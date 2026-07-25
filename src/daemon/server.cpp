@@ -1,6 +1,7 @@
 #include "daemon/server.hpp"
 
 #include "core/engine.hpp"
+#include "extension/host.hpp"
 #include "platform/io.hpp"
 #include "protocol/single_pane.hpp"
 
@@ -23,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <syslog.h>
 #include <unistd.h>
 
 namespace fiber::daemon {
@@ -150,6 +152,7 @@ struct OwnedEndpoint final {
   const char* path;
   int listener;
   int server_lock;
+  std::string extension_config;
 };
 
 void release_owned_endpoint(void* const context) noexcept {
@@ -159,9 +162,26 @@ void release_owned_endpoint(void* const context) noexcept {
   close_descriptor(endpoint.server_lock);
 }
 
+[[nodiscard]] auto acquire_extension_host(void* const context) noexcept
+    -> core::ExtensionConnection {
+  const auto& endpoint = *static_cast<const OwnedEndpoint*>(context);
+  const std::array inherited{endpoint.listener, endpoint.server_lock};
+  const auto connection = extension::spawn_host(endpoint.extension_config, inherited);
+  return {.descriptor = connection.descriptor};
+}
+
+void report_extension_error(void* const /*context*/, const std::string_view error) noexcept {
+  // The detached daemon has no stderr. Keep load failures observable through the host's system log;
+  // control listings also expose the retained error directly to CLI users.
+  // syslog is variadic because the message arguments are determined by its format string.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  ::syslog(LOG_ERR, "configuration error: %.*s", static_cast<int>(error.size()), error.data());
+}
+
 [[nodiscard]] auto run_owned_server(const std::string& path) noexcept -> int {
   static_cast<void>(::signal(SIGPIPE, SIG_IGN));
   static_cast<void>(::signal(SIGCHLD, SIG_IGN));
+  ::openlog("fiber", LOG_PID | LOG_NDELAY, LOG_USER);
   const auto previous_mask = ::umask(0077);
   int server_lock = -1;
   int listener = create_listener(path, server_lock);
@@ -174,8 +194,10 @@ void release_owned_endpoint(void* const context) noexcept {
       .path = path.c_str(),
       .listener = listener,
       .server_lock = server_lock,
+      .extension_config = extension::default_config_path(),
   };
-  return core::run_server(listener, &release_owned_endpoint, &endpoint);
+  return core::run_server(listener, &release_owned_endpoint, &endpoint, &acquire_extension_host,
+                          &endpoint, &report_extension_error, nullptr);
 }
 
 [[nodiscard]] auto server_available(const std::string& path) noexcept -> bool {

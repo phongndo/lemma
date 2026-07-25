@@ -86,7 +86,11 @@ add_library(
 )
 fiber_internal_target(fiber_platform)
 
-add_library(fiber_protocol STATIC src/protocol/single_pane.cpp)
+add_library(
+  fiber_protocol STATIC
+  src/protocol/extension.cpp
+  src/protocol/single_pane.cpp
+)
 fiber_internal_target(fiber_protocol)
 target_link_libraries(fiber_protocol PRIVATE fiber_base)
 
@@ -98,13 +102,16 @@ add_library(
 fiber_internal_target(fiber_render)
 target_link_libraries(fiber_render PRIVATE fiber_base fiber_platform fiber_terminal)
 
-add_library(fiber_extension STATIC src/extension/config.cpp)
+add_library(fiber_extension STATIC src/extension/host.cpp)
 fiber_internal_target(fiber_extension)
-target_link_libraries(fiber_extension PRIVATE fiber_base lua::lua)
+target_link_libraries(
+  fiber_extension PRIVATE fiber_base fiber_platform fiber_protocol lua::lua
+)
 
 add_library(
   fiber_core STATIC
   src/core/engine.cpp
+  src/core/extension_runtime.cpp
   src/core/fiber.cpp
   src/core/input.cpp
 )
@@ -125,7 +132,7 @@ add_library(fiber_daemon STATIC src/daemon/server.cpp)
 fiber_internal_target(fiber_daemon)
 target_link_libraries(
   fiber_daemon
-  PRIVATE fiber_base fiber_core fiber_platform fiber_protocol
+  PRIVATE fiber_base fiber_core fiber_extension fiber_platform fiber_protocol
 )
 
 add_library(fiber_client STATIC src/client/attached_client.cpp)
@@ -165,8 +172,8 @@ if(FIBER_BUILD_TESTS)
 
   add_executable(
     fiber_tests
-    tests/config_test.cpp
     tests/core_input_test.cpp
+    tests/extension_test.cpp
     tests/core_test.cpp
     tests/fiber_test.cpp
     tests/platform_test.cpp

@@ -12,6 +12,30 @@ older daemon that does not reserve or refresh the status row correctly.
 All integers are unsigned big-endian. Message type values are one ASCII byte for diagnostics only;
 they must be treated as binary enum values, not text.
 
+## Extension-host protocol
+
+The isolated Lua host uses a separate implemented protocol in `src/protocol/extension.*`. Every
+frame has a 20-byte header:
+
+```text
++------------+---------+------+-------+--------------+------------+
+| "FEX1": 4 | ver: u16| kind | flags | length: u32  | id: u64    |
++------------+---------+------+-------+--------------+------------+
+```
+
+Version 1 currently carries one host-to-daemon transactional generation: begin, bounded command and
+keymap registrations, event subscriptions, retained sidebar declarations, commit, or configuration
+error. Payloads are limited to 16 KiB and the incremental decoder owns 32 KiB. A message borrows
+decoder storage only until consumption. The core reads at most a bounded message/read batch after
+PTYs, client input, and rendering; it never waits for Lua.
+
+A valid commit atomically replaces the active registration generation. A configuration error rejects
+the candidate and preserves the prior generation. Disconnect removes active extension registrations
+and schedules an isolated host restart. Command invocation, snapshots, event delivery, UI updates,
+and output streams will add versioned message kinds without exposing C++ storage.
+
+The schemas below remain the description of the independent implemented client/daemon protocol.
+
 ## Control connection
 
 A newly accepted connection starts with exactly one control command:
@@ -135,18 +159,16 @@ Command actions retain their offsets among ordinary input so packet emission pre
 The parser handles fragmented arrow-key escape sequences, remains bounded, and stays outside
 terminal VT parsing. The eventual configurable key-table system will replace this fixed policy.
 
-## Evolution requirements
+## Client/daemon evolution requirements
 
-Before the protocol supports multiple clients per workspace or independent release versions, add:
+Remote operation and independent client releases eventually require a generalized client/daemon
+protocol with magic, version and capabilities, request IDs, explicit message lengths in both
+directions, typed errors, stable IDs, peer authentication, and bounded terminal-output semantics.
+Its semantic commands should be shared with built-in and Lua operations, while its transport may be
+a local Unix socket or SSH stdio.
 
-- a magic value and protocol version;
-- explicit message lengths for every direction;
-- request IDs for control commands;
-- capability negotiation;
-- typed error responses;
-- stable entity-ID encoding;
-- bounded frame/output message semantics; and
-- peer-credential validation at the transport boundary.
-
-Introduce these fields together through the generalized core protocol, with golden encoding tests,
-fragmented-input tests, malformed-input tests, and fuzz coverage.
+Introduce those fields as one tested protocol change with golden encodings, fragmentation,
+malformed- and oversized-input cases, client/daemon mismatch diagnostics, and fuzz coverage. The
+versioned endpoint may coexist with the current endpoint during development, but a client must never
+silently speak one format to a daemon expecting the other. Exact remote CLI and launch-context
+behavior remain open in [`product-contract.md`](product-contract.md).

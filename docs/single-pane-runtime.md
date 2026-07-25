@@ -4,7 +4,9 @@
 
 Fiber's end-to-end vertical slice has been migrated out of the former monolithic
 `single_pane.cpp`. Workspaces now support bounded windows and split panes while retaining the
-production component architecture:
+production component architecture. This document records implemented behavior; agreed foundation
+decisions and explicitly open product questions are in
+[`product-contract.md`](product-contract.md).
 
 ```text
 apps/fiber/main.cpp
@@ -57,7 +59,9 @@ terminal state.
 - `src/platform/`: descriptor I/O, PTY/process operations, and terminal mode;
 - `src/protocol/`: bounded packet encoding, prefix parsing, and incremental decoding;
 - `src/render/`: retained frame buffers and partial nonblocking client writes;
-- `src/terminal/`: the sole private `libghostty-vt` adapter.
+- `src/terminal/`: the sole private `libghostty-vt` adapter;
+- `src/extension/`: an isolated full-Lua host that sends transactional registrations over bounded
+  IPC after loading the host machine's optional `init.lua`.
 
 ## Supported behavior
 
@@ -94,7 +98,8 @@ limitations:
 - the local protocol has no version or capability negotiation;
 - listener acceptance and initial attach setup still use the vertical slice's simple policy;
 - new workspaces inherit the daemon's original environment and working directory;
-- extension commands/events and configurable key tables are not integrated;
+- the isolated Lua host can register a bounded generation, but command callbacks, snapshots, event
+  delivery, rendered UI, process APIs, output subscriptions, and reload are not yet integrated;
 - windows have numeric slots but no user-defined names or interactive rename prompt;
 - windows cannot be linked across workspaces;
 - pane ratios are fixed at equal halves and cannot yet be resized interactively;
@@ -103,19 +108,30 @@ limitations:
 
 These are feature and runtime-hardening tasks, not reasons to reorganize the source tree again.
 
-## Build-out sequence
+## Foundation sequence
 
-1. Move workspaces, panes, and clients into dense generational stores; window IDs are already
-   generational within each workspace.
-2. Represent topology and lifecycle changes as typed core commands.
-3. Add window naming/rename management and optional status configuration.
-4. Generalize listener integration to multiple pending clients without blocking workspace progress.
-5. Replace the rebuilt poll set with the descriptor registry/reactor abstraction.
-6. Move split topology into generational pane stores and add per-client viewport state.
-7. Add adjustable ratios, alternate layouts, pane-number overlays, and status surfaces.
-8. Version the protocol and add capabilities, request IDs, and typed errors.
-9. Add deferred, budgeted extension commands and immutable events.
-10. Add replay traces, capacity tests, fuzzing, and end-to-end latency benchmarks.
+The agreed next work is the extension and command foundation, without treating unresolved product
+choices as committed release behavior:
+
+1. Start and supervise one full-Lua host in a process isolated from the daemon.
+2. Establish bounded, versioned, nonblocking registration IPC and transactional generations.
+3. Represent existing topology and lifecycle changes as typed core commands with bounded arguments
+   and typed results.
+4. Route built-in keys, CLI operations, and extension requests through one semantic dispatcher.
+5. Add asynchronous Lua command invocation, immutable snapshots, and bounded event delivery.
+6. Install declarative Lua keymaps into C++ and retain validated status/sidebar surfaces for the C++
+   renderer.
+7. Add asynchronous process/timer APIs and explicit bounded pane-output subscriptions.
+8. Implement replacement-host reload that preserves the old generation until the candidate commits.
+9. Measure idle-host overhead, registration and command latency, event floods, blocked hosts, and
+   output backpressure.
+10. Generalize the client protocol for local and SSH operation after the shared command model is
+    established.
+
+Steps 1 and 2 now have an implementation slice: missing config activates an empty generation; valid
+Lua can register commands, keymaps, subscriptions, and a bounded sidebar; malformed generations are
+rejected; and host IPC is processed after mux-critical work. The later steps remain implementation
+work, not behavior already claimed by the executable.
 
 ## Rules for contributors and agents
 

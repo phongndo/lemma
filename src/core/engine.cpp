@@ -1,5 +1,6 @@
 #include "core/engine.hpp"
 
+#include "core/extension_runtime.hpp"
 #include "core/input.hpp"
 #include "fiber/id.hpp"
 #include "fiber/limits.hpp"
@@ -1190,19 +1191,32 @@ enum class ParseResult : std::uint8_t {
   return parse_client_packets(workspace);
 }
 
+[[nodiscard]] auto send_safe_text(const int socket, const std::string_view text,
+                                  const std::size_t maximum) noexcept -> bool {
+  std::array<char, 256> sanitized{};
+  const auto size = std::min(text.size(), maximum);
+  std::size_t offset = 0;
+  while (offset < size) {
+    const auto count = std::min(size - offset, sanitized.size());
+    const auto source = std::span<const char>(text).subspan(offset, count);
+    for (std::size_t index = 0; index < count; ++index) {
+      const auto character = source.subspan(index, 1).front();
+      const auto value = static_cast<unsigned char>(character);
+      std::span(sanitized).subspan(index, 1).front() =
+          value < 0x20U || value == 0x7FU ? '?' : character;
+    }
+    if (!send_text(socket, std::string_view(sanitized.data(), count))) {
+      return false;
+    }
+    offset += count;
+  }
+  return true;
+}
+
 [[nodiscard]] auto send_safe_title(const int socket, const std::string_view title) noexcept
     -> bool {
-  std::array<char, 256> sanitized{};
-  std::size_t used = 0;
-  const std::span<const char> title_characters(title);
-  for (const char character :
-       title_characters.first(std::min(title_characters.size(), sanitized.size()))) {
-    const auto value = static_cast<unsigned char>(character);
-    std::span(sanitized).subspan(used, 1).front() =
-        value < 0x20U || value == 0x7FU ? '?' : character;
-    ++used;
-  }
-  return send_text(socket, std::string_view(sanitized.data(), used));
+  constexpr std::size_t title_bytes_max = 256;
+  return send_safe_text(socket, title, title_bytes_max);
 }
 
 [[nodiscard]] auto send_number(const int socket, const std::uint64_t value) noexcept -> bool {
@@ -1347,6 +1361,14 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
   return nullptr;
 }
 
+[[nodiscard]] auto send_extension_error(const int connection, const std::string_view error) noexcept
+    -> bool {
+  return error.empty() ||
+         (send_text(connection, "fiber configuration error: ") &&
+          send_safe_text(connection, error, protocol::extension::error_bytes_max) &&
+          send_text(connection, "\n"));
+}
+
 [[nodiscard]] auto send_all_listings(const int connection, const Workspaces& workspaces) noexcept
     -> bool {
   std::size_t listed = 0;
@@ -1393,14 +1415,15 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
 
 // Control setup remains deliberately simple in the current unversioned protocol.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto handle_connection(const int connection, Workspaces& workspaces) noexcept
-    -> bool {
+[[nodiscard]] auto handle_connection(const int connection, Workspaces& workspaces,
+                                     const ExtensionRuntime& extensions) noexcept -> bool {
   std::array<std::byte, 1> command{};
   if (!read_exact(connection, command)) {
     return false;
   }
   if (command.front() == command_list) {
-    static_cast<void>(send_all_listings(connection, workspaces));
+    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
+                      send_all_listings(connection, workspaces));
     return false;
   }
   if (command.front() == command_kill_all) {
@@ -1450,11 +1473,13 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
     return attach_connection(connection, *workspace) && workspace->client == connection;
   }
   if (command.front() == command_list_workspace) {
-    static_cast<void>(send_listing(connection, *workspace));
+    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
+                      send_listing(connection, *workspace));
     return false;
   }
   if (command.front() == command_list_windows) {
-    static_cast<void>(send_window_listings(connection, *workspace));
+    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
+                      send_window_listings(connection, *workspace));
     return false;
   }
 
@@ -1465,9 +1490,10 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
   return false;
 }
 
-[[nodiscard]] auto poll_timeout(const Workspaces& workspaces) noexcept -> int {
-  auto timeout = -1;
+[[nodiscard]] auto poll_timeout(const Workspaces& workspaces,
+                                const ExtensionRuntime& extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
+  auto timeout = extensions.poll_timeout(now);
   for (const auto& workspace : workspaces) {
     if (workspace == nullptr || !workspace->active || !workspace->frame_pending ||
         workspace->client < 0 || workspace->output.busy()) {
@@ -1560,6 +1586,7 @@ void queue_due_frames(Workspaces& workspaces) noexcept {
 enum class DescriptorKind : std::uint8_t {
   pane,
   client,
+  extension,
 };
 
 struct DescriptorOwner final {
@@ -1572,15 +1599,22 @@ struct DescriptorOwner final {
 // The branches are the explicit bounded stages of the current single-owner reactor.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_server_impl(const int listener, const EndpointRelease release_endpoint,
-                                   void* const release_context) noexcept -> int {
+                                   void* const release_context,
+                                   const ExtensionAcquire acquire_extension,
+                                   void* const extension_context,
+                                   const ExtensionErrorReporter report_extension_error,
+                                   void* const extension_error_context) noexcept -> int {
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Workspaces workspaces;
-  constexpr auto descriptor_count_max = std::size_t{1} + limits::panes_hard_max +
+  ExtensionRuntime extensions(acquire_extension, extension_context, report_extension_error,
+                              extension_error_context);
+  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::workspaces_hard_max);
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
 
   while (true) {
+    extensions.connect_if_due(std::chrono::steady_clock::now());
     std::size_t descriptor_count = 1;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
     for (const auto& workspace : workspaces) {
@@ -1615,9 +1649,15 @@ struct DescriptorOwner final {
         ++descriptor_count;
       }
     }
+    if (extensions.descriptor() >= 0) {
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = extensions.descriptor(), .events = POLLIN, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.kind = DescriptorKind::extension};
+      ++descriptor_count;
+    }
 
-    const auto poll_result =
-        ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count), poll_timeout(workspaces));
+    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
+                                    poll_timeout(workspaces, extensions));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -1649,9 +1689,18 @@ struct DescriptorOwner final {
     queue_due_frames(workspaces);
     reclaim_inactive_workspaces(workspaces);
 
+    // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
+    // client input, or due frame composition.
+    for (std::size_t index = 1; index < descriptor_count; ++index) {
+      const auto owner = std::span(owners).subspan(index, 1).front();
+      if (owner.kind == DescriptorKind::extension) {
+        extensions.process(std::span(descriptors).subspan(index, 1).front().revents);
+      }
+    }
+
     if ((descriptors.front().revents & POLLIN) != 0) {
       int connection = ::accept(listener, nullptr, nullptr);
-      if (connection >= 0 && !handle_connection(connection, workspaces)) {
+      if (connection >= 0 && !handle_connection(connection, workspaces, extensions)) {
         close_descriptor(connection);
       }
     }
@@ -1662,8 +1711,12 @@ struct DescriptorOwner final {
 } // namespace
 
 [[nodiscard]] auto run_server(const int listener, const EndpointRelease release_endpoint,
-                              void* const release_context) noexcept -> int {
-  return run_server_impl(listener, release_endpoint, release_context);
+                              void* const release_context, const ExtensionAcquire acquire_extension,
+                              void* const extension_context,
+                              const ExtensionErrorReporter report_extension_error,
+                              void* const extension_error_context) noexcept -> int {
+  return run_server_impl(listener, release_endpoint, release_context, acquire_extension,
+                         extension_context, report_extension_error, extension_error_context);
 }
 
 } // namespace fiber::core

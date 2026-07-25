@@ -30,6 +30,21 @@ Reproduce the microbenchmarks with:
 just profile=release bench
 ```
 
+## Extension IPC baseline
+
+`benchmark_extension_registration_codec` measures one bounded typed command-registration encode and
+incremental decode. It isolates framing cost from process scheduling so future socket round-trip,
+event-flood, blocked-host, and pane-output backpressure benchmarks can report those costs separately.
+Run it with:
+
+```sh
+./build/release/fiber_benchmarks --benchmark_filter=extension_registration_codec
+```
+
+The extension host is never sampled from the PTY or renderer benchmark loops. An idle, blocked, or
+crashed host must leave those baselines unchanged within measurement noise; end-to-end extension
+latency does not justify moving Lua into the mux-critical path.
+
 ## Warm-session multiplexer comparison
 
 A pseudoterminal harness attached an 80x24 client to a warm session, then ran a process that wrote
@@ -65,3 +80,7 @@ scrollback, and memory use.
 - Dirty full-screen shifts are checked against bounded raw-cell row fingerprints.
 - Dirty partial rows emit only their changed prefix/suffix span.
 - No general allocation occurs while encoding an ANSI damage frame.
+- The reactor reads extension IPC only after ready PTYs, client input, and due frames.
+- Extension IPC has fixed frame, decoder, message-batch, registration, and UI bounds.
+- The daemon never synchronously waits for Lua, and host disconnect clears extension state without
+  stopping pane processes.

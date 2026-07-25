@@ -2,6 +2,8 @@
 
 Start here:
 
+- [`product-contract.md`](product-contract.md) — agreed foundation decisions and product questions
+  that remain explicitly open.
 - [`architecture.md`](architecture.md) — target architecture, ownership, dependencies, hot-path
   rules, and extension boundary.
 - [`single-pane-runtime.md`](single-pane-runtime.md) — current runtime ownership, window/split-pane

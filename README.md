@@ -74,9 +74,10 @@ lane mapping, branch-protection setting, and local reproduction commands.
 
 Fiber is being built as a bounded, data-oriented modular monolith: one strong core, a private
 Ghostty terminal adapter, narrow platform/protocol/render boundaries, and a deferred command/event
-extension API. See [`docs/architecture.md`](docs/architecture.md) for the target design and
-[`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for its current ownership, limitations,
-and multi-pane build-out plan.
+extension API. See [`docs/product-contract.md`](docs/product-contract.md) for agreed foundation
+decisions and unresolved product questions, [`docs/architecture.md`](docs/architecture.md) for the
+target design, and [`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership
+and limitations.
 
 ## Workspace/window mux
 

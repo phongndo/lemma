@@ -56,11 +56,12 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
   static_cast<void>(::close(descriptors.back()));
   std::array<char, 64> name{};
   std::size_t size = 0;
-  for (std::size_t attempt = 0; attempt < 100 && size == 0; ++attempt) {
+  for (std::size_t attempt = 0; attempt < 100; ++attempt) {
     size = foreground_process_name(descriptors.front(), name);
-    if (size == 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (std::string_view(name.data(), size) == "sleep") {
+      break;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
   static_cast<void>(::kill(child, SIGTERM));

@@ -1,11 +1,13 @@
 #include "fiber/fiber.hpp"
 #include "fiber/terminal/terminal.hpp"
+#include "protocol/extension.hpp"
 #include "render/pane_composition.hpp"
 
 #include <benchmark/benchmark.h>
 
 #include <array>
 #include <cstddef>
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -17,6 +19,36 @@ namespace {
 void benchmark_greeting(benchmark::State& state) {
   for ([[maybe_unused]] const auto iteration : state) {
     benchmark::DoNotOptimize(greeting());
+  }
+}
+
+void benchmark_extension_registration_codec(benchmark::State& state) {
+  std::array<std::byte, 512> frame{};
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto encoded = protocol::extension::encode_command(
+        {.name = "agents.toggle", .description = "Toggle the agent sidebar"}, 42, frame);
+    if (!encoded.has_value()) {
+      state.SkipWithError("failed to encode extension registration");
+      return;
+    }
+    protocol::extension::Decoder decoder;
+    std::ranges::copy(std::span(frame).first(*encoded), decoder.writable_bytes().begin());
+    if (!decoder.commit(*encoded).has_value()) {
+      state.SkipWithError("failed to commit extension frame");
+      return;
+    }
+    const auto message = decoder.next();
+    if (!message.has_value() || !message->has_value()) {
+      state.SkipWithError("failed to decode extension frame");
+      return;
+    }
+    const auto registration = protocol::extension::decode_command(**message);
+    if (!registration.has_value()) {
+      state.SkipWithError("failed to decode extension registration");
+      return;
+    }
+    auto registration_value = *registration;
+    benchmark::DoNotOptimize(registration_value);
   }
 }
 
@@ -265,6 +297,7 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
 }
 
 BENCHMARK(benchmark_greeting);
+BENCHMARK(benchmark_extension_registration_codec);
 BENCHMARK(benchmark_terminal_small_writes);
 BENCHMARK(benchmark_terminal_large_writes);
 BENCHMARK(benchmark_terminal_render_updates);

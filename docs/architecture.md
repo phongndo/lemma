@@ -6,8 +6,10 @@ workspace/window and split-pane runtime documented in [`single-pane-runtime.md`]
 
 ## Product goal
 
-Fiber is a bounded, data-oriented terminal multiplexer with a small, extremely fast core and an
-extension boundary that does not compromise latency, ownership, or memory safety.
+Fiber is a bounded, data-oriented terminal process runner and multiplexer with a small, extremely
+fast core and an extension boundary that does not compromise latency, ownership, or memory safety.
+Agreed foundation decisions and still-open product questions are recorded in
+[`product-contract.md`](product-contract.md).
 
 The design is a **modular monolith**:
 
@@ -45,15 +47,19 @@ release-enabled assertions and terminate rather than continuing with corrupt sta
 apps/fiber/main -> app -----> client -----> protocol
                     |           |             |
                     +------> daemon -----------+
-                               |
+                               |   |
+                               |   +----------> extension launcher
                                v
-extension host -----------> core engine <----> terminal adapter ---> third_party/ghostty
+                         core engine <----> terminal adapter ---> third_party/ghostty
                                |   |
                                |   +----------> renderer
                                +--------------> platform
+
+extension host - - - versioned typed IPC - - - core engine
 ```
 
-The arrows mean “may depend on.” Cycles are forbidden.
+Solid arrows mean “may depend on”; cycles are forbidden. The dashed process boundary is protocol
+communication, not a C++ target dependency.
 
 ### Core — `src/core/`
 
@@ -95,9 +101,9 @@ Platform operations return explicit values/errors and do not mutate core state t
 
 The protocol component owns bounded messages between the disposable client and the daemon:
 message schemas, encoding, incremental decoding, payload limits, and handshake rules. The current
-single-client wire format is documented in [`protocol.md`](protocol.md); the generalized protocol must add
-version and capability negotiation. Protocol code does not open sockets, discover workspaces,
-dispatch core commands, or write terminal bytes.
+single-client wire format is documented in [`protocol.md`](protocol.md); Phase 1 replaces it with the
+versioned command protocol fixed by [`product-contract.md`](product-contract.md). Protocol code does
+not open sockets, discover workspaces, dispatch core commands, or write terminal bytes.
 
 All lengths and enum values are validated before a message reaches the core.
 
@@ -112,13 +118,16 @@ sockets, mutate topology, or parse application VT streams.
 
 ### Extension host — `src/extension/`
 
-Extensions register declarative key bindings, commands, event subscriptions, and bounded UI
-components. The host validates extension output and converts it into typed core commands.
+One persistent Lua host process per daemon loads trusted user configuration and extensions. It may
+use normal user-level filesystem, network, process, and Lua-module capabilities without sharing the
+daemon's failure domain. It registers settings, declarative key bindings, commands, event
+subscriptions, and bounded UI components through a versioned, length-framed local socket.
 
 Extensions receive stable IDs and immutable snapshots. They never receive pointers or references to
-core arenas, terminal internals, PTYs, or sockets. Callbacks run only in a deferred, budgeted stage.
-Lua is the first host; a native C++ plugin ABI is explicitly out of scope because it would expose
-unstable internals and share the daemon's failure domain.
+core arenas, terminal internals, daemon PTYs, or daemon sockets. The daemon processes bounded host
+messages only in its deferred extension stage and never waits for Lua before PTY or frame progress.
+Rendered UI uses retained validated surfaces rather than synchronous Lua callbacks. A native C++
+plugin ABI is explicitly out of scope.
 
 ### Application — `src/app/` and `apps/fiber/`
 
@@ -176,10 +185,13 @@ Extensions must not:
 
 - retain internal pointers;
 - directly mutate layouts or pane state;
-- read/write PTY or socket descriptors;
+- access daemon-owned PTY or socket descriptors;
 - invoke terminal parsing or rendering;
-- block the event loop;
-- return unbounded strings, tables, or event batches.
+- make the daemon synchronously wait for extension work; or
+- return unbounded strings, tables, surfaces, or event batches.
+
+Trusted Lua may open its own files, sockets, and child processes. If it blocks or crashes, only the
+extension host is affected; bounded queues and cached daemon state preserve mux progress.
 
 This boundary preserves the freedom to change core storage and scheduling without breaking the
 extension API.
@@ -203,7 +215,7 @@ The current internal targets enforce component boundaries:
 - `fiber_protocol`: bounded wire encoding and decoding;
 - `fiber_render`: retained outer-terminal frame generation;
 - `fiber_core`: authoritative engine-facing API as it is introduced;
-- `fiber_extension`: configuration and the future deferred extension host;
+- `fiber_extension`: full Lua configuration and the isolated extension-host process;
 - `fiber_daemon`: per-user transport and daemon lifecycle;
 - `fiber_client`: disposable attached-terminal behavior;
 - `fiber_app`: application parsing and composition;
