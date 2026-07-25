@@ -2,6 +2,7 @@
 
 #include "core/extension_runtime.hpp"
 #include "core/input.hpp"
+#include "fiber/command.hpp"
 #include "fiber/id.hpp"
 #include "fiber/limits.hpp"
 #include "fiber/terminal/terminal.hpp"
@@ -679,16 +680,6 @@ void schedule_frame(Workspace& workspace, const bool force_full,
   return true;
 }
 
-void select_window_slot(Workspace& workspace, const std::size_t slot_index) noexcept {
-  if (slot_index >= workspace.windows.size()) {
-    return;
-  }
-  const auto& slot = std::span(workspace.windows).subspan(slot_index, 1).front();
-  if (slot.window != nullptr) {
-    static_cast<void>(select_window(workspace, slot.window->id));
-  }
-}
-
 void cycle_window(Workspace& workspace, const bool forward) noexcept {
   const auto current = static_cast<std::size_t>(workspace.active_window.slot());
   for (std::size_t offset = 1; offset <= workspace.windows.size(); ++offset) {
@@ -1000,59 +991,57 @@ void focus_direction(Workspace& workspace, Window& window,
   }
 }
 
-void apply_pane_command(Workspace& workspace, const protocol::PaneCommand command) noexcept {
-  auto* const window = active_window(workspace);
-  if (window == nullptr) {
-    workspace.active = false;
-    return;
-  }
-  switch (command) {
+[[nodiscard]] constexpr auto command_status(const bool changed) noexcept -> CommandResult {
+  return {.status = changed ? CommandStatus::applied : CommandStatus::no_effect};
+}
+
+[[nodiscard]] auto command_from_pane_command(const protocol::PaneCommand pane_command) noexcept
+    -> std::optional<Command> {
+  Command command{.origin = CommandOrigin::client};
+  switch (pane_command) {
   case protocol::PaneCommand::none:
-    break;
+    return std::nullopt;
   case protocol::PaneCommand::split_left_right:
-    static_cast<void>(split_focused_pane(workspace, *window, SplitAxis::left_right));
+    command.kind = CommandKind::split_left_right;
     break;
   case protocol::PaneCommand::split_top_bottom:
-    static_cast<void>(split_focused_pane(workspace, *window, SplitAxis::top_bottom));
+    command.kind = CommandKind::split_top_bottom;
     break;
   case protocol::PaneCommand::focus_left:
-    focus_direction(workspace, *window, FocusDirection::left);
+    command.kind = CommandKind::focus_left;
     break;
   case protocol::PaneCommand::focus_right:
-    focus_direction(workspace, *window, FocusDirection::right);
+    command.kind = CommandKind::focus_right;
     break;
   case protocol::PaneCommand::focus_up:
-    focus_direction(workspace, *window, FocusDirection::up);
+    command.kind = CommandKind::focus_up;
     break;
   case protocol::PaneCommand::focus_down:
-    focus_direction(workspace, *window, FocusDirection::down);
+    command.kind = CommandKind::focus_down;
     break;
   case protocol::PaneCommand::focus_next:
-    focus_next(workspace, *window);
+    command.kind = CommandKind::focus_next;
     break;
   case protocol::PaneCommand::focus_previous:
-    focus_pane(workspace, *window, window->previous_pane);
+    command.kind = CommandKind::focus_previous;
     break;
   case protocol::PaneCommand::close:
-    static_cast<void>(close_pane(workspace, *window, window->focused_pane));
+    command.kind = CommandKind::close_pane;
     break;
   case protocol::PaneCommand::zoom:
-    window->zoomed = !window->zoomed;
-    if (resolve_workspace_layout(workspace, *window)) {
-      schedule_frame(workspace, true);
-    }
+    command.kind = CommandKind::toggle_zoom;
     break;
   case protocol::PaneCommand::create_window:
-    create_window(workspace);
+    command.kind = CommandKind::create_window;
     break;
   case protocol::PaneCommand::next_window:
-    cycle_window(workspace, true);
+    command.kind = CommandKind::next_window;
     break;
   case protocol::PaneCommand::previous_window:
-    cycle_window(workspace, false);
+    command.kind = CommandKind::previous_window;
     break;
   case protocol::PaneCommand::kill_window:
-    remove_window(workspace, window->id);
+    command.kind = CommandKind::close_window;
     break;
   case protocol::PaneCommand::select_window_0:
   case protocol::PaneCommand::select_window_1:
@@ -1064,14 +1053,151 @@ void apply_pane_command(Workspace& workspace, const protocol::PaneCommand comman
   case protocol::PaneCommand::select_window_7:
   case protocol::PaneCommand::select_window_8:
   case protocol::PaneCommand::select_window_9: {
-    const auto encoded = static_cast<std::uint8_t>(command);
-    const auto slot = encoded == static_cast<std::uint8_t>('0')
-                          ? std::size_t{9}
-                          : static_cast<std::size_t>(encoded - static_cast<std::uint8_t>('1'));
-    select_window_slot(workspace, slot);
+    command.kind = CommandKind::select_window;
+    const auto encoded = static_cast<std::uint8_t>(pane_command);
+    command.argument = encoded == static_cast<std::uint8_t>('0')
+                           ? std::uint16_t{9}
+                           : static_cast<std::uint16_t>(encoded - static_cast<std::uint8_t>('1'));
     break;
   }
   }
+  return command;
+}
+
+// This is the only function that translates validated commands into authoritative mux mutations.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto execute_workspace_command(void* const context, const Command& command) noexcept
+    -> CommandResult {
+  auto& workspace = *static_cast<Workspace*>(context);
+  if (command.target.workspace.is_valid() || command.target.pane.is_valid()) {
+    return {.status = CommandStatus::invalid_target};
+  }
+  if (command.kind == CommandKind::detach_client) {
+    return {.status = CommandStatus::detach_requested};
+  }
+  if (command.kind == CommandKind::stop_workspace) {
+    const bool changed = workspace.active;
+    workspace.active = false;
+    return command_status(changed);
+  }
+
+  auto* const window = active_window(workspace);
+  if (window == nullptr) {
+    workspace.active = false;
+    return {.status = CommandStatus::failed};
+  }
+  if (command.target.window.is_valid() && command.target.window != window->id) {
+    return {.status = CommandStatus::invalid_target};
+  }
+
+  const auto focus_result = [&](const std::uint16_t previous) {
+    return workspace.active ? command_status(window->focused_pane != previous)
+                            : CommandResult{.status = CommandStatus::failed};
+  };
+  switch (command.kind) {
+  case CommandKind::none:
+  case CommandKind::detach_client:
+  case CommandKind::stop_workspace:
+    return {.status = CommandStatus::invalid_command};
+  case CommandKind::split_left_right:
+    if (split_focused_pane(workspace, *window, SplitAxis::left_right)) {
+      return {.status = CommandStatus::applied};
+    }
+    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+  case CommandKind::split_top_bottom:
+    if (split_focused_pane(workspace, *window, SplitAxis::top_bottom)) {
+      return {.status = CommandStatus::applied};
+    }
+    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+  case CommandKind::focus_left: {
+    const auto previous = window->focused_pane;
+    focus_direction(workspace, *window, FocusDirection::left);
+    return focus_result(previous);
+  }
+  case CommandKind::focus_right: {
+    const auto previous = window->focused_pane;
+    focus_direction(workspace, *window, FocusDirection::right);
+    return focus_result(previous);
+  }
+  case CommandKind::focus_up: {
+    const auto previous = window->focused_pane;
+    focus_direction(workspace, *window, FocusDirection::up);
+    return focus_result(previous);
+  }
+  case CommandKind::focus_down: {
+    const auto previous = window->focused_pane;
+    focus_direction(workspace, *window, FocusDirection::down);
+    return focus_result(previous);
+  }
+  case CommandKind::focus_next: {
+    const auto previous = window->focused_pane;
+    focus_next(workspace, *window);
+    return focus_result(previous);
+  }
+  case CommandKind::focus_previous: {
+    const auto previous = window->focused_pane;
+    focus_pane(workspace, *window, window->previous_pane);
+    return focus_result(previous);
+  }
+  case CommandKind::close_pane:
+    if (close_pane(workspace, *window, window->focused_pane)) {
+      return {.status = CommandStatus::applied};
+    }
+    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+  case CommandKind::toggle_zoom:
+    window->zoomed = !window->zoomed;
+    if (!resolve_workspace_layout(workspace, *window)) {
+      return {.status = CommandStatus::failed};
+    }
+    schedule_frame(workspace, true);
+    return {.status = CommandStatus::applied};
+  case CommandKind::create_window: {
+    const auto previous = window_count(workspace);
+    create_window(workspace);
+    if (!workspace.active) {
+      return {.status = CommandStatus::failed};
+    }
+    return previous == window_count(workspace) ? CommandResult{.status = CommandStatus::unavailable}
+                                               : CommandResult{.status = CommandStatus::applied};
+  }
+  case CommandKind::next_window: {
+    const auto previous = workspace.active_window;
+    cycle_window(workspace, true);
+    return workspace.active ? command_status(previous != workspace.active_window)
+                            : CommandResult{.status = CommandStatus::failed};
+  }
+  case CommandKind::previous_window: {
+    const auto previous = workspace.active_window;
+    cycle_window(workspace, false);
+    return workspace.active ? command_status(previous != workspace.active_window)
+                            : CommandResult{.status = CommandStatus::failed};
+  }
+  case CommandKind::close_window:
+    remove_window(workspace, window->id);
+    return {.status = CommandStatus::applied};
+  case CommandKind::select_window: {
+    const auto slot_index = static_cast<std::size_t>(command.argument);
+    if (slot_index >= workspace.windows.size()) {
+      return {.status = CommandStatus::invalid_target};
+    }
+    const auto& slot = std::span(workspace.windows).subspan(slot_index, 1).front();
+    if (slot.window == nullptr) {
+      return {.status = CommandStatus::unavailable};
+    }
+    const auto previous = workspace.active_window;
+    if (!select_window(workspace, slot.window->id)) {
+      return {.status = workspace.active ? CommandStatus::invalid_target : CommandStatus::failed};
+    }
+    return command_status(previous != workspace.active_window);
+  }
+  }
+  return {.status = CommandStatus::invalid_command};
+}
+
+[[nodiscard]] auto dispatch_workspace_command(Workspace& workspace, const Command& command) noexcept
+    -> CommandResult {
+  const CommandDispatcher dispatcher(&execute_workspace_command, &workspace);
+  return dispatcher.dispatch(command);
 }
 
 [[nodiscard]] auto
@@ -1142,9 +1268,13 @@ enum class ParseResult : std::uint8_t {
     }
     const auto& message = **decoded;
     switch (message.kind) {
-    case protocol::ClientMessageKind::detach:
+    case protocol::ClientMessageKind::detach: {
+      const Command command{.kind = CommandKind::detach_client, .origin = CommandOrigin::client};
+      const auto result = dispatch_workspace_command(workspace, command);
       workspace.decoder.consume();
-      return ParseResult::detach;
+      return result.status == CommandStatus::detach_requested ? ParseResult::detach
+                                                              : ParseResult::error;
+    }
     case protocol::ClientMessageKind::resize:
       if (!resize_workspace(workspace, message.dimensions)) {
         return ParseResult::error;
@@ -1161,9 +1291,16 @@ enum class ParseResult : std::uint8_t {
       }
       break;
     }
-    case protocol::ClientMessageKind::pane_command:
-      apply_pane_command(workspace, message.pane_command);
+    case protocol::ClientMessageKind::pane_command: {
+      const auto command = command_from_pane_command(message.pane_command);
+      if (!command.has_value() || !dispatch_workspace_command(workspace, *command).succeeded()) {
+        if (!workspace.active) {
+          workspace.decoder.consume();
+          return ParseResult::detach;
+        }
+      }
       break;
+    }
     }
     workspace.decoder.consume();
     if (!workspace.active) {
@@ -1427,9 +1564,10 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
     return false;
   }
   if (command.front() == command_kill_all) {
+    const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
     for (auto& workspace : workspaces) {
       if (workspace != nullptr) {
-        workspace->active = false;
+        static_cast<void>(dispatch_workspace_command(*workspace, stop));
       }
     }
     static_cast<void>(send_text(connection, "all fiber workspaces stopped\n"));
@@ -1486,7 +1624,8 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
   static_cast<void>(send_text(connection, "fiber workspace \"") &&
                     send_safe_title(connection, workspace->workspace_name()) &&
                     send_text(connection, "\" stopped\n"));
-  workspace->active = false;
+  const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
+  static_cast<void>(dispatch_workspace_command(*workspace, stop));
   return false;
 }
 

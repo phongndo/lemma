@@ -110,6 +110,7 @@ target_link_libraries(
 
 add_library(
   fiber_core STATIC
+  src/core/command.cpp
   src/core/engine.cpp
   src/core/extension_runtime.cpp
   src/core/fiber.cpp

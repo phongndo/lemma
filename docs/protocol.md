@@ -67,7 +67,9 @@ to nonblocking live operation.
 ## Attached-client stream
 
 Only the client sends framed messages. Daemon-to-client traffic is already encoded outer-terminal
-bytes and is deliberately unframed in the current protocol.
+bytes and is deliberately unframed in the current protocol. Detach and pane/window command packets
+are translated into bounded `fiber::Command` values and validated by the shared dispatcher before
+the engine applies them. Wire enums therefore do not double as authoritative core operations.
 
 ### Input
 

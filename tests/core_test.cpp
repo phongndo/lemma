@@ -1,4 +1,5 @@
 #include "fiber/bounded_byte_queue.hpp"
+#include "fiber/command.hpp"
 #include "fiber/id.hpp"
 
 #include <gmock/gmock.h>
@@ -9,9 +10,83 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <type_traits>
 
 namespace fiber {
 namespace {
+
+static_assert(std::is_trivially_copyable_v<Command>);
+static_assert(std::is_trivially_copyable_v<CommandResult>);
+
+struct CommandCapture final {
+  Command command;
+  std::size_t calls{0};
+};
+
+[[nodiscard]] auto capture_command(void* const context, const Command& command) noexcept
+    -> CommandResult {
+  auto& capture = *static_cast<CommandCapture*>(context);
+  capture.command = command;
+  ++capture.calls;
+  return {.status = CommandStatus::applied};
+}
+
+TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const Command command{
+      .kind = CommandKind::select_window,
+      .origin = CommandOrigin::extension,
+      .target = {.workspace = WorkspaceId::from_parts(2, 3),
+                 .window = WindowId::from_parts(4, 5),
+                 .pane = {}},
+      .argument = 7,
+  };
+
+  const auto result = dispatcher.dispatch(command);
+
+  EXPECT_TRUE(result.succeeded());
+  EXPECT_EQ(result.status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 1U);
+  EXPECT_EQ(capture.command.kind, CommandKind::select_window);
+  EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
+  EXPECT_EQ(capture.command.target.workspace, command.target.workspace);
+  EXPECT_EQ(capture.command.target.window, command.target.window);
+  EXPECT_EQ(capture.command.argument, 7U);
+}
+
+TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+
+  EXPECT_EQ(dispatcher.dispatch({}).status, CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::select_window,
+                           .origin = CommandOrigin::client,
+                           .argument = command_window_slots_max})
+                .status,
+            CommandStatus::invalid_command);
+  EXPECT_EQ(
+      dispatcher
+          .dispatch({.kind = CommandKind::close_pane,
+                     .origin = CommandOrigin::client,
+                     .target = {.workspace = {}, .window = {}, .pane = PaneId::from_parts(1, 1)}})
+          .status,
+      CommandStatus::invalid_target);
+  EXPECT_EQ(
+      dispatcher
+          .dispatch(
+              {.kind = CommandKind::focus_next, .origin = CommandOrigin::client, .argument = 1})
+          .status,
+      CommandStatus::invalid_command);
+  EXPECT_EQ(capture.calls, 0U);
+
+  const CommandDispatcher missing_executor(nullptr, nullptr);
+  EXPECT_EQ(missing_executor
+                .dispatch({.kind = CommandKind::focus_next, .origin = CommandOrigin::internal})
+                .status,
+            CommandStatus::failed);
+}
 
 TEST(GenerationalIdTest, InvalidUntilCreatedFromValidParts) {
   const WorkspaceId invalid;

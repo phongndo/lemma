@@ -20,9 +20,11 @@ ctest --preset debug --no-tests=error
 find apps src tests -type f -name '*.cpp' -print0 |
   xargs -0 clang-tidy --quiet -p build/debug
 
-# LLVM 22's isolated checker reports internal code-action failures while testing refactors in
-# loop- and macro-heavy runtime sources. The compiler and clang-tidy still cover these files.
+# LLVM 22's isolated checker reports internal code-action failures for the standalone command
+# header and while testing refactors in loop- and macro-heavy runtime sources. Their production
+# translation units and clang-tidy still cover these files.
 find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) \
+  ! -path 'include/fiber/command.hpp' \
   ! -path 'src/client/attached_client.cpp' \
   ! -path 'src/core/engine.cpp' \
   ! -path 'src/core/input.cpp' \

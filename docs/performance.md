@@ -30,7 +30,13 @@ Reproduce the microbenchmarks with:
 just profile=release bench
 ```
 
-## Extension IPC baseline
+## Command and extension baselines
+
+`benchmark_command_dispatch` measures validation plus one call through the allocation-free typed C++
+dispatcher. It excludes the command-specific topology mutation so future CLI, keymap, and extension
+transport measurements can separate dispatch overhead from the requested operation. The initial
+Apple Silicon release smoke measured approximately 1.5 ns per dispatch on July 24, 2026; this is a
+local regression baseline, not a cross-machine latency claim.
 
 `benchmark_extension_registration_codec` measures one bounded typed command-registration encode and
 incremental decode. It isolates framing cost from process scheduling so future socket round-trip,
@@ -38,7 +44,8 @@ event-flood, blocked-host, and pane-output backpressure benchmarks can report th
 Run it with:
 
 ```sh
-./build/release/fiber_benchmarks --benchmark_filter=extension_registration_codec
+./build/release/fiber_benchmarks \
+  --benchmark_filter='command_dispatch|extension_registration_codec'
 ```
 
 The extension host is never sampled from the PTY or renderer benchmark loops. An idle, blocked, or

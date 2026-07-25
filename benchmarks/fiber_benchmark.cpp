@@ -1,3 +1,4 @@
+#include "fiber/command.hpp"
 #include "fiber/fiber.hpp"
 #include "fiber/terminal/terminal.hpp"
 #include "protocol/extension.hpp"
@@ -7,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <ranges>
 #include <span>
 #include <string_view>
@@ -20,6 +22,27 @@ void benchmark_greeting(benchmark::State& state) {
   for ([[maybe_unused]] const auto iteration : state) {
     benchmark::DoNotOptimize(greeting());
   }
+}
+
+struct CommandBenchmarkContext final {
+  std::uint64_t calls{0};
+};
+
+[[nodiscard]] auto execute_benchmark_command(void* const context,
+                                             const Command& /*command*/) noexcept -> CommandResult {
+  ++static_cast<CommandBenchmarkContext*>(context)->calls;
+  return {.status = CommandStatus::applied};
+}
+
+void benchmark_command_dispatch(benchmark::State& state) {
+  CommandBenchmarkContext context;
+  const CommandDispatcher dispatcher(&execute_benchmark_command, &context);
+  const Command command{.kind = CommandKind::focus_next, .origin = CommandOrigin::keymap};
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto status = dispatcher.dispatch(command).status;
+    benchmark::DoNotOptimize(status);
+  }
+  benchmark::DoNotOptimize(context.calls);
 }
 
 void benchmark_extension_registration_codec(benchmark::State& state) {
@@ -297,6 +320,7 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
 }
 
 BENCHMARK(benchmark_greeting);
+BENCHMARK(benchmark_command_dispatch);
 BENCHMARK(benchmark_extension_registration_codec);
 BENCHMARK(benchmark_terminal_small_writes);
 BENCHMARK(benchmark_terminal_large_writes);

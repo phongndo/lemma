@@ -10,9 +10,12 @@ selection, attached client, input decoder, bounded status model/signature, damag
 frame deadline. The engine borrows the daemon's listener but does not own socket
 paths, locks, daemonization, or terminal-client raw mode.
 
-As the current workspace, window, pane, and client values move into generational stores, this
-component will add typed commands/events, bounded work queues, and a generalized backpressure
-policy. Generalized task, run, and view entities are not part of the agreed foundation; introduce
+The public `fiber/command.hpp` model now provides bounded command kinds, origins, generational-ID
+targets, typed results, and a validating dispatcher. Attached-client pane/window commands, detach,
+and CLI workspace-stop operations enter the authoritative engine through that dispatcher. Explicit
+workspace and pane ID resolution, extension invocation, typed events, bounded work queues, and a
+generalized backpressure policy remain follow-up work as the current values move into generational
+stores. Generalized task, run, and view entities are not part of the agreed foundation; introduce
 new authoritative entities only when implemented behavior proves they are necessary, and keep them
 dense and data-oriented rather than creating independently allocated service objects.
 

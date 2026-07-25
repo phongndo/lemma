@@ -110,6 +110,8 @@ namespace {
     return 0;
   }
   std::ranges::copy(suffix, remaining.subspan(digits).begin());
+  // open is variadic only to accept a mode when creation flags require one.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   const auto descriptor = ::open(path.data(), O_RDONLY | O_CLOEXEC);
   if (descriptor < 0) {
     return 0;

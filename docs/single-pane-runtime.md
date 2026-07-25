@@ -128,10 +128,13 @@ choices as committed release behavior:
 10. Generalize the client protocol for local and SSH operation after the shared command model is
     established.
 
-Steps 1 and 2 now have an implementation slice: missing config activates an empty generation; valid
-Lua can register commands, keymaps, subscriptions, and a bounded sidebar; malformed generations are
-rejected; and host IPC is processed after mux-critical work. The later steps remain implementation
-work, not behavior already claimed by the executable.
+Steps 1 through 3 now have implementation slices: missing config activates an empty generation;
+valid Lua can register commands, keymaps, subscriptions, and a bounded sidebar; malformed
+generations are rejected; and host IPC is processed after mux-critical work. Existing attached-client
+pane/window actions, detach, and CLI workspace stops now map to bounded `Command` values and pass
+through one validating dispatcher with typed results. Step 4 is therefore complete for those existing
+mutations, but extension requests and setup operations are not yet routed through it. The later steps
+remain implementation work, not behavior already claimed by the executable.
 
 ## Rules for contributors and agents
 

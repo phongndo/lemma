@@ -75,6 +75,7 @@ lint: configure
 lsp-check: configure
     {{ nix }} bash -c "find apps include src -type f \
         \\( -name '*.hpp' -o -name '*.cpp' \\) \
+        ! -path 'include/fiber/command.hpp' \
         ! -path 'src/client/attached_client.cpp' \
         ! -path 'src/core/engine.cpp' \
         ! -path 'src/core/input.cpp' \

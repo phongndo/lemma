@@ -99,11 +99,12 @@ Platform operations return explicit values/errors and do not mutate core state t
 
 ### Protocol — `src/protocol/`
 
-The protocol component owns bounded messages between the disposable client and the daemon:
-message schemas, encoding, incremental decoding, payload limits, and handshake rules. The current
-single-client wire format is documented in [`protocol.md`](protocol.md); Phase 1 replaces it with the
-versioned command protocol fixed by [`product-contract.md`](product-contract.md). Protocol code does
-not open sockets, discover workspaces, dispatch core commands, or write terminal bytes.
+The protocol component owns bounded messages between the disposable client, extension host, and
+daemon: message schemas, encoding, incremental decoding, payload limits, and handshake rules. The
+current client wire format and versioned extension framing are documented in
+[`protocol.md`](protocol.md). Decoded mutating client actions are translated into the shared C++
+command model before they change mux state; protocol code does not open sockets, discover
+workspaces, dispatch core commands, or write terminal bytes.
 
 All lengths and enum values are validated before a message reaches the core.
 
@@ -166,7 +167,9 @@ A bounded reactor turn proceeds in this order:
 
 Ordering is part of the architecture. In particular, extension work occurs after latency-sensitive
 PTY and rendering work. Fairness budgets prevent one busy pane or slow client from monopolizing a
-turn.
+turn. `include/fiber/command.hpp` defines the allocation-free command value, target IDs, origin, typed
+result, and validating dispatcher. The engine owns the sole executor that translates validated
+commands into workspace/window/pane mutations.
 
 ## Extension boundary
 
