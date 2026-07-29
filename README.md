@@ -1,17 +1,34 @@
 # fiber
 
-A bounded, data-oriented C++23 foundation for a fast terminal multiplexer, backed by the
-pinned `libghostty-vt` library. Lua 5.5 is the configuration language, and Zstandard supports
-bounded snapshots and application-owned compressed state.
+**A terminal multiplexer built like infrastructure.**
+
+Fiber is an open-source, self-hosted terminal multiplexer for fast, reliable, long-lived sessions.
+It is being designed so people, scripts, remote clients, and coding agents can operate the same
+sessions through one typed command model—without requiring a hosted service.
+
+## Why Fiber
+
+- **Reliable by construction:** one authoritative daemon owns session state; queues, payloads, and
+  event-loop work are bounded; client and extension failures do not end pane processes.
+- **Fast by measurement:** C++23 owns the PTY, terminal, layout, composition, and output hot paths,
+  with damage-based rendering backed by the pinned `libghostty-vt` library.
+- **Programmable:** Lua 5.5 configuration and an isolated extension host build on the same typed
+  command model used by built-in keys and CLI operations. Remote and agent access are planned on
+  that semantic foundation.
+- **Yours to operate:** Fiber runs as a per-user daemon, keeps working when clients detach, and is
+  distributed under the permissive MIT license.
 
 The current vertical slice provides up to 64 named persistent workspaces in one per-user daemon,
 each with up to 16 generationally identified windows and 64 panes distributed across them. It
 supports start, attach, detach, list, window-list, and kill commands, plus release-enabled invariant
-assertions, generational IDs, bounded byte queues,
-and an isolated Ghostty terminal adapter. The adapter owns the canonical terminal and dirty render
-state, captures terminal effects into bounded queues, and enforces a quota-tracked allocator. See
-[`docs/architecture.md`](docs/architecture.md) for the ownership model and system invariants, and
-[`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer results.
+assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
+adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
+queues, and enforces a quota-tracked allocator. Lua command callbacks, remote access, agent APIs,
+and durability across daemon restarts remain roadmap work. See
+[`docs/architecture.md`](docs/architecture.md) for the ownership model and system invariants,
+[`docs/product-contract.md`](docs/product-contract.md) for committed direction versus open product
+questions, and [`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer
+results.
 
 ## Toolchain
 
@@ -132,6 +149,11 @@ just hooks
 Run commits and pushes from `nix develop` so every hook tool is on `PATH`. Safe
 fixes are re-staged automatically while unstaged work is preserved. Bypass hk
 for one command only when necessary with `HK=0 git commit` or `HK=0 git push`.
+
+## License
+
+Fiber is released under the [MIT License](LICENSE). Third-party dependencies remain subject to
+their own licenses.
 
 ## Third-party dependency
 

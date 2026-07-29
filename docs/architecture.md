@@ -6,10 +6,12 @@ workspace/window and split-pane runtime documented in [`single-pane-runtime.md`]
 
 ## Product goal
 
-Fiber is a bounded, data-oriented terminal process runner and multiplexer with a small, extremely
-fast core and an extension boundary that does not compromise latency, ownership, or memory safety.
-Agreed foundation decisions and still-open product questions are recorded in
-[`product-contract.md`](product-contract.md).
+Fiber is an open-source, self-hosted terminal multiplexer built like infrastructure. It provides
+fast, reliable, programmable sessions through a bounded, data-oriented core and an extension
+boundary that does not compromise latency, ownership, or memory safety. The same typed semantic
+model is intended for people, scripts, remote clients, and coding agents without making a hosted
+service part of the runtime contract. Agreed foundation decisions and still-open product questions
+are recorded in [`product-contract.md`](product-contract.md).
 
 The design is a **modular monolith**:
 

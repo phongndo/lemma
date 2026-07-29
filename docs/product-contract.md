@@ -10,10 +10,15 @@ The current executable is described in [`single-pane-runtime.md`](single-pane-ru
 
 ## Product direction
 
-Fiber is a performant terminal process runner and multiplexer. One per-user daemon owns workspaces,
-windows, panes, child processes, PTYs, and canonical terminal state. A process continues when no
-terminal client is attached, so an unattached workspace or pane is the initial background-execution
-model. Generalized task, run, and view entities are not required for the foundation.
+Fiber is an open-source, self-hosted terminal multiplexer built like infrastructure: fast, reliable,
+and programmable without requiring a hosted service. Its typed command model is intended to let
+people, scripts, remote clients, and coding agents operate the same long-lived sessions while the
+latency-sensitive runtime remains bounded and independently operable.
+
+One per-user daemon owns workspaces, windows, panes, child processes, PTYs, and canonical terminal
+state. A process continues when no terminal client is attached, so an unattached workspace or pane
+is the initial background-execution model. Generalized task, run, and view entities are not required
+for the foundation.
 
 Remote-first initially means operating a Fiber daemon on another machine: create processes, inspect
 state, attach, detach, and manage workspaces through the same semantic API used locally. SSH stdio is
