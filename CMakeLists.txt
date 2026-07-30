@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.30)
 
 project(fiber VERSION 0.1.0 LANGUAGES C CXX)
 
-if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  message(FATAL_ERROR "fiber requires the LLVM Clang compiler")
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
+  message(FATAL_ERROR "fiber requires Clang or Apple Clang")
 endif()
 
 set(CMAKE_CXX_EXTENSIONS OFF)

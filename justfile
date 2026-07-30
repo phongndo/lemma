@@ -1,4 +1,4 @@
-nix := "nix develop --command"
+nix := ""
 profile := "debug"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
@@ -90,7 +90,7 @@ lsp:
     {{ nix }} clangd --enable-config
 
 # Run formatting, lint, LSP diagnostics, build, and tests.
-check: fmt-check lint lsp-check test
+check: build fmt-check lint lsp-check test
 
 # Run the merge-blocking C++ suite used by GitHub Actions.
 ci-cpp:

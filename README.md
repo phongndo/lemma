@@ -37,13 +37,13 @@ ordered implementation checklist is tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
 
-On macOS, the locked Nix shell uses the LLVM 22 installation from
-`brew --prefix llvm`; it does not install or select Nix's Clang. On Linux, the
-shell supplies the matching Nix LLVM 22 toolchain. It also supplies CMake,
-Ninja, ccache, Conan 2, Zig (required to build `libghostty-vt`), hk, Python,
-actionlint, ShellCheck, and the formatters. Conan supplies GoogleTest,
-GoogleMock, and Google Benchmark. CMake rejects non-LLVM C++ compilers,
-requires C++23 without compiler extensions,
+On macOS, the locked Nix shell selects Apple Clang and the Xcode SDK. It uses
+Nix-provided clangd, clang-format, and clang-tidy wrappers that analyze against
+Apple's SDK and libc++. On Linux, the shell supplies the
+Nix LLVM 22 toolchain. It also supplies CMake, Ninja, ccache, Conan 2, Zig
+(required to build `libghostty-vt`), hk, Python, actionlint, ShellCheck, and the
+formatters. Conan supplies GoogleTest, GoogleMock, and Google Benchmark. CMake
+accepts Clang and Apple Clang, requires C++23 without compiler extensions,
 exports the compilation database for clangd, and promotes the strict warning
 set to errors.
 
@@ -136,10 +136,11 @@ personal shell configuration.
 
 ## Editor and commit hooks
 
-Point the editor at `clangd` from `nix develop`. [`.clangd`](.clangd) uses
-`build/debug/compile_commands.json`, strict missing/unused include diagnostics,
-clang-tidy diagnostics, background indexing, and inlay hints. Run
-`just configure` before opening the project in an editor.
+Point the editor at `clangd` from `nix develop`. On macOS, its wrapper uses the
+Xcode resource headers alongside the generated Apple Clang compilation database.
+[`.clangd`](.clangd) uses `build/debug/compile_commands.json`, strict missing/unused
+include diagnostics, clang-tidy diagnostics, background indexing, and inlay hints.
+Run `just configure` before opening the project in an editor.
 
 [`hk.pkl`](hk.pkl) keeps pre-commit fast: it fixes staged C++/Nix/just
 formatting and runs staged-file hygiene, actionlint, ShellCheck, and CI contract
