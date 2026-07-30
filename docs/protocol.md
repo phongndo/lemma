@@ -169,6 +169,15 @@ directions, typed errors, stable IDs, peer authentication, and bounded terminal-
 Its semantic commands should be shared with built-in and Lua operations, while its transport may be
 a local Unix socket or SSH stdio.
 
+That protocol must make keyboard and mouse first-class without turning all input into opaque bytes.
+It will preserve the order of bounded text/paste, typed key, mouse, focus, resize, and command values.
+Mouse values use closed action/button enums, bounded modifiers, client-cell coordinates, and bounded
+wheel deltas. The core owns layout hit testing and pane-local translation; the terminal adapter owns
+encoding application-directed events according to canonical terminal modes. Motion and wheel floods
+must be bounded or coalesced without reordering clicks, key events, commands, or paste boundaries.
+Capability negotiation must make keyboard-only clients valid while explicitly advertising mouse and
+extended-key support.
+
 Introduce those fields as one tested protocol change with golden encodings, fragmentation,
 malformed- and oversized-input cases, client/daemon mismatch diagnostics, and fuzz coverage. The
 versioned endpoint may coexist with the current endpoint during development, but a client must never

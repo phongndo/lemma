@@ -95,6 +95,8 @@ limitations:
 - workspaces and panes do not yet use separate generational stores; windows use generational IDs
   within their owning workspace;
 - only one client may attach at a time;
+- keyboard prefix commands are implemented, but first-class mouse decoding, hit testing, application
+  pass-through, selection, scrolling, and drag resizing are not;
 - the local protocol has no version or capability negotiation;
 - listener acceptance and initial attach setup still use the vertical slice's simple policy;
 - new workspaces inherit the daemon's original environment and working directory;

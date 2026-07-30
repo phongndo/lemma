@@ -12,6 +12,8 @@ sessions through one typed command model—without requiring a hosted service.
   event-loop work are bounded; client and extension failures do not end pane processes.
 - **Fast by measurement:** C++23 owns the PTY, terminal, layout, composition, and output hot paths,
   with damage-based rendering backed by the pinned `libghostty-vt` library.
+- **Keyboard-complete and mouse-native:** keyboard and mouse are first-class input methods that
+  converge on the same commands, layout, and terminal state instead of separate feature paths.
 - **Programmable:** Lua 5.5 configuration and an isolated extension host build on the same typed
   command model used by built-in keys and CLI operations. Remote and agent access are planned on
   that semantic foundation.
@@ -27,8 +29,11 @@ queues, and enforces a quota-tracked allocator. Lua command callbacks, remote ac
 and durability across daemon restarts remain roadmap work. See
 [`docs/architecture.md`](docs/architecture.md) for the ownership model and system invariants,
 [`docs/product-contract.md`](docs/product-contract.md) for committed direction versus open product
-questions, and [`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer
-results.
+questions, [`docs/current-capabilities.md`](docs/current-capabilities.md) for the audited present
+state, [`docs/roadmap.md`](docs/roadmap.md) for milestone and release gates,
+[`docs/daily-driver-contract.md`](docs/daily-driver-contract.md) for the local mux quality bar, and
+[`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer results. The
+ordered implementation checklist is tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
 

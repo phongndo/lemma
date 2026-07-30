@@ -140,9 +140,10 @@ operations, and wires high-level components together. It owns no mux state or I/
 
 ### Client — `src/client/`
 
-The disposable client owns raw-terminal lifetime, local input/prefix handling, resize forwarding,
-the daemon connection, outer-terminal writes, and terminal restoration. It can disappear without
-affecting daemon-owned workspace state.
+The disposable client owns raw-terminal lifetime, local keyboard and mouse decoding, prefix
+handling, resize/focus forwarding, the daemon connection, outer-terminal writes, and exact terminal
+restoration. It normalizes identifiable interactions into bounded protocol values but owns no layout
+or hit-testing policy. It can disappear without affecting daemon-owned workspace state.
 
 ### Daemon — `src/daemon/`
 
@@ -172,6 +173,28 @@ PTY and rendering work. Fairness budgets prevent one busy pane or slow client fr
 turn. `include/fiber/command.hpp` defines the allocation-free command value, target IDs, origin, typed
 result, and validating dispatcher. The engine owns the sole executor that translates validated
 commands into workspace/window/pane mutations.
+
+## Input model
+
+Keyboard and mouse are first-class inputs to one semantic system. The client is responsible for
+bounded decoding and preserving event order; the core owns active-client policy, layout hit testing,
+focus, selection, and dispatch. A mouse event carries a closed action/button enum, bounded modifier
+bits, client-cell coordinates, and bounded wheel motion. The core either translates it into the same
+command used by a keyboard binding or targets a pane and converts the coordinates to pane-local
+cells. Application-directed key and mouse values are then encoded through the terminal adapter using
+the pane's canonical modes rather than being blindly forwarded.
+
+Fiber-owned rows, separators, overlays, and selection remain mux input targets even when an
+application has enabled mouse tracking. An explicit configurable modifier overrides application
+capture. Keyboard access must remain complete for all core operations, while pointer-specific
+interactions such as direct hit testing and drag resizing operate on the same layout mutations as
+their keyboard equivalents.
+
+Outer-terminal mode ownership remains with the disposable client. Enabling mouse tracking, focus
+reporting, paste modes, or alternate-screen behavior creates a restoration obligation on normal
+exit, protocol failure, signal handling, daemon disconnect, and partial startup failure. Input queues,
+decoder storage, per-turn input work, and drag/wheel coalescing are bounded. The current byte-stream
+client is transitional; [`protocol.md`](protocol.md) defines the required protocol evolution.
 
 ## Extension boundary
 

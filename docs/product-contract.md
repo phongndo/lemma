@@ -6,7 +6,11 @@ This document records decisions explicitly agreed for Fiber's foundation. It is 
 first-release feature contract. CLI defaults, copy-mode behavior, durability beyond daemon lifetime,
 and the final remote UX remain open and must not be inferred from this document.
 
-The current executable is described in [`single-pane-runtime.md`](single-pane-runtime.md).
+The current executable's ownership is described in
+[`single-pane-runtime.md`](single-pane-runtime.md), and its audited user-facing behavior is
+inventoried in [`current-capabilities.md`](current-capabilities.md). Required day-to-day mux behavior
+and its completion bar are defined in [`daily-driver-contract.md`](daily-driver-contract.md);
+milestone order is defined in [`roadmap.md`](roadmap.md).
 
 ## Product direction
 
@@ -28,8 +32,31 @@ Fiber's pillars are:
 
 1. **performance:** C++ owns every PTY, terminal, layout, composition, and output hot path;
 2. **strong foundation:** mutable state has one owner, every boundary is bounded, and extension
-   failure cannot end pane processes; and
-3. **extensibility:** configuration and extensions use one powerful Lua API over typed values.
+   failure cannot end pane processes;
+3. **first-class input:** keyboard and mouse are co-equal ways to operate mux state and terminal
+   applications; and
+4. **extensibility:** configuration and extensions use one powerful Lua API over typed values.
+
+## Input contract
+
+Keyboard operation remains complete: every core workspace, window, pane, copy, and configuration
+workflow must be usable without a mouse. Mouse support is nevertheless a primary interaction model,
+not optional raw-byte forwarding. Fiber owns bounded typed mouse events, layout hit testing,
+pane-local coordinate translation, status interaction, selection, scrolling, and drag resizing.
+Equivalent keyboard and mouse mux actions dispatch the same typed commands rather than maintaining
+separate mutation paths.
+
+When the focused terminal application requests mouse tracking, events inside its pane are encoded
+through the terminal adapter according to its active modes. Fiber-owned chrome remains under Fiber's
+control, and a configurable modifier must let a user override application capture for mux selection
+and navigation. Cell-based SGR mouse input is the required baseline; additional encodings may be
+supported through the terminal adapter. The attached client must restore outer-terminal keyboard,
+focus, paste, and mouse modes on every normal, error, signal, and disconnect path.
+
+The current runtime implements keyboard prefix commands but does not yet implement this mouse path.
+The versioned client protocol must represent typed key, text/paste, focus, resize, and mouse values
+without losing their input order. Exact default mouse enablement and override bindings remain part of
+the first-release UX decision.
 
 ## C++ and Lua boundary
 
@@ -115,7 +142,7 @@ The following require explicit decisions before a complete first-release contrac
 - exact process cwd and environment inheritance;
 - PTY-only versus additional pipe-backed background jobs;
 - detach, logout, daemon-restart, and reboot durability guarantees;
-- copy mode, pane resizing, and default bindings;
+- copy-mode details, clipboard integration, and default keyboard/mouse bindings;
 - the public automation/RPC presentation;
 - package discovery and installation;
 - config synchronization between local and remote hosts; and
