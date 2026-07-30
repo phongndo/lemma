@@ -306,9 +306,15 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
   return {};
 }
 
+// Repeated-message backpressure and all packet variants are intentionally explicit.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto ClientDecoder::next() noexcept
     -> std::expected<std::optional<ClientMessage>, DecodeError> {
-  FIBER_ASSERT(pending_size_ == 0);
+  // A caller applying downstream backpressure may inspect the same complete message again without
+  // consuming it. Decoder storage and packet boundaries remain unchanged between attempts.
+  if (pending_size_ != 0) {
+    pending_size_ = 0;
+  }
   if (used_ == 0) {
     return std::optional<ClientMessage>{};
   }

@@ -113,38 +113,39 @@ template <typename Integer>
              : 1;
 }
 
-[[nodiscard]] auto dispatch(const std::string_view command, const std::string_view workspace,
-                            const bool named) -> int {
+[[nodiscard]] auto dispatch(const daemon::RuntimeEndpoint& endpoint, const std::string_view command,
+                            const std::string_view workspace, const bool named) -> int {
   if (command == "demo" && !named) {
     return run_demo();
   }
   if (command == "new") {
-    return daemon::ensure(workspace) == 0 ? client::attach(workspace) : 1;
+    return daemon::ensure(endpoint, workspace) == 0 ? client::attach(endpoint, workspace) : 1;
   }
   if (command == "start") {
-    return daemon::start(workspace);
+    return daemon::start(endpoint, workspace);
   }
   if (command == "attach") {
-    return client::attach(workspace);
+    return client::attach(endpoint, workspace);
   }
   if (command == "list" || command == "ls" || command == "lookup") {
-    return named ? daemon::list(workspace) : daemon::list();
+    return named ? daemon::list(endpoint, workspace) : daemon::list(endpoint);
   }
   if (command == "windows") {
-    return daemon::list_windows(workspace);
+    return daemon::list_windows(endpoint, workspace);
   }
   if (command == "kill") {
-    return daemon::kill(workspace);
+    return daemon::kill(endpoint, workspace);
   }
   if (command == "kill-all" && !named) {
-    return daemon::kill_all();
+    return daemon::kill_all(endpoint);
   }
   return print_usage();
 }
 
 } // namespace
 
-[[nodiscard]] auto run(const int argument_count, char** argument_values) -> int {
+[[nodiscard]] auto run(const daemon::RuntimeEndpoint& endpoint, const int argument_count,
+                       char** argument_values) -> int {
   const std::span arguments(argument_values, static_cast<std::size_t>(argument_count));
   if (arguments.size() != 2 && arguments.size() != 3) {
     return print_usage();
@@ -156,7 +157,7 @@ template <typename Integer>
   if (named) {
     workspace = arguments.subspan(2, 1).front();
   }
-  return dispatch(command, workspace, named);
+  return dispatch(endpoint, command, workspace, named);
 }
 
 } // namespace fiber::app

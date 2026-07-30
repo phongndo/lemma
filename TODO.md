@@ -95,47 +95,47 @@ exit gate.
 
 Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/process-level-pty-harness.md).
 
-- [ ] Add a reusable pseudoterminal process harness under `tests/` or `tools/`.
-- [ ] Give tests isolated daemon endpoints so they cannot affect a user's daemon or each other.
-- [ ] Bound every harness wait and print useful process/output diagnostics on timeout.
-- [ ] Test daemon launch and workspace creation from a clean environment.
-- [ ] Test attach, ordinary key input, and visible shell output.
-- [ ] Test horizontal and vertical splits.
+- [x] Add a reusable pseudoterminal process harness under `tests/` or `tools/`.
+- [x] Give tests isolated daemon endpoints so they cannot affect a user's daemon or each other.
+- [x] Bound every harness wait and print useful process/output diagnostics on timeout.
+- [x] Test daemon launch and workspace creation from a clean environment.
+- [x] Test attach, ordinary key input, and visible shell output.
+- [x] Test horizontal and vertical splits.
 - [ ] Test directional, next, and previous focus.
 - [ ] Test pane close and zoom.
 - [ ] Test window create, cycle, direct select, and close.
-- [ ] Test outer resize and too-small-layout suspension/recovery.
-- [ ] Test detach, process continuity, and reattach reconstruction.
-- [ ] Test abrupt client EOF/crash without process loss.
-- [ ] Test child exit, pane reclamation, and final-workspace cleanup.
-- [ ] Test normal terminal restoration after detach and daemon disconnect.
+- [x] Test outer resize and too-small-layout suspension/recovery.
+- [x] Test detach, process continuity, and reattach reconstruction.
+- [x] Test abrupt client EOF/crash without process loss.
+- [x] Test child exit, pane reclamation, and final-workspace cleanup.
+- [x] Test normal terminal restoration after detach and daemon disconnect.
 - [ ] Move the warm-session multiplexer benchmark harness into the repository.
 
 ## P0 — make every accepted connection nonblocking
 
-- [ ] Set the listener and every accepted descriptor nonblocking immediately.
-- [ ] Introduce bounded generational connection slots owned by the reactor.
-- [ ] Represent control/attach setup as an incremental state machine.
-- [ ] Incrementally decode command, name, dimensions, and handshake data.
-- [ ] Add bounded setup input and output buffers.
-- [ ] Queue the initial full attach frame instead of sending it synchronously.
-- [ ] Queue list/window/error responses instead of writing synchronously in the reactor.
-- [ ] Add setup progress deadlines and deterministic timeout errors.
-- [ ] Reject connection-capacity exhaustion without affecting existing sessions.
-- [ ] Ensure one idle peer cannot delay PTY reads, client input, frames, or extensions.
+- [x] Set the listener and every accepted descriptor nonblocking immediately.
+- [x] Introduce bounded generational connection slots owned by the reactor.
+- [x] Represent control/attach setup as an incremental state machine.
+- [x] Incrementally decode command, name, dimensions, and handshake data.
+- [x] Add bounded setup input and output buffers.
+- [x] Queue the initial full attach frame instead of sending it synchronously.
+- [x] Queue list/window/error responses instead of writing synchronously in the reactor.
+- [x] Add bounded setup progress deadlines; add explicit timeout diagnostics with the versioned protocol.
+- [x] Reject connection-capacity exhaustion without affecting existing sessions.
+- [x] Ensure one idle peer cannot delay PTY reads, client input, frames, or extensions.
 - [ ] Test fragmented, coalesced, idle, disconnecting, malformed, and non-reading peers.
 - [ ] Test slow control clients and slow initial-attach clients.
 
 ## P0 — add bounded PTY write backpressure
 
-- [ ] Add one bounded ordered PTY write queue per pane.
-- [ ] Queue user key/text/paste input instead of calling `write_all` on a nonblocking PTY.
-- [ ] Queue terminal-generated responses on the same explicitly ordered path.
-- [ ] Poll `POLLOUT` only while a pane has queued writes.
-- [ ] Handle partial writes, `EINTR`, and `EAGAIN` without detaching or retiring the pane.
-- [ ] Define queue capacity and separate per-turn write budgets.
-- [ ] Define observable overflow behavior for user input, paste, and terminal responses.
-- [ ] Preserve ordering between terminal responses and subsequent user input.
+- [x] Add one bounded ordered PTY write queue per pane.
+- [x] Queue user key/text/paste input instead of calling `write_all` on a nonblocking PTY.
+- [x] Queue terminal-generated responses on the same explicitly ordered path.
+- [x] Poll `POLLOUT` only while a pane has queued writes.
+- [x] Handle partial writes, `EINTR`, and `EAGAIN` without detaching or retiring the pane.
+- [x] Define queue capacity and separate per-turn write budgets.
+- [x] Backpressure user input before acceptance and retire a pane on a true terminal-response capacity failure.
+- [x] Preserve ordering between terminal responses and subsequent user input.
 - [ ] Test blocked PTYs, partial writes, recovery, overflow, and fairness across panes.
 - [ ] Benchmark input latency while another pane's PTY write side is blocked.
 

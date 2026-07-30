@@ -40,11 +40,13 @@ typed commands for existing mutations, and an isolated Lua host with transaction
 The exact working, partial, scaffolded, and absent capabilities are audited in
 [`current-capabilities.md`](current-capabilities.md).
 
-Before feature breadth, the foundation must close three critical gaps found by that audit: blocking
-accepted-connection setup inside the authoritative reactor, missing bounded PTY write queues, and no
-checked-in process-level daemon/client test harness. Daily-driver feature gaps then include copy and
-selection, first-class mouse routing, interactive pane ratios, window naming, active configuration,
-protocol negotiation, release artifacts, and explicit durability guarantees.
+The first foundation hardening slice is now implemented: accepted setup/control sockets are bounded
+and nonblocking, every live pane has an ordered bounded PTY write queue, and isolated process-level
+PTY tests protect the production daemon/client/shell lifecycle. Remaining foundation work is deeper
+blocked-PTY stress and latency coverage before the authoritative-ID and versioned-protocol phase.
+Daily-driver feature gaps still include copy and selection, first-class mouse routing, interactive
+pane ratios, window naming, active configuration, release artifacts, and explicit durability
+guarantees.
 
 ## Daily-driver foundation gate
 
@@ -195,17 +197,11 @@ orchestration, and feature-for-feature competition with other multiplexers.
 
 ## Immediate implementation sequence
 
-1. Preserve today's behavior with the checked-in process-level pseudoterminal harness specified in
-   [`plans/process-level-pty-harness.md`](plans/process-level-pty-harness.md), covering daemon launch,
-   attach, input, splits, focus, windows, zoom, detach, reattach, child exit, and cleanup.
-2. Make accepted control/setup connections bounded and nonblocking so an idle peer cannot stop PTY
-   progress or rendering.
-3. Add bounded PTY write queues for ordered user input and terminal responses, including explicit
-   backpressure, overflow, and fairness tests.
-4. Resolve the remaining first-release decision gate in the product contract.
-5. Introduce authoritative generational workspace/pane IDs and a versioned protocol envelope.
-6. Add ordered typed keyboard, paste, focus, resize, and mouse values.
-7. Deliver keyboard focus plus click-to-focus through one command path, including correct application
+1. Finish blocked-PTY stress/latency tests and the remaining detailed process-harness scenarios.
+2. Resolve the remaining first-release decision gate in the product contract.
+3. Introduce authoritative generational workspace/pane IDs and a versioned protocol envelope.
+4. Add ordered typed keyboard, paste, focus, resize, and mouse values.
+5. Deliver keyboard focus plus click-to-focus through one command path, including correct application
    mouse pass-through and terminal restoration.
-8. Add plain-startup behavior, window naming, interactive pane resizing, and copy-mode foundations.
-9. Build the first `v0.1.0-alpha` release artifacts and recruit the initial feedback cohort.
+6. Add plain-startup behavior, window naming, interactive pane resizing, and copy-mode foundations.
+7. Build the first `v0.1.0-alpha` release artifacts and recruit the initial feedback cohort.

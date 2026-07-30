@@ -61,11 +61,7 @@ static_assert(panes_per_workspace_max > 0);
 static_assert(windows_per_workspace_max > 0);
 static_assert(windows_per_workspace_max <= render::status_windows_max);
 using platform::close_descriptor;
-using platform::read_exact;
-using platform::send_all;
-using platform::send_text;
 using platform::set_nonblocking;
-using platform::write_all;
 using render::ClientOutputState;
 using render::flush_frame;
 using render::FrameBuffer;
@@ -104,12 +100,18 @@ private:
          terminal.resize({.columns = columns, .rows = rows}).has_value();
 }
 
-[[nodiscard]] auto drain_terminal_responses(const int pty, vt::Terminal& terminal) noexcept
-    -> bool {
+[[nodiscard]] auto drain_terminal_responses(PanePtyWriteQueue& pending_writes,
+                                            vt::Terminal& terminal) noexcept -> bool {
+  // The terminal adapter reports its complete retained response size before destructive reads. A
+  // capacity failure is therefore observable and retires this pane without silently losing bytes.
+  const auto pending_bytes = terminal.pending_pty_response_bytes();
+  if (pending_bytes > pending_writes.remaining() || !pending_writes.reserve(pending_bytes)) {
+    return false;
+  }
   std::array<std::byte, std::size_t{4} * 1'024U> response{};
   while (terminal.pending_pty_response_bytes() > 0) {
     const auto size = terminal.read_pty_responses(response);
-    if (size == 0 || !write_all(pty, std::span(response).first(size))) {
+    if (size == 0 || !pending_writes.append(std::span(response).first(size))) {
       return false;
     }
   }
@@ -121,7 +123,8 @@ struct PtyDrainResult final {
   bool changed{false};
 };
 
-[[nodiscard]] auto drain_pty(const int pty, vt::Terminal& terminal) noexcept -> PtyDrainResult {
+[[nodiscard]] auto drain_pty(const int pty, vt::Terminal& terminal,
+                             PanePtyWriteQueue& pending_writes) noexcept -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
   PtyDrainResult drain{};
@@ -130,7 +133,7 @@ struct PtyDrainResult final {
     if (bytes_read > 0) {
       terminal.write(std::span(output).first(static_cast<std::size_t>(bytes_read)));
       drain.changed = true;
-      if (!drain_terminal_responses(pty, terminal)) {
+      if (!drain_terminal_responses(pending_writes, terminal)) {
         drain.alive = false;
         return drain;
       }
@@ -169,23 +172,6 @@ struct WorkspaceName final {
   });
 }
 
-[[nodiscard]] auto read_workspace_name(const int connection) noexcept
-    -> std::optional<WorkspaceName> {
-  std::array<std::byte, 1> encoded_size{};
-  if (!read_exact(connection, encoded_size)) {
-    return std::nullopt;
-  }
-  WorkspaceName workspace;
-  workspace.size = protocol::decode_workspace_name_size(encoded_size.front());
-  if (workspace.size == 0 || workspace.size > workspace.bytes.size() ||
-      !read_exact(connection,
-                  std::as_writable_bytes(std::span(workspace.bytes).first(workspace.size))) ||
-      !valid_workspace_name(workspace.view())) {
-    return std::nullopt;
-  }
-  return workspace;
-}
-
 struct Pane final {
   explicit Pane(vt::Terminal&& created_terminal) noexcept : terminal(std::move(created_terminal)) {}
 
@@ -208,6 +194,7 @@ struct Pane final {
   pid_t child{-1};
   std::array<char, process_name_bytes_max> process_name{};
   std::size_t process_name_size{0};
+  PanePtyWriteQueue pending_writes;
   bool active{true};
 };
 
@@ -279,6 +266,7 @@ struct Workspace final {
     output.reset();
     frame_pending = false;
     force_full_pending = false;
+    input_backpressured = false;
   }
 
   std::array<char, protocol::workspace_name_bytes_max> name{};
@@ -290,12 +278,15 @@ struct Workspace final {
   protocol::ClientDecoder decoder;
   ClientOutputState output;
   int client{-1};
+  std::uint32_t pending_attach_slot{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t pending_attach_generation{0};
   std::uint16_t columns{80};
   std::uint16_t rows{24};
   bool active{true};
   bool frame_pending{false};
   bool force_full_pending{false};
   bool status_valid{false};
+  bool input_backpressured{false};
   std::uint64_t status_signature{0};
   std::chrono::steady_clock::time_point frame_deadline;
 };
@@ -1251,6 +1242,7 @@ collect_surfaces(Workspace& workspace,
 
 enum class ParseResult : std::uint8_t {
   keep,
+  backpressure,
   detach,
   error,
 };
@@ -1286,7 +1278,15 @@ enum class ParseResult : std::uint8_t {
         return ParseResult::error;
       }
       auto& pane = std::span(window->panes).subspan(window->focused_pane, 1).front();
-      if (pane == nullptr || !write_normalized_input(pane->pty, pane->terminal, message.input)) {
+      if (pane == nullptr) {
+        return ParseResult::error;
+      }
+      const auto queued =
+          queue_normalized_input(pane->pending_writes, pane->terminal, message.input);
+      if (queued == InputQueueResult::full) {
+        return ParseResult::backpressure;
+      }
+      if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
       break;
@@ -1310,6 +1310,10 @@ enum class ParseResult : std::uint8_t {
 }
 
 [[nodiscard]] auto receive_client(Workspace& workspace) noexcept -> ParseResult {
+  const auto buffered = parse_client_packets(workspace);
+  if (buffered != ParseResult::keep) {
+    return buffered;
+  }
   const auto available = workspace.decoder.writable_bytes();
   if (available.empty()) {
     return ParseResult::error;
@@ -1328,43 +1332,72 @@ enum class ParseResult : std::uint8_t {
   return parse_client_packets(workspace);
 }
 
-[[nodiscard]] auto send_safe_text(const int socket, const std::string_view text,
-                                  const std::size_t maximum) noexcept -> bool {
-  std::array<char, 256> sanitized{};
-  const auto size = std::min(text.size(), maximum);
-  std::size_t offset = 0;
-  while (offset < size) {
-    const auto count = std::min(size - offset, sanitized.size());
-    const auto source = std::span<const char>(text).subspan(offset, count);
-    for (std::size_t index = 0; index < count; ++index) {
-      const auto character = source.subspan(index, 1).front();
-      const auto value = static_cast<unsigned char>(character);
-      std::span(sanitized).subspan(index, 1).front() =
-          value < 0x20U || value == 0x7FU ? '?' : character;
-    }
-    if (!send_text(socket, std::string_view(sanitized.data(), count))) {
+class ConnectionOutput final {
+public:
+  [[nodiscard]] auto append(const std::span<const std::byte> bytes) noexcept -> bool {
+    if (bytes.size() > storage_.size() - size_) {
       return false;
     }
-    offset += count;
+    std::ranges::copy(bytes, std::span(storage_).subspan(size_).begin());
+    size_ += bytes.size();
+    return true;
   }
-  return true;
-}
 
-[[nodiscard]] auto send_safe_title(const int socket, const std::string_view title) noexcept
-    -> bool {
-  constexpr std::size_t title_bytes_max = 256;
-  return send_safe_text(socket, title, title_bytes_max);
-}
-
-[[nodiscard]] auto send_number(const int socket, const std::uint64_t value) noexcept -> bool {
-  std::array<char, 32> buffer{};
-  const auto result = std::to_chars(buffer.begin(), buffer.end(), value);
-  if (result.ec != std::errc{}) {
-    return false;
+  [[nodiscard]] auto append_text(const std::string_view text) noexcept -> bool {
+    return append(std::as_bytes(std::span(text.data(), text.size())));
   }
-  const auto size = static_cast<std::size_t>(std::distance(buffer.begin(), result.ptr));
-  return send_text(socket, std::string_view(buffer.data(), size));
-}
+
+  [[nodiscard]] auto append_safe(const std::string_view text, const std::size_t maximum) noexcept
+      -> bool {
+    const auto size = std::min(text.size(), maximum);
+    if (size > storage_.size() - size_) {
+      return false;
+    }
+    for (const char character : std::span(text).first(size)) {
+      const auto value = static_cast<unsigned char>(character);
+      std::span(storage_).subspan(size_, 1).front() =
+          static_cast<std::byte>(value < 0x20U || value == 0x7FU ? '?' : character);
+      ++size_;
+    }
+    return true;
+  }
+
+  [[nodiscard]] auto append_title(const std::string_view title) noexcept -> bool {
+    constexpr std::size_t title_bytes_max = 256;
+    return append_safe(title, title_bytes_max);
+  }
+
+  [[nodiscard]] auto append_number(const std::uint64_t value) noexcept -> bool {
+    std::array<char, 32> buffer{};
+    const auto result = std::to_chars(buffer.begin(), buffer.end(), value);
+    if (result.ec != std::errc{}) {
+      return false;
+    }
+    const auto size = static_cast<std::size_t>(std::distance(buffer.begin(), result.ptr));
+    return append_text(std::string_view(buffer.data(), size));
+  }
+
+  [[nodiscard]] auto readable() const noexcept -> std::span<const std::byte> {
+    return std::span(storage_).first(size_).subspan(offset_);
+  }
+  [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
+  [[nodiscard]] auto consume(const std::size_t bytes) noexcept -> bool {
+    if (bytes > size_ - offset_) {
+      return false;
+    }
+    offset_ += bytes;
+    return true;
+  }
+  void reset() noexcept {
+    size_ = 0;
+    offset_ = 0;
+  }
+
+private:
+  std::array<std::byte, limits::pending_connection_output_bytes_max> storage_{};
+  std::size_t size_{0};
+  std::size_t offset_{0};
+};
 
 [[nodiscard]] auto window_title(const Window& window) noexcept -> std::string_view {
   const auto& focused = *std::span(window.panes).subspan(window.focused_pane, 1).front();
@@ -1427,27 +1460,28 @@ collect_status_line(Workspace& workspace,
   return {.windows = std::span(storage).first(count), .dirty = dirty};
 }
 
-[[nodiscard]] auto send_listing(const int socket, const Workspace& workspace) noexcept -> bool {
+[[nodiscard]] auto append_listing(ConnectionOutput& output, const Workspace& workspace) noexcept
+    -> bool {
   const auto* const window = active_window(workspace);
   if (window == nullptr) {
     return false;
   }
   const auto& focused = *std::span(window->panes).subspan(window->focused_pane, 1).front();
   const auto title_value = window_title(*window);
-  return send_text(socket, "fiber workspace \"") &&
-         send_safe_title(socket, workspace.workspace_name()) && send_text(socket, "\": ") &&
-         send_number(socket, window_count(workspace)) && send_text(socket, " window(s), ") &&
-         send_number(socket, pane_count(workspace)) &&
-         send_text(socket, " pane(s), focused pid ") &&
-         send_number(socket, static_cast<std::uint64_t>(focused.child)) &&
-         send_text(socket, workspace.client >= 0 ? ", attached, " : ", detached, ") &&
-         send_number(socket, workspace.columns) && send_text(socket, "x") &&
-         send_number(socket, workspace.rows) && send_text(socket, ", title \"") &&
-         send_safe_title(socket, title_value) && send_text(socket, "\"\n");
+  return output.append_text("fiber workspace \"") &&
+         output.append_title(workspace.workspace_name()) && output.append_text("\": ") &&
+         output.append_number(window_count(workspace)) && output.append_text(" window(s), ") &&
+         output.append_number(pane_count(workspace)) &&
+         output.append_text(" pane(s), focused pid ") &&
+         output.append_number(static_cast<std::uint64_t>(focused.child)) &&
+         output.append_text(workspace.client >= 0 ? ", attached, " : ", detached, ") &&
+         output.append_number(workspace.columns) && output.append_text("x") &&
+         output.append_number(workspace.rows) && output.append_text(", title \"") &&
+         output.append_title(title_value) && output.append_text("\"\n");
 }
 
-[[nodiscard]] auto send_window_listings(const int socket, const Workspace& workspace) noexcept
-    -> bool {
+[[nodiscard]] auto append_window_listings(ConnectionOutput& output,
+                                          const Workspace& workspace) noexcept -> bool {
   for (std::size_t index = 0; index < workspace.windows.size(); ++index) {
     const auto& slot = std::span(workspace.windows).subspan(index, 1).front();
     if (slot.window == nullptr) {
@@ -1455,12 +1489,12 @@ collect_status_line(Workspace& workspace,
     }
     const auto& window = *slot.window;
     const auto title_value = window_title(window);
-    if (!send_text(socket, "fiber window ") || !send_number(socket, index + 1U) ||
-        !send_text(socket, ": ") || !send_number(socket, pane_count(window)) ||
-        !send_text(socket, " pane(s), ") ||
-        !send_text(socket, window.id == workspace.active_window ? "active, title \""
-                                                                : "inactive, title \"") ||
-        !send_safe_title(socket, title_value) || !send_text(socket, "\"\n")) {
+    if (!output.append_text("fiber window ") || !output.append_number(index + 1U) ||
+        !output.append_text(": ") || !output.append_number(pane_count(window)) ||
+        !output.append_text(" pane(s), ") ||
+        !output.append_text(window.id == workspace.active_window ? "active, title \""
+                                                                 : "inactive, title \"") ||
+        !output.append_title(title_value) || !output.append_text("\"\n")) {
       return false;
     }
   }
@@ -1482,7 +1516,8 @@ using Workspaces =
 
 void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
   for (auto& workspace : workspaces) {
-    if (workspace != nullptr && !workspace->active) {
+    if (workspace != nullptr && !workspace->active &&
+        workspace->pending_attach_slot == std::numeric_limits<std::uint32_t>::max()) {
       workspace.reset();
     }
   }
@@ -1498,141 +1533,383 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
   return nullptr;
 }
 
-[[nodiscard]] auto send_extension_error(const int connection, const std::string_view error) noexcept
-    -> bool {
-  return error.empty() ||
-         (send_text(connection, "fiber configuration error: ") &&
-          send_safe_text(connection, error, protocol::extension::error_bytes_max) &&
-          send_text(connection, "\n"));
+[[nodiscard]] auto append_extension_error(ConnectionOutput& output,
+                                          const std::string_view error) noexcept -> bool {
+  return error.empty() || (output.append_text("fiber configuration error: ") &&
+                           output.append_safe(error, protocol::extension::error_bytes_max) &&
+                           output.append_text("\n"));
 }
 
-[[nodiscard]] auto send_all_listings(const int connection, const Workspaces& workspaces) noexcept
-    -> bool {
+[[nodiscard]] auto append_all_listings(ConnectionOutput& output,
+                                       const Workspaces& workspaces) noexcept -> bool {
   std::size_t listed = 0;
   for (const auto& workspace : workspaces) {
     if (workspace != nullptr && workspace->active) {
-      if (!send_listing(connection, *workspace)) {
+      if (!append_listing(output, *workspace)) {
         return false;
       }
       ++listed;
     }
   }
-  return listed > 0 || send_text(connection, "no fiber workspaces\n");
+  return listed > 0 || output.append_text("no fiber workspaces\n");
 }
 
-[[nodiscard]] auto attach_connection(const int connection, Workspace& workspace) noexcept -> bool {
-  std::array<std::byte, 4> dimensions{};
-  if (!read_exact(connection, dimensions)) {
-    return false;
-  }
-  if (workspace.client >= 0) {
-    return send_all(connection, std::span(&response_busy, 1));
-  }
-  if (!resize_workspace(workspace, protocol::decode_dimensions(dimensions)) ||
-      !send_all(connection, std::span(&response_ready, 1))) {
-    return false;
-  }
-  std::array<render::PaneSurface, panes_per_window_max> surface_storage{};
-  std::array<render::StatusWindow, render::status_windows_max> status_storage{};
-  const auto surfaces = collect_surfaces(workspace, surface_storage);
-  const auto status = collect_status_line(workspace, status_storage);
-  if (!render::send_composed_frame(connection, surfaces,
-                                   {.columns = workspace.columns, .rows = workspace.rows},
-                                   *workspace.frame, true, status) ||
-      !set_nonblocking(connection)) {
-    return false;
-  }
-  workspace.client = connection;
-  workspace.decoder.reset();
-  workspace.output.reset();
-  workspace.frame_pending = false;
-  workspace.force_full_pending = false;
-  return true;
+enum class PendingState : std::uint8_t {
+  unused,
+  read_command,
+  read_name_size,
+  read_name,
+  read_dimensions,
+  flush_response,
+};
+
+enum class PendingAction : std::uint8_t {
+  close,
+  attach,
+};
+
+struct PendingConnection final {
+  [[nodiscard]] auto active() const noexcept -> bool { return state != PendingState::unused; }
+
+  int descriptor{-1};
+  std::uint32_t generation{0};
+  PendingState state{PendingState::unused};
+  PendingAction action{PendingAction::close};
+  std::byte command{};
+  WorkspaceName workspace;
+  std::array<std::byte, protocol::workspace_name_bytes_max> field{};
+  std::size_t field_size{0};
+  std::size_t field_target{0};
+  ConnectionOutput output;
+  Workspace* attach_workspace{nullptr};
+  std::chrono::steady_clock::time_point deadline;
+};
+
+using PendingConnections = std::array<PendingConnection, limits::pending_connections_hard_max>;
+
+constexpr auto setup_progress_timeout = std::chrono::seconds(5);
+
+void begin_pending_field(PendingConnection& pending, const PendingState state,
+                         const std::size_t size) noexcept {
+  FIBER_ASSERT(size > 0 && size <= pending.field.size());
+  pending.state = state;
+  pending.field_size = 0;
+  pending.field_target = size;
 }
 
-// Control setup remains deliberately simple in the current unversioned protocol.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto handle_connection(const int connection, Workspaces& workspaces,
-                                     const ExtensionRuntime& extensions) noexcept -> bool {
-  std::array<std::byte, 1> command{};
-  if (!read_exact(connection, command)) {
-    return false;
+void release_attach_reservation(PendingConnection& pending, const std::size_t slot) noexcept {
+  if (pending.attach_workspace != nullptr &&
+      pending.attach_workspace->pending_attach_slot == slot &&
+      pending.attach_workspace->pending_attach_generation == pending.generation) {
+    pending.attach_workspace->pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
+    pending.attach_workspace->pending_attach_generation = 0;
   }
-  if (command.front() == command_list) {
-    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
-                      send_all_listings(connection, workspaces));
-    return false;
-  }
-  if (command.front() == command_kill_all) {
+  pending.attach_workspace = nullptr;
+}
+
+void close_pending(PendingConnection& pending, const std::size_t slot) noexcept {
+  release_attach_reservation(pending, slot);
+  close_descriptor(pending.descriptor);
+  pending.output.reset();
+  pending.state = PendingState::unused;
+  pending.field_size = 0;
+  pending.field_target = 0;
+  pending.action = PendingAction::close;
+}
+
+void finish_pending_output(PendingConnection& pending,
+                           const PendingAction action = PendingAction::close) noexcept {
+  pending.action = action;
+  pending.state = PendingState::flush_response;
+  pending.field_size = 0;
+  pending.field_target = 0;
+}
+
+void finish_pending_byte(PendingConnection& pending, const std::byte response,
+                         const PendingAction action = PendingAction::close) noexcept {
+  pending.output.reset();
+  const bool appended = pending.output.append(std::span(&response, 1));
+  FIBER_ASSERT(appended);
+  finish_pending_output(pending, action);
+}
+
+void fail_pending_output(PendingConnection& pending) noexcept {
+  finish_pending_byte(pending, response_failed);
+}
+
+void prepare_unnamed_command(PendingConnection& pending, Workspaces& workspaces,
+                             const ExtensionRuntime& extensions) noexcept {
+  bool prepared = true;
+  if (pending.command == command_list) {
+    prepared = append_extension_error(pending.output, extensions.last_error()) &&
+               append_all_listings(pending.output, workspaces);
+  } else if (pending.command == command_kill_all) {
     const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
     for (auto& workspace : workspaces) {
       if (workspace != nullptr) {
         static_cast<void>(dispatch_workspace_command(*workspace, stop));
       }
     }
-    static_cast<void>(send_text(connection, "all fiber workspaces stopped\n"));
-    return false;
+    prepared = pending.output.append_text("all fiber workspaces stopped\n");
+  } else {
+    pending.state = PendingState::unused;
+    return;
   }
-  if (command.front() != command_attach && command.front() != command_create &&
-      command.front() != command_list_workspace && command.front() != command_list_windows &&
-      command.front() != command_kill) {
-    return false;
+  if (!prepared) {
+    fail_pending_output(pending);
+  } else {
+    finish_pending_output(pending);
   }
+}
 
-  const auto name = read_workspace_name(connection);
-  if (!name.has_value()) {
-    return false;
-  }
-  Workspace* workspace = find_workspace(workspaces, name->view());
-  if (command.front() == command_create) {
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
+                           const ExtensionRuntime& extensions) noexcept {
+  Workspace* workspace = find_workspace(workspaces, pending.workspace.view());
+  if (pending.command == command_create) {
     if (workspace != nullptr) {
-      static_cast<void>(send_all(connection, std::span(&response_ready, 1)));
-      return false;
+      finish_pending_byte(pending, response_ready);
+      return;
     }
     auto* const slot = empty_workspace_slot(workspaces);
     if (slot == nullptr) {
-      static_cast<void>(send_all(connection, std::span(&response_capacity, 1)));
-      return false;
+      finish_pending_byte(pending, response_capacity);
+      return;
     }
-    auto created = create_workspace(name->view());
+    auto created = create_workspace(pending.workspace.view());
     if (created == nullptr) {
-      static_cast<void>(send_all(connection, std::span(&response_failed, 1)));
-      return false;
+      finish_pending_byte(pending, response_failed);
+      return;
     }
     *slot = std::move(created);
-    static_cast<void>(send_all(connection, std::span(&response_ready, 1)));
-    return false;
+    finish_pending_byte(pending, response_ready);
+    return;
   }
   if (workspace == nullptr) {
-    static_cast<void>(send_all(connection, std::span(&response_missing, 1)));
-    return false;
+    finish_pending_byte(pending, response_missing);
+    return;
   }
-  if (command.front() == command_attach) {
-    return attach_connection(connection, *workspace) && workspace->client == connection;
+  if (pending.command == command_list_workspace) {
+    if (!append_extension_error(pending.output, extensions.last_error()) ||
+        !append_listing(pending.output, *workspace)) {
+      fail_pending_output(pending);
+    } else {
+      finish_pending_output(pending);
+    }
+    return;
   }
-  if (command.front() == command_list_workspace) {
-    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
-                      send_listing(connection, *workspace));
-    return false;
-  }
-  if (command.front() == command_list_windows) {
-    static_cast<void>(send_extension_error(connection, extensions.last_error()) &&
-                      send_window_listings(connection, *workspace));
-    return false;
+  if (pending.command == command_list_windows) {
+    if (!append_extension_error(pending.output, extensions.last_error()) ||
+        !append_window_listings(pending.output, *workspace)) {
+      fail_pending_output(pending);
+    } else {
+      finish_pending_output(pending);
+    }
+    return;
   }
 
-  static_cast<void>(send_text(connection, "fiber workspace \"") &&
-                    send_safe_title(connection, workspace->workspace_name()) &&
-                    send_text(connection, "\" stopped\n"));
+  if (!pending.output.append_text("fiber workspace \"") ||
+      !pending.output.append_title(workspace->workspace_name()) ||
+      !pending.output.append_text("\" stopped\n")) {
+    fail_pending_output(pending);
+    return;
+  }
   const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
   static_cast<void>(dispatch_workspace_command(*workspace, stop));
-  return false;
+  finish_pending_output(pending);
 }
 
-[[nodiscard]] auto poll_timeout(const Workspaces& workspaces,
+void prepare_attach(PendingConnection& pending, Workspaces& workspaces,
+                    const std::size_t slot) noexcept {
+  Workspace* const workspace = find_workspace(workspaces, pending.workspace.view());
+  if (workspace == nullptr) {
+    finish_pending_byte(pending, response_missing);
+    return;
+  }
+  if (workspace->client >= 0 ||
+      workspace->pending_attach_slot != std::numeric_limits<std::uint32_t>::max()) {
+    finish_pending_byte(pending, response_busy);
+    return;
+  }
+  const auto dimensions = protocol::decode_dimensions(std::span(pending.field).first<4>());
+  if (dimensions.columns == 0 || dimensions.rows == 0 ||
+      dimensions.columns > protocol::columns_max || dimensions.rows > protocol::rows_max ||
+      !resize_workspace(*workspace, dimensions)) {
+    finish_pending_byte(pending, response_failed);
+    return;
+  }
+  workspace->pending_attach_slot = static_cast<std::uint32_t>(slot);
+  workspace->pending_attach_generation = pending.generation;
+  pending.attach_workspace = workspace;
+  finish_pending_byte(pending, response_ready, PendingAction::attach);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void complete_pending_field(PendingConnection& pending, Workspaces& workspaces,
+                            const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
+  switch (pending.state) {
+  case PendingState::read_command:
+    pending.command = pending.field.front();
+    if (pending.command == command_list || pending.command == command_kill_all) {
+      pending.output.reset();
+      prepare_unnamed_command(pending, workspaces, extensions);
+    } else if (pending.command == command_attach || pending.command == command_create ||
+               pending.command == command_list_workspace ||
+               pending.command == command_list_windows || pending.command == command_kill) {
+      begin_pending_field(pending, PendingState::read_name_size, 1);
+    } else {
+      pending.state = PendingState::unused;
+    }
+    break;
+  case PendingState::read_name_size: {
+    const auto size = protocol::decode_workspace_name_size(pending.field.front());
+    if (size == 0 || size > pending.workspace.bytes.size()) {
+      pending.state = PendingState::unused;
+    } else {
+      begin_pending_field(pending, PendingState::read_name, size);
+    }
+    break;
+  }
+  case PendingState::read_name:
+    pending.workspace.size = pending.field_target;
+    std::ranges::copy(std::span(pending.field).first(pending.workspace.size),
+                      std::as_writable_bytes(std::span(pending.workspace.bytes)).begin());
+    if (!valid_workspace_name(pending.workspace.view())) {
+      pending.state = PendingState::unused;
+    } else if (pending.command == command_attach) {
+      begin_pending_field(pending, PendingState::read_dimensions, 4);
+    } else {
+      pending.output.reset();
+      prepare_named_command(pending, workspaces, extensions);
+    }
+    break;
+  case PendingState::read_dimensions:
+    prepare_attach(pending, workspaces, slot);
+    break;
+  case PendingState::unused:
+  case PendingState::flush_response:
+    FIBER_ASSERT(false);
+    break;
+  }
+}
+
+void process_pending_read(PendingConnection& pending, Workspaces& workspaces,
+                          const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
+  constexpr std::size_t operations_per_turn_max = 8;
+  for (std::size_t operation = 0; operation < operations_per_turn_max && pending.active() &&
+                                  pending.state != PendingState::flush_response;
+       ++operation) {
+    auto available = std::span(pending.field)
+                         .subspan(pending.field_size, pending.field_target - pending.field_size);
+    const auto received = ::recv(pending.descriptor, available.data(), available.size(), 0);
+    if (received > 0) {
+      pending.field_size += static_cast<std::size_t>(received);
+      pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+      if (pending.field_size == pending.field_target) {
+        complete_pending_field(pending, workspaces, extensions, slot);
+      }
+      continue;
+    }
+    if (received < 0 && errno == EINTR) {
+      continue;
+    }
+    if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return;
+    }
+    close_pending(pending, slot);
+    return;
+  }
+  if (!pending.active()) {
+    close_pending(pending, slot);
+  }
+}
+
+void handoff_attached_connection(PendingConnection& pending, const std::size_t slot) noexcept {
+  Workspace* const workspace = pending.attach_workspace;
+  if (workspace == nullptr || !workspace->active || workspace->pending_attach_slot != slot ||
+      workspace->pending_attach_generation != pending.generation) {
+    close_pending(pending, slot);
+    return;
+  }
+
+  const int connection = pending.descriptor;
+  pending.descriptor = -1;
+  release_attach_reservation(pending, slot);
+  pending.output.reset();
+  pending.state = PendingState::unused;
+
+  workspace->client = connection;
+  workspace->decoder.reset();
+  workspace->output.reset();
+  workspace->input_backpressured = false;
+  workspace->frame_pending = false;
+  workspace->force_full_pending = false;
+  std::array<render::PaneSurface, panes_per_window_max> surface_storage{};
+  std::array<render::StatusWindow, render::status_windows_max> status_storage{};
+  const auto surfaces = collect_surfaces(*workspace, surface_storage);
+  const auto status = collect_status_line(*workspace, status_storage);
+  if (!render::queue_composed_frame(connection, surfaces,
+                                    {.columns = workspace->columns, .rows = workspace->rows},
+                                    *workspace->frame, workspace->output, true, status)) {
+    workspace->detach_client();
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void flush_pending_output(PendingConnection& pending, const std::size_t slot,
+                          std::size_t& global_budget) noexcept {
+  constexpr std::size_t per_connection_budget = std::size_t{16} * 1'024U;
+  std::size_t budget = std::min(per_connection_budget, global_budget);
+  std::size_t attempts = 0;
+  while (pending.output.busy() && budget > 0 && attempts < 16) {
+    ++attempts;
+    const auto bytes =
+        pending.output.readable().first(std::min(pending.output.readable().size(), budget));
+    const auto sent = ::send(pending.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+    if (sent > 0) {
+      const auto size = static_cast<std::size_t>(sent);
+      const bool consumed = pending.output.consume(size);
+      FIBER_ASSERT(consumed);
+      budget -= size;
+      global_budget -= size;
+      pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+      continue;
+    }
+    if (sent < 0 && errno == EINTR) {
+      continue;
+    }
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return;
+    }
+    close_pending(pending, slot);
+    return;
+  }
+  if (!pending.active() || pending.output.busy()) {
+    return;
+  }
+  if (pending.action == PendingAction::attach) {
+    handoff_attached_connection(pending, slot);
+  } else {
+    close_pending(pending, slot);
+  }
+}
+
+[[nodiscard]] auto poll_timeout(const Workspaces& workspaces, const PendingConnections& pending,
                                 const ExtensionRuntime& extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
   auto timeout = extensions.poll_timeout(now);
+  for (const auto& connection : pending) {
+    if (!connection.active()) {
+      continue;
+    }
+    if (now >= connection.deadline) {
+      return 0;
+    }
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(connection.deadline - now);
+    const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+    timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
+  }
   for (const auto& workspace : workspaces) {
     if (workspace == nullptr || !workspace->active || !workspace->frame_pending ||
         workspace->client < 0 || workspace->output.busy()) {
@@ -1654,7 +1931,7 @@ void process_pane_events(Workspace& workspace, Window& window, Pane& pane,
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
     return;
   }
-  const auto drained = drain_pty(pane.pty, pane.terminal);
+  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes);
   pane.active = drained.alive;
   const bool process_changed = refresh_process_name(pane);
   if ((!drained.changed && !process_changed) || workspace.client < 0) {
@@ -1670,16 +1947,51 @@ void process_pane_events(Workspace& workspace, Window& window, Pane& pane,
 
 void process_client_events(Workspace& workspace, const pollfd& events) noexcept {
   // Consume resizes before flushing queued output so resize_workspace can discard bytes composed
-  // for the previous physical viewport.
-  if (workspace.client >= 0 && (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0 &&
-      receive_client(workspace) != ParseResult::keep) {
+  // for the previous physical viewport. A decoder-held input message is retried even without new
+  // socket readiness after a prior turn made PTY queue capacity available. If its peer has already
+  // closed, discard a backpressured message instead of letting it hide EOF indefinitely.
+  if (workspace.client >= 0 && workspace.input_backpressured &&
+      (events.revents & (POLLHUP | POLLERR)) != 0) {
     workspace.detach_client();
     return;
   }
-  if (workspace.client >= 0 && (events.revents & POLLOUT) != 0 &&
-      !flush_frame(workspace.client, *workspace.frame, workspace.output)) {
-    workspace.detach_client();
+  if (workspace.client >= 0 &&
+      (workspace.input_backpressured || (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
+    const auto received = receive_client(workspace);
+    workspace.input_backpressured = received == ParseResult::backpressure;
+    if (received == ParseResult::detach || received == ParseResult::error) {
+      workspace.detach_client();
+      return;
+    }
   }
+}
+
+[[nodiscard]] auto flush_pane_writes(Pane& pane, std::size_t& global_budget) noexcept -> bool {
+  constexpr std::size_t per_pane_budget = std::size_t{64} * 1'024U;
+  std::size_t budget = std::min(per_pane_budget, global_budget);
+  std::size_t attempts = 0;
+  while (!pane.pending_writes.empty() && budget > 0 && attempts < 32) {
+    ++attempts;
+    const auto readable = pane.pending_writes.readable_span();
+    const auto bytes = readable.first(std::min(readable.size(), budget));
+    const auto written = ::write(pane.pty, bytes.data(), bytes.size());
+    if (written > 0) {
+      const auto size = static_cast<std::size_t>(written);
+      const bool consumed = pane.pending_writes.consume(size);
+      FIBER_ASSERT(consumed);
+      budget -= size;
+      global_budget -= size;
+      continue;
+    }
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return true;
+    }
+    return false;
+  }
+  return true;
 }
 
 void reclaim_dead_panes(Workspace& workspace) noexcept {
@@ -1722,9 +2034,63 @@ void queue_due_frames(Workspaces& workspaces) noexcept {
   }
 }
 
+void expire_pending_connections(PendingConnections& pending_connections) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+    auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+    if (pending.active() && now >= pending.deadline) {
+      close_pending(pending, slot);
+    }
+  }
+}
+
+[[nodiscard]] auto empty_pending_slot(PendingConnections& pending_connections) noexcept
+    -> std::optional<std::size_t> {
+  for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+    if (!std::span(pending_connections).subspan(slot, 1).front().active()) {
+      return slot;
+    }
+  }
+  return std::nullopt;
+}
+
+void accept_pending_connections(const int listener,
+                                PendingConnections& pending_connections) noexcept {
+  constexpr std::size_t accepts_per_turn_max = 8;
+  for (std::size_t accepted = 0; accepted < accepts_per_turn_max; ++accepted) {
+    int connection = ::accept(listener, nullptr, nullptr);
+    if (connection < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return;
+    }
+    if (!set_nonblocking(connection)) {
+      close_descriptor(connection);
+      continue;
+    }
+    const auto available = empty_pending_slot(pending_connections);
+    if (!available.has_value()) {
+      static_cast<void>(::send(connection, &response_capacity, 1, MSG_NOSIGNAL));
+      close_descriptor(connection);
+      continue;
+    }
+    auto& pending = std::span(pending_connections).subspan(*available, 1).front();
+    pending.descriptor = connection;
+    pending.generation = next_generation(pending.generation);
+    pending.output.reset();
+    pending.workspace = {};
+    pending.attach_workspace = nullptr;
+    pending.action = PendingAction::close;
+    pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+    begin_pending_field(pending, PendingState::read_command, 1);
+  }
+}
+
 enum class DescriptorKind : std::uint8_t {
   pane,
   client,
+  pending,
   extension,
 };
 
@@ -1732,6 +2098,8 @@ struct DescriptorOwner final {
   Workspace* workspace{nullptr};
   Window* window{nullptr};
   Pane* pane{nullptr};
+  PendingConnection* pending{nullptr};
+  std::size_t pending_slot{0};
   DescriptorKind kind{DescriptorKind::client};
 };
 
@@ -1745,12 +2113,23 @@ struct DescriptorOwner final {
                                    void* const extension_error_context) noexcept -> int {
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Workspaces workspaces;
+  auto pending_storage =
+      std::unique_ptr<PendingConnections>(new (std::nothrow) PendingConnections{});
+  if (pending_storage == nullptr) {
+    return 1;
+  }
+  auto& pending_connections = *pending_storage;
   ExtensionRuntime extensions(acquire_extension, extension_context, report_extension_error,
                               extension_error_context);
+  if (!set_nonblocking(listener)) {
+    return 1;
+  }
   constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
-                                        static_cast<std::size_t>(limits::workspaces_hard_max);
+                                        static_cast<std::size_t>(limits::workspaces_hard_max) +
+                                        limits::pending_connections_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
+  std::size_t pty_flush_cursor = 0;
 
   while (true) {
     extensions.connect_if_due(std::chrono::steady_clock::now());
@@ -1768,8 +2147,10 @@ struct DescriptorOwner final {
           if (pane == nullptr || !pane->active) {
             continue;
           }
+          const auto pane_events = static_cast<short>(
+              POLLIN | (!pane->pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
           std::span(descriptors).subspan(descriptor_count, 1).front() = {
-              .fd = pane->pty, .events = POLLIN, .revents = 0};
+              .fd = pane->pty, .events = pane_events, .revents = 0};
           std::span(owners).subspan(descriptor_count, 1).front() = {.workspace = workspace.get(),
                                                                     .window =
                                                                         window_slot.window.get(),
@@ -1779,14 +2160,28 @@ struct DescriptorOwner final {
         }
       }
       if (workspace->client >= 0) {
-        const auto client_events = static_cast<short>(
-            POLLIN | (workspace->output.busy() ? static_cast<short>(POLLOUT) : 0));
+        const auto client_events =
+            static_cast<short>((workspace->input_backpressured ? 0 : POLLIN) |
+                               (workspace->output.busy() ? static_cast<short>(POLLOUT) : 0));
         std::span(descriptors).subspan(descriptor_count, 1).front() = {
             .fd = workspace->client, .events = client_events, .revents = 0};
         std::span(owners).subspan(descriptor_count, 1).front() = {.workspace = workspace.get(),
                                                                   .kind = DescriptorKind::client};
         ++descriptor_count;
       }
+    }
+    for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+      auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+      if (!pending.active()) {
+        continue;
+      }
+      const auto events =
+          static_cast<short>(pending.state == PendingState::flush_response ? POLLOUT : POLLIN);
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = pending.descriptor, .events = events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {
+          .pending = &pending, .pending_slot = slot, .kind = DescriptorKind::pending};
+      ++descriptor_count;
     }
     if (extensions.descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
@@ -1796,7 +2191,7 @@ struct DescriptorOwner final {
     }
 
     const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(workspaces, extensions));
+                                    poll_timeout(workspaces, pending_connections, extensions));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -1825,11 +2220,93 @@ struct DescriptorOwner final {
         process_client_events(*owner.workspace, events);
       }
     }
+    for (std::size_t index = 1; index < descriptor_count; ++index) {
+      const auto owner = std::span(owners).subspan(index, 1).front();
+      if (owner.kind != DescriptorKind::pending || !owner.pending->active()) {
+        continue;
+      }
+      const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+      if (owner.pending->state != PendingState::flush_response &&
+          (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        process_pending_read(*owner.pending, workspaces, extensions, owner.pending_slot);
+      }
+    }
+
+    // Writes are attempted only from retained queue bytes and are bounded both per pane and across
+    // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
+    std::size_t pty_write_budget = std::size_t{1} * 1'024U * 1'024U;
+    std::array<Pane*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
+    std::size_t writable_pane_count = 0;
+    for (auto& workspace : workspaces) {
+      if (workspace == nullptr || !workspace->active) {
+        continue;
+      }
+      for (auto& window_slot : workspace->windows) {
+        if (window_slot.window == nullptr) {
+          continue;
+        }
+        for (auto& pane : window_slot.window->panes) {
+          if (pane != nullptr && pane->active && !pane->pending_writes.empty()) {
+            std::span(writable_panes).subspan(writable_pane_count, 1).front() = pane.get();
+            ++writable_pane_count;
+          }
+        }
+      }
+    }
+    if (writable_pane_count > 0) {
+      pty_flush_cursor %= writable_pane_count;
+      std::size_t visited = 0;
+      for (; visited < writable_pane_count && pty_write_budget > 0; ++visited) {
+        const auto index = (pty_flush_cursor + visited) % writable_pane_count;
+        auto& pane = *std::span(writable_panes).subspan(index, 1).front();
+        if (!flush_pane_writes(pane, pty_write_budget)) {
+          pane.active = false;
+        }
+      }
+      pty_flush_cursor = (pty_flush_cursor + visited) % writable_pane_count;
+    } else {
+      pty_flush_cursor = 0;
+    }
+    for (auto& workspace : workspaces) {
+      if (workspace != nullptr && workspace->active) {
+        reclaim_dead_panes(*workspace);
+      }
+    }
+    // Capacity may have become available without new client socket readiness.
+    const pollfd no_events{.fd = -1, .events = 0, .revents = 0};
+    for (auto& workspace : workspaces) {
+      if (workspace != nullptr && workspace->active && workspace->client >= 0 &&
+          workspace->input_backpressured) {
+        process_client_events(*workspace, no_events);
+      }
+    }
+
     queue_due_frames(workspaces);
+    for (auto& workspace : workspaces) {
+      if (workspace != nullptr && workspace->active && workspace->client >= 0 &&
+          workspace->output.busy() &&
+          !flush_frame(workspace->client, *workspace->frame, workspace->output)) {
+        workspace->detach_client();
+      }
+    }
+
+    std::size_t pending_output_budget = std::size_t{256} * 1'024U;
+    for (std::size_t index = 1; index < descriptor_count; ++index) {
+      const auto owner = std::span(owners).subspan(index, 1).front();
+      if (owner.kind != DescriptorKind::pending || !owner.pending->active() ||
+          owner.pending->state != PendingState::flush_response) {
+        continue;
+      }
+      const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+      if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
+        flush_pending_output(*owner.pending, owner.pending_slot, pending_output_budget);
+      }
+    }
+    expire_pending_connections(pending_connections);
     reclaim_inactive_workspaces(workspaces);
 
     // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
-    // client input, or due frame composition.
+    // client input, queued writes, or due frame composition.
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::extension) {
@@ -1838,10 +2315,7 @@ struct DescriptorOwner final {
     }
 
     if ((descriptors.front().revents & POLLIN) != 0) {
-      int connection = ::accept(listener, nullptr, nullptr);
-      if (connection >= 0 && !handle_connection(connection, workspaces, extensions)) {
-        close_descriptor(connection);
-      }
+      accept_pending_connections(listener, pending_connections);
     }
     reclaim_inactive_workspaces(workspaces);
   }

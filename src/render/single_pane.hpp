@@ -23,18 +23,12 @@ struct ClientOutputState final {
   }
 };
 
-// Initial attach is a setup boundary and sends the complete frame. Live updates use queue_frame()
-// and flush_frame() so a slow client never blocks PTY progress.
-[[nodiscard]] auto send_frame(int client, vt::Terminal& terminal, FrameBuffer& frame,
-                              bool force_full) noexcept -> bool;
+// Initial attach and live updates share the same bounded partial-write state.
 [[nodiscard]] auto flush_frame(int client, const FrameBuffer& frame,
                                ClientOutputState& output) noexcept -> bool;
 [[nodiscard]] auto queue_frame(int client, vt::Terminal& terminal, FrameBuffer& frame,
                                ClientOutputState& output) noexcept -> bool;
 
-[[nodiscard]] auto send_composed_frame(int client, std::span<const PaneSurface> panes,
-                                       Viewport viewport, FrameBuffer& frame, bool force_full,
-                                       StatusLine status = {}) noexcept -> bool;
 [[nodiscard]] auto queue_composed_frame(int client, std::span<const PaneSurface> panes,
                                         Viewport viewport, FrameBuffer& frame,
                                         ClientOutputState& output, bool force_full,

@@ -20,6 +20,29 @@ public:
   [[nodiscard]] constexpr std::size_t remaining() const noexcept { return Capacity - size_; }
   [[nodiscard]] constexpr bool empty() const noexcept { return size_ == 0; }
 
+  // Returns the first directly readable ring segment. A wrapped queue is exposed as two segments
+  // across a consume() boundary; callers never need to copy or remove/reinsert partial writes.
+  [[nodiscard]] auto readable_span() const noexcept -> std::span<const std::byte> {
+    FIBER_ASSERT(size_ <= Capacity);
+    FIBER_ASSERT(read_offset_ < Capacity);
+    return std::span<const std::byte, Capacity>(storage_).subspan(
+        read_offset_, std::min(size_, Capacity - read_offset_));
+  }
+
+  // Consumes only bytes already present. Failure leaves queue state unchanged.
+  [[nodiscard]] bool consume(const std::size_t bytes) noexcept {
+    FIBER_ASSERT(size_ <= Capacity);
+    FIBER_ASSERT(read_offset_ < Capacity);
+    if (bytes > size_) {
+      return false;
+    }
+    read_offset_ = advance(read_offset_, bytes);
+    size_ -= bytes;
+    FIBER_ASSERT(size_ <= Capacity);
+    FIBER_ASSERT(read_offset_ < Capacity);
+    return true;
+  }
+
   [[nodiscard]] bool append(const std::span<const std::byte> input) noexcept {
     FIBER_ASSERT(size_ <= Capacity);
     FIBER_ASSERT(write_offset_ < Capacity);
@@ -59,11 +82,8 @@ public:
     copy_bytes(output.subspan(first_size, read_size - first_size),
                storage.first(read_size - first_size));
 
-    read_offset_ = advance(read_offset_, read_size);
-    size_ -= read_size;
-
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(read_offset_ < Capacity);
+    const bool consumed = consume(read_size);
+    FIBER_ASSERT(consumed);
     return read_size;
   }
 

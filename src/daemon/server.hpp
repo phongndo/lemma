@@ -1,25 +1,57 @@
 #ifndef FIBER_DAEMON_SERVER_HPP
 #define FIBER_DAEMON_SERVER_HPP
 
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace fiber::daemon {
 
 inline constexpr std::string_view default_workspace = "default";
 
+// Immutable process runtime routing. Socket naming policy stays in the daemon boundary; callers
+// may only construct a validated absolute endpoint and pass it through component APIs.
+class RuntimeEndpoint final {
+public:
+  [[nodiscard]] static auto create(std::string_view socket_path) -> std::optional<RuntimeEndpoint>;
+  [[nodiscard]] auto socket_path() const noexcept -> std::string_view { return socket_path_; }
+  [[nodiscard]] auto socket_path_storage() const noexcept -> const std::string& {
+    return socket_path_;
+  }
+
+private:
+  explicit RuntimeEndpoint(std::string socket_path) : socket_path_(std::move(socket_path)) {}
+
+  std::string socket_path_;
+};
+
+struct ServeOptions final {
+  bool extensions_enabled{true};
+};
+
+[[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint;
 [[nodiscard]] auto validate_workspace(std::string_view workspace) noexcept -> bool;
 
-// Connects to the per-user daemon. Ownership of the returned descriptor transfers to the caller;
-// -1 means the daemon is unavailable.
-[[nodiscard]] auto open_server_connection() -> int;
+// Runs the production listener/core path in the calling process. The endpoint is owned until the
+// core reactor exits. Tests use this entry point with extensions disabled.
+[[nodiscard]] auto serve(const RuntimeEndpoint& endpoint, ServeOptions options = {}) noexcept
+    -> int;
 
-[[nodiscard]] auto ensure(std::string_view workspace) -> int;
-[[nodiscard]] auto start(std::string_view workspace = default_workspace) -> int;
-[[nodiscard]] auto list() -> int;
-[[nodiscard]] auto list(std::string_view workspace) -> int;
-[[nodiscard]] auto list_windows(std::string_view workspace = default_workspace) -> int;
-[[nodiscard]] auto kill(std::string_view workspace = default_workspace) -> int;
-[[nodiscard]] auto kill_all() -> int;
+// Connects to the selected daemon. Ownership of the returned descriptor transfers to the caller;
+// -1 means the daemon is unavailable.
+[[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
+
+[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, std::string_view workspace) -> int;
+[[nodiscard]] auto start(const RuntimeEndpoint& endpoint,
+                         std::string_view workspace = default_workspace) -> int;
+[[nodiscard]] auto list(const RuntimeEndpoint& endpoint) -> int;
+[[nodiscard]] auto list(const RuntimeEndpoint& endpoint, std::string_view workspace) -> int;
+[[nodiscard]] auto list_windows(const RuntimeEndpoint& endpoint,
+                                std::string_view workspace = default_workspace) -> int;
+[[nodiscard]] auto kill(const RuntimeEndpoint& endpoint,
+                        std::string_view workspace = default_workspace) -> int;
+[[nodiscard]] auto kill_all(const RuntimeEndpoint& endpoint) -> int;
 
 } // namespace fiber::daemon
 

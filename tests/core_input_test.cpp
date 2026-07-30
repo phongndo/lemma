@@ -7,8 +7,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
-
-#include <unistd.h>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -25,18 +24,27 @@ TEST(CoreInputTest, EncodesEnterSemanticallyWhenKittyKeyboardModeIsActive) {
   auto terminal = std::move(*terminal_result);
   write_terminal(terminal, "\x1B[>1u");
 
-  std::array<int, 2> descriptors{};
-  ASSERT_EQ(::pipe(descriptors.data()), 0);
+  PanePtyWriteQueue queue;
   const std::array input{std::byte{'l'}, std::byte{'s'}, std::byte{0x0D}};
 
-  ASSERT_TRUE(write_normalized_input(descriptors.back(), terminal, input));
+  ASSERT_EQ(queue_normalized_input(queue, terminal, input), InputQueueResult::queued);
   std::array<std::byte, input.size()> output{};
-  const auto bytes_read = ::read(descriptors.front(), output.data(), output.size());
-
-  static_cast<void>(::close(descriptors.front()));
-  static_cast<void>(::close(descriptors.back()));
-  ASSERT_EQ(bytes_read, static_cast<ssize_t>(output.size()));
+  ASSERT_EQ(queue.read(output), output.size());
   EXPECT_EQ(output, input);
+}
+
+TEST(CoreInputTest, LeavesFullQueueUnchangedForBackpressure) {
+  auto terminal_result = vt::Terminal::create({});
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  PanePtyWriteQueue queue;
+  const std::vector<std::byte> filler(PanePtyWriteQueue::capacity());
+  ASSERT_TRUE(queue.append(filler));
+  const auto original_size = queue.size();
+  const std::array input{std::byte{'x'}};
+
+  EXPECT_EQ(queue_normalized_input(queue, terminal, input), InputQueueResult::full);
+  EXPECT_EQ(queue.size(), original_size);
 }
 
 TEST(CoreInputTest, SuppliesTextForControlKeys) {
@@ -44,17 +52,12 @@ TEST(CoreInputTest, SuppliesTextForControlKeys) {
   ASSERT_TRUE(terminal_result.has_value());
   auto terminal = std::move(*terminal_result);
 
-  std::array<int, 2> descriptors{};
-  ASSERT_EQ(::pipe(descriptors.data()), 0);
+  PanePtyWriteQueue queue;
   const std::array input{std::byte{0x03}};
 
-  ASSERT_TRUE(write_normalized_input(descriptors.back(), terminal, input));
+  ASSERT_EQ(queue_normalized_input(queue, terminal, input), InputQueueResult::queued);
   std::array<std::byte, input.size()> output{};
-  const auto bytes_read = ::read(descriptors.front(), output.data(), output.size());
-
-  static_cast<void>(::close(descriptors.front()));
-  static_cast<void>(::close(descriptors.back()));
-  ASSERT_EQ(bytes_read, static_cast<ssize_t>(output.size()));
+  ASSERT_EQ(queue.read(output), output.size());
   EXPECT_EQ(output, input);
 }
 

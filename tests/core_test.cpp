@@ -120,6 +120,38 @@ TEST(BoundedByteQueueTest, PreservesOrderAcrossWraparound) {
   EXPECT_TRUE(queue.empty());
 }
 
+TEST(BoundedByteQueueTest, ExposesAndConsumesContiguousReadableSegments) {
+  BoundedByteQueue<5> queue;
+  const std::array first{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+  ASSERT_TRUE(queue.append(first));
+  ASSERT_TRUE(queue.consume(3));
+  const std::array second{std::byte{5}, std::byte{6}, std::byte{7}};
+  ASSERT_TRUE(queue.append(second));
+
+  EXPECT_THAT(queue.readable_span(), testing::ElementsAre(std::byte{4}, std::byte{5}));
+  EXPECT_FALSE(queue.consume(5));
+  EXPECT_EQ(queue.size(), 4U);
+  ASSERT_TRUE(queue.consume(2));
+  EXPECT_THAT(queue.readable_span(), testing::ElementsAre(std::byte{6}, std::byte{7}));
+  ASSERT_TRUE(queue.consume(2));
+  EXPECT_TRUE(queue.empty());
+  EXPECT_TRUE(queue.readable_span().empty());
+}
+
+TEST(BoundedByteQueueTest, ReusesFullStorageAfterPartialConsumption) {
+  BoundedByteQueue<3> queue;
+  const std::array full{std::byte{1}, std::byte{2}, std::byte{3}};
+  ASSERT_TRUE(queue.append(full));
+  EXPECT_EQ(queue.readable_span().size(), full.size());
+  ASSERT_TRUE(queue.consume(2));
+  const std::array reused{std::byte{4}, std::byte{5}};
+  ASSERT_TRUE(queue.append(reused));
+
+  std::array<std::byte, 3> output{};
+  EXPECT_EQ(queue.read(output), output.size());
+  EXPECT_THAT(output, testing::ElementsAre(std::byte{3}, std::byte{4}, std::byte{5}));
+}
+
 TEST(BoundedByteQueueTest, RejectsInputWithoutPartiallyAppending) {
   BoundedByteQueue<3> queue;
   const std::array first{std::byte{1}, std::byte{2}};

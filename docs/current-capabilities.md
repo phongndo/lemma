@@ -2,10 +2,9 @@
 
 ## Audit basis
 
-This inventory describes the executable at commit `17bc602` on July 29, 2026. It is based on source
-inspection, a clean debug build, all 60 registered tests, a control-command smoke test, and a
-pseudoterminal smoke that created three panes in one window, created a second window, changed window
-and zoom state, detached, listed the retained topology, and killed the workspace.
+This inventory was established at commit `17bc602` on July 29, 2026 and updated after the local mux
+hardening phase. It is based on source inspection, clean debug builds, 64 component tests, and four
+isolated process-level PTY tests that exercise the real daemon/client/shell path.
 
 This is a current-state document, not a target architecture. Target behavior belongs in
 [`product-contract.md`](product-contract.md), the local quality bar belongs in
@@ -108,7 +107,7 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 | Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. |
 | Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. |
 | Reattach reconstruction | Working | Attach, active-window change, and resize can force complete visible-state reconstruction. |
-| Slow-client isolation | Partial | One bounded frame can be in flight while PTYs continue, but broader backpressure and fairness scenarios lack end-to-end stress coverage. |
+| Slow-client isolation | Working | Initial/live frames and control output flush nonblockingly; idle and non-reading peers are covered by isolated process tests. Broader latency benchmarking remains. |
 | Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=fiber`; Fiber ships no terminfo entry or explicit capability policy. |
 | Copy access to scrollback | Absent | Ghostty retains scrollback, but Fiber exposes no viewport/traversal/selection API. |
 | Graphics protocols | Unspecified | No supported passthrough/rendering contract is documented for terminal graphics. |
@@ -135,41 +134,36 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 - One reactor owns all mutable mux/terminal state.
 - Window IDs reject stale generations; the public ID value type also defines workspace, pane, and
   client IDs for future stores.
-- Client input, extension frames, terminal responses, layouts, frame buffers, registration counts,
-  and terminal allocations have explicit limits.
-- PTYs are drained before client input; extension IPC is processed after PTY, client, and frame work.
-- A blocked client frame does not synchronously stop PTY reads.
+- Client input, accepted connections, control output, PTY writes, extension frames, terminal
+  responses, layouts, frame buffers, registration counts, and terminal allocations have explicit
+  limits.
+- PTYs are drained before client input; terminal responses and user input share an ordered per-pane
+  queue; extension IPC is processed after PTY, client, queued-write, and frame work.
+- Idle setup peers, blocked client frames, and temporarily blocked PTYs do not synchronously stop
+  unrelated PTY progress.
 - Release-enabled assertions protect internal invariants.
 - CI covers `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`; scheduled Linux
   ASan/UBSan exists.
-- The current 60 tests passed during this audit. They cover IDs/queues, protocol fragmentation and
-  bounds, key encoding, extension registration/isolation, terminal damage/allocation, and pane
-  composition.
+- The current suite includes 64 component tests and four process-level mux tests. It covers
+  IDs/queues, protocol fragmentation and bounds, key encoding, extension registration/isolation,
+  terminal damage/allocation, pane composition, daemon/client lifecycle, topology retention, resize,
+  abrupt disconnect, child exit, restoration, idle setup peers, and non-reading initial attach.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
   scroll detection, and 1/4/16 terminal surfaces.
 
 ### Important robustness gaps
 
-1. **Accepted control/setup connections are blocking.** The reactor calls blocking `read_exact` and
-   initial frame sends after `accept`. A peer that connects and stops can block PTY progress, contrary
-   to the target invariant. Accepted connections need bounded incremental nonblocking state.
-2. **PTY writes are not queued.** Client input and terminal responses use `write_all` against a
-   nonblocking PTY. `EAGAIN` currently becomes an error instead of bounded backpressure, potentially
-   detaching the client or retiring a pane.
-3. **There is no automated process-level mux test.** Unit/component tests do not currently launch the
-   daemon/client together to protect attach, split, window, detach, reattach, process exit, and
-   restoration behavior. The audit pseudoterminal smoke was manual.
-4. **The client protocol is unversioned.** Endpoint-name changes avoid some stale-daemon mismatches,
+1. **The client protocol is unversioned.** Endpoint-name changes avoid some stale-daemon mismatches,
    but there is no handshake, capabilities, typed errors, or independent upgrade path.
-5. **Terminal restoration is not signal-complete.** Normal detach/disconnect performs broad escape
+2. **Terminal restoration is not signal-complete.** Normal detach/disconnect performs broad escape
    cleanup and the raw-mode object restores termios during ordinary unwinding, but fatal/default
    signals do not guarantee those paths execute.
-6. **Workspace and pane IDs are not authoritative stores.** Their public types exist, but core
+3. **Workspace and pane IDs are not authoritative stores.** Their public types exist, but core
    commands can only explicitly validate the current window; workspace/pane targets remain invalid.
-7. **Performance coverage is narrow.** Existing measurements are promising, but there are no checked-in
+4. **Performance coverage is narrow.** Existing measurements are promising, but there are no checked-in
    key-to-PTY, key-to-frame, mouse, slow-client, memory-per-pane, resize-storm, or multi-day soak
    harnesses. The documented warm-mux comparison harness is not in the repository.
-8. **User-visible failures are coarse.** Attached-client loop failures generally return success after
+5. **User-visible failures are coarse.** Attached-client loop failures generally return success after
    cleanup, pane exit reasons are absent, and several capacity/no-effect outcomes have no attached UI.
 
 ## What the audit means for phase one
@@ -180,14 +174,9 @@ reactor and test-harness gaps before adding broad features.
 
 The derived order is:
 
-1. Check in a process-level pseudoterminal integration harness that protects today's create, attach,
-   input, split, focus, window, zoom, detach, reattach, child-exit, and cleanup behavior.
-2. Replace blocking accepted-connection setup/control handling with bounded incremental nonblocking
-   state and tests for idle/malicious peers.
-3. Add bounded PTY write queues for user input and terminal responses, with explicit overflow and
-   fairness behavior.
-4. Introduce authoritative workspace/pane IDs and the generalized versioned protocol.
-5. Build ordered typed keyboard, paste, focus, resize, and mouse input over that protocol.
-6. Deliver the first shared semantic interaction: keyboard focus plus mouse click-to-focus and
+1. Complete blocked-PTY stress/latency coverage and the remaining detailed process scenarios.
+2. Introduce authoritative workspace/pane IDs and the generalized versioned protocol.
+3. Build ordered typed keyboard, paste, focus, resize, and mouse input over that protocol.
+4. Deliver the first shared semantic interaction: keyboard focus plus mouse click-to-focus and
    correct application mouse pass-through/restoration.
-7. Continue into names, interactive resize, copy/search/selection, and installable alpha artifacts.
+5. Continue into names, interactive resize, copy/search/selection, and installable alpha artifacts.

@@ -87,13 +87,14 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 
 // This is the client reactor; branches correspond directly to terminal and socket readiness.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto attach_client(const std::string_view workspace) -> int {
+[[nodiscard]] auto attach_client(const daemon::RuntimeEndpoint& endpoint,
+                                 const std::string_view workspace) -> int {
   if (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0) {
     static_cast<void>(write_text(STDERR_FILENO, "fiber attach requires a terminal\n"));
     return 1;
   }
 
-  int connection = daemon::open_server_connection();
+  int connection = daemon::open_server_connection(endpoint);
   if (connection < 0) {
     static_cast<void>(write_text(STDERR_FILENO, "no fiber daemon; run `fiber new`\n"));
     return 1;
@@ -213,8 +214,9 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 
 } // namespace
 
-[[nodiscard]] auto attach(const std::string_view workspace) -> int {
-  return daemon::validate_workspace(workspace) ? attach_client(workspace) : 1;
+[[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, const std::string_view workspace)
+    -> int {
+  return daemon::validate_workspace(workspace) ? attach_client(endpoint, workspace) : 1;
 }
 
 } // namespace fiber::client

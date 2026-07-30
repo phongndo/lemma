@@ -11,6 +11,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <expected>
 #include <span>
@@ -48,10 +49,6 @@ using platform::write_text;
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
-}
-
-[[nodiscard]] auto socket_path() -> std::string {
-  return "/tmp/fiber-v8-" + std::to_string(::getuid()) + ".sock";
 }
 
 [[nodiscard]] auto socket_address(const std::string& path) noexcept
@@ -178,7 +175,8 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
   ::syslog(LOG_ERR, "configuration error: %.*s", static_cast<int>(error.size()), error.data());
 }
 
-[[nodiscard]] auto run_owned_server(const std::string& path) noexcept -> int {
+[[nodiscard]] auto run_owned_server(const std::string& path, const ServeOptions options) noexcept
+    -> int {
   static_cast<void>(::signal(SIGPIPE, SIG_IGN));
   static_cast<void>(::signal(SIGCHLD, SIG_IGN));
   ::openlog("fiber", LOG_PID | LOG_NDELAY, LOG_USER);
@@ -194,10 +192,20 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
       .path = path.c_str(),
       .listener = listener,
       .server_lock = server_lock,
-      .extension_config = extension::default_config_path(),
+      .extension_config = {},
   };
-  return core::run_server(listener, &release_owned_endpoint, &endpoint, &acquire_extension_host,
-                          &endpoint, &report_extension_error, nullptr);
+  if (options.extensions_enabled) {
+    try {
+      endpoint.extension_config = extension::default_config_path();
+    } catch (...) {
+      release_owned_endpoint(&endpoint);
+      return 1;
+    }
+  }
+  return core::run_server(listener, &release_owned_endpoint, &endpoint,
+                          options.extensions_enabled ? &acquire_extension_host : nullptr,
+                          options.extensions_enabled ? &endpoint : nullptr,
+                          options.extensions_enabled ? &report_extension_error : nullptr, nullptr);
 }
 
 [[nodiscard]] auto server_available(const std::string& path) noexcept -> bool {
@@ -245,7 +253,7 @@ void redirect_standard_descriptors() noexcept {
       ::_exit(0);
     }
     redirect_standard_descriptors();
-    ::_exit(run_owned_server(path));
+    ::_exit(run_owned_server(path, {}));
   }
 
   static_cast<void>(::waitpid(first_child, nullptr, 0));
@@ -271,10 +279,11 @@ void redirect_standard_descriptors() noexcept {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_control_command(const protocol::ControlCommand command,
+[[nodiscard]] auto run_control_command(const RuntimeEndpoint& endpoint,
+                                       const protocol::ControlCommand command,
                                        const std::string_view workspace, const bool report_missing)
     -> int {
-  int connection = open_connection(socket_path());
+  int connection = open_connection(std::string(endpoint.socket_path()));
   if (connection < 0) {
     if (report_missing) {
       static_cast<void>(write_text(STDERR_FILENO, "no fiber daemon\n"));
@@ -332,13 +341,39 @@ void redirect_standard_descriptors() noexcept {
   return false;
 }
 
-[[nodiscard]] auto open_server_connection() -> int { return open_connection(socket_path()); }
+[[nodiscard]] auto RuntimeEndpoint::create(const std::string_view socket_path)
+    -> std::optional<RuntimeEndpoint> {
+  if (socket_path.empty() || socket_path.front() != '/' || socket_path.contains('\0') ||
+      !socket_address(std::string(socket_path)).has_value()) {
+    return std::nullopt;
+  }
+  return RuntimeEndpoint(std::string(socket_path));
+}
 
-[[nodiscard]] auto ensure(const std::string_view workspace) -> int {
+[[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint {
+  auto endpoint = RuntimeEndpoint::create("/tmp/fiber-v8-" + std::to_string(::getuid()) + ".sock");
+  // The fixed production path is absolute and well below sockaddr_un::sun_path on supported hosts.
+  if (!endpoint.has_value()) {
+    std::abort();
+  }
+  return std::move(*endpoint);
+}
+
+[[nodiscard]] auto serve(const RuntimeEndpoint& endpoint, const ServeOptions options) noexcept
+    -> int {
+  return run_owned_server(endpoint.socket_path_storage(), options);
+}
+
+[[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int {
+  return open_connection(std::string(endpoint.socket_path()));
+}
+
+[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view workspace)
+    -> int {
   if (!validate_workspace(workspace)) {
     return 1;
   }
-  const auto path = socket_path();
+  const std::string path(endpoint.socket_path());
   if (!ensure_server(path)) {
     static_cast<void>(write_text(STDERR_FILENO, "failed to start fiber daemon\n"));
     return 1;
@@ -361,45 +396,47 @@ void redirect_standard_descriptors() noexcept {
   return 1;
 }
 
-auto start(const std::string_view workspace) -> int {
-  return ensure(workspace) == 0 ? list(workspace) : 1;
+auto start(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
+  return ensure(endpoint, workspace) == 0 ? list(endpoint, workspace) : 1;
 }
 
-auto list() -> int {
-  int connection = open_server_connection();
+auto list(const RuntimeEndpoint& endpoint) -> int {
+  int connection = open_server_connection(endpoint);
   if (connection < 0) {
     static_cast<void>(write_text(STDOUT_FILENO, "no fiber workspaces\n"));
     return 0;
   }
   close_descriptor(connection);
-  return run_control_command(protocol::ControlCommand::list, {}, false);
+  return run_control_command(endpoint, protocol::ControlCommand::list, {}, false);
 }
 
-auto list(const std::string_view workspace) -> int {
+auto list(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
   return validate_workspace(workspace)
-             ? run_control_command(protocol::ControlCommand::list_workspace, workspace, true)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_workspace, workspace,
+                                   true)
              : 1;
 }
 
-auto list_windows(const std::string_view workspace) -> int {
+auto list_windows(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
   return validate_workspace(workspace)
-             ? run_control_command(protocol::ControlCommand::list_windows, workspace, true)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_windows, workspace,
+                                   true)
              : 1;
 }
 
-auto kill(const std::string_view workspace) -> int {
+auto kill(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
   return validate_workspace(workspace)
-             ? run_control_command(protocol::ControlCommand::kill, workspace, true)
+             ? run_control_command(endpoint, protocol::ControlCommand::kill, workspace, true)
              : 1;
 }
 
-auto kill_all() -> int {
-  int connection = open_server_connection();
+auto kill_all(const RuntimeEndpoint& endpoint) -> int {
+  int connection = open_server_connection(endpoint);
   if (connection < 0) {
     return 0;
   }
   close_descriptor(connection);
-  return run_control_command(protocol::ControlCommand::kill_all, {}, false);
+  return run_control_command(endpoint, protocol::ControlCommand::kill_all, {}, false);
 }
 
 } // namespace fiber::daemon

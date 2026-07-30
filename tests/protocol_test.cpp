@@ -65,6 +65,27 @@ TEST(ProtocolTest, DecodesResizeAndDetachPackets) {
   EXPECT_EQ(decoded_detach.value().value().kind, ClientMessageKind::detach);
 }
 
+TEST(ProtocolTest, RepeatsUnconsumedMessageForBackpressure) {
+  ClientDecoder decoder;
+  const std::array payload{std::byte{'a'}, std::byte{'b'}};
+  const auto header = encode_input_header(payload.size());
+  auto output = std::ranges::copy(header, decoder.writable_bytes().begin()).out;
+  std::ranges::copy(payload, output);
+  ASSERT_TRUE(decoder.commit(header.size() + payload.size()).has_value());
+
+  const auto first = decoder.next();
+  const auto repeated = decoder.next();
+
+  ASSERT_TRUE(first.has_value() && first->has_value());
+  ASSERT_TRUE(repeated.has_value() && repeated->has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  EXPECT_TRUE(std::ranges::equal(repeated.value().value().input, payload));
+  decoder.consume();
+  const auto empty = decoder.next();
+  ASSERT_TRUE(empty.has_value());
+  EXPECT_FALSE(empty->has_value());
+}
+
 TEST(ProtocolTest, EncodesAndDecodesPaneCommands) {
   ClientDecoder decoder;
   const auto packet = encode_pane_command(PaneCommand::split_left_right);

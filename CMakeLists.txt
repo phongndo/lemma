@@ -194,6 +194,36 @@ if(FIBER_BUILD_TESTS)
       GTest::gmock
   )
   gtest_discover_tests(fiber_tests)
+
+  add_executable(fiber_test_server tests/support/server_main.cpp)
+  fiber_internal_target(fiber_test_server)
+  target_link_libraries(fiber_test_server PRIVATE fiber_daemon)
+
+  add_executable(fiber_test_cli tests/support/cli_main.cpp)
+  fiber_internal_target(fiber_test_cli)
+  target_link_libraries(fiber_test_cli PRIVATE fiber_app)
+
+  add_executable(
+    fiber_e2e_tests
+    tests/support/process.cpp
+    tests/e2e_mux_test.cpp
+  )
+  fiber_internal_target(fiber_e2e_tests)
+  target_link_libraries(
+    fiber_e2e_tests
+    PRIVATE fiber_platform fiber_protocol fiber_terminal GTest::gtest_main
+  )
+  target_compile_definitions(
+    fiber_e2e_tests
+    PRIVATE
+      FIBER_TEST_SERVER_PATH="$<TARGET_FILE:fiber_test_server>"
+      FIBER_TEST_CLI_PATH="$<TARGET_FILE:fiber_test_cli>"
+  )
+  add_dependencies(fiber_e2e_tests fiber_test_server fiber_test_cli)
+  gtest_discover_tests(
+    fiber_e2e_tests
+    PROPERTIES TIMEOUT 30 LABELS "integration;pty"
+  )
 endif()
 
 if(FIBER_BUILD_BENCHMARKS)
