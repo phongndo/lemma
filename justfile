@@ -53,6 +53,10 @@ test: build
 bench: build
     {{ nix }} ./build/{{ profile }}/fiber_benchmarks
 
+# Run release microbenchmarks plus checked-in process-level mux benchmarks.
+mux-bench:
+    {{ nix }} scripts/ci/benchmarks extended
+
 # Format C++ and Nix files in place.
 fmt:
     {{ nix }} bash -c "find {{ cpp_files }} -type f \
@@ -79,6 +83,7 @@ lsp-check: configure
         ! -path 'src/client/attached_client.cpp' \
         ! -path 'src/core/engine.cpp' \
         ! -path 'src/core/input.cpp' \
+        ! -path 'src/core/pty_writer.cpp' \
         ! -path 'src/daemon/server.cpp' \
         ! -path 'src/platform/io.cpp' \
         ! -path 'src/protocol/single_pane.cpp' \

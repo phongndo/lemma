@@ -1,7 +1,9 @@
 #include "core/engine.hpp"
 
+#include "core/connection_output.hpp"
 #include "core/extension_runtime.hpp"
 #include "core/input.hpp"
+#include "core/pty_writer.hpp"
 #include "fiber/command.hpp"
 #include "fiber/id.hpp"
 #include "fiber/limits.hpp"
@@ -14,20 +16,17 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>
 #include <optional>
 #include <span>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 #include <poll.h>
@@ -100,24 +99,6 @@ private:
          terminal.resize({.columns = columns, .rows = rows}).has_value();
 }
 
-[[nodiscard]] auto drain_terminal_responses(PanePtyWriteQueue& pending_writes,
-                                            vt::Terminal& terminal) noexcept -> bool {
-  // The terminal adapter reports its complete retained response size before destructive reads. A
-  // capacity failure is therefore observable and retires this pane without silently losing bytes.
-  const auto pending_bytes = terminal.pending_pty_response_bytes();
-  if (pending_bytes > pending_writes.remaining() || !pending_writes.reserve(pending_bytes)) {
-    return false;
-  }
-  std::array<std::byte, std::size_t{4} * 1'024U> response{};
-  while (terminal.pending_pty_response_bytes() > 0) {
-    const auto size = terminal.read_pty_responses(response);
-    if (size == 0 || !pending_writes.append(std::span(response).first(size))) {
-      return false;
-    }
-  }
-  return true;
-}
-
 struct PtyDrainResult final {
   bool alive{true};
   bool changed{false};
@@ -133,7 +114,7 @@ struct PtyDrainResult final {
     if (bytes_read > 0) {
       terminal.write(std::span(output).first(static_cast<std::size_t>(bytes_read)));
       drain.changed = true;
-      if (!drain_terminal_responses(pending_writes, terminal)) {
+      if (!queue_terminal_responses(pending_writes, terminal)) {
         drain.alive = false;
         return drain;
       }
@@ -1332,73 +1313,6 @@ enum class ParseResult : std::uint8_t {
   return parse_client_packets(workspace);
 }
 
-class ConnectionOutput final {
-public:
-  [[nodiscard]] auto append(const std::span<const std::byte> bytes) noexcept -> bool {
-    if (bytes.size() > storage_.size() - size_) {
-      return false;
-    }
-    std::ranges::copy(bytes, std::span(storage_).subspan(size_).begin());
-    size_ += bytes.size();
-    return true;
-  }
-
-  [[nodiscard]] auto append_text(const std::string_view text) noexcept -> bool {
-    return append(std::as_bytes(std::span(text.data(), text.size())));
-  }
-
-  [[nodiscard]] auto append_safe(const std::string_view text, const std::size_t maximum) noexcept
-      -> bool {
-    const auto size = std::min(text.size(), maximum);
-    if (size > storage_.size() - size_) {
-      return false;
-    }
-    for (const char character : std::span(text).first(size)) {
-      const auto value = static_cast<unsigned char>(character);
-      std::span(storage_).subspan(size_, 1).front() =
-          static_cast<std::byte>(value < 0x20U || value == 0x7FU ? '?' : character);
-      ++size_;
-    }
-    return true;
-  }
-
-  [[nodiscard]] auto append_title(const std::string_view title) noexcept -> bool {
-    constexpr std::size_t title_bytes_max = 256;
-    return append_safe(title, title_bytes_max);
-  }
-
-  [[nodiscard]] auto append_number(const std::uint64_t value) noexcept -> bool {
-    std::array<char, 32> buffer{};
-    const auto result = std::to_chars(buffer.begin(), buffer.end(), value);
-    if (result.ec != std::errc{}) {
-      return false;
-    }
-    const auto size = static_cast<std::size_t>(std::distance(buffer.begin(), result.ptr));
-    return append_text(std::string_view(buffer.data(), size));
-  }
-
-  [[nodiscard]] auto readable() const noexcept -> std::span<const std::byte> {
-    return std::span(storage_).first(size_).subspan(offset_);
-  }
-  [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
-  [[nodiscard]] auto consume(const std::size_t bytes) noexcept -> bool {
-    if (bytes > size_ - offset_) {
-      return false;
-    }
-    offset_ += bytes;
-    return true;
-  }
-  void reset() noexcept {
-    size_ = 0;
-    offset_ = 0;
-  }
-
-private:
-  std::array<std::byte, limits::pending_connection_output_bytes_max> storage_{};
-  std::size_t size_{0};
-  std::size_t offset_{0};
-};
-
 [[nodiscard]] auto window_title(const Window& window) noexcept -> std::string_view {
   const auto& focused = *std::span(window.panes).subspan(window.focused_pane, 1).front();
   if (focused.process_name_size > 0) {
@@ -1855,36 +1769,26 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto write_pending_output(void* const context,
+                                        const std::span<const std::byte> bytes) noexcept
+    -> ConnectionWriteAttempt {
+  auto& pending = *static_cast<PendingConnection*>(context);
+  const auto sent = ::send(pending.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+  if (sent > 0) {
+    pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+  }
+  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+}
+
 void flush_pending_output(PendingConnection& pending, const std::size_t slot,
                           std::size_t& global_budget) noexcept {
-  constexpr std::size_t per_connection_budget = std::size_t{16} * 1'024U;
-  std::size_t budget = std::min(per_connection_budget, global_budget);
-  std::size_t attempts = 0;
-  while (pending.output.busy() && budget > 0 && attempts < 16) {
-    ++attempts;
-    const auto bytes =
-        pending.output.readable().first(std::min(pending.output.readable().size(), budget));
-    const auto sent = ::send(pending.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-    if (sent > 0) {
-      const auto size = static_cast<std::size_t>(sent);
-      const bool consumed = pending.output.consume(size);
-      FIBER_ASSERT(consumed);
-      budget -= size;
-      global_budget -= size;
-      pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
-      continue;
-    }
-    if (sent < 0 && errno == EINTR) {
-      continue;
-    }
-    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      return;
-    }
+  const auto status =
+      flush_connection_output(pending.output, global_budget, &write_pending_output, &pending);
+  if (status == ConnectionFlushStatus::hard_error) {
     close_pending(pending, slot);
     return;
   }
-  if (!pending.active() || pending.output.busy()) {
+  if (!pending.active() || status != ConnectionFlushStatus::drained) {
     return;
   }
   if (pending.action == PendingAction::attach) {
@@ -1966,32 +1870,17 @@ void process_client_events(Workspace& workspace, const pollfd& events) noexcept 
   }
 }
 
+[[nodiscard]] auto write_pane_pty(void* const context,
+                                  const std::span<const std::byte> bytes) noexcept
+    -> PtyWriteAttempt {
+  const int descriptor = *static_cast<int*>(context);
+  const auto written = ::write(descriptor, bytes.data(), bytes.size());
+  return {.bytes = written, .error = written < 0 ? errno : 0};
+}
+
 [[nodiscard]] auto flush_pane_writes(Pane& pane, std::size_t& global_budget) noexcept -> bool {
-  constexpr std::size_t per_pane_budget = std::size_t{64} * 1'024U;
-  std::size_t budget = std::min(per_pane_budget, global_budget);
-  std::size_t attempts = 0;
-  while (!pane.pending_writes.empty() && budget > 0 && attempts < 32) {
-    ++attempts;
-    const auto readable = pane.pending_writes.readable_span();
-    const auto bytes = readable.first(std::min(readable.size(), budget));
-    const auto written = ::write(pane.pty, bytes.data(), bytes.size());
-    if (written > 0) {
-      const auto size = static_cast<std::size_t>(written);
-      const bool consumed = pane.pending_writes.consume(size);
-      FIBER_ASSERT(consumed);
-      budget -= size;
-      global_budget -= size;
-      continue;
-    }
-    if (written < 0 && errno == EINTR) {
-      continue;
-    }
-    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      return true;
-    }
-    return false;
-  }
-  return true;
+  return flush_pty_write_queue(pane.pending_writes, global_budget, &write_pane_pty, &pane.pty) !=
+         PtyFlushStatus::hard_error;
 }
 
 void reclaim_dead_panes(Workspace& workspace) noexcept {
@@ -2104,13 +1993,13 @@ struct DescriptorOwner final {
 };
 
 // The branches are the explicit bounded stages of the current single-owner reactor.
+[[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_server_impl(const int listener, const EndpointRelease release_endpoint,
-                                   void* const release_context,
-                                   const ExtensionAcquire acquire_extension,
-                                   void* const extension_context,
-                                   const ExtensionErrorReporter report_extension_error,
-                                   void* const extension_error_context) noexcept -> int {
+run_server_impl(const int listener, const EndpointRelease release_endpoint,
+                void* const release_context, const ExtensionAcquire acquire_extension,
+                void* const extension_context, const ExtensionErrorReporter report_extension_error,
+                void* const extension_error_context, const StopRequested stop_requested) noexcept
+    -> int {
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Workspaces workspaces;
   auto pending_storage =
@@ -2132,6 +2021,9 @@ struct DescriptorOwner final {
   std::size_t pty_flush_cursor = 0;
 
   while (true) {
+    if (stop_requested != nullptr && stop_requested()) {
+      return 0;
+    }
     extensions.connect_if_due(std::chrono::steady_clock::now());
     std::size_t descriptor_count = 1;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
@@ -2327,9 +2219,11 @@ struct DescriptorOwner final {
                               void* const release_context, const ExtensionAcquire acquire_extension,
                               void* const extension_context,
                               const ExtensionErrorReporter report_extension_error,
-                              void* const extension_error_context) noexcept -> int {
+                              void* const extension_error_context,
+                              const StopRequested stop_requested) noexcept -> int {
   return run_server_impl(listener, release_endpoint, release_context, acquire_extension,
-                         extension_context, report_extension_error, extension_error_context);
+                         extension_context, report_extension_error, extension_error_context,
+                         stop_requested);
 }
 
 } // namespace fiber::core

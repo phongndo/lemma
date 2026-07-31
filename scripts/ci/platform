@@ -4,6 +4,6 @@ set -euo pipefail
 scripts/ci/configure debug \
   -DFIBER_BUILD_TESTS=ON \
   -DFIBER_BUILD_BENCHMARKS=OFF
-cmake --build --preset debug --target fiber fiber_tests
+cmake --build --preset debug --target fiber fiber_tests fiber_e2e_tests
 ctest --preset debug --no-tests=error
 ./build/debug/fiber >/dev/null

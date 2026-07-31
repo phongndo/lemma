@@ -15,6 +15,20 @@ Supporting contracts:
 A checked baseline item means the behavior exists at the current audit; it does not waive the
 completion requirements below.
 
+## Phase plan archive convention
+
+Milestone execution plans live under `.plan/` and use durable numbered filenames:
+`NNN-kebab-case-phase-name.md` (for example, `001-p0-local-mux-hardening.md`). Allocate the next
+zero-padded three-digit number when a phase is created, keep that filename while its status moves
+from proposed to active to complete, and never reuse a number or rename a completed phase to
+`next-phase.md`.
+
+On completion, turn the plan into an archive in place by recording delivery dates, evidence,
+deviations, remaining hosted validation, and links back to this checklist and the roadmap. The TODO
+and roadmap identify the active phase; no mutable `next-phase.md` alias is maintained. Detailed
+subsystem designs may remain under `docs/plans/`, while milestone execution records follow this
+numbered `.plan/` convention.
+
 ## Definition of done for every feature
 
 A feature is complete only when all applicable boxes are satisfied:
@@ -75,7 +89,7 @@ A feature is complete only when all applicable boxes are satisfied:
 
 ### Current validation
 
-- [x] Pass the current 60 component tests.
+- [x] Pass the current 72 component tests.
 - [x] Cover four host architectures in scheduled CI.
 - [x] Run Linux ASan/UBSan in scheduled CI.
 - [x] Maintain terminal, renderer, command, and extension codec benchmarks.
@@ -83,11 +97,13 @@ A feature is complete only when all applicable boxes are satisfied:
 
 # Phase 1 — excellent local daily-driver mux
 
-Immediate execution plan:
-[`.plan/next-phase.md`](.plan/next-phase.md).
+Archived P0 execution record:
+[`.plan/001-p0-local-mux-hardening.md`](.plan/001-p0-local-mux-hardening.md). The active sequence after
+P0 is maintained in [`docs/roadmap.md`](docs/roadmap.md).
 
-Later programmable and remote phases do not take priority until this phase satisfies the daily-driver
-exit gate.
+Later programmable, shared, agent, and broad remote-product phases do not take priority until this
+phase satisfies the daily-driver exit gate. The replication protocol is nevertheless validated over
+SSH during P1 so local-only transport assumptions cannot harden into the architecture.
 
 ## P0 — protect the working vertical slice
 
@@ -101,15 +117,15 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [x] Test daemon launch and workspace creation from a clean environment.
 - [x] Test attach, ordinary key input, and visible shell output.
 - [x] Test horizontal and vertical splits.
-- [ ] Test directional, next, and previous focus.
-- [ ] Test pane close and zoom.
-- [ ] Test window create, cycle, direct select, and close.
+- [x] Test directional, next, and previous focus.
+- [x] Test pane close and zoom.
+- [x] Test window create, cycle, direct select, and close.
 - [x] Test outer resize and too-small-layout suspension/recovery.
 - [x] Test detach, process continuity, and reattach reconstruction.
 - [x] Test abrupt client EOF/crash without process loss.
 - [x] Test child exit, pane reclamation, and final-workspace cleanup.
 - [x] Test normal terminal restoration after detach and daemon disconnect.
-- [ ] Move the warm-session multiplexer benchmark harness into the repository.
+- [x] Move the warm-session multiplexer benchmark harness into the repository.
 
 ## P0 — make every accepted connection nonblocking
 
@@ -123,8 +139,8 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [x] Add bounded setup progress deadlines; add explicit timeout diagnostics with the versioned protocol.
 - [x] Reject connection-capacity exhaustion without affecting existing sessions.
 - [x] Ensure one idle peer cannot delay PTY reads, client input, frames, or extensions.
-- [ ] Test fragmented, coalesced, idle, disconnecting, malformed, and non-reading peers.
-- [ ] Test slow control clients and slow initial-attach clients.
+- [x] Test fragmented, coalesced, idle, disconnecting, malformed, and non-reading peers.
+- [x] Test slow control clients and slow initial-attach clients.
 
 ## P0 — add bounded PTY write backpressure
 
@@ -136,24 +152,44 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [x] Define queue capacity and separate per-turn write budgets.
 - [x] Backpressure user input before acceptance and retire a pane on a true terminal-response capacity failure.
 - [x] Preserve ordering between terminal responses and subsequent user input.
-- [ ] Test blocked PTYs, partial writes, recovery, overflow, and fairness across panes.
-- [ ] Benchmark input latency while another pane's PTY write side is blocked.
+- [x] Test blocked PTYs, partial writes, recovery, overflow, and fairness across panes.
+- [x] Benchmark input latency while another pane's PTY write side is blocked.
 
 ## P0 — resolve first-release product decisions
 
-- [ ] Decide what plain `fiber` does.
-- [ ] Decide default workspace creation/selection behavior.
-- [ ] Define pane cwd inheritance for first pane, split pane, and new window.
-- [ ] Define environment refresh/inheritance behavior.
-- [ ] Decide whether v0.1 supports custom launch commands or login shells only.
-- [ ] Define detach, client-crash, logout, daemon-crash, and reboot guarantees separately.
-- [ ] Select initial supported macOS and Linux versions.
-- [ ] Decide whether to keep the Fiber name before broad adoption.
-- [ ] Define default prefix, copy-mode keys, mouse enablement, and mouse-capture override.
-- [ ] Decide whether first automation is machine-readable CLI output, local RPC, or both.
-- [ ] Record decisions in `docs/product-contract.md` before implementation depends on them.
+- [x] Decide what plain `fiber` does.
+- [x] Decide default workspace creation/selection behavior.
+- [x] Define pane cwd inheritance for first pane, split pane, and new window.
+- [x] Define environment refresh/inheritance behavior.
+- [x] Decide whether v0.1 supports custom launch commands or login shells only.
+- [x] Define detach, client-crash, logout, daemon-crash, and reboot guarantees separately.
+- [x] Select initial supported macOS and Linux versions.
+- [x] Decide whether to keep the Fiber name before broad adoption.
+- [x] Define default prefix, copy-mode keys, mouse enablement, and mouse-capture override.
+- [x] Decide whether first automation is machine-readable CLI output, local RPC, or both.
+- [x] Record decisions in `docs/product-contract.md` before implementation depends on them.
 
-## P1 — authoritative IDs and generalized local protocol
+## P1 — terminal checkpoint and replicated-client foundation
+
+Active feasibility plan:
+[`.plan/002-terminal-checkpoint-feasibility.md`](.plan/002-terminal-checkpoint-feasibility.md).
+Contingent implementation plan:
+[`.plan/003-replicated-terminal-foundation.md`](.plan/003-replicated-terminal-foundation.md).
+
+### Mandatory terminal-checkpoint feasibility gate
+
+- [ ] Inventory every canonical terminal/parser/mode/effect/history value required for deterministic
+      continuation at an arbitrary PTY read boundary.
+- [ ] Define authoritative-daemon and replica-client terminal roles, including suppression of replica
+      PTY responses and policy side effects.
+- [ ] Design a bounded versioned Fiber-owned checkpoint value that exposes no Ghostty private memory
+      layout.
+- [ ] Prototype transactional checkpoint export/import behind `fiber_terminal`.
+- [ ] Prove checkpoint at sequence `N` plus the event tail equals uninterrupted parsing across text,
+      alternate-screen, resize/reflow, incomplete escape/UTF-8, query, and scrollback traces.
+- [ ] Prove visible-ready state can precede bounded recent-to-oldest history hydration.
+- [ ] Measure checkpoint bytes, export/import time, peak memory, and history chunk behavior.
+- [ ] Record required upstream `libghostty-vt` API work and archive an explicit Pass or Stop decision.
 
 ### Core identities
 
@@ -166,19 +202,50 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [ ] Keep dense iteration and bounded lookup behavior.
 - [ ] Add create/remove/reuse/wraparound/stale-ID tests for every store.
 
-### Protocol envelope
+### Versioned bidirectional protocol
 
-- [ ] Define magic, protocol version, capabilities, message kind, flags, length, and request ID.
-- [ ] Define maximum frame, decoder, request, response, and batch sizes.
-- [ ] Add typed success, no-effect, capacity, unavailable, invalid-target, and protocol errors.
-- [ ] Add client/daemon version mismatch diagnostics.
-- [ ] Negotiate keyboard, mouse, extended-key, focus, paste, and output capabilities.
-- [ ] Preserve command and input ordering across fragmented/coalesced transport reads.
-- [ ] Frame daemon-to-client terminal output instead of relying on an unframed byte stream.
-- [ ] Add golden encodings and round-trip tests.
-- [ ] Add malformed length/enum/ID/version/capability tests.
-- [ ] Add a Fiber protocol fuzz target and seed corpus.
-- [ ] Support a deliberate migration from the current `fiber-v8` endpoint.
+- [ ] Define magic, protocol/checkpoint versions, capabilities, message kind, flags, length, and
+      request/result correlation.
+- [ ] Define maximum frame, decoder, request, response, checkpoint, event-tail, history, and batch
+      sizes plus aggregate per-client limits.
+- [ ] Add typed success, no-effect, capacity, unavailable, invalid-target, unauthorized, mismatch,
+      and protocol errors.
+- [ ] Add client/daemon/protocol/checkpoint version mismatch diagnostics.
+- [ ] Negotiate keyboard, mouse, extended-key, focus, paste, history, compression, presentation, and
+      transport capabilities.
+- [ ] Preserve command, input, and per-pane terminal-event ordering across fragmented/coalesced reads.
+- [ ] Give every pane one sequence covering output, resize, reset, and exit events.
+- [ ] Define topology snapshot/delta, terminal checkpoint, ready, output, history, acknowledgement,
+      resume, reset, and resynchronization messages.
+- [ ] Frame both directions; do not wrap daemon-rendered ANSI as the generalized output model.
+- [ ] Add golden encodings, round trips, malformed matrices, and checkpoint-tail equivalence tests.
+- [ ] Add Fiber protocol and checkpoint-import fuzz targets with bounded seed corpora.
+- [ ] Support a deliberate temporary migration endpoint distinct from `fiber-v8`.
+
+### Smart client and production cutover
+
+- [ ] Give the client bounded terminal replica stores and synchronization state.
+- [ ] Import checkpoints transactionally and apply ordered pane event tails without generating PTY
+      responses.
+- [ ] Add contiguous acknowledgements, bounded resumable tails, forced fresh-checkpoint recovery, and
+      disconnect when even bounded checkpoint progress fails.
+- [ ] Replicate logical topology with stable IDs and move physical rectangles/view state into the
+      client.
+- [ ] Move the existing ANSI compositor behind the smart compatibility client.
+- [ ] Pass the existing split/focus/zoom/window/resize/detach process suite through client-side
+      replicas and composition.
+- [ ] Remove production daemon-to-attached-client unframed/composed ANSI and retire `fiber-v8` after
+      explicit cutover tests.
+
+### Early remote transport proof
+
+- [ ] Carry the identical application protocol over Unix sockets and SSH stdio.
+- [ ] Test attach, progressive history, disconnect, resume, forced checkpoint, mismatch, and process
+      continuity over both transports.
+- [ ] Shape latency, bandwidth, short writes, and output floods while bounding lag and preserving
+      input responsiveness.
+- [ ] Measure optional compression for large checkpoint/history/output chunks without assuming small
+      interactive frames benefit.
 
 ## P1 — first-class keyboard and mouse input
 
@@ -204,18 +271,23 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [ ] Add signal-safe cleanup/restoration strategy for termination paths.
 - [ ] Test partial startup failure and daemon disconnect during every client lifecycle stage.
 
-### Core routing
+### Client hit testing and authoritative routing
 
-- [ ] Add bounded hit testing for panes, separators, status, overlays, and selections.
-- [ ] Translate outer mouse coordinates into pane-local cells.
+- [ ] Add bounded client-side hit testing for pane presentation, separators, status, overlays, and
+      selections.
+- [ ] Translate client presentation coordinates into stable semantic targets; physical rectangles
+      never become core identities.
+- [ ] Send application mouse input with `PaneId` and pane-local cells.
 - [ ] Route Fiber chrome before application mouse capture.
 - [ ] Implement configurable override of application mouse capture.
-- [ ] Encode application mouse events through the terminal adapter's canonical modes.
+- [ ] Validate pane/permission/coordinate targets and encode application mouse events through the
+      authoritative terminal adapter's modes.
 - [ ] Implement keyboard focus and click-to-focus through the same `focus` command.
 - [ ] Implement keyboard window selection and status click selection through the same command.
 - [ ] Test X10, normal, button, any-motion, SGR, alternate-scroll, and focus combinations that Fiber
       claims to support.
-- [ ] Benchmark key-to-PTY, key-to-frame, click-to-focus, and mouse pass-through latency.
+- [ ] Benchmark key-to-PTY, key-to-visible-presentation, click-to-focus, and mouse pass-through
+      latency locally and over shaped SSH.
 
 ## P1 — local startup, errors, and process behavior
 
@@ -255,14 +327,17 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 
 ## P2 — copy mode, search, selection, and clipboard
 
-### Viewport and copy mode
+### Client-local viewport and copy mode
 
-- [ ] Add per-client viewport state separate from canonical pane terminal state.
-- [ ] Enter/leave copy mode without stopping PTY parsing or losing new scrollback.
-- [ ] Navigate by cell, line, page, word, top, and bottom with the keyboard.
-- [ ] Define follow-output and unread-output behavior while scrolled back.
-- [ ] Add bounded pane scrollback traversal APIs to the terminal adapter.
-- [ ] Reconstruct copy-mode viewport after resize and new output.
+- [ ] Add viewport, copy cursor, follow-output, and unread-output state to each client terminal replica,
+      separate from canonical daemon state.
+- [ ] Enter/leave copy mode without stopping PTY parsing, live event application, or progressive
+      history hydration.
+- [ ] Navigate available history by cell, line, page, word, top, and bottom with the keyboard.
+- [ ] Define loading and boundary behavior when requested older history is not present yet.
+- [ ] Add bounded recent-to-oldest history range APIs and protocol requests.
+- [ ] Reconstruct copy-mode viewport after checkpoint reset, resize, new output, and newly hydrated
+      history.
 
 ### Search
 
@@ -273,7 +348,7 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 
 ### Selection and clipboard
 
-- [ ] Add one canonical character/word/line selection model.
+- [ ] Add one client-local character/word/line selection model shared by keyboard and mouse input.
 - [ ] Add keyboard selection operations.
 - [ ] Add mouse click/drag and multi-click selection.
 - [ ] Handle grapheme clusters, combining marks, wide cells, wrapped lines, and trailing spaces.
@@ -297,32 +372,40 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [ ] Test blocked/crashed host behavior during input, output, reload, and daemon shutdown.
 - [ ] Benchmark idle host overhead and keymap/command dispatch latency.
 
-## P2 — terminal compatibility and rendering completion
+## P2 — native presentation, terminal compatibility, and rendering completion
 
+- [ ] Deliver the primary native renderer over the same smart-client replica model.
 - [ ] Define and ship truthful `$TERM`/terminfo behavior.
 - [ ] Define supported legacy and extended keyboard protocols.
-- [ ] Verify UTF-8, graphemes, combining marks, wide cells, wrapping, tab stops, and resize reflow.
-- [ ] Verify true color, supported styles, cursor shapes, scroll regions, and alternate screen.
-- [ ] Verify synchronized updates, bracketed paste, focus events, hyperlinks, titles, and queries.
-- [ ] Define bells, activity, and notification behavior.
+- [ ] Verify authoritative/replica equivalence for UTF-8, graphemes, combining marks, wide cells,
+      wrapping, tab stops, resize reflow, and arbitrary parser chunk boundaries.
+- [ ] Verify true color, supported styles, cursor shapes, scroll regions, alternate screen,
+      synchronized updates, bracketed paste, focus, hyperlinks, titles, and queries.
+- [ ] Define daemon-authoritative versus client-local bells, activity, clipboard, notification, and
+      other side-effect behavior.
 - [ ] Ensure pane modes never leak into status, separators, overlays, or copy mode.
-- [ ] Document unsupported graphics/image protocols explicitly.
-- [ ] Test Ghostty and representative outer terminals on each supported OS.
-- [ ] Test zsh, bash, fish, Neovim, terminal editors, less/man, htop-class tools, REPLs, and TUIs.
+- [ ] Document unsupported graphics/image/checkpoint features explicitly.
+- [ ] Test the native backend and the ANSI compatibility backend in Ghostty and representative outer
+      terminals on each supported OS.
+- [ ] Test zsh, bash, fish, Neovim, terminal editors, less/man, htop-class tools, REPLs, and TUIs
+      locally and through SSH.
 
 ## P2 — performance and robustness gate
 
 ### End-to-end performance
 
-- [ ] Add repeatable key-to-PTY and key-to-visible-frame latency harnesses.
+- [ ] Add repeatable key-to-PTY and key-to-visible-presentation latency harnesses.
 - [ ] Measure p50/p95/p99 at idle and during output load.
 - [ ] Measure sparse editor, full redraw, synchronized update, and high-scroll workloads.
 - [ ] Measure one/four/sixteen/maximum panes and active/inactive windows.
-- [ ] Measure attach reconstruction, status changes, and resize storms.
-- [ ] Measure slow/blocked clients and slow/blocked extension hosts.
+- [ ] Measure checkpoint export/import, attach-to-ready, recent/full history hydration, status
+      changes, and resize storms.
+- [ ] Measure PTY-read-to-event, event-to-visible, acknowledgement lag, forced resynchronization, and
+      reconnect latency.
+- [ ] Measure slow/blocked clients and slow/blocked extension hosts over local Unix and shaped SSH.
 - [ ] Measure idle CPU/wakeups and daemon baseline memory.
 - [ ] Measure incremental/peak memory per pane, window, workspace, and client.
-- [ ] Record bytes written alongside frame latency.
+- [ ] Record checkpoint, event, history, and presentation bytes alongside latency.
 - [ ] Set reviewed regression budgets once each harness is stable.
 - [ ] Run release benchmark smoke in CI and fuller comparisons on a controlled machine.
 
@@ -330,7 +413,7 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 
 - [ ] Add property/model tests for generational stores and split trees.
 - [ ] Add deterministic traces for topology plus mixed keyboard/mouse/command input.
-- [ ] Fuzz untrusted control, attached-client, extension, and input decoders.
+- [ ] Fuzz untrusted control, attached-client, checkpoint-import, extension, and input decoders.
 - [ ] Stress repeated attach/detach and client crashes.
 - [ ] Stress split/resize/focus/close/window operations.
 - [ ] Stress output floods, blocked PTYs, blocked clients, and extension crashes.
@@ -359,7 +442,7 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 - [ ] Every included local feature satisfies the definition of done.
 - [ ] Keyboard-only operation covers every core workflow.
 - [ ] Mouse focus, resize, status, selection, scrolling, and application forwarding are tested.
-- [ ] No supported exit path leaves outer terminal state corrupted.
+- [ ] No supported compatibility-client exit path leaves outer terminal state corrupted.
 - [ ] Protocol fuzz, sanitizer, platform, stress, and soak suites pass.
 - [ ] Performance has no unexplained regression outside reviewed budgets.
 - [ ] Installation and upgrade paths pass from release artifacts.
@@ -376,29 +459,33 @@ Begin only after the daily-driver path is credible.
 - [ ] Add asynchronous typed core-command requests/results for Lua.
 - [ ] Add timers and asynchronous process APIs.
 - [ ] Add bounded pane-output subscriptions with explicit backpressure/loss policy.
-- [ ] Render validated retained status/sidebar surfaces without synchronous Lua calls.
+- [ ] Distribute validated retained status/sidebar models for client rendering without synchronous
+      Lua calls.
 - [ ] Expose machine-readable local automation results.
 - [ ] Publish maintained example extensions.
 - [ ] Document extension API lifecycle and compatibility policy.
 - [ ] Verify blocked, malformed, or crashed extensions cannot affect mux progress or pane processes.
 
-# Phase 3 — remote, shared, and agent-driven Fiber
+# Phase 3 — shared and agent-driven Fiber
 
-- [ ] Add SSH-stdio transport using the same versioned semantic protocol.
-- [ ] Define remote daemon bootstrap, cwd/environment, configuration, and upgrade behavior.
-- [ ] Add per-client physical/render/viewport state.
-- [ ] Support multiple attached clients.
+Basic SSH-stdio transport, checkpoint attachment, and reconnect correctness are P1 architecture
+requirements. This phase adds product breadth on that same protocol.
+
+- [ ] Define remote daemon bootstrap, cwd/environment, configuration synchronization, and upgrade
+      behavior.
+- [ ] Support multiple attached clients with independent replica/view state.
 - [ ] Add explicit viewer/controller permissions and control transfer.
 - [ ] Preserve keyboard, mouse, paste, focus, resize, and command ordering remotely.
 - [ ] Expose commands, snapshots, events, output, cancellation, and capacity to coding agents.
 - [ ] Add peer authentication and hostile-client tests.
 - [ ] Document the local/remote security model.
-- [ ] Verify disconnect/reconnect and shared access without process loss from client failure.
+- [ ] Verify shared access, control transfer, and repeated resynchronization without process loss or
+      canonical-state corruption from client failure.
 
 # v1.0 — trusted infrastructure
 
 - [ ] Publish stable configuration and upgrade policies.
-- [ ] Publish protocol compatibility and deprecation policy.
+- [ ] Publish protocol/checkpoint compatibility and deprecation policy.
 - [ ] Publish security and supported-platform policy.
 - [ ] Publish explicit detach, logout, daemon-crash, and reboot guarantees.
 - [ ] Maintain supported macOS/Linux packages.

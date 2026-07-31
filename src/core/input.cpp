@@ -19,6 +19,10 @@ namespace fiber::core {
 
 std::atomic_size_t PanePtyWriteQueue::allocated_bytes{0};
 
+[[nodiscard]] auto PanePtyWriteQueue::allocated_bytes_current() noexcept -> std::size_t {
+  return allocated_bytes.load(std::memory_order_relaxed);
+}
+
 PanePtyWriteQueue::~PanePtyWriteQueue() { release_storage(); }
 
 auto PanePtyWriteQueue::readable_span() const noexcept -> std::span<const std::byte> {
@@ -163,6 +167,22 @@ void PanePtyWriteQueue::release_storage() noexcept {
   read_offset_ = 0;
   size_ = 0;
   release_allocation(released);
+}
+
+[[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
+                                            vt::Terminal& terminal) noexcept -> bool {
+  const auto pending_bytes = terminal.pending_pty_response_bytes();
+  if (pending_bytes > queue.remaining() || !queue.reserve(pending_bytes)) {
+    return false;
+  }
+  std::array<std::byte, std::size_t{4} * 1'024U> response{};
+  while (terminal.pending_pty_response_bytes() > 0) {
+    const auto size = terminal.read_pty_responses(response);
+    if (size == 0 || !queue.append(std::span(response).first(size))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 namespace {

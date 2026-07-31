@@ -47,7 +47,7 @@
           '';
           darwinClangd = pkgs.writeShellScriptBin "clangd" ''
             resource_dir="$(/usr/bin/env -u SDKROOT DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun clang -print-resource-dir)" || exit 1
-            exec "${darwinTools}/bin/clangd" \
+            exec "${darwinTools}/bin/clangd-unwrapped" \
               --resource-dir="$resource_dir" \
               "$@"
           '';
@@ -57,7 +57,7 @@
           darwinClangTidy = pkgs.writeShellScriptBin "clang-tidy" ''
             sdk="$(/usr/bin/env -u SDKROOT DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun --sdk macosx --show-sdk-path)" || exit 1
             resource_dir="$(/usr/bin/env -u SDKROOT DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun clang -print-resource-dir)" || exit 1
-            exec "${darwinTools}/bin/clang-tidy" \
+            exec "${darwinTools}/bin/clang-tidy-unwrapped" \
               --extra-arg-before=-isysroot \
               --extra-arg-before="$sdk" \
               --extra-arg-before=-resource-dir \

@@ -2,7 +2,8 @@
 
 Performance claims are measured rather than inferred from implementation language. Results below
 are from the same Apple Silicon development machine and release builds. They are local baselines,
-not universal rankings.
+not universal rankings. They measure the current daemon-rendered ANSI architecture and remain
+migration comparisons; they do not predict the selected checkpoint/event smart-client path.
 
 ## Renderer microbenchmarks
 
@@ -52,31 +53,78 @@ The extension host is never sampled from the PTY or renderer benchmark loops. An
 crashed host must leave those baselines unchanged within measurement noise; end-to-end extension
 latency does not justify moving Lua into the mux-critical path.
 
-## Warm-session multiplexer comparison
+## Checked-in process benchmarks
 
-A pseudoterminal harness attached an 80x24 client to a warm session, then ran a process that wrote
-25,000 79-column lines (approximately 2 MiB) followed by a generated completion marker. Time was
-measured from submitting the command until the marker was observable in the client render stream.
-Client bytes count multiplexer-to-terminal output, not PTY input. Five runs were performed and the
-median is reported.
+[`../benchmarks/mux_benchmark.py`](../benchmarks/mux_benchmark.py) runs the real foreground daemon,
+attached client, shell PTY, terminal adapter, renderer, and deterministic workload executable through
+isolated endpoints. It records the Fiber commit, host/architecture, every latency sample, p50/p95/p99,
+and client bytes as JSON. It never touches the user's daemon. The benchmark driver removes Ghostty's
+shared source-tree `zig-out` first so a prior debug/sanitizer build cannot be mistaken for a
+ReleaseFast result.
 
-| Multiplexer | Version | Marker latency | Client bytes |
-|---|---:|---:|---:|
-| Fiber | current release | 29.3 ms | 17.2 KiB |
-| Herdr | 0.6.8 | 53.4 ms | 52.3 KiB |
-| Zellij | 0.44.3 | 60.0 ms | 9.4 KiB |
-| tmux | 3.6a | 116.3 ms | 66.2 KiB |
+Reproduce a release smoke or five-sample run with:
 
-Herdr's workspace was created before timing. All tools were given the same pseudoterminal geometry
-and were already started before timing. Zellij emitted the least client traffic; Fiber reached the
-completion marker first for this high-scroll workload.
+```sh
+scripts/ci/benchmarks smoke
+python3 benchmarks/mux_benchmark.py --mode all --repetitions 5 \
+  --output build/release/mux-benchmark-results.json
+```
 
-This benchmark rewards state coalescing: multiplexers do not need to transmit all 2 MiB to show the
-final 80x24 state. It does not measure every important workload. Full comparisons must also include
-key-to-PTY latency, sparse Neovim updates, mouse input, multiple panes, slow clients, large
-scrollback, and memory use.
+The warm-scroll workload attaches an 80x24 client to a warm daemon/session, writes 25,000
+79-column CRLF-terminated rows (approximately 2 MiB), then emits a completion marker. Time runs from
+command submission until the marker is observable in the client render stream. Client bytes count
+multiplexer-to-terminal output, not PTY input; the workload intentionally allows final-state
+coalescing.
 
-## Performance invariants
+The blocked-PTY workload gates a foreground reader and sends a 2 MiB input payload until the attached
+client is backpressured. In another workspace, a deterministic peer acknowledges each input token over
+a fixture-owned Unix datagram socket immediately after reading it from the PTY, then echoes the token
+to the rendered client stream. The report records separate `key_to_pty` and `key_to_visible`
+distributions at idle and while the first PTY remains blocked. Finally, the harness releases the reader
+and verifies exact byte-count/digest recovery.
+
+Five release samples on the Apple Silicon development machine on July 30, 2026 produced:
+
+| Workload | p50 | p95 | p99 | Median client bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Warm 2 MiB scroll marker | 2.41 ms | 2.78 ms | 2.78 ms | 328 B |
+| Responsive workspace, idle peer (key-to-visible) | 2.43 ms | 2.48 ms | 2.48 ms | not recorded per sample |
+| Responsive workspace, other PTY blocked (key-to-visible) | 2.45 ms | 2.50 ms | 2.50 ms | not recorded per sample |
+
+The blocked reader accepted 1,125,222 bytes through the outer client before backpressure was
+observable in that run, then recovered the complete 2 MiB payload. Five samples are a smoke baseline,
+not a statistically stable regression budget. Cross-multiplexer results are intentionally omitted
+until checked-in adapters can reproduce the exact same workload and report binary versions.
+
+This benchmark does not replace future sparse editor, mouse, multi-pane, slow-client,
+large-scrollback, memory, resize-storm, or soak measurements.
+
+## Replicated-terminal performance requirements
+
+The target architecture must report work on both sides rather than describing moved client work as
+eliminated. Its checked-in harnesses will measure:
+
+- PTY-read-to-event availability, event-to-visible presentation, key-to-PTY, and key-to-visible
+  p50/p95/p99;
+- checkpoint encoded bytes, export/import time, peak temporary allocation, and attach-to-ready;
+- recent and complete scrollback hydration time/bytes;
+- acknowledged sequence lag, retained-tail bytes, lag detection, and forced-checkpoint recovery;
+- raw event bytes for sparse editor, full redraw, synchronized update, and warm-scroll workloads;
+- daemon and client CPU/wakeups/memory at 1, 4, 16, and maximum pane counts;
+- compatibility ANSI and native presentation costs over the same replica traces; and
+- the same core distributions over local Unix and shaped SSH transports.
+
+Checkpoint plus event tail is the only target synchronization algorithm. Normal operation does not
+wait for daemon ANSI composition. Output/history/checkpoint queues and scheduling remain bounded; a
+lagging client resets from a fresh checkpoint instead of retaining an unbounded raw stream. Large
+checkpoint/history/output compression is selected only by measured bytes/latency/CPU evidence.
+
+No target performance claim is accepted until the checkpoint feasibility phase measures export,
+import, size, and continuation costs. A native-performance claim additionally requires a native
+presentation path; moving the existing ANSI compositor into a smart client proves architecture but
+not the final key-to-pixel advantage.
+
+## Current server-rendered performance invariants
 
 - PTY parsing never waits for a steady-state client write.
 - A reactor turn reads at most 256 KiB from the PTY.
@@ -91,3 +139,7 @@ scrollback, and memory use.
 - Extension IPC has fixed frame, decoder, message-batch, registration, and UI bounds.
 - The daemon never synchronously waits for Lua, and host disconnect clears extension state without
   stopping pane processes.
+
+These invariants remain required until production cutover. After cutover, equivalent bounds apply to
+pane event sequencing, checkpoint/history work, protocol writes, replica application, and client
+presentation; obsolete daemon frame scheduling is removed rather than preserved beside the new path.

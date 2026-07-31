@@ -115,6 +115,7 @@ add_library(
   src/core/extension_runtime.cpp
   src/core/fiber.cpp
   src/core/input.cpp
+  src/core/pty_writer.cpp
 )
 fiber_internal_target(fiber_core)
 target_link_libraries(
@@ -166,6 +167,19 @@ target_include_directories(
 add_executable(fiber apps/fiber/main.cpp)
 target_link_libraries(fiber PRIVATE fiber_app fiber_warnings)
 
+if(FIBER_BUILD_TESTS OR FIBER_BUILD_BENCHMARKS)
+  add_executable(fiber_test_server tests/support/server_main.cpp)
+  fiber_internal_target(fiber_test_server)
+  target_link_libraries(fiber_test_server PRIVATE fiber_daemon)
+
+  add_executable(fiber_test_cli tests/support/cli_main.cpp)
+  fiber_internal_target(fiber_test_cli)
+  target_link_libraries(fiber_test_cli PRIVATE fiber_app)
+
+  add_executable(fiber_test_pty_peer tests/support/pty_peer_main.cpp)
+  target_link_libraries(fiber_test_pty_peer PRIVATE fiber_warnings)
+endif()
+
 if(FIBER_BUILD_TESTS)
   enable_testing()
   find_package(GTest CONFIG REQUIRED)
@@ -173,12 +187,14 @@ if(FIBER_BUILD_TESTS)
 
   add_executable(
     fiber_tests
+    tests/connection_output_test.cpp
     tests/core_input_test.cpp
     tests/extension_test.cpp
     tests/core_test.cpp
     tests/fiber_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
+    tests/pty_writer_test.cpp
     tests/render_composition_test.cpp
     tests/terminal_test.cpp
   )
@@ -195,14 +211,6 @@ if(FIBER_BUILD_TESTS)
   )
   gtest_discover_tests(fiber_tests)
 
-  add_executable(fiber_test_server tests/support/server_main.cpp)
-  fiber_internal_target(fiber_test_server)
-  target_link_libraries(fiber_test_server PRIVATE fiber_daemon)
-
-  add_executable(fiber_test_cli tests/support/cli_main.cpp)
-  fiber_internal_target(fiber_test_cli)
-  target_link_libraries(fiber_test_cli PRIVATE fiber_app)
-
   add_executable(
     fiber_e2e_tests
     tests/support/process.cpp
@@ -218,11 +226,12 @@ if(FIBER_BUILD_TESTS)
     PRIVATE
       FIBER_TEST_SERVER_PATH="$<TARGET_FILE:fiber_test_server>"
       FIBER_TEST_CLI_PATH="$<TARGET_FILE:fiber_test_cli>"
+      FIBER_TEST_PTY_PEER_PATH="$<TARGET_FILE:fiber_test_pty_peer>"
   )
-  add_dependencies(fiber_e2e_tests fiber_test_server fiber_test_cli)
+  add_dependencies(fiber_e2e_tests fiber_test_server fiber_test_cli fiber_test_pty_peer)
   gtest_discover_tests(
     fiber_e2e_tests
-    PROPERTIES TIMEOUT 30 LABELS "integration;pty"
+    PROPERTIES TIMEOUT 120 LABELS "integration;pty"
   )
 endif()
 

@@ -13,6 +13,7 @@ struct ExtensionConnection final {
 
 using ExtensionAcquire = ExtensionConnection (*)(void* context) noexcept;
 using ExtensionErrorReporter = void (*)(void* context, std::string_view error) noexcept;
+using StopRequested = bool (*)() noexcept;
 
 // Runs the authoritative bounded reactor for every workspace. The engine invokes release_endpoint
 // exactly once after it stops using the borrowed listener; the daemon retains ownership of the
@@ -22,7 +23,8 @@ using ExtensionErrorReporter = void (*)(void* context, std::string_view error) n
                               ExtensionAcquire acquire_extension = nullptr,
                               void* extension_context = nullptr,
                               ExtensionErrorReporter report_extension_error = nullptr,
-                              void* extension_error_context = nullptr) noexcept -> int;
+                              void* extension_error_context = nullptr,
+                              StopRequested stop_requested = nullptr) noexcept -> int;
 
 } // namespace fiber::core
 

@@ -48,8 +48,10 @@ It covers the four systems exported by the Nix flake:
 - `aarch64-darwin`.
 
 It also runs AddressSanitizer plus UndefinedBehaviorSanitizer on Linux in an
-isolated `build/sanitizers` tree. Durable performance claims and local
-baselines remain documented in [`performance.md`](performance.md).
+isolated `build/sanitizers` tree. Both scheduled lanes build and discover the component suite and the
+real daemon/client/shell process suite, including its test-only server, CLI, and deterministic PTY
+peer dependencies. Durable performance claims and local baselines remain documented in
+[`performance.md`](performance.md).
 
 Both workflows check out the pinned Ghostty submodule and enter the locked Nix
 development environment. Actions are pinned to immutable commit SHAs and jobs

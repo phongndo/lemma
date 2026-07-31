@@ -9,8 +9,106 @@ negotiation; incompatible changes must therefore remain coordinated between the 
 This process-named status revision uses the `fiber-v8-<uid>.sock` endpoint so it cannot attach to an
 older daemon that does not reserve or refresh the status row correctly.
 
-All integers are unsigned big-endian. Message type values are one ASCII byte for diagnostics only;
-they must be treated as binary enum values, not text.
+All integers in the current format are unsigned big-endian. Current message type values are one
+ASCII byte for diagnostics only; they must be treated as binary enum values, not text.
+
+## Target checkpointed replication protocol
+
+The generalized protocol replaces the attached output model rather than merely framing its ANSI
+bytes. It has one terminal-data architecture for local Unix sockets and SSH stdio:
+
+```text
+terminal checkpoint at pane sequence N
+-> ready
+-> ordered output/resize/reset/exit events after N
+-> progressive history ranges
+```
+
+The daemon owns canonical terminal state and event sequence allocation. Smart clients own imported
+replicas and presentation. ANSI is a client presentation backend; daemon-to-attached-client composed
+ANSI is removed after migration. The active feasibility gate is
+[`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md), and
+final checkpoint sections or wire kind values must not be frozen before it passes.
+
+### Envelope requirements
+
+Every direction is framed. The reviewed production envelope must include or unambiguously derive:
+
+- magic and major/minor protocol version;
+- message kind and flags;
+- bounded payload length;
+- request/result correlation ID where applicable;
+- stable workspace, window, pane, and client IDs in payloads that target them; and
+- capability/version negotiation for terminal checkpoints, typed input, history, compression,
+  presentation, and transport behavior.
+
+All frames, decoder storage, queued output, messages per turn, and aggregate per-client memory have
+explicit limits. Unknown required versions, kinds, enum values, IDs, sequence ranges, or capabilities
+produce typed errors or disconnect before partial state mutation. The protocol encoding is
+Fiber-owned and never copies Ghostty private structs or enum numbers onto the wire.
+
+### Terminal stream values
+
+Each pane has one monotonically ordered sequence covering:
+
+- `terminal_output(bytes)`;
+- `terminal_resize(columns, rows, cell pixel dimensions)`;
+- `terminal_reset(reason)`; and
+- `terminal_exit(status, reason)`.
+
+A checkpoint names its pane, terminal-checkpoint format/features, canonical dimensions, fence
+sequence, visible-ready state, and available/missing history ranges. Chunk boundaries are not assumed
+to be parser boundaries. Export/import must preserve deterministic continuation across incomplete
+UTF-8 and terminal escape sequences.
+
+The daemon is the only endpoint allowed to emit terminal-generated PTY responses or apply
+authoritative terminal side-effect policy. Replica import and event application suppress those
+outputs.
+
+### Attach, ready, and history
+
+A successful attach proceeds as one explicit state machine:
+
+1. exchange hello/version/capability messages;
+2. resolve the workspace and return stable topology IDs;
+3. fence each presented pane at an authoritative sequence;
+4. send topology and bounded visible checkpoints;
+5. send `ready` only after the client can publish its replicas and accept input;
+6. send all later ordered pane events without a checkpoint/tail gap; and
+7. send bounded recent-to-oldest history chunks at lower priority.
+
+History range identity is independent of the live pane sequence. A client can distinguish complete,
+partial, and missing history and can request bounded ranges without blocking live output.
+
+### Acknowledgement, resume, and reset
+
+Clients acknowledge the highest contiguous applied sequence per pane. Resume is allowed only when
+session identity, object generations, protocol/checkpoint versions, topology, and every required
+event range still match. Otherwise the daemon sends a fresh topology/checkpoint transaction.
+
+A slow client's pending events remain bounded. When it exceeds its lag policy, the daemon stops
+retaining an unbounded tail, transitions the client through an explicit reset, sends a newer
+checkpoint, and resumes from its successor sequence. If bounded checkpoint progress cannot complete
+before its deadline, the client is disconnected without affecting pane or unrelated client progress.
+
+### Typed control and input
+
+Commands use the same semantic command values as built-in and Lua operations, with typed results and
+errors. Input preserves the order of bounded key, text, paste, focus, resize request, mouse, command,
+and detach values. Fiber-owned client chrome is hit-tested in the client and emits semantic commands
+with stable targets. Application mouse input carries a validated `PaneId` and pane-local coordinates;
+the daemon validates and encodes it using canonical terminal modes.
+
+One controlling client determines canonical PTY dimensions. A viewer cannot independently resize the
+same terminal replica; later permission/control-transfer messages make that authority explicit.
+
+### Transport independence
+
+Unix sockets and SSH stdio carry the same application frames and state machines. Authentication and
+transport setup do not weaken protocol validation. Schedulers may prioritize control/input/live
+visible events over history, but they cannot reorder events within a pane stream. Compression is
+negotiated and bounded for measured large checkpoints, history, or output chunks; tiny interactive
+messages are not compressed by assumption.
 
 ## Extension-host protocol
 
@@ -161,25 +259,27 @@ Command actions retain their offsets among ordinary input so packet emission pre
 The parser handles fragmented arrow-key escape sequences, remains bounded, and stays outside
 terminal VT parsing. The eventual configurable key-table system will replace this fixed policy.
 
-## Client/daemon evolution requirements
+## Migration and validation requirements
 
-Remote operation and independent client releases eventually require a generalized client/daemon
-protocol with magic, version and capabilities, request IDs, explicit message lengths in both
-directions, typed errors, stable IDs, peer authentication, and bounded terminal-output semantics.
-Its semantic commands should be shared with built-in and Lua operations, while its transport may be
-a local Unix socket or SSH stdio.
+The generalized endpoint may coexist with `fiber-v8` only while the smart client is proven and the
+existing process suite is migrated. Peers must never silently speak one format to an endpoint
+expecting the other. After cutover, production attached output uses the checkpoint/event protocol and
+the old daemon ANSI endpoint is removed.
 
-That protocol must make keyboard and mouse first-class without turning all input into opaque bytes.
-It will preserve the order of bounded text/paste, typed key, mouse, focus, resize, and command values.
-Mouse values use closed action/button enums, bounded modifiers, client-cell coordinates, and bounded
-wheel deltas. The core owns layout hit testing and pane-local translation; the terminal adapter owns
-encoding application-directed events according to canonical terminal modes. Motion and wheel floods
-must be bounded or coalesced without reordering clicks, key events, commands, or paste boundaries.
-Capability negotiation must make keyboard-only clients valid while explicitly advertising mouse and
-extended-key support.
+The protocol change requires:
 
-Introduce those fields as one tested protocol change with golden encodings, fragmentation,
-malformed- and oversized-input cases, client/daemon mismatch diagnostics, and fuzz coverage. The
-versioned endpoint may coexist with the current endpoint during development, but a client must never
-silently speak one format to a daemon expecting the other. Exact remote CLI and launch-context
-behavior remain open in [`product-contract.md`](product-contract.md).
+- golden encodings and round trips for every envelope and value;
+- checkpoint-plus-tail equivalence tests across arbitrary parser and resize boundaries;
+- fragmentation, coalescing, malformed, truncated, duplicate, out-of-order, stale-ID, wrong-pane,
+  oversized, version, and capability cases;
+- transactional checkpoint import and allocation-failure tests;
+- lag, acknowledgement, resume, forced reset, and non-reading-client process scenarios;
+- one protocol fuzz target with a bounded seed corpus;
+- the same behavior suites over local Unix and SSH-stdio transports; and
+- mismatch diagnostics that tell users which client, daemon, protocol, or checkpoint version must be
+  upgraded.
+
+The target migration and exit gates are detailed in
+[`.plan/003-replicated-terminal-foundation.md`](../.plan/003-replicated-terminal-foundation.md).
+Exact remote CLI/bootstrap and config-synchronization behavior remain open in
+[`product-contract.md`](product-contract.md).

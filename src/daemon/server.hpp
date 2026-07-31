@@ -26,8 +26,12 @@ private:
   std::string socket_path_;
 };
 
+using StopRequested = bool (*)() noexcept;
+
 struct ServeOptions final {
   bool extensions_enabled{true};
+  // Foreground/test owners may request a normal reactor unwind after waking its poll.
+  StopRequested stop_requested{nullptr};
 };
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint;

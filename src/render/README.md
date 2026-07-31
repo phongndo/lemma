@@ -1,16 +1,20 @@
 # Renderer
 
-Transforms terminal damage, mux layout, and client view state into bounded outer-terminal frames.
-It owns layout composition, clipping, borders/status/overlays, retained physical client state,
-diffing, and ANSI output encoding.
+Home of Fiber's client-side presentation backends.
 
-Rendering must be synchronous, deterministic, allocation-bounded, and limited to affected clients
-and rows. It does not poll descriptors, write sockets, mutate mux topology, parse application VT
-streams, or execute extensions.
+The target renderer consumes terminal replicas, logical topology values, retained extension UI
+models, and client-local view state. It resolves physical rectangles, clips viewports, composes
+borders/status/overlays, retains backend physical state, and renders either bounded ANSI for an
+existing outer terminal or native surfaces. Both backends consume the same checkpoint/event replica
+model.
 
-The pane compositor accepts bounded, already-resolved surface rectangles, validates them before
-consuming terminal damage, offsets pane output into one synchronized frame, and gives cursor and
-outer-terminal mode ownership to the focused pane. The engine feeds it the active window's resolved
-split-tree surfaces with one-cell separators. The renderer also owns a centered status row built from
-bounded window labels; pane-number overlays and generalized UI surfaces remain future renderer
-inputs.
+Rendering is synchronous, deterministic, allocation-bounded, and limited to affected replicas and
+presentation regions. It does not poll protocol descriptors, mutate authoritative topology, parse PTY
+streams, generate terminal responses, or execute extensions.
+
+The current implementation is a daemon-driven ANSI pane compositor: the engine supplies canonical
+terminals and resolved rectangles, and the renderer produces synchronized attached-client frames.
+That code remains a tested migration asset. The replication foundation moves it behind the smart
+client, changes its inputs to client-owned replicas and semantic topology, then removes daemon ANSI
+output. A temporary old/new endpoint overlap is migration scaffolding, not a permanent dual renderer
+architecture.

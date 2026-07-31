@@ -5,12 +5,19 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -143,6 +150,9 @@ TemporaryRuntime::~TemporaryRuntime() {
   if (directory_.empty()) {
     return;
   }
+  for (const auto& path : owned_paths_) {
+    static_cast<void>(::unlink(path.c_str()));
+  }
   static_cast<void>(::unlink(socket_path_.c_str()));
   static_cast<void>(::unlink(lock_path_.c_str()));
   static_cast<void>(::rmdir(home_path_.c_str()));
@@ -152,7 +162,7 @@ TemporaryRuntime::~TemporaryRuntime() {
 }
 
 [[nodiscard]] auto TemporaryRuntime::environment() const -> std::vector<std::string> {
-  return {
+  std::vector<std::string> environment{
       "HOME=" + home_path_,
       "XDG_CONFIG_HOME=" + config_path_,
       "ZDOTDIR=" + zdot_path_,
@@ -162,6 +172,22 @@ TemporaryRuntime::~TemporaryRuntime() {
       "LC_ALL=C",
       "TMPDIR=" + directory_,
   };
+  if (const char* const options = std::getenv("ASAN_OPTIONS"); options != nullptr) {
+    environment.emplace_back("ASAN_OPTIONS=" + std::string(options));
+  }
+  if (const char* const options = std::getenv("UBSAN_OPTIONS"); options != nullptr) {
+    environment.emplace_back("UBSAN_OPTIONS=" + std::string(options));
+  }
+  return environment;
+}
+
+[[nodiscard]] auto TemporaryRuntime::owned_path(const std::string_view name) -> std::string {
+  if (name.empty() || name.contains('/')) {
+    return {};
+  }
+  auto path = directory_ + "/" + std::string(name);
+  owned_paths_.push_back(path);
+  return path;
 }
 
 ChildProcess::~ChildProcess() { terminate(); }
@@ -260,7 +286,7 @@ void ChildProcess::signal_group(const int signal_number) const noexcept {
 void ChildProcess::terminate() noexcept {
   if (running()) {
     signal_group(SIGTERM);
-    if (!wait(deadline_after(std::chrono::milliseconds(250)))) {
+    if (!wait(deadline_after(std::chrono::seconds(5)))) {
       signal_group(SIGKILL);
       static_cast<void>(wait(deadline_after(std::chrono::milliseconds(250))));
     }
@@ -271,6 +297,386 @@ void ChildProcess::terminate() noexcept {
 [[nodiscard]] auto ChildProcess::output() -> std::string {
   drain_output();
   return output_tail_;
+}
+
+RawPeer::~RawPeer() { close(); }
+
+// Connection setup keeps retry and asynchronous completion failures explicit.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto RawPeer::connect(const std::string_view socket_path,
+                                    const Deadline deadline) noexcept -> bool {
+  if (connected() || socket_path.empty()) {
+    last_error_ = EINVAL;
+    return false;
+  }
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  if (socket_path.size() >= sizeof(address.sun_path)) {
+    last_error_ = ENAMETOOLONG;
+    return false;
+  }
+  std::memcpy(std::span(address.sun_path).data(), socket_path.data(), socket_path.size());
+  while (std::chrono::steady_clock::now() < deadline) {
+    descriptor_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (descriptor_ < 0) {
+      last_error_ = errno;
+      return false;
+    }
+    if (!platform::set_nonblocking(descriptor_)) {
+      last_error_ = errno;
+      close();
+      return false;
+    }
+    // The socket ABI intentionally erases the concrete address type.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto* generic = reinterpret_cast<const sockaddr*>(&address);
+    if (::connect(descriptor_, generic, sizeof(address)) == 0) {
+      return true;
+    }
+
+    auto connection_error = errno;
+    if (connection_error == EINPROGRESS || connection_error == EALREADY ||
+        connection_error == EAGAIN || connection_error == EWOULDBLOCK ||
+        connection_error == EINTR) {
+      while (std::chrono::steady_clock::now() < deadline) {
+        pollfd event{.fd = descriptor_, .events = POLLOUT, .revents = 0};
+        const auto polled = ::poll(&event, 1, milliseconds_until(deadline));
+        if (polled < 0 && errno == EINTR) {
+          continue;
+        }
+        if (polled < 0) {
+          last_error_ = errno;
+          close();
+          return false;
+        }
+        if (polled == 0) {
+          continue;
+        }
+        int socket_error = 0;
+        auto socket_error_size = static_cast<socklen_t>(sizeof(socket_error));
+        const auto option_status =
+            ::getsockopt(descriptor_, SOL_SOCKET, SO_ERROR, &socket_error, &socket_error_size);
+        if (option_status != 0) {
+          last_error_ = errno;
+          close();
+          return false;
+        }
+        if (socket_error == 0) {
+          return true;
+        }
+        connection_error = socket_error;
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        close();
+        last_error_ = ETIMEDOUT;
+        return false;
+      }
+    }
+
+    last_error_ = connection_error;
+    close();
+    if (last_error_ != ENOENT && last_error_ != ECONNREFUSED) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  last_error_ = ETIMEDOUT;
+  return false;
+}
+
+[[nodiscard]] auto RawPeer::set_receive_buffer(const int bytes) noexcept -> bool {
+  if (!connected() || bytes <= 0) {
+    last_error_ = EINVAL;
+    return false;
+  }
+  if (::setsockopt(descriptor_, SOL_SOCKET, SO_RCVBUF, &bytes,
+                   static_cast<socklen_t>(sizeof(bytes))) != 0) {
+    last_error_ = errno;
+    return false;
+  }
+  return true;
+}
+
+[[nodiscard]] auto RawPeer::send_available(const std::span<const std::byte> bytes,
+                                           std::size_t& consumed) noexcept -> bool {
+  consumed = 0;
+  while (consumed < bytes.size()) {
+    const auto sent =
+        ::send(descriptor_, bytes.subspan(consumed).data(), bytes.size() - consumed, MSG_NOSIGNAL);
+    if (sent > 0) {
+      consumed += static_cast<std::size_t>(sent);
+      continue;
+    }
+    if (sent < 0 && errno == EINTR) {
+      continue;
+    }
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      last_error_ = errno;
+      return true;
+    }
+    last_error_ = sent == 0 ? EPIPE : errno;
+    return false;
+  }
+  return true;
+}
+
+[[nodiscard]] auto RawPeer::send(const std::span<const std::byte> bytes,
+                                 const Deadline deadline) noexcept -> bool {
+  std::size_t offset = 0;
+  while (offset < bytes.size() && std::chrono::steady_clock::now() < deadline) {
+    std::size_t sent = 0;
+    if (!send_available(bytes.subspan(offset), sent)) {
+      return false;
+    }
+    offset += sent;
+    if (offset == bytes.size()) {
+      return true;
+    }
+    pollfd event{.fd = descriptor_, .events = POLLOUT, .revents = 0};
+    const auto polled = ::poll(&event, 1, milliseconds_until(deadline));
+    if (polled < 0 && errno != EINTR) {
+      last_error_ = errno;
+      return false;
+    }
+  }
+  last_error_ = ETIMEDOUT;
+  return false;
+}
+
+[[nodiscard]] auto RawPeer::send(const std::string_view text, const Deadline deadline) noexcept
+    -> bool {
+  return send(std::as_bytes(std::span(text.data(), text.size())), deadline);
+}
+
+[[nodiscard]] auto RawPeer::send_fragments(const std::span<const std::byte> bytes,
+                                           const std::size_t fragment_bytes,
+                                           const Deadline deadline) noexcept -> bool {
+  if (fragment_bytes == 0) {
+    last_error_ = EINVAL;
+    return false;
+  }
+  for (std::size_t offset = 0; offset < bytes.size(); offset += fragment_bytes) {
+    const auto size = std::min(fragment_bytes, bytes.size() - offset);
+    if (!send(bytes.subspan(offset, size), deadline)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void RawPeer::retain_received(const std::span<const std::byte> bytes) noexcept {
+  retain_tail(received_tail_, byte_characters(bytes));
+}
+
+[[nodiscard]] auto RawPeer::read_some(const std::span<std::byte> output,
+                                      const Deadline deadline) noexcept -> std::ptrdiff_t {
+  if (!connected() || output.empty()) {
+    last_error_ = EINVAL;
+    return -1;
+  }
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto received = ::recv(descriptor_, output.data(), output.size(), 0);
+    if (received > 0) {
+      const auto size = static_cast<std::size_t>(received);
+      retain_received(output.first(size));
+      return received;
+    }
+    if (received == 0) {
+      return 0;
+    }
+    if (errno == EINTR) {
+      continue;
+    }
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      last_error_ = errno;
+      return -1;
+    }
+    pollfd event{.fd = descriptor_, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, milliseconds_until(deadline));
+    if (polled < 0 && errno != EINTR) {
+      last_error_ = errno;
+      return -1;
+    }
+  }
+  last_error_ = ETIMEDOUT;
+  return -1;
+}
+
+[[nodiscard]] auto RawPeer::read_until_close(const std::size_t maximum, const Deadline deadline)
+    -> std::optional<std::string> {
+  std::string output;
+  while (std::chrono::steady_clock::now() < deadline) {
+    std::array<std::byte, 4'096> bytes{};
+    const auto received = read_some(bytes, deadline);
+    if (received == 0) {
+      return output;
+    }
+    if (received < 0) {
+      return std::nullopt;
+    }
+    const auto size = static_cast<std::size_t>(received);
+    if (size > maximum - std::min(maximum, output.size())) {
+      last_error_ = EMSGSIZE;
+      return std::nullopt;
+    }
+    const auto characters = byte_characters(std::span(bytes).first(size));
+    output.append(characters.data(), characters.size());
+  }
+  last_error_ = ETIMEDOUT;
+  return std::nullopt;
+}
+
+[[nodiscard]] auto RawPeer::wait_for_byte(const std::byte expected,
+                                          const Deadline deadline) noexcept -> bool {
+  std::array<std::byte, 1> value{};
+  return read_some(value, deadline) == 1 && value.front() == expected;
+}
+
+[[nodiscard]] auto RawPeer::wait_for_close(const Deadline deadline) noexcept -> bool {
+  std::array<std::byte, 4'096> bytes{};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto received = read_some(bytes, deadline);
+    if (received == 0) {
+      return true;
+    }
+    if (received < 0) {
+      return false;
+    }
+  }
+  last_error_ = ETIMEDOUT;
+  return false;
+}
+
+void RawPeer::close() noexcept { platform::close_descriptor(descriptor_); }
+
+namespace {
+
+[[nodiscard]] auto parse_unsigned(const std::string_view text, std::size_t& offset)
+    -> std::optional<std::uint64_t> {
+  if (offset >= text.size()) {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  const auto remaining = std::span(text).subspan(offset);
+  const auto result = std::from_chars(remaining.data(), std::to_address(remaining.end()), value);
+  if (result.ec != std::errc{}) {
+    return std::nullopt;
+  }
+  offset = static_cast<std::size_t>(result.ptr - text.data());
+  return value;
+}
+
+[[nodiscard]] auto consume_text(std::string_view text, std::size_t& offset,
+                                const std::string_view expected) noexcept -> bool {
+  if (offset > text.size()) {
+    return false;
+  }
+  text.remove_prefix(offset);
+  if (!text.starts_with(expected)) {
+    return false;
+  }
+  offset += expected.size();
+  return true;
+}
+
+[[nodiscard]] auto parse_window_listing(const std::string_view line)
+    -> std::optional<WindowListing> {
+  constexpr std::string_view prefix = "fiber window ";
+  if (!line.starts_with(prefix)) {
+    return std::nullopt;
+  }
+  std::size_t offset = prefix.size();
+  const auto number = parse_unsigned(line, offset);
+  if (!number.has_value() || !consume_text(line, offset, ": ")) {
+    return std::nullopt;
+  }
+  const auto panes = parse_unsigned(line, offset);
+  if (!panes.has_value() || !consume_text(line, offset, " pane(s), ")) {
+    return std::nullopt;
+  }
+  const auto status = line.substr(offset);
+  const bool active = status.starts_with("active, title \"");
+  if ((!active && !status.starts_with("inactive, title \"")) ||
+      *number > std::numeric_limits<std::size_t>::max() ||
+      *panes > std::numeric_limits<std::size_t>::max()) {
+    return std::nullopt;
+  }
+  return WindowListing{
+      .number = static_cast<std::size_t>(*number),
+      .panes = static_cast<std::size_t>(*panes),
+      .active = active,
+  };
+}
+
+} // namespace
+
+[[nodiscard]] auto parse_workspace_listing(const std::string_view output)
+    -> std::optional<WorkspaceListing> {
+  const auto prefix = output.find(": ");
+  if (prefix == std::string_view::npos) {
+    return std::nullopt;
+  }
+  std::size_t offset = prefix + 2U;
+  const auto windows = parse_unsigned(output, offset);
+  if (!windows.has_value() || !consume_text(output, offset, " window(s), ")) {
+    return std::nullopt;
+  }
+  const auto panes = parse_unsigned(output, offset);
+  if (!panes.has_value() || !consume_text(output, offset, " pane(s), focused pid ")) {
+    return std::nullopt;
+  }
+  const auto focused_pid = parse_unsigned(output, offset);
+  if (!focused_pid.has_value()) {
+    return std::nullopt;
+  }
+  bool attached = false;
+  if (consume_text(output, offset, ", attached, ")) {
+    attached = true;
+  } else if (!consume_text(output, offset, ", detached, ")) {
+    return std::nullopt;
+  }
+  const auto columns = parse_unsigned(output, offset);
+  if (!columns.has_value() || !consume_text(output, offset, "x")) {
+    return std::nullopt;
+  }
+  const auto rows = parse_unsigned(output, offset);
+  if (!rows.has_value() || *windows > std::numeric_limits<std::size_t>::max() ||
+      *panes > std::numeric_limits<std::size_t>::max() ||
+      *focused_pid > static_cast<std::uint64_t>(std::numeric_limits<pid_t>::max()) ||
+      *columns > std::numeric_limits<std::uint16_t>::max() ||
+      *rows > std::numeric_limits<std::uint16_t>::max()) {
+    return std::nullopt;
+  }
+  return WorkspaceListing{
+      .windows = static_cast<std::size_t>(*windows),
+      .panes = static_cast<std::size_t>(*panes),
+      .focused_pid = static_cast<pid_t>(*focused_pid),
+      .columns = static_cast<std::uint16_t>(*columns),
+      .rows = static_cast<std::uint16_t>(*rows),
+      .attached = attached,
+  };
+}
+
+[[nodiscard]] auto parse_window_listings(const std::string_view output)
+    -> std::vector<WindowListing> {
+  std::vector<WindowListing> listings;
+  std::size_t line_start = 0;
+  while (line_start < output.size()) {
+    const auto line_end = output.find('\n', line_start);
+    const auto line =
+        output.substr(line_start, line_end == std::string_view::npos ? output.size() - line_start
+                                                                     : line_end - line_start);
+    const auto parsed = parse_window_listing(line);
+    if (parsed.has_value()) {
+      listings.push_back(parsed.value_or(WindowListing{}));
+    }
+    if (line_end == std::string_view::npos) {
+      break;
+    }
+    line_start = line_end + 1U;
+  }
+  return listings;
 }
 
 PtyClient::PtyClient() {
@@ -328,26 +734,42 @@ PtyClient::~PtyClient() { terminate(); }
   return terminal_->resize({.columns = columns, .rows = rows}).has_value();
 }
 
-[[nodiscard]] auto PtyClient::send(const std::span<const std::byte> bytes,
-                                   const Deadline deadline) noexcept -> bool {
-  std::size_t offset = 0;
-  while (offset < bytes.size()) {
-    const auto written = ::write(master_, bytes.subspan(offset).data(), bytes.size() - offset);
+[[nodiscard]] auto PtyClient::send_available(const std::span<const std::byte> bytes,
+                                             std::size_t& consumed) const noexcept -> bool {
+  consumed = 0;
+  while (consumed < bytes.size()) {
+    const auto written = ::write(master_, bytes.subspan(consumed).data(), bytes.size() - consumed);
     if (written > 0) {
-      offset += static_cast<std::size_t>(written);
+      consumed += static_cast<std::size_t>(written);
       continue;
     }
     if (written < 0 && errno == EINTR) {
       continue;
     }
-    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      pollfd descriptor{.fd = master_, .events = POLLOUT, .revents = 0};
-      if (::poll(&descriptor, 1, milliseconds_until(deadline)) >= 0 &&
-          std::chrono::steady_clock::now() < deadline) {
-        continue;
-      }
+    return written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+  }
+  return true;
+}
+
+[[nodiscard]] auto PtyClient::send(const std::span<const std::byte> bytes,
+                                   const Deadline deadline) noexcept -> bool {
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    std::size_t written = 0;
+    if (!send_available(bytes.subspan(offset), written)) {
+      return false;
     }
-    return false;
+    offset += written;
+    if (offset == bytes.size()) {
+      return true;
+    }
+    pollfd descriptor{.fd = master_, .events = POLLOUT, .revents = 0};
+    if (::poll(&descriptor, 1, milliseconds_until(deadline)) < 0 && errno != EINTR) {
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
   }
   return true;
 }

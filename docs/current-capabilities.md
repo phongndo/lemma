@@ -2,13 +2,16 @@
 
 ## Audit basis
 
-This inventory was established at commit `17bc602` on July 29, 2026 and updated after the local mux
-hardening phase. It is based on source inspection, clean debug builds, 64 component tests, and four
+This inventory was established at commit `17bc602` on July 29, 2026 and updated after the P0 local
+mux closeout. It is based on source inspection, clean debug builds, 72 component tests, and 12
 isolated process-level PTY tests that exercise the real daemon/client/shell path.
 
-This is a current-state document, not a target architecture. Target behavior belongs in
-[`product-contract.md`](product-contract.md), the local quality bar belongs in
-[`daily-driver-contract.md`](daily-driver-contract.md), and milestone order belongs in
+This is a current-state document, not a target architecture. The currently implemented
+server-rendered ANSI path and stateless client are a protected migration baseline; the selected
+target is the checkpointed smart-client replication architecture in
+[`architecture.md`](architecture.md). Product behavior belongs in
+[`product-contract.md`](product-contract.md), the quality bar in
+[`daily-driver-contract.md`](daily-driver-contract.md), and milestone order in
 [`roadmap.md`](roadmap.md).
 
 Status terms:
@@ -48,7 +51,7 @@ workspace name is `default`.
 | Arbitrary launch command | Absent | Pane creation cannot currently select a command, cwd, or environment. |
 | cwd/environment policy | Partial | New panes inherit the daemon's original cwd/environment, not the invoking client's current context. |
 | Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its window and the last window removes the workspace. |
-| Restart/reboot durability | Absent | Topology, scrollback, and processes are not persisted across daemon death or reboot. Zstandard is linked but no snapshot path exists. |
+| Restart/reboot durability | Absent | Topology, scrollback, and processes are not persisted across daemon death or reboot. Zstandard is linked but no durable-session snapshot path exists; the planned attach checkpoint is not reboot persistence. |
 | Exit-status reporting | Absent | Pane exit status and reason are not presented to the user. |
 
 ### Windows
@@ -106,8 +109,11 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 | VT parsing/effects | Working | UTF-8/VT input, terminal responses, title changes, bells, modes, reflow, and dirty state are captured behind the adapter. |
 | Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. |
 | Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. |
-| Reattach reconstruction | Working | Attach, active-window change, and resize can force complete visible-state reconstruction. |
+| Reattach reconstruction | Working | Attach, active-window change, and resize can force complete visible-state reconstruction through daemon-rendered ANSI. |
 | Slow-client isolation | Working | Initial/live frames and control output flush nonblockingly; idle and non-reading peers are covered by isolated process tests. Broader latency benchmarking remains. |
+| Portable terminal checkpoint export/import | Absent | The adapter has no complete bounded wire checkpoint that a fresh client terminal can import and continue from. |
+| Smart client terminal replicas | Absent | The attached client owns no pane terminal state, sequence acknowledgements, history ranges, or resynchronization state. |
+| SSH checkpoint/event attachment | Absent | Remote transport and the generalized replication protocol are not implemented. |
 | Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=fiber`; Fiber ships no terminfo entry or explicit capability policy. |
 | Copy access to scrollback | Absent | Ghostty retains scrollback, but Fiber exposes no viewport/traversal/selection API. |
 | Graphics protocols | Unspecified | No supported passthrough/rendering contract is documented for terminal graphics. |
@@ -144,39 +150,57 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 - Release-enabled assertions protect internal invariants.
 - CI covers `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`; scheduled Linux
   ASan/UBSan exists.
-- The current suite includes 64 component tests and four process-level mux tests. It covers
-  IDs/queues, protocol fragmentation and bounds, key encoding, extension registration/isolation,
-  terminal damage/allocation, pane composition, daemon/client lifecycle, topology retention, resize,
-  abrupt disconnect, child exit, restoration, idle setup peers, and non-reading initial attach.
+- The current suite includes 72 component tests and 12 process-level mux tests. It covers
+  IDs/queues, deterministic partial PTY/control writes and budgets, protocol fragmentation and
+  bounds, key encoding, extension registration/isolation, terminal damage/allocation, pane composition,
+  daemon/client lifecycle, complete existing focus/zoom/close/window controls, topology retention,
+  resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
+  attach, real blocked-PTY recovery, cross-workspace fairness, and terminal-response/input ordering.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
-  scroll detection, and 1/4/16 terminal surfaces.
+  scroll detection, 1/4/16 terminal surfaces, warm-session marker latency/client bytes, and separate
+  key-to-PTY and key-to-visible-frame latency with another workspace's PTY blocked.
 
 ### Important robustness gaps
 
-1. **The client protocol is unversioned.** Endpoint-name changes avoid some stale-daemon mismatches,
-   but there is no handshake, capabilities, typed errors, or independent upgrade path.
-2. **Terminal restoration is not signal-complete.** Normal detach/disconnect performs broad escape
+1. **There is no portable terminal checkpoint/import contract.** The pinned adapter can format or
+   render state, but it cannot transactionally initialize a fresh replica with complete parser,
+   mode, screen, history-range, and continuation semantics. This is the active feasibility gate.
+2. **The client protocol is unversioned and output is daemon-rendered ANSI.** Endpoint-name changes
+   avoid some stale-daemon mismatches, but there is no handshake, checkpoint/event framing,
+   acknowledgements, resynchronization, typed errors, or independent upgrade path.
+3. **Terminal restoration is not signal-complete.** Normal detach/disconnect performs broad escape
    cleanup and the raw-mode object restores termios during ordinary unwinding, but fatal/default
    signals do not guarantee those paths execute.
-3. **Workspace and pane IDs are not authoritative stores.** Their public types exist, but core
+4. **Workspace and pane IDs are not authoritative stores.** Their public types exist, but core
    commands can only explicitly validate the current window; workspace/pane targets remain invalid.
-4. **Performance coverage is narrow.** Existing measurements are promising, but there are no checked-in
-   key-to-PTY, key-to-frame, mouse, slow-client, memory-per-pane, resize-storm, or multi-day soak
-   harnesses. The documented warm-mux comparison harness is not in the repository.
-5. **User-visible failures are coarse.** Attached-client loop failures generally return success after
+5. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll
+   marker latency/client bytes plus separate key-to-PTY and key-to-visible-frame latency with another
+   PTY blocked. Mouse, slow-client distributions, memory-per-pane, resize-storm, and multi-day soak
+   harnesses remain absent.
+6. **User-visible failures are coarse.** Attached-client loop failures generally return success after
    cleanup, pane exit reasons are absent, and several capacity/no-effect outcomes have no attached UI.
 
 ## What the audit means for phase one
 
 Phase one is not greenfield: the mux topology, terminal adapter, renderer, daemon, and basic keyboard
-control already form a working vertical slice. It should preserve that behavior while closing the
-reactor and test-harness gaps before adding broad features.
+control already form a working vertical slice. The replication migration must preserve that behavior
+and the closed P0 invariants while deliberately replacing attached-output and presentation ownership
+before adding broad features.
 
-The derived order is:
+The P0 foundation gate is complete: existing topology behavior is process-tested, accepted peers and
+PTY writes have adversarial coverage, blocked PTYs recover exact ordered input without starving
+another workspace, the process benchmark harness is checked in, and the first-release decisions are
+recorded.
 
-1. Complete blocked-PTY stress/latency coverage and the remaining detailed process scenarios.
-2. Introduce authoritative workspace/pane IDs and the generalized versioned protocol.
-3. Build ordered typed keyboard, paste, focus, resize, and mouse input over that protocol.
-4. Deliver the first shared semantic interaction: keyboard focus plus mouse click-to-focus and
-   correct application mouse pass-through/restoration.
-5. Continue into names, interactive resize, copy/search/selection, and installable alpha artifacts.
+The derived order is now:
+
+1. Pass or stop the terminal-checkpoint feasibility gate: complete state inventory, Fiber-owned
+   export/import model, checkpoint-plus-tail equivalence, side-effect suppression, and measured
+   bounds.
+2. Introduce authoritative workspace/pane/client IDs and the versioned checkpoint/event protocol.
+3. Build a smart replica client, bounded acknowledgement/resynchronization, and client-side ANSI
+   composition; then remove daemon ANSI attachment.
+4. Prove the same protocol over SSH before local-only assumptions harden.
+5. Build ordered typed keyboard, paste, focus, resize, and mouse input over that protocol.
+6. Continue into native presentation, names, interactive resize, client-local copy/search/selection,
+   and installable alpha/daily-driver artifacts.

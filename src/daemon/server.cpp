@@ -205,7 +205,8 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
   return core::run_server(listener, &release_owned_endpoint, &endpoint,
                           options.extensions_enabled ? &acquire_extension_host : nullptr,
                           options.extensions_enabled ? &endpoint : nullptr,
-                          options.extensions_enabled ? &report_extension_error : nullptr, nullptr);
+                          options.extensions_enabled ? &report_extension_error : nullptr, nullptr,
+                          options.stop_requested);
 }
 
 [[nodiscard]] auto server_available(const std::string& path) noexcept -> bool {

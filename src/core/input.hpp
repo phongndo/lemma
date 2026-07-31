@@ -28,6 +28,7 @@ public:
   [[nodiscard]] static constexpr auto capacity() noexcept -> std::size_t {
     return limits::pane_pty_write_queue_bytes_max;
   }
+  [[nodiscard]] static auto allocated_bytes_current() noexcept -> std::size_t;
   [[nodiscard]] auto remaining() const noexcept -> std::size_t { return capacity() - size_; }
   [[nodiscard]] auto empty() const noexcept -> bool { return size_ == 0; }
   [[nodiscard]] auto readable_span() const noexcept -> std::span<const std::byte>;
@@ -58,6 +59,11 @@ enum class InputQueueResult : std::uint8_t {
   full,
   encoding_failed,
 };
+
+// Moves complete terminal-generated replies onto the pane's ordered write path before they can be
+// overtaken by input accepted later in the same reactor turn.
+[[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
+                                            vt::Terminal& terminal) noexcept -> bool;
 
 // Normalizes attached-terminal legacy bytes against the pane's active keyboard modes, then appends
 // the complete encoded packet transactionally. A full queue is unchanged so the caller can retain

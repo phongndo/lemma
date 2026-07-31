@@ -21,8 +21,10 @@ apps/fiber/main.cpp
                    +------> renderer / platform / protocol
 ```
 
-There is no temporary demo component or `app -> demo` dependency. Further mux work must build on
-the core, client, daemon, protocol, and render boundaries rather than recreate a vertical-slice
+There is no temporary demo component or `app -> demo` dependency. This diagram describes current
+implementation, not the selected target ownership: the checkpointed architecture adds client-owned
+terminal replicas and moves presentation behind the smart client. Migration must build on the core,
+client, daemon, protocol, terminal, and render boundaries rather than recreate a vertical-slice
 monolith.
 
 ## Current ownership
@@ -97,8 +99,7 @@ limitations:
 - only one client may attach at a time;
 - keyboard prefix commands are implemented, but first-class mouse decoding, hit testing, application
   pass-through, selection, scrolling, and drag resizing are not;
-- the local protocol has no version or capability negotiation;
-- listener acceptance and initial attach setup still use the vertical slice's simple policy;
+- the local protocol has no version or capability negotiation and still sends unframed daemon ANSI;
 - new workspaces inherit the daemon's original environment and working directory;
 - the isolated Lua host can register a bounded generation, but command callbacks, snapshots, event
   delivery, rendered UI, process APIs, output subscriptions, and reload are not yet integrated;
@@ -106,45 +107,47 @@ limitations:
 - windows cannot be linked across workspaces;
 - pane ratios are fixed at equal halves and cannot yet be resized interactively;
 - alternate tmux layouts, pane-number overlays, and per-client physical state are not yet
-  implemented.
+  implemented;
+- the client has no terminal replicas, checkpoint importer, event sequence, acknowledgement, or
+  progressive history state;
+- `libghostty-vt` has no Fiber-exposed portable checkpoint export/import contract; and
+- daemon-to-client output is composed ANSI rather than the selected checkpoint/event protocol.
 
-These are feature and runtime-hardening tasks, not reasons to reorganize the source tree again.
+The server-rendered runtime remains the process-tested migration baseline. The selected architecture
+changes attached-output and presentation ownership deliberately; it does not justify dissolving the
+existing subsystem boundaries or weakening P0 invariants.
 
-## Foundation sequence
+## Migration sequence
 
-The agreed next work is the extension and command foundation, without treating unresolved product
-choices as committed release behavior:
+1. Pass or stop [`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md):
+   complete state inventory, portable export/import, checkpoint-plus-tail equivalence, side-effect
+   suppression, progressive-history model, and resource evidence.
+2. Move workspaces, panes, and clients into authoritative generational stores.
+3. Add the bounded versioned topology/checkpoint/event/input protocol with explicit sequence and
+   resynchronization semantics.
+4. Build a one-pane smart client with a replica terminal and the existing ANSI presentation backend.
+5. Add bounded acknowledgement, reconnect, forced fresh-checkpoint recovery, and history hydration.
+6. Replicate logical topology and move multi-pane composition/status/overlays into the client.
+7. Prove the same application protocol over SSH stdio under shaped links.
+8. Cut over production attachment and remove daemon-to-attached-client composed ANSI.
+9. Continue typed input, native presentation, mouse, copy/search/selection, and programmability on
+   that single architecture.
 
-1. Start and supervise one full-Lua host in a process isolated from the daemon.
-2. Establish bounded, versioned, nonblocking registration IPC and transactional generations.
-3. Represent existing topology and lifecycle changes as typed core commands with bounded arguments
-   and typed results.
-4. Route built-in keys, CLI operations, and extension requests through one semantic dispatcher.
-5. Add asynchronous Lua command invocation, immutable snapshots, and bounded event delivery.
-6. Install declarative Lua keymaps into C++ and retain validated status/sidebar surfaces for the C++
-   renderer.
-7. Add asynchronous process/timer APIs and explicit bounded pane-output subscriptions.
-8. Implement replacement-host reload that preserves the old generation until the candidate commits.
-9. Measure idle-host overhead, registration and command latency, event floods, blocked hosts, and
-   output backpressure.
-10. Generalize the client protocol for local and SSH operation after the shared command model is
-    established.
-
-Steps 1 through 3 now have implementation slices: missing config activates an empty generation;
-valid Lua can register commands, keymaps, subscriptions, and a bounded sidebar; malformed
-generations are rejected; and host IPC is processed after mux-critical work. Existing attached-client
-pane/window actions, detach, and CLI workspace stops now map to bounded `Command` values and pass
-through one validating dispatcher with typed results. Step 4 is therefore complete for those existing
-mutations, but extension requests and setup operations are not yet routed through it. The later steps
-remain implementation work, not behavior already claimed by the executable.
+The isolated Lua host, transactional registrations, and typed commands remain valid foundation.
+Existing attached-client pane/window actions, detach, and CLI workspace stops already pass through
+one validating dispatcher. Later extension callbacks and retained UI models must integrate after the
+replication foundation; declarative UI is distributed to clients rather than synchronously rendered
+by Lua or the daemon.
 
 ## Rules for contributors and agents
 
-- Never move client raw-terminal state into the daemon or core.
+- Keep canonical terminal state in the daemon and expendable replica/view state in smart clients;
+  never treat a replica as authority.
 - Never move socket naming, locks, or daemonization into the core.
-- Never expose Ghostty headers outside `src/terminal/terminal.cpp`.
-- Do not let client or extension work block PTY progress.
+- Never expose Ghostty headers or private checkpoint layout outside the terminal adapter.
+- Do not let client lag, checkpoint/history work, presentation, or extensions block PTY progress.
 - Preserve bounds when generalizing a single object into an arena.
 - Add state transitions through typed commands instead of direct cross-component mutation.
-- Keep structural refactors separate from new mux behavior.
+- Keep checkpoint feasibility, ID migration, protocol introduction, renderer relocation, and feature
+  behavior in reviewable tested steps.
 - Update this document when ownership or a runtime invariant changes.

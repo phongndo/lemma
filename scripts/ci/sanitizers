@@ -6,7 +6,7 @@ set -euo pipefail
 scripts/ci/configure sanitizers \
   -DFIBER_BUILD_TESTS=ON \
   -DFIBER_BUILD_BENCHMARKS=OFF
-cmake --build --preset sanitizers --target fiber fiber_tests
+cmake --build --preset sanitizers --target fiber fiber_tests fiber_e2e_tests
 
 export ASAN_OPTIONS="detect_leaks=1:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"

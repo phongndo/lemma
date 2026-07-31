@@ -10,8 +10,9 @@ sessions through one typed command model—without requiring a hosted service.
 
 - **Reliable by construction:** one authoritative daemon owns session state; queues, payloads, and
   event-loop work are bounded; client and extension failures do not end pane processes.
-- **Fast by measurement:** C++23 owns the PTY, terminal, layout, composition, and output hot paths,
-  with damage-based rendering backed by the pinned `libghostty-vt` library.
+- **Fast by measurement:** C++23 owns PTYs and authoritative terminal state; the target smart-client
+  architecture attaches from bounded `libghostty-vt` checkpoints, applies ordered pane events, and
+  renders locally instead of waiting for daemon ANSI composition.
 - **Keyboard-complete and mouse-native:** keyboard and mouse are first-class input methods that
   converge on the same commands, layout, and terminal state instead of separate feature paths.
 - **Programmable:** Lua 5.5 configuration and an isolated extension host build on the same typed
@@ -25,8 +26,9 @@ each with up to 16 generationally identified windows and 64 panes distributed ac
 supports start, attach, detach, list, window-list, and kill commands, plus release-enabled invariant
 assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
 adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
-queues, and enforces a quota-tracked allocator. Lua command callbacks, remote access, agent APIs,
-and durability across daemon restarts remain roadmap work. See
+queues, and enforces a quota-tracked allocator. Lua command callbacks, replicated smart clients, remote access, agent APIs, and durability across
+daemon restarts remain roadmap work. The current daemon-rendered ANSI path is a tested migration
+baseline, not the target attached-output protocol. See
 [`docs/architecture.md`](docs/architecture.md) for the ownership model and system invariants,
 [`docs/product-contract.md`](docs/product-contract.md) for committed direction versus open product
 questions, [`docs/current-capabilities.md`](docs/current-capabilities.md) for the audited present
@@ -68,7 +70,8 @@ just run                    # Show fiber usage
 just demo                   # Run the scripted libghostty-vt demo
 just build && ./build/debug/fiber new  # Start and attach to pane 0
 just test                   # GoogleTest and GoogleMock
-just bench                  # Google Benchmark
+just bench                  # Google Benchmark microbenchmarks
+just mux-bench              # Release microbenchmarks + process-level mux workloads
 just fmt                    # Apply clang-format and nixpkgs-fmt
 just fmt-check              # Verify formatting only
 just lint                   # clang-tidy; every diagnostic is an error
@@ -94,12 +97,14 @@ lane mapping, branch-protection setting, and local reproduction commands.
 
 ## Architecture
 
-Fiber is being built as a bounded, data-oriented modular monolith: one strong core, a private
-Ghostty terminal adapter, narrow platform/protocol/render boundaries, and a deferred command/event
-extension API. See [`docs/product-contract.md`](docs/product-contract.md) for agreed foundation
-decisions and unresolved product questions, [`docs/architecture.md`](docs/architecture.md) for the
-target design, and [`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership
-and limitations.
+Fiber is being built as a bounded, data-oriented authoritative daemon plus smart clients. The target
+uses one checkpoint-and-ordered-event protocol locally and over SSH: the daemon owns process, PTY,
+topology, and canonical terminal truth; clients own expendable terminal replicas and presentation.
+The current server-side ANSI compositor will migrate into the smart compatibility client before the
+old attached-output path is removed. See [`docs/product-contract.md`](docs/product-contract.md) for
+agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target design,
+[`docs/protocol.md`](docs/protocol.md) for current and target wire contracts, and
+[`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership and limitations.
 
 ## Workspace/window mux
 

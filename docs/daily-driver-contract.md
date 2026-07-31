@@ -2,10 +2,11 @@
 
 ## Purpose
 
-Fiber must first become an excellent day-to-day terminal multiplexer. Remote access, agents, and a
-large extension ecosystem are differentiators only after the local mux is complete, performant, and
-robust. This document defines that quality gate; it is narrower than feature parity with tmux or
-Zellij and stronger than merely having a code path for each feature.
+Fiber must become an excellent day-to-day terminal multiplexer on one architecture used locally and
+remotely. SSH transport and reconnect correctness are validated with the replication foundation so
+local assumptions do not harden into the protocol; multiplayer, agents, and broad remote UX remain
+later differentiators. This document defines the quality gate. It is narrower than feature parity
+with tmux or Zellij and stronger than merely having a code path for each feature.
 
 Current implementation status is documented in
 [`single-pane-runtime.md`](single-pane-runtime.md). Milestone order is documented in
@@ -70,9 +71,10 @@ operations are dependable.
 - Bracketed paste preserves boundaries, applies explicit size/backpressure policy, and is never
   mistaken for mux commands.
 - Mouse click, release, motion/drag, and wheel events are decoded into bounded typed values.
-- Fiber hit-tests its status, separators, overlays, selection, and panes before forwarding events.
-- Application events are translated to pane-local cells and encoded according to canonical terminal
-  mouse modes.
+- The smart client hit-tests its status, separators, overlays, selection, and pane presentation and
+  emits semantic commands with stable targets.
+- Application events carry a validated pane ID and pane-local cells and are encoded by the daemon
+  according to canonical terminal mouse modes.
 - A configurable modifier overrides application mouse capture for Fiber interaction.
 - Focus reporting is forwarded only when requested by the focused application.
 - Client startup and every exit path restore raw mode, cursor state, alternate screen, paste, focus,
@@ -80,30 +82,40 @@ operations are dependable.
 
 ### Copy, search, selection, and clipboard
 
+- The smart client owns per-replica viewport, copy cursor, search, selection, and follow-output state;
+  one client's view never mutates another client's canonical terminal or viewport.
 - Enter and leave copy mode without stopping PTY progress or losing new scrollback.
-- Navigate scrollback, pages, lines, words, and buffer boundaries with the keyboard.
-- Select by character, word, and line with keyboard and mouse paths sharing one selection model.
-- Search forward/backward incrementally with bounded state and visible no-match behavior.
+- Navigate available scrollback, pages, lines, words, and buffer boundaries with the keyboard while
+  bounded missing history hydrates progressively from the daemon.
+- Select by character, word, and line with keyboard and mouse paths sharing one client-local model.
+- Search forward/backward incrementally with bounded state and visible no-match/loading behavior.
 - Copy plain text predictably across wrapped lines, wide cells, grapheme clusters, and rectangular
   pane boundaries.
 - Integrate with the platform clipboard through an explicit security policy; OSC 52 behavior is
-  configurable and bounded.
-- Define wheel behavior separately for normal scrollback, alternate screen, copy mode, and
-  applications that request mouse tracking or alternate scroll.
+  configurable and bounded by daemon policy and client consent.
+- Define wheel behavior separately for normal scrollback, alternate screen, copy mode, missing
+  history, and applications that request mouse tracking or alternate scroll.
 
-### Terminal compatibility and rendering
+### Terminal replication, compatibility, and rendering
 
 - Correctly handle UTF-8, grapheme clusters, combining marks, wide cells, true color, supported text
-  styles, cursor shapes, tab stops, wrapping, scroll regions, and resize reflow through the terminal
-  adapter.
+  styles, cursor shapes, tab stops, wrapping, scroll regions, and resize reflow through authoritative
+  and replica terminal adapter roles.
+- A bounded versioned checkpoint at sequence `N` plus every ordered event after `N` produces the same
+  observable terminal state as uninterrupted parsing across arbitrary chunk and parser boundaries.
+- Only the daemon emits terminal query responses and applies authoritative side-effect policy;
+  replicas suppress those outputs.
+- Attach presents visible state before progressive history, and lag/reconnect recover through bounded
+  resume or a fresh checkpoint without stopping PTYs.
 - Support alternate screen, synchronized updates, bracketed paste, focus events, hyperlinks, title
-  changes, and terminal query responses without leaking pane modes into Fiber-owned chrome.
+  changes, and terminal queries without leaking pane modes into Fiber-owned chrome.
 - Ship or select truthful terminfo and `$TERM` behavior rather than advertising unsupported
   capabilities.
-- Compose panes, separators, status, overlays, cursor, and terminal modes into one deterministic
-  frame without visible partial-layout updates.
-- Reconstruct complete visible state after attach, active-window change, resize, and output
-  backpressure.
+- Client presentation composes replicas, separators, status, overlays, cursor, and terminal modes
+  without visible partial-topology updates. ANSI compatibility and native rendering consume the same
+  replica model.
+- Reconstruct complete visible state after attach, active-window change, resize, client lag, and
+  reconnect.
 - Document unsupported protocols such as graphics instead of silently corrupting or discarding them.
 
 ### Configuration
@@ -139,15 +151,20 @@ must cover distributions and resource use, not only best-case throughput:
   queues; and
 - bytes written to clients alongside latency so coalescing does not hide excessive bandwidth.
 
+The suite additionally covers checkpoint bytes/export/import time, attach-to-ready, event-to-visible
+latency, acknowledgement lag, forced-resynchronization time, progressive-history bytes/time, and the
+same core workloads over local Unix and shaped SSH transports. It records both daemon and client CPU
+and memory so moving work to clients is not mislabeled as eliminating it.
+
 The suite records p50, p95, and p99 where the harness supports enough samples. Stable benchmarks gain
 reviewed regression budgets; a regression outside budget requires explanation and evidence rather
-than a language-level assumption that the path is fast. Release results remain hardware- and
-workload-labeled.
+than a language-level assumption that the path is fast. Release results remain hardware-, transport-,
+presentation-, and workload-labeled.
 
 Hot-path invariants from [`architecture.md`](architecture.md) and
 [`performance.md`](performance.md) continue to apply: no synchronous extension waits, no slow-client
-PTY stalls, bounded work per turn, affected-row/client rendering, and no accidental general-heap use
-in steady-state encoding.
+PTY stalls, bounded sequencing/checkpoint/history work per turn, bounded replica/render work, and no
+accidental general-heap use in steady-state event processing.
 
 ## Robustness contract
 
@@ -158,7 +175,10 @@ The daily-driver gate requires:
 - pseudoterminal integration tests for launch, input, paste, mouse modes, resize, detach/attach,
   child exit, and terminal restoration;
 - protocol fragmentation, coalescing, malformed, oversized, flood, and mismatch tests;
-- fuzz coverage for untrusted client framing and input decoders in addition to upstream VT coverage;
+- checkpoint-plus-tail equivalence, transactional import, duplicate/missing/out-of-order event,
+  acknowledgement, resume, forced reset, and progressive-history tests;
+- fuzz coverage for untrusted client framing, checkpoint import, and input decoders in addition to
+  upstream VT coverage;
 - deterministic engine traces for topology and ordered mixed keyboard/mouse/command input;
 - AddressSanitizer and UndefinedBehaviorSanitizer runs plus the four supported host architectures;
 - repeated attach/detach, resize, split/close, output-flood, slow-client, and extension-crash stress
@@ -177,8 +197,9 @@ Release testing includes at least:
 - editors: Neovim and one common terminal editor using alternate screen and mouse input;
 - pagers and monitors: less, man, top/htop-class tools;
 - REPLs and TUIs with bracketed paste, focus, and extended keys;
-- outer terminals: Ghostty plus representative terminals on each supported OS; and
-- local sockets and, once implemented, the same scenarios over SSH stdio.
+- the native presentation backend plus the ANSI compatibility backend in Ghostty and representative
+  outer terminals on each supported OS; and
+- local Unix sockets and the same checkpoint/event scenarios over SSH stdio.
 
 The matrix records known limitations by Fiber version. Passing one high-throughput benchmark does not
 substitute for interaction correctness.
@@ -189,9 +210,11 @@ Fiber can claim day-to-day readiness only when:
 
 1. the required local behavior above is implemented or an omission is deliberately removed from the
    release contract;
-2. keyboard and mouse paths pass their shared semantic, forwarding, and restoration tests;
-3. performance suites show no unexplained regressions against reviewed budgets;
-4. sanitizer, platform, stress, and soak suites pass;
-5. installation and upgrade paths are tested from release artifacts; and
-6. a focused external cohort uses Fiber as its primary multiplexer for at least 30 days, with reasons
+2. keyboard and mouse paths pass their shared semantic, forwarding, and applicable presentation
+   restoration tests;
+3. checkpoint/event equivalence, bounded lag recovery, and Unix/SSH transport suites pass;
+4. performance suites show no unexplained regressions against reviewed budgets;
+5. sanitizer, platform, stress, and soak suites pass;
+6. installation and upgrade paths are tested from release artifacts; and
+7. a focused external cohort uses Fiber as its primary multiplexer for at least 30 days, with reasons
    for returning to another tool tracked and triaged.

@@ -26,8 +26,10 @@ find apps src tests -type f -name '*.cpp' -print0 |
 find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) \
   ! -path 'include/fiber/command.hpp' \
   ! -path 'src/client/attached_client.cpp' \
+  ! -path 'src/core/connection_output.hpp' \
   ! -path 'src/core/engine.cpp' \
   ! -path 'src/core/input.cpp' \
+  ! -path 'src/core/pty_writer.cpp' \
   ! -path 'src/daemon/server.cpp' \
   ! -path 'src/platform/io.cpp' \
   ! -path 'src/protocol/single_pane.cpp' \

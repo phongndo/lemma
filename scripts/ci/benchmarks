@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly mode="${1:-smoke}"
 readonly output="build/release/benchmark-results.json"
+readonly mux_output="build/release/mux-benchmark-results.json"
 
 case "${mode}" in
   smoke)
@@ -30,11 +31,25 @@ benchmark_args+=(
 )
 
 clang-format --dry-run --Werror benchmarks/*.cpp
+# Ghostty's upstream CMake wrapper writes every profile to one source-tree zig-out directory. Force
+# the benchmark lane to rebuild ReleaseFast so a prior debug/sanitizer build cannot taint results.
+rm -rf third_party/ghostty/zig-out
 scripts/ci/configure release -DFIBER_BUILD_TESTS=OFF
-cmake --build --preset release --target fiber_benchmarks
+cmake --build --preset release --target \
+  fiber_benchmarks fiber_test_server fiber_test_cli fiber_test_pty_peer
 clang-tidy --quiet -p build/release benchmarks/*.cpp
 rm -f "${output}"
 ./build/release/fiber_benchmarks "${benchmark_args[@]}"
+
+mux_repetitions=1
+if [[ "${mode}" == "extended" ]]; then
+  mux_repetitions=5
+fi
+rm -f "${mux_output}"
+python3 benchmarks/mux_benchmark.py \
+  --mode all \
+  --repetitions "${mux_repetitions}" \
+  --output "${mux_output}" >/dev/null
 
 if [[ ! -s "${output}" ]]; then
   printf 'benchmark did not create %s\n' "${output}" >&2
@@ -65,4 +80,43 @@ for failure in failures:
     print(f"benchmark {name} failed: {message}", file=sys.stderr)
 
 raise SystemExit(bool(failures))
+PY
+
+python3 - "${mux_output}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    report = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    print(f"invalid mux benchmark report {path}: {error}", file=sys.stderr)
+    raise SystemExit(1) from error
+
+workloads = report.get("workloads") if isinstance(report, dict) else None
+binaries = report.get("binaries") if isinstance(report, dict) else None
+required = {"warm_scroll", "blocked_pty"}
+if not isinstance(workloads, dict) or not required.issubset(workloads):
+    print(f"mux benchmark report {path} is missing required workloads", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(binaries, dict) or not {"server", "cli", "workload"}.issubset(binaries):
+    print(f"mux benchmark report {path} is missing binary provenance", file=sys.stderr)
+    raise SystemExit(1)
+for name in ("warm_scroll",):
+    result = workloads[name]
+    if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
+        print(f"mux benchmark workload {name} has invalid latency samples", file=sys.stderr)
+        raise SystemExit(1)
+blocked = workloads["blocked_pty"]
+for condition in ("idle", "blocked_other_pane"):
+    condition_result = blocked.get(condition) if isinstance(blocked, dict) else None
+    for measurement in ("key_to_pty", "key_to_visible"):
+        result = condition_result.get(measurement) if isinstance(condition_result, dict) else None
+        if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
+            print(
+                f"mux benchmark workload blocked_pty.{condition}.{measurement} is invalid",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 PY
