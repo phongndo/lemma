@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 -m unittest discover -s tools -p 'test_ci*.py'
-find scripts/ci -maxdepth 1 -type f ! -name '*.py' -print0 | xargs -0 shellcheck
-actionlint -color
+# GitHub Actions runs these lanes independently. Keep one sequential local
+# aggregate for convenience.
+scripts/ci/contracts
+scripts/ci/shellcheck
+scripts/ci/actionlint

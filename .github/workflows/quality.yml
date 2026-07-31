@@ -16,6 +16,9 @@ concurrency:
 
 env:
   ACTIONLINT_VERSION: 1.7.12
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  CCACHE_MAXSIZE: 500M
+  CONAN_HOME: ${{ github.workspace }}/.conan2
 
 jobs:
   changes:
@@ -24,7 +27,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       cpp: ${{ steps.classify.outputs.cpp }}
-      workflows: ${{ steps.classify.outputs.workflows }}
+      automation: ${{ steps.classify.outputs.automation }}
 
     steps:
       - name: Checkout
@@ -40,10 +43,42 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: scripts/ci/changes.py
 
-  workflow-lint:
-    name: Workflow lint
+  ci-contracts:
+    name: CI contracts
     needs: changes
-    if: needs.changes.outputs.workflows == 'true'
+    if: needs.changes.outputs.automation == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Test change classification
+        run: scripts/ci/contracts
+
+  shellcheck:
+    name: ShellCheck
+    needs: changes
+    if: needs.changes.outputs.automation == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check shell scripts
+        run: scripts/ci/shellcheck
+
+  actionlint:
+    name: Actionlint
+    needs: changes
+    if: needs.changes.outputs.automation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -67,19 +102,34 @@ jobs:
             go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
           echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
 
-      - name: Validate CI orchestration
-        run: scripts/ci/workflows
+      - name: Check Actions workflows
+        run: scripts/ci/actionlint
 
-  cpp:
-    name: C++ correctness
+  format:
+    name: Format
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Check formatting
+        run: nix develop --command scripts/ci/format
+
+  build-test:
+    name: Build and test
     needs: changes
     if: needs.changes.outputs.cpp == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
-      CCACHE_MAXSIZE: 500M
-      CONAN_HOME: ${{ github.workspace }}/.conan2
 
     steps:
       - name: Checkout with submodules
@@ -91,7 +141,7 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
-      - name: Restore trusted build cache
+      - name: Restore trusted debug cache
         uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
@@ -103,10 +153,10 @@ jobs:
           restore-keys: |
             fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
 
-      - name: Run C++ suite
-        run: nix develop --command scripts/ci/cpp
+      - name: Build and run tests
+        run: nix develop --command scripts/ci/build-test
 
-      - name: Save trusted build cache
+      - name: Save trusted debug cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
@@ -117,12 +167,125 @@ jobs:
             third_party/ghostty/.zig-cache
           key: fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
 
+  clang-tidy:
+    name: Clang-tidy
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Restore trusted debug cache
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            third_party/ghostty/.zig-cache
+          key: fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+          restore-keys: |
+            fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+
+      - name: Run clang-tidy
+        run: nix develop --command scripts/ci/lint
+
+  clangd:
+    name: Clangd
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Restore trusted debug cache
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            third_party/ghostty/.zig-cache
+          key: fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+          restore-keys: |
+            fiber-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+
+      - name: Run clangd checks
+        run: nix develop --command scripts/ci/lsp
+
+  sanitizers:
+    name: Address and undefined behavior sanitizers
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Restore trusted sanitizer cache
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            third_party/ghostty/.zig-cache
+          key: fiber-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+          restore-keys: |
+            fiber-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+
+      - name: Run sanitizer suite
+        run: nix develop --command scripts/ci/sanitizers
+
+      - name: Save trusted sanitizer cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            third_party/ghostty/.zig-cache
+          key: fiber-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+
   gate:
     name: CI gate
     needs:
       - changes
-      - workflow-lint
-      - cpp
+      - ci-contracts
+      - shellcheck
+      - actionlint
+      - format
+      - build-test
+      - clang-tidy
+      - clangd
+      - sanitizers
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -131,10 +294,16 @@ jobs:
       - name: Require every selected lane
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          WORKFLOW_SELECTED: ${{ needs.changes.outputs.workflows }}
-          WORKFLOW_RESULT: ${{ needs.workflow-lint.result }}
+          AUTOMATION_SELECTED: ${{ needs.changes.outputs.automation }}
+          CI_CONTRACTS_RESULT: ${{ needs.ci-contracts.result }}
+          SHELLCHECK_RESULT: ${{ needs.shellcheck.result }}
+          ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           CPP_SELECTED: ${{ needs.changes.outputs.cpp }}
-          CPP_RESULT: ${{ needs.cpp.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          BUILD_TEST_RESULT: ${{ needs.build-test.result }}
+          CLANG_TIDY_RESULT: ${{ needs.clang-tidy.result }}
+          CLANGD_RESULT: ${{ needs.clangd.result }}
+          SANITIZERS_RESULT: ${{ needs.sanitizers.result }}
         shell: bash
         run: |
           set -euo pipefail
@@ -145,8 +314,14 @@ jobs:
 
           failed=0
           for entry in \
-            "workflow-lint:$WORKFLOW_SELECTED:$WORKFLOW_RESULT" \
-            "cpp:$CPP_SELECTED:$CPP_RESULT"
+            "ci-contracts:$AUTOMATION_SELECTED:$CI_CONTRACTS_RESULT" \
+            "shellcheck:$AUTOMATION_SELECTED:$SHELLCHECK_RESULT" \
+            "actionlint:$AUTOMATION_SELECTED:$ACTIONLINT_RESULT" \
+            "format:$CPP_SELECTED:$FORMAT_RESULT" \
+            "build-test:$CPP_SELECTED:$BUILD_TEST_RESULT" \
+            "clang-tidy:$CPP_SELECTED:$CLANG_TIDY_RESULT" \
+            "clangd:$CPP_SELECTED:$CLANGD_RESULT" \
+            "sanitizers:$CPP_SELECTED:$SANITIZERS_RESULT"
           do
             name="${entry%%:*}"
             remainder="${entry#*:}"

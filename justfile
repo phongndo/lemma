@@ -97,20 +97,55 @@ lsp:
 # Run formatting, lint, LSP diagnostics, build, and tests.
 check: build fmt-check lint lsp-check test
 
-# Run the merge-blocking C++ suite used by GitHub Actions.
+# Check the merge-blocking formatter lane.
+ci-format:
+    {{ nix }} scripts/ci/format
+
+# Run the merge-blocking debug build and test lane.
+ci-build-test:
+    {{ nix }} scripts/ci/build-test
+
+# Run the merge-blocking clang-tidy lane.
+ci-lint:
+    {{ nix }} scripts/ci/lint
+
+# Run the merge-blocking clangd lane.
+ci-lsp:
+    {{ nix }} scripts/ci/lsp
+
+# Run the regular C++ lanes sequentially for local reproduction.
 ci-cpp:
     {{ nix }} scripts/ci/cpp
 
-# Reproduce the temporarily local-only benchmark lane.
+# Run the scheduled/local release benchmark smoke lane.
 ci-benchmarks:
     {{ nix }} scripts/ci/benchmarks smoke
 
-# Test CI orchestration and lint Actions workflows and shell scripts.
+# Reproduce the sanitizer suite (the merge-blocking hosted lane uses Linux).
+ci-sanitizers:
+    {{ nix }} scripts/ci/sanitizers
+
+# Run the CI change-classification contract tests.
+ci-contracts:
+    {{ nix }} scripts/ci/contracts
+
+# Run ShellCheck over CI scripts.
+ci-shellcheck:
+    {{ nix }} scripts/ci/shellcheck
+
+# Run Actionlint over GitHub Actions workflows.
+ci-actionlint:
+    {{ nix }} scripts/ci/actionlint
+
+# Run all automation checks sequentially for local reproduction.
 ci-workflows:
     {{ nix }} scripts/ci/workflows
 
-# Reproduce every merge-blocking CI lane locally.
-ci-check: ci-cpp ci-workflows
+# Reproduce every merge-blocking CI lane locally in a safe sequence.
+ci-check:
+    {{ nix }} scripts/ci/cpp
+    {{ nix }} scripts/ci/sanitizers
+    {{ nix }} scripts/ci/workflows
 
 # Configure the debug tree and install this repository's hk hooks.
 hooks:

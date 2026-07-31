@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 
-LANES = ("cpp", "workflows")
+LANES = ("cpp", "automation")
 ZERO_SHA = "0" * 40
 
 
@@ -30,10 +30,10 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             return {lane: True for lane in LANES}
 
         if path.startswith("tools/test_ci"):
-            result["workflows"] = True
+            result["automation"] = True
 
-        # Production, test, and benchmark sources share the C++ source-hygiene
-        # lane. Benchmarks are intentionally not built or executed in CI for now.
+        # Production, test, and benchmark sources select the independent C++
+        # format, build/test, clang-tidy, clangd, and sanitizer jobs.
         if path.startswith(
             (
                 "apps/",
@@ -63,7 +63,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         # merge-blocking suites, so validate their complete contract.
         if _is(path, "flake.nix", "flake.lock", "justfile"):
             result["cpp"] = True
-            result["workflows"] = True
+            result["automation"] = True
 
     return result
 

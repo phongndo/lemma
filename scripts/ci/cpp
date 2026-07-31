@@ -1,41 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly cpp_roots=(apps include src tests benchmarks)
-
-# Fail before dependency setup when source or Nix formatting is wrong.
-find "${cpp_roots[@]}" -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 |
-  xargs -0 clang-format --dry-run --Werror
-nixpkgs-fmt --check flake.nix
-just --fmt --check --unstable --justfile justfile
-hk validate
-nix flake check --no-build
-
-scripts/ci/configure debug \
-  -DFIBER_BUILD_TESTS=ON \
-  -DFIBER_BUILD_BENCHMARKS=OFF
-cmake --build --preset debug
-ctest --preset debug --no-tests=error
-
-find apps src tests -type f -name '*.cpp' -print0 |
-  xargs -0 clang-tidy --quiet -p build/debug
-
-# LLVM 22's isolated checker reports internal code-action failures for the standalone command
-# header and while testing refactors in loop- and macro-heavy runtime sources. Their production
-# translation units and clang-tidy still cover these files.
-find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) \
-  ! -path 'include/fiber/command.hpp' \
-  ! -path 'src/client/attached_client.cpp' \
-  ! -path 'src/core/connection_output.hpp' \
-  ! -path 'src/core/engine.cpp' \
-  ! -path 'src/core/input.cpp' \
-  ! -path 'src/core/pty_writer.cpp' \
-  ! -path 'src/daemon/server.cpp' \
-  ! -path 'src/platform/io.cpp' \
-  ! -path 'src/protocol/single_pane.cpp' \
-  ! -path 'src/render/single_pane.cpp' -print0 |
-  sort -z |
-  xargs -0 cmake/check-clangd.sh
-
-# Exercise command dispatch without opening a PTY or creating persistent state.
-./build/debug/fiber >/dev/null
+# GitHub Actions runs these lanes on isolated runners in parallel. This aggregate
+# remains the convenient sequential local reproduction command.
+scripts/ci/format
+scripts/ci/build-test
+scripts/ci/lint
+scripts/ci/lsp

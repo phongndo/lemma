@@ -49,7 +49,7 @@ class CiChangesTests(unittest.TestCase):
     def test_application_change_selects_cpp_correctness(self):
         self.assertEqual(self.selected("apps/fiber/main.cpp"), {"cpp"})
 
-    def test_benchmark_change_gets_cpp_source_hygiene(self):
+    def test_benchmark_change_selects_cpp_jobs(self):
         self.assertEqual(self.selected("benchmarks/fiber_benchmark.cpp"), {"cpp"})
 
     def test_dependency_change_selects_cpp_correctness(self):
@@ -61,8 +61,8 @@ class CiChangesTests(unittest.TestCase):
     def test_tidy_configuration_selects_cpp_correctness(self):
         self.assertEqual(self.selected(".clang-tidy"), {"cpp"})
 
-    def test_ci_test_change_selects_workflow_lane(self):
-        self.assertEqual(self.selected("tools/test_ci_changes.py"), {"workflows"})
+    def test_ci_test_change_selects_automation_lane(self):
+        self.assertEqual(self.selected("tools/test_ci_changes.py"), {"automation"})
 
     def test_workflow_change_runs_every_lane(self):
         result = changes.classify_paths([".github/workflows/quality.yml"])

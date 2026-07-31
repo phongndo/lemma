@@ -59,8 +59,10 @@ latency does not justify moving Lua into the mux-critical path.
 attached client, shell PTY, terminal adapter, renderer, and deterministic workload executable through
 isolated endpoints. It records the Fiber commit, host/architecture, every latency sample, p50/p95/p99,
 and client bytes as JSON. It never touches the user's daemon. The benchmark driver removes Ghostty's
-shared source-tree `zig-out` first so a prior debug/sanitizer build cannot be mistaken for a
-ReleaseFast result.
+shared source-tree `zig-out` before and after the run so a prior ReleaseFast archive cannot taint the
+measurement or a later local debug/sanitizer build. Scheduled and manually dispatched extended CI
+runs the smoke mode in an isolated checkout and uploads both JSON reports; shared-runner timings are
+evidence, not thresholds.
 
 Reproduce a release smoke or five-sample run with:
 

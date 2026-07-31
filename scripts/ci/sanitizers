@@ -8,7 +8,13 @@ scripts/ci/configure sanitizers \
   -DFIBER_BUILD_BENCHMARKS=OFF
 cmake --build --preset sanitizers --target fiber fiber_tests fiber_e2e_tests
 
-export ASAN_OPTIONS="detect_leaks=1:strict_string_checks=1"
+leak_detection=1
+if [[ "$(uname -s)" == Darwin ]]; then
+  # Apple's ASan runtime does not implement LeakSanitizer. The merge-blocking
+  # Linux lane below keeps leak detection mandatory.
+  leak_detection=0
+fi
+export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
-ctest --preset sanitizers --no-tests=error
+ctest --preset sanitizers --no-tests=error --parallel "${CTEST_PARALLEL_LEVEL:-4}"
 ./build/sanitizers/fiber >/dev/null

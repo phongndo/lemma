@@ -5,6 +5,14 @@ readonly mode="${1:-smoke}"
 readonly output="build/release/benchmark-results.json"
 readonly mux_output="build/release/mux-benchmark-results.json"
 
+# Ghostty's current CMake wrapper writes every profile to the source checkout's
+# zig-out directory. CI lanes have isolated checkouts; locally, remove the
+# ReleaseFast output on every exit so a later debug/sanitizer build cannot reuse it.
+cleanup_ghostty_output() {
+  rm -rf third_party/ghostty/zig-out
+}
+trap cleanup_ghostty_output EXIT
+
 case "${mode}" in
   smoke)
     benchmark_args=(
@@ -30,14 +38,11 @@ benchmark_args+=(
   --benchmark_out_format=json
 )
 
-clang-format --dry-run --Werror benchmarks/*.cpp
-# Ghostty's upstream CMake wrapper writes every profile to one source-tree zig-out directory. Force
-# the benchmark lane to rebuild ReleaseFast so a prior debug/sanitizer build cannot taint results.
+# Force this isolated lane to build the measured ReleaseFast Ghostty archive.
 rm -rf third_party/ghostty/zig-out
 scripts/ci/configure release -DFIBER_BUILD_TESTS=OFF
 cmake --build --preset release --target \
   fiber_benchmarks fiber_test_server fiber_test_cli fiber_test_pty_peer
-clang-tidy --quiet -p build/release benchmarks/*.cpp
 rm -f "${output}"
 ./build/release/fiber_benchmarks "${benchmark_args[@]}"
 
