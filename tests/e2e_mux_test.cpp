@@ -794,7 +794,7 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherWorkspace) {
     ASSERT_GE(::poll(capacity_events.data(), static_cast<nfds_t>(capacity_events.size()), 100), 0);
     for (std::size_t index = 0; index < capacity_events.size(); ++index) {
       auto& events = std::span(capacity_events).subspan(index, 1).front();
-      if ((events.revents & POLLIN) != 0) {
+      if ((events.revents & (POLLIN | POLLHUP)) != 0) {
         std::array<std::byte, 1> response{};
         auto& peer = std::span(capacity_peers).subspan(index, 1).front();
         if (peer.read_some(response, deadline_after(100ms)) == 1 &&
