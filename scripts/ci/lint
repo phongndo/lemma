@@ -4,6 +4,8 @@ set -euo pipefail
 scripts/ci/configure debug \
   -DFIBER_BUILD_TESTS=ON \
   -DFIBER_BUILD_BENCHMARKS=ON
+# Analysis needs Ghostty's generated public header but not Fiber object files.
+cmake --build --preset debug --target zig_build_lib_vt
 
 find apps src tests benchmarks -type f -name '*.cpp' -print0 |
   xargs -0 -n 1 -P "${CLANG_TIDY_JOBS:-4}" clang-tidy --quiet -p build/debug

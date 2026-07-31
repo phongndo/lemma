@@ -4,6 +4,8 @@ set -euo pipefail
 scripts/ci/configure debug \
   -DFIBER_BUILD_TESTS=ON \
   -DFIBER_BUILD_BENCHMARKS=OFF
+# Clangd needs Ghostty's generated public header but not Fiber object files.
+cmake --build --preset debug --target zig_build_lib_vt
 
 # LLVM 22's isolated checker reports internal code-action failures for the standalone command
 # header and while testing refactors in loop- and macro-heavy runtime sources. Their production

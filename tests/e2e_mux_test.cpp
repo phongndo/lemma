@@ -788,19 +788,24 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherWorkspace) {
         .revents = 0,
     };
   }
-  ASSERT_GT(::poll(capacity_events.data(), static_cast<nfds_t>(capacity_events.size()), 2'000), 0);
   bool capacity_observed = false;
-  for (std::size_t index = 0; index < capacity_events.size(); ++index) {
-    const auto& events = std::span(capacity_events).subspan(index, 1).front();
-    if ((events.revents & POLLIN) == 0) {
-      continue;
-    }
-    std::array<std::byte, 1> response{};
-    auto& peer = std::span(capacity_peers).subspan(index, 1).front();
-    if (peer.read_some(response, deadline_after(100ms)) == 1 &&
-        response.front() == protocol::wire_byte(protocol::ControlResponse::capacity)) {
-      capacity_observed = true;
-      break;
+  for (std::size_t attempt = 0; attempt < 20 && !capacity_observed; ++attempt) {
+    ASSERT_GE(::poll(capacity_events.data(), static_cast<nfds_t>(capacity_events.size()), 100), 0);
+    for (std::size_t index = 0; index < capacity_events.size(); ++index) {
+      auto& events = std::span(capacity_events).subspan(index, 1).front();
+      if ((events.revents & POLLIN) != 0) {
+        std::array<std::byte, 1> response{};
+        auto& peer = std::span(capacity_peers).subspan(index, 1).front();
+        if (peer.read_some(response, deadline_after(100ms)) == 1 &&
+            response.front() == protocol::wire_byte(protocol::ControlResponse::capacity)) {
+          capacity_observed = true;
+          break;
+        }
+      }
+      if ((events.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        events.fd = -1;
+      }
+      events.revents = 0;
     }
   }
   EXPECT_TRUE(capacity_observed);
