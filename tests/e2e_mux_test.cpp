@@ -776,12 +776,14 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherWorkspace) {
   }
   fragmented.close();
 
-  // Exceed the hard limit directly; the earlier idle peer may expire independently.
-  std::array<RawPeer, limits::pending_connections_hard_max + 1> capacity_peers;
+  // Use a full limit of excess peers so connect/accept scheduling cannot leave the only rejected
+  // connection hidden at the tail of the listener backlog.
+  constexpr auto capacity_peer_count = limits::pending_connections_hard_max * 2U;
+  std::array<RawPeer, capacity_peer_count> capacity_peers;
   for (auto& peer : capacity_peers) {
     ASSERT_TRUE(peer.connect(runtime_.socket_path(), deadline_after(2s)));
   }
-  std::array<pollfd, limits::pending_connections_hard_max + 1> capacity_events{};
+  std::array<pollfd, capacity_peer_count> capacity_events{};
   for (std::size_t index = 0; index < capacity_peers.size(); ++index) {
     std::span(capacity_events).subspan(index, 1).front() = {
         .fd = std::span(capacity_peers).subspan(index, 1).front().native_handle(),
