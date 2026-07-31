@@ -9,7 +9,7 @@ scripts/ci/configure debug \
   -DFIBER_BUILD_TESTS=ON \
   -DFIBER_BUILD_BENCHMARKS=ON
 cmake --build --preset debug
-ctest --preset debug --no-tests=error --parallel "${CTEST_PARALLEL_LEVEL:-4}"
+scripts/ci/test debug
 
 # Exercise command dispatch without opening a PTY or creating persistent state.
 ./build/debug/fiber >/dev/null

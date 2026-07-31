@@ -16,5 +16,5 @@ if [[ "$(uname -s)" == Darwin ]]; then
 fi
 export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
-ctest --preset sanitizers --no-tests=error --parallel "${CTEST_PARALLEL_LEVEL:-4}"
+scripts/ci/test sanitizers
 ./build/sanitizers/fiber >/dev/null

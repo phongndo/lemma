@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# != 1 )); then
+  printf 'usage: %s <debug|release|sanitizers>\n' "$0" >&2
+  exit 2
+fi
+
+readonly profile="$1"
+
+# Component tests are cheap and isolated. Process tests intentionally run one at
+# a time: each creates many real PTYs, sockets, and subprocesses, and host-level
+# contention can obscure the behavior under test.
+ctest --preset "${profile}" --no-tests=error -LE integration \
+  --parallel "${CTEST_PARALLEL_LEVEL:-4}"
+ctest --preset "${profile}" --no-tests=error -L integration --parallel 1
