@@ -1,12 +1,16 @@
-# fiber
+# lemma
 
 **A terminal multiplexer built like infrastructure.**
 
-Fiber is an open-source, self-hosted terminal multiplexer for fast, reliable, long-lived sessions.
+Lemma is an open-source, self-hosted terminal multiplexer for fast, reliable, long-lived sessions.
 It is being designed so people, scripts, remote clients, and coding agents can operate the same
 sessions through one typed command model—without requiring a hosted service.
 
-## Why Fiber
+In mathematics, a lemma is a small proven result used to establish something larger. This project
+follows the same philosophy: provide one dependable terminal primitive that people and agents can
+compose into their own workflows.
+
+## Why Lemma
 
 - **Reliable by construction:** one authoritative daemon owns session state; queues, payloads, and
   event-loop work are bounded; client and extension failures do not end pane processes.
@@ -18,7 +22,7 @@ sessions through one typed command model—without requiring a hosted service.
 - **Programmable:** Lua 5.5 configuration and an isolated extension host build on the same typed
   command model used by built-in keys and CLI operations. Remote and agent access are planned on
   that semantic foundation.
-- **Yours to operate:** Fiber runs as a per-user daemon, keeps working when clients detach, and is
+- **Yours to operate:** Lemma runs as a per-user daemon, keeps working when clients detach, and is
   distributed under the permissive MIT license.
 
 The current vertical slice provides up to 64 named persistent workspaces in one per-user daemon,
@@ -66,9 +70,9 @@ Subsequent C++ compilations use ccache.
 ```sh
 just configure              # Conan install + CMake/Ninja generation
 just build                  # Debug build (`just profile=release build` for release)
-just run                    # Show fiber usage
+just run                    # Show lemma usage
 just demo                   # Run the scripted libghostty-vt demo
-just build && ./build/debug/fiber new  # Start and attach to pane 0
+just build && ./build/debug/lemma new  # Start and attach to pane 0
 just test                   # GoogleTest and GoogleMock
 just bench                  # Google Benchmark microbenchmarks
 just mux-bench              # Release microbenchmarks + process-level mux workloads
@@ -98,7 +102,7 @@ commands.
 
 ## Architecture
 
-Fiber is being built as a bounded, data-oriented authoritative daemon plus smart clients. The target
+Lemma is being built as a bounded, data-oriented authoritative daemon plus smart clients. The target
 uses one checkpoint-and-ordered-event protocol locally and over SSH: the daemon owns process, PTY,
 topology, and canonical terminal truth; clients own expendable terminal replicas and presentation.
 The current server-side ANSI compositor will migrate into the smart compatibility client before the
@@ -110,18 +114,18 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 ## Workspace/window mux
 
 ```sh
-./build/debug/fiber new work       # start workspace "work" and attach
+./build/debug/lemma new work       # start workspace "work" and attach
 # Press C-b d to detach.
-./build/debug/fiber new logs       # create another workspace in the same daemon
-./build/debug/fiber list           # list all workspaces
-./build/debug/fiber windows work   # list work's windows
-./build/debug/fiber attach work    # reattach to work
-./build/debug/fiber kill work      # stop one workspace
-./build/debug/fiber kill-all       # stop every workspace
+./build/debug/lemma new logs       # create another workspace in the same daemon
+./build/debug/lemma list           # list all workspaces
+./build/debug/lemma windows work   # list work's windows
+./build/debug/lemma attach work    # reattach to work
+./build/debug/lemma kill work      # stop one workspace
+./build/debug/lemma kill-all       # stop every workspace
 ```
 
 Each workspace permits one attached client, owns an ordered set of windows, and gives each pane its
-own login shell, PTY, and terminal. Fiber inherits the daemon's launch environment, advertises
+own login shell, PTY, and terminal. Lemma inherits the daemon's launch environment, advertises
 `xterm-256color`, and resizes pane PTYs from the active window's split layout. Workspace names
 contain 1-32 ASCII letters, digits, underscores, or hyphens.
 The built-in key table follows tmux defaults:
@@ -137,7 +141,7 @@ A minimal reverse-video status row is centered at the bottom. It shows windows a
 `number:foreground-process`, brackets the active window (`[1:zsh]`), automatically follows the
 focused pane's foreground process, and uses `…` when the complete window list does not fit.
 
-Launch `fiber` directly from the normal shell rather than through `nix develop` when testing
+Launch `lemma` directly from the normal shell rather than through `nix develop` when testing
 personal shell configuration.
 
 ## Editor and commit hooks
@@ -164,13 +168,13 @@ for one command only when necessary with `HK=0 git commit` or `HK=0 git push`.
 
 ## License
 
-Fiber is released under the [MIT License](LICENSE). Third-party dependencies remain subject to
+Lemma is released under the [MIT License](LICENSE). Third-party dependencies remain subject to
 their own licenses.
 
 ## Third-party dependency
 
 Ghostty is a Git submodule pinned to commit
 `55a3e33ab26a23d75b274b23c7f76d837db00578`. Its CMake wrapper invokes Zig to
-produce `libghostty-vt`; fiber links the static target. Update it deliberately
+produce `libghostty-vt`; Lemma links the static target. Update it deliberately
 by checking out a reviewed Ghostty commit in `third_party/ghostty` and committing the
 new submodule pointer.

@@ -1,6 +1,6 @@
 #include "core/input.hpp"
 
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <array>
 #include <cstddef>
@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-namespace fiber::core {
+namespace lemma::core {
 namespace {
 
 void write_terminal(vt::Terminal& terminal, const std::string_view bytes) noexcept {
@@ -62,4 +62,4 @@ TEST(CoreInputTest, SuppliesTextForControlKeys) {
 }
 
 } // namespace
-} // namespace fiber::core
+} // namespace lemma::core

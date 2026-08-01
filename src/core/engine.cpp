@@ -4,10 +4,10 @@
 #include "core/extension_runtime.hpp"
 #include "core/input.hpp"
 #include "core/pty_writer.hpp"
-#include "fiber/command.hpp"
-#include "fiber/id.hpp"
-#include "fiber/limits.hpp"
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/command.hpp"
+#include "lemma/id.hpp"
+#include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
 #include "protocol/single_pane.hpp"
@@ -33,7 +33,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace fiber::core {
+namespace lemma::core {
 namespace {
 
 constexpr auto command_attach = protocol::wire_byte(protocol::ControlCommand::attach);
@@ -1382,7 +1382,7 @@ collect_status_line(Workspace& workspace,
   }
   const auto& focused = *std::span(window->panes).subspan(window->focused_pane, 1).front();
   const auto title_value = window_title(*window);
-  return output.append_text("fiber workspace \"") &&
+  return output.append_text("lemma workspace \"") &&
          output.append_title(workspace.workspace_name()) && output.append_text("\": ") &&
          output.append_number(window_count(workspace)) && output.append_text(" window(s), ") &&
          output.append_number(pane_count(workspace)) &&
@@ -1403,7 +1403,7 @@ collect_status_line(Workspace& workspace,
     }
     const auto& window = *slot.window;
     const auto title_value = window_title(window);
-    if (!output.append_text("fiber window ") || !output.append_number(index + 1U) ||
+    if (!output.append_text("lemma window ") || !output.append_number(index + 1U) ||
         !output.append_text(": ") || !output.append_number(pane_count(window)) ||
         !output.append_text(" pane(s), ") ||
         !output.append_text(window.id == workspace.active_window ? "active, title \""
@@ -1449,7 +1449,7 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
 
 [[nodiscard]] auto append_extension_error(ConnectionOutput& output,
                                           const std::string_view error) noexcept -> bool {
-  return error.empty() || (output.append_text("fiber configuration error: ") &&
+  return error.empty() || (output.append_text("lemma configuration error: ") &&
                            output.append_safe(error, protocol::extension::error_bytes_max) &&
                            output.append_text("\n"));
 }
@@ -1465,7 +1465,7 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
       ++listed;
     }
   }
-  return listed > 0 || output.append_text("no fiber workspaces\n");
+  return listed > 0 || output.append_text("no lemma workspaces\n");
 }
 
 enum class PendingState : std::uint8_t {
@@ -1505,7 +1505,7 @@ constexpr auto setup_progress_timeout = std::chrono::seconds(5);
 
 void begin_pending_field(PendingConnection& pending, const PendingState state,
                          const std::size_t size) noexcept {
-  FIBER_ASSERT(size > 0 && size <= pending.field.size());
+  LEMMA_ASSERT(size > 0 && size <= pending.field.size());
   pending.state = state;
   pending.field_size = 0;
   pending.field_target = size;
@@ -1543,7 +1543,7 @@ void finish_pending_byte(PendingConnection& pending, const std::byte response,
                          const PendingAction action = PendingAction::close) noexcept {
   pending.output.reset();
   const bool appended = pending.output.append(std::span(&response, 1));
-  FIBER_ASSERT(appended);
+  LEMMA_ASSERT(appended);
   finish_pending_output(pending, action);
 }
 
@@ -1564,7 +1564,7 @@ void prepare_unnamed_command(PendingConnection& pending, Workspaces& workspaces,
         static_cast<void>(dispatch_workspace_command(*workspace, stop));
       }
     }
-    prepared = pending.output.append_text("all fiber workspaces stopped\n");
+    prepared = pending.output.append_text("all lemma workspaces stopped\n");
   } else {
     pending.state = PendingState::unused;
     return;
@@ -1622,7 +1622,7 @@ void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
     return;
   }
 
-  if (!pending.output.append_text("fiber workspace \"") ||
+  if (!pending.output.append_text("lemma workspace \"") ||
       !pending.output.append_title(workspace->workspace_name()) ||
       !pending.output.append_text("\" stopped\n")) {
     fail_pending_output(pending);
@@ -1702,7 +1702,7 @@ void complete_pending_field(PendingConnection& pending, Workspaces& workspaces,
     break;
   case PendingState::unused:
   case PendingState::flush_response:
-    FIBER_ASSERT(false);
+    LEMMA_ASSERT(false);
     break;
   }
 }
@@ -2226,4 +2226,4 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                          stop_requested);
 }
 
-} // namespace fiber::core
+} // namespace lemma::core

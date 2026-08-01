@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded process-level benchmarks for Fiber's warm mux and PTY backpressure paths."""
+"""Bounded process-level benchmarks for Lemma's warm mux and PTY backpressure paths."""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ import time
 from typing import Any
 
 ALT_SCREEN = b"\x1b[?1049h"
-WARM_MARKER = b"__FIBER_WARM_SCROLL_DONE__"
-BLOCK_READY = b"__FIBER_PTY_READY__"
-BLOCK_DONE = b"__FIBER_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
-LATENCY_READY = b"__FIBER_LATENCY_READY__"
+WARM_MARKER = b"__LEMMA_WARM_SCROLL_DONE__"
+BLOCK_READY = b"__LEMMA_PTY_READY__"
+BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
+LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 PAYLOAD_SIZE = 2 * 1024 * 1024
 
 
@@ -228,9 +228,9 @@ def termios_tiocswinsz() -> int:
     return termios.TIOCSWINSZ
 
 
-class FiberRuntime:
+class LemmaRuntime:
     def __init__(self, server: Path, cli: Path, peer: Path) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="fiber-benchmark-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="lemma-benchmark-")
         root = Path(self.temporary.name)
         for name in ("home", "config", "zdot"):
             (root / name).mkdir(mode=0o700)
@@ -274,7 +274,7 @@ class FiberRuntime:
                 return
             except OSError:
                 time.sleep(0.005)
-        raise TimeoutError("Fiber benchmark server did not become ready")
+        raise TimeoutError("Lemma benchmark server did not become ready")
 
     def command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -318,7 +318,7 @@ class FiberRuntime:
         self.temporary.cleanup()
 
 
-def warm_scroll(runtime: FiberRuntime, repetitions: int) -> dict[str, Any]:
+def warm_scroll(runtime: LemmaRuntime, repetitions: int) -> dict[str, Any]:
     client = runtime.start_and_attach("warm_scroll")
     command = f"{shlex.quote(str(runtime.peer_path))} warm-scroll\r".encode()
     client.write_all(command, 2.0)
@@ -346,7 +346,7 @@ def latency_samples(
     key_to_pty: list[int] = []
     key_to_visible: list[int] = []
     for index in range(repetitions):
-        marker = f"__FIBER_{label}_{index:04d}__".encode()
+        marker = f"__LEMMA_{label}_{index:04d}__".encode()
         started_ns = time.monotonic_ns()
         client.write_all(marker + b"\n", 2.0)
         key_to_pty.append(receipts.read_latency(marker, 5.0, started_ns))
@@ -359,7 +359,7 @@ def latency_samples(
     }
 
 
-def blocked_pty(runtime: FiberRuntime, repetitions: int) -> dict[str, Any]:
+def blocked_pty(runtime: LemmaRuntime, repetitions: int) -> dict[str, Any]:
     receipts = PtyReceiptChannel(runtime.receipt_path)
     try:
         blocked = runtime.start_and_attach("blocked_benchmark")
@@ -424,9 +424,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("warm-scroll", "blocked-pty", "all"), default="all")
     parser.add_argument("--repetitions", type=int, default=5)
-    parser.add_argument("--server", type=Path, default=Path("build/release/fiber_test_server"))
-    parser.add_argument("--cli", type=Path, default=Path("build/release/fiber_test_cli"))
-    parser.add_argument("--peer", type=Path, default=Path("build/release/fiber_test_pty_peer"))
+    parser.add_argument("--server", type=Path, default=Path("build/release/lemma_test_server"))
+    parser.add_argument("--cli", type=Path, default=Path("build/release/lemma_test_cli"))
+    parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
     if arguments.repetitions < 1 or arguments.repetitions > 1_000:
@@ -435,7 +435,7 @@ def main() -> int:
         if not executable.is_file():
             parser.error(f"missing executable: {executable}")
 
-    runtime = FiberRuntime(arguments.server, arguments.cli, arguments.peer)
+    runtime = LemmaRuntime(arguments.server, arguments.cli, arguments.peer)
     try:
         workloads: dict[str, Any] = {}
         if arguments.mode in ("warm-scroll", "all"):
@@ -445,7 +445,7 @@ def main() -> int:
         commit, worktree_dirty = git_provenance()
         report = {
             "schema": 2,
-            "multiplexer": "fiber",
+            "multiplexer": "lemma",
             "commit": commit,
             "worktree_dirty": worktree_dirty,
             "host": platform.node(),

@@ -1,6 +1,6 @@
-#include "fiber/bounded_byte_queue.hpp"
-#include "fiber/command.hpp"
-#include "fiber/id.hpp"
+#include "lemma/bounded_byte_queue.hpp"
+#include "lemma/command.hpp"
+#include "lemma/id.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -12,7 +12,7 @@
 #include <span>
 #include <type_traits>
 
-namespace fiber {
+namespace lemma {
 namespace {
 
 static_assert(std::is_trivially_copyable_v<Command>);
@@ -168,4 +168,4 @@ TEST(BoundedByteQueueTest, RejectsInputWithoutPartiallyAppending) {
 }
 
 } // namespace
-} // namespace fiber
+} // namespace lemma

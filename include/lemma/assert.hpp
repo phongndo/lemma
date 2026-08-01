@@ -1,19 +1,19 @@
-#ifndef FIBER_ASSERT_HPP
-#define FIBER_ASSERT_HPP
+#ifndef LEMMA_ASSERT_HPP
+#define LEMMA_ASSERT_HPP
 
 #include <source_location>
 
-namespace fiber {
+namespace lemma {
 
 [[noreturn]] void
 assertion_failed(const char* expression,
                  std::source_location location = std::source_location::current()) noexcept;
 
-} // namespace fiber
+} // namespace lemma
 
-#define FIBER_ASSERT(expression)                                                                   \
+#define LEMMA_ASSERT(expression)                                                                   \
   (static_cast<bool>(expression)                                                                   \
        ? static_cast<void>(0)                                                                      \
-       : ::fiber::assertion_failed(#expression, std::source_location::current()))
+       : ::lemma::assertion_failed(#expression, std::source_location::current()))
 
-#endif // FIBER_ASSERT_HPP
+#endif // LEMMA_ASSERT_HPP

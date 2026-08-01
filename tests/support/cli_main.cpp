@@ -13,7 +13,7 @@ int main(const int argc, char** argv) {
       return 2;
     }
     const auto endpoint =
-        fiber::daemon::RuntimeEndpoint::create(std::string_view(arguments.subspan<1, 1>().front()));
+        lemma::daemon::RuntimeEndpoint::create(std::string_view(arguments.subspan<1, 1>().front()));
     if (!endpoint.has_value()) {
       return 2;
     }
@@ -24,7 +24,7 @@ int main(const int argc, char** argv) {
     for (char* const argument : arguments.subspan(2)) {
       app_arguments.push_back(argument);
     }
-    return fiber::app::run(*endpoint, static_cast<int>(app_arguments.size()), app_arguments.data());
+    return lemma::app::run(*endpoint, static_cast<int>(app_arguments.size()), app_arguments.data());
   } catch (...) {
     return 2;
   }

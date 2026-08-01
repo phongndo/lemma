@@ -1,11 +1,11 @@
-#ifndef FIBER_PLATFORM_TERMINAL_MODE_HPP
-#define FIBER_PLATFORM_TERMINAL_MODE_HPP
+#ifndef LEMMA_PLATFORM_TERMINAL_MODE_HPP
+#define LEMMA_PLATFORM_TERMINAL_MODE_HPP
 
 #include <cstdint>
 
 #include <termios.h>
 
-namespace fiber::platform {
+namespace lemma::platform {
 
 struct WindowSize final {
   std::uint16_t columns{80};
@@ -32,6 +32,6 @@ private:
   bool active_{false};
 };
 
-} // namespace fiber::platform
+} // namespace lemma::platform
 
-#endif // FIBER_PLATFORM_TERMINAL_MODE_HPP
+#endif // LEMMA_PLATFORM_TERMINAL_MODE_HPP

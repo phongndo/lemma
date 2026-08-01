@@ -1,6 +1,6 @@
 #include "render/pane_composition.hpp"
 
-#include "fiber/limits.hpp"
+#include "lemma/limits.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <iterator>
 #include <string_view>
 
-namespace fiber::render {
+namespace lemma::render {
 namespace {
 
 [[nodiscard]] auto append(std::span<std::byte> output, std::size_t& used,
@@ -582,4 +582,4 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   return composition;
 }
 
-} // namespace fiber::render
+} // namespace lemma::render

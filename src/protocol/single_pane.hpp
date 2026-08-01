@@ -1,5 +1,5 @@
-#ifndef FIBER_PROTOCOL_SINGLE_PANE_HPP
-#define FIBER_PROTOCOL_SINGLE_PANE_HPP
+#ifndef LEMMA_PROTOCOL_SINGLE_PANE_HPP
+#define LEMMA_PROTOCOL_SINGLE_PANE_HPP
 
 #include <array>
 #include <cstddef>
@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 
-namespace fiber::protocol {
+namespace lemma::protocol {
 
 inline constexpr std::size_t input_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t parser_bytes_max = std::size_t{16} * 1'024U;
@@ -159,6 +159,6 @@ private:
   std::size_t pending_size_{0};
 };
 
-} // namespace fiber::protocol
+} // namespace lemma::protocol
 
-#endif // FIBER_PROTOCOL_SINGLE_PANE_HPP
+#endif // LEMMA_PROTOCOL_SINGLE_PANE_HPP

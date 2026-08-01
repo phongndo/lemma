@@ -2,7 +2,7 @@
 
 #include "render/pane_composition.hpp"
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -11,7 +11,7 @@
 
 #include <sys/socket.h>
 
-namespace fiber::render {
+namespace lemma::render {
 
 [[nodiscard]] auto flush_frame(const int client, const FrameBuffer& frame,
                                ClientOutputState& output) noexcept -> bool {
@@ -48,7 +48,7 @@ namespace fiber::render {
                                         const Viewport viewport, FrameBuffer& frame,
                                         ClientOutputState& output, const bool force_full,
                                         const StatusLine status) noexcept -> bool {
-  FIBER_ASSERT(!output.busy());
+  LEMMA_ASSERT(!output.busy());
   const auto rendered = compose_frame(panes, viewport, frame, force_full, status);
   if (!rendered.has_value()) {
     return false;
@@ -70,4 +70,4 @@ namespace fiber::render {
                               {.columns = size.columns, .rows = size.rows}, frame, output, false);
 }
 
-} // namespace fiber::render
+} // namespace lemma::render

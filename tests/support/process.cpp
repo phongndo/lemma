@@ -36,10 +36,10 @@
 #elifdef __linux__
 #include <pty.h>
 #else
-#error "fiber process tests require forkpty"
+#error "lemma process tests require forkpty"
 #endif
 
-namespace fiber::test {
+namespace lemma::test {
 namespace {
 
 constexpr std::size_t output_tail_bytes_max = std::size_t{64} * 1'024U;
@@ -123,7 +123,7 @@ void exec_child(const PreparedExec& prepared) noexcept {
 
 TemporaryRuntime::TemporaryRuntime() {
   std::array<char, 64> pattern{};
-  constexpr std::string_view value = "/tmp/fiber-e2e-XXXXXX";
+  constexpr std::string_view value = "/tmp/lemma-e2e-XXXXXX";
   std::ranges::copy(value, pattern.begin());
   char* const created = ::mkdtemp(pattern.data());
   if (created == nullptr) {
@@ -582,7 +582,7 @@ namespace {
 
 [[nodiscard]] auto parse_window_listing(const std::string_view line)
     -> std::optional<WindowListing> {
-  constexpr std::string_view prefix = "fiber window ";
+  constexpr std::string_view prefix = "lemma window ";
   if (!line.starts_with(prefix)) {
     return std::nullopt;
   }
@@ -942,4 +942,4 @@ void PtyClient::terminate() noexcept {
   return false;
 }
 
-} // namespace fiber::test
+} // namespace lemma::test

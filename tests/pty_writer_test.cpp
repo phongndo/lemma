@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-namespace fiber::core {
+namespace lemma::core {
 namespace {
 
 struct ScriptedWriter final {
@@ -180,4 +180,4 @@ TEST(PtyWriterTest, RejectsInvalidWriterProgress) {
 }
 
 } // namespace
-} // namespace fiber::core
+} // namespace lemma::core

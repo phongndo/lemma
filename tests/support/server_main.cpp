@@ -19,7 +19,7 @@ int main(const int argc, char** argv) {
   if (arguments.size() != 2) {
     return 2;
   }
-  const auto endpoint = fiber::daemon::RuntimeEndpoint::create(std::string_view(arguments.back()));
+  const auto endpoint = lemma::daemon::RuntimeEndpoint::create(std::string_view(arguments.back()));
   if (!endpoint.has_value()) {
     return 2;
   }
@@ -28,6 +28,6 @@ int main(const int argc, char** argv) {
   if (sigemptyset(&action.sa_mask) != 0 || ::sigaction(SIGTERM, &action, nullptr) != 0) {
     return 2;
   }
-  return fiber::daemon::serve(*endpoint,
+  return lemma::daemon::serve(*endpoint,
                               {.extensions_enabled = false, .stop_requested = &should_stop});
 }

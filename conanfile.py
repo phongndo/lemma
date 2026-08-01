@@ -1,7 +1,7 @@
 from conan import ConanFile
 
 
-class FiberConan(ConanFile):
+class LemmaConan(ConanFile):
     package_type = "application"
     settings = "os", "arch", "compiler", "build_type"
 

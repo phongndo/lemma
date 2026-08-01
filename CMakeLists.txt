@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.30)
 
-project(fiber VERSION 0.1.0 LANGUAGES C CXX)
+project(lemma VERSION 0.1.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
-  message(FATAL_ERROR "fiber requires Clang or Apple Clang")
+  message(FATAL_ERROR "lemma requires Clang or Apple Clang")
 endif()
 
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -11,12 +11,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(FIBER_BUILD_TESTS "Build the test suite" ON)
-option(FIBER_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(LEMMA_BUILD_TESTS "Build the test suite" ON)
+option(LEMMA_BUILD_BENCHMARKS "Build benchmarks" ON)
 
-add_library(fiber_warnings INTERFACE)
+add_library(lemma_warnings INTERFACE)
 target_compile_options(
-  fiber_warnings
+  lemma_warnings
   INTERFACE
     -Wall
     -Wextra
@@ -48,7 +48,7 @@ target_compile_options(
 # otherwise valid default-library selection as unused, so suppress that driver-only diagnostic.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_compile_options(
-    fiber_warnings
+    lemma_warnings
     INTERFACE -Wno-unused-command-line-argument
   )
 endif()
@@ -59,139 +59,139 @@ add_subdirectory(third_party/ghostty EXCLUDE_FROM_ALL SYSTEM)
 find_package(lua CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 
-function(fiber_internal_target target)
+function(lemma_internal_target target)
   target_include_directories(
     ${target}
     PUBLIC
       "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
       "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
   )
-  target_link_libraries(${target} PRIVATE fiber_warnings)
+  target_link_libraries(${target} PRIVATE lemma_warnings)
 endfunction()
 
-add_library(fiber_base STATIC src/core/assert.cpp)
-fiber_internal_target(fiber_base)
+add_library(lemma_base STATIC src/core/assert.cpp)
+lemma_internal_target(lemma_base)
 
 # This is the only target that may include Ghostty headers. The final executable receives the
-# static archive as a link-only implementation requirement; Ghostty is not part of Fiber's API.
-add_library(fiber_terminal STATIC src/terminal/terminal.cpp)
-fiber_internal_target(fiber_terminal)
-target_link_libraries(fiber_terminal PRIVATE fiber_base ghostty-vt-static)
+# static archive as a link-only implementation requirement; Ghostty is not part of Lemma's API.
+add_library(lemma_terminal STATIC src/terminal/terminal.cpp)
+lemma_internal_target(lemma_terminal)
+target_link_libraries(lemma_terminal PRIVATE lemma_base ghostty-vt-static)
 
 add_library(
-  fiber_platform STATIC
+  lemma_platform STATIC
   src/platform/io.cpp
   src/platform/pty.cpp
   src/platform/terminal_mode.cpp
 )
-fiber_internal_target(fiber_platform)
+lemma_internal_target(lemma_platform)
 
 add_library(
-  fiber_protocol STATIC
+  lemma_protocol STATIC
   src/protocol/extension.cpp
   src/protocol/single_pane.cpp
 )
-fiber_internal_target(fiber_protocol)
-target_link_libraries(fiber_protocol PRIVATE fiber_base)
+lemma_internal_target(lemma_protocol)
+target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
 add_library(
-  fiber_render STATIC
+  lemma_render STATIC
   src/render/pane_composition.cpp
   src/render/single_pane.cpp
 )
-fiber_internal_target(fiber_render)
-target_link_libraries(fiber_render PRIVATE fiber_base fiber_platform fiber_terminal)
+lemma_internal_target(lemma_render)
+target_link_libraries(lemma_render PRIVATE lemma_base lemma_platform lemma_terminal)
 
-add_library(fiber_extension STATIC src/extension/host.cpp)
-fiber_internal_target(fiber_extension)
+add_library(lemma_extension STATIC src/extension/host.cpp)
+lemma_internal_target(lemma_extension)
 target_link_libraries(
-  fiber_extension PRIVATE fiber_base fiber_platform fiber_protocol lua::lua
+  lemma_extension PRIVATE lemma_base lemma_platform lemma_protocol lua::lua
 )
 
 add_library(
-  fiber_core STATIC
+  lemma_core STATIC
   src/core/command.cpp
   src/core/engine.cpp
   src/core/extension_runtime.cpp
-  src/core/fiber.cpp
+  src/core/lemma.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
 )
-fiber_internal_target(fiber_core)
+lemma_internal_target(lemma_core)
 target_link_libraries(
-  fiber_core
+  lemma_core
   PRIVATE
-    fiber_base
-    fiber_platform
-    fiber_protocol
-    fiber_render
-    fiber_terminal
+    lemma_base
+    lemma_platform
+    lemma_protocol
+    lemma_render
+    lemma_terminal
     lua::lua
     zstd::libzstd_static
 )
 
-add_library(fiber_daemon STATIC src/daemon/server.cpp)
-fiber_internal_target(fiber_daemon)
+add_library(lemma_daemon STATIC src/daemon/server.cpp)
+lemma_internal_target(lemma_daemon)
 target_link_libraries(
-  fiber_daemon
-  PRIVATE fiber_base fiber_core fiber_extension fiber_platform fiber_protocol
+  lemma_daemon
+  PRIVATE lemma_base lemma_core lemma_extension lemma_platform lemma_protocol
 )
 
-add_library(fiber_client STATIC src/client/attached_client.cpp)
-fiber_internal_target(fiber_client)
+add_library(lemma_client STATIC src/client/attached_client.cpp)
+lemma_internal_target(lemma_client)
 target_link_libraries(
-  fiber_client
-  PRIVATE fiber_daemon fiber_platform fiber_protocol
+  lemma_client
+  PRIVATE lemma_daemon lemma_platform lemma_protocol
 )
 
-add_library(fiber_app STATIC src/app/application.cpp)
-fiber_internal_target(fiber_app)
-target_link_libraries(fiber_app PRIVATE fiber_client fiber_daemon fiber_terminal)
+add_library(lemma_app STATIC src/app/application.cpp)
+lemma_internal_target(lemma_app)
+target_link_libraries(lemma_app PRIVATE lemma_client lemma_daemon lemma_terminal)
 
 # Compatibility aggregate for existing tests and embedders. New internal code should depend on the
 # narrow component target it uses rather than this aggregate.
-add_library(fiber_lib INTERFACE)
-add_library(fiber::lib ALIAS fiber_lib)
+add_library(lemma_lib INTERFACE)
+add_library(lemma::lib ALIAS lemma_lib)
 target_link_libraries(
-  fiber_lib
-  INTERFACE fiber_core fiber_extension fiber_terminal
+  lemma_lib
+  INTERFACE lemma_core lemma_extension lemma_terminal
 )
 target_include_directories(
-  fiber_lib
+  lemma_lib
   INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
     "$<INSTALL_INTERFACE:include>"
 )
 
-add_executable(fiber apps/fiber/main.cpp)
-target_link_libraries(fiber PRIVATE fiber_app fiber_warnings)
+add_executable(lemma apps/lemma/main.cpp)
+target_link_libraries(lemma PRIVATE lemma_app lemma_warnings)
 
-if(FIBER_BUILD_TESTS OR FIBER_BUILD_BENCHMARKS)
-  add_executable(fiber_test_server tests/support/server_main.cpp)
-  fiber_internal_target(fiber_test_server)
-  target_link_libraries(fiber_test_server PRIVATE fiber_daemon)
+if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
+  add_executable(lemma_test_server tests/support/server_main.cpp)
+  lemma_internal_target(lemma_test_server)
+  target_link_libraries(lemma_test_server PRIVATE lemma_daemon)
 
-  add_executable(fiber_test_cli tests/support/cli_main.cpp)
-  fiber_internal_target(fiber_test_cli)
-  target_link_libraries(fiber_test_cli PRIVATE fiber_app)
+  add_executable(lemma_test_cli tests/support/cli_main.cpp)
+  lemma_internal_target(lemma_test_cli)
+  target_link_libraries(lemma_test_cli PRIVATE lemma_app)
 
-  add_executable(fiber_test_pty_peer tests/support/pty_peer_main.cpp)
-  target_link_libraries(fiber_test_pty_peer PRIVATE fiber_warnings)
+  add_executable(lemma_test_pty_peer tests/support/pty_peer_main.cpp)
+  target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
 endif()
 
-if(FIBER_BUILD_TESTS)
+if(LEMMA_BUILD_TESTS)
   enable_testing()
   find_package(GTest CONFIG REQUIRED)
   include(GoogleTest)
 
   add_executable(
-    fiber_tests
+    lemma_tests
     tests/connection_output_test.cpp
     tests/core_input_test.cpp
     tests/extension_test.cpp
     tests/core_test.cpp
-    tests/fiber_test.cpp
+    tests/lemma_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
     tests/pty_writer_test.cpp
@@ -199,48 +199,48 @@ if(FIBER_BUILD_TESTS)
     tests/terminal_test.cpp
   )
   target_link_libraries(
-    fiber_tests
+    lemma_tests
     PRIVATE
-      fiber::lib
-      fiber_platform
-      fiber_protocol
-      fiber_render
-      fiber_warnings
+      lemma::lib
+      lemma_platform
+      lemma_protocol
+      lemma_render
+      lemma_warnings
       GTest::gtest_main
       GTest::gmock
   )
-  gtest_discover_tests(fiber_tests)
+  gtest_discover_tests(lemma_tests)
 
   add_executable(
-    fiber_e2e_tests
+    lemma_e2e_tests
     tests/support/process.cpp
     tests/e2e_mux_test.cpp
   )
-  fiber_internal_target(fiber_e2e_tests)
+  lemma_internal_target(lemma_e2e_tests)
   target_link_libraries(
-    fiber_e2e_tests
-    PRIVATE fiber_platform fiber_protocol fiber_terminal GTest::gtest_main
+    lemma_e2e_tests
+    PRIVATE lemma_platform lemma_protocol lemma_terminal GTest::gtest_main
   )
   target_compile_definitions(
-    fiber_e2e_tests
+    lemma_e2e_tests
     PRIVATE
-      FIBER_TEST_SERVER_PATH="$<TARGET_FILE:fiber_test_server>"
-      FIBER_TEST_CLI_PATH="$<TARGET_FILE:fiber_test_cli>"
-      FIBER_TEST_PTY_PEER_PATH="$<TARGET_FILE:fiber_test_pty_peer>"
+      LEMMA_TEST_SERVER_PATH="$<TARGET_FILE:lemma_test_server>"
+      LEMMA_TEST_CLI_PATH="$<TARGET_FILE:lemma_test_cli>"
+      LEMMA_TEST_PTY_PEER_PATH="$<TARGET_FILE:lemma_test_pty_peer>"
   )
-  add_dependencies(fiber_e2e_tests fiber_test_server fiber_test_cli fiber_test_pty_peer)
+  add_dependencies(lemma_e2e_tests lemma_test_server lemma_test_cli lemma_test_pty_peer)
   gtest_discover_tests(
-    fiber_e2e_tests
+    lemma_e2e_tests
     PROPERTIES TIMEOUT 120 LABELS "integration;pty"
   )
 endif()
 
-if(FIBER_BUILD_BENCHMARKS)
+if(LEMMA_BUILD_BENCHMARKS)
   find_package(benchmark CONFIG REQUIRED)
 
-  add_executable(fiber_benchmarks benchmarks/fiber_benchmark.cpp)
+  add_executable(lemma_benchmarks benchmarks/lemma_benchmark.cpp)
   target_link_libraries(
-    fiber_benchmarks
-    PRIVATE fiber::lib fiber_warnings benchmark::benchmark_main
+    lemma_benchmarks
+    PRIVATE lemma::lib lemma_warnings benchmark::benchmark_main
   )
 endif()

@@ -1,4 +1,4 @@
-# Fiber roadmap
+# Lemma roadmap
 
 ## Status
 
@@ -18,7 +18,7 @@ contingent implementation plan is
 
 ## North star
 
-**Fiber is a terminal multiplexer built like infrastructure.** It provides fast, reliable,
+**Lemma is a terminal multiplexer built like infrastructure.** It provides fast, reliable,
 self-hosted, programmable sessions through one checkpointed terminal-replication protocol used by
 local clients, remote clients, automation, and future native presentation.
 
@@ -47,7 +47,7 @@ architecture.
 
 ## Current baseline
 
-Fiber has a working server-rendered local vertical slice: a per-user daemon, named workspaces,
+Lemma has a working server-rendered local vertical slice: a per-user daemon, named workspaces,
 windows, split panes, fixed keyboard controls, retained ANSI damage rendering, one canonical private
 `libghostty-vt` terminal per pane, typed commands for existing mutations, and an isolated Lua host
 with transactional registration. The current client is stateless with respect to pane terminals and
@@ -65,7 +65,7 @@ backpressure, tests, or benchmark infrastructure.
 
 ## Architecture decision and feasibility gate
 
-Fiber has selected one target client architecture:
+Lemma has selected one target client architecture:
 
 ```text
 terminal checkpoint at N -> ready -> ordered output/resize/reset/exit events after N
@@ -130,9 +130,9 @@ preserving a usable terminal-hosted presentation during native-client developmen
 
 ### Local usability and distribution
 
-- Implement the contracted plain-`fiber` default workspace, cwd/environment capture, errors, and
+- Implement the contracted plain-`lemma` default workspace, cwd/environment capture, errors, and
   login-shell behavior.
-- Add version metadata identifying Fiber protocol and terminal-checkpoint compatibility.
+- Add version metadata identifying Lemma protocol and terminal-checkpoint compatibility.
 - Produce checksummed macOS/Linux archives and a five-minute install/first-session guide.
 - Add shell completions and recruit the first external architecture-testing cohort.
 
@@ -152,7 +152,7 @@ preserving a usable terminal-hosted presentation during native-client developmen
 presentation and remote attachment credible for daily terminal work.
 
 - Deliver the primary native client renderer over the same replica model and protocol.
-- Add native tabs/windows/splits, client-side Fiber chrome hit testing, and exact logical-topology
+- Add native tabs/windows/splits, client-side Lemma chrome hit testing, and exact logical-topology
   command validation by the daemon.
 - Add window naming, adjustable split ratios, keyboard resizing, mouse focus/status selection, and
   separator dragging.
@@ -173,16 +173,16 @@ presentation and remote attachment credible for daily terminal work.
 
 - The complete daily-driver gate passes across behavior, native/compatibility presentation,
   performance, robustness, local/SSH transport, installation, and upgrades.
-- A focused cohort uses Fiber as its primary multiplexer for 30 days.
+- A focused cohort uses Lemma as its primary multiplexer for 30 days.
 - Keyboard-only operation covers every core workflow; mouse workflows are tested rather than merely
   forwarded.
 - Checkpoint plus tail equivalence holds across the supported terminal compatibility corpus.
 - No supported compatibility-client exit path leaves the outer terminal in raw, alternate-screen,
   paste, focus, keyboard, or mouse mode.
 
-## v0.3 — programmable Fiber
+## v0.3 — programmable Lemma
 
-**Goal:** the extension and automation model becomes a reason to choose Fiber without entering the
+**Goal:** the extension and automation model becomes a reason to choose Lemma without entering the
 terminal replication hot path.
 
 - Add asynchronous Lua command invocation, immutable snapshots, and bounded event delivery.
@@ -200,7 +200,7 @@ terminal replication hot path.
 - Useful workflows can be built without modifying C++.
 - Extension backpressure and event loss are observable and repairable from snapshots.
 
-## v0.4 — shared and agent-driven Fiber
+## v0.4 — shared and agent-driven Lemma
 
 **Goal:** extend the already remote-capable terminal protocol to multiple people and software
 operators without a hosted control plane.
@@ -222,7 +222,7 @@ client failure.
 
 ## v1.0 — trusted infrastructure
 
-Fiber reaches 1.0 when its guarantees are credible, not when it implements every command from another
+Lemma reaches 1.0 when its guarantees are credible, not when it implements every command from another
 multiplexer. The release requires:
 
 - documented configuration, checkpoint/protocol compatibility, security, and upgrade policies;
@@ -241,12 +241,12 @@ Every milestone pairs engineering with adoption work:
 - maintain a small feedback cohort before seeking broad attention;
 - track repeat daily use and reasons for abandonment rather than stars alone;
 - add contributor guidance and bounded starter issues;
-- upstream the checkpoint/import capabilities Fiber needs from `libghostty-vt`; and
+- upstream the checkpoint/import capabilities Lemma needs from `libghostty-vt`; and
 - grow release volume only as fast as maintainership remains healthy.
 
 ## Explicitly deferred
 
-Until terminal-native local and remote Fiber are excellent, defer web/mobile clients, accounts,
+Until terminal-native local and remote Lemma are excellent, defer web/mobile clients, accounts,
 hosted control planes, extension package discovery, generalized task/run/view entities, production
 orchestration, and feature-for-feature competition with every multiplexer. Browser or mobile
 feasibility must reuse the same replica protocol and does not justify a second terminal architecture.

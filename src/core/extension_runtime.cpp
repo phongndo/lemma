@@ -13,7 +13,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace fiber::core {
+namespace lemma::core {
 namespace {
 
 constexpr std::uint8_t reconnect_failures_max = 5;
@@ -319,4 +319,4 @@ void ExtensionRuntime::disconnect() noexcept {
       static_cast<std::uint16_t>(reconnect_failures_) + 1U, reconnect_failures_max));
 }
 
-} // namespace fiber::core
+} // namespace lemma::core

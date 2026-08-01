@@ -1,7 +1,7 @@
 #include "client/attached_client.hpp"
 
 #include "daemon/server.hpp"
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 #include "platform/io.hpp"
 #include "platform/terminal_mode.hpp"
 #include "protocol/single_pane.hpp"
@@ -20,7 +20,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace fiber::client {
+namespace lemma::client {
 namespace {
 
 constexpr auto response_ready = protocol::wire_byte(protocol::ControlResponse::ready);
@@ -59,8 +59,8 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
                                        const std::span<const std::byte> input) noexcept -> bool {
   std::size_t sent = 0;
   for (const auto& action : std::span(parsed.actions).first(parsed.action_count)) {
-    FIBER_ASSERT(action.input_bytes >= sent);
-    FIBER_ASSERT(action.input_bytes <= input.size());
+    LEMMA_ASSERT(action.input_bytes >= sent);
+    LEMMA_ASSERT(action.input_bytes <= input.size());
     const auto ordinary_input = input.subspan(sent, action.input_bytes - sent);
     if ((!ordinary_input.empty() && !send_input(connection, ordinary_input)) ||
         !send_all(connection, protocol::encode_pane_command(action.command))) {
@@ -90,13 +90,13 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 [[nodiscard]] auto attach_client(const daemon::RuntimeEndpoint& endpoint,
                                  const std::string_view workspace) -> int {
   if (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0) {
-    static_cast<void>(write_text(STDERR_FILENO, "fiber attach requires a terminal\n"));
+    static_cast<void>(write_text(STDERR_FILENO, "lemma attach requires a terminal\n"));
     return 1;
   }
 
   int connection = daemon::open_server_connection(endpoint);
   if (connection < 0) {
-    static_cast<void>(write_text(STDERR_FILENO, "no fiber daemon; run `fiber new`\n"));
+    static_cast<void>(write_text(STDERR_FILENO, "no lemma daemon; run `lemma new`\n"));
     return 1;
   }
   if (!send_attach_handshake(connection, workspace, terminal_size())) {
@@ -106,11 +106,11 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 
   std::array<std::byte, 1> response{};
   if (!read_exact(connection, response) || response.front() != response_ready) {
-    std::string_view message = "fiber attach failed\n";
+    std::string_view message = "lemma attach failed\n";
     if (response.front() == response_busy) {
-      message = "fiber workspace is already attached\n";
+      message = "lemma workspace is already attached\n";
     } else if (response.front() == response_missing) {
-      message = "no fiber workspace\n";
+      message = "no lemma workspace\n";
     }
     static_cast<void>(write_text(STDERR_FILENO, message));
     close_descriptor(connection);
@@ -219,4 +219,4 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
   return daemon::validate_workspace(workspace) ? attach_client(endpoint, workspace) : 1;
 }
 
-} // namespace fiber::client
+} // namespace lemma::client

@@ -1,5 +1,5 @@
-#ifndef FIBER_CORE_EXTENSION_RUNTIME_HPP
-#define FIBER_CORE_EXTENSION_RUNTIME_HPP
+#ifndef LEMMA_CORE_EXTENSION_RUNTIME_HPP
+#define LEMMA_CORE_EXTENSION_RUNTIME_HPP
 
 #include "core/engine.hpp"
 #include "protocol/extension.hpp"
@@ -11,7 +11,7 @@
 #include <ranges>
 #include <string_view>
 
-namespace fiber::core {
+namespace lemma::core {
 
 inline constexpr std::size_t extension_commands_max = 64;
 inline constexpr std::size_t extension_keymaps_max = 128;
@@ -121,6 +121,6 @@ private:
   std::chrono::steady_clock::time_point reconnect_at_;
 };
 
-} // namespace fiber::core
+} // namespace lemma::core
 
-#endif // FIBER_CORE_EXTENSION_RUNTIME_HPP
+#endif // LEMMA_CORE_EXTENSION_RUNTIME_HPP

@@ -1,5 +1,5 @@
-#ifndef FIBER_PLATFORM_PTY_HPP
-#define FIBER_PLATFORM_PTY_HPP
+#ifndef LEMMA_PLATFORM_PTY_HPP
+#define LEMMA_PLATFORM_PTY_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 
 #include <sys/types.h>
 
-namespace fiber::platform {
+namespace lemma::platform {
 
 // Spawns the account's login shell with a new controlling PTY. The parent receives the child PID
 // and master descriptor; the child replaces itself or exits with status 127.
@@ -21,6 +21,6 @@ namespace fiber::platform {
 [[nodiscard]] auto foreground_process_name(int pty_descriptor, std::span<char> output) noexcept
     -> std::size_t;
 
-} // namespace fiber::platform
+} // namespace lemma::platform
 
-#endif // FIBER_PLATFORM_PTY_HPP
+#endif // LEMMA_PLATFORM_PTY_HPP

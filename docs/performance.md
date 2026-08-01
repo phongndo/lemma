@@ -45,7 +45,7 @@ event-flood, blocked-host, and pane-output backpressure benchmarks can report th
 Run it with:
 
 ```sh
-./build/release/fiber_benchmarks \
+./build/release/lemma_benchmarks \
   --benchmark_filter='command_dispatch|extension_registration_codec'
 ```
 
@@ -57,7 +57,7 @@ latency does not justify moving Lua into the mux-critical path.
 
 [`../benchmarks/mux_benchmark.py`](../benchmarks/mux_benchmark.py) runs the real foreground daemon,
 attached client, shell PTY, terminal adapter, renderer, and deterministic workload executable through
-isolated endpoints. It records the Fiber commit, host/architecture, every latency sample, p50/p95/p99,
+isolated endpoints. It records the Lemma commit, host/architecture, every latency sample, p50/p95/p99,
 and client bytes as JSON. It never touches the user's daemon. The benchmark driver removes Ghostty's
 shared source-tree `zig-out` before and after the run so a prior ReleaseFast archive cannot taint the
 measurement or a later local debug/sanitizer build. Scheduled and manually dispatched extended CI

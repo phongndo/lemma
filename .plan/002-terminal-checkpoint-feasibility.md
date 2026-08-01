@@ -1,4 +1,4 @@
-# Fiber terminal-checkpoint feasibility gate
+# Lemma terminal-checkpoint feasibility gate
 
 ## Status
 
@@ -13,7 +13,7 @@ direction in [`../docs/protocol.md`](../docs/protocol.md), and the contingent im
 
 ## Decision to validate
 
-Fiber intends to use one attached-client architecture:
+Lemma intends to use one attached-client architecture:
 
 ```text
 terminal checkpoint at sequence N
@@ -29,13 +29,13 @@ presentation, and future native presentation all use this model.
 The pinned `libghostty-vt` C API does not currently expose a complete portable terminal checkpoint
 export/import contract. Internal page cloning or visible-screen formatting is not sufficient proof.
 This phase must establish whether a correct bounded implementation can be added without serializing
-private memory layouts or weakening Fiber's ownership and failure invariants.
+private memory layouts or weakening Lemma's ownership and failure invariants.
 
 ## Outcome
 
 The phase ends with one of two explicit results:
 
-1. **Pass:** a reviewed Fiber-owned checkpoint model and prototype prove deterministic continuation,
+1. **Pass:** a reviewed Lemma-owned checkpoint model and prototype prove deterministic continuation,
    bounded resource use, authoritative side-effect policy, and acceptable size/time. P1 production
    work may proceed through `.plan/003`.
 2. **Stop:** one or more required terminal states cannot be exported/imported correctly or within
@@ -51,7 +51,7 @@ pass.
 
 - Inventory all terminal state required to continue parsing at an arbitrary PTY read boundary.
 - Specify authoritative versus replica terminal roles and side-effect behavior.
-- Design a versioned, bounded Fiber-owned checkpoint value model.
+- Design a versioned, bounded Lemma-owned checkpoint value model.
 - Determine the required `libghostty-vt` API additions and upstream strategy.
 - Prototype export/import narrowly enough to run equivalence tests.
 - Build a deterministic checkpoint-plus-tail conformance harness.
@@ -63,7 +63,7 @@ pass.
 
 - Production generalized protocol framing.
 - Workspace, pane, or client store migration.
-- Replacing the current `fiber-v8` endpoint.
+- Replacing the current `lemma-v8` endpoint.
 - Production smart-client attachment.
 - Native GPU rendering.
 - Multiple attached clients or permissions.
@@ -94,13 +94,13 @@ For each item, record:
 - maximum encoded size and element count;
 - import behavior for unknown or unsupported values;
 - whether it can generate side effects; and
-- conformance observations available through the Fiber-owned adapter.
+- conformance observations available through the Lemma-owned adapter.
 
 ## Design constraints
 
-### Fiber-owned format
+### Lemma-owned format
 
-The checkpoint schema is a Fiber protocol value. It may be implemented efficiently by Ghostty but
+The checkpoint schema is a Lemma protocol value. It may be implemented efficiently by Ghostty but
 must not expose pointers, allocator identities, Zig/C struct layouts, or private enum numbers. Every
 length and count is bounded and validated before client state mutation.
 
@@ -132,12 +132,12 @@ heads/tails plus digests where full content is unnecessary.
 
 ## Workstream A — state and upstream API audit
 
-- [ ] Enumerate checkpoint-relevant state from Fiber's adapter and pinned Ghostty terminal/parser
+- [ ] Enumerate checkpoint-relevant state from Lemma's adapter and pinned Ghostty terminal/parser
       implementation.
 - [ ] Identify state already exposed by stable C values and state requiring new Ghostty APIs.
 - [ ] Distinguish visible-ready state from progressive history and client-local presentation state.
 - [ ] Document terminal responses/effects that replica writes must suppress.
-- [ ] Decide whether the required API belongs upstream, in Fiber's pinned wrapper, or in a temporary
+- [ ] Decide whether the required API belongs upstream, in Lemma's pinned wrapper, or in a temporary
       prototype that must be upstreamed before release.
 - [ ] Record graphics and unsupported-feature policy rather than silently dropping state.
 
@@ -153,7 +153,7 @@ heads/tails plus digests where full content is unnecessary.
 - [ ] Define a versioned checkpoint header and bounded section/table model without assigning final P1
       message kind numbers.
 - [ ] Add or prototype explicit authoritative export and replica import operations behind
-      `fiber_terminal`.
+      `lemma_terminal`.
 - [ ] Make import transactional: malformed, unsupported, over-capacity, or allocation-failed input
       leaves the previous replica unchanged or destroys a not-yet-published candidate.
 - [ ] Suppress PTY responses and authoritative effects in replica role.
@@ -172,7 +172,7 @@ heads/tails plus digests where full content is unnecessary.
 ## Workstream C — deterministic equivalence harness
 
 For a source terminal `A`, choose sequence boundary `N`, export/import replica `B`, then apply the same
-events after `N` to both. Compare all Fiber-observable state and bounded deep terminal observations.
+events after `N` to both. Compare all Lemma-observable state and bounded deep terminal observations.
 
 Required trace families:
 
@@ -268,7 +268,7 @@ Stop for design review if:
 
 ## Completion gate
 
-This phase passes only when Fiber can truthfully state:
+This phase passes only when Lemma can truthfully state:
 
 > For every supported terminal trace and arbitrary bounded event boundary, a versioned bounded
 > checkpoint imported into a fresh replica plus the ordered event tail produces the same observable

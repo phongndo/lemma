@@ -22,10 +22,10 @@
 #include <fcntl.h>
 #include <pty.h>
 #else
-#error "fiber requires forkpty"
+#error "lemma requires forkpty"
 #endif
 
-namespace fiber::platform {
+namespace lemma::platform {
 namespace {
 
 [[nodiscard]] auto copy_process_name(const std::span<const char> source,
@@ -70,7 +70,7 @@ namespace {
   }
 
   if (::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
-      ::setenv("TERM_PROGRAM", "fiber", 1) != 0) {
+      ::setenv("TERM_PROGRAM", "lemma", 1) != 0) {
     ::_exit(127);
   }
 
@@ -138,4 +138,4 @@ namespace {
   return ::ioctl(pty_descriptor, TIOCSWINSZ, &native_size) == 0;
 }
 
-} // namespace fiber::platform
+} // namespace lemma::platform

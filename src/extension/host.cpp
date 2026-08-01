@@ -29,7 +29,7 @@
 #endif
 #include <unistd.h>
 
-namespace fiber::extension {
+namespace lemma::extension {
 namespace {
 
 constexpr std::size_t config_source_bytes_max = std::size_t{1} * 1'024U * 1'024U;
@@ -144,29 +144,29 @@ int register_command(lua_State* state) {
   const auto name = checked_text(state, 1);
   luaL_checktype(state, 2, LUA_TTABLE);
   if (host.command_count == host.commands.size() || duplicate_command(host, name)) {
-    return lua_fail(state, "fiber command capacity reached or duplicate command");
+    return lua_fail(state, "lemma command capacity reached or duplicate command");
   }
 
   auto& command = std::span(host.commands).subspan(host.command_count, 1).front();
   if (!command.name.assign(name)) {
-    return lua_fail(state, "invalid fiber command name");
+    return lua_fail(state, "invalid lemma command name");
   }
   static_cast<void>(lua_getfield(state, 2, "description"));
   if (is_nil(state, -1)) {
     if (!command.description.assign_optional({})) {
-      return lua_fail(state, "invalid fiber command description");
+      return lua_fail(state, "invalid lemma command description");
     }
   } else {
     const auto description = checked_text(state, -1);
     if (!command.description.assign_optional(description)) {
-      return lua_fail(state, "fiber command description is too long");
+      return lua_fail(state, "lemma command description is too long");
     }
   }
   lua_pop(state, 1);
 
   static_cast<void>(lua_getfield(state, 2, "run"));
   if (!is_nil(state, -1) && !is_function(state, -1)) {
-    return lua_fail(state, "fiber command run must be a function");
+    return lua_fail(state, "lemma command run must be a function");
   }
   if (is_function(state, -1)) {
     command.callback_ref = luaL_ref(state, LUA_REGISTRYINDEX);
@@ -181,12 +181,12 @@ int register_command(lua_State* state) {
 int set_keymap(lua_State* state) {
   auto& host = state_from_upvalue(state);
   if (host.keymap_count == host.keymaps.size()) {
-    return lua_fail(state, "fiber keymap capacity reached");
+    return lua_fail(state, "lemma keymap capacity reached");
   }
   auto& keymap = std::span(host.keymaps).subspan(host.keymap_count, 1).front();
   if (!keymap.mode.assign(checked_text(state, 1)) || !keymap.key.assign(checked_text(state, 2)) ||
       !keymap.command.assign(checked_text(state, 3))) {
-    return lua_fail(state, "invalid fiber keymap");
+    return lua_fail(state, "invalid lemma keymap");
   }
   ++host.keymap_count;
   return 0;
@@ -195,12 +195,12 @@ int set_keymap(lua_State* state) {
 int subscribe(lua_State* state) {
   auto& host = state_from_upvalue(state);
   if (host.subscription_count == host.subscriptions.size()) {
-    return lua_fail(state, "fiber subscription capacity reached");
+    return lua_fail(state, "lemma subscription capacity reached");
   }
   luaL_checktype(state, 2, LUA_TFUNCTION);
   auto& subscription = std::span(host.subscriptions).subspan(host.subscription_count, 1).front();
   if (!subscription.event.assign(checked_text(state, 1))) {
-    return lua_fail(state, "invalid fiber event name");
+    return lua_fail(state, "invalid lemma event name");
   }
   lua_pushvalue(state, 2);
   subscription.callback_ref = luaL_ref(state, LUA_REGISTRYINDEX);
@@ -217,7 +217,7 @@ int subscribe(lua_State* state) {
     if (side == "right") {
       result = protocol::extension::SidebarSide::right;
     } else if (side != "left") {
-      static_cast<void>(lua_fail(state, "fiber sidebar side must be left or right"));
+      static_cast<void>(lua_fail(state, "lemma sidebar side must be left or right"));
     }
   }
   lua_pop(state, 1);
@@ -228,11 +228,11 @@ int set_sidebar(lua_State* state) {
   auto& host = state_from_upvalue(state);
   luaL_checktype(state, 2, LUA_TTABLE);
   if (host.sidebar_count == host.sidebars.size()) {
-    return lua_fail(state, "fiber sidebar capacity reached");
+    return lua_fail(state, "lemma sidebar capacity reached");
   }
   auto& sidebar = std::span(host.sidebars).subspan(host.sidebar_count, 1).front();
   if (!sidebar.id.assign(checked_text(state, 1))) {
-    return lua_fail(state, "invalid fiber sidebar id");
+    return lua_fail(state, "invalid lemma sidebar id");
   }
   sidebar.side = parse_sidebar_side(state, 2);
 
@@ -240,7 +240,7 @@ int set_sidebar(lua_State* state) {
   const auto width = luaL_checkinteger(state, -1);
   lua_pop(state, 1);
   if (width <= 0 || width > 500) {
-    return lua_fail(state, "fiber sidebar width must be between 1 and 500");
+    return lua_fail(state, "lemma sidebar width must be between 1 and 500");
   }
   sidebar.width = static_cast<std::uint16_t>(width);
 
@@ -248,13 +248,13 @@ int set_sidebar(lua_State* state) {
   luaL_checktype(state, -1, LUA_TTABLE);
   const auto line_count = lua_rawlen(state, -1);
   if (line_count > sidebar.lines.size()) {
-    return lua_fail(state, "fiber sidebar has too many lines");
+    return lua_fail(state, "lemma sidebar has too many lines");
   }
   for (std::size_t index = 0; index < line_count; ++index) {
     static_cast<void>(lua_geti(state, -1, static_cast<lua_Integer>(index) + 1));
     auto& line = std::span(sidebar.lines).subspan(index, 1).front();
     if (!line.assign_optional(checked_text(state, -1))) {
-      return lua_fail(state, "fiber sidebar line is too long");
+      return lua_fail(state, "lemma sidebar line is too long");
     }
     lua_pop(state, 1);
   }
@@ -310,7 +310,7 @@ void restrict_module_search_paths(lua_State* state) {
   lua_pop(state, 1);
 }
 
-void install_fiber_module(lua_State* state, HostState& host) {
+void install_lemma_module(lua_State* state, HostState& host) {
   lua_newtable(state);
   const auto root = lua_gettop(state);
   set_closure(state, host, "setup", &setup);
@@ -334,7 +334,7 @@ void install_fiber_module(lua_State* state, HostState& host) {
   lua_getglobal(state, "package");
   static_cast<void>(lua_getfield(state, -1, "loaded"));
   lua_pushvalue(state, root);
-  lua_setfield(state, -2, "fiber");
+  lua_setfield(state, -2, "lemma");
   lua_pop(state, 2);
   lua_pop(state, 1);
 }
@@ -444,7 +444,7 @@ private:
     return false;
   }
   if (info.st_size < 0 || std::cmp_greater(info.st_size, config_source_bytes_max)) {
-    lua_pushliteral(state, "fiber init.lua exceeds the 1 MiB source limit");
+    lua_pushliteral(state, "lemma init.lua exceeds the 1 MiB source limit");
     return false;
   }
   if (luaL_loadfilex(state, path, "t") != LUA_OK) {
@@ -469,7 +469,7 @@ void wait_for_disconnect(const int connection) noexcept {
   luaL_openlibs(state);
   restrict_module_search_paths(state);
   HostState host{.connection = connection};
-  install_fiber_module(state, host);
+  install_lemma_module(state, host);
 
   const bool loaded = load_config(state, config_path);
   const bool sent = loaded ? send_generation(host) : send_lua_error(connection, state);
@@ -506,10 +506,10 @@ void close_inherited_descriptors(const int first) noexcept {
 
 auto default_config_path() -> std::string {
   if (const char* const xdg = std::getenv("XDG_CONFIG_HOME"); xdg != nullptr && *xdg == '/') {
-    return std::string(xdg) + "/fiber/init.lua";
+    return std::string(xdg) + "/lemma/init.lua";
   }
   if (const char* const home = std::getenv("HOME"); home != nullptr && *home == '/') {
-    return std::string(home) + "/.config/fiber/init.lua";
+    return std::string(home) + "/.config/lemma/init.lua";
   }
   return {};
 }
@@ -574,4 +574,4 @@ auto spawn_host(const std::string_view config_path,
   return {.descriptor = parent_socket, .process = static_cast<int>(process)};
 }
 
-} // namespace fiber::extension
+} // namespace lemma::extension

@@ -1,8 +1,8 @@
-# Fiber foundation decisions
+# Lemma foundation decisions
 
 ## Status
 
-This document records decisions explicitly agreed for Fiber's foundation and the v0.1 alpha product
+This document records decisions explicitly agreed for Lemma's foundation and the v0.1 alpha product
 boundary. A recorded decision is not a claim that the behavior is implemented; current behavior
 remains audited in `current-capabilities.md`. Later copy-mode refinements, package discovery, and the
 final remote UX may evolve only through an explicit contract update.
@@ -15,7 +15,7 @@ milestone order is defined in [`roadmap.md`](roadmap.md).
 
 ## Product direction
 
-Fiber is an open-source, self-hosted terminal multiplexer built like infrastructure: fast, reliable,
+Lemma is an open-source, self-hosted terminal multiplexer built like infrastructure: fast, reliable,
 and programmable without requiring a hosted service. Its typed command model is intended to let
 people, scripts, remote clients, and coding agents operate the same long-lived sessions while the
 latency-sensitive runtime remains bounded and independently operable.
@@ -25,11 +25,11 @@ state. A process continues when no terminal client is attached, so an unattached
 is the initial background-execution model. Generalized task, run, and view entities are not required
 for the foundation.
 
-Remote-first initially means operating a Fiber daemon on another machine: create processes, inspect
+Remote-first initially means operating a Lemma daemon on another machine: create processes, inspect
 state, attach, detach, and manage workspaces through the same semantic API used locally. SSH stdio is
 the preferred first remote transport. Live cross-host process migration is not a current promise.
 
-Fiber's pillars are:
+Lemma's pillars are:
 
 1. **performance:** C++ owns every PTY and authoritative terminal hot path; smart clients replay
    ordered terminal events and own presentation rather than waiting for daemon ANSI composition;
@@ -41,7 +41,7 @@ Fiber's pillars are:
 
 ## Replicated-terminal client contract
 
-Fiber has one target attached-client architecture. The daemon owns canonical `libghostty-vt` state,
+Lemma has one target attached-client architecture. The daemon owns canonical `libghostty-vt` state,
 logical topology, process/PTY lifetime, terminal responses, and application-input encoding. A smart
 client imports a bounded versioned terminal checkpoint at sequence `N`, becomes ready, then applies
 every ordered output, resize, reset, and exit event after `N`. Recent-to-oldest scrollback may hydrate
@@ -54,7 +54,7 @@ slow client never causes unbounded event retention or blocks PTY progress.
 
 The daemon does not maintain permanent raw, cell-delta, and ANSI output architectures. ANSI
 compatibility is a smart-client presentation backend over local replicas. The primary future native
-client renders the same replicas directly. Checkpoints use a Fiber-owned format and never expose
+client renders the same replicas directly. Checkpoints use a Lemma-owned format and never expose
 private Ghostty memory layouts. The required export/import capability must pass the feasibility gate
 in [`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md)
 before the generalized wire format is frozen.
@@ -73,7 +73,7 @@ mux actions dispatch the same typed commands rather than maintaining separate mu
 
 When a terminal application requests mouse tracking, the client sends a stable `PaneId` plus
 pane-local coordinates and bounded typed action data. The daemon validates the target and encodes the
-event through the authoritative terminal adapter's active modes. Fiber-owned chrome remains under
+event through the authoritative terminal adapter's active modes. Lemma-owned chrome remains under
 the client's control, and a configurable modifier lets a user override application capture for mux
 selection and navigation. Cell-based SGR mouse input is the required baseline; additional encodings
 may be supported through the terminal adapter. A compatibility client must restore outer-terminal
@@ -92,7 +92,7 @@ absent.
 
 ### Plain invocation and default workspace
 
-Plain `fiber` means “enter my default workspace.” It uses the literal workspace name `default`:
+Plain `lemma` means “enter my default workspace.” It uses the literal workspace name `default`:
 
 1. if `default` does not exist, create it and attach;
 2. if it exists detached, attach;
@@ -100,7 +100,7 @@ Plain `fiber` means “enter my default workspace.” It uses the literal worksp
 4. if daemon startup, workspace creation, or attach fails, report that stage and preserve any
    workspace that was successfully created.
 
-Explicit `fiber new NAME`, `start`, and `attach` keep their distinct behavior. Fiber does not guess a
+Explicit `lemma new NAME`, `start`, and `attach` keep their distinct behavior. Lemma does not guess a
 workspace based on recency because that makes scripts and first-session instructions unpredictable.
 
 ### Pane cwd and environment
@@ -127,12 +127,12 @@ Guarantees are deliberately separate:
 | --- | --- |
 | Normal detach | Pane processes, topology, terminal state, and scrollback continue while the daemon lives. |
 | Client EOF/crash/terminal loss | Same process-continuity guarantee as detach; the outer terminal is restored where the client can still execute cleanup. |
-| User logout | No survival guarantee. Fiber may continue where the operating system preserves the per-user daemon, but v0.1 does not install a lingering service. |
+| User logout | No survival guarantee. Lemma may continue where the operating system preserves the per-user daemon, but v0.1 does not install a lingering service. |
 | Daemon crash or forced kill | No process, topology, terminal-state, or scrollback survival guarantee. |
 | Host reboot | No survival guarantee. |
 | Explicit daemon shutdown | Ends owned pane processes after an explicit warning/confirmation contract; it is not equivalent to detach. |
 
-Fiber must never describe ordinary detach continuity as persistence across daemon failure or reboot.
+Lemma must never describe ordinary detach continuity as persistence across daemon failure or reboot.
 Signal-complete outer-terminal restoration remains required even though daemon-owned process
 persistence is not.
 
@@ -146,13 +146,13 @@ The initial supported and release-tested matrix is:
 - Ubuntu 24.04 LTS on arm64.
 
 A supported platform receives release artifacts, scheduled CI, installation testing, and
-release-blocking fixes for Fiber regressions. Other current glibc Linux distributions and newer macOS
+release-blocking fixes for Lemma regressions. Other current glibc Linux distributions and newer macOS
 versions are best effort until added to that matrix. The matrix may shrink only through a documented
 release-policy change.
 
 ### Name
 
-The project keeps the **Fiber** name for v0.1. The executable and package namespace remain `fiber`.
+The project keeps the **Lemma** name for v0.1. The executable and package namespace remain `lemma`.
 The established project identity and pre-alpha migration cost do not currently justify a rename.
 Package-registry and legal screening must be repeated before publishing artifacts; a concrete
 conflict is a release blocker handled by an explicit rename decision rather than a reason to leave
@@ -164,8 +164,8 @@ the current name perpetually undecided.
 - Copy mode enters with `C-b [` and defaults to vi-style movement, `/` and `?` search, `Space` to
   begin selection, `Enter` to copy, and `q`/`Escape` to leave. Configuration may select another key
   table later.
-- Fiber mouse operation is enabled by default once the complete typed mouse path ships.
-- Holding `Shift` overrides application mouse capture for Fiber focus, selection, scrolling, and
+- Lemma mouse operation is enabled by default once the complete typed mouse path ships.
+- Holding `Shift` overrides application mouse capture for Lemma focus, selection, scrolling, and
   separator/status interaction.
 - Every core workflow remains keyboard-complete, and equivalent keyboard/mouse mutations dispatch
   the same semantic command.
@@ -187,7 +187,7 @@ the initial transport framing as a public API.
 The v0.1 alpha proves the final checkpoint/event architecture with a smart compatibility client that
 renders client-side replicas into an outer terminal. The old daemon-rendered ANSI endpoint may exist
 only during migration and is removed before the replication-foundation exit gate. A native renderer
-is required before Fiber claims the complete native performance direction and is targeted by v0.2.
+is required before Lemma claims the complete native performance direction and is targeted by v0.2.
 
 The same application protocol must pass an SSH-stdio transport proof in v0.1, including attach,
 progressive history, reconnect, forced checkpoint recovery, slow-link bounds, and mismatch behavior.
@@ -197,15 +197,15 @@ permissions in v0.1.
 ## C++ and Lua boundary
 
 The daemon, control CLI, and smart attached client remain C++ and may ship as one executable with
-distinct process roles. A persistent Lua 5.5 host runs in a separate Fiber-managed process.
-Configuration is entirely Lua, beginning at the host machine's `~/.config/fiber/init.lua` (or
-`$XDG_CONFIG_HOME/fiber/init.lua`). The remote daemon uses the configuration installed on the remote
+distinct process roles. A persistent Lua 5.5 host runs in a separate Lemma-managed process.
+Configuration is entirely Lua, beginning at the host machine's `~/.config/lemma/init.lua` (or
+`$XDG_CONFIG_HOME/lemma/init.lua`). The remote daemon uses the configuration installed on the remote
 host for the initial remote implementation.
 
 Lua code is trusted user code with normal user permissions. It may use the filesystem, network,
 processes, standard Lua libraries, and native Lua modules. Project-local Lua is not loaded
 automatically in the first release. Declared permissions may provide provenance and warnings before
-Fiber attempts enforceable sandboxing.
+Lemma attempts enforceable sandboxing.
 
 The C++ daemon never exposes pointers, descriptors, Ghostty values, or mutable arenas to Lua. The
 public extension contract contains only bounded serializable values, stable IDs, typed command
@@ -255,7 +255,7 @@ validation.
 
 The approved minimum capability surface is:
 
-- settings through `fiber.setup`;
+- settings through `lemma.setup`;
 - dynamic commands;
 - declarative keymaps;
 - bounded event subscriptions;

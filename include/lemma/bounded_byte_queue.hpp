@@ -1,7 +1,7 @@
-#ifndef FIBER_BOUNDED_BYTE_QUEUE_HPP
-#define FIBER_BOUNDED_BYTE_QUEUE_HPP
+#ifndef LEMMA_BOUNDED_BYTE_QUEUE_HPP
+#define LEMMA_BOUNDED_BYTE_QUEUE_HPP
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <cstring>
 #include <span>
 
-namespace fiber {
+namespace lemma {
 
 template <std::size_t Capacity> class BoundedByteQueue final {
   static_assert(Capacity > 0);
@@ -23,29 +23,29 @@ public:
   // Returns the first directly readable ring segment. A wrapped queue is exposed as two segments
   // across a consume() boundary; callers never need to copy or remove/reinsert partial writes.
   [[nodiscard]] auto readable_span() const noexcept -> std::span<const std::byte> {
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(read_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(read_offset_ < Capacity);
     return std::span<const std::byte, Capacity>(storage_).subspan(
         read_offset_, std::min(size_, Capacity - read_offset_));
   }
 
   // Consumes only bytes already present. Failure leaves queue state unchanged.
   [[nodiscard]] bool consume(const std::size_t bytes) noexcept {
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(read_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(read_offset_ < Capacity);
     if (bytes > size_) {
       return false;
     }
     read_offset_ = advance(read_offset_, bytes);
     size_ -= bytes;
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(read_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(read_offset_ < Capacity);
     return true;
   }
 
   [[nodiscard]] bool append(const std::span<const std::byte> input) noexcept {
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(write_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(write_offset_ < Capacity);
 
     if (input.size() > remaining()) {
       return false;
@@ -62,14 +62,14 @@ public:
     write_offset_ = advance(write_offset_, input.size());
     size_ += input.size();
 
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(write_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(write_offset_ < Capacity);
     return true;
   }
 
   std::size_t read(const std::span<std::byte> output) noexcept {
-    FIBER_ASSERT(size_ <= Capacity);
-    FIBER_ASSERT(read_offset_ < Capacity);
+    LEMMA_ASSERT(size_ <= Capacity);
+    LEMMA_ASSERT(read_offset_ < Capacity);
 
     const std::size_t read_size = std::min(output.size(), size_);
     if (read_size == 0) {
@@ -83,7 +83,7 @@ public:
                storage.first(read_size - first_size));
 
     const bool consumed = consume(read_size);
-    FIBER_ASSERT(consumed);
+    LEMMA_ASSERT(consumed);
     return read_size;
   }
 
@@ -96,7 +96,7 @@ public:
 private:
   static void copy_bytes(const std::span<std::byte> destination,
                          const std::span<const std::byte> source) noexcept {
-    FIBER_ASSERT(destination.size() == source.size());
+    LEMMA_ASSERT(destination.size() == source.size());
     if (!source.empty()) {
       std::memcpy(destination.data(), source.data(), source.size());
     }
@@ -104,8 +104,8 @@ private:
 
   [[nodiscard]] static constexpr std::size_t advance(const std::size_t offset,
                                                      const std::size_t amount) noexcept {
-    FIBER_ASSERT(offset < Capacity);
-    FIBER_ASSERT(amount <= Capacity);
+    LEMMA_ASSERT(offset < Capacity);
+    LEMMA_ASSERT(amount <= Capacity);
     const std::size_t available = Capacity - offset;
     return amount < available ? offset + amount : amount - available;
   }
@@ -116,6 +116,6 @@ private:
   std::size_t size_{0};
 };
 
-} // namespace fiber
+} // namespace lemma
 
-#endif // FIBER_BOUNDED_BYTE_QUEUE_HPP
+#endif // LEMMA_BOUNDED_BYTE_QUEUE_HPP

@@ -1,10 +1,10 @@
-#include "fiber/fiber.hpp"
+#include "lemma/lemma.hpp"
 
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 #include <lua.h>
 #include <zstd.h>
 
-namespace fiber {
+namespace lemma {
 
 [[nodiscard]] auto greeting() noexcept -> std::string_view { return "Hello, world!"; }
 
@@ -16,4 +16,4 @@ namespace fiber {
 
 [[nodiscard]] auto zstd_version() noexcept -> std::string_view { return ZSTD_versionString(); }
 
-} // namespace fiber
+} // namespace lemma

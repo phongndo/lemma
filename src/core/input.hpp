@@ -1,8 +1,8 @@
-#ifndef FIBER_CORE_INPUT_HPP
-#define FIBER_CORE_INPUT_HPP
+#ifndef LEMMA_CORE_INPUT_HPP
+#define LEMMA_CORE_INPUT_HPP
 
-#include "fiber/limits.hpp"
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -10,7 +10,7 @@
 #include <memory>
 #include <span>
 
-namespace fiber::core {
+namespace lemma::core {
 
 // Per-pane PTY output is allocated on demand and shares a process-wide memory budget. Queue
 // operations remain bounded and non-throwing so exhausted aggregate capacity applies backpressure.
@@ -72,6 +72,6 @@ enum class InputQueueResult : std::uint8_t {
                                           std::span<const std::byte> input) noexcept
     -> InputQueueResult;
 
-} // namespace fiber::core
+} // namespace lemma::core
 
-#endif // FIBER_CORE_INPUT_HPP
+#endif // LEMMA_CORE_INPUT_HPP

@@ -1,10 +1,10 @@
 #include "protocol/single_pane.hpp"
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 
 #include <cstring>
 
-namespace fiber::protocol {
+namespace lemma::protocol {
 namespace {
 
 constexpr std::byte packet_input{'I'};
@@ -72,8 +72,8 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 [[nodiscard]] auto encode_workspace_header(const ControlCommand command,
                                            const std::string_view workspace) noexcept
     -> std::array<std::byte, 2> {
-  FIBER_ASSERT(!workspace.empty());
-  FIBER_ASSERT(workspace.size() <= workspace_name_bytes_max);
+  LEMMA_ASSERT(!workspace.empty());
+  LEMMA_ASSERT(workspace.size() <= workspace_name_bytes_max);
   return {wire_byte(command), static_cast<std::byte>(workspace.size())};
 }
 
@@ -91,7 +91,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 
 [[nodiscard]] auto encode_input_header(const std::size_t bytes) noexcept
     -> std::array<std::byte, 3> {
-  FIBER_ASSERT(bytes <= input_bytes_max * 2U);
+  LEMMA_ASSERT(bytes <= input_bytes_max * 2U);
   std::array<std::byte, 3> header{packet_input};
   encode_u16(static_cast<std::uint16_t>(bytes), std::span(header).subspan<1, 2>());
   return header;
@@ -101,7 +101,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 
 [[nodiscard]] auto encode_pane_command(const PaneCommand command) noexcept
     -> std::array<std::byte, 2> {
-  FIBER_ASSERT(command != PaneCommand::none);
+  LEMMA_ASSERT(command != PaneCommand::none);
   return {packet_pane_command, static_cast<std::byte>(command)};
 }
 
@@ -120,7 +120,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
                                        const std::span<std::byte> output) noexcept -> PrefixResult {
   PrefixResult result{};
   const auto append = [&](const std::byte byte) {
-    FIBER_ASSERT(result.bytes < output.size());
+    LEMMA_ASSERT(result.bytes < output.size());
     output.subspan(result.bytes, 1).front() = byte;
     ++result.bytes;
   };
@@ -185,7 +185,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
       continue;
     }
 
-    FIBER_ASSERT(state_ == State::prefix);
+    LEMMA_ASSERT(state_ == State::prefix);
     state_ = State::normal;
     if (byte == std::byte{'d'}) {
       result.detach = true;
@@ -267,7 +267,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
     -> std::size_t {
   std::size_t bytes = 0;
   const auto append = [&](const std::byte byte) {
-    FIBER_ASSERT(bytes < output.size());
+    LEMMA_ASSERT(bytes < output.size());
     output.subspan(bytes, 1).front() = byte;
     ++bytes;
   };
@@ -293,7 +293,7 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 }
 
 [[nodiscard]] auto ClientDecoder::writable_bytes() noexcept -> std::span<std::byte> {
-  FIBER_ASSERT(pending_size_ == 0);
+  LEMMA_ASSERT(pending_size_ == 0);
   return std::span(storage_).subspan(used_);
 }
 
@@ -378,8 +378,8 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 }
 
 void ClientDecoder::consume() noexcept {
-  FIBER_ASSERT(pending_size_ > 0);
-  FIBER_ASSERT(pending_size_ <= used_);
+  LEMMA_ASSERT(pending_size_ > 0);
+  LEMMA_ASSERT(pending_size_ <= used_);
   std::memmove(storage_.data(), std::span(storage_).subspan(pending_size_).data(),
                used_ - pending_size_);
   used_ -= pending_size_;
@@ -391,4 +391,4 @@ void ClientDecoder::reset() noexcept {
   pending_size_ = 0;
 }
 
-} // namespace fiber::protocol
+} // namespace lemma::protocol

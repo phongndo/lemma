@@ -31,7 +31,7 @@ deps:
 # Generate Ninja files and compile_commands.json.
 configure: deps
     {{ nix }} cmake --preset {{ profile }} \
-        -DFIBER_BUILD_TESTS=ON -DFIBER_BUILD_BENCHMARKS=ON
+        -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON
 
 # Build the application, tests, and benchmarks.
 build: configure
@@ -39,11 +39,11 @@ build: configure
 
 # Run the application.
 run: build
-    {{ nix }} ./build/{{ profile }}/fiber
+    {{ nix }} ./build/{{ profile }}/lemma
 
 # Run the scripted libghostty-vt demo.
 demo: build
-    {{ nix }} ./build/{{ profile }}/fiber demo
+    {{ nix }} ./build/{{ profile }}/lemma demo
 
 # Run the GoogleTest/GoogleMock suite.
 test: build
@@ -51,7 +51,7 @@ test: build
 
 # Run Google Benchmark.
 bench: build
-    {{ nix }} ./build/{{ profile }}/fiber_benchmarks
+    {{ nix }} ./build/{{ profile }}/lemma_benchmarks
 
 # Run release microbenchmarks plus checked-in process-level mux benchmarks.
 mux-bench:
@@ -79,8 +79,9 @@ lint: configure
 lsp-check: configure
     {{ nix }} bash -c "find apps include src -type f \
         \\( -name '*.hpp' -o -name '*.cpp' \\) \
-        ! -path 'include/fiber/command.hpp' \
+        ! -path 'include/lemma/command.hpp' \
         ! -path 'src/client/attached_client.cpp' \
+        ! -path 'src/core/connection_output.hpp' \
         ! -path 'src/core/engine.cpp' \
         ! -path 'src/core/input.cpp' \
         ! -path 'src/core/pty_writer.cpp' \
@@ -149,7 +150,7 @@ ci-check:
 
 # Configure the debug tree and install this repository's hk hooks.
 hooks:
-    {{ nix }} bash -c 'scripts/ci/configure debug -DFIBER_BUILD_TESTS=ON -DFIBER_BUILD_BENCHMARKS=ON && hk validate && hk install'
+    {{ nix }} bash -c 'scripts/ci/configure debug -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON && hk validate && hk install'
 
 # Run every fast and pre-push hk check over the repository.
 hooks-check:

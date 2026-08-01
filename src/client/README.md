@@ -1,10 +1,10 @@
 # Client
 
-Home of Fiber's smart attached client and control clients.
+Home of Lemma's smart attached client and control clients.
 
 The target attached client owns the daemon connection, protocol handshake, bounded generational
 replica store, terminal checkpoint import, ordered pane-event application, acknowledgements and
-resynchronization, client-local viewport/search/selection state, input decoding, Fiber chrome hit
+resynchronization, client-local viewport/search/selection state, input decoding, Lemma chrome hit
 testing, and presentation coordination. It can disappear or discard every replica without affecting
 daemon-owned processes, PTYs, topology, or canonical terminal state.
 
@@ -16,7 +16,7 @@ replicas and protocol.
 The current implementation is transitional: it owns raw-terminal lifetime, local prefix handling,
 resize forwarding, daemon connection lifetime, outer-terminal byte writes, and restoration, but no
 pane terminal state. During the replication cutover, terminal ownership moves into this component
-through `fiber_terminal`, and the tested ANSI compositor moves behind this client. The daemon's old
+through `lemma_terminal`, and the tested ANSI compositor moves behind this client. The daemon's old
 composed-ANSI attach path is then removed rather than retained as a second architecture.
 
 The client never accesses core storage directly, generates PTY responses, treats physical rectangles

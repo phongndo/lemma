@@ -1,6 +1,6 @@
-#include "fiber/command.hpp"
+#include "lemma/command.hpp"
 
-namespace fiber {
+namespace lemma {
 namespace {
 
 [[nodiscard]] constexpr auto valid_kind(const CommandKind kind) noexcept -> bool {
@@ -74,4 +74,4 @@ auto CommandDispatcher::dispatch(const Command& command) const noexcept -> Comma
   return executor_(context_, command);
 }
 
-} // namespace fiber
+} // namespace lemma

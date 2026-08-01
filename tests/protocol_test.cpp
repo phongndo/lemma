@@ -8,7 +8,7 @@
 
 #include <gtest/gtest.h>
 
-namespace fiber::protocol {
+namespace lemma::protocol {
 namespace {
 
 // GoogleTest assertion macros inflate the measured branch count.
@@ -264,4 +264,4 @@ TEST(ProtocolTest, PrefixParserFlushesInterruptedPrefixEscape) {
 }
 
 } // namespace
-} // namespace fiber::protocol
+} // namespace lemma::protocol

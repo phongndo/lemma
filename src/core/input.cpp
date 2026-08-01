@@ -1,6 +1,6 @@
 #include "core/input.hpp"
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 #include "protocol/single_pane.hpp"
 
 #include <algorithm>
@@ -15,7 +15,7 @@
 #include <string_view>
 #include <utility>
 
-namespace fiber::core {
+namespace lemma::core {
 
 std::atomic_size_t PanePtyWriteQueue::allocated_bytes{0};
 
@@ -26,18 +26,18 @@ std::atomic_size_t PanePtyWriteQueue::allocated_bytes{0};
 PanePtyWriteQueue::~PanePtyWriteQueue() { release_storage(); }
 
 auto PanePtyWriteQueue::readable_span() const noexcept -> std::span<const std::byte> {
-  FIBER_ASSERT(size_ <= capacity());
+  LEMMA_ASSERT(size_ <= capacity());
   if (size_ == 0) {
     return {};
   }
-  FIBER_ASSERT(storage_ != nullptr);
-  FIBER_ASSERT(read_offset_ <= storage_capacity_);
-  FIBER_ASSERT(size_ <= storage_capacity_ - read_offset_);
+  LEMMA_ASSERT(storage_ != nullptr);
+  LEMMA_ASSERT(read_offset_ <= storage_capacity_);
+  LEMMA_ASSERT(size_ <= storage_capacity_ - read_offset_);
   return std::span(storage_.get(), storage_capacity_).subspan(read_offset_, size_);
 }
 
 auto PanePtyWriteQueue::consume(const std::size_t bytes) noexcept -> bool {
-  FIBER_ASSERT(size_ <= capacity());
+  LEMMA_ASSERT(size_ <= capacity());
   if (bytes > size_) {
     return false;
   }
@@ -64,8 +64,8 @@ auto PanePtyWriteQueue::append(const std::span<const std::byte> input) noexcept 
     return true;
   }
   const auto write_offset = read_offset_ + size_;
-  FIBER_ASSERT(write_offset <= storage_capacity_);
-  FIBER_ASSERT(input.size() <= storage_capacity_ - write_offset);
+  LEMMA_ASSERT(write_offset <= storage_capacity_);
+  LEMMA_ASSERT(input.size() <= storage_capacity_ - write_offset);
   auto storage = std::span(storage_.get(), storage_capacity_);
   std::memcpy(storage.subspan(write_offset, input.size()).data(), input.data(), input.size());
   size_ += input.size();
@@ -80,7 +80,7 @@ auto PanePtyWriteQueue::read(const std::span<std::byte> output) noexcept -> std:
   }
   std::memcpy(output.data(), readable.data(), bytes);
   const bool consumed = consume(bytes);
-  FIBER_ASSERT(consumed);
+  LEMMA_ASSERT(consumed);
   return bytes;
 }
 
@@ -92,7 +92,7 @@ auto PanePtyWriteQueue::ensure_capacity(const std::size_t required) noexcept -> 
   }
   if (required <= storage_capacity_) {
     if (read_offset_ > storage_capacity_ - required) {
-      FIBER_ASSERT(storage_ != nullptr);
+      LEMMA_ASSERT(storage_ != nullptr);
       const auto storage = std::span(storage_.get(), storage_capacity_);
       std::memmove(storage_.get(), storage.subspan(read_offset_, size_).data(), size_);
       read_offset_ = 0;
@@ -111,9 +111,9 @@ auto PanePtyWriteQueue::ensure_capacity(const std::size_t required) noexcept -> 
 }
 
 auto PanePtyWriteQueue::replace_storage(const std::size_t new_capacity) noexcept -> bool {
-  FIBER_ASSERT(new_capacity > storage_capacity_);
-  FIBER_ASSERT(new_capacity >= size_);
-  FIBER_ASSERT(new_capacity <= capacity());
+  LEMMA_ASSERT(new_capacity > storage_capacity_);
+  LEMMA_ASSERT(new_capacity >= size_);
+  LEMMA_ASSERT(new_capacity <= capacity());
   if (!acquire_allocation(new_capacity)) {
     return false;
   }
@@ -127,7 +127,7 @@ auto PanePtyWriteQueue::replace_storage(const std::size_t new_capacity) noexcept
     return false;
   }
   if (size_ > 0) {
-    FIBER_ASSERT(storage_ != nullptr);
+    LEMMA_ASSERT(storage_ != nullptr);
     const auto storage = std::span(storage_.get(), storage_capacity_);
     std::memcpy(replacement.get(), storage.subspan(read_offset_, size_).data(), size_);
   }
@@ -157,7 +157,7 @@ void PanePtyWriteQueue::release_allocation(const std::size_t bytes) noexcept {
     return;
   }
   const auto previous = allocated_bytes.fetch_sub(bytes, std::memory_order_relaxed);
-  FIBER_ASSERT(previous >= bytes);
+  LEMMA_ASSERT(previous >= bytes);
 }
 
 void PanePtyWriteQueue::release_storage() noexcept {
@@ -195,7 +195,7 @@ static_assert(limits::pane_pty_write_queue_bytes_max >=
 
 [[nodiscard]] constexpr auto control_key(const std::byte byte) noexcept -> vt::Key {
   const auto value = std::to_integer<std::uint8_t>(byte);
-  FIBER_ASSERT(value >= 1 && value <= 26);
+  LEMMA_ASSERT(value >= 1 && value <= 26);
   return static_cast<vt::Key>(static_cast<std::uint8_t>(vt::Key::a) + value - 1U);
 }
 
@@ -302,8 +302,8 @@ template <typename Visitor>
       visit_normalized_input(terminal, input, [&](const std::span<const std::byte> bytes) noexcept {
         return queue.append(bytes);
       });
-  FIBER_ASSERT(appended);
+  LEMMA_ASSERT(appended);
   return appended ? InputQueueResult::queued : InputQueueResult::encoding_failed;
 }
 
-} // namespace fiber::core
+} // namespace lemma::core

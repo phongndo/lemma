@@ -1,7 +1,7 @@
-#ifndef FIBER_TESTS_SUPPORT_PROCESS_HPP
-#define FIBER_TESTS_SUPPORT_PROCESS_HPP
+#ifndef LEMMA_TESTS_SUPPORT_PROCESS_HPP
+#define LEMMA_TESTS_SUPPORT_PROCESS_HPP
 
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -15,7 +15,7 @@
 #include <sys/types.h>
 #include <termios.h>
 
-namespace fiber::test {
+namespace lemma::test {
 
 using Deadline = std::chrono::steady_clock::time_point;
 
@@ -170,6 +170,6 @@ private:
 [[nodiscard]] auto wait_for_endpoint(std::string_view socket_path, Deadline deadline) noexcept
     -> bool;
 
-} // namespace fiber::test
+} // namespace lemma::test
 
-#endif // FIBER_TESTS_SUPPORT_PROCESS_HPP
+#endif // LEMMA_TESTS_SUPPORT_PROCESS_HPP

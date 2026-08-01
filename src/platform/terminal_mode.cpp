@@ -5,7 +5,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-namespace fiber::platform {
+namespace lemma::platform {
 
 [[nodiscard]] auto terminal_size(const int descriptor, const std::uint16_t columns_max,
                                  const std::uint16_t rows_max) noexcept -> WindowSize {
@@ -48,4 +48,4 @@ RawTerminal::~RawTerminal() {
   }
 }
 
-} // namespace fiber::platform
+} // namespace lemma::platform

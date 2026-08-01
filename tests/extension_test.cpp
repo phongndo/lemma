@@ -22,7 +22,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace fiber {
+namespace lemma {
 namespace {
 
 using protocol::extension::MessageKind;
@@ -308,16 +308,16 @@ TEST(ExtensionHostTest, IgnoresRelativeConfigRoots) {
   EnvironmentGuard xdg_guard("XDG_CONFIG_HOME");
   EnvironmentGuard home_guard("HOME");
   ASSERT_EQ(::setenv("XDG_CONFIG_HOME", ".", 1), 0);
-  ASSERT_EQ(::setenv("HOME", "/tmp/fiber-home", 1), 0);
+  ASSERT_EQ(::setenv("HOME", "/tmp/lemma-home", 1), 0);
 
-  EXPECT_EQ(extension::default_config_path(), "/tmp/fiber-home/.config/fiber/init.lua");
+  EXPECT_EQ(extension::default_config_path(), "/tmp/lemma-home/.config/lemma/init.lua");
 
   ASSERT_EQ(::setenv("HOME", "relative-home", 1), 0);
   EXPECT_TRUE(extension::default_config_path().empty());
 }
 
 TEST(ExtensionHostTest, LoadsFullLuaAndRegistersBoundedGenerationOutOfProcess) {
-  constexpr const char* probe_path = "fiber_untrusted_cwd_probe.lua";
+  constexpr const char* probe_path = "lemma_untrusted_cwd_probe.lua";
   // open is variadic when O_CREAT supplies a mode.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   int probe = ::open(probe_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
@@ -328,7 +328,7 @@ TEST(ExtensionHostTest, LoadsFullLuaAndRegistersBoundedGenerationOutOfProcess) {
   platform::close_descriptor(probe);
 
   std::array<char, 64> path_template{};
-  constexpr std::string_view pattern = "/tmp/fiber-extension-test-XXXXXX";
+  constexpr std::string_view pattern = "/tmp/lemma-extension-test-XXXXXX";
   std::ranges::copy(pattern, path_template.begin());
   int config = ::mkstemp(path_template.data());
   ASSERT_GE(config, 0);
@@ -340,27 +340,27 @@ TEST(ExtensionHostTest, LoadsFullLuaAndRegistersBoundedGenerationOutOfProcess) {
     end
     assert_absolute_search_path(package.path)
     assert_absolute_search_path(package.cpath)
-    local loaded_project_module = pcall(require, "fiber_untrusted_cwd_probe")
+    local loaded_project_module = pcall(require, "lemma_untrusted_cwd_probe")
     assert(not loaded_project_module, "loaded a module from the daemon working directory")
 
-    local fiber = require("fiber")
+    local lemma = require("lemma")
     local file = assert(io.open("/dev/null", "w"))
     file:write(os.getenv("HOME") or "")
     file:close()
     local executed, reason, status = os.execute("exit 0")
     assert(executed and reason == "exit" and status == 0)
 
-    fiber.setup({ prefix = "C-b" })
-    fiber.command.register("agents.toggle", {
+    lemma.setup({ prefix = "C-b" })
+    lemma.command.register("agents.toggle", {
       description = "Toggle agents",
       run = function() end,
     })
     for index = 2, 64 do
-      fiber.command.register("test.command." .. index, {})
+      lemma.command.register("test.command." .. index, {})
     end
-    fiber.keymap.set("prefix", "g", "agents.toggle")
-    fiber.on("pane.exited", function() end)
-    fiber.ui.sidebar.set("agents", {
+    lemma.keymap.set("prefix", "g", "agents.toggle")
+    lemma.on("pane.exited", function() end)
+    lemma.ui.sidebar.set("agents", {
       side = "left",
       width = 24,
       lines = { "Agents", "pi", "codex" },
@@ -410,7 +410,7 @@ TEST(ExtensionHostTest, LoadsFullLuaAndRegistersBoundedGenerationOutOfProcess) {
 
 TEST(ExtensionHostTest, ReportsEmptyLuaErrorWithoutRestarting) {
   std::array<char, 64> path_template{};
-  constexpr std::string_view pattern = "/tmp/fiber-extension-error-test-XXXXXX";
+  constexpr std::string_view pattern = "/tmp/lemma-extension-error-test-XXXXXX";
   std::ranges::copy(pattern, path_template.begin());
   int config = ::mkstemp(path_template.data());
   ASSERT_GE(config, 0);
@@ -433,4 +433,4 @@ TEST(ExtensionHostTest, ReportsEmptyLuaErrorWithoutRestarting) {
 }
 
 } // namespace
-} // namespace fiber
+} // namespace lemma

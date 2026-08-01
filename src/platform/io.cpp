@@ -6,7 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace fiber::platform {
+namespace lemma::platform {
 
 [[nodiscard]] auto write_all(const int descriptor, const std::span<const std::byte> bytes) noexcept
     -> bool {
@@ -86,4 +86,4 @@ void close_descriptor(int& descriptor) noexcept {
   return ::fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-} // namespace fiber::platform
+} // namespace lemma::platform

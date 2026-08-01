@@ -2,7 +2,7 @@
 
 #include "client/attached_client.hpp"
 #include "daemon/server.hpp"
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <array>
 #include <charconv>
@@ -14,10 +14,10 @@
 #include <system_error>
 #include <utility>
 
-namespace fiber::app {
+namespace lemma::app {
 namespace {
 
-void write_text(fiber::vt::Terminal& terminal, const std::string_view text) noexcept {
+void write_text(lemma::vt::Terminal& terminal, const std::string_view text) noexcept {
   terminal.write(std::as_bytes(std::span(text.data(), text.size())));
 }
 
@@ -36,9 +36,9 @@ template <typename Integer>
   return std::fwrite(buffer.data(), 1, size, stream) == size;
 }
 
-[[nodiscard]] auto write_summary(const fiber::vt::RenderUpdate& update,
-                                 const fiber::vt::EffectBatch& effects,
-                                 const fiber::vt::AllocationStats& stats) noexcept -> bool {
+[[nodiscard]] auto write_summary(const lemma::vt::RenderUpdate& update,
+                                 const lemma::vt::EffectBatch& effects,
+                                 const lemma::vt::AllocationStats& stats) noexcept -> bool {
   return write_fragment(stdout, "\x1B[0m\n\nGhostty damage: ") &&
          write_integer(stdout, update.dirty_rows) && write_fragment(stdout, " rows; bells: ") &&
          write_integer(stdout, effects.bells) && write_fragment(stdout, "; terminal memory: ") &&
@@ -46,7 +46,7 @@ template <typename Integer>
 }
 
 [[nodiscard]] auto run_demo() noexcept -> int {
-  fiber::vt::TerminalOptions options;
+  lemma::vt::TerminalOptions options;
   options.size = {
       .columns = 72,
       .rows = 12,
@@ -54,7 +54,7 @@ template <typename Integer>
       .cell_height_px = 18,
   };
 
-  auto terminal_result = fiber::vt::Terminal::create(options);
+  auto terminal_result = lemma::vt::Terminal::create(options);
   if (!terminal_result.has_value()) {
     static_cast<void>(write_fragment(stderr, "failed to create the demo terminal\n"));
     return 1;
@@ -62,8 +62,8 @@ template <typename Integer>
   auto terminal = std::move(*terminal_result);
 
   constexpr std::string_view screen =
-      "\x1B]2;fiber demo\x1B\\"
-      "\x1B[1;36mFiber\x1B[0m + \x1B[1;35mlibghostty-vt\x1B[0m\r\n"
+      "\x1B]2;lemma demo\x1B\\"
+      "\x1B[1;36mLemma\x1B[0m + \x1B[1;35mlibghostty-vt\x1B[0m\r\n"
       "\x1B[2mBounded, data-oriented terminal state\x1B[0m\r\n"
       "\r\n"
       "  \x1B[32m✓\x1B[0m ANSI colors and styles\r\n"
@@ -82,7 +82,7 @@ template <typename Integer>
   }
 
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
-  const auto output_size = terminal.format_screen(fiber::vt::ScreenFormat::vt, output);
+  const auto output_size = terminal.format_screen(lemma::vt::ScreenFormat::vt, output);
   if (!output_size.has_value()) {
     static_cast<void>(write_fragment(stderr, "failed to format the demo screen\n"));
     return 1;
@@ -102,7 +102,7 @@ template <typename Integer>
 [[nodiscard]] auto print_usage() noexcept -> int {
   return write_fragment(
              stdout,
-             "fiber\n\nCommands:\n  new [name]     start and attach\n  start [name]   "
+             "lemma\n\nCommands:\n  new [name]     start and attach\n  start [name]   "
              "start detached\n  attach [name]  attach\n  list [name]    list all or one\n  "
              "windows [name] list windows\n  kill [name]    stop one workspace\n  kill-all       "
              "stop every workspace\n  demo "
@@ -160,4 +160,4 @@ template <typename Integer>
   return dispatch(endpoint, command, workspace, named);
 }
 
-} // namespace fiber::app
+} // namespace lemma::app

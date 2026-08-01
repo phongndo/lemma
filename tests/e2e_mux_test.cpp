@@ -1,6 +1,6 @@
 #include "support/process.hpp"
 
-#include "fiber/limits.hpp"
+#include "lemma/limits.hpp"
 #include "protocol/single_pane.hpp"
 
 #include <algorithm>
@@ -20,17 +20,17 @@
 
 #include <gtest/gtest.h>
 
-#ifndef FIBER_TEST_SERVER_PATH
-#error "FIBER_TEST_SERVER_PATH must name the foreground test server"
+#ifndef LEMMA_TEST_SERVER_PATH
+#error "LEMMA_TEST_SERVER_PATH must name the foreground test server"
 #endif
-#ifndef FIBER_TEST_CLI_PATH
-#error "FIBER_TEST_CLI_PATH must name the injected CLI driver"
+#ifndef LEMMA_TEST_CLI_PATH
+#error "LEMMA_TEST_CLI_PATH must name the injected CLI driver"
 #endif
-#ifndef FIBER_TEST_PTY_PEER_PATH
-#error "FIBER_TEST_PTY_PEER_PATH must name the deterministic PTY peer"
+#ifndef LEMMA_TEST_PTY_PEER_PATH
+#error "LEMMA_TEST_PTY_PEER_PATH must name the deterministic PTY peer"
 #endif
 
-namespace fiber::test {
+namespace lemma::test {
 namespace {
 
 using namespace std::chrono_literals;
@@ -45,7 +45,7 @@ protected:
   void SetUp() override {
     ASSERT_TRUE(runtime_.valid());
     ASSERT_TRUE(
-        server_.spawn({FIBER_TEST_SERVER_PATH, runtime_.socket_path()}, runtime_.environment()));
+        server_.spawn({LEMMA_TEST_SERVER_PATH, runtime_.socket_path()}, runtime_.environment()));
     ASSERT_TRUE(wait_for_endpoint(runtime_.socket_path(), deadline_after(5s))) << server_.output();
   }
 
@@ -62,7 +62,7 @@ protected:
   }
 
   [[nodiscard]] auto command(const std::vector<std::string>& arguments) -> CommandResult {
-    std::vector<std::string> command_arguments{FIBER_TEST_CLI_PATH, runtime_.socket_path()};
+    std::vector<std::string> command_arguments{LEMMA_TEST_CLI_PATH, runtime_.socket_path()};
     command_arguments.insert(command_arguments.end(), arguments.begin(), arguments.end());
     ChildProcess process;
     if (!process.spawn(command_arguments, runtime_.environment()) ||
@@ -146,7 +146,7 @@ protected:
   [[nodiscard]] auto client_arguments(const std::string_view command,
                                       const std::string_view workspace) const
       -> std::vector<std::string> {
-    return {FIBER_TEST_CLI_PATH, runtime_.socket_path(), std::string(command),
+    return {LEMMA_TEST_CLI_PATH, runtime_.socket_path(), std::string(command),
             std::string(workspace)};
   }
 
@@ -232,8 +232,8 @@ TEST_F(MuxProcessTest, CreatesAttachesRendersAndDetaches) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "basic"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  ASSERT_TRUE(client.send("printf '__FIBER_BASIC__\\n'\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__FIBER_BASIC__", deadline_after(5s)))
+  ASSERT_TRUE(client.send("printf '__LEMMA_BASIC__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_BASIC__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail() << "\nserver:\n"
       << server_.output();
@@ -479,7 +479,7 @@ TEST_F(MuxProcessTest, LastShellExitReclaimsWorkspaceAndRestoresTerminal) {
 
   const auto listing = command({"list"});
   ASSERT_EQ(listing.status, 0) << listing.output;
-  EXPECT_NE(listing.output.find("no fiber workspaces"), std::string::npos) << listing.output;
+  EXPECT_NE(listing.output.find("no lemma workspaces"), std::string::npos) << listing.output;
 }
 
 // GoogleTest assertion macros inflate the measured branch count.
@@ -664,10 +664,10 @@ TEST_F(MuxProcessTest, BackpressuresBlockedPtyAndRecoversInOrderWithoutStarvingP
 
   constexpr std::size_t payload_size = std::size_t{2} * 1'024U * 1'024U;
   const auto gate = runtime_.owned_path("blocked-pty.gate");
-  const auto launch = "exec " + shell_quote(FIBER_TEST_PTY_PEER_PATH) + " block " +
+  const auto launch = "exec " + shell_quote(LEMMA_TEST_PTY_PEER_PATH) + " block " +
                       shell_quote(gate) + " " + std::to_string(payload_size) + "\r";
   ASSERT_TRUE(blocked.send(launch, deadline_after(2s)));
-  ASSERT_TRUE(blocked.wait_for_screen("__FIBER_PTY_READY__", deadline_after(5s)))
+  ASSERT_TRUE(blocked.wait_for_screen("__LEMMA_PTY_READY__", deadline_after(5s)))
       << blocked.screen() << "\nraw:\n"
       << blocked.raw_tail();
 
@@ -703,7 +703,7 @@ TEST_F(MuxProcessTest, BackpressuresBlockedPtyAndRecoversInOrderWithoutStarvingP
 
   ASSERT_TRUE(create_gate(gate));
   ASSERT_TRUE(blocked.send(std::span(payload).subspan(sent), deadline_after(15s)));
-  ASSERT_TRUE(blocked.wait_for_screen("__FIBER_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325",
+  ASSERT_TRUE(blocked.wait_for_screen("__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325",
                                       deadline_after(20s)))
       << blocked.screen() << "\nraw:\n"
       << blocked.raw_tail() << "\nserver:\n"
@@ -724,15 +724,15 @@ TEST_F(MuxProcessTest, RoutesTerminalResponsesAndClientInputToPtyPeers) {
 
   const auto gate = runtime_.owned_path("response-order.gate");
   constexpr std::string_view user_input = "USER_AFTER_RESPONSE";
-  const auto launch = "exec " + shell_quote(FIBER_TEST_PTY_PEER_PATH) + " order " +
+  const auto launch = "exec " + shell_quote(LEMMA_TEST_PTY_PEER_PATH) + " order " +
                       shell_quote(gate) + " " + shell_quote(user_input) + "\r";
   ASSERT_TRUE(client.send(launch, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__FIBER_ORDER_READY__", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_ORDER_READY__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
   ASSERT_TRUE(client.send(user_input, deadline_after(2s)));
   ASSERT_TRUE(create_gate(gate));
-  ASSERT_TRUE(client.wait_for_screen("__FIBER_ORDER_OK__", deadline_after(10s)))
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_ORDER_OK__", deadline_after(10s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail() << "\nserver:\n"
       << server_.output();
@@ -828,4 +828,4 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherWorkspace) {
 }
 
 } // namespace
-} // namespace fiber::test
+} // namespace lemma::test

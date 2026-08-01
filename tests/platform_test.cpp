@@ -17,12 +17,12 @@
 #elifdef __linux__
 #include <pty.h>
 #else
-#error "fiber PTY tests require forkpty support"
+#error "lemma PTY tests require forkpty support"
 #endif
 
 #include <gtest/gtest.h>
 
-namespace fiber::platform {
+namespace lemma::platform {
 namespace {
 
 // GoogleTest assertions and explicit PTY child setup inflate the measured branch count.
@@ -73,4 +73,4 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
 }
 
 } // namespace
-} // namespace fiber::platform
+} // namespace lemma::platform

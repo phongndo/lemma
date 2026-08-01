@@ -1,11 +1,11 @@
-#ifndef FIBER_EXTENSION_HOST_HPP
-#define FIBER_EXTENSION_HOST_HPP
+#ifndef LEMMA_EXTENSION_HOST_HPP
+#define LEMMA_EXTENSION_HOST_HPP
 
 #include <span>
 #include <string>
 #include <string_view>
 
-namespace fiber::extension {
+namespace lemma::extension {
 
 struct HostConnection final {
   int descriptor{-1};
@@ -20,6 +20,6 @@ struct HostConnection final {
 [[nodiscard]] auto spawn_host(std::string_view config_path,
                               std::span<const int> close_in_child) noexcept -> HostConnection;
 
-} // namespace fiber::extension
+} // namespace lemma::extension
 
-#endif // FIBER_EXTENSION_HOST_HPP
+#endif // LEMMA_EXTENSION_HOST_HPP

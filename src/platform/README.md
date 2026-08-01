@@ -5,5 +5,5 @@ foreground process-group inspection, Unix sockets, SSH-stdio subprocess plumbing
 clocks, raw terminal mode, and concrete native-presentation mechanisms when implemented.
 
 Platform code performs mechanisms and reports explicit results. It does not decide mux policy,
-mutate core topology, parse protocol messages, or render frames. Abstract only operations Fiber
+mutate core topology, parse protocol messages, or render frames. Abstract only operations Lemma
 actually uses; do not build a speculative portability framework.

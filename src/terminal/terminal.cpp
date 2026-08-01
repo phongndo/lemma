@@ -1,7 +1,7 @@
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
-#include "fiber/assert.hpp"
-#include "fiber/bounded_byte_queue.hpp"
+#include "lemma/assert.hpp"
+#include "lemma/bounded_byte_queue.hpp"
 
 #include <ghostty/vt.h>
 
@@ -21,7 +21,7 @@
 #include <system_error>
 #include <utility>
 
-namespace fiber::vt {
+namespace lemma::vt {
 
 [[nodiscard]] auto library_version() noexcept -> std::span<const std::uint8_t> {
   GhosttyString version{};
@@ -65,7 +65,7 @@ public:
 
   [[nodiscard]] auto size() const noexcept -> std::size_t { return used_; }
   void rewind(const std::size_t size) noexcept {
-    FIBER_ASSERT(size <= used_);
+    LEMMA_ASSERT(size <= used_);
     used_ = size;
   }
 
@@ -299,8 +299,8 @@ class QuotaAllocator final {
 public:
   explicit QuotaAllocator(const std::size_t bytes_max) noexcept
       : bytes_max_(bytes_max), native_{.ctx = this, .vtable = &vtable} {
-    FIBER_ASSERT(bytes_max_ > 0);
-    FIBER_ASSERT(bytes_max_ <= limits::terminal_allocation_bytes_hard_max);
+    LEMMA_ASSERT(bytes_max_ > 0);
+    LEMMA_ASSERT(bytes_max_ <= limits::terminal_allocation_bytes_hard_max);
   }
 
   [[nodiscard]] auto native() const noexcept -> const GhosttyAllocator* { return &native_; }
@@ -332,7 +332,7 @@ private:
                      [[maybe_unused]] const std::uintptr_t return_address) noexcept -> bool {
     auto& allocator = *static_cast<QuotaAllocator*>(context);
     allocator.assert_allocation(memory, memory_length, alignment);
-    FIBER_ASSERT(new_length > 0);
+    LEMMA_ASSERT(new_length > 0);
 
     if (new_length > memory_length) {
       return false;
@@ -347,7 +347,7 @@ private:
                      [[maybe_unused]] const std::uintptr_t return_address) noexcept {
     auto& allocator = *static_cast<QuotaAllocator*>(context);
     allocator.assert_allocation(memory, memory_length, alignment);
-    FIBER_ASSERT(new_length > 0);
+    LEMMA_ASSERT(new_length > 0);
 
     if (new_length <= memory_length) {
       allocator.stats_.bytes_current -= memory_length - new_length;
@@ -387,8 +387,8 @@ private:
   }
 
   void record_allocation(const std::size_t length) noexcept {
-    FIBER_ASSERT(length <= bytes_max_ - stats_.bytes_current);
-    FIBER_ASSERT(stats_.allocations_current < std::numeric_limits<std::size_t>::max());
+    LEMMA_ASSERT(length <= bytes_max_ - stats_.bytes_current);
+    LEMMA_ASSERT(stats_.allocations_current < std::numeric_limits<std::size_t>::max());
 
     stats_.bytes_current += length;
     stats_.bytes_peak = std::max(stats_.bytes_peak, stats_.bytes_current);
@@ -410,10 +410,10 @@ private:
 
   void assert_allocation(const void* memory, const std::size_t memory_length,
                          const std::uint8_t alignment) const noexcept {
-    FIBER_ASSERT(memory != nullptr);
-    FIBER_ASSERT(memory_length > 0);
-    FIBER_ASSERT(memory_length <= stats_.bytes_current);
-    FIBER_ASSERT(stats_.allocations_current > 0);
+    LEMMA_ASSERT(memory != nullptr);
+    LEMMA_ASSERT(memory_length > 0);
+    LEMMA_ASSERT(memory_length <= stats_.bytes_current);
+    LEMMA_ASSERT(stats_.allocations_current > 0);
     assert_valid_alignment(alignment);
   }
 
@@ -434,8 +434,8 @@ private:
 
   static void assert_valid_alignment(const std::uint8_t alignment) noexcept {
     // Ghostty forwards Zig's log2 alignment enum despite the current C header describing bytes.
-    FIBER_ASSERT(std::has_single_bit(alignof(std::max_align_t)));
-    FIBER_ASSERT(alignment < std::numeric_limits<std::size_t>::digits);
+    LEMMA_ASSERT(std::has_single_bit(alignof(std::max_align_t)));
+    LEMMA_ASSERT(alignment < std::numeric_limits<std::size_t>::digits);
   }
 
   static constexpr GhosttyAllocatorVtable vtable{
@@ -521,8 +521,8 @@ struct Terminal::Impl final {
     ghostty_render_state_row_iterator_free(row_iterator);
     ghostty_render_state_free(render_state);
     ghostty_terminal_free(terminal);
-    FIBER_ASSERT(allocator.stats().bytes_current == 0);
-    FIBER_ASSERT(allocator.stats().allocations_current == 0);
+    LEMMA_ASSERT(allocator.stats().bytes_current == 0);
+    LEMMA_ASSERT(allocator.stats().allocations_current == 0);
   }
 
   Impl(const Impl&) = delete;
@@ -645,7 +645,7 @@ struct Terminal::Impl final {
       }
       ++cell_count;
     }
-    FIBER_ASSERT(cell_count == options.size.columns);
+    LEMMA_ASSERT(cell_count == options.size.columns);
     return row_hash;
   }
 
@@ -670,7 +670,7 @@ struct Terminal::Impl final {
   }
 
   void apply_physical_scroll(const std::int32_t scroll) noexcept {
-    FIBER_ASSERT(scroll != 0);
+    LEMMA_ASSERT(scroll != 0);
     const auto amount = static_cast<std::size_t>(scroll > 0 ? scroll : -scroll);
     const auto columns = static_cast<std::size_t>(options.size.columns);
     const auto shifted_cells = amount * columns;
@@ -698,8 +698,8 @@ struct Terminal::Impl final {
   [[nodiscard]] auto encode_row(AnsiWriter& writer, const std::size_t row_index, const bool force,
                                 const std::uint16_t origin_column, const std::uint16_t origin_row,
                                 const bool erase_line_tail) noexcept -> std::expected<bool, Error> {
-    FIBER_ASSERT(row_index < row_hash_count);
-    FIBER_ASSERT(physical_cell_hashes != nullptr);
+    LEMMA_ASSERT(row_index < row_hash_count);
+    LEMMA_ASSERT(physical_cell_hashes != nullptr);
     const auto checkpoint = writer.size();
     auto result = ghostty_render_state_row_get(row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
                                                static_cast<void*>(&row_cells));
@@ -770,7 +770,7 @@ struct Terminal::Impl final {
         }
       }
       const auto physical_index = (row_index * options.size.columns) + cell_count;
-      FIBER_ASSERT(physical_index < physical_cell_count);
+      LEMMA_ASSERT(physical_index < physical_cell_count);
       auto physical_cells = std::span(physical_cell_hashes.get(), physical_cell_count);
       auto& physical_hash = physical_cells.subspan(physical_index, 1).front();
       const bool changed = force || !ansi_physical_valid || physical_hash != cell_hash;
@@ -826,10 +826,10 @@ struct Terminal::Impl final {
       ++cell_count;
     }
 
-    FIBER_ASSERT(cell_count == options.size.columns);
+    LEMMA_ASSERT(cell_count == options.size.columns);
     std::span(row_hashes).subspan(row_index, 1).front() = row_hash;
     if (!span_started) {
-      FIBER_ASSERT(writer.size() == checkpoint);
+      LEMMA_ASSERT(writer.size() == checkpoint);
       return false;
     }
     if (erase_line_tail && trailing_blank_start != std::numeric_limits<std::size_t>::max() &&
@@ -865,8 +865,8 @@ struct Terminal::Impl final {
 };
 
 Terminal::Terminal(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 }
 
 Terminal::Terminal(Terminal&& other) noexcept = default;
@@ -955,8 +955,8 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
 }
 
 void Terminal::write(const std::span<const std::byte> bytes) noexcept {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 
   if (!bytes.empty()) {
     // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
@@ -967,8 +967,8 @@ void Terminal::write(const std::span<const std::byte> bytes) noexcept {
 }
 
 auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 
   if (!valid_size(size)) {
     return std::unexpected(Error::invalid_options);
@@ -998,8 +998,8 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
 }
 
 auto Terminal::update_render_state() noexcept -> std::expected<RenderUpdate, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->render_state != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->render_state != nullptr);
 
   const auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
   if (result != GHOSTTY_SUCCESS) {
@@ -1024,14 +1024,14 @@ auto Terminal::update_render_state() noexcept -> std::expected<RenderUpdate, Err
   }
   update.dirty_rows = *dirty_rows;
 
-  FIBER_ASSERT(update.columns == impl_->options.size.columns);
-  FIBER_ASSERT(update.rows == impl_->options.size.rows);
+  LEMMA_ASSERT(update.columns == impl_->options.size.columns);
+  LEMMA_ASSERT(update.rows == impl_->options.size.rows);
   return update;
 }
 
 auto Terminal::mark_rendered() noexcept -> std::expected<void, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->render_state != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->render_state != nullptr);
 
   auto result =
       ghostty_render_state_get(impl_->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
@@ -1071,7 +1071,7 @@ auto Terminal::render_pane_ansi(const std::span<std::byte> output,
 }
 
 void Terminal::invalidate_ansi_render_state() noexcept {
-  FIBER_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
   impl_->ansi_physical_valid = false;
 }
 
@@ -1082,8 +1082,8 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
                                 const bool composed, const bool focused,
                                 const bool allow_terminal_scroll) noexcept
     -> std::expected<AnsiRenderResult, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->render_state != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->render_state != nullptr);
 
   auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
   if (result != GHOSTTY_SUCCESS) {
@@ -1129,7 +1129,7 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
       std::span(impl_->current_row_hashes).subspan(hash_index, 1).front() = *hash;
       ++hash_index;
     }
-    FIBER_ASSERT(hash_index == impl_->row_hash_count);
+    LEMMA_ASSERT(hash_index == impl_->row_hash_count);
     scrolled_rows = impl_->detect_scroll();
     if (scrolled_rows != 0) {
       const auto amount = scrolled_rows > 0 ? scrolled_rows : -scrolled_rows;
@@ -1267,10 +1267,10 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
 
 auto Terminal::encode_key(const KeyEvent& event, const std::span<std::byte> output) noexcept
     -> std::expected<std::size_t, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
-  FIBER_ASSERT(impl_->key_encoder != nullptr);
-  FIBER_ASSERT(impl_->key_event != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_->key_encoder != nullptr);
+  LEMMA_ASSERT(impl_->key_event != nullptr);
 
   constexpr std::uint16_t modifiers_valid =
       key_modifier_shift | key_modifier_control | key_modifier_alt | key_modifier_super;
@@ -1298,14 +1298,14 @@ auto Terminal::encode_key(const KeyEvent& event, const std::span<std::byte> outp
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(map_error(result));
   }
-  FIBER_ASSERT(bytes_written <= output.size());
+  LEMMA_ASSERT(bytes_written <= output.size());
   return bytes_written;
 }
 
 auto Terminal::format_screen(const ScreenFormat format, const std::span<std::byte> output) noexcept
     -> std::expected<std::size_t, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 
   GhosttyFormatterTerminalOptions options{};
   options.size = sizeof(options);
@@ -1334,19 +1334,19 @@ auto Terminal::format_screen(const ScreenFormat format, const std::span<std::byt
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(map_error(result));
   }
-  FIBER_ASSERT(bytes_written <= output.size());
+  LEMMA_ASSERT(bytes_written <= output.size());
   return bytes_written;
 }
 
 auto Terminal::size() const noexcept -> TerminalSize {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->options.size;
 }
 
 auto Terminal::title() const noexcept -> std::expected<std::string_view, Error> {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 
   GhosttyString title{};
   const auto result = ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_TITLE, &title);
@@ -1359,8 +1359,8 @@ auto Terminal::title() const noexcept -> std::expected<std::string_view, Error> 
 }
 
 auto Terminal::take_effects() noexcept -> EffectBatch {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
 
   const auto effects = impl_->effects;
   impl_->effects = {};
@@ -1368,21 +1368,21 @@ auto Terminal::take_effects() noexcept -> EffectBatch {
 }
 
 auto Terminal::pending_pty_response_bytes() const noexcept -> std::size_t {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->pty_responses.size();
 }
 
 auto Terminal::read_pty_responses(const std::span<std::byte> output) noexcept -> std::size_t {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->pty_responses.read(output);
 }
 
 auto Terminal::allocation_stats() const noexcept -> AllocationStats {
-  FIBER_ASSERT(impl_ != nullptr);
-  FIBER_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->allocator.stats();
 }
 
-} // namespace fiber::vt
+} // namespace lemma::vt

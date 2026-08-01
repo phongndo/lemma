@@ -1,12 +1,12 @@
-#ifndef FIBER_DAEMON_SERVER_HPP
-#define FIBER_DAEMON_SERVER_HPP
+#ifndef LEMMA_DAEMON_SERVER_HPP
+#define LEMMA_DAEMON_SERVER_HPP
 
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
-namespace fiber::daemon {
+namespace lemma::daemon {
 
 inline constexpr std::string_view default_workspace = "default";
 
@@ -57,6 +57,6 @@ struct ServeOptions final {
                         std::string_view workspace = default_workspace) -> int;
 [[nodiscard]] auto kill_all(const RuntimeEndpoint& endpoint) -> int;
 
-} // namespace fiber::daemon
+} // namespace lemma::daemon
 
-#endif // FIBER_DAEMON_SERVER_HPP
+#endif // LEMMA_DAEMON_SERVER_HPP

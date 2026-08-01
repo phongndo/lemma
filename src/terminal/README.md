@@ -1,6 +1,6 @@
 # Terminal adapter
 
-Home of Fiber's only boundary to `libghostty-vt`.
+Home of Lemma's only boundary to `libghostty-vt`.
 
 The target adapter supports two explicit roles:
 
@@ -10,7 +10,7 @@ The target adapter supports two explicit roles:
 - **client replica terminal:** transactionally imports checkpoints and applies ordered pane events for
   presentation while suppressing PTY responses and authoritative side effects.
 
-The interface exposes only Fiber-owned terminal sizes, effects, damage, cells, checkpoint values,
+The interface exposes only Lemma-owned terminal sizes, effects, damage, cells, checkpoint values,
 history ranges, versions, and bounded input/output values. Ghostty headers, private enum values,
 allocator identities, pointers, and memory layouts never cross this component or appear directly on
 the wire.

@@ -1,15 +1,15 @@
-# Fiber architecture
+# Lemma architecture
 
-This document defines Fiber's intended architecture. It is a contract for contributors and coding
+This document defines Lemma's intended architecture. It is a contract for contributors and coding
 agents, not a claim that every component already exists. The current executable is the bounded,
 server-rendered workspace/window and split-pane runtime documented in
 [`single-pane-runtime.md`](single-pane-runtime.md) and audited in
-[`current-capabilities.md`](current-capabilities.md). That output path is transitional while Fiber
+[`current-capabilities.md`](current-capabilities.md). That output path is transitional while Lemma
 moves to the checkpointed terminal-replication architecture below.
 
 ## Product goal
 
-Fiber is an open-source, self-hosted terminal multiplexer built like infrastructure. It provides
+Lemma is an open-source, self-hosted terminal multiplexer built like infrastructure. It provides
 fast, reliable, programmable sessions through a bounded, data-oriented authoritative daemon and
 smart clients that use the same protocol locally and remotely. People, scripts, remote clients, and
 coding agents operate one semantic model without making a hosted service part of the runtime
@@ -87,7 +87,7 @@ A smart client owns expendable replicas and presentation:
 - acknowledged sequence and synchronization state per pane;
 - viewport, selection, search, follow-output, and local clipboard state;
 - physical rectangles, native windows/tabs/splits, status, borders, overlays, and raster state;
-- local keyboard/mouse decoding and Fiber-owned chrome hit testing;
+- local keyboard/mouse decoding and Lemma-owned chrome hit testing;
 - outer-terminal modes and restoration when using the ANSI presentation backend.
 
 Replica state may be discarded at any time and reconstructed from a newer checkpoint. It is never an
@@ -101,7 +101,7 @@ PTY while claiming identical terminal replicas.
 ## Component map
 
 ```text
-apps/fiber/main -> app -----> client -----> protocol
+apps/lemma/main -> app -----> client -----> protocol
                     |           |  |          |
                     |           |  +------> terminal adapter ---> third_party/ghostty
                     |           +---------> renderer
@@ -134,15 +134,15 @@ Unix socket naming conventions, client rendering algorithms, or Ghostty C types.
 
 ### Terminal adapter — `src/terminal/`
 
-The adapter is Fiber's only boundary to `libghostty-vt`. It supports two explicit roles:
+The adapter is Lemma's only boundary to `libghostty-vt`. It supports two explicit roles:
 
 - an authoritative daemon terminal that parses PTY events, owns canonical scrollback, emits terminal
   effects/responses, encodes application input, and exports checkpoints; and
 - a client replica terminal that imports checkpoints and applies ordered output/resize/reset events
   while suppressing authoritative PTY responses and policy side effects.
 
-A checkpoint uses a bounded, versioned Fiber-owned encoding. It must not serialize private Ghostty
-structs or expose Ghostty values in Fiber protocol interfaces. Checkpoint import/export must include
+A checkpoint uses a bounded, versioned Lemma-owned encoding. It must not serialize private Ghostty
+structs or expose Ghostty values in Lemma protocol interfaces. Checkpoint import/export must include
 all state needed for deterministic continuation, including parser state at arbitrary PTY read
 boundaries. Scrollback may be transferred progressively after the visible checkpoint, but the client
 must know which history ranges are present.
@@ -156,7 +156,7 @@ is the mandatory feasibility gate before the replication protocol is frozen.
 
 ### Platform — `src/platform/`
 
-Platform code wraps mechanisms Fiber actually uses: descriptor ownership, PTY creation and resizing,
+Platform code wraps mechanisms Lemma actually uses: descriptor ownership, PTY creation and resizing,
 child processes, Unix sockets, SSH-stdio process plumbing, signals, clocks, polling, client raw
 terminal mode, and future native presentation mechanisms where required.
 
@@ -208,10 +208,10 @@ messages only in its deferred extension stage and never waits for Lua before PTY
 synchronization progress. Retained validated status/sidebar models are sent to clients for rendering;
 Lua is not invoked during a presentation frame. A native C++ plugin ABI is explicitly out of scope.
 
-### Application — `src/app/` and `apps/fiber/`
+### Application — `src/app/` and `apps/lemma/`
 
-`apps/fiber/main.cpp` is a policy-free process bootstrap that immediately delegates to
-`fiber::app::run`. The application component parses arguments, selects control-client, attached-client,
+`apps/lemma/main.cpp` is a policy-free process bootstrap that immediately delegates to
+`lemma::app::run`. The application component parses arguments, selects control-client, attached-client,
 or daemon operations, and wires high-level components together. It owns no mux, terminal, or
 presentation state.
 
@@ -219,7 +219,7 @@ presentation state.
 
 The target smart client owns the daemon connection, handshake, bounded replica stores, checkpoint
 import, terminal event application, acknowledgement state, client-local view state, input decoding,
-Fiber-owned chrome hit testing, presentation, and cleanup. It can disappear without affecting daemon
+Lemma-owned chrome hit testing, presentation, and cleanup. It can disappear without affecting daemon
 processes or canonical state.
 
 The initial smart compatibility client may continue running inside an outer terminal and therefore
@@ -309,7 +309,7 @@ extensions cannot monopolize a turn.
 ## Input and presentation model
 
 Keyboard and mouse are first-class inputs to one semantic system. Clients decode input and preserve
-its order. Fiber-owned client presentation is hit-tested locally:
+its order. Lemma-owned client presentation is hit-tested locally:
 
 - status, borders, tabs, overlays, selection, and split handles become typed commands with stable
   targets;
@@ -318,7 +318,7 @@ its order. Fiber-owned client presentation is hit-tested locally:
   a command or encoding application input through the canonical terminal modes.
 
 Equivalent keyboard and mouse mux actions dispatch the same core command. A configurable modifier
-overrides application capture for Fiber interaction. Keyboard access remains complete.
+overrides application capture for Lemma interaction. Keyboard access remains complete.
 
 Viewport, scrolling, search, and selection are client-local replica operations. Clipboard and OSC 52
 remain explicit security boundaries. A compatibility client that enables outer-terminal keyboard,
@@ -372,20 +372,20 @@ is faster.
 
 The internal targets evolve toward:
 
-- `fiber_base`: assertions and dependency-free foundations;
-- `fiber_terminal`: the sole Ghostty adapter for authoritative and replica roles;
-- `fiber_platform`: operating-system and presentation mechanisms;
-- `fiber_protocol`: bounded control, checkpoint, event, history, input, and extension framing;
-- `fiber_render`: client presentation backends, including the migrated ANSI compositor;
-- `fiber_core`: authoritative stores, sequencing, synchronization, commands, and reactor policy;
-- `fiber_extension`: full Lua configuration and the isolated extension-host process;
-- `fiber_daemon`: per-user transport lifecycle and bootstrap;
-- `fiber_client`: smart replica lifecycle, input, view state, and presentation coordination;
-- `fiber_app`: application parsing and composition;
-- `fiber`: the thin bootstrap at `apps/fiber/main.cpp`.
+- `lemma_base`: assertions and dependency-free foundations;
+- `lemma_terminal`: the sole Ghostty adapter for authoritative and replica roles;
+- `lemma_platform`: operating-system and presentation mechanisms;
+- `lemma_protocol`: bounded control, checkpoint, event, history, input, and extension framing;
+- `lemma_render`: client presentation backends, including the migrated ANSI compositor;
+- `lemma_core`: authoritative stores, sequencing, synchronization, commands, and reactor policy;
+- `lemma_extension`: full Lua configuration and the isolated extension-host process;
+- `lemma_daemon`: per-user transport lifecycle and bootstrap;
+- `lemma_client`: smart replica lifecycle, input, view state, and presentation coordination;
+- `lemma_app`: application parsing and composition;
+- `lemma`: the thin bootstrap at `apps/lemma/main.cpp`.
 
 Targets remain cohesive rather than becoming one target per class. Ghostty headers and types must not
-escape `fiber_terminal`, and checkpoint wire values remain Fiber-owned even though both daemon and
+escape `lemma_terminal`, and checkpoint wire values remain Lemma-owned even though both daemon and
 client link the private terminal dependency.
 
 ## Migration rules
@@ -393,7 +393,7 @@ client link the private terminal dependency.
 - Finish and preserve the P0 server-rendered baseline before changing protocol semantics.
 - Pass the terminal-checkpoint feasibility gate before freezing generalized output messages.
 - Introduce authoritative IDs before checkpoint/event messages depend on pane identity.
-- A temporary versioned endpoint may coexist with `fiber-v8` for tests and cutover only.
+- A temporary versioned endpoint may coexist with `lemma-v8` for tests and cutover only.
 - First prove one-pane checkpoint plus event-tail equivalence, then lag recovery, then multi-pane
   client composition, then SSH transport.
 - Move the existing ANSI compositor to the smart client before deleting daemon ANSI output.
@@ -404,7 +404,7 @@ client link the private terminal dependency.
 
 - A directory represents a subsystem or ownership boundary, not a class.
 - Keep private headers beside their implementation under `src/`.
-- Put a header under `include/fiber/` only when it is a deliberate cross-component or public API.
+- Put a header under `include/lemma/` only when it is a deliberate cross-component or public API.
 - Do not add empty speculative source files. Component READMEs define destinations until code is
   extracted.
 - New code follows the dependency direction above; transitional coupling must be documented.

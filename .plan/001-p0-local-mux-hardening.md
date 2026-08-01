@@ -1,4 +1,4 @@
-# Fiber P0 completion archive
+# Lemma P0 completion archive
 
 ## Archive status
 
@@ -24,7 +24,7 @@ Implementation began from baseline `37ab15c`:
 - every live pane has one bounded ordered PTY write queue;
 - the first three P0 workstreams had 29 checked and eight open items in [`../TODO.md`](../TODO.md);
 - all 11 first-release product-decision items were open; and
-- `scripts/ci/platform` and `scripts/ci/sanitizers` built only `fiber` and `fiber_tests`, so the
+- `scripts/ci/platform` and `scripts/ci/sanitizers` built only `lemma` and `lemma_tests`, so the
   process suite was absent from those scheduled lanes.
 
 The earlier detailed harness design remains in
@@ -50,7 +50,7 @@ work can distinguish what P0 proved from what later phases still need to impleme
 
 ## Outcome
 
-P0 is complete when Fiber's existing local mux surface is protected end to end and this statement is
+P0 is complete when Lemma's existing local mux surface is protected end to end and this statement is
 continuously true:
 
 > Every accepted connection and PTY write is bounded and nonblocking; malformed, idle, slow, or
@@ -146,7 +146,7 @@ focus scenarios do not need public pane IDs before P1.
 
 ## A3. Deterministic PTY workload helper
 
-Add a test/benchmark-only executable, tentatively `fiber_test_pty_peer`, that can be launched from the
+Add a test/benchmark-only executable, tentatively `lemma_test_pty_peer`, that can be launched from the
 account shell with a safely quoted absolute path. It must support bounded modes for:
 
 - announcing readiness, entering an appropriate no-echo input mode, and waiting on a fixture-owned
@@ -194,7 +194,7 @@ Avoid fixed sleeps and avoid process-title assertions.
 Add `MuxProcessTest.ClosesPanesAndTogglesZoom`:
 
 - seed two panes with distinct visible markers;
-- zoom the focused pane and require a full reconstruction showing only the focused surface plus Fiber
+- zoom the focused pane and require a full reconstruction showing only the focused surface plus Lemma
   chrome;
 - unzoom and require both pane surfaces and their separator to return;
 - close the focused pane and assert the pane count, focus PID, geometry compaction, and continued input
@@ -206,7 +206,7 @@ Add `MuxProcessTest.ClosesPanesAndTogglesZoom`:
 
 Add `MuxProcessTest.CreatesCyclesSelectsAndClosesWindows`:
 
-- create at least three windows and parse `fiber windows` output;
+- create at least three windows and parse `lemma windows` output;
 - verify active/previous state through next and previous cycling;
 - directly select existing windows with `C-b 1` through `C-b 3`;
 - directly select a missing window and verify topology remains unchanged;
@@ -381,7 +381,7 @@ Add a checked-in tool under `tools/` or `benchmarks/mux/` with:
 - monotonic timestamps;
 - bounded raw output capture and byte counts;
 - configurable repetitions and absolute per-run timeout;
-- JSON output containing host, architecture, Fiber commit/build mode, workload, samples, p50/p95/p99,
+- JSON output containing host, architecture, Lemma commit/build mode, workload, samples, p50/p95/p99,
   and client bytes; and
 - concise human-readable output derived from the same result data.
 
@@ -400,7 +400,7 @@ Reproduce the documented comparison in [`../docs/performance.md`](../docs/perfor
 - multiplexer-to-client bytes; and
 - five repetitions with median plus full sample data.
 
-Fiber is mandatory. tmux, Zellij, and Herdr adapters are optional and must report their exact binary
+Lemma is mandatory. tmux, Zellij, and Herdr adapters are optional and must report their exact binary
 versions or a clear skip; CI must not require external multiplexers.
 
 ## E3. Blocked-PTY latency workload
@@ -417,7 +417,7 @@ only after repeated results are stable.
 
 ## E4. CI smoke
 
-Extend `scripts/ci/benchmarks smoke` to run one short Fiber-only process sample in addition to Google
+Extend `scripts/ci/benchmarks smoke` to run one short Lemma-only process sample in addition to Google
 Benchmark. The extended local mode runs the complete repetitions. Preserve JSON artifacts for later
 comparison.
 
@@ -446,7 +446,7 @@ Use one compact decision table in `docs/product-contract.md`. Every row must con
 
 Decide together:
 
-- what plain `fiber` does;
+- what plain `lemma` does;
 - whether it attaches, creates, or selects `default`;
 - behavior when the default workspace is busy; and
 - whether explicit `new`, `start`, and `attach` semantics remain unchanged.
@@ -487,7 +487,7 @@ v0.1 to promise no survival across daemon death or reboot; it is not acceptable 
   CI and release artifacts.
 - Define what “supported” means versus best effort.
 - Perform package registry, executable, GitHub, search, and basic trademark-conflict screening for
-  “Fiber.”
+  “Lemma.”
 - Record keep/rename and the evidence date before release URLs and package names become public.
 
 ## F5. Input defaults and automation boundary
@@ -516,8 +516,8 @@ selects defaults and the first public boundary.
 
 Update `scripts/ci/platform` and `scripts/ci/sanitizers` so clean builds include:
 
-- `fiber_e2e_tests`;
-- `fiber_test_server` and `fiber_test_cli` dependencies;
+- `lemma_e2e_tests`;
+- `lemma_test_server` and `lemma_test_cli` dependencies;
 - the deterministic PTY workload helper; and
 - all discovered `integration;pty` tests.
 
@@ -554,7 +554,7 @@ Correct the stale “60 component tests” baseline while updating counts.
 - [x] `just check`
 - [x] `just ci-check`
 - [x] Debug and release CTest, including all process tests
-- [x] Fiber-only benchmark smoke and extended local benchmark
+- [x] Lemma-only benchmark smoke and extended local benchmark
 - [ ] Four-platform scheduled suite (merge-time validation)
 - [ ] Linux ASan/UBSan process suite (merge-time validation)
 - [x] Repeated and parallel process-suite runs without leftovers

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 scripts/ci/configure debug \
-  -DFIBER_BUILD_TESTS=ON \
-  -DFIBER_BUILD_BENCHMARKS=ON
-# Analysis needs Ghostty's generated public header but not Fiber object files.
+  -DLEMMA_BUILD_TESTS=ON \
+  -DLEMMA_BUILD_BENCHMARKS=ON
+# Analysis needs Ghostty's generated public header but not Lemma object files.
 cmake --build --preset debug --target zig_build_lib_vt
 
 find apps src tests benchmarks -type f -name '*.cpp' -print0 |

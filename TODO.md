@@ -1,6 +1,6 @@
-# Fiber TODO
+# Lemma TODO
 
-This is the operational checklist for turning Fiber's working vertical slice into a robust,
+This is the operational checklist for turning Lemma's working vertical slice into a robust,
 performant daily-driver multiplexer and then extending it to programmable, remote, shared, and
 agent-driven sessions.
 
@@ -46,7 +46,7 @@ A feature is complete only when all applicable boxes are satisfied:
 
 ### Project
 
-- [x] Publish Fiber under the MIT license.
+- [x] Publish Lemma under the MIT license.
 - [x] Define the “terminal multiplexer built like infrastructure” identity.
 - [x] Document the target architecture and product contract.
 - [x] Audit current capabilities and limitations.
@@ -69,7 +69,7 @@ A feature is complete only when all applicable boxes are satisfied:
 
 ### Terminal and rendering
 
-- [x] Isolate `libghostty-vt` behind a Fiber-owned adapter.
+- [x] Isolate `libghostty-vt` behind a Lemma-owned adapter.
 - [x] Give every pane canonical terminal and scrollback state.
 - [x] Capture terminal responses, titles, bells, modes, and dirty state.
 - [x] Render dirty rows/cell spans and detected scroll operations.
@@ -157,14 +157,14 @@ Implementation plan: [`docs/plans/process-level-pty-harness.md`](docs/plans/proc
 
 ## P0 — resolve first-release product decisions
 
-- [x] Decide what plain `fiber` does.
+- [x] Decide what plain `lemma` does.
 - [x] Decide default workspace creation/selection behavior.
 - [x] Define pane cwd inheritance for first pane, split pane, and new window.
 - [x] Define environment refresh/inheritance behavior.
 - [x] Decide whether v0.1 supports custom launch commands or login shells only.
 - [x] Define detach, client-crash, logout, daemon-crash, and reboot guarantees separately.
 - [x] Select initial supported macOS and Linux versions.
-- [x] Decide whether to keep the Fiber name before broad adoption.
+- [x] Decide whether to keep the Lemma name before broad adoption.
 - [x] Define default prefix, copy-mode keys, mouse enablement, and mouse-capture override.
 - [x] Decide whether first automation is machine-readable CLI output, local RPC, or both.
 - [x] Record decisions in `docs/product-contract.md` before implementation depends on them.
@@ -182,9 +182,9 @@ Contingent implementation plan:
       continuation at an arbitrary PTY read boundary.
 - [ ] Define authoritative-daemon and replica-client terminal roles, including suppression of replica
       PTY responses and policy side effects.
-- [ ] Design a bounded versioned Fiber-owned checkpoint value that exposes no Ghostty private memory
+- [ ] Design a bounded versioned Lemma-owned checkpoint value that exposes no Ghostty private memory
       layout.
-- [ ] Prototype transactional checkpoint export/import behind `fiber_terminal`.
+- [ ] Prototype transactional checkpoint export/import behind `lemma_terminal`.
 - [ ] Prove checkpoint at sequence `N` plus the event tail equals uninterrupted parsing across text,
       alternate-screen, resize/reflow, incomplete escape/UTF-8, query, and scrollback traces.
 - [ ] Prove visible-ready state can precede bounded recent-to-oldest history hydration.
@@ -219,8 +219,8 @@ Contingent implementation plan:
       resume, reset, and resynchronization messages.
 - [ ] Frame both directions; do not wrap daemon-rendered ANSI as the generalized output model.
 - [ ] Add golden encodings, round trips, malformed matrices, and checkpoint-tail equivalence tests.
-- [ ] Add Fiber protocol and checkpoint-import fuzz targets with bounded seed corpora.
-- [ ] Support a deliberate temporary migration endpoint distinct from `fiber-v8`.
+- [ ] Add Lemma protocol and checkpoint-import fuzz targets with bounded seed corpora.
+- [ ] Support a deliberate temporary migration endpoint distinct from `lemma-v8`.
 
 ### Smart client and production cutover
 
@@ -234,7 +234,7 @@ Contingent implementation plan:
 - [ ] Move the existing ANSI compositor behind the smart compatibility client.
 - [ ] Pass the existing split/focus/zoom/window/resize/detach process suite through client-side
       replicas and composition.
-- [ ] Remove production daemon-to-attached-client unframed/composed ANSI and retire `fiber-v8` after
+- [ ] Remove production daemon-to-attached-client unframed/composed ANSI and retire `lemma-v8` after
       explicit cutover tests.
 
 ### Early remote transport proof
@@ -278,20 +278,20 @@ Contingent implementation plan:
 - [ ] Translate client presentation coordinates into stable semantic targets; physical rectangles
       never become core identities.
 - [ ] Send application mouse input with `PaneId` and pane-local cells.
-- [ ] Route Fiber chrome before application mouse capture.
+- [ ] Route Lemma chrome before application mouse capture.
 - [ ] Implement configurable override of application mouse capture.
 - [ ] Validate pane/permission/coordinate targets and encode application mouse events through the
       authoritative terminal adapter's modes.
 - [ ] Implement keyboard focus and click-to-focus through the same `focus` command.
 - [ ] Implement keyboard window selection and status click selection through the same command.
-- [ ] Test X10, normal, button, any-motion, SGR, alternate-scroll, and focus combinations that Fiber
+- [ ] Test X10, normal, button, any-motion, SGR, alternate-scroll, and focus combinations that Lemma
       claims to support.
 - [ ] Benchmark key-to-PTY, key-to-visible-presentation, click-to-focus, and mouse pass-through
       latency locally and over shaped SSH.
 
 ## P1 — local startup, errors, and process behavior
 
-- [ ] Implement the decided plain-`fiber` behavior.
+- [ ] Implement the decided plain-`lemma` behavior.
 - [ ] Add explicit `--help` and `--version` output.
 - [ ] Return nonzero status for invalid commands and failed attached-client loops.
 - [ ] Report workspace/window/pane capacity and no-effect outcomes visibly.
@@ -361,7 +361,7 @@ Contingent implementation plan:
 
 ## P2 — configuration usable in daily operation
 
-- [ ] Make `fiber.setup` validate and apply actual settings transactionally.
+- [ ] Make `lemma.setup` validate and apply actual settings transactionally.
 - [ ] Install declarative keyboard keymaps into C++ state.
 - [ ] Install declarative mouse bindings into the same semantic command system.
 - [ ] Invoke Lua command callbacks asynchronously.
@@ -446,10 +446,10 @@ Contingent implementation plan:
 - [ ] Protocol fuzz, sanitizer, platform, stress, and soak suites pass.
 - [ ] Performance has no unexplained regression outside reviewed budgets.
 - [ ] Installation and upgrade paths pass from release artifacts.
-- [ ] A focused external cohort uses Fiber as its primary multiplexer for at least 30 days.
-- [ ] Reasons for abandoning Fiber are tracked, triaged, and reflected in the release decision.
+- [ ] A focused external cohort uses Lemma as its primary multiplexer for at least 30 days.
+- [ ] Reasons for abandoning Lemma are tracked, triaged, and reflected in the release decision.
 
-# Phase 2 — programmable Fiber
+# Phase 2 — programmable Lemma
 
 Begin only after the daily-driver path is credible.
 
@@ -466,7 +466,7 @@ Begin only after the daily-driver path is credible.
 - [ ] Document extension API lifecycle and compatibility policy.
 - [ ] Verify blocked, malformed, or crashed extensions cannot affect mux progress or pane processes.
 
-# Phase 3 — shared and agent-driven Fiber
+# Phase 3 — shared and agent-driven Lemma
 
 Basic SSH-stdio transport, checkpoint attachment, and reconnect correctness are P1 architecture
 requirements. This phase adds product breadth on that same protocol.

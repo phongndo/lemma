@@ -1,6 +1,6 @@
 # Renderer
 
-Home of Fiber's client-side presentation backends.
+Home of Lemma's client-side presentation backends.
 
 The target renderer consumes terminal replicas, logical topology values, retained extension UI
 models, and client-local view state. It resolves physical rectangles, clips viewports, composes

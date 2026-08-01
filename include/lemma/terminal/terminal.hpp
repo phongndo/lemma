@@ -1,7 +1,7 @@
-#ifndef FIBER_TERMINAL_TERMINAL_HPP
-#define FIBER_TERMINAL_TERMINAL_HPP
+#ifndef LEMMA_TERMINAL_TERMINAL_HPP
+#define LEMMA_TERMINAL_TERMINAL_HPP
 
-#include "fiber/limits.hpp"
+#include "lemma/limits.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,7 +10,7 @@
 #include <span>
 #include <string_view>
 
-namespace fiber::vt {
+namespace lemma::vt {
 
 // Version of the privately linked terminal engine. The returned view has static lifetime.
 [[nodiscard]] auto library_version() noexcept -> std::span<const std::uint8_t>;
@@ -236,6 +236,6 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace fiber::vt
+} // namespace lemma::vt
 
-#endif // FIBER_TERMINAL_TERMINAL_HPP
+#endif // LEMMA_TERMINAL_TERMINAL_HPP

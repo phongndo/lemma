@@ -1,6 +1,6 @@
-#include "fiber/command.hpp"
-#include "fiber/fiber.hpp"
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/command.hpp"
+#include "lemma/lemma.hpp"
+#include "lemma/terminal/terminal.hpp"
 #include "protocol/extension.hpp"
 #include "render/pane_composition.hpp"
 
@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace fiber {
+namespace lemma {
 namespace {
 
 void benchmark_greeting(benchmark::State& state) {
@@ -332,4 +332,4 @@ BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16);
 BENCHMARK(benchmark_terminal_full_frames);
 
 } // namespace
-} // namespace fiber
+} // namespace lemma

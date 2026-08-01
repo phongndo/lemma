@@ -42,15 +42,15 @@ class CiChangesTests(unittest.TestCase):
 
     def test_library_change_selects_cpp_correctness(self):
         self.assertEqual(
-            self.selected("include/fiber/id.hpp", "src/core/fiber.cpp"),
+            self.selected("include/lemma/id.hpp", "src/core/lemma.cpp"),
             {"cpp"},
         )
 
     def test_application_change_selects_cpp_correctness(self):
-        self.assertEqual(self.selected("apps/fiber/main.cpp"), {"cpp"})
+        self.assertEqual(self.selected("apps/lemma/main.cpp"), {"cpp"})
 
     def test_benchmark_change_selects_cpp_jobs(self):
-        self.assertEqual(self.selected("benchmarks/fiber_benchmark.cpp"), {"cpp"})
+        self.assertEqual(self.selected("benchmarks/lemma_benchmark.cpp"), {"cpp"})
 
     def test_dependency_change_selects_cpp_correctness(self):
         self.assertEqual(

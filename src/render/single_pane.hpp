@@ -1,13 +1,13 @@
-#ifndef FIBER_RENDER_SINGLE_PANE_HPP
-#define FIBER_RENDER_SINGLE_PANE_HPP
+#ifndef LEMMA_RENDER_SINGLE_PANE_HPP
+#define LEMMA_RENDER_SINGLE_PANE_HPP
 
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 #include "render/pane_composition.hpp"
 
 #include <array>
 #include <cstddef>
 
-namespace fiber::render {
+namespace lemma::render {
 
 inline constexpr std::size_t frame_bytes_max = std::size_t{4} * 1'024U * 1'024U;
 using FrameBuffer = std::array<std::byte, frame_bytes_max>;
@@ -34,6 +34,6 @@ struct ClientOutputState final {
                                         ClientOutputState& output, bool force_full,
                                         StatusLine status = {}) noexcept -> bool;
 
-} // namespace fiber::render
+} // namespace lemma::render
 
-#endif // FIBER_RENDER_SINGLE_PANE_HPP
+#endif // LEMMA_RENDER_SINGLE_PANE_HPP

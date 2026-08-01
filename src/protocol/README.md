@@ -1,6 +1,6 @@
 # Protocol
 
-Home of bounded messages between Fiber clients, the daemon, and the extension host. This component
+Home of bounded messages between Lemma clients, the daemon, and the extension host. This component
 owns schemas, limits, versions, capabilities, encoding, and incremental decoding.
 
 The target client protocol is bidirectional and transport-independent. It carries typed
@@ -12,9 +12,9 @@ the same application values and state machines.
 It does not open sockets, discover workspaces, dispatch core commands, parse terminal bytes, import
 terminal state, or render presentation. Every length, enum, version, capability, identifier, sequence,
 and range is validated before entering authoritative or replica state. Checkpoint encoding is
-Fiber-owned and cannot expose Ghostty private layouts.
+Lemma-owned and cannot expose Ghostty private layouts.
 
-The present one-client-per-workspace `fiber-v8` format is unversioned and sends daemon-rendered ANSI.
+The present one-client-per-workspace `lemma-v8` format is unversioned and sends daemon-rendered ANSI.
 It remains a protected migration baseline only. After the smart-client cutover, production attachment
 uses checkpoint plus ordered event tail and the old endpoint is removed. See `docs/protocol.md`,
 `.plan/002-terminal-checkpoint-feasibility.md`, and

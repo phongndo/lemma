@@ -1,10 +1,10 @@
 # Extension host
 
-Fiber configuration and extensions run as trusted Lua 5.5 code in one persistent child process per
+Lemma configuration and extensions run as trusted Lua 5.5 code in one persistent child process per
 daemon. The daemon starts and supervises the host; a host crash or blocked callback cannot stop pane
 processes, PTY parsing, input, checkpoint/event synchronization, or client presentation.
 
-The host loads `$XDG_CONFIG_HOME/fiber/init.lua`, falling back to `~/.config/fiber/init.lua`. A
+The host loads `$XDG_CONFIG_HOME/lemma/init.lua`, falling back to `~/.config/lemma/init.lua`. A
 missing file is a valid empty generation. Lua has its normal user-level standard libraries and may
 load modules, use the filesystem and network, and start its own processes. Project-local Lua is not
 automatically trusted or loaded.

@@ -41,7 +41,7 @@ Child processes will `exec` small test drivers rather than calling complex C++ c
 
 ### Do not use the user's daemon endpoint
 
-Tests must never connect to `/tmp/fiber-v8-<uid>.sock`. Each test creates a unique `0700` temporary
+Tests must never connect to `/tmp/lemma-v8-<uid>.sock`. Each test creates a unique `0700` temporary
 runtime directory and socket path, checks ownership/path length, and passes that endpoint explicitly
 to every spawned process.
 
@@ -51,10 +51,10 @@ running user daemon.
 ### Inject runtime context instead of adding global mutable test state
 
 Refactor internal app/client/daemon entry points to accept an immutable runtime endpoint value. The
-normal `fiber` executable constructs the existing per-user default, so production CLI behavior does
+normal `lemma` executable constructs the existing per-user default, so production CLI behavior does
 not change. Test-only drivers pass a unique endpoint.
 
-This avoids a production `FIBER_TEST_*` environment switch and makes endpoint ownership visible at
+This avoids a production `LEMMA_TEST_*` environment switch and makes endpoint ownership visible at
 component boundaries.
 
 ### Run an owned foreground server
@@ -71,7 +71,7 @@ not the behavior this harness is intended to protect.
 ### Parse rendered output as terminal output
 
 Do not assert on raw ANSI byte substrings except in diagnostics. Feed attached-client output into a
-Fiber terminal adapter representing the outer 80x24 terminal, then inspect bounded plain snapshots.
+Lemma terminal adapter representing the outer 80x24 terminal, then inspect bounded plain snapshots.
 This makes assertions resilient to cursor movement, damage encoding, synchronized-update wrappers,
 and full versus incremental frames.
 
@@ -80,17 +80,17 @@ Control-command output remains plain text and can be captured through ordinary p
 ## Proposed test architecture
 
 ```text
-fiber_e2e_tests (GoogleTest parent)
+lemma_e2e_tests (GoogleTest parent)
   |
   +-- TemporaryRuntime (unique directory/socket/config/home)
   |
-  +-- fiber_test_server <socket>       [fork + exec, owned process group]
+  +-- lemma_test_server <socket>       [fork + exec, owned process group]
   |      `-- daemon foreground serve -> core reactor -> shell PTYs
   |
-  +-- fiber_test_cli <socket> ...      [fork + exec, pipe capture]
+  +-- lemma_test_cli <socket> ...      [fork + exec, pipe capture]
   |      `-- same app command parser and daemon/client libraries
   |
-  `-- fiber_test_cli <socket> new ...  [forkpty + exec]
+  `-- lemma_test_cli <socket> new ...  [forkpty + exec]
          `-- attached client in controlled 80x24 outer PTY
 ```
 
@@ -102,7 +102,7 @@ the application parser and all substantive production components remain exercise
 ### Internal runtime value
 
 - Add an internal immutable endpoint/runtime value with a validated socket path.
-- Preserve the current `/tmp/fiber-v8-<uid>.sock` default for the production executable.
+- Preserve the current `/tmp/lemma-v8-<uid>.sock` default for the production executable.
 - Pass the endpoint through application dispatch, daemon control commands, and client attach.
 - Keep socket naming/path policy in the daemon component, not core.
 - Avoid globals and avoid storing borrowed path views beyond their owner lifetime.
@@ -120,8 +120,8 @@ the application parser and all substantive production components remain exercise
 
 ### Test drivers
 
-- Add a test-only foreground server executable linked to `fiber_daemon`.
-- Add a test-only CLI executable linked to `fiber_app` that injects the supplied endpoint and then
+- Add a test-only foreground server executable linked to `lemma_daemon`.
+- Add a test-only CLI executable linked to `lemma_app` that injects the supplied endpoint and then
   delegates to the same application argument parser.
 - Make both reject invalid arguments with nonzero status and no daemon side effects.
 
@@ -246,7 +246,7 @@ Do not depend on a particular account-shell prompt or foreground process name.
 - Capture relevant slave termios before the attached client enters raw mode.
 - Attach and detach normally.
 - Compare the post-exit termios flags/control characters with the original state.
-- Feed the complete raw output to the outer terminal model and verify Fiber leaves the outer terminal
+- Feed the complete raw output to the outer terminal model and verify Lemma leaves the outer terminal
   on the primary screen with a visible cursor and disabled tracked modes where the adapter exposes
   those observations.
 - Keep signal-termination restoration as a later test because production signal-safe cleanup is not
@@ -269,9 +269,9 @@ in a separate product decision; do not silently change production shell behavior
 
 ## CMake and CI integration
 
-- Add a separate `fiber_e2e_tests` target rather than growing `fiber_tests`.
-- Add the two test-only driver targets only when `FIBER_BUILD_TESTS=ON`.
-- Link `fiber_e2e_tests` to test support, `fiber_terminal`, warnings, GoogleTest, and any narrow
+- Add a separate `lemma_e2e_tests` target rather than growing `lemma_tests`.
+- Add the two test-only driver targets only when `LEMMA_BUILD_TESTS=ON`.
+- Link `lemma_e2e_tests` to test support, `lemma_terminal`, warnings, GoogleTest, and any narrow
   platform target it directly uses.
 - Make test targets depend on their driver executables.
 - Supply driver paths with generated compile definitions or a generated test configuration header;
@@ -287,17 +287,17 @@ in a separate product decision; do not silently change production shell behavior
 Likely CMake shape:
 
 ```cmake
-add_executable(fiber_test_server tests/support/server_main.cpp)
-add_executable(fiber_test_cli tests/support/cli_main.cpp)
+add_executable(lemma_test_server tests/support/server_main.cpp)
+add_executable(lemma_test_cli tests/support/cli_main.cpp)
 add_executable(
-  fiber_e2e_tests
+  lemma_e2e_tests
   tests/support/process.cpp
   tests/support/pty_client.cpp
   tests/e2e_mux_test.cpp
 )
-add_dependencies(fiber_e2e_tests fiber_test_server fiber_test_cli)
+add_dependencies(lemma_e2e_tests lemma_test_server lemma_test_cli)
 gtest_discover_tests(
-  fiber_e2e_tests
+  lemma_e2e_tests
   PROPERTIES TIMEOUT 30 LABELS "integration;pty"
 )
 ```
@@ -335,7 +335,7 @@ The harness work is complete when:
 
 1. all six initial scenarios pass repeatedly on macOS and Linux debug builds;
 2. the suite passes scheduled ASan/UBSan without orphan processes;
-3. tests can run while a real user Fiber daemon and workspace are active without observing or
+3. tests can run while a real user Lemma daemon and workspace are active without observing or
    changing them;
 4. two e2e tests can run concurrently with different endpoints;
 5. every wait and teardown path has a hard deadline;

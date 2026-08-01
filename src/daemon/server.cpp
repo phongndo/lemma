@@ -28,7 +28,7 @@
 #include <syslog.h>
 #include <unistd.h>
 
-namespace fiber::daemon {
+namespace lemma::daemon {
 namespace {
 
 constexpr auto response_ready = protocol::wire_byte(protocol::ControlResponse::ready);
@@ -179,7 +179,7 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
     -> int {
   static_cast<void>(::signal(SIGPIPE, SIG_IGN));
   static_cast<void>(::signal(SIGCHLD, SIG_IGN));
-  ::openlog("fiber", LOG_PID | LOG_NDELAY, LOG_USER);
+  ::openlog("lemma", LOG_PID | LOG_NDELAY, LOG_USER);
   const auto previous_mask = ::umask(0077);
   int server_lock = -1;
   int listener = create_listener(path, server_lock);
@@ -287,7 +287,7 @@ void redirect_standard_descriptors() noexcept {
   int connection = open_connection(std::string(endpoint.socket_path()));
   if (connection < 0) {
     if (report_missing) {
-      static_cast<void>(write_text(STDERR_FILENO, "no fiber daemon\n"));
+      static_cast<void>(write_text(STDERR_FILENO, "no lemma daemon\n"));
     }
     return 1;
   }
@@ -316,7 +316,7 @@ void redirect_standard_descriptors() noexcept {
     }
     const auto bytes = std::span(response).first(static_cast<std::size_t>(bytes_read));
     if (first && bytes.front() == response_missing) {
-      static_cast<void>(write_text(STDERR_FILENO, "no fiber workspace\n"));
+      static_cast<void>(write_text(STDERR_FILENO, "no lemma workspace\n"));
       close_descriptor(connection);
       return 1;
     }
@@ -352,7 +352,7 @@ void redirect_standard_descriptors() noexcept {
 }
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint {
-  auto endpoint = RuntimeEndpoint::create("/tmp/fiber-v8-" + std::to_string(::getuid()) + ".sock");
+  auto endpoint = RuntimeEndpoint::create("/tmp/lemma-v8-" + std::to_string(::getuid()) + ".sock");
   // The fixed production path is absolute and well below sockaddr_un::sun_path on supported hosts.
   if (!endpoint.has_value()) {
     std::abort();
@@ -376,7 +376,7 @@ void redirect_standard_descriptors() noexcept {
   }
   const std::string path(endpoint.socket_path());
   if (!ensure_server(path)) {
-    static_cast<void>(write_text(STDERR_FILENO, "failed to start fiber daemon\n"));
+    static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
     return 1;
   }
   int connection = open_connection(path);
@@ -392,8 +392,8 @@ void redirect_standard_descriptors() noexcept {
     return 0;
   }
   static_cast<void>(write_text(STDERR_FILENO, received && response.front() == response_capacity
-                                                  ? "fiber workspace capacity reached\n"
-                                                  : "failed to create fiber workspace\n"));
+                                                  ? "lemma workspace capacity reached\n"
+                                                  : "failed to create lemma workspace\n"));
   return 1;
 }
 
@@ -404,7 +404,7 @@ auto start(const RuntimeEndpoint& endpoint, const std::string_view workspace) ->
 auto list(const RuntimeEndpoint& endpoint) -> int {
   int connection = open_server_connection(endpoint);
   if (connection < 0) {
-    static_cast<void>(write_text(STDOUT_FILENO, "no fiber workspaces\n"));
+    static_cast<void>(write_text(STDOUT_FILENO, "no lemma workspaces\n"));
     return 0;
   }
   close_descriptor(connection);
@@ -440,4 +440,4 @@ auto kill_all(const RuntimeEndpoint& endpoint) -> int {
   return run_control_command(endpoint, protocol::ControlCommand::kill_all, {}, false);
 }
 
-} // namespace fiber::daemon
+} // namespace lemma::daemon

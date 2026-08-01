@@ -1,4 +1,4 @@
-# Fiber replicated-terminal foundation
+# Lemma replicated-terminal foundation
 
 ## Status
 
@@ -9,7 +9,7 @@ production checkpoint/event protocol work while that gate is unresolved.
 This plan replaces the former assumption that P1 would frame daemon-generated ANSI. It implements
 the single target architecture in [`../docs/architecture.md`](../docs/architecture.md): smart clients
 attach from terminal checkpoints, apply ordered pane events, own presentation, and recover through
-fresh checkpoints. The current server-rendered `fiber-v8` path remains a protected migration
+fresh checkpoints. The current server-rendered `lemma-v8` path remains a protected migration
 baseline until cutover, then is removed from attached output.
 
 ## Outcome
@@ -57,7 +57,7 @@ a fresh checkpoint. Scrollback uses bounded range chunks and does not block visi
 
 ### One production output protocol
 
-The generalized daemon protocol never treats ANSI as terminal state. During migration, `fiber-v8`
+The generalized daemon protocol never treats ANSI as terminal state. During migration, `lemma-v8`
 and the new endpoint may coexist only for explicit tests/cutover. The final compatibility client
 imports replicas and invokes the existing ANSI compositor locally. Native presentation later consumes
 the same replicas.
@@ -66,7 +66,7 @@ the same replicas.
 
 The daemon owns process, PTY, topology, dimensions, canonical terminals, sequence allocation,
 terminal responses, application input encoding, and command validation. Clients own disposable
-replicas, physical presentation, viewport/selection, input decoding, and local Fiber chrome hit
+replicas, physical presentation, viewport/selection, input decoding, and local Lemma chrome hit
 testing.
 
 ### Bounded lag
@@ -142,7 +142,7 @@ Define a bounded bidirectional envelope with at least:
 
 - [ ] Implement handshake, attach, checkpoint import, ready, event application, acknowledgement,
       reset, and disconnect states as an exhaustive bounded client state machine.
-- [ ] Add a generational/fixed-capacity replica store using the Fiber terminal adapter's replica role.
+- [ ] Add a generational/fixed-capacity replica store using the Lemma terminal adapter's replica role.
 - [ ] Keep candidate checkpoint import unpublished until validation and allocation succeed.
 - [ ] Decode typed key/text/paste/focus/resize input without relying on daemon ANSI output.
 - [ ] Render one replica through the existing ANSI backend inside a controlled outer terminal.
@@ -162,9 +162,9 @@ Define a bounded bidirectional envelope with at least:
 - [ ] Send bounded topology snapshots and ordered deltas with stable workspace/window/pane IDs.
 - [ ] Replicate active/previous window, focus, zoom, logical split tree, ratios, status labels, and
       canonical pane dimensions.
-- [ ] Move physical rectangle resolution and the tested pane ANSI compositor behind `fiber_client`.
+- [ ] Move physical rectangle resolution and the tested pane ANSI compositor behind `lemma_client`.
 - [ ] Keep server logical layout validation authoritative while making client presentation expendable.
-- [ ] Route Fiber chrome input as semantic commands with stable targets.
+- [ ] Route Lemma chrome input as semantic commands with stable targets.
 - [ ] Route application mouse values with `PaneId` and pane-local coordinates; defer complete mouse UX
       if needed but freeze the correct target shape.
 - [ ] Rebuild client presentation after topology snapshot, reset, resize, active-window change, and
@@ -200,7 +200,7 @@ Define a bounded bidirectional envelope with at least:
 ## Workstream G — SSH-stdio transport proof
 
 Use the same application frames and state machines through a transport adapter. SSH handles initial
-authentication and encryption; Fiber continues validating every decoded value as untrusted.
+authentication and encryption; Lemma continues validating every decoded value as untrusted.
 
 - [ ] Add test-owned SSH-stdio or equivalent subprocess transport plumbing without embedding SSH
       policy in core/protocol code.

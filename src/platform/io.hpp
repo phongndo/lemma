@@ -1,11 +1,11 @@
-#ifndef FIBER_PLATFORM_IO_HPP
-#define FIBER_PLATFORM_IO_HPP
+#ifndef LEMMA_PLATFORM_IO_HPP
+#define LEMMA_PLATFORM_IO_HPP
 
 #include <cstddef>
 #include <span>
 #include <string_view>
 
-namespace fiber::platform {
+namespace lemma::platform {
 
 // Blocking completion helpers. Use only at setup/control boundaries or with descriptors whose
 // readiness has already been established. Hot-path output uses explicit partial-write state.
@@ -18,6 +18,6 @@ namespace fiber::platform {
 void close_descriptor(int& descriptor) noexcept;
 [[nodiscard]] auto set_nonblocking(int descriptor) noexcept -> bool;
 
-} // namespace fiber::platform
+} // namespace lemma::platform
 
-#endif // FIBER_PLATFORM_IO_HPP
+#endif // LEMMA_PLATFORM_IO_HPP

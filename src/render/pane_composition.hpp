@@ -1,7 +1,7 @@
-#ifndef FIBER_RENDER_PANE_COMPOSITION_HPP
-#define FIBER_RENDER_PANE_COMPOSITION_HPP
+#ifndef LEMMA_RENDER_PANE_COMPOSITION_HPP
+#define LEMMA_RENDER_PANE_COMPOSITION_HPP
 
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 
-namespace fiber::render {
+namespace lemma::render {
 
 inline constexpr std::size_t status_windows_max = 16;
 
@@ -73,6 +73,6 @@ struct CompositionResult final {
                                  StatusLine status = {}) noexcept
     -> std::expected<CompositionResult, CompositionError>;
 
-} // namespace fiber::render
+} // namespace lemma::render
 
-#endif // FIBER_RENDER_PANE_COMPOSITION_HPP
+#endif // LEMMA_RENDER_PANE_COMPOSITION_HPP

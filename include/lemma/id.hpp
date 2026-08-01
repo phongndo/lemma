@@ -1,13 +1,13 @@
-#ifndef FIBER_ID_HPP
-#define FIBER_ID_HPP
+#ifndef LEMMA_ID_HPP
+#define LEMMA_ID_HPP
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 
 #include <cstdint>
 #include <limits>
 #include <optional>
 
-namespace fiber {
+namespace lemma {
 
 template <typename Tag> class GenerationalId final {
 public:
@@ -24,7 +24,7 @@ public:
   [[nodiscard]] static constexpr GenerationalId
   from_parts(const std::uint32_t slot, const std::uint32_t generation) noexcept {
     const std::optional<GenerationalId> id = try_from_parts(slot, generation);
-    FIBER_ASSERT(id.has_value());
+    LEMMA_ASSERT(id.has_value());
     return *id;
   }
 
@@ -57,6 +57,6 @@ using WindowId = GenerationalId<WindowIdTag>;
 using PaneId = GenerationalId<PaneIdTag>;
 using ClientId = GenerationalId<ClientIdTag>;
 
-} // namespace fiber
+} // namespace lemma
 
-#endif // FIBER_ID_HPP
+#endif // LEMMA_ID_HPP

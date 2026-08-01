@@ -1,9 +1,9 @@
-#ifndef FIBER_CORE_ENGINE_HPP
-#define FIBER_CORE_ENGINE_HPP
+#ifndef LEMMA_CORE_ENGINE_HPP
+#define LEMMA_CORE_ENGINE_HPP
 
 #include <string_view>
 
-namespace fiber::core {
+namespace lemma::core {
 
 using EndpointRelease = void (*)(void* context) noexcept;
 
@@ -26,6 +26,6 @@ using StopRequested = bool (*)() noexcept;
                               void* extension_error_context = nullptr,
                               StopRequested stop_requested = nullptr) noexcept -> int;
 
-} // namespace fiber::core
+} // namespace lemma::core
 
-#endif // FIBER_CORE_ENGINE_HPP
+#endif // LEMMA_CORE_ENGINE_HPP

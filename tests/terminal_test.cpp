@@ -1,4 +1,4 @@
-#include "fiber/terminal/terminal.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -10,7 +10,7 @@
 #include <string_view>
 #include <utility>
 
-namespace fiber::vt {
+namespace lemma::vt {
 namespace {
 
 void write_text(Terminal& terminal, const std::string_view text) {
@@ -232,7 +232,7 @@ TEST(TerminalTest, KeyEncoderTracksCursorApplicationMode) {
 
 TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   auto terminal = make_terminal();
-  write_text(terminal, "\a\x1B]2;fiber title\x1B\\\x1B[?7$p");
+  write_text(terminal, "\a\x1B]2;lemma title\x1B\\\x1B[?7$p");
 
   const auto effects = terminal.take_effects();
   EXPECT_EQ(effects.bells, 1U);
@@ -241,7 +241,7 @@ TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
 
   const auto title = terminal.title();
   ASSERT_TRUE(title.has_value());
-  EXPECT_THAT(*title, testing::StrEq("fiber title"));
+  EXPECT_THAT(*title, testing::StrEq("lemma title"));
 
   ASSERT_GT(terminal.pending_pty_response_bytes(), 0U);
   std::array<std::byte, 64> response{};
@@ -263,4 +263,4 @@ TEST(TerminalTest, TracksQuotaAllocatorUsage) {
 }
 
 } // namespace
-} // namespace fiber::vt
+} // namespace lemma::vt

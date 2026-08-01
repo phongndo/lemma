@@ -109,7 +109,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
 
 [[nodiscard]] auto run_block(const char* const gate, const std::size_t bytes) noexcept -> int {
   if (bytes == 0 || bytes > std::size_t{8} * 1'024U * 1'024U || !enter_raw_input() ||
-      !write_all("\r\n__FIBER_PTY_READY__\r\n") || !wait_for_gate(gate)) {
+      !write_all("\r\n__LEMMA_PTY_READY__\r\n") || !wait_for_gate(gate)) {
     return 1;
   }
   std::uint64_t digest = 0;
@@ -119,7 +119,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
     const auto received_storage = std::span(received_text);
     const auto encoded =
         std::to_chars(received_storage.data(), std::to_address(received_storage.end()), received);
-    static_cast<void>(write_all("\r\n__FIBER_PTY_FAILED__ received="));
+    static_cast<void>(write_all("\r\n__LEMMA_PTY_FAILED__ received="));
     if (encoded.ec == std::errc{}) {
       static_cast<void>(write_all(
           {received_text.data(), static_cast<std::size_t>(encoded.ptr - received_text.data())}));
@@ -143,7 +143,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
     return 1;
   }
   const bool written =
-      write_all("\r\n__FIBER_PTY_DONE__ bytes=") &&
+      write_all("\r\n__LEMMA_PTY_DONE__ bytes=") &&
       write_all({count_text.data(), static_cast<std::size_t>(count.ptr - count_text.data())}) &&
       write_all(" digest=") &&
       write_all({digest_text.data(), static_cast<std::size_t>(encoded.ptr - digest_text.data())}) &&
@@ -157,7 +157,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
 [[nodiscard]] auto run_order(const char* const gate, const std::string_view user_input) noexcept
     -> int {
   if (user_input.empty() || user_input.size() > 1'024U || !enter_raw_input() ||
-      !write_all("\x1B[5n") || !write_all("\r\n__FIBER_ORDER_READY__\r\n") ||
+      !write_all("\x1B[5n") || !write_all("\r\n__LEMMA_ORDER_READY__\r\n") ||
       !wait_for_gate(gate)) {
     return 1;
   }
@@ -187,7 +187,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
                        std::ranges::equal(std::span(actual).first(response.size()), response) &&
                        std::ranges::equal(std::span(actual).subspan(response.size()), user_input);
   if (!matches) {
-    static_cast<void>(write_all("\r\n__FIBER_ORDER_FAILED__ bytes="));
+    static_cast<void>(write_all("\r\n__LEMMA_ORDER_FAILED__ bytes="));
     for (const char character : actual) {
       const auto byte = static_cast<unsigned char>(character);
       std::array<char, 2> encoded{};
@@ -200,7 +200,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
     linger_for_render();
     return 1;
   }
-  const bool written = write_all("\r\n__FIBER_ORDER_OK__\r\n");
+  const bool written = write_all("\r\n__LEMMA_ORDER_OK__\r\n");
   linger_for_render();
   return written ? 0 : 1;
 }
@@ -225,7 +225,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* generic = reinterpret_cast<const sockaddr*>(&address);
   if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
-      !write_all("\r\n__FIBER_LATENCY_READY__\r\n")) {
+      !write_all("\r\n__LEMMA_LATENCY_READY__\r\n")) {
     static_cast<void>(::close(receipt));
     return 1;
   }
@@ -302,7 +302,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
       return 1;
     }
   }
-  const bool written = write_all("__FIBER_WARM_SCROLL_DONE__\r\n");
+  const bool written = write_all("__LEMMA_WARM_SCROLL_DONE__\r\n");
   return written ? 0 : 1;
 }
 

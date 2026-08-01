@@ -1,12 +1,12 @@
 #include "core/pty_writer.hpp"
 
-#include "fiber/assert.hpp"
+#include "lemma/assert.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
 
-namespace fiber::core {
+namespace lemma::core {
 
 // The branches are the explicit bounded outcomes of one nonblocking queue flush.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -33,7 +33,7 @@ namespace fiber::core {
         return PtyFlushStatus::hard_error;
       }
       const bool consumed = queue.consume(size);
-      FIBER_ASSERT(consumed);
+      LEMMA_ASSERT(consumed);
       budget -= size;
       global_budget -= size;
       continue;
@@ -52,4 +52,4 @@ namespace fiber::core {
   return queue.empty() ? PtyFlushStatus::drained : PtyFlushStatus::pending;
 }
 
-} // namespace fiber::core
+} // namespace lemma::core

@@ -1,5 +1,5 @@
 {
-  description = "fiber C++23 development environment";
+  description = "lemma C++23 development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

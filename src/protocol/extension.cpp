@@ -4,7 +4,7 @@
 #include <cstring>
 #include <limits>
 
-namespace fiber::protocol::extension {
+namespace lemma::protocol::extension {
 namespace {
 
 class Writer final {
@@ -437,4 +437,4 @@ void Decoder::reset() noexcept {
   pending_size_ = 0;
 }
 
-} // namespace fiber::protocol::extension
+} // namespace lemma::protocol::extension

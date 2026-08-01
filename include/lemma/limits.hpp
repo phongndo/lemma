@@ -1,10 +1,10 @@
-#ifndef FIBER_LIMITS_HPP
-#define FIBER_LIMITS_HPP
+#ifndef LEMMA_LIMITS_HPP
+#define LEMMA_LIMITS_HPP
 
 #include <cstddef>
 #include <cstdint>
 
-namespace fiber::limits {
+namespace lemma::limits {
 
 inline constexpr std::uint32_t workspaces_hard_max = 64;
 inline constexpr std::uint32_t windows_hard_max = 1'024;
@@ -35,6 +35,6 @@ inline constexpr std::uint16_t terminal_rows_hard_max = 1'000;
 inline constexpr std::size_t terminal_scrollback_rows_default = 10'000;
 inline constexpr std::size_t terminal_scrollback_rows_hard_max = 1'000'000;
 
-} // namespace fiber::limits
+} // namespace lemma::limits
 
-#endif // FIBER_LIMITS_HPP
+#endif // LEMMA_LIMITS_HPP

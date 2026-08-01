@@ -40,11 +40,11 @@ benchmark_args+=(
 
 # Force this isolated lane to build the measured ReleaseFast Ghostty archive.
 rm -rf third_party/ghostty/zig-out
-scripts/ci/configure release -DFIBER_BUILD_TESTS=OFF
+scripts/ci/configure release -DLEMMA_BUILD_TESTS=OFF
 cmake --build --preset release --target \
-  fiber_benchmarks fiber_test_server fiber_test_cli fiber_test_pty_peer
+  lemma_benchmarks lemma_test_server lemma_test_cli lemma_test_pty_peer
 rm -f "${output}"
-./build/release/fiber_benchmarks "${benchmark_args[@]}"
+./build/release/lemma_benchmarks "${benchmark_args[@]}"
 
 mux_repetitions=1
 if [[ "${mode}" == "extended" ]]; then

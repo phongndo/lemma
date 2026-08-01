@@ -4,9 +4,9 @@ set -euo pipefail
 # Keep sanitizer flags and objects out of the ordinary debug cache so running
 # this suite locally cannot change later `just build` or hook behavior.
 scripts/ci/configure sanitizers \
-  -DFIBER_BUILD_TESTS=ON \
-  -DFIBER_BUILD_BENCHMARKS=OFF
-cmake --build --preset sanitizers --target fiber fiber_tests fiber_e2e_tests
+  -DLEMMA_BUILD_TESTS=ON \
+  -DLEMMA_BUILD_BENCHMARKS=OFF
+cmake --build --preset sanitizers --target lemma lemma_tests lemma_e2e_tests
 
 leak_detection=1
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -17,4 +17,4 @@ fi
 export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 scripts/ci/test sanitizers
-./build/sanitizers/fiber >/dev/null
+./build/sanitizers/lemma >/dev/null

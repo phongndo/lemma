@@ -1,5 +1,5 @@
-#ifndef FIBER_PROTOCOL_EXTENSION_HPP
-#define FIBER_PROTOCOL_EXTENSION_HPP
+#ifndef LEMMA_PROTOCOL_EXTENSION_HPP
+#define LEMMA_PROTOCOL_EXTENSION_HPP
 
 #include <array>
 #include <cstddef>
@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 
-namespace fiber::protocol::extension {
+namespace lemma::protocol::extension {
 
 inline constexpr std::uint16_t version = 1;
 inline constexpr std::size_t frame_header_bytes = 20;
@@ -133,6 +133,6 @@ private:
   std::size_t pending_size_{0};
 };
 
-} // namespace fiber::protocol::extension
+} // namespace lemma::protocol::extension
 
-#endif // FIBER_PROTOCOL_EXTENSION_HPP
+#endif // LEMMA_PROTOCOL_EXTENSION_HPP

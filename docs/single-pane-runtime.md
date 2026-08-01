@@ -2,14 +2,14 @@
 
 ## Status
 
-Fiber's end-to-end vertical slice has been migrated out of the former monolithic
+Lemma's end-to-end vertical slice has been migrated out of the former monolithic
 `single_pane.cpp`. Workspaces now support bounded windows and split panes while retaining the
 production component architecture. This document records implemented behavior; agreed foundation
 decisions and explicitly open product questions are in
 [`product-contract.md`](product-contract.md).
 
 ```text
-apps/fiber/main.cpp
+apps/lemma/main.cpp
         |
         v
      app/run
@@ -31,8 +31,8 @@ monolith.
 
 ### Application — `src/app/`
 
-Parses commands and selects client or daemon operations. It contains the diagnostic `fiber demo`
-command but no workspace runtime logic. `apps/fiber/main.cpp` only delegates to `fiber::app::run`.
+Parses commands and selects client or daemon operations. It contains the diagnostic `lemma demo`
+command but no workspace runtime logic. `apps/lemma/main.cpp` only delegates to `lemma::app::run`.
 
 ### Client — `src/client/`
 
@@ -110,7 +110,7 @@ limitations:
   implemented;
 - the client has no terminal replicas, checkpoint importer, event sequence, acknowledgement, or
   progressive history state;
-- `libghostty-vt` has no Fiber-exposed portable checkpoint export/import contract; and
+- `libghostty-vt` has no Lemma-exposed portable checkpoint export/import contract; and
 - daemon-to-client output is composed ANSI rather than the selected checkpoint/event protocol.
 
 The server-rendered runtime remains the process-tested migration baseline. The selected architecture

@@ -1,7 +1,7 @@
-#ifndef FIBER_CORE_CONNECTION_OUTPUT_HPP
-#define FIBER_CORE_CONNECTION_OUTPUT_HPP
+#ifndef LEMMA_CORE_CONNECTION_OUTPUT_HPP
+#define LEMMA_CORE_CONNECTION_OUTPUT_HPP
 
-#include "fiber/limits.hpp"
+#include "lemma/limits.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +15,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace fiber::core {
+namespace lemma::core {
 
 class ConnectionOutput final {
 public:
@@ -146,6 +146,6 @@ flush_connection_output(ConnectionOutput& output, std::size_t& global_budget,
   return output.busy() ? ConnectionFlushStatus::pending : ConnectionFlushStatus::drained;
 }
 
-} // namespace fiber::core
+} // namespace lemma::core
 
-#endif // FIBER_CORE_CONNECTION_OUTPUT_HPP
+#endif // LEMMA_CORE_CONNECTION_OUTPUT_HPP

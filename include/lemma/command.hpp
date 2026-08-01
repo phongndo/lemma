@@ -1,11 +1,11 @@
-#ifndef FIBER_COMMAND_HPP
-#define FIBER_COMMAND_HPP
+#ifndef LEMMA_COMMAND_HPP
+#define LEMMA_COMMAND_HPP
 
-#include "fiber/id.hpp"
+#include "lemma/id.hpp"
 
 #include <cstdint>
 
-namespace fiber {
+namespace lemma {
 
 inline constexpr std::uint16_t command_window_slots_max = 16;
 
@@ -90,6 +90,6 @@ private:
   void* context_{nullptr};
 };
 
-} // namespace fiber
+} // namespace lemma
 
-#endif // FIBER_COMMAND_HPP
+#endif // LEMMA_COMMAND_HPP

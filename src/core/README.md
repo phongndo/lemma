@@ -1,6 +1,6 @@
 # Core
 
-Home of Fiber's authoritative mux engine and dense state.
+Home of Lemma's authoritative mux engine and dense state.
 
 The current engine owns up to 64 named workspaces, 1,024 windows, and 4,096 panes in one reactor.
 Each workspace is bounded to 16 windows and 64 panes. Every pane owns one child process, PTY,
@@ -14,7 +14,7 @@ history scheduling, controller/permission policy, and semantic topology/UI distr
 only bounded event tails; a lagging client resets from a fresh checkpoint instead of blocking PTYs or
 creating an unbounded raw-output log.
 
-The public `fiber/command.hpp` model provides bounded command kinds, origins, generational-ID targets,
+The public `lemma/command.hpp` model provides bounded command kinds, origins, generational-ID targets,
 typed results, and a validating dispatcher. All client, CLI, extension, remote, and agent mutations
 converge on that executor. Client presentation hit testing emits stable targets; physical client
 rectangles never become core identities.

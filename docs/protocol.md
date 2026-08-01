@@ -1,4 +1,4 @@
-# Fiber local protocol
+# Lemma local protocol
 
 ## Status and scope
 
@@ -6,7 +6,7 @@ The current protocol is the bounded local wire format used by the runtime. Its i
 remains in `src/protocol/single_pane.*` for now so framing can be tested independently of sockets and
 terminal state. It is not yet the final generalized protocol and currently has no version
 negotiation; incompatible changes must therefore remain coordinated between the daemon and client.
-This process-named status revision uses the `fiber-v8-<uid>.sock` endpoint so it cannot attach to an
+This process-named status revision uses the `lemma-v8-<uid>.sock` endpoint so it cannot attach to an
 older daemon that does not reserve or refresh the status row correctly.
 
 All integers in the current format are unsigned big-endian. Current message type values are one
@@ -45,7 +45,7 @@ Every direction is framed. The reviewed production envelope must include or unam
 All frames, decoder storage, queued output, messages per turn, and aggregate per-client memory have
 explicit limits. Unknown required versions, kinds, enum values, IDs, sequence ranges, or capabilities
 produce typed errors or disconnect before partial state mutation. The protocol encoding is
-Fiber-owned and never copies Ghostty private structs or enum numbers onto the wire.
+Lemma-owned and never copies Ghostty private structs or enum numbers onto the wire.
 
 ### Terminal stream values
 
@@ -95,7 +95,7 @@ before its deadline, the client is disconnected without affecting pane or unrela
 
 Commands use the same semantic command values as built-in and Lua operations, with typed results and
 errors. Input preserves the order of bounded key, text, paste, focus, resize request, mouse, command,
-and detach values. Fiber-owned client chrome is hit-tested in the client and emits semantic commands
+and detach values. Lemma-owned client chrome is hit-tested in the client and emits semantic commands
 with stable targets. Application mouse input carries a validated `PaneId` and pane-local coordinates;
 the daemon validates and encodes it using canonical terminal modes.
 
@@ -166,7 +166,7 @@ to nonblocking live operation.
 
 Only the client sends framed messages. Daemon-to-client traffic is already encoded outer-terminal
 bytes and is deliberately unframed in the current protocol. Detach and pane/window command packets
-are translated into bounded `fiber::Command` values and validated by the shared dispatcher before
+are translated into bounded `lemma::Command` values and validated by the shared dispatcher before
 the engine applies them. Wire enums therefore do not double as authoritative core operations.
 
 ### Input
@@ -261,7 +261,7 @@ terminal VT parsing. The eventual configurable key-table system will replace thi
 
 ## Migration and validation requirements
 
-The generalized endpoint may coexist with `fiber-v8` only while the smart client is proven and the
+The generalized endpoint may coexist with `lemma-v8` only while the smart client is proven and the
 existing process suite is migrated. Peers must never silently speak one format to an endpoint
 expecting the other. After cutover, production attached output uses the checkpoint/event protocol and
 the old daemon ANSI endpoint is removed.

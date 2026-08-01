@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace fiber::render {
+namespace lemma::render {
 namespace {
 
 [[nodiscard]] auto make_terminal(const std::uint16_t columns, const std::uint16_t rows)
@@ -368,4 +368,4 @@ TEST(PaneCompositionTest, EnforcesPaneAndOutputBounds) {
 }
 
 } // namespace
-} // namespace fiber::render
+} // namespace lemma::render

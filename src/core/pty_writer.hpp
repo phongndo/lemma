@@ -1,12 +1,12 @@
-#ifndef FIBER_CORE_PTY_WRITER_HPP
-#define FIBER_CORE_PTY_WRITER_HPP
+#ifndef LEMMA_CORE_PTY_WRITER_HPP
+#define LEMMA_CORE_PTY_WRITER_HPP
 
 #include "core/input.hpp"
 
 #include <cstddef>
 #include <span>
 
-namespace fiber::core {
+namespace lemma::core {
 
 inline constexpr std::size_t pty_write_bytes_per_pane_turn_max = std::size_t{64} * 1'024U;
 inline constexpr std::size_t pty_write_attempts_per_pane_turn_max = 32;
@@ -32,6 +32,6 @@ enum class PtyFlushStatus : unsigned char {
                                          PtyWriteOperation write, void* context) noexcept
     -> PtyFlushStatus;
 
-} // namespace fiber::core
+} // namespace lemma::core
 
-#endif // FIBER_CORE_PTY_WRITER_HPP
+#endif // LEMMA_CORE_PTY_WRITER_HPP

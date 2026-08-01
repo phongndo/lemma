@@ -1,8 +1,8 @@
-# Fiber daily-driver contract
+# Lemma daily-driver contract
 
 ## Purpose
 
-Fiber must become an excellent day-to-day terminal multiplexer on one architecture used locally and
+Lemma must become an excellent day-to-day terminal multiplexer on one architecture used locally and
 remotely. SSH transport and reconnect correctness are validated with the replication foundation so
 local assumptions do not harden into the protocol; multiplayer, agents, and broad remote UX remain
 later differentiators. This document defines the quality gate. It is narrower than feature parity
@@ -32,12 +32,12 @@ bypass this gate to accumulate more surface area.
 
 ### Startup and session lifecycle
 
-- Plain `fiber` has a predictable zero-configuration behavior.
+- Plain `lemma` has a predictable zero-configuration behavior.
 - Named workspaces can be created, listed, attached, detached, renamed, and killed.
 - Client EOF, crash, terminal closure, or network loss does not end workspace processes.
 - Child exit, shell launch failure, capacity exhaustion, stale sockets, and incompatible clients
   produce actionable errors.
-- Detach, logout, daemon failure, and reboot guarantees are explicit and tested; Fiber does not imply
+- Detach, logout, daemon failure, and reboot guarantees are explicit and tested; Lemma does not imply
   process survival where the architecture cannot provide it.
 - Endpoint permissions and ownership prevent another local user from controlling a daemon.
 
@@ -75,7 +75,7 @@ operations are dependable.
   emits semantic commands with stable targets.
 - Application events carry a validated pane ID and pane-local cells and are encoded by the daemon
   according to canonical terminal mouse modes.
-- A configurable modifier overrides application mouse capture for Fiber interaction.
+- A configurable modifier overrides application mouse capture for Lemma interaction.
 - Focus reporting is forwarded only when requested by the focused application.
 - Client startup and every exit path restore raw mode, cursor state, alternate screen, paste, focus,
   keyboard, and mouse modes exactly.
@@ -108,7 +108,7 @@ operations are dependable.
 - Attach presents visible state before progressive history, and lag/reconnect recover through bounded
   resume or a fresh checkpoint without stopping PTYs.
 - Support alternate screen, synchronized updates, bracketed paste, focus events, hyperlinks, title
-  changes, and terminal queries without leaking pane modes into Fiber-owned chrome.
+  changes, and terminal queries without leaking pane modes into Lemma-owned chrome.
 - Ship or select truthful terminfo and `$TERM` behavior rather than advertising unsupported
   capabilities.
 - Client presentation composes replicas, separators, status, overlays, cursor, and terminal modes
@@ -126,12 +126,12 @@ operations are dependable.
   behavior are configurable through typed validated values.
 - Reload is transactional; blocked or crashed Lua cannot block input, PTY progress, rendering, or
   process lifetime.
-- `fiber --help` and generated command/binding references are sufficient to discover core operation.
+- `lemma --help` and generated command/binding references are sufficient to discover core operation.
 
 ### Installation and upgrades
 
 - Users install signed or checksummed macOS/Linux artifacts without compiling dependencies.
-- Version output identifies Fiber, protocol, build mode, and relevant private dependency revisions.
+- Version output identifies Lemma, protocol, build mode, and relevant private dependency revisions.
 - Client/daemon mismatches fail with an upgrade/restart instruction rather than wire corruption.
 - Upgrade notes identify configuration, protocol, state, or behavior changes.
 - Uninstall and daemon cleanup are documented and do not silently kill unexpected processes.
@@ -201,12 +201,12 @@ Release testing includes at least:
   outer terminals on each supported OS; and
 - local Unix sockets and the same checkpoint/event scenarios over SSH stdio.
 
-The matrix records known limitations by Fiber version. Passing one high-throughput benchmark does not
+The matrix records known limitations by Lemma version. Passing one high-throughput benchmark does not
 substitute for interaction correctness.
 
 ## Daily-driver exit gate
 
-Fiber can claim day-to-day readiness only when:
+Lemma can claim day-to-day readiness only when:
 
 1. the required local behavior above is implemented or an omission is deliberately removed from the
    release contract;
@@ -216,5 +216,5 @@ Fiber can claim day-to-day readiness only when:
 4. performance suites show no unexplained regressions against reviewed budgets;
 5. sanitizer, platform, stress, and soak suites pass;
 6. installation and upgrade paths are tested from release artifacts; and
-7. a focused external cohort uses Fiber as its primary multiplexer for at least 30 days, with reasons
+7. a focused external cohort uses Lemma as its primary multiplexer for at least 30 days, with reasons
    for returning to another tool tracked and triaged.

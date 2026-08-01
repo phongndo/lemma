@@ -1,4 +1,4 @@
-# Current Fiber capabilities
+# Current Lemma capabilities
 
 ## Audit basis
 
@@ -27,11 +27,11 @@ Status terms:
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Start and attach | Working | `fiber new [name]` ensures the daemon/workspace exists, then attaches. |
-| Start detached | Working | `fiber start [name]` creates a workspace and prints its listing. |
-| Attach/detach | Working | `fiber attach [name]`; `C-b d` detaches without ending pane processes. |
+| Start and attach | Working | `lemma new [name]` ensures the daemon/workspace exists, then attaches. |
+| Start detached | Working | `lemma start [name]` creates a workspace and prints its listing. |
+| Attach/detach | Working | `lemma attach [name]`; `C-b d` detaches without ending pane processes. |
 | List/control | Working | List all/one workspace, list windows, kill one workspace, or kill all workspaces. |
-| Default invocation | Partial | Plain `fiber` prints usage; it does not enter a default workspace. |
+| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default workspace. |
 | Help/version/errors | Partial | Usage exists, but there are no dedicated help/version commands and unknown commands return usage rather than a precise failing diagnostic. |
 | Per-user daemon | Working | Double-forked daemon, lock file, stale-socket validation, `0600` Unix socket, one listener. |
 | Daemon shutdown | Absent | Workspace kill commands remove workspaces; there is no explicit daemon shutdown/control command. |
@@ -95,11 +95,11 @@ The implemented hard limits derive to 64 panes per workspace and 64 panes in any
 | Bracketed paste | Partial | Escape bytes pass through, but paste is not represented as a boundary and the prefix parser does not have paste-specific routing or limits. |
 | Focus events | Partial | Focus mode is mirrored in rendered terminal state, but the client has no typed focus-event path. |
 | Application mouse input | Unsupported | Mouse modes may be mirrored from the focused app and raw bytes may happen to pass through, but coordinates are not pane-local and split-pane behavior is not correct. |
-| Fiber mouse operation | Absent | No typed mouse decoding, status/pane hit testing, selection, scrolling, or drag resizing. |
+| Lemma mouse operation | Absent | No typed mouse decoding, status/pane hit testing, selection, scrolling, or drag resizing. |
 | Copy/search/selection | Absent | No copy mode, scrollback viewport, search, selection model, or clipboard integration. |
 
 Raw mouse pass-through is not considered a working mouse feature because the core cannot distinguish
-Fiber chrome from pane content or translate outer coordinates into the focused pane.
+Lemma chrome from pane content or translate outer coordinates into the focused pane.
 
 ### Terminal emulation and rendering
 
@@ -114,8 +114,8 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 | Portable terminal checkpoint export/import | Absent | The adapter has no complete bounded wire checkpoint that a fresh client terminal can import and continue from. |
 | Smart client terminal replicas | Absent | The attached client owns no pane terminal state, sequence acknowledgements, history ranges, or resynchronization state. |
 | SSH checkpoint/event attachment | Absent | Remote transport and the generalized replication protocol are not implemented. |
-| Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=fiber`; Fiber ships no terminfo entry or explicit capability policy. |
-| Copy access to scrollback | Absent | Ghostty retains scrollback, but Fiber exposes no viewport/traversal/selection API. |
+| Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=lemma`; Lemma ships no terminfo entry or explicit capability policy. |
+| Copy access to scrollback | Absent | Ghostty retains scrollback, but Lemma exposes no viewport/traversal/selection API. |
 | Graphics protocols | Unspecified | No supported passthrough/rendering contract is documented for terminal graphics. |
 
 ### Lua configuration and extensions
@@ -126,7 +126,7 @@ Fiber chrome from pane content or translate outer coordinates into the focused p
 | Transactional registration | Working | Commands, keymaps, subscriptions, and sidebar declarations are bounded and atomically committed. |
 | Failure isolation/restart | Working | Registration IPC is nonblocking and deferred; disconnect clears the generation and schedules restart backoff. |
 | Configuration errors | Working | Retained in daemon state, shown by list operations, and reported to the system log. |
-| `fiber.setup` settings | Scaffold only | The function accepts a table but currently applies no settings. |
+| `lemma.setup` settings | Scaffold only | The function accepts a table but currently applies no settings. |
 | Command callbacks | Scaffold only | Lua callbacks are retained in the host but cannot be invoked by the daemon. |
 | Keymaps | Scaffold only | Registrations reach daemon state but do not affect attached input. |
 | Events/snapshots | Scaffold only | Subscription names register; no events or immutable snapshots are delivered. |
@@ -194,7 +194,7 @@ recorded.
 
 The derived order is now:
 
-1. Pass or stop the terminal-checkpoint feasibility gate: complete state inventory, Fiber-owned
+1. Pass or stop the terminal-checkpoint feasibility gate: complete state inventory, Lemma-owned
    export/import model, checkpoint-plus-tail equivalence, side-effect suppression, and measured
    bounds.
 2. Introduce authoritative workspace/pane/client IDs and the versioned checkpoint/event protocol.

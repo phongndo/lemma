@@ -1,4 +1,4 @@
-# Fiber documentation
+# Lemma documentation
 
 Start here:
 
