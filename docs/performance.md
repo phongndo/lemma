@@ -2,8 +2,7 @@
 
 Performance claims are measured rather than inferred from implementation language. Results below
 are from the same Apple Silicon development machine and release builds. They are local baselines,
-not universal rankings. They measure the current daemon-rendered ANSI architecture and remain
-migration comparisons; they do not predict the selected checkpoint/event smart-client path.
+not universal rankings. They measure the selected daemon-authoritative, server-rendered architecture.
 
 ## Renderer microbenchmarks
 
@@ -101,32 +100,54 @@ until checked-in adapters can reproduce the exact same workload and report binar
 This benchmark does not replace future sparse editor, mouse, multi-pane, slow-client,
 large-scrollback, memory, resize-storm, or soak measurements.
 
-## Replicated-terminal performance requirements
+## Checkpoint feasibility measurements
 
-The target architecture must report work on both sides rather than describing moved client work as
-eliminated. Its checked-in harnesses will measure:
+The archived checkpoint feasibility gate used a temporary 16 MiB-bounded reconstructive-VT prototype and
+release measurement executable. It was a negative feasibility artifact, not production code. The
+prototype and target were removed after the server-rendered decision; the retained results document
+the rejected option and are not a current benchmark command.
 
-- PTY-read-to-event availability, event-to-visible presentation, key-to-PTY, and key-to-visible
-  p50/p95/p99;
-- checkpoint encoded bytes, export/import time, peak temporary allocation, and attach-to-ready;
-- recent and complete scrollback hydration time/bytes;
-- acknowledged sequence lag, retained-tail bytes, lag detection, and forced-checkpoint recovery;
-- raw event bytes for sparse editor, full redraw, synchronized update, and warm-scroll workloads;
-- daemon and client CPU/wakeups/memory at 1, 4, 16, and maximum pane counts;
-- compatibility ANSI and native presentation costs over the same replica traces; and
-- the same core distributions over local Unix and shaped SSH transports.
+Apple Silicon release results on August 1, 2026 ranged from 5.7 KiB and 17.4–23.2 us export p50 for
+empty terminals to 98.4 KiB and 831.9 us for the 80x24 maximum-retained-history workload. Import p50
+ranged from 75.8 to 279.7 us. A 240x80 shell-like state encoded 29.9 KiB, exported in 175.3 us p50,
+and imported in 123.7 us p50. Zstd level 1 reduced the highly repetitive synthetic payloads to
+1.0–2.1 KiB, which supports measuring large-state compression but says nothing about tiny
+interactive frames.
 
-Checkpoint plus event tail is the only target synchronization algorithm. Normal operation does not
-wait for daemon ANSI composition. Output/history/checkpoint queues and scheduling remain bounded; a
-lagging client resets from a fresh checkpoint instead of retaining an unbounded raw stream. Large
-checkpoint/history/output compression is selected only by measured bytes/latency/CPU evidence.
+The benchmark also exposed a disqualifying scaling property: the formatter places all retained
+active-screen history on the ready path, and no range hydration API exists. More importantly, tests
+prove that the measured payload cannot continue incomplete CSI/UTF-8 state or restore an inactive
+primary screen. Full tables, bounds, and interpretation are in
+[`terminal-checkpoint-feasibility.md`](terminal-checkpoint-feasibility.md).
 
-No target performance claim is accepted until the checkpoint feasibility phase measures export,
-import, size, and continuation costs. A native-performance claim additionally requires a native
-presentation path; moving the existing ANSI compositor into a smart client proves architecture but
-not the final key-to-pixel advantage.
+## Server-rendered performance requirements
 
-## Current server-rendered performance invariants
+The production harnesses measure the complete daemon/client path rather than treating daemon work as
+free. Required distributions include:
+
+- PTY-read-to-frame, key-to-PTY, key-to-visible, and attach-to-visible p50/p95/p99;
+- full-redraw generation and recovery after client backpressure;
+- bytes for sparse editor, full redraw, synchronized update, and warm-scroll workloads;
+- copy/search/mouse interaction latency and large retained-history traversal;
+- daemon and thin-client CPU, wakeups, and memory at 1, 4, 16, and maximum pane counts;
+- blocked clients, blocked PTYs, resize storms, inactive windows, and extension-host failures;
+- JSON and persistent-agent command, snapshot, launch, capture, wait, cancel, and event latency/bytes
+  under concurrent PTY/render load; and
+- the same core observations during ordinary SSH operation where the transport permits measurement.
+
+Relative performance claims require checked-in adapters and identical completion semantics for pinned
+tmux, Zellij, Herdr, and Lemma versions. Lemma may claim a workload-specific measured advantage, not
+an unsupported universal “fastest multiplexer” label.
+
+Only bounded complete frames are queued. New output while a frame is blocked remains represented by
+canonical damage rather than an output log. After progress resumes, one full redraw repairs the
+presentation; a client that misses its deadline disconnects. Compression is considered only for
+measured large framed values and never assumed beneficial for interactive ANSI.
+
+Native performance is not a 1.0 claim. A later native presentation path receives replaceable
+presentation snapshots/deltas and requires its own end-to-end evidence.
+
+## Server-rendered performance invariants
 
 - PTY parsing never waits for a steady-state client write.
 - A reactor turn reads at most 256 KiB from the PTY.
@@ -139,9 +160,9 @@ not the final key-to-pixel advantage.
 - No general allocation occurs while encoding an ANSI damage frame.
 - The reactor reads extension IPC only after ready PTYs, client input, and due frames.
 - Extension IPC has fixed frame, decoder, message-batch, registration, and UI bounds.
-- The daemon never synchronously waits for Lua, and host disconnect clears extension state without
-  stopping pane processes.
+- The daemon never synchronously waits for Lua or automation clients; host/client disconnect clears
+  their bounded subscriptions without stopping pane processes.
 
-These invariants remain required until production cutover. After cutover, equivalent bounds apply to
-pane event sequencing, checkpoint/history work, protocol writes, replica application, and client
-presentation; obsolete daemon frame scheduling is removed rather than preserved beside the new path.
+These invariants are permanent production requirements. The versioned protocol must preserve them
+while adding complete render-frame boundaries, full-redraw epochs, progress deadlines, and precise
+mismatch/error behavior.

@@ -32,8 +32,11 @@ inline constexpr std::size_t terminal_allocation_bytes_hard_max =
     std::size_t{1} * 1'024U * 1'024U * 1'024U;
 inline constexpr std::uint16_t terminal_columns_hard_max = 1'000;
 inline constexpr std::uint16_t terminal_rows_hard_max = 1'000;
-inline constexpr std::size_t terminal_scrollback_rows_default = 10'000;
-inline constexpr std::size_t terminal_scrollback_rows_hard_max = 1'000'000;
+// The pinned Ghostty implementation interprets max_scrollback as bytes despite its C header naming
+// lines. Its page allocator bypasses QuotaAllocator, so keep this independent exposure bounded.
+inline constexpr std::size_t terminal_scrollback_bytes_default = 10'000;
+inline constexpr std::size_t terminal_scrollback_bytes_hard_max = 1'000'000;
+static_assert(terminal_scrollback_bytes_hard_max <= terminal_allocation_bytes_default);
 
 } // namespace lemma::limits
 

@@ -21,11 +21,10 @@ apps/lemma/main.cpp
                    +------> renderer / platform / protocol
 ```
 
-There is no temporary demo component or `app -> demo` dependency. This diagram describes current
-implementation, not the selected target ownership: the checkpointed architecture adds client-owned
-terminal replicas and moves presentation behind the smart client. Migration must build on the core,
-client, daemon, protocol, terminal, and render boundaries rather than recreate a vertical-slice
-monolith.
+There is no temporary demo component or `app -> demo` dependency. This diagram is also the selected
+production ownership direction: the daemon remains authoritative for terminals and presentation,
+while the client remains a thin input/output and outer-terminal-lifecycle process. Build-out must use
+these component boundaries rather than recreate a vertical-slice monolith.
 
 ## Current ownership
 
@@ -106,48 +105,32 @@ limitations:
 - windows have numeric slots but no user-defined names or interactive rename prompt;
 - windows cannot be linked across workspaces;
 - pane ratios are fixed at equal halves and cannot yet be resized interactively;
-- alternate tmux layouts, pane-number overlays, and per-client physical state are not yet
+- alternate layouts, pane-number overlays, and independent per-attachment view state are not yet
   implemented;
-- the client has no terminal replicas, checkpoint importer, event sequence, acknowledgement, or
-  progressive history state;
-- `libghostty-vt` has no Lemma-exposed portable checkpoint export/import contract; and
-- daemon-to-client output is composed ANSI rather than the selected checkpoint/event protocol.
+- daemon output remains unframed ANSI without version negotiation or redraw epochs;
+- typed paste/focus/mouse input and signal-complete client restoration are incomplete; and
+- copy/search/selection has no daemon-owned attachment model.
 
-The server-rendered runtime remains the process-tested migration baseline. The selected architecture
-changes attached-output and presentation ownership deliberately; it does not justify dissolving the
-existing subsystem boundaries or weakening P0 invariants.
+The server-rendered runtime is the production foundation rather than migration scaffolding. Build-out
+must preserve its subsystem boundaries and P0 invariants.
 
-## Migration sequence
-
-1. Pass or stop [`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md):
-   complete state inventory, portable export/import, checkpoint-plus-tail equivalence, side-effect
-   suppression, progressive-history model, and resource evidence.
-2. Move workspaces, panes, and clients into authoritative generational stores.
-3. Add the bounded versioned topology/checkpoint/event/input protocol with explicit sequence and
-   resynchronization semantics.
-4. Build a one-pane smart client with a replica terminal and the existing ANSI presentation backend.
-5. Add bounded acknowledgement, reconnect, forced fresh-checkpoint recovery, and history hydration.
-6. Replicate logical topology and move multi-pane composition/status/overlays into the client.
-7. Prove the same application protocol over SSH stdio under shaped links.
-8. Cut over production attachment and remove daemon-to-attached-client composed ANSI.
-9. Continue typed input, native presentation, mouse, copy/search/selection, and programmability on
-   that single architecture.
+Future implementation priorities are tracked only in [`../TODO.md`](../TODO.md), with outcome and
+release guidance in [`roadmap.md`](roadmap.md).
 
 The isolated Lua host, transactional registrations, and typed commands remain valid foundation.
 Existing attached-client pane/window actions, detach, and CLI workspace stops already pass through
-one validating dispatcher. Later extension callbacks and retained UI models must integrate after the
-replication foundation; declarative UI is distributed to clients rather than synchronously rendered
-by Lua or the daemon.
+one validating dispatcher. Later extension callbacks and retained UI models integrate after ready
+PTY, input, and rendering work; Lua is never called synchronously while composing a frame.
 
 ## Rules for contributors and agents
 
-- Keep canonical terminal state in the daemon and expendable replica/view state in smart clients;
-  never treat a replica as authority.
+- Keep canonical terminal, attachment view, layout, and presentation state in the daemon.
+- Keep clients thin: physical input decode, transport, outer-terminal writes, and restoration only.
 - Never move socket naming, locks, or daemonization into the core.
-- Never expose Ghostty headers or private checkpoint layout outside the terminal adapter.
-- Do not let client lag, checkpoint/history work, presentation, or extensions block PTY progress.
+- Never expose Ghostty headers or private layouts outside the terminal adapter.
+- Do not let client lag, presentation, history interaction, or extensions block PTY progress.
 - Preserve bounds when generalizing a single object into an arena.
 - Add state transitions through typed commands instead of direct cross-component mutation.
-- Keep checkpoint feasibility, ID migration, protocol introduction, renderer relocation, and feature
-  behavior in reviewable tested steps.
+- Keep ID migration, protocol introduction, render framing, typed input, and feature behavior in
+  reviewable tested steps.
 - Update this document when ownership or a runtime invariant changes.

@@ -14,14 +14,13 @@ compose into their own workflows.
 
 - **Reliable by construction:** one authoritative daemon owns session state; queues, payloads, and
   event-loop work are bounded; client and extension failures do not end pane processes.
-- **Fast by measurement:** C++23 owns PTYs and authoritative terminal state; the target smart-client
-  architecture attaches from bounded `libghostty-vt` checkpoints, applies ordered pane events, and
-  renders locally instead of waiting for daemon ANSI composition.
+- **Fast by measurement:** C++23 owns PTYs, canonical terminal state, layout, and bounded ANSI damage
+  composition; slow clients never block PTY progress and optimizations require end-to-end evidence.
 - **Keyboard-complete and mouse-native:** keyboard and mouse are first-class input methods that
   converge on the same commands, layout, and terminal state instead of separate feature paths.
-- **Programmable:** Lua 5.5 configuration and an isolated extension host build on the same typed
-  command model used by built-in keys and CLI operations. Remote and agent access are planned on
-  that semantic foundation.
+- **Programmable and agent-friendly:** one typed semantic model serves built-in keys, mouse, Lua 5.5,
+  JSON, a same-user automation socket, and AI agents. Lemma aims for a Pi-like product shape: a small
+  high-performance kernel, a complete tmux-like standard layer, and replaceable workflow packages.
 - **Yours to operate:** Lemma runs as a per-user daemon, keeps working when clients detach, and is
   distributed under the permissive MIT license.
 
@@ -30,16 +29,18 @@ each with up to 16 generationally identified windows and 64 panes distributed ac
 supports start, attach, detach, list, window-list, and kill commands, plus release-enabled invariant
 assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
 adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
-queues, and enforces a quota-tracked allocator. Lua command callbacks, replicated smart clients, remote access, agent APIs, and durability across
-daemon restarts remain roadmap work. The current daemon-rendered ANSI path is a tested migration
-baseline, not the target attached-output protocol. See
+queues, and enforces a quota-tracked allocator. Lua command callbacks, first-class mouse/copy UX,
+remote release validation, agent APIs, and durability across daemon restarts remain roadmap work. The
+daemon-rendered ANSI path is the selected production architecture through 1.0. A checkpoint
+feasibility gate proved that client terminal replication was not viable with the pinned Ghostty API;
+the completed architecture review retained one authoritative daemon and thin clients. See
 [`docs/architecture.md`](docs/architecture.md) for the ownership model and system invariants,
 [`docs/product-contract.md`](docs/product-contract.md) for committed direction versus open product
 questions, [`docs/current-capabilities.md`](docs/current-capabilities.md) for the audited present
 state, [`docs/roadmap.md`](docs/roadmap.md) for milestone and release gates,
 [`docs/daily-driver-contract.md`](docs/daily-driver-contract.md) for the local mux quality bar, and
 [`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer results. The
-ordered implementation checklist is tracked in [`TODO.md`](TODO.md).
+mutable execution backlog and current focus are tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
 
@@ -102,11 +103,11 @@ commands.
 
 ## Architecture
 
-Lemma is being built as a bounded, data-oriented authoritative daemon plus smart clients. The target
-uses one checkpoint-and-ordered-event protocol locally and over SSH: the daemon owns process, PTY,
-topology, and canonical terminal truth; clients own expendable terminal replicas and presentation.
-The current server-side ANSI compositor will migrate into the smart compatibility client before the
-old attached-output path is removed. See [`docs/product-contract.md`](docs/product-contract.md) for
+Lemma is a bounded, data-oriented authoritative daemon plus thin terminal clients. The daemon owns
+processes, PTYs, topology, canonical terminal truth, per-attachment view state, and ANSI composition;
+clients decode physical input, write bounded render frames, and restore the outer terminal. Attach
+and recovery rebuild visible state from daemon authority without terminal checkpoints. See
+[`docs/product-contract.md`](docs/product-contract.md) for
 agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target design,
 [`docs/protocol.md`](docs/protocol.md) for current and target wire contracts, and
 [`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership and limitations.

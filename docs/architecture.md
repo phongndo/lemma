@@ -1,120 +1,122 @@
 # Lemma architecture
 
-This document defines Lemma's intended architecture. It is a contract for contributors and coding
-agents, not a claim that every component already exists. The current executable is the bounded,
-server-rendered workspace/window and split-pane runtime documented in
-[`single-pane-runtime.md`](single-pane-runtime.md) and audited in
-[`current-capabilities.md`](current-capabilities.md). That output path is transitional while Lemma
-moves to the checkpointed terminal-replication architecture below.
+## Decision
+
+Lemma is an authoritative, server-rendered terminal multiplexer. One per-user daemon owns every PTY,
+canonical terminal, mux mutation, attachment view, and presentation decision. Thin clients decode
+physical input, exchange bounded typed messages with the daemon, write daemon-produced ANSI frames,
+and restore their outer terminal exactly.
+
+This is the production direction through 1.0. Lemma does not require client terminal replicas,
+portable terminal checkpoints, or client-side VT parsing. The retained
+[`terminal-checkpoint-feasibility.md`](terminal-checkpoint-feasibility.md) evidence proves that the
+pinned Ghostty API cannot support deterministic checkpoint continuation, so the smart-replica design
+was rejected in favor of server-rendered authority.
+
+The current implementation already follows the essential ownership model. Its unversioned protocol,
+input surface, daily-driver UX, configuration integration, remote validation, and release engineering
+remain incomplete; implemented behavior is audited in
+[`current-capabilities.md`](current-capabilities.md).
 
 ## Product goal
 
-Lemma is an open-source, self-hosted terminal multiplexer built like infrastructure. It provides
-fast, reliable, programmable sessions through a bounded, data-oriented authoritative daemon and
-smart clients that use the same protocol locally and remotely. People, scripts, remote clients, and
-coding agents operate one semantic model without making a hosted service part of the runtime
-contract.
-
-The daemon and each smart client form a replicated terminal system:
+Lemma is an open-source, self-hosted terminal multiplexer built like infrastructure: fast, reliable,
+and programmable without a hosted service. People, scripts, remote shells, Lua extensions, and AI
+agents operate one semantic command model while the latency-sensitive PTY and rendering path
+remains bounded and independently operable.
 
 ```text
-                                      +--> smart client terminal replicas --> presentation
-PTY --> ordered terminal events ------+--> smart client terminal replicas --> presentation
-  |                                   +--> smart client terminal replicas --> presentation
-  +--> authoritative libghostty state --> checkpoints / scrollback / effects / input modes
+                                 typed commands / input
+thin terminal client --------------------------------------------+
+       ^                                                         |
+       | bounded ANSI frames / effects                           v
+       +---------------------- daemon reactor and core engine ----+
+                                      |       |          |
+                                      |       |          +--> isolated Lua host
+                                      |       +--> layout / compositor
+                                      +--> PTYs / canonical Ghostty terminals
 ```
 
-A client attaches from a bounded terminal checkpoint at sequence `N`, becomes ready, and then applies
-the ordered terminal events after `N`. A checkpoint plus its event tail is the single synchronization
-mechanism for local attachment, SSH attachment, reconnection, and lag recovery. The daemon does not
-maintain a second long-term ANSI streaming protocol. An ANSI compatibility client consumes the same
-replication protocol and renders its local replicas into an existing outer terminal; a native client
-renders them directly.
+The architecture is a modular monolith around one daemon reactor, not a collection of services:
 
-The implementation remains a **modular monolith** on each side of the process boundary:
-
-- one daemon process owns authoritative mux, process, PTY, topology, and canonical terminal state;
-- each client exclusively owns its replica terminals and local presentation state;
-- one engine coordinates authoritative state transitions and bounded I/O;
+- one daemon process owns authoritative mux, process, terminal, attachment, and render state;
+- one engine coordinates state transitions and bounded I/O;
 - hot data remains dense and locally owned;
-- subsystems have explicit dependency boundaries;
-- extensions communicate through commands, events, immutable values, and declarative UI models;
-- components are not independent services and do not require virtual interfaces.
-
-Agreed product decisions are recorded in [`product-contract.md`](product-contract.md), protocol
-semantics in [`protocol.md`](protocol.md), and the migration sequence in
-[`roadmap.md`](roadmap.md).
+- subsystem dependencies are explicit and acyclic; and
+- extensions communicate through commands, immutable values, events, and declarative UI models.
 
 ## Non-negotiable invariants
 
 1. Every mutable object has exactly one owner.
-2. Every queue, checkpoint, event chunk, history batch, payload, and decoder has explicit bounds.
-3. Every event-loop stage has a work bound.
-4. A client or extension can never block PTY progress.
-5. Generational IDs are validated at trust boundaries.
-6. State transitions are explicit and exhaustive.
-7. Each pane's terminal events have one total order, including output, resize, reset, and exit.
-8. A checkpoint at sequence `N` plus all events after `N` reconstructs the same observable terminal
-   state as the authoritative daemon.
-9. Only the authoritative daemon generates PTY responses and mode-dependent application input.
-10. Client lag is repaired by a bounded reset/checkpoint transition, never unbounded event retention.
-11. Steady-state hot paths avoid the general heap.
-12. Nondeterminism is isolated so authoritative event-loop executions can be replayed.
-13. Capacity exhaustion is a normal, observable, tested result.
-14. Foreign-library types and private memory layouts never cross their adapter or wire boundaries.
-15. Extension code never executes inside PTY parsing, event sequencing, client synchronization, or
-    rendering.
+2. Every queue, frame, decoder, payload, batch, allocation, and per-turn loop has an explicit bound.
+3. A client or extension can never block PTY progress or end pane processes by failing.
+4. Generational IDs are validated at every trust boundary.
+5. State transitions are explicit and exhaustive.
+6. PTY output, terminal responses, and accepted application input preserve their required order.
+7. Only the daemon parses PTY output, generates PTY responses, and encodes mode-dependent input.
+8. Attach, window changes, resize, and presentation recovery reconstruct visible state from canonical
+   daemon state; no replay log is required for correctness.
+9. Client lag is repaired by a bounded full redraw or disconnect, never an unbounded output queue.
+10. Steady-state terminal parsing and damage rendering avoid the general heap.
+11. Nondeterminism is isolated so authoritative engine traces can be reproduced.
+12. Capacity exhaustion is a normal, observable, tested result.
+13. Foreign-library types and private layouts never cross their adapter boundary.
+14. Extension code never executes in PTY parsing, input ordering, rendering, or descriptor progress.
+15. Every outer-terminal mode enabled by a client has a complete restoration path.
 
-Malformed external input is rejected without damaging state. Internal invariant violations use
-release-enabled assertions and terminate rather than continuing with corrupt state.
+Malformed external input is rejected without partial authoritative mutation. Internal invariant
+violations use release-enabled assertions and terminate rather than continuing with corrupt state.
 
-## Authoritative and replica state
+## Ownership
 
-The daemon owns the truth:
+### Daemon authority
 
-- workspace, window, pane, and client identities;
-- process and PTY lifetime;
-- logical split topology, focus, zoom, ratios, and active-window state;
-- canonical terminal dimensions and ordered resize decisions;
-- one canonical `libghostty-vt` terminal and scrollback history per pane;
-- terminal event sequence allocation;
-- terminal-generated PTY responses and mode-dependent input encoding;
-- permissions, controller selection, command results, and extension state.
+The daemon owns:
 
-A smart client owns expendable replicas and presentation:
+- workspace, window, pane, connection, and attachment identities;
+- child-process and PTY lifetime;
+- logical split topology, resolved presentation rectangles, focus, zoom, ratios, and active windows;
+- canonical terminal dimensions, Ghostty state, scrollback, effects, and input modes;
+- per-attachment prefix state, viewport, copy/search/selection state, and presentation cache;
+- command validation, application-input encoding, and terminal-generated PTY responses;
+- bounded ANSI frame construction, queueing, redraw state, and lag policy;
+- extension registrations, validated retained UI models, and configuration generations; and
+- permissions and controller policy if multiple attachments are added later.
 
-- one imported terminal replica per presented pane;
-- acknowledged sequence and synchronization state per pane;
-- viewport, selection, search, follow-output, and local clipboard state;
-- physical rectangles, native windows/tabs/splits, status, borders, overlays, and raster state;
-- local keyboard/mouse decoding and Lemma-owned chrome hit testing;
-- outer-terminal modes and restoration when using the ANSI presentation backend.
+The current one-client-per-workspace rule keeps dimension and presentation ownership unambiguous.
+Future viewers require separate daemon-owned attachment state and an explicit controlling client;
+they do not require terminal replicas.
 
-Replica state may be discarded at any time and reconstructed from a newer checkpoint. It is never an
-authority for process lifetime, topology mutation, terminal responses, or application input modes.
-Logical topology remains shared daemon state; physical presentation is client-owned.
+### Thin client
 
-One controlling client selects canonical PTY dimensions. Other clients render, clip, or pan that
-canonical grid until control is transferred explicitly. Two clients cannot independently resize one
-PTY while claiming identical terminal replicas.
+An attached client owns only expendable transport and outer-terminal state:
+
+- daemon connection and protocol decoder;
+- physical keyboard, paste, focus, resize, and mouse decoding;
+- local termios, signal integration, and enabled outer-terminal modes;
+- a bounded output queue while writing daemon-produced ANSI; and
+- exact cleanup on normal, failure, signal, disconnect, and partial-startup paths.
+
+A client does not own a terminal emulator, mux topology, command authority, or canonical scrollback.
+It can disappear at any time without affecting pane processes.
 
 ## Component map
 
 ```text
-apps/lemma/main -> app -----> client -----> protocol
-                    |           |  |          |
-                    |           |  +------> terminal adapter ---> third_party/ghostty
-                    |           +---------> renderer
-                    +------> daemon ---------> protocol
+apps/lemma/main -> app -----> client --------> protocol
+                    |           |                 |
+                    |           +------------> platform
+                    +------> daemon ----------> protocol
                                |
                                +----------> extension launcher
                                v
-                         core engine <----> terminal adapter ---> third_party/ghostty
-                               |
-                               +--------------> platform
+                         core engine <------> renderer
+                           |      |
+                           |      +----------> terminal adapter ---> third_party/ghostty
+                           +-----------------> platform
 
 extension host - - - versioned typed IPC - - - core engine
-client         - - checkpoint/event protocol - core engine
+client         - - - versioned attach IPC - - core engine
 ```
 
 Solid arrows mean “may depend on”; cycles are forbidden. Dashed lines are protocol communication,
@@ -122,307 +124,241 @@ not C++ target dependencies.
 
 ### Core — `src/core/`
 
-The core is the authoritative owner of mux behavior and hot daemon state. It contains the engine,
-dense generational stores, commands, events, bounded queues, work budgets, terminal sequence state,
-client synchronization state, and scheduling policy. Workspaces, windows, panes, clients, focus, and
-logical layouts are core data—not independently allocated services.
+The core is the sole authoritative mux owner. It contains dense generational stores, typed commands,
+bounded queues, scheduling policy, attachment state, and the daemon reactor. Workspaces, windows,
+panes, clients, focus, layouts, viewports, and copy state are core data—not independently allocated
+services.
 
-The core assigns pane event sequence numbers, applies the same events to canonical terminals, and
-retains only bounded data required by active writes and synchronization. It may orchestrate platform,
-terminal, protocol, and extension interfaces. It must not know about CLI syntax, Lua stack details,
-Unix socket naming conventions, client rendering algorithms, or Ghostty C types.
+The core may orchestrate platform, terminal, protocol, renderer, and extension interfaces. It must
+not know CLI syntax, Lua stack details, Unix socket naming conventions, or Ghostty C types.
 
 ### Terminal adapter — `src/terminal/`
 
-The adapter is Lemma's only boundary to `libghostty-vt`. It supports two explicit roles:
+The adapter is Lemma's only boundary to `libghostty-vt`. Every live pane has one daemon-owned
+terminal. The adapter:
 
-- an authoritative daemon terminal that parses PTY events, owns canonical scrollback, emits terminal
-  effects/responses, encodes application input, and exports checkpoints; and
-- a client replica terminal that imports checkpoints and applies ordered output/resize/reset events
-  while suppressing authoritative PTY responses and policy side effects.
+- parses PTY bytes and owns canonical screen/scrollback state;
+- exposes bounded Lemma-owned cells, damage, modes, title, cursor, and effects;
+- captures terminal-generated responses for the pane's ordered PTY write queue;
+- encodes application input from canonical modes; and
+- supports complete visible-state and damage formatting for the compositor.
 
-A checkpoint uses a bounded, versioned Lemma-owned encoding. It must not serialize private Ghostty
-structs or expose Ghostty values in Lemma protocol interfaces. Checkpoint import/export must include
-all state needed for deterministic continuation, including parser state at arbitrary PTY read
-boundaries. Scrollback may be transferred progressively after the visible checkpoint, but the client
-must know which history ranges are present.
-
-Only adapter implementation files may include Ghostty headers. The adapter does not own PTYs,
-processes, protocol sockets, topology, or presentation policy.
-
-The pinned library does not currently expose the complete portable checkpoint API required by this
-target. [`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md)
-is the mandatory feasibility gate before the replication protocol is frozen.
-
-### Platform — `src/platform/`
-
-Platform code wraps mechanisms Lemma actually uses: descriptor ownership, PTY creation and resizing,
-child processes, Unix sockets, SSH-stdio process plumbing, signals, clocks, polling, client raw
-terminal mode, and future native presentation mechanisms where required.
-
-This is a narrow portability seam, not a framework. Platform operations return explicit values and
-errors and do not mutate core or replica state themselves.
-
-### Protocol — `src/protocol/`
-
-The protocol component owns bounded messages between clients, the daemon, and the extension host:
-message schemas, encoding, incremental decoding, limits, versions, capabilities, and handshake rules.
-The generalized client protocol carries:
-
-- typed commands, results, errors, and immutable topology values;
-- terminal checkpoints and progressive history chunks;
-- ordered pane output, resize, reset, and exit events;
-- ready, acknowledgement, resume, reset, and resynchronization transitions; and
-- ordered key, text, paste, focus, mouse, resize-request, and detach input.
-
-The application protocol is transport-independent. Local Unix sockets and SSH stdio use the same
-message semantics and bounds. Protocol code does not open sockets, discover workspaces, dispatch
-commands, parse terminal bytes, or render surfaces. All lengths, enum values, versions, sequence
-positions, and IDs are validated before entering authoritative or replica state.
+It does not export production checkpoints and does not support a replica role. Ghostty headers,
+pointers, allocator identities, private enum values, and layouts never leave the implementation.
+The pinned Ghostty scrollback option is exposed as bytes because its implementation applies a byte
+limit despite the C header naming lines.
 
 ### Renderer — `src/render/`
 
-The target renderer is client-side. It transforms replica terminal damage plus logical topology and
-client-local view state into presentation output. Backends may encode a bounded ANSI frame for an
-existing outer terminal or render native surfaces directly; both consume the same replica and UI
-model.
+The renderer converts canonical terminal damage, topology, status, overlays, and per-attachment view
+state into bounded ANSI frames. It owns retained physical-frame state, clipping, separators, cursor,
+outer-terminal modes, full-redraw invalidation, and frame encoding. It performs no socket I/O and
+does not mutate topology or terminal state.
 
-The renderer owns physical rectangle resolution, clipping, borders/status/overlays, retained
-presentation state, and backend-specific output. It does not poll protocol descriptors, mutate
-shared topology, parse PTY bytes, generate terminal responses, or execute extensions.
+A later native renderer may consume bounded Lemma-owned presentation snapshots and deltas derived
+from canonical daemon state. Such values are replaceable presentation state—not VT input, parser
+state, or a second terminal authority. Native presentation is not a 1.0 requirement.
 
-The current daemon-side ANSI compositor remains a tested migration asset. During the cutover it moves
-behind the smart client and is then removed from the daemon attached-output path. A temporary second
-endpoint is allowed for migration tests; two permanent daemon output architectures are not.
+### Protocol — `src/protocol/`
 
-### Extension host — `src/extension/`
+The private production attach protocol is bounded and bidirectional. It carries hello/mismatch,
+attach/control, ordered physical input/commands, bounded ANSI render frames, full-redraw epochs, and
+typed client effects. It is version-coupled to the binary and is not the public automation API.
 
-One persistent Lua host process per daemon loads trusted user configuration and extensions. It may
-use normal user-level filesystem, network, process, and Lua-module capabilities without sharing the
-daemon's failure domain. It registers settings, declarative key bindings, commands, event
-subscriptions, and bounded UI components through a versioned, length-framed local socket.
+One shared semantic model separately defines stable IDs, actors, commands, results/errors,
+capabilities, snapshots, events, launch/capture/wait/cancel values, deadlines, cancellation, and
+request/idempotency identity. `--format=json`, the isolated Lua host, and a public versioned same-user
+automation socket bind to that model. AI agents use this semantic surface and never parse render
+frames or bypass the command dispatcher.
 
-Extensions receive stable IDs and immutable snapshots. They never receive pointers or references to
-core arenas, terminal internals, daemon PTYs, or daemon sockets. The daemon processes bounded host
-messages only in its deferred extension stage and never waits for Lua before PTY, input, or client
-synchronization progress. Retained validated status/sidebar models are sent to clients for rendering;
-Lua is not invoked during a presentation frame. A native C++ plugin ABI is explicitly out of scope.
+Protocol code owns schemas, encoding, incremental decoding, limits, and versions. It does not open
+sockets, dispatch commands, parse terminal bytes, hit-test layouts, or render frames.
 
-### Application — `src/app/` and `apps/lemma/`
+### Platform — `src/platform/`
 
-`apps/lemma/main.cpp` is a policy-free process bootstrap that immediately delegates to
-`lemma::app::run`. The application component parses arguments, selects control-client, attached-client,
-or daemon operations, and wires high-level components together. It owns no mux, terminal, or
-presentation state.
+Platform code wraps descriptor ownership, PTY/process creation, resize, Unix sockets, signals,
+clocks, polling, terminal modes, and subprocess plumbing. It returns explicit values and errors and
+does not mutate core state itself.
 
 ### Client — `src/client/`
 
-The target smart client owns the daemon connection, handshake, bounded replica stores, checkpoint
-import, terminal event application, acknowledgement state, client-local view state, input decoding,
-Lemma-owned chrome hit testing, presentation, and cleanup. It can disappear without affecting daemon
-processes or canonical state.
-
-The initial smart compatibility client may continue running inside an outer terminal and therefore
-owns raw-mode lifetime and exact restoration. A native client removes that outer-terminal layer but
-uses the same protocol and replica model. The current stateless byte-forwarding client is
-transitional and remains documented in [`single-pane-runtime.md`](single-pane-runtime.md).
+The client connects, negotiates, decodes physical input into bounded values, forwards typed protocol
+messages, writes ANSI frames, observes resize, and restores the outer terminal. Prefix/keymap policy
+may remain daemon-owned so built-in and configured bindings converge on the same command dispatcher.
+The client must not infer mux state from ANSI output.
 
 ### Daemon — `src/daemon/`
 
-The daemon component owns the per-user endpoint and lock, listener lifecycle, daemonization,
-endpoint security policy, shutdown coordination, transport bootstrap, and cleanup. It lends accepted
-connections to the single-owner core reactor. It does not own workspace state, canonical terminals,
-protocol decoding internals, or rendering.
+The daemon component owns endpoint naming, lock and listener lifecycle, daemonization, endpoint
+security, shutdown coordination, and transport bootstrap. It lends accepted connections to the core
+reactor; it does not own workspace or terminal state.
 
-## Terminal synchronization model
+### Extension host — `src/extension/`
 
-### Ordered pane events
+One persistent Lua host per daemon loads trusted user configuration. It registers settings, keymaps,
+commands, subscriptions, and declarative UI through bounded versioned IPC. C++ validates a complete
+candidate generation before atomically committing it. A blocked or crashed host cannot block the
+daemon, and the daemon restarts it with bounded backoff.
 
-Every pane has one monotonically increasing event sequence. The sequence includes all mutations a
-replica must apply in order:
+### Application — `src/app/` and `apps/lemma/`
 
-```text
-output(bytes)
-resize(columns, rows, cell pixels)
-reset(reason)
-exit(status, reason)
-```
+The application parses CLI arguments, selects control, attached-client, daemon, or extension-host
+roles, and wires components together. It owns no mux, terminal, or presentation state.
 
-Chunk boundaries are protocol/storage choices, not terminal semantic boundaries. Checkpoints must
-therefore preserve parser continuation state or be taken only through an equally rigorous proven
-mechanism; waiting indefinitely for a “safe” escape-sequence boundary is not acceptable.
+## Attachment and presentation protocol
 
 ### Attach
 
-A successful attach is an explicit transaction:
+A successful attachment is an explicit transaction:
 
-1. negotiate protocol, terminal-checkpoint, input, and presentation capabilities;
-2. resolve stable topology and pane IDs;
-3. fence each pane at an authoritative sequence;
-4. send topology plus bounded visible terminal checkpoints;
-5. send `ready` only when the client can present and accept input;
-6. send all subsequent ordered pane events; and
-7. hydrate recent-to-oldest scrollback in bounded low-priority chunks.
+1. negotiate daemon/client protocol versions and presentation/input capabilities;
+2. resolve the workspace and allocate bounded daemon-side attachment state;
+3. establish canonical dimensions and resize the active layout;
+4. invalidate the new attachment's retained presentation cache;
+5. generate and queue one complete visible ANSI frame; and
+6. enter bounded live input/render operation only after setup succeeds.
 
-New events that arrive while a checkpoint is encoded remain ordered after its fence. No output may be
-lost between the checkpoint and event tail.
+No terminal history replay or checkpoint is needed. The daemon can regenerate visible state at any
+time from its canonical terminals and topology.
 
-### Acknowledgement and lag recovery
+### Live output
 
-Each client reports the highest contiguous applied sequence per pane. Event and socket queues remain
-bounded. When a client exceeds its lag watermark, the daemon stops adding an unbounded tail, marks
-the replica for reset, and transitions it to a fresh checkpoint after already-transmitted framed data
-is handled according to the transport contract.
+PTY output is parsed once by the daemon. Damage accumulates in canonical terminal state. At a bounded
+coalescing deadline the daemon composes one frame from the latest state, queues it nonblockingly, and
+continues processing PTYs. Reliable stream order preserves accepted frames.
 
-The client applies reset/checkpoint atomically and resumes at the checkpoint's successor sequence.
-Missing scrollback is requested separately. If even bounded checkpoint progress cannot be made before
-a deadline, the daemon disconnects that client without affecting the pane.
+Only complete bounded frames enter the attachment queue. Once bytes from a frame have begun writing,
+that frame is completed or the connection is retired; it is never spliced with another frame.
 
-### Reconnection
+### Lag and redraw recovery
 
-A reconnecting client may request resume from a session identity and acknowledged sequences. The
-daemon resumes only if every required event remains available and all versions/capabilities still
-match; otherwise it sends a fresh topology/checkpoint state. Resume is an optimization, never the
-only correctness path.
+Each client has strict frame, byte, time, and per-turn budgets. While a frame is blocked, newer damage
+remains represented by canonical state rather than accumulating an output log. After the blocked
+frame completes, the renderer emits a full redraw from the latest state. A client that cannot make
+bounded progress before its deadline is disconnected without affecting its workspace.
+
+Reconnect always begins with a fresh full frame. Resume/delta replay is an optional optimization and
+is never required for correctness.
+
+### Remote operation
+
+The 1.0 baseline supports operation through an ordinary SSH terminal:
+
+```sh
+ssh -t host lemma
+```
+
+Remote machine-readable control uses ordinary SSH commands such as
+`ssh host lemma list --format=json`. A later `lemma connect HOST` may carry the same framed attach
+protocol over SSH stdio, but it keeps the daemon-rendered presentation model and is not a prerequisite
+for local daily-driver quality.
 
 ## Authoritative execution model
 
-A bounded daemon reactor turn proceeds conceptually in this order:
+A bounded daemon turn proceeds conceptually in this order:
 
-1. collect descriptor readiness and expired deadlines;
-2. read PTYs into reusable or pooled bounded chunks;
-3. assign ordered pane events and make eligible output chunks available to client synchronization;
-4. apply those events to canonical terminal adapters;
-5. drain authoritative terminal responses into PTY write queues;
-6. decode bounded client input, acknowledgements, and control messages;
-7. apply a bounded batch of typed commands after canonical state has reached the required input
-   order;
-8. prepare bounded checkpoints, history batches, and semantic topology/UI messages;
-9. flush bounded PTY and client protocol queues; and
-10. dispatch a bounded batch of deferred extension work.
+1. collect descriptor readiness and deadlines;
+2. read ready PTYs within per-pane and aggregate budgets;
+3. parse output into canonical terminals and collect terminal responses/effects;
+4. service queued PTY writes without reordering responses and accepted input;
+5. decode a bounded batch of client/control messages;
+6. validate and apply typed commands and input against current IDs, topology, and modes;
+7. build at most the bounded due presentation work;
+8. flush bounded client/control output; and
+9. process a bounded batch of deferred extension IPC.
 
-Exact implementation stages may combine work, but observable ordering may not change. In particular,
-client display does not wait for daemon ANSI composition, while mode-dependent input never overtakes
-canonical parsing of preceding output. Slow clients, checkpoint generation, history hydration, and
-extensions cannot monopolize a turn.
+Exact implementation stages may combine work, but a slow client, blocked PTY, output flood, or
+extension cannot monopolize a turn. Mode-dependent input cannot overtake preceding PTY output that
+changes that mode.
 
-## Input and presentation model
+## Input, mouse, and copy model
 
-Keyboard and mouse are first-class inputs to one semantic system. Clients decode input and preserve
-its order. Lemma-owned client presentation is hit-tested locally:
+Clients decode physical input but the daemon owns interpretation against mux state:
 
-- status, borders, tabs, overlays, selection, and split handles become typed commands with stable
-  targets;
-- application-directed mouse values carry a validated `PaneId` and pane-local coordinates; and
-- the authoritative daemon validates target, permission, bounds, and current topology before applying
-  a command or encoding application input through the canonical terminal modes.
+- equivalent keyboard and mouse mux actions dispatch the same typed command;
+- the daemon hit-tests status, separators, panes, overlays, and selection against its resolved layout;
+- application mouse events are translated to pane-local coordinates and encoded through the focused
+  canonical terminal's active mouse modes;
+- bracketed paste remains a bounded typed value and cannot become prefix commands;
+- focus is forwarded only when requested by the focused application; and
+- a configurable modifier overrides application mouse capture for Lemma interaction.
 
-Equivalent keyboard and mouse mux actions dispatch the same core command. A configurable modifier
-overrides application capture for Lemma interaction. Keyboard access remains complete.
+Viewport, copy cursor, search, selection, and follow-output state are per attachment but daemon-owned.
+Copy mode never pauses PTY parsing. The terminal adapter exposes bounded history and cell traversal to
+core copy operations; the renderer presents that view without mutating canonical terminal content.
+Clipboard and OSC 52 remain explicit policy boundaries.
 
-Viewport, scrolling, search, and selection are client-local replica operations. Clipboard and OSC 52
-remain explicit security boundaries. A compatibility client that enables outer-terminal keyboard,
-focus, paste, mouse, synchronized-update, or alternate-screen modes must restore them on every normal,
-error, signal, disconnect, and partial-startup path.
-
-## Extension boundary
-
-The extension contract remains command/event based:
+## Automation and extension boundary
 
 ```text
-extension --typed command request--> core
-extension <--immutable event value-- core
-extension --bounded declarative UI--> retained daemon model --> clients
+keyboard/mouse ----typed command-----------------------> core
+Lua/agent/JSON ----typed command request---------------> core
+Lua/agent/JSON <---result / immutable snapshot / event-- core
+Lua extension -----bounded declarative UI--------------> retained model --> renderer
 ```
 
-An extension may request an operation; the core validates IDs, permissions, payload bounds, and
-current state before applying it. Event delivery may be delayed or dropped according to a documented
-bounded policy, and loss is observable and repairable from a snapshot.
+Every supported human semantic mutation has an automation equivalent or documented exclusion.
+Agents can discover the schema/context, launch commands, mutate topology, send typed input, capture
+bounded terminal content, wait for output/exit, inspect results, and cancel work without screen
+scraping. Provider-specific agent status and orchestration remain extensions rather than core types.
 
-Extensions must not:
-
-- retain internal pointers;
-- directly mutate layouts, terminal streams, or replica state;
-- access daemon-owned PTY or socket descriptors;
-- invoke terminal parsing, checkpointing, synchronization, or rendering;
-- make the daemon or client synchronously wait for extension work; or
-- return unbounded strings, tables, surfaces, or event batches.
-
-Trusted Lua may open its own files, sockets, and child processes. If it blocks or crashes, only the
-extension host is affected; cached validated state and bounded queues preserve mux progress.
+Extensions and automation clients never receive internal pointers, descriptors, Ghostty values, or
+mutable arenas. Event/output subscriptions are bounded; loss is observable and repairable from a
+snapshot or bounded canonical capture. The daemon never waits synchronously for Lua or an agent
+before PTY, input, or rendering work.
 
 ## Data and performance policy
 
-Prefer dense arrays, generational IDs, bitsets, fixed-capacity queues, pooled immutable output slabs,
-and value types over shared ownership. Avoid virtual dispatch in per-byte and per-cell loops. Share
-one bounded PTY output chunk across eligible client queues rather than copying it once per client.
+Prefer dense arrays, generational IDs, bitsets, fixed-capacity queues, retained buffers, and value
+types over shared ownership. Avoid virtual dispatch in per-byte and per-cell loops. Do not retain raw
+PTY output after canonical parsing merely for possible clients; explicit observation buffers are
+bounded, sequenced, report gaps, and are never required for terminal correctness.
 
-The primary native path is checkpoint plus raw ordered events, not daemon-generated cell diffs. A
-lagging client recovers from a newer checkpoint instead of forcing indefinite raw replay. Large
-checkpoints, history, and sustained output may use negotiated bounded compression; small interactive
-messages are not compressed without measurement.
-
-Optimization follows end-to-end evidence. Required measurements include key-to-PTY, key-to-visible
-presentation, raw event bytes, checkpoint size/time, attach-to-ready, scrollback hydration, client
-lag/resynchronization, server/client CPU, and memory across local Unix and shaped SSH transports.
-The current server-rendered benchmarks remain migration baselines, not evidence that the target path
-is faster.
+Required end-to-end measurements include key-to-PTY, key-to-visible, attach-to-visible, sparse editor,
+full redraw, high scroll, resize storms, copy/search/mouse interaction, blocked clients, agent command/
+capture/wait latency, idle CPU, wakeups, bytes, and memory at representative pane counts. Comparable
+workloads use pinned tmux, Zellij, Herdr, and Lemma versions before any relative performance claim.
+Remote measurements are labeled by SSH, terminal, latency, and bandwidth conditions.
 
 ## Build boundaries
 
-The internal targets evolve toward:
+The internal targets remain:
 
 - `lemma_base`: assertions and dependency-free foundations;
-- `lemma_terminal`: the sole Ghostty adapter for authoritative and replica roles;
-- `lemma_platform`: operating-system and presentation mechanisms;
-- `lemma_protocol`: bounded control, checkpoint, event, history, input, and extension framing;
-- `lemma_render`: client presentation backends, including the migrated ANSI compositor;
-- `lemma_core`: authoritative stores, sequencing, synchronization, commands, and reactor policy;
-- `lemma_extension`: full Lua configuration and the isolated extension-host process;
-- `lemma_daemon`: per-user transport lifecycle and bootstrap;
-- `lemma_client`: smart replica lifecycle, input, view state, and presentation coordination;
-- `lemma_app`: application parsing and composition;
-- `lemma`: the thin bootstrap at `apps/lemma/main.cpp`.
+- `lemma_terminal`: the sole authoritative Ghostty adapter;
+- `lemma_platform`: operating-system mechanisms;
+- `lemma_protocol`: private attach plus public semantic automation and extension framing;
+- `lemma_render`: daemon-owned ANSI composition and future presentation values;
+- `lemma_core`: authoritative stores, commands, attachment/view state, and reactor policy;
+- `lemma_extension`: Lua configuration and isolated host process;
+- `lemma_daemon`: per-user endpoint lifecycle;
+- `lemma_client`: thin transport/input/output and outer-terminal lifecycle;
+- `lemma_app`: CLI parsing and process-role composition; and
+- `lemma`: the bootstrap in `apps/lemma/main.cpp`.
 
-Targets remain cohesive rather than becoming one target per class. Ghostty headers and types must not
-escape `lemma_terminal`, and checkpoint wire values remain Lemma-owned even though both daemon and
-client link the private terminal dependency.
-
-## Migration rules
-
-- Finish and preserve the P0 server-rendered baseline before changing protocol semantics.
-- Pass the terminal-checkpoint feasibility gate before freezing generalized output messages.
-- Introduce authoritative IDs before checkpoint/event messages depend on pane identity.
-- A temporary versioned endpoint may coexist with `lemma-v8` for tests and cutover only.
-- First prove one-pane checkpoint plus event-tail equivalence, then lag recovery, then multi-pane
-  client composition, then SSH transport.
-- Move the existing ANSI compositor to the smart client before deleting daemon ANSI output.
-- Do not maintain raw replication, cell-delta replication, and daemon ANSI as permanent modes.
-- Keep structural moves separate from behavior changes where tests can distinguish them.
+Targets remain cohesive rather than becoming one target per class.
 
 ## Source placement rules
 
 - A directory represents a subsystem or ownership boundary, not a class.
-- Keep private headers beside their implementation under `src/`.
-- Put a header under `include/lemma/` only when it is a deliberate cross-component or public API.
-- Do not add empty speculative source files. Component READMEs define destinations until code is
-  extracted.
-- New code follows the dependency direction above; transitional coupling must be documented.
+- Keep private headers beside implementations under `src/`.
+- Put headers under `include/lemma/` only for deliberate cross-component or public APIs.
+- Do not add empty speculative source files.
+- Keep structural moves separate from behavior changes where tests can distinguish them.
 - Update [`single-pane-runtime.md`](single-pane-runtime.md) and
-  [`current-capabilities.md`](current-capabilities.md) only as implemented ownership changes.
+  [`current-capabilities.md`](current-capabilities.md) only when implemented ownership changes.
 
-## Architectural test questions
+## Architectural review questions
 
 Before accepting a change, ask:
 
-1. Who owns every new authoritative and replica value?
-2. What bounds every queue, checkpoint, event tail, history batch, payload, loop, and allocation?
-3. What pane sequence orders this mutation?
-4. Can checkpoint `N` plus its tail be proven equivalent to uninterrupted parsing?
-5. Can a slow or malicious client delay PTY, input, or unrelated synchronization progress?
-6. Can a client replica accidentally generate a PTY response or authoritative side effect?
-7. Does a Ghostty/private type or memory layout escape its adapter?
-8. Is presentation-local state being confused with shared topology or process state?
-9. Can the operation be represented as a typed command, immutable event, or terminal-stream event?
-10. How will correctness, resynchronization, capacity exhaustion, local performance, and shaped-remote
-    performance be tested?
+1. Who owns every new mutable value?
+2. What bounds every queue, frame, decoder, payload, loop, and allocation?
+3. Can this client, PTY, or extension delay unrelated PTY progress?
+4. Can visible state be rebuilt from daemon authority without an unbounded log?
+5. Does a stable generational ID identify every explicit target?
+6. Does any Ghostty type or private layout escape its adapter?
+7. Do keyboard, mouse, CLI, Lua, scripts, and AI agents converge on one typed command?
+8. Can outer-terminal state be restored after every exit and partial-startup path?
+9. How are malformed input, capacity exhaustion, backpressure, and recovery tested?
+10. Which end-to-end latency, bytes, memory, or soak evidence validates the change?

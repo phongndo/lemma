@@ -2,24 +2,29 @@
 
 Home of Lemma's only boundary to `libghostty-vt`.
 
-The target adapter supports two explicit roles:
+Every live pane has one authoritative daemon-owned terminal. The adapter consumes PTY output, owns
+canonical screen and scrollback state, captures terminal responses/effects, exposes bounded
+Lemma-owned damage/cell/mode values to the renderer, and encodes application input from canonical
+terminal modes.
 
-- **authoritative daemon terminal:** consumes ordered PTY output/resize/reset events, owns canonical
-  screen and scrollback state, captures effects and PTY responses, encodes application input, and
-  exports bounded versioned checkpoints; and
-- **client replica terminal:** transactionally imports checkpoints and applies ordered pane events for
-  presentation while suppressing PTY responses and authoritative side effects.
+Ghostty headers, private enum values, allocator identities, pointers, and memory layouts never cross
+this component or appear on the wire. The adapter does not own PTYs, child processes, topology,
+client sockets, copy-mode policy, frame scheduling, or protocol state.
 
-The interface exposes only Lemma-owned terminal sizes, effects, damage, cells, checkpoint values,
-history ranges, versions, and bounded input/output values. Ghostty headers, private enum values,
-allocator identities, pointers, and memory layouts never cross this component or appear directly on
-the wire.
+The retained checkpoint feasibility evidence documents a temporary reconstructive-VT prototype and
+replica role. Deterministic parser, UTF-8, inactive-screen, and
+history counterexamples caused a Stop result. The completed architecture review retained
+server-rendered daemon authority, so the prototype and replica API were removed from the production
+source tree.
 
-Checkpoint export/import must continue deterministically across arbitrary PTY chunk boundaries,
-including incomplete parser/UTF-8 state. The pinned library does not yet expose the complete portable
-API; `.plan/002-terminal-checkpoint-feasibility.md` is the mandatory gate before production protocol
-work.
+## Scrollback unit contract
 
-This component does not own PTYs, child processes, topology, client sockets, sequencing, lag policy,
-or presentation scheduling. The current adapter implements only the authoritative role plus ANSI
-rendering support; replica and checkpoint behavior remain target work.
+`TerminalOptions::scrollback_bytes_max` is intentionally measured in bytes. The pinned Ghostty C
+header names `max_scrollback` in lines, but its implementation applies that value as a byte limit in
+the page allocator. Lemma previously exposed `scrollback_rows_max`; correcting the name and unit is
+an intentional pre-1.0 source API break for embedders. Rows and bytes are not interchangeable, so no
+silent compatibility alias is provided.
+
+Ghostty PagePool storage bypasses Lemma's C `QuotaAllocator`. Allocation statistics exposed by the
+adapter therefore cover only routed C allocations and must not be described as total terminal
+memory.

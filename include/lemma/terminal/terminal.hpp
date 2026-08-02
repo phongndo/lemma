@@ -46,10 +46,14 @@ struct TerminalSize final {
 
 struct TerminalOptions final {
   TerminalSize size{};
-  std::size_t scrollback_rows_max{limits::terminal_scrollback_rows_default};
+  // This is intentionally bytes: the pinned Ghostty implementation treats max_scrollback as bytes
+  // despite naming that value in lines in its public C header.
+  std::size_t scrollback_bytes_max{limits::terminal_scrollback_bytes_default};
   std::size_t allocation_bytes_max{limits::terminal_allocation_bytes_default};
 };
 
+// Covers only allocations routed through Lemma's Ghostty C allocator. Ghostty PagePool storage and
+// adapter-owned buffers such as physical cell hashes are excluded.
 struct AllocationStats final {
   std::size_t bytes_current{0};
   std::size_t bytes_peak{0};

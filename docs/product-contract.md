@@ -2,7 +2,7 @@
 
 ## Status
 
-This document records decisions explicitly agreed for Lemma's foundation and the v0.1 alpha product
+This document records decisions explicitly agreed for Lemma's foundation and the 1.0 product
 boundary. A recorded decision is not a claim that the behavior is implemented; current behavior
 remains audited in `current-capabilities.md`. Later copy-mode refinements, package discovery, and the
 final remote UX may evolve only through an explicit contract update.
@@ -11,7 +11,7 @@ The current executable's ownership is described in
 [`single-pane-runtime.md`](single-pane-runtime.md), and its audited user-facing behavior is
 inventoried in [`current-capabilities.md`](current-capabilities.md). Required day-to-day mux behavior
 and its completion bar are defined in [`daily-driver-contract.md`](daily-driver-contract.md);
-milestone order is defined in [`roadmap.md`](roadmap.md).
+outcome and priority guidance is defined in [`roadmap.md`](roadmap.md).
 
 ## Product direction
 
@@ -25,70 +25,69 @@ state. A process continues when no terminal client is attached, so an unattached
 is the initial background-execution model. Generalized task, run, and view entities are not required
 for the foundation.
 
-Remote-first initially means operating a Lemma daemon on another machine: create processes, inspect
-state, attach, detach, and manage workspaces through the same semantic API used locally. SSH stdio is
-the preferred first remote transport. Live cross-host process migration is not a current promise.
+Remote-first initially means operating a Lemma daemon on another machine through ordinary SSH:
+create processes, inspect state, attach, detach, and manage workspaces through the same semantic API
+used locally. Ordinary SSH terminal operation and machine-readable commands are the 1.0 baseline; a
+custom `lemma connect` SSH-stdio bridge is deferred beyond 1.0. Live cross-host process migration is
+not a current promise.
 
 Lemma's pillars are:
 
-1. **performance:** C++ owns every PTY and authoritative terminal hot path; smart clients replay
-   ordered terminal events and own presentation rather than waiting for daemon ANSI composition;
+1. **performance:** C++ owns every PTY, canonical terminal, and damage-rendering hot path; thin
+   clients never duplicate terminal parsing and slow presentation cannot block PTY progress;
 2. **strong foundation:** mutable state has one owner, every boundary is bounded, and client or
    extension failure cannot end pane processes;
 3. **first-class input:** keyboard and mouse are co-equal ways to operate mux state and terminal
    applications; and
 4. **extensibility:** configuration and extensions use one powerful Lua API over typed values.
 
-## Replicated-terminal client contract
+## Attached-client and presentation contract
 
-Lemma has one target attached-client architecture. The daemon owns canonical `libghostty-vt` state,
-logical topology, process/PTY lifetime, terminal responses, and application-input encoding. A smart
-client imports a bounded versioned terminal checkpoint at sequence `N`, becomes ready, then applies
-every ordered output, resize, reset, and exit event after `N`. Recent-to-oldest scrollback may hydrate
-after readiness.
+Lemma has one production attached-client architecture through 1.0. The daemon owns canonical
+`libghostty-vt` state, logical and physical layout, process/PTY lifetime, terminal responses,
+application-input encoding, per-attachment view state, and ANSI composition. A thin client owns its
+connection, physical input decoding, outer-terminal writes, and complete terminal restoration. It
+owns no VT parser or terminal replica.
 
-Checkpoint plus event tail is the attachment, live-update, reconnect, and lag-recovery mechanism for
-both local Unix sockets and SSH stdio. A client may resume from acknowledged sequences only when the
-complete tail is retained and all versions match; otherwise it resets from a fresh checkpoint. A
-slow client never causes unbounded event retention or blocks PTY progress.
+Attach, reconnect, active-window changes, resize, and lag recovery reconstruct a complete visible
+frame from current daemon authority. Live output uses bounded ordered render frames. If one client
+cannot make bounded write progress, canonical damage continues to represent the newest state; after
+the blocked frame completes the daemon forces a full redraw, or disconnects the client at its
+progress deadline. Pane processes and unrelated work continue.
 
-The daemon does not maintain permanent raw, cell-delta, and ANSI output architectures. ANSI
-compatibility is a smart-client presentation backend over local replicas. The primary future native
-client renders the same replicas directly. Checkpoints use a Lemma-owned format and never expose
-private Ghostty memory layouts. The required export/import capability must pass the feasibility gate
-in [`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md)
-before the generalized wire format is frozen.
+The retained [`terminal-checkpoint-feasibility.md`](terminal-checkpoint-feasibility.md) evidence
+records the Stop result that rejected smart replicas and selected server-rendered authority. A future native client,
+if justified after 1.0, consumes replaceable presentation snapshots/deltas derived from canonical
+state rather than replaying PTY bytes.
 
-The daemon remains the only authority for PTY responses and policy side effects. Replica processing
-must suppress those responses. One controlling client selects canonical PTY dimensions; viewers use
-that grid until control is transferred rather than independently resizing the same terminal state.
+The daemon remains the only authority for PTY responses and policy side effects. The 1.0
+one-client-per-workspace rule also selects canonical PTY dimensions. Multiple viewers/controllers
+require explicit per-attachment state and control policy later; they do not change terminal ownership.
 
 ## Input contract
 
 Keyboard operation remains complete: every core workspace, window, pane, copy, and configuration
 workflow must be usable without a mouse. Mouse support is nevertheless a primary interaction model,
-not optional raw-byte forwarding. Smart clients own bounded input decoding, client-presentation hit
-testing, status interaction, selection, scrolling, and drag gestures. Equivalent keyboard and mouse
-mux actions dispatch the same typed commands rather than maintaining separate mutation paths.
+not optional raw-byte forwarding. Thin clients perform bounded physical input decoding; the daemon
+owns presentation hit testing, status interaction, per-attachment selection/scrolling, and ratio
+mutation. Equivalent keyboard and mouse actions dispatch the same typed commands.
 
-When a terminal application requests mouse tracking, the client sends a stable `PaneId` plus
-pane-local coordinates and bounded typed action data. The daemon validates the target and encodes the
-event through the authoritative terminal adapter's active modes. Lemma-owned chrome remains under
-the client's control, and a configurable modifier lets a user override application capture for mux
-selection and navigation. Cell-based SGR mouse input is the required baseline; additional encodings
-may be supported through the terminal adapter. A compatibility client must restore outer-terminal
-keyboard, focus, paste, mouse, synchronized-update, and alternate-screen modes on every normal,
-error, signal, and disconnect path.
+When a terminal application requests mouse tracking, the client sends bounded outer-terminal mouse
+values. The daemon hit-tests its resolved layout, derives a stable `PaneId` and pane-local coordinates,
+validates them, and encodes the event through the canonical terminal adapter's active modes. A
+configurable modifier lets a user override application capture for mux selection and navigation.
+Cell-based SGR mouse input is the required baseline; additional encodings may be supported through
+the terminal adapter. The client must restore outer-terminal keyboard, focus, paste, mouse,
+synchronized-update, and alternate-screen modes on every normal, error, signal, and disconnect path.
 
 The current runtime implements keyboard prefix commands but does not yet implement this mouse path.
 The versioned client protocol must represent typed key, text/paste, focus, resize, and mouse values
 without losing their input order.
 
-## v0.1 alpha product contract
+## 1.0 product contract
 
-These choices close the first-release decision gate. They define required behavior for subsequent P1
-and P2 implementation; until then the capability audit must continue to label gaps as partial or
-absent.
+These choices define required behavior for the server-rendered daily-driver and 1.0 implementation;
+until then the capability audit continues to label gaps as partial or absent.
 
 ### Plain invocation and default workspace
 
@@ -113,21 +112,21 @@ home and produces an observable warning.
 
 Workspace creation captures a bounded environment snapshot from the invoking client. All panes in
 that workspace inherit the snapshot. Attaching later does not mutate it implicitly. A future explicit
-refresh operation may update an allowlisted set, but v0.1 has no ambient attach-time refresh. Invalid
+refresh operation may update an allowlisted set, but 1.0 has no ambient attach-time refresh. Invalid
 names, embedded NULs, and values outside the protocol bounds are rejected before workspace mutation.
 
-v0.1 launches the account login shell only. Per-pane custom commands are deferred until command,
+Lemma 1.0 launches the account login shell only. Per-pane custom commands are deferred until command,
 cwd, environment, and exit reporting can share one typed launch contract.
 
 ### Lifecycle and durability guarantees
 
 Guarantees are deliberately separate:
 
-| Event | v0.1 guarantee |
+| Event | 1.0 guarantee |
 | --- | --- |
 | Normal detach | Pane processes, topology, terminal state, and scrollback continue while the daemon lives. |
 | Client EOF/crash/terminal loss | Same process-continuity guarantee as detach; the outer terminal is restored where the client can still execute cleanup. |
-| User logout | No survival guarantee. Lemma may continue where the operating system preserves the per-user daemon, but v0.1 does not install a lingering service. |
+| User logout | No survival guarantee. Lemma may continue where the operating system preserves the per-user daemon, but 1.0 does not install a lingering service. |
 | Daemon crash or forced kill | No process, topology, terminal-state, or scrollback survival guarantee. |
 | Host reboot | No survival guarantee. |
 | Explicit daemon shutdown | Ends owned pane processes after an explicit warning/confirmation contract; it is not equivalent to detach. |
@@ -152,7 +151,7 @@ release-policy change.
 
 ### Name
 
-The project keeps the **Lemma** name for v0.1. The executable and package namespace remain `lemma`.
+The project keeps the **Lemma** name for 1.0. The executable and package namespace remain `lemma`.
 The established project identity and pre-alpha migration cost do not currently justify a rename.
 Package-registry and legal screening must be repeated before publishing artifacts; a concrete
 conflict is a release blocker handled by an explicit rename decision rather than a reason to leave
@@ -173,30 +172,53 @@ the current name perpetually undecided.
 Until copy mode and typed mouse input are implemented and tested, the current release must not imply
 that these defaults are active.
 
-### First automation boundary
+### Automation and AI-agent boundary
 
-The first public automation surface is machine-readable CLI output, selected explicitly with
-`--format=json`; human-readable output remains the default. The CLI uses the versioned local semantic
-protocol internally, but raw local RPC is not a supported public API in v0.1. A documented local RPC
-API becomes public with stable IDs, snapshots, typed results, cancellation, and compatibility policy
-in the programmable milestone. This keeps the first automation contract scriptable without freezing
-the initial transport framing as a public API.
+Machine-readable CLI output selected with `--format=json` is the first public automation surface;
+human-readable output remains the default. Before 1.0, Lemma also exposes a versioned same-user
+semantic socket for efficient scripts and AI agents. It is separate from the private attached-client
+render/input protocol and contains only stable IDs, typed commands/results/errors, capabilities,
+snapshots, bounded events/output observations, deadlines, cancellation, and request/idempotency
+identity.
 
-### v0.1 client and remote boundary
+Every supported human semantic mutation has an automation equivalent or a documented exclusion.
+Agents can discover the schema/context, launch commands with cwd/environment, mutate topology, send
+typed input, capture bounded terminal content, wait for output/exit, inspect results, and cancel work
+without screen scraping. Output/event loss is explicit and repairable through bounded capture or
+snapshots. Local agents initially have the invoking user's permissions; remote permissions and
+multiple-controller policy remain later decisions.
 
-The v0.1 alpha proves the final checkpoint/event architecture with a smart compatibility client that
-renders client-side replicas into an outer terminal. The old daemon-rendered ANSI endpoint may exist
-only during migration and is removed before the replication-foundation exit gate. A native renderer
-is required before Lemma claims the complete native performance direction and is targeted by v0.2.
+Provider-specific detection, working/blocked/done views, worktrees, and orchestration remain
+extensions rather than core agent entities. Lemma ships a maintained agent `SKILL.md` and at least one
+first-party agent-observer extension to prove the API.
 
-The same application protocol must pass an SSH-stdio transport proof in v0.1, including attach,
-progressive history, reconnect, forced checkpoint recovery, slow-link bounds, and mismatch behavior.
-This does not freeze exact remote CLI syntax, configuration synchronization, multiplayer, or agent
-permissions in v0.1.
+### 1.0 client and remote boundary
+
+The 1.0 client is a thin outer-terminal adapter over the versioned server-rendered protocol. It
+decodes bounded physical input, writes daemon-produced ANSI frames, and guarantees cleanup; the
+daemon remains the only terminal and presentation authority. A native renderer is explicitly not a
+1.0 requirement.
+
+The supported remote baseline is ordinary SSH terminal operation (`ssh -t HOST lemma`) plus
+machine-readable commands invoked over ordinary SSH. Transport loss has the same process-continuity
+behavior as local client loss. A custom `lemma connect` SSH-stdio transport, configuration
+synchronization, multiplayer, and agent permissions remain later product work.
+
+## Programmable mux standard layer
+
+Lemma follows a Pi-like product shape: a small high-performance C++ mux kernel, one typed semantic
+API, a complete tmux-like standard experience, and replaceable Lua workflow/UI policy. Correctness-
+and latency-sensitive PTY, terminal, render, input, history, layout, store, command, and protocol
+mechanisms remain C++. Lua may compose commands, bindings, layouts, startup behavior, status,
+sidebars, overlays, notifications, projects, and agent workflows through bounded values.
+
+The shipped standard layer uses the same commands/settings/declarative UI available to user packages,
+while a minimal C++ fallback keeps pane processes and essential operation available if Lua fails.
+Local versioned packages/modules are a 1.0 requirement; marketplace discovery is not.
 
 ## C++ and Lua boundary
 
-The daemon, control CLI, and smart attached client remain C++ and may ship as one executable with
+The daemon, control CLI, and thin attached client remain C++ and may ship as one executable with
 distinct process roles. A persistent Lua 5.5 host runs in a separate Lemma-managed process.
 Configuration is entirely Lua, beginning at the host machine's `~/.config/lemma/init.lua` (or
 `$XDG_CONFIG_HOME/lemma/init.lua`). The remote daemon uses the configuration installed on the remote
@@ -221,7 +243,7 @@ CLI operations, remote operations, agents, and extensions.
 IPC is never part of the terminal hot path:
 
 ```text
-PTY read -> sequence event -> authoritative Ghostty parse -> bounded client synchronization
+PTY read -> authoritative Ghostty parse -> bounded damage composition -> client frame
 ```
 
 Extension work is deferred until after ready PTYs, client input, and due synchronization work. The
@@ -267,18 +289,16 @@ The approved minimum capability surface is:
 - explicit bounded pane-output subscriptions; and
 - transactional hot reload.
 
-The first implementation slice establishes process isolation, framed registration messages,
-transactional generation activation, and daemon-side supervision. Command invocation, snapshots,
-event delivery, rendered sidebars, process APIs, output streaming, and reload are subsequent slices
-of this same foundation—not a separate plugin architecture.
+The extension foundation includes process isolation, framed registration messages, transactional
+generation activation, daemon-side supervision, command invocation, snapshots, event delivery,
+rendered sidebars, process APIs, output streaming, and reload. These remain one plugin architecture.
 
-## Still open beyond the v0.1 boundary
+## Still open beyond the 1.0 boundary
 
-These do not block the v0.1 decision gate but require later milestone decisions:
+These do not block the 1.0 release contract but require later product decisions:
 
 - PTY-only versus additional pipe-backed background jobs;
 - exact clipboard provider and bounded OSC 52 policy beyond the selected copy-mode defaults;
-- package discovery and installation for extensions;
+- marketplace discovery and installation UX beyond local versioned packages;
 - config synchronization between local and remote hosts;
-- the public local RPC lifecycle and compatibility policy; and
 - the exact first remote CLI syntax and capability set.

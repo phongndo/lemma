@@ -30,6 +30,12 @@ TEST(TerminalTest, RejectsInvalidAndUnfundedConfigurations) {
   ASSERT_FALSE(invalid_result.has_value());
   EXPECT_EQ(invalid_result.error(), Error::invalid_options);
 
+  TerminalOptions excessive_scrollback;
+  excessive_scrollback.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max + 1U;
+  const auto excessive_scrollback_result = Terminal::create(excessive_scrollback);
+  ASSERT_FALSE(excessive_scrollback_result.has_value());
+  EXPECT_EQ(excessive_scrollback_result.error(), Error::invalid_options);
+
   TerminalOptions exhausted;
   exhausted.allocation_bytes_max = 1;
   const auto exhausted_result = Terminal::create(exhausted);

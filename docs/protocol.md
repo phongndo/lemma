@@ -2,113 +2,132 @@
 
 ## Status and scope
 
-The current protocol is the bounded local wire format used by the runtime. Its implementation
-remains in `src/protocol/single_pane.*` for now so framing can be tested independently of sockets and
-terminal state. It is not yet the final generalized protocol and currently has no version
-negotiation; incompatible changes must therefore remain coordinated between the daemon and client.
-This process-named status revision uses the `lemma-v8-<uid>.sock` endpoint so it cannot attach to an
-older daemon that does not reserve or refresh the status row correctly.
+The current protocol is the bounded local wire format used by the runtime. Its implementation remains
+in `src/protocol/single_pane.*` so framing can be tested independently of sockets and terminal state.
+It has no version negotiation and daemon-to-attached-client output is currently unframed ANSI.
+Incompatible changes therefore remain coordinated through the process-named `lemma-v8-<uid>.sock`
+endpoint.
 
-All integers in the current format are unsigned big-endian. Current message type values are one
-ASCII byte for diagnostics only; they must be treated as binary enum values, not text.
+The production direction is a bounded versioned **server-rendered** protocol. It preserves daemon
+terminal and presentation authority, frames both directions, and does not carry terminal checkpoints,
+raw PTY event tails, or client VT replicas. Migration priority is maintained in the rolling
+[`TODO.md`](../TODO.md) backlog.
 
-## Target checkpointed replication protocol
+All integers in the current format are unsigned big-endian. Current one-byte ASCII-looking type
+values are diagnostic conveniences, not text protocol values.
 
-The generalized protocol replaces the attached output model rather than merely framing its ANSI
-bytes. It has one terminal-data architecture for local Unix sockets and SSH stdio:
+## Production server-rendered protocol contract
 
 ```text
-terminal checkpoint at pane sequence N
--> ready
--> ordered output/resize/reset/exit events after N
--> progressive history ranges
+client -- typed key/text/paste/focus/mouse/resize/command --> daemon
+client <-- typed result/error/effect + bounded ANSI frame -- daemon
 ```
 
-The daemon owns canonical terminal state and event sequence allocation. Smart clients own imported
-replicas and presentation. ANSI is a client presentation backend; daemon-to-attached-client composed
-ANSI is removed after migration. The active feasibility gate is
-[`.plan/002-terminal-checkpoint-feasibility.md`](../.plan/002-terminal-checkpoint-feasibility.md), and
-final checkpoint sections or wire kind values must not be frozen before it passes.
+The daemon owns canonical terminals, topology, resolved rectangles, per-attachment view state,
+application-input encoding, and ANSI composition. The client owns physical input decoding, transport,
+outer-terminal writes, and cleanup. Attach and recovery regenerate complete visible state from the
+daemon; no replay log is needed.
 
-### Envelope requirements
+### Envelope
 
-Every direction is framed. The reviewed production envelope must include or unambiguously derive:
+Every production message is framed. The reviewed envelope must include or derive:
 
 - magic and major/minor protocol version;
-- message kind and flags;
+- closed message kind and flags;
 - bounded payload length;
 - request/result correlation ID where applicable;
-- stable workspace, window, pane, and client IDs in payloads that target them; and
-- capability/version negotiation for terminal checkpoints, typed input, history, compression,
-  presentation, and transport behavior.
+- stable workspace, window, pane, and client IDs in explicit targets; and
+- negotiated input, presentation, and effect capabilities.
 
-All frames, decoder storage, queued output, messages per turn, and aggregate per-client memory have
-explicit limits. Unknown required versions, kinds, enum values, IDs, sequence ranges, or capabilities
-produce typed errors or disconnect before partial state mutation. The protocol encoding is
-Lemma-owned and never copies Ghostty private structs or enum numbers onto the wire.
+Frames, decoder storage, queued output, messages per turn, setup progress, and aggregate per-client
+memory all have explicit limits. Unknown required versions, kinds, flags, enum values, IDs, or
+capabilities produce typed errors or disconnect before partial state mutation. Wire values are
+Lemma-owned and never expose Ghostty types or private layouts.
 
-### Terminal stream values
+### Message families
 
-Each pane has one monotonically ordered sequence covering:
+The initial production protocol carries:
 
-- `terminal_output(bytes)`;
-- `terminal_resize(columns, rows, cell pixel dimensions)`;
-- `terminal_reset(reason)`; and
-- `terminal_exit(status, reason)`.
+- `client_hello`, `daemon_hello`, and actionable mismatch results;
+- attach/create/list/window-list/kill/shutdown requests and typed results;
+- stable topology values needed by command results and diagnostics;
+- ordered key, text, paste, focus, mouse, resize, command, and detach input;
+- bounded complete ANSI render frames and full-redraw generation/epoch markers;
+- title, bell, clipboard, notification, or other typed client effects where explicit client policy is
+  required; and
+- ping/progress/error values needed for bounded setup and cleanup.
 
-A checkpoint names its pane, terminal-checkpoint format/features, canonical dimensions, fence
-sequence, visible-ready state, and available/missing history ranges. Chunk boundaries are not assumed
-to be parser boundaries. Export/import must preserve deterministic continuation across incomplete
-UTF-8 and terminal escape sequences.
+The attached-client envelope remains private and version-coupled to the binary. It is not exposed as
+an automation protocol.
 
-The daemon is the only endpoint allowed to emit terminal-generated PTY responses or apply
-authoritative terminal side-effect policy. Replica import and event application suppress those
-outputs.
+### Public semantic automation
 
-### Attach, ready, and history
+One transport-independent semantic schema is shared by `--format=json`, the isolated Lua host, and a
+versioned same-user automation socket for scripts and AI agents. It includes:
 
-A successful attach proceeds as one explicit state machine:
+- stable object and actor/client IDs, request correlation, deadlines, cancellation, and optional
+  idempotency keys;
+- typed commands, arguments, success/no-effect/capacity/unavailable/stale/malformed errors, and
+  capability/schema introspection;
+- immutable topology, process, terminal-observation, configuration, and extension snapshots;
+- typed launch with executable/arguments, cwd, bounded environment, PTY, and remain-on-exit policy;
+- bounded capture, send-text/key/paste, wait-for-output/exit, signal, cancel, restart, and close;
+- bounded lifecycle/topology/configuration/output events with sequence, truncation, gap, and snapshot-
+  repair semantics; and
+- generated machine-readable schemas plus a maintained agent skill.
 
-1. exchange hello/version/capability messages;
-2. resolve the workspace and return stable topology IDs;
-3. fence each presented pane at an authoritative sequence;
-4. send topology and bounded visible checkpoints;
-5. send `ready` only after the client can publish its replicas and accept input;
-6. send all later ordered pane events without a checkpoint/tail gap; and
-7. send bounded recent-to-oldest history chunks at lower priority.
+Automation never receives ANSI render frames as state, Ghostty/private values, or direct descriptors.
+Every supported human semantic mutation has an equivalent request or a documented exclusion. The
+public semantic compatibility policy is independent from private attached-client framing.
 
-History range identity is independent of the live pane sequence. A client can distinguish complete,
-partial, and missing history and can request bounded ranges without blocking live output.
+### Attach and full redraw
 
-### Acknowledgement, resume, and reset
+A successful attach is an explicit transaction:
 
-Clients acknowledge the highest contiguous applied sequence per pane. Resume is allowed only when
-session identity, object generations, protocol/checkpoint versions, topology, and every required
-event range still match. Otherwise the daemon sends a fresh topology/checkpoint transaction.
+1. exchange version/capability hello values;
+2. resolve the workspace and allocate daemon-side attachment state;
+3. validate canonical dimensions;
+4. invalidate retained presentation state;
+5. queue one complete visible ANSI frame; and
+6. enter live input/output only after setup succeeds.
 
-A slow client's pending events remain bounded. When it exceeds its lag policy, the daemon stops
-retaining an unbounded tail, transitions the client through an explicit reset, sends a newer
-checkpoint, and resumes from its successor sequence. If bounded checkpoint progress cannot complete
-before its deadline, the client is disconnected without affecting pane or unrelated client progress.
+Active-window changes, resize, reconnect, and presentation invalidation use the same complete-frame
+path. Reliable stream order preserves accepted frames.
+
+### Backpressure and recovery
+
+Only complete bounded frames enter an attachment queue. Once a frame begins writing it is completed
+or the connection is retired; bytes from different frames are never spliced. While a frame is
+blocked, new PTY output remains represented by canonical terminal damage instead of growing an output
+log. When the frame drains, the daemon emits a full redraw at a newer generation. A client that misses
+its bounded progress deadline is disconnected without affecting pane processes or unrelated work.
+
+A reconnect always receives a fresh complete frame. Delta resume may be added as a measured
+optimization, but correctness never depends on retained render history or acknowledgements.
 
 ### Typed control and input
 
-Commands use the same semantic command values as built-in and Lua operations, with typed results and
-errors. Input preserves the order of bounded key, text, paste, focus, resize request, mouse, command,
-and detach values. Lemma-owned client chrome is hit-tested in the client and emits semantic commands
-with stable targets. Application mouse input carries a validated `PaneId` and pane-local coordinates;
-the daemon validates and encodes it using canonical terminal modes.
+Commands use the same semantic values as built-in key and Lua operations, with typed success,
+no-effect, capacity, unavailable, invalid-target, malformed, mismatch, and internal errors.
 
-One controlling client determines canonical PTY dimensions. A viewer cannot independently resize the
-same terminal replica; later permission/control-transfer messages make that authority explicit.
+Input preserves the order of bounded key, text, paste, focus, resize, mouse, command, and detach
+values. Clients decode physical sequences; the daemon owns prefix/keymap interpretation, presentation
+hit testing, stable target resolution, and application-input encoding. Application mouse values are
+translated from outer coordinates to validated pane-local cells using the daemon's current layout and
+canonical terminal modes.
 
-### Transport independence
+### Remote use
 
-Unix sockets and SSH stdio carry the same application frames and state machines. Authentication and
-transport setup do not weaken protocol validation. Schedulers may prioritize control/input/live
-visible events over history, but they cannot reorder events within a pane stream. Compression is
-negotiated and bounded for measured large checkpoints, history, or output chunks; tiny interactive
-messages are not compressed by assumption.
+The 1.0 remote baseline is ordinary SSH terminal operation:
+
+```sh
+ssh -t host lemma
+ssh host lemma list --format=json
+```
+
+That path runs the normal thin attached client on the remote host and lets SSH carry terminal bytes.
+A later local client may carry the same framed protocol through an SSH-stdio bridge, but such a
+transport does not change terminal/presentation ownership and is not a 1.0 requirement.
 
 ## Extension-host protocol
 
@@ -130,11 +149,11 @@ PTYs, client input, and rendering; it never waits for Lua.
 A valid commit atomically replaces the active registration generation. A configuration error rejects
 the candidate and preserves the prior generation. Disconnect removes active extension registrations
 and schedules an isolated host restart. Command invocation, snapshots, event delivery, UI updates,
-and output streams will add versioned message kinds without exposing C++ storage.
+and output streams add versioned message kinds without exposing C++ storage.
 
-The schemas below remain the description of the independent implemented client/daemon protocol.
+The schemas below describe the independent currently implemented client/daemon protocol.
 
-## Control connection
+## Current control connection
 
 A newly accepted connection starts with exactly one control command:
 
@@ -148,26 +167,25 @@ A newly accepted connection starts with exactly one control command:
 | kill | `K` | name length, name | Stop one workspace and close |
 | kill all | `X` | none | Stop every workspace and close |
 
-A name length is one byte and is followed by 1-32 validated ASCII workspace-name bytes. Create and
-attach return one response byte; a missing named workspace also returns `M`:
+A name length is one byte followed by 1–32 validated ASCII workspace-name bytes. Create and attach
+return one response byte; a missing named workspace returns `M`:
 
 | Response | Byte | Meaning |
 | --- | ---: | --- |
-| ready | `Y` | Workspace exists, or the connection is now the streaming client |
-| busy | `B` | This workspace already has an attached client |
-| missing | `M` | The named workspace does not exist |
+| ready | `Y` | Workspace exists, or connection is now the streaming client |
+| busy | `B` | Workspace already has an attached client |
+| missing | `M` | Named workspace does not exist |
 | capacity | `C` | Workspace capacity is exhausted |
 | failed | `F` | Workspace creation failed |
 
-After `Y`, the daemon sends a complete reconstructed terminal frame before switching the connection
-to nonblocking live operation.
+After attached `Y`, the daemon sends a complete reconstructed frame before nonblocking live
+operation.
 
-## Attached-client stream
+## Current attached-client stream
 
-Only the client sends framed messages. Daemon-to-client traffic is already encoded outer-terminal
-bytes and is deliberately unframed in the current protocol. Detach and pane/window command packets
-are translated into bounded `lemma::Command` values and validated by the shared dispatcher before
-the engine applies them. Wire enums therefore do not double as authoritative core operations.
+Only the client sends framed messages. Daemon-to-client traffic is currently encoded outer-terminal
+bytes and deliberately unframed. Detach and pane/window packets become bounded `lemma::Command`
+values and pass through the shared validating dispatcher.
 
 ### Input
 
@@ -179,8 +197,8 @@ the engine applies them. Wire enums therefore do not double as authoritative cor
 ```
 
 The client prefix parser may emit at most twice the terminal read batch. The decoder rejects larger
-lengths before exposing a message. Input bytes are normalized and encoded through the pane's
-terminal adapter rather than blindly forwarding recognized control/navigation sequences.
+lengths before exposing a message. Recognized control/navigation sequences are normalized and encoded
+through the canonical terminal adapter rather than blindly forwarded.
 
 ### Resize
 
@@ -191,8 +209,7 @@ terminal adapter rather than blindly forwarding recognized control/navigation se
    1 B          2 B            2 B
 ```
 
-The runtime clamps dimensions to its configured hard limits, resizes the PTY, and then resizes the
-canonical terminal state. Both operations must succeed.
+The runtime clamps dimensions to hard limits, resizes pane PTYs, then resizes canonical terminals.
 
 ### Pane command
 
@@ -205,8 +222,8 @@ canonical terminal state. Both operations must succeed.
 
 The command byte is a closed enum for window create/next/previous/select/kill and pane left/right or
 top/bottom splits, directional/next/previous focus, close, and zoom. Unknown values terminate the
-attached connection as protocol errors. The core applies commands only to the attached workspace
-and its active window.
+attached connection as protocol errors. The core applies commands only to the attached workspace and
+active window.
 
 ### Detach
 
@@ -219,67 +236,54 @@ and its active window.
 
 Detach closes only the attached connection. It does not terminate the shell or workspace.
 
-## Decoder contract
+## Current decoder contract
 
-`protocol::ClientDecoder` owns a fixed 16 KiB buffer and supports arbitrary stream fragmentation and
-coalescing. The caller follows this sequence:
+`protocol::ClientDecoder` owns a fixed 16 KiB buffer and supports arbitrary fragmentation and
+coalescing. The caller:
 
-1. obtain `writable_bytes()`;
-2. receive at most that span's size;
-3. call `commit(received)`;
-4. call `next()` until it reports incomplete input;
-5. process each borrowed message synchronously; and
-6. call `consume()` before asking for another message or receiving more bytes.
+1. obtains `writable_bytes()`;
+2. receives at most that span's size;
+3. calls `commit(received)`;
+4. calls `next()` until incomplete;
+5. processes each borrowed message synchronously; and
+6. calls `consume()` before receiving or decoding another message.
 
-An input span returned in `ClientMessage` borrows decoder storage and becomes invalid on `consume()`
-or `reset()`. It must never be retained in core state or passed to deferred extension work.
+A span in `ClientMessage` borrows decoder storage and becomes invalid on `consume()` or `reset()`. It
+must never be retained in core state or passed to deferred extension work. Unknown types, oversized
+lengths, and buffer exhaustion are terminal protocol errors and never partially mutate mux state.
 
-Unknown types, oversized lengths, and buffer exhaustion are terminal protocol errors for that
-connection. They never partially mutate mux state.
+## Current prefix parser
 
-## Prefix parser
+The client recognizes a fixed tmux-compatible `C-b` prefix:
 
-The attached client currently recognizes a fixed tmux-compatible `C-b` prefix:
-
-- `C-b %` and `C-b "` emit left/right and top/bottom split commands;
-- `C-b Arrow`, `C-b o`, and `C-b ;` emit focus commands;
-- `C-b x` and `C-b z` emit pane close and zoom commands;
-- `C-b c`, `C-b n`, and `C-b p` create, select the next, or select the previous window;
-- `C-b 1` through `C-b 9` select windows 1-9, `C-b 0` selects window 10, and `C-b &`
-  kills the active window;
-- `C-b d` emits a detach message;
-- `C-b C-b` emits one literal `C-b` input byte;
+- `C-b %` and `C-b "` split left/right and top/bottom;
+- `C-b Arrow`, `C-b o`, and `C-b ;` change pane focus;
+- `C-b x` and `C-b z` close and zoom;
+- `C-b c`, `C-b n`, and `C-b p` create/cycle windows;
+- `C-b 1` through `C-b 9` select windows 1–9, `C-b 0` selects window 10, and `C-b &` closes the
+  active window;
+- `C-b d` detaches;
+- `C-b C-b` sends a literal prefix; and
 - unknown keys forward the literal prefix and key.
 
-Incomplete prefix sequences remain pending for at most 50 ms. If the sequence is still incomplete,
-the client forwards every buffered byte literally so a lone prefix or `C-b Escape` cannot be
-swallowed indefinitely.
-
-Command actions retain their offsets among ordinary input so packet emission preserves input order.
-The parser handles fragmented arrow-key escape sequences, remains bounded, and stays outside
-terminal VT parsing. The eventual configurable key-table system will replace this fixed policy.
+Incomplete prefix sequences remain pending for at most 50 ms, then forward literally. Command
+actions retain offsets among ordinary input so packet emission preserves order. The eventual
+configurable key-table system replaces this fixed policy without moving command authority into the
+client.
 
 ## Migration and validation requirements
 
-The generalized endpoint may coexist with `lemma-v8` only while the smart client is proven and the
-existing process suite is migrated. Peers must never silently speak one format to an endpoint
-expecting the other. After cutover, production attached output uses the checkpoint/event protocol and
-the old daemon ANSI endpoint is removed.
-
-The protocol change requires:
+The versioned endpoint may coexist with `lemma-v8` only for explicit migration tests. Peers never
+silently speak one format to another. The production change requires:
 
 - golden encodings and round trips for every envelope and value;
-- checkpoint-plus-tail equivalence tests across arbitrary parser and resize boundaries;
-- fragmentation, coalescing, malformed, truncated, duplicate, out-of-order, stale-ID, wrong-pane,
-  oversized, version, and capability cases;
-- transactional checkpoint import and allocation-failure tests;
-- lag, acknowledgement, resume, forced reset, and non-reading-client process scenarios;
-- one protocol fuzz target with a bounded seed corpus;
-- the same behavior suites over local Unix and SSH-stdio transports; and
-- mismatch diagnostics that tell users which client, daemon, protocol, or checkpoint version must be
-  upgraded.
+- fragmentation, coalescing, malformed, truncated, stale-ID, oversized, version, capability,
+  progress-deadline, and output-backpressure cases;
+- complete-frame partial-write and forced-full-redraw tests;
+- blocked/non-reading client process scenarios proving unrelated PTY progress;
+- attach, resize, window-change, reconnect, and lag reconstruction tests;
+- one bounded protocol fuzz corpus;
+- precise mismatch diagnostics; and
+- preservation of every existing mux process scenario during cutover.
 
-The target migration and exit gates are detailed in
-[`.plan/003-replicated-terminal-foundation.md`](../.plan/003-replicated-terminal-foundation.md).
-Exact remote CLI/bootstrap and config-synchronization behavior remain open in
-[`product-contract.md`](product-contract.md).
+Current implementation priority and completion checks are maintained in [`TODO.md`](../TODO.md).

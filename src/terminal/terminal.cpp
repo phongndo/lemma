@@ -466,7 +466,7 @@ private:
   if (!valid_size(options.size)) {
     return false;
   }
-  if (options.scrollback_rows_max > limits::terminal_scrollback_rows_hard_max) {
+  if (options.scrollback_bytes_max > limits::terminal_scrollback_bytes_hard_max) {
     return false;
   }
   return options.allocation_bytes_max > 0 &&
@@ -888,7 +888,7 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   const GhosttyTerminalOptions ghostty_options{
       .cols = options.size.columns,
       .rows = options.size.rows,
-      .max_scrollback = options.scrollback_rows_max,
+      .max_scrollback = options.scrollback_bytes_max,
   };
   auto result = ghostty_terminal_new(impl->allocator.native(), &impl->terminal, ghostty_options);
   if (result != GHOSTTY_SUCCESS) {
