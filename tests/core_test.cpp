@@ -37,7 +37,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   const Command command{
       .kind = CommandKind::select_window,
       .origin = CommandOrigin::extension,
-      .target = {.workspace = WorkspaceId::from_parts(2, 3),
+      .target = {.space = SpaceId::from_parts(2, 3),
                  .window = WindowId::from_parts(4, 5),
                  .pane = {}},
       .argument = 7,
@@ -50,7 +50,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_EQ(capture.calls, 1U);
   EXPECT_EQ(capture.command.kind, CommandKind::select_window);
   EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
-  EXPECT_EQ(capture.command.target.workspace, command.target.workspace);
+  EXPECT_EQ(capture.command.target.space, command.target.space);
   EXPECT_EQ(capture.command.target.window, command.target.window);
   EXPECT_EQ(capture.command.argument, 7U);
 }
@@ -66,13 +66,12 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                            .argument = command_window_slots_max})
                 .status,
             CommandStatus::invalid_command);
-  EXPECT_EQ(
-      dispatcher
-          .dispatch({.kind = CommandKind::close_pane,
-                     .origin = CommandOrigin::client,
-                     .target = {.workspace = {}, .window = {}, .pane = PaneId::from_parts(1, 1)}})
-          .status,
-      CommandStatus::invalid_target);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::close_pane,
+                           .origin = CommandOrigin::client,
+                           .target = {.space = {}, .window = {}, .pane = PaneId::from_parts(1, 1)}})
+                .status,
+            CommandStatus::invalid_target);
   EXPECT_EQ(
       dispatcher
           .dispatch(
@@ -89,16 +88,15 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
 }
 
 TEST(GenerationalIdTest, InvalidUntilCreatedFromValidParts) {
-  const WorkspaceId invalid;
-  const auto workspace = WorkspaceId::from_parts(7, 3);
+  const SpaceId invalid;
+  const auto space = SpaceId::from_parts(7, 3);
 
   EXPECT_FALSE(invalid.is_valid());
-  EXPECT_FALSE(WorkspaceId::try_from_parts(7, 0).has_value());
-  EXPECT_FALSE(
-      WorkspaceId::try_from_parts(std::numeric_limits<std::uint32_t>::max(), 3).has_value());
-  EXPECT_TRUE(workspace.is_valid());
-  EXPECT_EQ(workspace.slot(), 7U);
-  EXPECT_EQ(workspace.generation(), 3U);
+  EXPECT_FALSE(SpaceId::try_from_parts(7, 0).has_value());
+  EXPECT_FALSE(SpaceId::try_from_parts(std::numeric_limits<std::uint32_t>::max(), 3).has_value());
+  EXPECT_TRUE(space.is_valid());
+  EXPECT_EQ(space.slot(), 7U);
+  EXPECT_EQ(space.generation(), 3U);
 }
 
 TEST(BoundedByteQueueTest, PreservesOrderAcrossWraparound) {

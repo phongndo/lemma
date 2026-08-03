@@ -2,13 +2,13 @@
 
 Home of Lemma's authoritative mux engine and dense state.
 
-The current engine owns up to 64 named workspaces, 1,024 windows, and 4,096 panes in one reactor.
-Each workspace is bounded to 16 windows and 64 panes. Every pane owns one child process, PTY,
+The current engine owns up to 64 named spaces, 1,024 windows, and 4,096 panes in one reactor.
+Each space is bounded to 16 windows and 64 panes. Every pane owns one child process, PTY,
 canonical terminal adapter, resolved surface, and ordered bounded PTY write queue. Windows own
-generational IDs, binary split trees, focus, and zoom. Workspaces own order/selection, attached-client
+generational IDs, binary split trees, focus, and zoom. Spaces own order/selection, attached-client
 state, status, per-attachment view/prefix state, retained presentation state, and frame scheduling.
 
-The target core adds dense generational workspace/pane/client stores, actor/request origins, stored
+The target core adds dense generational space/pane/client stores, actor/request origins, stored
 layout ratios, copy/search state, typed input, explicit render-redraw generations, immutable
 snapshots/events, bounded output observations, and complete typed command results. A lagging
 client retains only bounded frame work; canonical terminal damage represents newer state until one

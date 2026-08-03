@@ -15,7 +15,7 @@ using ExtensionAcquire = ExtensionConnection (*)(void* context) noexcept;
 using ExtensionErrorReporter = void (*)(void* context, std::string_view error) noexcept;
 using StopRequested = bool (*)() noexcept;
 
-// Runs the authoritative bounded reactor for every workspace. The engine invokes release_endpoint
+// Runs the authoritative bounded reactor for every space. The engine invokes release_endpoint
 // exactly once after it stops using the borrowed listener; the daemon retains ownership of the
 // listener and its filesystem lifecycle. acquire_extension may be null; otherwise the reactor uses
 // it to start and restart an isolated extension host without waiting for extension execution.

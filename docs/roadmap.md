@@ -49,7 +49,7 @@ visible frame from current daemon state.
 ## Current baseline
 
 Lemma already has a working server-rendered local vertical slice: one per-user daemon, named
-workspaces, windows, nested split panes, focus/zoom/resize/detach, bounded queues, canonical Ghostty
+spaces, windows, nested split panes, focus/zoom/resize/detach, bounded queues, canonical Ghostty
 terminals, retained ANSI damage rendering, typed existing commands, and an isolated transactional Lua
 host. The client is thin and forwards daemon-rendered output into an outer terminal.
 
@@ -66,7 +66,7 @@ daemon through 1.0.
 
 **Goal:** make every core object and client boundary explicit without changing terminal ownership.
 
-- Move workspaces, panes, and clients into dense generational stores; retain `WindowId` behavior.
+- Move spaces, panes, and clients into dense generational stores; retain `WindowId` behavior.
 - Resolve every command target at the core trust boundary and return typed results/errors.
 - Replace the development protocol with bounded versioned bidirectional framing.
 - Frame daemon ANSI output as complete bounded render messages.
@@ -86,7 +86,7 @@ daemon through 1.0.
 **Goal:** make Lemma credible as a primary local mux.
 
 - Implement plain `lemma`, help/version, precise errors, cwd/environment policy, and exit reporting.
-- Add workspace/window naming, stable reorder, pane identification, stored ratios, and keyboard resize.
+- Add space/window naming, stable reorder, pane identification, stored ratios, and keyboard resize.
 - Add bounded typed key, text, paste, focus, resize, and mouse input.
 - Complete signal-safe/best-available outer-terminal restoration.
 - Add daemon-side status/pane/separator hit testing and application mouse forwarding.
@@ -115,7 +115,8 @@ standard layer, and typed extension/automation surfaces shared by people, script
 - Make output/event loss bounded, observable, and repairable through capture/snapshots.
 - Add declarative retained status/sidebar/overlay models and local versioned Lua packages.
 - Ship maintained configuration examples, generated schema/binding references, and an agent `SKILL.md`.
-- Prove the API with first-party workflow and agent-observer extensions rather than core agent types.
+- Prove the API with first-party workspace/worktree and agent-observer extensions rather than core
+  workspace or agent types.
 
 ### Exit criteria
 

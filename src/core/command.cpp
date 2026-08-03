@@ -23,7 +23,7 @@ namespace {
   case CommandKind::previous_window:
   case CommandKind::close_window:
   case CommandKind::select_window:
-  case CommandKind::stop_workspace:
+  case CommandKind::stop_space:
     return true;
   }
   return false;
@@ -52,7 +52,7 @@ namespace {
   if (command.target.pane.is_valid() && !command.target.window.is_valid()) {
     return false;
   }
-  if ((command.kind == CommandKind::detach_client || command.kind == CommandKind::stop_workspace) &&
+  if ((command.kind == CommandKind::detach_client || command.kind == CommandKind::stop_space) &&
       (command.target.window.is_valid() || command.target.pane.is_valid())) {
     return false;
   }

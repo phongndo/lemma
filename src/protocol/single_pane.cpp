@@ -69,12 +69,12 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 
 } // namespace
 
-[[nodiscard]] auto encode_workspace_header(const ControlCommand command,
-                                           const std::string_view workspace) noexcept
+[[nodiscard]] auto encode_space_header(const ControlCommand command,
+                                       const std::string_view space) noexcept
     -> std::array<std::byte, 2> {
-  LEMMA_ASSERT(!workspace.empty());
-  LEMMA_ASSERT(workspace.size() <= workspace_name_bytes_max);
-  return {wire_byte(command), static_cast<std::byte>(workspace.size())};
+  LEMMA_ASSERT(!space.empty());
+  LEMMA_ASSERT(space.size() <= space_name_bytes_max);
+  return {wire_byte(command), static_cast<std::byte>(space.size())};
 }
 
 [[nodiscard]] auto encode_dimensions(const Dimensions dimensions) noexcept

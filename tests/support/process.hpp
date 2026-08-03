@@ -108,7 +108,7 @@ private:
   std::string received_tail_;
 };
 
-struct WorkspaceListing final {
+struct SpaceListing final {
   std::size_t windows{0};
   std::size_t panes{0};
   pid_t focused_pid{-1};
@@ -123,8 +123,7 @@ struct WindowListing final {
   bool active{false};
 };
 
-[[nodiscard]] auto parse_workspace_listing(std::string_view output)
-    -> std::optional<WorkspaceListing>;
+[[nodiscard]] auto parse_space_listing(std::string_view output) -> std::optional<SpaceListing>;
 [[nodiscard]] auto parse_window_listings(std::string_view output) -> std::vector<WindowListing>;
 
 class PtyClient final {

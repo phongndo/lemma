@@ -78,7 +78,7 @@ multiplexer-to-terminal output, not PTY input; the workload intentionally allows
 coalescing.
 
 The blocked-PTY workload gates a foreground reader and sends a 2 MiB input payload until the attached
-client is backpressured. In another workspace, a deterministic peer acknowledges each input token over
+client is backpressured. In another space, a deterministic peer acknowledges each input token over
 a fixture-owned Unix datagram socket immediately after reading it from the PTY, then echoes the token
 to the rendered client stream. The report records separate `key_to_pty` and `key_to_visible`
 distributions at idle and while the first PTY remains blocked. Finally, the harness releases the reader
@@ -89,8 +89,8 @@ Five release samples on the Apple Silicon development machine on July 30, 2026 p
 | Workload | p50 | p95 | p99 | Median client bytes |
 | --- | ---: | ---: | ---: | ---: |
 | Warm 2 MiB scroll marker | 2.41 ms | 2.78 ms | 2.78 ms | 328 B |
-| Responsive workspace, idle peer (key-to-visible) | 2.43 ms | 2.48 ms | 2.48 ms | not recorded per sample |
-| Responsive workspace, other PTY blocked (key-to-visible) | 2.45 ms | 2.50 ms | 2.50 ms | not recorded per sample |
+| Responsive space, idle peer (key-to-visible) | 2.43 ms | 2.48 ms | 2.48 ms | not recorded per sample |
+| Responsive space, other PTY blocked (key-to-visible) | 2.45 ms | 2.50 ms | 2.50 ms | not recorded per sample |
 
 The blocked reader accepted 1,125,222 bytes through the outer client before backpressure was
 observable in that run, then recovered the complete 2 MiB payload. Five samples are a smoke baseline,

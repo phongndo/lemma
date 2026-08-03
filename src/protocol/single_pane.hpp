@@ -15,7 +15,7 @@ inline constexpr std::size_t input_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t parser_bytes_max = std::size_t{16} * 1'024U;
 inline constexpr std::uint16_t columns_max = 500;
 inline constexpr std::uint16_t rows_max = 200;
-inline constexpr std::size_t workspace_name_bytes_max = 32;
+inline constexpr std::size_t space_name_bytes_max = 32;
 inline constexpr std::size_t prefix_actions_max = 64;
 
 struct Dimensions final {
@@ -27,7 +27,7 @@ enum class ControlCommand : std::uint8_t {
   attach = 'A',
   create = 'N',
   list = 'L',
-  list_workspace = 'Q',
+  list_space = 'Q',
   list_windows = 'W',
   kill = 'K',
   kill_all = 'X',
@@ -97,8 +97,7 @@ struct ClientMessage final {
   return static_cast<std::byte>(response);
 }
 
-[[nodiscard]] auto encode_workspace_header(ControlCommand command,
-                                           std::string_view workspace) noexcept
+[[nodiscard]] auto encode_space_header(ControlCommand command, std::string_view space) noexcept
     -> std::array<std::byte, 2>;
 [[nodiscard]] auto encode_dimensions(Dimensions dimensions) noexcept -> std::array<std::byte, 4>;
 [[nodiscard]] auto encode_resize(Dimensions dimensions) noexcept -> std::array<std::byte, 5>;
@@ -106,8 +105,7 @@ struct ClientMessage final {
 [[nodiscard]] auto encode_detach() noexcept -> std::array<std::byte, 1>;
 [[nodiscard]] auto encode_pane_command(PaneCommand command) noexcept -> std::array<std::byte, 2>;
 [[nodiscard]] auto decode_dimensions(std::span<const std::byte, 4> bytes) noexcept -> Dimensions;
-[[nodiscard]] constexpr auto decode_workspace_name_size(const std::byte value) noexcept
-    -> std::size_t {
+[[nodiscard]] constexpr auto decode_space_name_size(const std::byte value) noexcept -> std::size_t {
   return std::to_integer<std::size_t>(value);
 }
 

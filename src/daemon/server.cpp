@@ -40,12 +40,11 @@ using platform::send_all;
 using platform::write_all;
 using platform::write_text;
 
-[[nodiscard]] constexpr auto valid_workspace_name(const std::string_view workspace) noexcept
-    -> bool {
-  if (workspace.empty() || workspace.size() > protocol::workspace_name_bytes_max) {
+[[nodiscard]] constexpr auto valid_space_name(const std::string_view space) noexcept -> bool {
+  if (space.empty() || space.size() > protocol::space_name_bytes_max) {
     return false;
   }
-  return std::ranges::all_of(workspace, [](const char character) {
+  return std::ranges::all_of(space, [](const char character) {
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
@@ -271,18 +270,17 @@ void redirect_standard_descriptors() noexcept {
   return server_available(path) || launch_server(path);
 }
 
-[[nodiscard]] auto send_workspace_request(const int connection,
-                                          const protocol::ControlCommand command,
-                                          const std::string_view workspace) noexcept -> bool {
-  const auto header = protocol::encode_workspace_header(command, workspace);
+[[nodiscard]] auto send_space_request(const int connection, const protocol::ControlCommand command,
+                                      const std::string_view space) noexcept -> bool {
+  const auto header = protocol::encode_space_header(command, space);
   return send_all(connection, header) &&
-         send_all(connection, std::as_bytes(std::span(workspace.data(), workspace.size())));
+         send_all(connection, std::as_bytes(std::span(space.data(), space.size())));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_control_command(const RuntimeEndpoint& endpoint,
                                        const protocol::ControlCommand command,
-                                       const std::string_view workspace, const bool report_missing)
+                                       const std::string_view space, const bool report_missing)
     -> int {
   int connection = open_connection(std::string(endpoint.socket_path()));
   if (connection < 0) {
@@ -291,9 +289,9 @@ void redirect_standard_descriptors() noexcept {
     }
     return 1;
   }
-  const bool named = !workspace.empty();
+  const bool named = !space.empty();
   const std::array encoded_command{protocol::wire_byte(command)};
-  const bool sent = named ? send_workspace_request(connection, command, workspace)
+  const bool sent = named ? send_space_request(connection, command, space)
                           : send_all(connection, encoded_command);
   if (!sent) {
     close_descriptor(connection);
@@ -316,7 +314,7 @@ void redirect_standard_descriptors() noexcept {
     }
     const auto bytes = std::span(response).first(static_cast<std::size_t>(bytes_read));
     if (first && bytes.front() == response_missing) {
-      static_cast<void>(write_text(STDERR_FILENO, "no lemma workspace\n"));
+      static_cast<void>(write_text(STDERR_FILENO, "no lemma space\n"));
       close_descriptor(connection);
       return 1;
     }
@@ -332,13 +330,13 @@ void redirect_standard_descriptors() noexcept {
 
 } // namespace
 
-[[nodiscard]] auto validate_workspace(const std::string_view workspace) noexcept -> bool {
-  if (valid_workspace_name(workspace)) {
+[[nodiscard]] auto validate_space(const std::string_view space) noexcept -> bool {
+  if (valid_space_name(space)) {
     return true;
   }
-  static_cast<void>(write_text(
-      STDERR_FILENO,
-      "invalid workspace name; use 1-32 ASCII letters, digits, underscores, or hyphens\n"));
+  static_cast<void>(
+      write_text(STDERR_FILENO,
+                 "invalid space name; use 1-32 ASCII letters, digits, underscores, or hyphens\n"));
   return false;
 }
 
@@ -369,9 +367,8 @@ void redirect_standard_descriptors() noexcept {
   return open_connection(std::string(endpoint.socket_path()));
 }
 
-[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view workspace)
-    -> int {
-  if (!validate_workspace(workspace)) {
+[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
+  if (!validate_space(space)) {
     return 1;
   }
   const std::string path(endpoint.socket_path());
@@ -380,8 +377,7 @@ void redirect_standard_descriptors() noexcept {
     return 1;
   }
   int connection = open_connection(path);
-  if (connection < 0 ||
-      !send_workspace_request(connection, protocol::ControlCommand::create, workspace)) {
+  if (connection < 0 || !send_space_request(connection, protocol::ControlCommand::create, space)) {
     close_descriptor(connection);
     return 1;
   }
@@ -392,42 +388,40 @@ void redirect_standard_descriptors() noexcept {
     return 0;
   }
   static_cast<void>(write_text(STDERR_FILENO, received && response.front() == response_capacity
-                                                  ? "lemma workspace capacity reached\n"
-                                                  : "failed to create lemma workspace\n"));
+                                                  ? "lemma space capacity reached\n"
+                                                  : "failed to create lemma space\n"));
   return 1;
 }
 
-auto start(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
-  return ensure(endpoint, workspace) == 0 ? list(endpoint, workspace) : 1;
+auto start(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
+  return ensure(endpoint, space) == 0 ? list(endpoint, space) : 1;
 }
 
 auto list(const RuntimeEndpoint& endpoint) -> int {
   int connection = open_server_connection(endpoint);
   if (connection < 0) {
-    static_cast<void>(write_text(STDOUT_FILENO, "no lemma workspaces\n"));
+    static_cast<void>(write_text(STDOUT_FILENO, "no lemma spaces\n"));
     return 0;
   }
   close_descriptor(connection);
   return run_control_command(endpoint, protocol::ControlCommand::list, {}, false);
 }
 
-auto list(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
-  return validate_workspace(workspace)
-             ? run_control_command(endpoint, protocol::ControlCommand::list_workspace, workspace,
-                                   true)
+auto list(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
+  return validate_space(space)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_space, space, true)
              : 1;
 }
 
-auto list_windows(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
-  return validate_workspace(workspace)
-             ? run_control_command(endpoint, protocol::ControlCommand::list_windows, workspace,
-                                   true)
+auto list_windows(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
+  return validate_space(space)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_windows, space, true)
              : 1;
 }
 
-auto kill(const RuntimeEndpoint& endpoint, const std::string_view workspace) -> int {
-  return validate_workspace(workspace)
-             ? run_control_command(endpoint, protocol::ControlCommand::kill, workspace, true)
+auto kill(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
+  return validate_space(space)
+             ? run_control_command(endpoint, protocol::ControlCommand::kill, space, true)
              : 1;
 }
 

@@ -28,32 +28,32 @@ Status terms:
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Start and attach | Working | `lemma new [name]` ensures the daemon/workspace exists, then attaches. |
-| Start detached | Working | `lemma start [name]` creates a workspace and prints its listing. |
+| Start and attach | Working | `lemma new [name]` ensures the daemon/space exists, then attaches. |
+| Start detached | Working | `lemma start [name]` creates a space and prints its listing. |
 | Attach/detach | Working | `lemma attach [name]`; `C-b d` detaches without ending pane processes. |
-| List/control | Working | List all/one workspace, list windows, kill one workspace, or kill all workspaces. |
-| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default workspace. |
+| List/control | Working | List all/one space, list windows, kill one space, or kill all spaces. |
+| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default space. |
 | Help/version/errors | Partial | Usage exists, but there are no dedicated help/version commands and unknown commands return usage rather than a precise failing diagnostic. |
 | Machine-readable automation | Absent | There is no `--format=json`, generated semantic schema, immutable snapshot API, or documented compatibility policy. |
 | Persistent agent/automation API | Absent | The current local socket is a private unversioned control/attach protocol; agents cannot discover typed commands, launch/capture/wait/cancel, subscribe to bounded events, or recover from stale IDs. |
 | Per-user daemon | Working | Double-forked daemon, lock file, stale-socket validation, `0600` Unix socket, one listener. |
-| Daemon shutdown | Absent | Workspace kill commands remove workspaces; there is no explicit daemon shutdown/control command. |
+| Daemon shutdown | Absent | Space kill commands remove spaces; there is no explicit daemon shutdown/control command. |
 | Installable releases | Absent | Users currently build from source; no versioned binary archives or package are produced. |
 
-Workspace names are 1–32 ASCII letters, digits, underscores, or hyphens. The default explicit
-workspace name is `default`.
+Space names are 1–32 ASCII letters, digits, underscores, or hyphens. The default explicit
+space name is `default`.
 
-### Workspace and process lifecycle
+### Space and process lifecycle
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Multiple workspaces | Working | Up to 64 named workspaces coexist in one daemon. |
+| Multiple spaces | Working | Up to 64 named spaces coexist in one daemon. |
 | Detached process continuity | Working | Shells and PTYs remain owned by the daemon when the client detaches or disconnects. |
-| Multiple attached clients | Absent | One client may attach to each workspace; another receives `busy`. |
+| Multiple attached clients | Absent | One client may attach to each space; another receives `busy`. |
 | Shell launch | Working | Every pane starts the account login shell in a PTY. |
 | Arbitrary launch command | Absent | Pane creation cannot currently select a command, cwd, or environment. |
 | cwd/environment policy | Partial | New panes inherit the daemon's original cwd/environment, not the invoking client's current context. |
-| Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its window and the last window removes the workspace. |
+| Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its window and the last window removes the space. |
 | Restart/reboot durability | Absent | Topology, scrollback, and processes are not persisted across daemon death or reboot. Zstandard is linked but no durable-session snapshot path exists; the planned attach checkpoint is not reboot persistence. |
 | Exit-status reporting | Absent | Pane exit status and reason are not presented to the user. |
 
@@ -61,13 +61,13 @@ workspace name is `default`.
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Multiple windows | Working | Up to 16 generationally identified numeric window slots per workspace. |
+| Multiple windows | Working | Up to 16 generationally identified numeric window slots per space. |
 | Create/cycle/select | Working | `C-b c`, `C-b n`, `C-b p`, and `C-b 0`–`9`. |
-| Close window | Working | `C-b &`; closing the final window ends the workspace. |
+| Close window | Working | `C-b &`; closing the final window ends the space. |
 | Active/previous state | Working | Active and previous windows are retained; inactive windows continue processing PTY output. |
 | Window listing/status | Working | CLI listing plus a centered one-row status with number and focused process title. |
 | User names/rename | Absent | Window labels are numeric and derive titles from the foreground process or terminal title. |
-| Reorder/link/move | Absent | Windows cannot be reordered or linked across workspaces. |
+| Reorder/link/move | Absent | Windows cannot be reordered or linked across spaces. |
 | Mouse status selection | Absent | The status row has no hit testing or pointer interaction. |
 
 ### Panes and layout
@@ -84,7 +84,7 @@ workspace name is `default`.
 | Pane IDs/names/overlay | Absent | Pane storage uses local numeric slots without public generational IDs, names, or an identification overlay. |
 | Mouse focus/drag | Absent | No pane hit testing, click-to-focus, or separator dragging. |
 
-The implemented hard limits derive to 64 panes per workspace and 64 panes in any one window, with
+The implemented hard limits derive to 64 panes per space and 64 panes in any one window, with
 4,096 panes across the daemon.
 
 ### Keyboard, mouse, paste, and copy
@@ -141,7 +141,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 ### What is already strong
 
 - One reactor owns all mutable mux/terminal state.
-- Window IDs reject stale generations; the public ID value type also defines workspace, pane, and
+- Window IDs reject stale generations; the public ID value type also defines space, pane, and
   client IDs for future stores.
 - Client input, accepted connections, control output, PTY writes, extension frames, terminal
   responses, layouts, frame buffers, registration counts, and terminal allocations have explicit
@@ -158,10 +158,10 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
   bounds, key encoding, extension registration/isolation, terminal damage/allocation, pane composition,
   daemon/client lifecycle, complete existing focus/zoom/close/window controls, topology retention,
   resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
-  attach, real blocked-PTY recovery, cross-workspace fairness, and terminal-response/input ordering.
+  attach, real blocked-PTY recovery, cross-space fairness, and terminal-response/input ordering.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
   scroll detection, 1/4/16 terminal surfaces, warm-session marker latency/client bytes, and separate
-  key-to-PTY and key-to-visible-frame latency with another workspace's PTY blocked.
+  key-to-PTY and key-to-visible-frame latency with another space's PTY blocked.
 
 ### Important robustness gaps
 
@@ -171,8 +171,8 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 2. **The outer-terminal client lifecycle is not signal-complete.** Normal detach/disconnect performs
    broad escape cleanup and ordinary unwinding restores termios, but fatal/default signals do not
    guarantee those paths execute.
-3. **Workspace and pane IDs are not authoritative stores.** Their public types exist, but core
-   commands can only explicitly validate the current window; workspace/pane targets remain invalid.
+3. **Space and pane IDs are not authoritative stores.** Their public types exist, but core
+   commands can only explicitly validate the current window; space/pane targets remain invalid.
 4. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll
    marker latency/client bytes plus separate key-to-PTY and key-to-visible-frame latency with another
    PTY blocked. Mouse, slow-client distributions, memory-per-pane, resize-storm, and multi-day soak
@@ -192,7 +192,7 @@ presentation authority.
 
 The P0 foundation gate is complete: existing topology behavior is process-tested, accepted peers and
 PTY writes have adversarial coverage, blocked PTYs recover exact ordered input without starving
-another workspace, the process benchmark harness is checked in, and the first-release decisions are
+another space, the process benchmark harness is checked in, and the first-release decisions are
 recorded.
 
 Remaining work and current priority live only in [`../TODO.md`](../TODO.md); desired outcomes and

@@ -8,7 +8,8 @@ sessions through one typed command model—without requiring a hosted service.
 
 In mathematics, a lemma is a small proven result used to establish something larger. This project
 follows the same philosophy: provide one dependable terminal primitive that people and agents can
-compose into their own workflows.
+compose into their own workflows. Lemma calls each persistent multiplexer session a **space**; spaces
+contain windows and panes, while project/worktree workspaces remain extension-level concepts.
 
 ## Why Lemma
 
@@ -24,7 +25,7 @@ compose into their own workflows.
 - **Yours to operate:** Lemma runs as a per-user daemon, keeps working when clients detach, and is
   distributed under the permissive MIT license.
 
-The current vertical slice provides up to 64 named persistent workspaces in one per-user daemon,
+The current vertical slice provides up to 64 named persistent spaces in one per-user daemon,
 each with up to 16 generationally identified windows and 64 panes distributed across them. It
 supports start, attach, detach, list, window-list, and kill commands, plus release-enabled invariant
 assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
@@ -112,22 +113,22 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 [`docs/protocol.md`](docs/protocol.md) for current and target wire contracts, and
 [`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership and limitations.
 
-## Workspace/window mux
+## Spaces, windows, and panes
 
 ```sh
-./build/debug/lemma new work       # start workspace "work" and attach
+./build/debug/lemma new work       # start space "work" and attach
 # Press C-b d to detach.
-./build/debug/lemma new logs       # create another workspace in the same daemon
-./build/debug/lemma list           # list all workspaces
+./build/debug/lemma new logs       # create another space in the same daemon
+./build/debug/lemma list           # list all spaces
 ./build/debug/lemma windows work   # list work's windows
 ./build/debug/lemma attach work    # reattach to work
-./build/debug/lemma kill work      # stop one workspace
-./build/debug/lemma kill-all       # stop every workspace
+./build/debug/lemma kill work      # stop one space
+./build/debug/lemma kill-all       # stop every space
 ```
 
-Each workspace permits one attached client, owns an ordered set of windows, and gives each pane its
+Each space permits one attached client, owns an ordered set of windows, and gives each pane its
 own login shell, PTY, and terminal. Lemma inherits the daemon's launch environment, advertises
-`xterm-256color`, and resizes pane PTYs from the active window's split layout. Workspace names
+`xterm-256color`, and resizes pane PTYs from the active window's split layout. Space names
 contain 1-32 ASCII letters, digits, underscores, or hyphens.
 The built-in key table follows tmux defaults:
 

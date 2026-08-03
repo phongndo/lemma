@@ -611,8 +611,8 @@ namespace {
 
 } // namespace
 
-[[nodiscard]] auto parse_workspace_listing(const std::string_view output)
-    -> std::optional<WorkspaceListing> {
+[[nodiscard]] auto parse_space_listing(const std::string_view output)
+    -> std::optional<SpaceListing> {
   const auto prefix = output.find(": ");
   if (prefix == std::string_view::npos) {
     return std::nullopt;
@@ -648,7 +648,7 @@ namespace {
       *rows > std::numeric_limits<std::uint16_t>::max()) {
     return std::nullopt;
   }
-  return WorkspaceListing{
+  return SpaceListing{
       .windows = static_cast<std::size_t>(*windows),
       .panes = static_cast<std::size_t>(*panes),
       .focused_pid = static_cast<pid_t>(*focused_pid),

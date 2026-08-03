@@ -39,8 +39,7 @@ namespace {
 constexpr auto command_attach = protocol::wire_byte(protocol::ControlCommand::attach);
 constexpr auto command_create = protocol::wire_byte(protocol::ControlCommand::create);
 constexpr auto command_list = protocol::wire_byte(protocol::ControlCommand::list);
-constexpr auto command_list_workspace =
-    protocol::wire_byte(protocol::ControlCommand::list_workspace);
+constexpr auto command_list_space = protocol::wire_byte(protocol::ControlCommand::list_space);
 constexpr auto command_list_windows = protocol::wire_byte(protocol::ControlCommand::list_windows);
 constexpr auto command_kill = protocol::wire_byte(protocol::ControlCommand::kill);
 constexpr auto command_kill_all = protocol::wire_byte(protocol::ControlCommand::kill_all);
@@ -49,16 +48,16 @@ constexpr auto response_busy = protocol::wire_byte(protocol::ControlResponse::bu
 constexpr auto response_missing = protocol::wire_byte(protocol::ControlResponse::missing);
 constexpr auto response_capacity = protocol::wire_byte(protocol::ControlResponse::capacity);
 constexpr auto response_failed = protocol::wire_byte(protocol::ControlResponse::failed);
-constexpr std::size_t panes_per_workspace_max =
-    static_cast<std::size_t>(limits::panes_hard_max / limits::workspaces_hard_max);
-constexpr std::size_t windows_per_workspace_max =
-    static_cast<std::size_t>(limits::windows_hard_max / limits::workspaces_hard_max);
-constexpr std::size_t panes_per_window_max = panes_per_workspace_max;
+constexpr std::size_t panes_per_space_max =
+    static_cast<std::size_t>(limits::panes_hard_max / limits::spaces_hard_max);
+constexpr std::size_t windows_per_space_max =
+    static_cast<std::size_t>(limits::windows_hard_max / limits::spaces_hard_max);
+constexpr std::size_t panes_per_window_max = panes_per_space_max;
 constexpr std::size_t layout_nodes_per_window_max = (panes_per_window_max * 2U) - 1U;
 constexpr std::size_t process_name_bytes_max = 64;
-static_assert(panes_per_workspace_max > 0);
-static_assert(windows_per_workspace_max > 0);
-static_assert(windows_per_workspace_max <= render::status_windows_max);
+static_assert(panes_per_space_max > 0);
+static_assert(windows_per_space_max > 0);
+static_assert(windows_per_space_max <= render::status_windows_max);
 using platform::close_descriptor;
 using platform::set_nonblocking;
 using render::ClientOutputState;
@@ -135,19 +134,18 @@ struct PtyDrainResult final {
   return drain;
 }
 
-struct WorkspaceName final {
-  std::array<char, protocol::workspace_name_bytes_max> bytes{};
+struct SpaceName final {
+  std::array<char, protocol::space_name_bytes_max> bytes{};
   std::size_t size{0};
 
   [[nodiscard]] auto view() const noexcept -> std::string_view { return {bytes.data(), size}; }
 };
 
-[[nodiscard]] constexpr auto valid_workspace_name(const std::string_view workspace) noexcept
-    -> bool {
-  if (workspace.empty() || workspace.size() > protocol::workspace_name_bytes_max) {
+[[nodiscard]] constexpr auto valid_space_name(const std::string_view space) noexcept -> bool {
+  if (space.empty() || space.size() > protocol::space_name_bytes_max) {
     return false;
   }
-  return std::ranges::all_of(workspace, [](const char character) {
+  return std::ranges::all_of(space, [](const char character) {
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
@@ -223,21 +221,20 @@ struct WindowSlot final {
   std::uint32_t generation{0};
 };
 
-struct Workspace final {
-  Workspace(const std::string_view workspace_name,
-            std::unique_ptr<FrameBuffer> created_frame) noexcept
-      : name_size(workspace_name.size()), frame(std::move(created_frame)) {
-    std::memcpy(name.data(), workspace_name.data(), workspace_name.size());
+struct Space final {
+  Space(const std::string_view space_name, std::unique_ptr<FrameBuffer> created_frame) noexcept
+      : name_size(space_name.size()), frame(std::move(created_frame)) {
+    std::memcpy(name.data(), space_name.data(), space_name.size());
   }
 
-  Workspace(const Workspace&) = delete;
-  auto operator=(const Workspace&) -> Workspace& = delete;
-  Workspace(Workspace&&) = delete;
-  auto operator=(Workspace&&) -> Workspace& = delete;
+  Space(const Space&) = delete;
+  auto operator=(const Space&) -> Space& = delete;
+  Space(Space&&) = delete;
+  auto operator=(Space&&) -> Space& = delete;
 
-  ~Workspace() { close_descriptor(client); }
+  ~Space() { close_descriptor(client); }
 
-  [[nodiscard]] auto workspace_name() const noexcept -> std::string_view {
+  [[nodiscard]] auto space_name() const noexcept -> std::string_view {
     return {name.data(), name_size};
   }
 
@@ -250,10 +247,10 @@ struct Workspace final {
     input_backpressured = false;
   }
 
-  std::array<char, protocol::workspace_name_bytes_max> name{};
+  std::array<char, protocol::space_name_bytes_max> name{};
   std::size_t name_size{0};
   std::unique_ptr<FrameBuffer> frame;
-  std::array<WindowSlot, windows_per_workspace_max> windows{};
+  std::array<WindowSlot, windows_per_space_max> windows{};
   WindowId active_window;
   WindowId previous_window;
   protocol::ClientDecoder decoder;
@@ -317,29 +314,28 @@ struct Workspace final {
   return generation == std::numeric_limits<std::uint32_t>::max() ? 1U : generation + 1U;
 }
 
-[[nodiscard]] auto find_window(Workspace& workspace, const WindowId id) noexcept -> Window* {
-  if (!id.is_valid() || id.slot() >= workspace.windows.size()) {
+[[nodiscard]] auto find_window(Space& space, const WindowId id) noexcept -> Window* {
+  if (!id.is_valid() || id.slot() >= space.windows.size()) {
     return nullptr;
   }
-  auto& slot = std::span(workspace.windows).subspan(id.slot(), 1).front();
+  auto& slot = std::span(space.windows).subspan(id.slot(), 1).front();
   return slot.generation == id.generation() ? slot.window.get() : nullptr;
 }
 
-[[nodiscard]] auto find_window(const Workspace& workspace, const WindowId id) noexcept
-    -> const Window* {
-  if (!id.is_valid() || id.slot() >= workspace.windows.size()) {
+[[nodiscard]] auto find_window(const Space& space, const WindowId id) noexcept -> const Window* {
+  if (!id.is_valid() || id.slot() >= space.windows.size()) {
     return nullptr;
   }
-  const auto& slot = std::span(workspace.windows).subspan(id.slot(), 1).front();
+  const auto& slot = std::span(space.windows).subspan(id.slot(), 1).front();
   return slot.generation == id.generation() ? slot.window.get() : nullptr;
 }
 
-[[nodiscard]] auto active_window(Workspace& workspace) noexcept -> Window* {
-  return find_window(workspace, workspace.active_window);
+[[nodiscard]] auto active_window(Space& space) noexcept -> Window* {
+  return find_window(space, space.active_window);
 }
 
-[[nodiscard]] auto active_window(const Workspace& workspace) noexcept -> const Window* {
-  return find_window(workspace, workspace.active_window);
+[[nodiscard]] auto active_window(const Space& space) noexcept -> const Window* {
+  return find_window(space, space.active_window);
 }
 
 [[nodiscard]] auto pane_count(const Window& window) noexcept -> std::size_t {
@@ -347,9 +343,9 @@ struct Workspace final {
       std::ranges::count_if(window.panes, [](const auto& pane) { return pane != nullptr; }));
 }
 
-[[nodiscard]] auto pane_count(const Workspace& workspace) noexcept -> std::size_t {
+[[nodiscard]] auto pane_count(const Space& space) noexcept -> std::size_t {
   std::size_t count = 0;
-  for (const auto& slot : workspace.windows) {
+  for (const auto& slot : space.windows) {
     if (slot.window != nullptr) {
       count += pane_count(*slot.window);
     }
@@ -357,21 +353,21 @@ struct Workspace final {
   return count;
 }
 
-[[nodiscard]] auto window_count(const Workspace& workspace) noexcept -> std::size_t {
+[[nodiscard]] auto window_count(const Space& space) noexcept -> std::size_t {
   return static_cast<std::size_t>(std::ranges::count_if(
-      workspace.windows, [](const WindowSlot& slot) { return slot.window != nullptr; }));
+      space.windows, [](const WindowSlot& slot) { return slot.window != nullptr; }));
 }
 
-[[nodiscard]] auto allocate_window(Workspace& workspace) noexcept -> Window* {
-  if (pane_count(workspace) >= panes_per_workspace_max) {
+[[nodiscard]] auto allocate_window(Space& space) noexcept -> Window* {
+  if (pane_count(space) >= panes_per_space_max) {
     return nullptr;
   }
-  for (std::size_t index = 0; index < workspace.windows.size(); ++index) {
-    auto& slot = std::span(workspace.windows).subspan(index, 1).front();
+  for (std::size_t index = 0; index < space.windows.size(); ++index) {
+    auto& slot = std::span(space.windows).subspan(index, 1).front();
     if (slot.window != nullptr) {
       continue;
     }
-    auto first_pane = create_pane(workspace.columns, pane_rows(workspace.rows));
+    auto first_pane = create_pane(space.columns, pane_rows(space.rows));
     if (first_pane == nullptr) {
       return nullptr;
     }
@@ -381,29 +377,28 @@ struct Workspace final {
     if (created == nullptr) {
       return nullptr;
     }
-    created->layout_columns = workspace.columns;
-    created->layout_rows = pane_rows(workspace.rows);
+    created->layout_columns = space.columns;
+    created->layout_rows = pane_rows(space.rows);
     slot.generation = generation;
     slot.window = std::move(created);
-    workspace.previous_window = workspace.active_window;
-    workspace.active_window = id;
+    space.previous_window = space.active_window;
+    space.active_window = id;
     return slot.window.get();
   }
   return nullptr;
 }
 
-[[nodiscard]] auto create_workspace(const std::string_view name) noexcept
-    -> std::unique_ptr<Workspace> {
+[[nodiscard]] auto create_space(const std::string_view name) noexcept -> std::unique_ptr<Space> {
   auto frame = std::unique_ptr<FrameBuffer>(new (std::nothrow) FrameBuffer{});
   if (frame == nullptr) {
     return nullptr;
   }
-  auto workspace = std::unique_ptr<Workspace>(new (std::nothrow) Workspace(name, std::move(frame)));
-  if (workspace == nullptr || allocate_window(*workspace) == nullptr) {
+  auto space = std::unique_ptr<Space>(new (std::nothrow) Space(name, std::move(frame)));
+  if (space == nullptr || allocate_window(*space) == nullptr) {
     return nullptr;
   }
-  workspace->previous_window = workspace->active_window;
-  return workspace;
+  space->previous_window = space->active_window;
+  return space;
 }
 
 [[nodiscard]] auto empty_pane_slot(Window& window) noexcept -> std::optional<std::size_t> {
@@ -598,30 +593,29 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_window_max>;
   return resolve_node(window, 0, viewport, 0);
 }
 
-[[nodiscard]] auto resolve_workspace_layout(Workspace& workspace, Window& window) noexcept -> bool {
-  // PTY resizing is not transactional: retire the workspace rather than continue after a partial
+[[nodiscard]] auto resolve_space_layout(Space& space, Window& window) noexcept -> bool {
+  // PTY resizing is not transactional: retire the space rather than continue after a partial
   // geometry update.
   const bool resolved = resolve_layout(window);
-  workspace.active = workspace.active && resolved;
+  space.active = space.active && resolved;
   return resolved;
 }
 
-void schedule_frame(Workspace& workspace, const bool force_full,
-                    const bool immediate = true) noexcept {
+void schedule_frame(Space& space, const bool force_full, const bool immediate = true) noexcept {
   constexpr auto frame_delay = std::chrono::milliseconds(2);
   const auto deadline =
       immediate ? std::chrono::steady_clock::now() : std::chrono::steady_clock::now() + frame_delay;
-  if (!workspace.frame_pending || deadline < workspace.frame_deadline) {
-    workspace.frame_deadline = deadline;
+  if (!space.frame_pending || deadline < space.frame_deadline) {
+    space.frame_deadline = deadline;
   }
-  workspace.frame_pending = true;
-  workspace.force_full_pending = workspace.force_full_pending || force_full;
+  space.frame_pending = true;
+  space.force_full_pending = space.force_full_pending || force_full;
 }
 
-[[nodiscard]] auto fit_window_to_viewport(Workspace& workspace, Window& window) noexcept -> bool {
+[[nodiscard]] auto fit_window_to_viewport(Space& space, Window& window) noexcept -> bool {
   const render::PaneRectangle viewport{
-      .columns = workspace.columns,
-      .rows = pane_rows(workspace.rows),
+      .columns = space.columns,
+      .rows = pane_rows(space.rows),
   };
   if (!layout_fits_node(window, 0, viewport, 0)) {
     window.layout_suspended = true;
@@ -630,101 +624,101 @@ void schedule_frame(Workspace& workspace, const bool force_full,
   window.layout_suspended = false;
   window.layout_columns = viewport.columns;
   window.layout_rows = viewport.rows;
-  return resolve_workspace_layout(workspace, window);
+  return resolve_space_layout(space, window);
 }
 
-[[nodiscard]] auto select_window(Workspace& workspace, const WindowId id) noexcept -> bool {
-  auto* const selected = find_window(workspace, id);
+[[nodiscard]] auto select_window(Space& space, const WindowId id) noexcept -> bool {
+  auto* const selected = find_window(space, id);
   if (selected == nullptr) {
     return false;
   }
-  if (workspace.active_window == id) {
+  if (space.active_window == id) {
     return true;
   }
-  workspace.previous_window = workspace.active_window;
-  workspace.active_window = id;
-  workspace.output.reset();
-  if (!fit_window_to_viewport(workspace, *selected)) {
-    workspace.active = false;
+  space.previous_window = space.active_window;
+  space.active_window = id;
+  space.output.reset();
+  if (!fit_window_to_viewport(space, *selected)) {
+    space.active = false;
     return false;
   }
-  schedule_frame(workspace, true);
+  schedule_frame(space, true);
   return true;
 }
 
-void cycle_window(Workspace& workspace, const bool forward) noexcept {
-  const auto current = static_cast<std::size_t>(workspace.active_window.slot());
-  for (std::size_t offset = 1; offset <= workspace.windows.size(); ++offset) {
+void cycle_window(Space& space, const bool forward) noexcept {
+  const auto current = static_cast<std::size_t>(space.active_window.slot());
+  for (std::size_t offset = 1; offset <= space.windows.size(); ++offset) {
     const auto candidate =
-        forward ? (current + offset) % workspace.windows.size()
-                : (current + workspace.windows.size() - (offset % workspace.windows.size())) %
-                      workspace.windows.size();
-    const auto& slot = std::span(workspace.windows).subspan(candidate, 1).front();
+        forward ? (current + offset) % space.windows.size()
+                : (current + space.windows.size() - (offset % space.windows.size())) %
+                      space.windows.size();
+    const auto& slot = std::span(space.windows).subspan(candidate, 1).front();
     if (slot.window != nullptr) {
-      static_cast<void>(select_window(workspace, slot.window->id));
+      static_cast<void>(select_window(space, slot.window->id));
       return;
     }
   }
 }
 
-void remove_window(Workspace& workspace, const WindowId id) noexcept {
-  auto* const window = find_window(workspace, id);
+void remove_window(Space& space, const WindowId id) noexcept {
+  auto* const window = find_window(space, id);
   if (window == nullptr) {
     return;
   }
   const auto removed_slot = static_cast<std::size_t>(id.slot());
-  std::span(workspace.windows).subspan(removed_slot, 1).front().window.reset();
-  if (window_count(workspace) == 0) {
-    workspace.active = false;
+  std::span(space.windows).subspan(removed_slot, 1).front().window.reset();
+  if (window_count(space) == 0) {
+    space.active = false;
     return;
   }
-  if (workspace.active_window != id) {
-    schedule_frame(workspace, false);
+  if (space.active_window != id) {
+    schedule_frame(space, false);
     return;
   }
-  for (std::size_t offset = 1; offset <= workspace.windows.size(); ++offset) {
-    const auto candidate = (removed_slot + offset) % workspace.windows.size();
-    const auto& slot = std::span(workspace.windows).subspan(candidate, 1).front();
+  for (std::size_t offset = 1; offset <= space.windows.size(); ++offset) {
+    const auto candidate = (removed_slot + offset) % space.windows.size();
+    const auto& slot = std::span(space.windows).subspan(candidate, 1).front();
     if (slot.window != nullptr) {
-      workspace.active_window = slot.window->id;
-      workspace.previous_window = workspace.active_window;
-      workspace.output.reset();
-      if (!fit_window_to_viewport(workspace, *slot.window)) {
-        workspace.active = false;
+      space.active_window = slot.window->id;
+      space.previous_window = space.active_window;
+      space.output.reset();
+      if (!fit_window_to_viewport(space, *slot.window)) {
+        space.active = false;
         return;
       }
-      schedule_frame(workspace, true);
+      schedule_frame(space, true);
       return;
     }
   }
 }
 
-void create_window(Workspace& workspace) noexcept {
-  auto* const created = allocate_window(workspace);
+void create_window(Space& space) noexcept {
+  auto* const created = allocate_window(space);
   if (created == nullptr) {
     return;
   }
-  workspace.output.reset();
-  if (!fit_window_to_viewport(workspace, *created)) {
-    workspace.active = false;
+  space.output.reset();
+  if (!fit_window_to_viewport(space, *created)) {
+    space.active = false;
     return;
   }
-  schedule_frame(workspace, true);
+  schedule_frame(space, true);
 }
 
 // Splitting is an explicit bounded topology transaction.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto split_focused_pane(Workspace& workspace, Window& window,
-                                      const SplitAxis axis) noexcept -> bool {
+[[nodiscard]] auto split_focused_pane(Space& space, Window& window, const SplitAxis axis) noexcept
+    -> bool {
   if (window.zoomed) {
     window.zoomed = false;
-    if (!resolve_workspace_layout(workspace, window)) {
+    if (!resolve_space_layout(space, window)) {
       return false;
     }
     // Leaving zoom changes both the composed view and pane geometry even if the split is rejected.
-    schedule_frame(workspace, true);
+    schedule_frame(space, true);
   }
-  if (pane_count(workspace) >= panes_per_workspace_max) {
+  if (pane_count(space) >= panes_per_space_max) {
     return false;
   }
   const auto focused_index = static_cast<std::size_t>(window.focused_pane);
@@ -798,15 +792,15 @@ void create_window(Workspace& workspace) noexcept {
   std::span(window.panes).subspan(*pane_slot, 1).front() = std::move(created);
   window.previous_pane = window.focused_pane;
   window.focused_pane = static_cast<std::uint16_t>(*pane_slot);
-  if (!resolve_workspace_layout(workspace, window)) {
+  if (!resolve_space_layout(space, window)) {
     return false;
   }
-  schedule_frame(workspace, true);
+  schedule_frame(space, true);
   return true;
 }
 
-[[nodiscard]] auto close_pane(Workspace& workspace, Window& window,
-                              const std::size_t pane_index) noexcept -> bool {
+[[nodiscard]] auto close_pane(Space& space, Window& window, const std::size_t pane_index) noexcept
+    -> bool {
   auto& pane = std::span(window.panes).subspan(pane_index, 1).front();
   if (pane == nullptr) {
     return false;
@@ -814,7 +808,7 @@ void create_window(Workspace& workspace) noexcept {
   const bool was_focused = pane_index == window.focused_pane;
   if (pane_count(window) == 1) {
     const auto id = window.id;
-    remove_window(workspace, id);
+    remove_window(space, id);
     return true;
   }
   const auto leaf_index = node_for_pane(window, pane_index);
@@ -854,32 +848,32 @@ void create_window(Workspace& workspace) noexcept {
     window.previous_pane = window.focused_pane;
   }
   window.zoomed = false;
-  if (!resolve_workspace_layout(workspace, window)) {
+  if (!resolve_space_layout(space, window)) {
     return false;
   }
-  schedule_frame(workspace, true);
+  schedule_frame(space, true);
   return true;
 }
 
-void focus_pane(Workspace& workspace, Window& window, const std::uint16_t pane_index) noexcept {
+void focus_pane(Space& space, Window& window, const std::uint16_t pane_index) noexcept {
   if (pane_index == window.focused_pane ||
       std::span(window.panes).subspan(pane_index, 1).front() == nullptr) {
     return;
   }
   window.previous_pane = window.focused_pane;
   window.focused_pane = pane_index;
-  if (window.zoomed && !resolve_workspace_layout(workspace, window)) {
+  if (window.zoomed && !resolve_space_layout(space, window)) {
     return;
   }
-  schedule_frame(workspace, window.zoomed);
+  schedule_frame(space, window.zoomed);
 }
 
-void focus_next(Workspace& workspace, Window& window) noexcept {
+void focus_next(Space& space, Window& window) noexcept {
   for (std::size_t offset = 1; offset <= window.panes.size(); ++offset) {
     const auto candidate =
         (static_cast<std::size_t>(window.focused_pane) + offset) % window.panes.size();
     if (std::span(window.panes).subspan(candidate, 1).front() != nullptr) {
-      focus_pane(workspace, window, static_cast<std::uint16_t>(candidate));
+      focus_pane(space, window, static_cast<std::uint16_t>(candidate));
       return;
     }
   }
@@ -894,8 +888,7 @@ enum class FocusDirection : std::uint8_t {
 
 // Directional scoring handles each axis explicitly and remains bounded by pane capacity.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void focus_direction(Workspace& workspace, Window& window,
-                     const FocusDirection direction) noexcept {
+void focus_direction(Space& space, Window& window, const FocusDirection direction) noexcept {
   // Zoom resizes focused panes to the viewport, so derive stable tiled geometry from the tree.
   PaneRectangles rectangles{};
   const render::PaneRectangle viewport{
@@ -959,7 +952,7 @@ void focus_direction(Workspace& workspace, Window& window,
     }
   }
   if (best.has_value()) {
-    focus_pane(workspace, window, *best);
+    focus_pane(space, window, *best);
   }
 }
 
@@ -1038,24 +1031,24 @@ void focus_direction(Workspace& workspace, Window& window,
 
 // This is the only function that translates validated commands into authoritative mux mutations.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto execute_workspace_command(void* const context, const Command& command) noexcept
+[[nodiscard]] auto execute_space_command(void* const context, const Command& command) noexcept
     -> CommandResult {
-  auto& workspace = *static_cast<Workspace*>(context);
-  if (command.target.workspace.is_valid() || command.target.pane.is_valid()) {
+  auto& space = *static_cast<Space*>(context);
+  if (command.target.space.is_valid() || command.target.pane.is_valid()) {
     return {.status = CommandStatus::invalid_target};
   }
   if (command.kind == CommandKind::detach_client) {
     return {.status = CommandStatus::detach_requested};
   }
-  if (command.kind == CommandKind::stop_workspace) {
-    const bool changed = workspace.active;
-    workspace.active = false;
+  if (command.kind == CommandKind::stop_space) {
+    const bool changed = space.active;
+    space.active = false;
     return command_status(changed);
   }
 
-  auto* const window = active_window(workspace);
+  auto* const window = active_window(space);
   if (window == nullptr) {
-    workspace.active = false;
+    space.active = false;
     return {.status = CommandStatus::failed};
   }
   if (command.target.window.is_valid() && command.target.window != window->id) {
@@ -1063,120 +1056,120 @@ void focus_direction(Workspace& workspace, Window& window,
   }
 
   const auto focus_result = [&](const std::uint16_t previous) {
-    return workspace.active ? command_status(window->focused_pane != previous)
-                            : CommandResult{.status = CommandStatus::failed};
+    return space.active ? command_status(window->focused_pane != previous)
+                        : CommandResult{.status = CommandStatus::failed};
   };
   switch (command.kind) {
   case CommandKind::none:
   case CommandKind::detach_client:
-  case CommandKind::stop_workspace:
+  case CommandKind::stop_space:
     return {.status = CommandStatus::invalid_command};
   case CommandKind::split_left_right:
-    if (split_focused_pane(workspace, *window, SplitAxis::left_right)) {
+    if (split_focused_pane(space, *window, SplitAxis::left_right)) {
       return {.status = CommandStatus::applied};
     }
-    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+    return {.status = space.active ? CommandStatus::unavailable : CommandStatus::failed};
   case CommandKind::split_top_bottom:
-    if (split_focused_pane(workspace, *window, SplitAxis::top_bottom)) {
+    if (split_focused_pane(space, *window, SplitAxis::top_bottom)) {
       return {.status = CommandStatus::applied};
     }
-    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+    return {.status = space.active ? CommandStatus::unavailable : CommandStatus::failed};
   case CommandKind::focus_left: {
     const auto previous = window->focused_pane;
-    focus_direction(workspace, *window, FocusDirection::left);
+    focus_direction(space, *window, FocusDirection::left);
     return focus_result(previous);
   }
   case CommandKind::focus_right: {
     const auto previous = window->focused_pane;
-    focus_direction(workspace, *window, FocusDirection::right);
+    focus_direction(space, *window, FocusDirection::right);
     return focus_result(previous);
   }
   case CommandKind::focus_up: {
     const auto previous = window->focused_pane;
-    focus_direction(workspace, *window, FocusDirection::up);
+    focus_direction(space, *window, FocusDirection::up);
     return focus_result(previous);
   }
   case CommandKind::focus_down: {
     const auto previous = window->focused_pane;
-    focus_direction(workspace, *window, FocusDirection::down);
+    focus_direction(space, *window, FocusDirection::down);
     return focus_result(previous);
   }
   case CommandKind::focus_next: {
     const auto previous = window->focused_pane;
-    focus_next(workspace, *window);
+    focus_next(space, *window);
     return focus_result(previous);
   }
   case CommandKind::focus_previous: {
     const auto previous = window->focused_pane;
-    focus_pane(workspace, *window, window->previous_pane);
+    focus_pane(space, *window, window->previous_pane);
     return focus_result(previous);
   }
   case CommandKind::close_pane:
-    if (close_pane(workspace, *window, window->focused_pane)) {
+    if (close_pane(space, *window, window->focused_pane)) {
       return {.status = CommandStatus::applied};
     }
-    return {.status = workspace.active ? CommandStatus::unavailable : CommandStatus::failed};
+    return {.status = space.active ? CommandStatus::unavailable : CommandStatus::failed};
   case CommandKind::toggle_zoom:
     window->zoomed = !window->zoomed;
-    if (!resolve_workspace_layout(workspace, *window)) {
+    if (!resolve_space_layout(space, *window)) {
       return {.status = CommandStatus::failed};
     }
-    schedule_frame(workspace, true);
+    schedule_frame(space, true);
     return {.status = CommandStatus::applied};
   case CommandKind::create_window: {
-    const auto previous = window_count(workspace);
-    create_window(workspace);
-    if (!workspace.active) {
+    const auto previous = window_count(space);
+    create_window(space);
+    if (!space.active) {
       return {.status = CommandStatus::failed};
     }
-    return previous == window_count(workspace) ? CommandResult{.status = CommandStatus::unavailable}
-                                               : CommandResult{.status = CommandStatus::applied};
+    return previous == window_count(space) ? CommandResult{.status = CommandStatus::unavailable}
+                                           : CommandResult{.status = CommandStatus::applied};
   }
   case CommandKind::next_window: {
-    const auto previous = workspace.active_window;
-    cycle_window(workspace, true);
-    return workspace.active ? command_status(previous != workspace.active_window)
-                            : CommandResult{.status = CommandStatus::failed};
+    const auto previous = space.active_window;
+    cycle_window(space, true);
+    return space.active ? command_status(previous != space.active_window)
+                        : CommandResult{.status = CommandStatus::failed};
   }
   case CommandKind::previous_window: {
-    const auto previous = workspace.active_window;
-    cycle_window(workspace, false);
-    return workspace.active ? command_status(previous != workspace.active_window)
-                            : CommandResult{.status = CommandStatus::failed};
+    const auto previous = space.active_window;
+    cycle_window(space, false);
+    return space.active ? command_status(previous != space.active_window)
+                        : CommandResult{.status = CommandStatus::failed};
   }
   case CommandKind::close_window:
-    remove_window(workspace, window->id);
+    remove_window(space, window->id);
     return {.status = CommandStatus::applied};
   case CommandKind::select_window: {
     const auto slot_index = static_cast<std::size_t>(command.argument);
-    if (slot_index >= workspace.windows.size()) {
+    if (slot_index >= space.windows.size()) {
       return {.status = CommandStatus::invalid_target};
     }
-    const auto& slot = std::span(workspace.windows).subspan(slot_index, 1).front();
+    const auto& slot = std::span(space.windows).subspan(slot_index, 1).front();
     if (slot.window == nullptr) {
       return {.status = CommandStatus::unavailable};
     }
-    const auto previous = workspace.active_window;
-    if (!select_window(workspace, slot.window->id)) {
-      return {.status = workspace.active ? CommandStatus::invalid_target : CommandStatus::failed};
+    const auto previous = space.active_window;
+    if (!select_window(space, slot.window->id)) {
+      return {.status = space.active ? CommandStatus::invalid_target : CommandStatus::failed};
     }
-    return command_status(previous != workspace.active_window);
+    return command_status(previous != space.active_window);
   }
   }
   return {.status = CommandStatus::invalid_command};
 }
 
-[[nodiscard]] auto dispatch_workspace_command(Workspace& workspace, const Command& command) noexcept
+[[nodiscard]] auto dispatch_space_command(Space& space, const Command& command) noexcept
     -> CommandResult {
-  const CommandDispatcher dispatcher(&execute_workspace_command, &workspace);
+  const CommandDispatcher dispatcher(&execute_space_command, &space);
   return dispatcher.dispatch(command);
 }
 
 [[nodiscard]] auto
-collect_surfaces(Workspace& workspace,
+collect_surfaces(Space& space,
                  std::array<render::PaneSurface, panes_per_window_max>& storage) noexcept
     -> std::span<const render::PaneSurface> {
-  auto* const window = active_window(workspace);
+  auto* const window = active_window(space);
   if (window == nullptr || window->layout_suspended) {
     return std::span<const render::PaneSurface>{};
   }
@@ -1201,8 +1194,8 @@ collect_surfaces(Workspace& workspace,
   return std::span(storage).first(count);
 }
 
-[[nodiscard]] auto resize_workspace(Workspace& workspace,
-                                    const protocol::Dimensions dimensions) noexcept -> bool {
+[[nodiscard]] auto resize_space(Space& space, const protocol::Dimensions dimensions) noexcept
+    -> bool {
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
   // Record every physical resize and discard any unsent frame composed for the previous viewport.
@@ -1210,14 +1203,14 @@ collect_surfaces(Workspace& workspace,
   // until it fits again. Preserve that geometry and send a surface-free clear frame constrained to
   // the physical viewport instead of rendering stale rectangles outside it. Checking the unzoomed
   // tree also prevents an undersized viewport from becoming latent while zoomed.
-  workspace.columns = columns;
-  workspace.rows = rows;
-  workspace.output.reset();
-  auto* const window = active_window(workspace);
-  if (window == nullptr || !fit_window_to_viewport(workspace, *window)) {
+  space.columns = columns;
+  space.rows = rows;
+  space.output.reset();
+  auto* const window = active_window(space);
+  if (window == nullptr || !fit_window_to_viewport(space, *window)) {
     return false;
   }
-  schedule_frame(workspace, true);
+  schedule_frame(space, true);
   return true;
 }
 
@@ -1228,11 +1221,11 @@ enum class ParseResult : std::uint8_t {
   error,
 };
 
-// Packet dispatch exhaustively maps validated protocol messages to workspace transitions.
+// Packet dispatch exhaustively maps validated protocol messages to space transitions.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto parse_client_packets(Workspace& workspace) noexcept -> ParseResult {
+[[nodiscard]] auto parse_client_packets(Space& space) noexcept -> ParseResult {
   while (true) {
-    const auto decoded = workspace.decoder.next();
+    const auto decoded = space.decoder.next();
     if (!decoded.has_value()) {
       return ParseResult::error;
     }
@@ -1243,18 +1236,18 @@ enum class ParseResult : std::uint8_t {
     switch (message.kind) {
     case protocol::ClientMessageKind::detach: {
       const Command command{.kind = CommandKind::detach_client, .origin = CommandOrigin::client};
-      const auto result = dispatch_workspace_command(workspace, command);
-      workspace.decoder.consume();
+      const auto result = dispatch_space_command(space, command);
+      space.decoder.consume();
       return result.status == CommandStatus::detach_requested ? ParseResult::detach
                                                               : ParseResult::error;
     }
     case protocol::ClientMessageKind::resize:
-      if (!resize_workspace(workspace, message.dimensions)) {
+      if (!resize_space(space, message.dimensions)) {
         return ParseResult::error;
       }
       break;
     case protocol::ClientMessageKind::input: {
-      auto* const window = active_window(workspace);
+      auto* const window = active_window(space);
       if (window == nullptr) {
         return ParseResult::error;
       }
@@ -1274,32 +1267,32 @@ enum class ParseResult : std::uint8_t {
     }
     case protocol::ClientMessageKind::pane_command: {
       const auto command = command_from_pane_command(message.pane_command);
-      if (!command.has_value() || !dispatch_workspace_command(workspace, *command).succeeded()) {
-        if (!workspace.active) {
-          workspace.decoder.consume();
+      if (!command.has_value() || !dispatch_space_command(space, *command).succeeded()) {
+        if (!space.active) {
+          space.decoder.consume();
           return ParseResult::detach;
         }
       }
       break;
     }
     }
-    workspace.decoder.consume();
-    if (!workspace.active) {
+    space.decoder.consume();
+    if (!space.active) {
       return ParseResult::detach;
     }
   }
 }
 
-[[nodiscard]] auto receive_client(Workspace& workspace) noexcept -> ParseResult {
-  const auto buffered = parse_client_packets(workspace);
+[[nodiscard]] auto receive_client(Space& space) noexcept -> ParseResult {
+  const auto buffered = parse_client_packets(space);
   if (buffered != ParseResult::keep) {
     return buffered;
   }
-  const auto available = workspace.decoder.writable_bytes();
+  const auto available = space.decoder.writable_bytes();
   if (available.empty()) {
     return ParseResult::error;
   }
-  const auto bytes_read = ::recv(workspace.client, available.data(), available.size(), 0);
+  const auto bytes_read = ::recv(space.client, available.data(), available.size(), 0);
   if (bytes_read == 0) {
     return ParseResult::detach;
   }
@@ -1307,10 +1300,10 @@ enum class ParseResult : std::uint8_t {
     return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ? ParseResult::keep
                                                                      : ParseResult::detach;
   }
-  if (!workspace.decoder.commit(static_cast<std::size_t>(bytes_read)).has_value()) {
+  if (!space.decoder.commit(static_cast<std::size_t>(bytes_read)).has_value()) {
     return ParseResult::error;
   }
-  return parse_client_packets(workspace);
+  return parse_client_packets(space);
 }
 
 [[nodiscard]] auto window_title(const Window& window) noexcept -> std::string_view {
@@ -1322,7 +1315,7 @@ enum class ParseResult : std::uint8_t {
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
 }
 
-[[nodiscard]] auto current_status_signature(const Workspace& workspace) noexcept -> std::uint64_t {
+[[nodiscard]] auto current_status_signature(const Space& space) noexcept -> std::uint64_t {
   constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
   constexpr std::uint64_t prime = 1'099'511'628'211ULL;
   std::uint64_t signature = offset_basis;
@@ -1330,13 +1323,13 @@ enum class ParseResult : std::uint8_t {
     signature ^= value;
     signature *= prime;
   };
-  for (std::size_t index = 0; index < workspace.windows.size(); ++index) {
-    const auto& slot = std::span(workspace.windows).subspan(index, 1).front();
+  for (std::size_t index = 0; index < space.windows.size(); ++index) {
+    const auto& slot = std::span(space.windows).subspan(index, 1).front();
     if (slot.window == nullptr) {
       continue;
     }
     mix(static_cast<std::uint8_t>(index + 1U));
-    mix(slot.window->id == workspace.active_window ? 1U : 0U);
+    mix(slot.window->id == space.active_window ? 1U : 0U);
     const auto title = window_title(*slot.window);
     for (const char character : std::span(title).first(std::min(title.size(), std::size_t{16}))) {
       mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
@@ -1347,57 +1340,55 @@ enum class ParseResult : std::uint8_t {
 }
 
 [[nodiscard]] auto
-collect_status_line(Workspace& workspace,
+collect_status_line(Space& space,
                     std::array<render::StatusWindow, render::status_windows_max>& storage) noexcept
     -> render::StatusLine {
   std::size_t count = 0;
-  for (std::size_t index = 0; index < workspace.windows.size(); ++index) {
-    auto& slot = std::span(workspace.windows).subspan(index, 1).front();
+  for (std::size_t index = 0; index < space.windows.size(); ++index) {
+    auto& slot = std::span(space.windows).subspan(index, 1).front();
     if (slot.window == nullptr) {
       continue;
     }
-    if (!workspace.status_valid) {
+    if (!space.status_valid) {
       auto& focused = *std::span(slot.window->panes).subspan(slot.window->focused_pane, 1).front();
       static_cast<void>(refresh_process_name(focused));
     }
     std::span(storage).subspan(count, 1).front() = {
         .number = static_cast<std::uint16_t>(index + 1U),
         .title = window_title(*slot.window),
-        .active = slot.window->id == workspace.active_window,
+        .active = slot.window->id == space.active_window,
     };
     ++count;
   }
-  const auto signature = current_status_signature(workspace);
-  const bool dirty = !workspace.status_valid || signature != workspace.status_signature;
-  workspace.status_signature = signature;
-  workspace.status_valid = true;
+  const auto signature = current_status_signature(space);
+  const bool dirty = !space.status_valid || signature != space.status_signature;
+  space.status_signature = signature;
+  space.status_valid = true;
   return {.windows = std::span(storage).first(count), .dirty = dirty};
 }
 
-[[nodiscard]] auto append_listing(ConnectionOutput& output, const Workspace& workspace) noexcept
-    -> bool {
-  const auto* const window = active_window(workspace);
+[[nodiscard]] auto append_listing(ConnectionOutput& output, const Space& space) noexcept -> bool {
+  const auto* const window = active_window(space);
   if (window == nullptr) {
     return false;
   }
   const auto& focused = *std::span(window->panes).subspan(window->focused_pane, 1).front();
   const auto title_value = window_title(*window);
-  return output.append_text("lemma workspace \"") &&
-         output.append_title(workspace.workspace_name()) && output.append_text("\": ") &&
-         output.append_number(window_count(workspace)) && output.append_text(" window(s), ") &&
-         output.append_number(pane_count(workspace)) &&
+  return output.append_text("lemma space \"") && output.append_title(space.space_name()) &&
+         output.append_text("\": ") && output.append_number(window_count(space)) &&
+         output.append_text(" window(s), ") && output.append_number(pane_count(space)) &&
          output.append_text(" pane(s), focused pid ") &&
          output.append_number(static_cast<std::uint64_t>(focused.child)) &&
-         output.append_text(workspace.client >= 0 ? ", attached, " : ", detached, ") &&
-         output.append_number(workspace.columns) && output.append_text("x") &&
-         output.append_number(workspace.rows) && output.append_text(", title \"") &&
+         output.append_text(space.client >= 0 ? ", attached, " : ", detached, ") &&
+         output.append_number(space.columns) && output.append_text("x") &&
+         output.append_number(space.rows) && output.append_text(", title \"") &&
          output.append_title(title_value) && output.append_text("\"\n");
 }
 
-[[nodiscard]] auto append_window_listings(ConnectionOutput& output,
-                                          const Workspace& workspace) noexcept -> bool {
-  for (std::size_t index = 0; index < workspace.windows.size(); ++index) {
-    const auto& slot = std::span(workspace.windows).subspan(index, 1).front();
+[[nodiscard]] auto append_window_listings(ConnectionOutput& output, const Space& space) noexcept
+    -> bool {
+  for (std::size_t index = 0; index < space.windows.size(); ++index) {
+    const auto& slot = std::span(space.windows).subspan(index, 1).front();
     if (slot.window == nullptr) {
       continue;
     }
@@ -1406,8 +1397,8 @@ collect_status_line(Workspace& workspace,
     if (!output.append_text("lemma window ") || !output.append_number(index + 1U) ||
         !output.append_text(": ") || !output.append_number(pane_count(window)) ||
         !output.append_text(" pane(s), ") ||
-        !output.append_text(window.id == workspace.active_window ? "active, title \""
-                                                                 : "inactive, title \"") ||
+        !output.append_text(window.id == space.active_window ? "active, title \""
+                                                             : "inactive, title \"") ||
         !output.append_title(title_value) || !output.append_text("\"\n")) {
       return false;
     }
@@ -1415,33 +1406,31 @@ collect_status_line(Workspace& workspace,
   return true;
 }
 
-using Workspaces =
-    std::array<std::unique_ptr<Workspace>, static_cast<std::size_t>(limits::workspaces_hard_max)>;
+using Spaces =
+    std::array<std::unique_ptr<Space>, static_cast<std::size_t>(limits::spaces_hard_max)>;
 
-[[nodiscard]] auto find_workspace(Workspaces& workspaces, const std::string_view name) noexcept
-    -> Workspace* {
-  for (auto& workspace : workspaces) {
-    if (workspace != nullptr && workspace->active && workspace->workspace_name() == name) {
-      return workspace.get();
+[[nodiscard]] auto find_space(Spaces& spaces, const std::string_view name) noexcept -> Space* {
+  for (auto& space : spaces) {
+    if (space != nullptr && space->active && space->space_name() == name) {
+      return space.get();
     }
   }
   return nullptr;
 }
 
-void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
-  for (auto& workspace : workspaces) {
-    if (workspace != nullptr && !workspace->active &&
-        workspace->pending_attach_slot == std::numeric_limits<std::uint32_t>::max()) {
-      workspace.reset();
+void reclaim_inactive_spaces(Spaces& spaces) noexcept {
+  for (auto& space : spaces) {
+    if (space != nullptr && !space->active &&
+        space->pending_attach_slot == std::numeric_limits<std::uint32_t>::max()) {
+      space.reset();
     }
   }
 }
 
-[[nodiscard]] auto empty_workspace_slot(Workspaces& workspaces) noexcept
-    -> std::unique_ptr<Workspace>* {
-  for (auto& workspace : workspaces) {
-    if (workspace == nullptr) {
-      return &workspace;
+[[nodiscard]] auto empty_space_slot(Spaces& spaces) noexcept -> std::unique_ptr<Space>* {
+  for (auto& space : spaces) {
+    if (space == nullptr) {
+      return &space;
     }
   }
   return nullptr;
@@ -1454,18 +1443,18 @@ void reclaim_inactive_workspaces(Workspaces& workspaces) noexcept {
                            output.append_text("\n"));
 }
 
-[[nodiscard]] auto append_all_listings(ConnectionOutput& output,
-                                       const Workspaces& workspaces) noexcept -> bool {
+[[nodiscard]] auto append_all_listings(ConnectionOutput& output, const Spaces& spaces) noexcept
+    -> bool {
   std::size_t listed = 0;
-  for (const auto& workspace : workspaces) {
-    if (workspace != nullptr && workspace->active) {
-      if (!append_listing(output, *workspace)) {
+  for (const auto& space : spaces) {
+    if (space != nullptr && space->active) {
+      if (!append_listing(output, *space)) {
         return false;
       }
       ++listed;
     }
   }
-  return listed > 0 || output.append_text("no lemma workspaces\n");
+  return listed > 0 || output.append_text("no lemma spaces\n");
 }
 
 enum class PendingState : std::uint8_t {
@@ -1490,12 +1479,12 @@ struct PendingConnection final {
   PendingState state{PendingState::unused};
   PendingAction action{PendingAction::close};
   std::byte command{};
-  WorkspaceName workspace;
-  std::array<std::byte, protocol::workspace_name_bytes_max> field{};
+  SpaceName space;
+  std::array<std::byte, protocol::space_name_bytes_max> field{};
   std::size_t field_size{0};
   std::size_t field_target{0};
   ConnectionOutput output;
-  Workspace* attach_workspace{nullptr};
+  Space* attach_space{nullptr};
   std::chrono::steady_clock::time_point deadline;
 };
 
@@ -1512,13 +1501,12 @@ void begin_pending_field(PendingConnection& pending, const PendingState state,
 }
 
 void release_attach_reservation(PendingConnection& pending, const std::size_t slot) noexcept {
-  if (pending.attach_workspace != nullptr &&
-      pending.attach_workspace->pending_attach_slot == slot &&
-      pending.attach_workspace->pending_attach_generation == pending.generation) {
-    pending.attach_workspace->pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
-    pending.attach_workspace->pending_attach_generation = 0;
+  if (pending.attach_space != nullptr && pending.attach_space->pending_attach_slot == slot &&
+      pending.attach_space->pending_attach_generation == pending.generation) {
+    pending.attach_space->pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
+    pending.attach_space->pending_attach_generation = 0;
   }
-  pending.attach_workspace = nullptr;
+  pending.attach_space = nullptr;
 }
 
 void close_pending(PendingConnection& pending, const std::size_t slot) noexcept {
@@ -1551,20 +1539,20 @@ void fail_pending_output(PendingConnection& pending) noexcept {
   finish_pending_byte(pending, response_failed);
 }
 
-void prepare_unnamed_command(PendingConnection& pending, Workspaces& workspaces,
+void prepare_unnamed_command(PendingConnection& pending, Spaces& spaces,
                              const ExtensionRuntime& extensions) noexcept {
   bool prepared = true;
   if (pending.command == command_list) {
     prepared = append_extension_error(pending.output, extensions.last_error()) &&
-               append_all_listings(pending.output, workspaces);
+               append_all_listings(pending.output, spaces);
   } else if (pending.command == command_kill_all) {
-    const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
-    for (auto& workspace : workspaces) {
-      if (workspace != nullptr) {
-        static_cast<void>(dispatch_workspace_command(*workspace, stop));
+    const Command stop{.kind = CommandKind::stop_space, .origin = CommandOrigin::cli};
+    for (auto& space : spaces) {
+      if (space != nullptr) {
+        static_cast<void>(dispatch_space_command(*space, stop));
       }
     }
-    prepared = pending.output.append_text("all lemma workspaces stopped\n");
+    prepared = pending.output.append_text("all lemma spaces stopped\n");
   } else {
     pending.state = PendingState::unused;
     return;
@@ -1577,20 +1565,20 @@ void prepare_unnamed_command(PendingConnection& pending, Workspaces& workspaces,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
+void prepare_named_command(PendingConnection& pending, Spaces& spaces,
                            const ExtensionRuntime& extensions) noexcept {
-  Workspace* workspace = find_workspace(workspaces, pending.workspace.view());
+  Space* space = find_space(spaces, pending.space.view());
   if (pending.command == command_create) {
-    if (workspace != nullptr) {
+    if (space != nullptr) {
       finish_pending_byte(pending, response_ready);
       return;
     }
-    auto* const slot = empty_workspace_slot(workspaces);
+    auto* const slot = empty_space_slot(spaces);
     if (slot == nullptr) {
       finish_pending_byte(pending, response_capacity);
       return;
     }
-    auto created = create_workspace(pending.workspace.view());
+    auto created = create_space(pending.space.view());
     if (created == nullptr) {
       finish_pending_byte(pending, response_failed);
       return;
@@ -1599,13 +1587,13 @@ void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
     finish_pending_byte(pending, response_ready);
     return;
   }
-  if (workspace == nullptr) {
+  if (space == nullptr) {
     finish_pending_byte(pending, response_missing);
     return;
   }
-  if (pending.command == command_list_workspace) {
+  if (pending.command == command_list_space) {
     if (!append_extension_error(pending.output, extensions.last_error()) ||
-        !append_listing(pending.output, *workspace)) {
+        !append_listing(pending.output, *space)) {
       fail_pending_output(pending);
     } else {
       finish_pending_output(pending);
@@ -1614,7 +1602,7 @@ void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
   }
   if (pending.command == command_list_windows) {
     if (!append_extension_error(pending.output, extensions.last_error()) ||
-        !append_window_listings(pending.output, *workspace)) {
+        !append_window_listings(pending.output, *space)) {
       fail_pending_output(pending);
     } else {
       finish_pending_output(pending);
@@ -1622,62 +1610,61 @@ void prepare_named_command(PendingConnection& pending, Workspaces& workspaces,
     return;
   }
 
-  if (!pending.output.append_text("lemma workspace \"") ||
-      !pending.output.append_title(workspace->workspace_name()) ||
+  if (!pending.output.append_text("lemma space \"") ||
+      !pending.output.append_title(space->space_name()) ||
       !pending.output.append_text("\" stopped\n")) {
     fail_pending_output(pending);
     return;
   }
-  const Command stop{.kind = CommandKind::stop_workspace, .origin = CommandOrigin::cli};
-  static_cast<void>(dispatch_workspace_command(*workspace, stop));
+  const Command stop{.kind = CommandKind::stop_space, .origin = CommandOrigin::cli};
+  static_cast<void>(dispatch_space_command(*space, stop));
   finish_pending_output(pending);
 }
 
-void prepare_attach(PendingConnection& pending, Workspaces& workspaces,
-                    const std::size_t slot) noexcept {
-  Workspace* const workspace = find_workspace(workspaces, pending.workspace.view());
-  if (workspace == nullptr) {
+void prepare_attach(PendingConnection& pending, Spaces& spaces, const std::size_t slot) noexcept {
+  Space* const space = find_space(spaces, pending.space.view());
+  if (space == nullptr) {
     finish_pending_byte(pending, response_missing);
     return;
   }
-  if (workspace->client >= 0 ||
-      workspace->pending_attach_slot != std::numeric_limits<std::uint32_t>::max()) {
+  if (space->client >= 0 ||
+      space->pending_attach_slot != std::numeric_limits<std::uint32_t>::max()) {
     finish_pending_byte(pending, response_busy);
     return;
   }
   const auto dimensions = protocol::decode_dimensions(std::span(pending.field).first<4>());
   if (dimensions.columns == 0 || dimensions.rows == 0 ||
       dimensions.columns > protocol::columns_max || dimensions.rows > protocol::rows_max ||
-      !resize_workspace(*workspace, dimensions)) {
+      !resize_space(*space, dimensions)) {
     finish_pending_byte(pending, response_failed);
     return;
   }
-  workspace->pending_attach_slot = static_cast<std::uint32_t>(slot);
-  workspace->pending_attach_generation = pending.generation;
-  pending.attach_workspace = workspace;
+  space->pending_attach_slot = static_cast<std::uint32_t>(slot);
+  space->pending_attach_generation = pending.generation;
+  pending.attach_space = space;
   finish_pending_byte(pending, response_ready, PendingAction::attach);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void complete_pending_field(PendingConnection& pending, Workspaces& workspaces,
+void complete_pending_field(PendingConnection& pending, Spaces& spaces,
                             const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
     if (pending.command == command_list || pending.command == command_kill_all) {
       pending.output.reset();
-      prepare_unnamed_command(pending, workspaces, extensions);
+      prepare_unnamed_command(pending, spaces, extensions);
     } else if (pending.command == command_attach || pending.command == command_create ||
-               pending.command == command_list_workspace ||
-               pending.command == command_list_windows || pending.command == command_kill) {
+               pending.command == command_list_space || pending.command == command_list_windows ||
+               pending.command == command_kill) {
       begin_pending_field(pending, PendingState::read_name_size, 1);
     } else {
       pending.state = PendingState::unused;
     }
     break;
   case PendingState::read_name_size: {
-    const auto size = protocol::decode_workspace_name_size(pending.field.front());
-    if (size == 0 || size > pending.workspace.bytes.size()) {
+    const auto size = protocol::decode_space_name_size(pending.field.front());
+    if (size == 0 || size > pending.space.bytes.size()) {
       pending.state = PendingState::unused;
     } else {
       begin_pending_field(pending, PendingState::read_name, size);
@@ -1685,20 +1672,20 @@ void complete_pending_field(PendingConnection& pending, Workspaces& workspaces,
     break;
   }
   case PendingState::read_name:
-    pending.workspace.size = pending.field_target;
-    std::ranges::copy(std::span(pending.field).first(pending.workspace.size),
-                      std::as_writable_bytes(std::span(pending.workspace.bytes)).begin());
-    if (!valid_workspace_name(pending.workspace.view())) {
+    pending.space.size = pending.field_target;
+    std::ranges::copy(std::span(pending.field).first(pending.space.size),
+                      std::as_writable_bytes(std::span(pending.space.bytes)).begin());
+    if (!valid_space_name(pending.space.view())) {
       pending.state = PendingState::unused;
     } else if (pending.command == command_attach) {
       begin_pending_field(pending, PendingState::read_dimensions, 4);
     } else {
       pending.output.reset();
-      prepare_named_command(pending, workspaces, extensions);
+      prepare_named_command(pending, spaces, extensions);
     }
     break;
   case PendingState::read_dimensions:
-    prepare_attach(pending, workspaces, slot);
+    prepare_attach(pending, spaces, slot);
     break;
   case PendingState::unused:
   case PendingState::flush_response:
@@ -1707,7 +1694,7 @@ void complete_pending_field(PendingConnection& pending, Workspaces& workspaces,
   }
 }
 
-void process_pending_read(PendingConnection& pending, Workspaces& workspaces,
+void process_pending_read(PendingConnection& pending, Spaces& spaces,
                           const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
   constexpr std::size_t operations_per_turn_max = 8;
   for (std::size_t operation = 0; operation < operations_per_turn_max && pending.active() &&
@@ -1720,7 +1707,7 @@ void process_pending_read(PendingConnection& pending, Workspaces& workspaces,
       pending.field_size += static_cast<std::size_t>(received);
       pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
       if (pending.field_size == pending.field_target) {
-        complete_pending_field(pending, workspaces, extensions, slot);
+        complete_pending_field(pending, spaces, extensions, slot);
       }
       continue;
     }
@@ -1739,9 +1726,9 @@ void process_pending_read(PendingConnection& pending, Workspaces& workspaces,
 }
 
 void handoff_attached_connection(PendingConnection& pending, const std::size_t slot) noexcept {
-  Workspace* const workspace = pending.attach_workspace;
-  if (workspace == nullptr || !workspace->active || workspace->pending_attach_slot != slot ||
-      workspace->pending_attach_generation != pending.generation) {
+  Space* const space = pending.attach_space;
+  if (space == nullptr || !space->active || space->pending_attach_slot != slot ||
+      space->pending_attach_generation != pending.generation) {
     close_pending(pending, slot);
     return;
   }
@@ -1752,20 +1739,20 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   pending.output.reset();
   pending.state = PendingState::unused;
 
-  workspace->client = connection;
-  workspace->decoder.reset();
-  workspace->output.reset();
-  workspace->input_backpressured = false;
-  workspace->frame_pending = false;
-  workspace->force_full_pending = false;
+  space->client = connection;
+  space->decoder.reset();
+  space->output.reset();
+  space->input_backpressured = false;
+  space->frame_pending = false;
+  space->force_full_pending = false;
   std::array<render::PaneSurface, panes_per_window_max> surface_storage{};
   std::array<render::StatusWindow, render::status_windows_max> status_storage{};
-  const auto surfaces = collect_surfaces(*workspace, surface_storage);
-  const auto status = collect_status_line(*workspace, status_storage);
+  const auto surfaces = collect_surfaces(*space, surface_storage);
+  const auto status = collect_status_line(*space, status_storage);
   if (!render::queue_composed_frame(connection, surfaces,
-                                    {.columns = workspace->columns, .rows = workspace->rows},
-                                    *workspace->frame, workspace->output, true, status)) {
-    workspace->detach_client();
+                                    {.columns = space->columns, .rows = space->rows}, *space->frame,
+                                    space->output, true, status)) {
+    space->detach_client();
   }
 }
 
@@ -1798,7 +1785,7 @@ void flush_pending_output(PendingConnection& pending, const std::size_t slot,
   }
 }
 
-[[nodiscard]] auto poll_timeout(const Workspaces& workspaces, const PendingConnections& pending,
+[[nodiscard]] auto poll_timeout(const Spaces& spaces, const PendingConnections& pending,
                                 const ExtensionRuntime& extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
   auto timeout = extensions.poll_timeout(now);
@@ -1814,57 +1801,55 @@ void flush_pending_output(PendingConnection& pending, const std::size_t slot,
     const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
   }
-  for (const auto& workspace : workspaces) {
-    if (workspace == nullptr || !workspace->active || !workspace->frame_pending ||
-        workspace->client < 0 || workspace->output.busy()) {
+  for (const auto& space : spaces) {
+    if (space == nullptr || !space->active || !space->frame_pending || space->client < 0 ||
+        space->output.busy()) {
       continue;
     }
-    if (now >= workspace->frame_deadline) {
+    if (now >= space->frame_deadline) {
       return 0;
     }
     const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(workspace->frame_deadline - now);
+        std::chrono::duration_cast<std::chrono::milliseconds>(space->frame_deadline - now);
     const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
   }
   return timeout;
 }
 
-void process_pane_events(Workspace& workspace, Window& window, Pane& pane,
-                         const pollfd& events) noexcept {
+void process_pane_events(Space& space, Window& window, Pane& pane, const pollfd& events) noexcept {
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
     return;
   }
   const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes);
   pane.active = drained.alive;
   const bool process_changed = refresh_process_name(pane);
-  if ((!drained.changed && !process_changed) || workspace.client < 0) {
+  if ((!drained.changed && !process_changed) || space.client < 0) {
     return;
   }
-  if (window.id == workspace.active_window) {
-    schedule_frame(workspace, false, !drained.alive);
-  } else if (!workspace.status_valid ||
-             current_status_signature(workspace) != workspace.status_signature) {
-    schedule_frame(workspace, false);
+  if (window.id == space.active_window) {
+    schedule_frame(space, false, !drained.alive);
+  } else if (!space.status_valid || current_status_signature(space) != space.status_signature) {
+    schedule_frame(space, false);
   }
 }
 
-void process_client_events(Workspace& workspace, const pollfd& events) noexcept {
-  // Consume resizes before flushing queued output so resize_workspace can discard bytes composed
+void process_client_events(Space& space, const pollfd& events) noexcept {
+  // Consume resizes before flushing queued output so resize_space can discard bytes composed
   // for the previous physical viewport. A decoder-held input message is retried even without new
   // socket readiness after a prior turn made PTY queue capacity available. If its peer has already
   // closed, discard a backpressured message instead of letting it hide EOF indefinitely.
-  if (workspace.client >= 0 && workspace.input_backpressured &&
+  if (space.client >= 0 && space.input_backpressured &&
       (events.revents & (POLLHUP | POLLERR)) != 0) {
-    workspace.detach_client();
+    space.detach_client();
     return;
   }
-  if (workspace.client >= 0 &&
-      (workspace.input_backpressured || (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
-    const auto received = receive_client(workspace);
-    workspace.input_backpressured = received == ParseResult::backpressure;
+  if (space.client >= 0 &&
+      (space.input_backpressured || (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
+    const auto received = receive_client(space);
+    space.input_backpressured = received == ParseResult::backpressure;
     if (received == ParseResult::detach || received == ParseResult::error) {
-      workspace.detach_client();
+      space.detach_client();
       return;
     }
   }
@@ -1883,43 +1868,43 @@ void process_client_events(Workspace& workspace, const pollfd& events) noexcept 
          PtyFlushStatus::hard_error;
 }
 
-void reclaim_dead_panes(Workspace& workspace) noexcept {
-  for (auto& slot : workspace.windows) {
-    if (slot.window == nullptr || !workspace.active) {
+void reclaim_dead_panes(Space& space) noexcept {
+  for (auto& slot : space.windows) {
+    if (slot.window == nullptr || !space.active) {
       continue;
     }
     const auto id = slot.window->id;
     for (std::size_t index = 0;; ++index) {
-      auto* const window = find_window(workspace, id);
+      auto* const window = find_window(space, id);
       if (window == nullptr || index >= window->panes.size()) {
         break;
       }
       const auto& pane = std::span(window->panes).subspan(index, 1).front();
       if (pane != nullptr && !pane->active) {
-        static_cast<void>(close_pane(workspace, *window, index));
+        static_cast<void>(close_pane(space, *window, index));
       }
     }
   }
 }
 
-void queue_due_frames(Workspaces& workspaces) noexcept {
+void queue_due_frames(Spaces& spaces) noexcept {
   const auto now = std::chrono::steady_clock::now();
-  for (auto& workspace : workspaces) {
-    if (workspace == nullptr || !workspace->active || !workspace->frame_pending ||
-        workspace->client < 0 || workspace->output.busy() || now < workspace->frame_deadline) {
+  for (auto& space : spaces) {
+    if (space == nullptr || !space->active || !space->frame_pending || space->client < 0 ||
+        space->output.busy() || now < space->frame_deadline) {
       continue;
     }
     std::array<render::PaneSurface, panes_per_window_max> surface_storage{};
     std::array<render::StatusWindow, render::status_windows_max> status_storage{};
-    const auto surfaces = collect_surfaces(*workspace, surface_storage);
-    const auto status = collect_status_line(*workspace, status_storage);
+    const auto surfaces = collect_surfaces(*space, surface_storage);
+    const auto status = collect_status_line(*space, status_storage);
     if (!render::queue_composed_frame(
-            workspace->client, surfaces, {.columns = workspace->columns, .rows = workspace->rows},
-            *workspace->frame, workspace->output, workspace->force_full_pending, status)) {
-      workspace->detach_client();
+            space->client, surfaces, {.columns = space->columns, .rows = space->rows},
+            *space->frame, space->output, space->force_full_pending, status)) {
+      space->detach_client();
     }
-    workspace->frame_pending = false;
-    workspace->force_full_pending = false;
+    space->frame_pending = false;
+    space->force_full_pending = false;
   }
 }
 
@@ -1968,8 +1953,8 @@ void accept_pending_connections(const int listener,
     pending.descriptor = connection;
     pending.generation = next_generation(pending.generation);
     pending.output.reset();
-    pending.workspace = {};
-    pending.attach_workspace = nullptr;
+    pending.space = {};
+    pending.attach_space = nullptr;
     pending.action = PendingAction::close;
     pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
     begin_pending_field(pending, PendingState::read_command, 1);
@@ -1984,7 +1969,7 @@ enum class DescriptorKind : std::uint8_t {
 };
 
 struct DescriptorOwner final {
-  Workspace* workspace{nullptr};
+  Space* space{nullptr};
   Window* window{nullptr};
   Pane* pane{nullptr};
   PendingConnection* pending{nullptr};
@@ -2001,7 +1986,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const extension_error_context, const StopRequested stop_requested) noexcept
     -> int {
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
-  Workspaces workspaces;
+  Spaces spaces;
   auto pending_storage =
       std::unique_ptr<PendingConnections>(new (std::nothrow) PendingConnections{});
   if (pending_storage == nullptr) {
@@ -2014,7 +1999,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     return 1;
   }
   constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
-                                        static_cast<std::size_t>(limits::workspaces_hard_max) +
+                                        static_cast<std::size_t>(limits::spaces_hard_max) +
                                         limits::pending_connections_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
@@ -2027,11 +2012,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     extensions.connect_if_due(std::chrono::steady_clock::now());
     std::size_t descriptor_count = 1;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
-    for (const auto& workspace : workspaces) {
-      if (workspace == nullptr || !workspace->active) {
+    for (const auto& space : spaces) {
+      if (space == nullptr || !space->active) {
         continue;
       }
-      for (const auto& window_slot : workspace->windows) {
+      for (const auto& window_slot : space->windows) {
         if (window_slot.window == nullptr) {
           continue;
         }
@@ -2043,7 +2028,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
               POLLIN | (!pane->pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
           std::span(descriptors).subspan(descriptor_count, 1).front() = {
               .fd = pane->pty, .events = pane_events, .revents = 0};
-          std::span(owners).subspan(descriptor_count, 1).front() = {.workspace = workspace.get(),
+          std::span(owners).subspan(descriptor_count, 1).front() = {.space = space.get(),
                                                                     .window =
                                                                         window_slot.window.get(),
                                                                     .pane = pane.get(),
@@ -2051,13 +2036,13 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           ++descriptor_count;
         }
       }
-      if (workspace->client >= 0) {
+      if (space->client >= 0) {
         const auto client_events =
-            static_cast<short>((workspace->input_backpressured ? 0 : POLLIN) |
-                               (workspace->output.busy() ? static_cast<short>(POLLOUT) : 0));
+            static_cast<short>((space->input_backpressured ? 0 : POLLIN) |
+                               (space->output.busy() ? static_cast<short>(POLLOUT) : 0));
         std::span(descriptors).subspan(descriptor_count, 1).front() = {
-            .fd = workspace->client, .events = client_events, .revents = 0};
-        std::span(owners).subspan(descriptor_count, 1).front() = {.workspace = workspace.get(),
+            .fd = space->client, .events = client_events, .revents = 0};
+        std::span(owners).subspan(descriptor_count, 1).front() = {.space = space.get(),
                                                                   .kind = DescriptorKind::client};
         ++descriptor_count;
       }
@@ -2083,7 +2068,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
 
     const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(workspaces, pending_connections, extensions));
+                                    poll_timeout(spaces, pending_connections, extensions));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -2097,19 +2082,19 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::pane) {
         const auto& events = std::span(descriptors).subspan(index, 1).front();
-        process_pane_events(*owner.workspace, *owner.window, *owner.pane, events);
+        process_pane_events(*owner.space, *owner.window, *owner.pane, events);
       }
     }
-    for (auto& workspace : workspaces) {
-      if (workspace != nullptr && workspace->active) {
-        reclaim_dead_panes(*workspace);
+    for (auto& space : spaces) {
+      if (space != nullptr && space->active) {
+        reclaim_dead_panes(*space);
       }
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind == DescriptorKind::client && owner.workspace->active) {
+      if (owner.kind == DescriptorKind::client && owner.space->active) {
         const auto& events = std::span(descriptors).subspan(index, 1).front();
-        process_client_events(*owner.workspace, events);
+        process_client_events(*owner.space, events);
       }
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
@@ -2120,7 +2105,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       const auto events = std::span(descriptors).subspan(index, 1).front().revents;
       if (owner.pending->state != PendingState::flush_response &&
           (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-        process_pending_read(*owner.pending, workspaces, extensions, owner.pending_slot);
+        process_pending_read(*owner.pending, spaces, extensions, owner.pending_slot);
       }
     }
 
@@ -2129,11 +2114,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     std::size_t pty_write_budget = std::size_t{1} * 1'024U * 1'024U;
     std::array<Pane*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
     std::size_t writable_pane_count = 0;
-    for (auto& workspace : workspaces) {
-      if (workspace == nullptr || !workspace->active) {
+    for (auto& space : spaces) {
+      if (space == nullptr || !space->active) {
         continue;
       }
-      for (auto& window_slot : workspace->windows) {
+      for (auto& window_slot : space->windows) {
         if (window_slot.window == nullptr) {
           continue;
         }
@@ -2159,26 +2144,24 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     } else {
       pty_flush_cursor = 0;
     }
-    for (auto& workspace : workspaces) {
-      if (workspace != nullptr && workspace->active) {
-        reclaim_dead_panes(*workspace);
+    for (auto& space : spaces) {
+      if (space != nullptr && space->active) {
+        reclaim_dead_panes(*space);
       }
     }
     // Capacity may have become available without new client socket readiness.
     const pollfd no_events{.fd = -1, .events = 0, .revents = 0};
-    for (auto& workspace : workspaces) {
-      if (workspace != nullptr && workspace->active && workspace->client >= 0 &&
-          workspace->input_backpressured) {
-        process_client_events(*workspace, no_events);
+    for (auto& space : spaces) {
+      if (space != nullptr && space->active && space->client >= 0 && space->input_backpressured) {
+        process_client_events(*space, no_events);
       }
     }
 
-    queue_due_frames(workspaces);
-    for (auto& workspace : workspaces) {
-      if (workspace != nullptr && workspace->active && workspace->client >= 0 &&
-          workspace->output.busy() &&
-          !flush_frame(workspace->client, *workspace->frame, workspace->output)) {
-        workspace->detach_client();
+    queue_due_frames(spaces);
+    for (auto& space : spaces) {
+      if (space != nullptr && space->active && space->client >= 0 && space->output.busy() &&
+          !flush_frame(space->client, *space->frame, space->output)) {
+        space->detach_client();
       }
     }
 
@@ -2195,7 +2178,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
     expire_pending_connections(pending_connections);
-    reclaim_inactive_workspaces(workspaces);
+    reclaim_inactive_spaces(spaces);
 
     // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
     // client input, queued writes, or due frame composition.
@@ -2209,7 +2192,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if ((descriptors.front().revents & POLLIN) != 0) {
       accept_pending_connections(listener, pending_connections);
     }
-    reclaim_inactive_workspaces(workspaces);
+    reclaim_inactive_spaces(spaces);
   }
 }
 

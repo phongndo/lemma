@@ -30,14 +30,14 @@ Partial behavior remains labeled experimental or incomplete.
 
 ### Startup and lifecycle
 
-- Plain `lemma` predictably creates or enters the `default` workspace.
-- Named workspaces can be created, listed, attached, detached, renamed, and killed.
-- Client EOF, crash, terminal closure, or network loss does not end workspace processes.
+- Plain `lemma` predictably creates or enters the `default` space.
+- Named spaces can be created, listed, attached, detached, renamed, and killed.
+- Client EOF, crash, terminal closure, or network loss does not end space processes.
 - Child exit, shell launch failure, capacity exhaustion, stale sockets, and incompatible clients
   produce actionable errors and nonzero statuses where appropriate.
 - Detach, logout, daemon failure, shutdown, and reboot guarantees are explicit and tested.
 - Endpoint permissions and ownership prevent another local user from controlling a daemon.
-- Workspace creation applies the documented cwd and bounded environment policy.
+- Space creation applies the documented cwd and bounded environment policy.
 
 ### Windows
 
@@ -55,7 +55,7 @@ Partial behavior remains labeled experimental or incomplete.
 - Make pane targets visible through status, borders, or a bounded identification overlay.
 - Handle child exit without corrupting the remaining split tree.
 
-Preset layouts, pane swapping, and moving panes between workspaces are desirable only after these
+Preset layouts, pane swapping, and moving panes between spaces are desirable only after these
 operations are dependable.
 
 ### Keyboard, mouse, paste, and focus
@@ -111,7 +111,7 @@ operations are dependable.
 
 - Missing configuration selects useful defaults.
 - Invalid configuration reports file/line context and preserves the previous valid generation.
-- Prefixes, keyboard/mouse bindings, status behavior, shell, and default workspace behavior are
+- Prefixes, keyboard/mouse bindings, status behavior, shell, and default space behavior are
   configurable through typed validated values.
 - Reload is transactional; blocked or crashed Lua cannot block input, PTYs, rendering, or process
   lifetime.

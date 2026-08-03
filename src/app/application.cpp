@@ -104,8 +104,8 @@ template <typename Integer>
              stdout,
              "lemma\n\nCommands:\n  new [name]     start and attach\n  start [name]   "
              "start detached\n  attach [name]  attach\n  list [name]    list all or one\n  "
-             "windows [name] list windows\n  kill [name]    stop one workspace\n  kill-all       "
-             "stop every workspace\n  demo "
+             "windows [name] list windows\n  kill [name]    stop one space\n  kill-all       "
+             "stop every space\n  demo "
              "          "
              "VT demo\n\nThe default name is `default`. C-b % and C-b \" split panes; "
              "C-b c creates a window; C-b n/p changes windows; C-b d detaches.\n")
@@ -114,27 +114,27 @@ template <typename Integer>
 }
 
 [[nodiscard]] auto dispatch(const daemon::RuntimeEndpoint& endpoint, const std::string_view command,
-                            const std::string_view workspace, const bool named) -> int {
+                            const std::string_view space, const bool named) -> int {
   if (command == "demo" && !named) {
     return run_demo();
   }
   if (command == "new") {
-    return daemon::ensure(endpoint, workspace) == 0 ? client::attach(endpoint, workspace) : 1;
+    return daemon::ensure(endpoint, space) == 0 ? client::attach(endpoint, space) : 1;
   }
   if (command == "start") {
-    return daemon::start(endpoint, workspace);
+    return daemon::start(endpoint, space);
   }
   if (command == "attach") {
-    return client::attach(endpoint, workspace);
+    return client::attach(endpoint, space);
   }
   if (command == "list" || command == "ls" || command == "lookup") {
-    return named ? daemon::list(endpoint, workspace) : daemon::list(endpoint);
+    return named ? daemon::list(endpoint, space) : daemon::list(endpoint);
   }
   if (command == "windows") {
-    return daemon::list_windows(endpoint, workspace);
+    return daemon::list_windows(endpoint, space);
   }
   if (command == "kill") {
-    return daemon::kill(endpoint, workspace);
+    return daemon::kill(endpoint, space);
   }
   if (command == "kill-all" && !named) {
     return daemon::kill_all(endpoint);
@@ -152,12 +152,12 @@ template <typename Integer>
   }
 
   const std::string_view command(arguments.subspan(1, 1).front());
-  std::string_view workspace = daemon::default_workspace;
+  std::string_view space = daemon::default_space;
   const bool named = arguments.size() == 3;
   if (named) {
-    workspace = arguments.subspan(2, 1).front();
+    space = arguments.subspan(2, 1).front();
   }
-  return dispatch(endpoint, command, workspace, named);
+  return dispatch(endpoint, command, space, named);
 }
 
 } // namespace lemma::app

@@ -20,13 +20,13 @@ and programmable without requiring a hosted service. Its typed command model is 
 people, scripts, remote clients, and coding agents operate the same long-lived sessions while the
 latency-sensitive runtime remains bounded and independently operable.
 
-One per-user daemon owns workspaces, windows, panes, child processes, PTYs, and canonical terminal
-state. A process continues when no terminal client is attached, so an unattached workspace or pane
+One per-user daemon owns spaces, windows, panes, child processes, PTYs, and canonical terminal
+state. A process continues when no terminal client is attached, so an unattached space or pane
 is the initial background-execution model. Generalized task, run, and view entities are not required
 for the foundation.
 
 Remote-first initially means operating a Lemma daemon on another machine through ordinary SSH:
-create processes, inspect state, attach, detach, and manage workspaces through the same semantic API
+create processes, inspect state, attach, detach, and manage spaces through the same semantic API
 used locally. Ordinary SSH terminal operation and machine-readable commands are the 1.0 baseline; a
 custom `lemma connect` SSH-stdio bridge is deferred beyond 1.0. Live cross-host process migration is
 not a current promise.
@@ -40,6 +40,19 @@ Lemma's pillars are:
 3. **first-class input:** keyboard and mouse are co-equal ways to operate mux state and terminal
    applications; and
 4. **extensibility:** configuration and extensions use one powerful Lua API over typed values.
+
+## Core vocabulary
+
+A **space** is Lemma's durable terminal-multiplexer session: it contains windows and panes, survives
+detach, and is the top-level object addressed by `SpaceId`. A tmux session therefore maps directly to
+a Lemma space. Product documentation may describe a space as a persistent terminal session, but the
+typed C++, Lua, JSON, and automation APIs use only `Space`/`SpaceId` and `space.*` names.
+
+A **workspace** is intentionally not a kernel object. Workspace/project extensions may associate a
+repository, worktree, environment, layout, tasks, and agent runs with one or more spaces. This keeps
+project policy replaceable without splitting the core API between `SessionId`, `SpaceId`, and
+`WorkspaceId`. The pre-1.0 `Workspace*` C++/protocol names are therefore renamed to `Space*` without
+compatibility aliases; downstream embedders must update before the vocabulary becomes stable.
 
 ## Attached-client and presentation contract
 
@@ -61,12 +74,12 @@ if justified after 1.0, consumes replaceable presentation snapshots/deltas deriv
 state rather than replaying PTY bytes.
 
 The daemon remains the only authority for PTY responses and policy side effects. The 1.0
-one-client-per-workspace rule also selects canonical PTY dimensions. Multiple viewers/controllers
+one-client-per-space rule also selects canonical PTY dimensions. Multiple viewers/controllers
 require explicit per-attachment state and control policy later; they do not change terminal ownership.
 
 ## Input contract
 
-Keyboard operation remains complete: every core workspace, window, pane, copy, and configuration
+Keyboard operation remains complete: every core space, window, pane, copy, and configuration
 workflow must be usable without a mouse. Mouse support is nevertheless a primary interaction model,
 not optional raw-byte forwarding. Thin clients perform bounded physical input decoding; the daemon
 owns presentation hit testing, status interaction, per-attachment selection/scrolling, and ratio
@@ -89,31 +102,31 @@ without losing their input order.
 These choices define required behavior for the server-rendered daily-driver and 1.0 implementation;
 until then the capability audit continues to label gaps as partial or absent.
 
-### Plain invocation and default workspace
+### Plain invocation and default space
 
-Plain `lemma` means “enter my default workspace.” It uses the literal workspace name `default`:
+Plain `lemma` means “enter my default space.” It uses the literal space name `default`:
 
 1. if `default` does not exist, create it and attach;
 2. if it exists detached, attach;
-3. if it is already attached, fail visibly and nonzero rather than selecting another workspace; and
-4. if daemon startup, workspace creation, or attach fails, report that stage and preserve any
-   workspace that was successfully created.
+3. if it is already attached, fail visibly and nonzero rather than selecting another space; and
+4. if daemon startup, space creation, or attach fails, report that stage and preserve any
+   space that was successfully created.
 
 Explicit `lemma new NAME`, `start`, and `attach` keep their distinct behavior. Lemma does not guess a
-workspace based on recency because that makes scripts and first-session instructions unpredictable.
+space based on recency because that makes scripts and first-session instructions unpredictable.
 
 ### Pane cwd and environment
 
-The first pane in a workspace starts in the invoking client's current working directory, transported
+The first pane in a space starts in the invoking client's current working directory, transported
 as a validated bounded absolute path. A split or new window starts in the focused pane's current
 working directory when the platform can inspect it safely; otherwise it falls back to the
-workspace-creation directory. A missing or inaccessible directory falls back to the invoking user's
+space-creation directory. A missing or inaccessible directory falls back to the invoking user's
 home and produces an observable warning.
 
-Workspace creation captures a bounded environment snapshot from the invoking client. All panes in
-that workspace inherit the snapshot. Attaching later does not mutate it implicitly. A future explicit
+Space creation captures a bounded environment snapshot from the invoking client. All panes in
+that space inherit the snapshot. Attaching later does not mutate it implicitly. A future explicit
 refresh operation may update an allowlisted set, but 1.0 has no ambient attach-time refresh. Invalid
-names, embedded NULs, and values outside the protocol bounds are rejected before workspace mutation.
+names, embedded NULs, and values outside the protocol bounds are rejected before space mutation.
 
 Lemma 1.0 launches the account login shell only. Per-pane custom commands are deferred until command,
 cwd, environment, and exit reporting can share one typed launch contract.

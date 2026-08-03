@@ -6,7 +6,7 @@
 
 namespace lemma::limits {
 
-inline constexpr std::uint32_t workspaces_hard_max = 64;
+inline constexpr std::uint32_t spaces_hard_max = 64;
 inline constexpr std::uint32_t windows_hard_max = 1'024;
 inline constexpr std::uint32_t panes_hard_max = 4'096;
 inline constexpr std::uint32_t clients_hard_max = 128;

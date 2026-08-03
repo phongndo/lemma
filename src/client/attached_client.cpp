@@ -72,23 +72,22 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
   return remaining.empty() || send_input(connection, remaining);
 }
 
-[[nodiscard]] auto send_attach_handshake(const int connection, const std::string_view workspace,
+[[nodiscard]] auto send_attach_handshake(const int connection, const std::string_view space,
                                          const platform::WindowSize& size) noexcept -> bool {
-  const auto header =
-      protocol::encode_workspace_header(protocol::ControlCommand::attach, workspace);
+  const auto header = protocol::encode_space_header(protocol::ControlCommand::attach, space);
   const auto dimensions = protocol::encode_dimensions({
       .columns = size.columns,
       .rows = size.rows,
   });
   return send_all(connection, header) &&
-         send_all(connection, std::as_bytes(std::span(workspace.data(), workspace.size()))) &&
+         send_all(connection, std::as_bytes(std::span(space.data(), space.size()))) &&
          send_all(connection, dimensions);
 }
 
 // This is the client reactor; branches correspond directly to terminal and socket readiness.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto attach_client(const daemon::RuntimeEndpoint& endpoint,
-                                 const std::string_view workspace) -> int {
+                                 const std::string_view space) -> int {
   if (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0) {
     static_cast<void>(write_text(STDERR_FILENO, "lemma attach requires a terminal\n"));
     return 1;
@@ -99,7 +98,7 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
     static_cast<void>(write_text(STDERR_FILENO, "no lemma daemon; run `lemma new`\n"));
     return 1;
   }
-  if (!send_attach_handshake(connection, workspace, terminal_size())) {
+  if (!send_attach_handshake(connection, space, terminal_size())) {
     close_descriptor(connection);
     return 1;
   }
@@ -108,9 +107,9 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
   if (!read_exact(connection, response) || response.front() != response_ready) {
     std::string_view message = "lemma attach failed\n";
     if (response.front() == response_busy) {
-      message = "lemma workspace is already attached\n";
+      message = "lemma space is already attached\n";
     } else if (response.front() == response_missing) {
-      message = "no lemma workspace\n";
+      message = "no lemma space\n";
     }
     static_cast<void>(write_text(STDERR_FILENO, message));
     close_descriptor(connection);
@@ -214,9 +213,9 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 
 } // namespace
 
-[[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, const std::string_view workspace)
+[[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, const std::string_view space)
     -> int {
-  return daemon::validate_workspace(workspace) ? attach_client(endpoint, workspace) : 1;
+  return daemon::validate_space(space) ? attach_client(endpoint, space) : 1;
 }
 
 } // namespace lemma::client

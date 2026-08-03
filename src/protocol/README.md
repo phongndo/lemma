@@ -12,7 +12,7 @@ A separate public semantic schema is shared by JSON CLI, Lua, and the same-user 
 carries actors/requests, stable IDs, commands/results/errors, capabilities, snapshots, bounded events,
 and launch/capture/wait/cancel operations. Agents use that schema rather than render frames.
 
-Protocol code does not open sockets, discover workspaces, dispatch commands, parse terminal bytes,
+Protocol code does not open sockets, discover spaces, dispatch commands, parse terminal bytes,
 hit-test layouts, or render frames. Every length, enum, version, capability, identifier, and generation is
 validated before authoritative mutation. The wire never contains Ghostty values or private layouts.
 

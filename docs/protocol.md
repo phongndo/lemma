@@ -36,7 +36,7 @@ Every production message is framed. The reviewed envelope must include or derive
 - closed message kind and flags;
 - bounded payload length;
 - request/result correlation ID where applicable;
-- stable workspace, window, pane, and client IDs in explicit targets; and
+- stable space, window, pane, and client IDs in explicit targets; and
 - negotiated input, presentation, and effect capabilities.
 
 Frames, decoder storage, queued output, messages per turn, setup progress, and aggregate per-client
@@ -85,7 +85,7 @@ public semantic compatibility policy is independent from private attached-client
 A successful attach is an explicit transaction:
 
 1. exchange version/capability hello values;
-2. resolve the workspace and allocate daemon-side attachment state;
+2. resolve the space and allocate daemon-side attachment state;
 3. validate canonical dimensions;
 4. invalidate retained presentation state;
 5. queue one complete visible ANSI frame; and
@@ -159,24 +159,24 @@ A newly accepted connection starts with exactly one control command:
 
 | Command | Byte | Following bytes | Meaning |
 | --- | ---: | --- | --- |
-| attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one workspace |
-| create | `N` | name length, name | Ensure one workspace exists |
-| list | `L` | none | List every workspace and close |
-| list workspace | `Q` | name length, name | List one workspace and close |
-| list windows | `W` | name length, name | List one workspace's windows and close |
-| kill | `K` | name length, name | Stop one workspace and close |
-| kill all | `X` | none | Stop every workspace and close |
+| attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one space |
+| create | `N` | name length, name | Ensure one space exists |
+| list | `L` | none | List every space and close |
+| list space | `Q` | name length, name | List one space and close |
+| list windows | `W` | name length, name | List one space's windows and close |
+| kill | `K` | name length, name | Stop one space and close |
+| kill all | `X` | none | Stop every space and close |
 
-A name length is one byte followed by 1–32 validated ASCII workspace-name bytes. Create and attach
-return one response byte; a missing named workspace returns `M`:
+A name length is one byte followed by 1–32 validated ASCII space-name bytes. Create and attach
+return one response byte; a missing named space returns `M`:
 
 | Response | Byte | Meaning |
 | --- | ---: | --- |
-| ready | `Y` | Workspace exists, or connection is now the streaming client |
-| busy | `B` | Workspace already has an attached client |
-| missing | `M` | Named workspace does not exist |
-| capacity | `C` | Workspace capacity is exhausted |
-| failed | `F` | Workspace creation failed |
+| ready | `Y` | Space exists, or connection is now the streaming client |
+| busy | `B` | Space already has an attached client |
+| missing | `M` | Named space does not exist |
+| capacity | `C` | Space capacity is exhausted |
+| failed | `F` | Space creation failed |
 
 After attached `Y`, the daemon sends a complete reconstructed frame before nonblocking live
 operation.
@@ -222,7 +222,7 @@ The runtime clamps dimensions to hard limits, resizes pane PTYs, then resizes ca
 
 The command byte is a closed enum for window create/next/previous/select/kill and pane left/right or
 top/bottom splits, directional/next/previous focus, close, and zoom. Unknown values terminate the
-attached connection as protocol errors. The core applies commands only to the attached workspace and
+attached connection as protocol errors. The core applies commands only to the attached space and
 active window.
 
 ### Detach
@@ -234,7 +234,7 @@ active window.
    1 B
 ```
 
-Detach closes only the attached connection. It does not terminate the shell or workspace.
+Detach closes only the attached connection. It does not terminate the shell or space.
 
 ## Current decoder contract
 

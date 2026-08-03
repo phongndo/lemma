@@ -103,13 +103,13 @@ TEST(ProtocolTest, EncodesAndDecodesPaneCommands) {
 }
 
 TEST(ProtocolTest, EncodesNamedAttachControlFields) {
-  constexpr std::string_view workspace = "project";
+  constexpr std::string_view space = "project";
 
-  const auto header = encode_workspace_header(ControlCommand::attach, workspace);
+  const auto header = encode_space_header(ControlCommand::attach, space);
   const auto dimensions = encode_dimensions({.columns = 132, .rows = 43});
 
   EXPECT_EQ(header.front(), wire_byte(ControlCommand::attach));
-  EXPECT_EQ(decode_workspace_name_size(header.back()), workspace.size());
+  EXPECT_EQ(decode_space_name_size(header.back()), space.size());
   const auto decoded_dimensions = decode_dimensions(dimensions);
   EXPECT_EQ(decoded_dimensions.columns, 132);
   EXPECT_EQ(decoded_dimensions.rows, 43);

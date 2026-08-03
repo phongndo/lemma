@@ -27,7 +27,7 @@ enum class CommandKind : std::uint8_t {
   previous_window,
   close_window,
   select_window,
-  stop_workspace,
+  stop_space,
 };
 
 enum class CommandOrigin : std::uint8_t {
@@ -42,7 +42,7 @@ enum class CommandOrigin : std::uint8_t {
 // Invalid IDs mean "the current object". Explicit IDs are retained in the command value so future
 // CLI, remote, and extension transports can use the same dispatcher without exposing core pointers.
 struct CommandTarget final {
-  WorkspaceId workspace;
+  SpaceId space;
   WindowId window;
   PaneId pane;
 };

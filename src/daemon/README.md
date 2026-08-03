@@ -9,7 +9,7 @@ ordinary SSH. A custom SSH-stdio bridge is deferred beyond 1.0; if added later, 
 application protocol and lends its validated connection lifecycle to the core rather than creating a
 remote core.
 
-**Does not own:** workspace state, terminal state, PTY scheduling, rendering algorithms, protocol
+**Does not own:** space state, terminal state, PTY scheduling, rendering algorithms, protocol
 parsing internals, or raw client-terminal state. It creates one listener and lends it to the core
-engine, which owns every workspace plus bounded incremental accepted-connection state in the
+engine, which owns every space plus bounded incremental accepted-connection state in the
 single-writer reactor.

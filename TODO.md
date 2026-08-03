@@ -41,7 +41,7 @@ A feature is complete only when all applicable boxes are satisfied:
 
 ## Current focus — revise whenever evidence changes
 
-- [ ] Move workspaces and panes into dense generational stores and make every explicit target stable.
+- [ ] Move spaces and panes into dense generational stores and make every explicit target stable.
 - [ ] Add client/actor origin, request correlation, and typed command/result/error values shared by
       keyboard, mouse, Lua, JSON automation, and AI agents.
 - [ ] Define the smallest public semantic automation slice: schema/context, launch, capture, wait,
@@ -71,12 +71,12 @@ others; update it in the same change.
 
 - [x] Run one per-user daemon with a locked `0600` Unix socket.
 - [x] Detect and remove safe stale sockets.
-- [x] Support named workspaces and detached process continuity.
+- [x] Support named spaces and detached process continuity.
 - [x] Support multiple windows and nested left/right/top/bottom pane splits.
 - [x] Support directional/next/previous focus, close, zoom, window create/cycle/select/close.
 - [x] Resize active pane PTYs after outer-terminal resize.
-- [x] Continue processing PTYs in detached workspaces and inactive windows.
-- [x] Reclaim exited panes and empty windows/workspaces.
+- [x] Continue processing PTYs in detached spaces and inactive windows.
+- [x] Reclaim exited panes and empty windows/spaces.
 - [x] Keep accepted/setup/control connections bounded and nonblocking.
 - [x] Keep ordered bounded PTY write queues with partial-write recovery and fairness.
 
@@ -124,12 +124,12 @@ others; update it in the same change.
 
 ## Authoritative identities
 
-- [ ] Move workspaces into a dense generational store and assign `WorkspaceId`.
+- [ ] Move spaces into a dense generational store and assign `SpaceId`.
 - [ ] Move panes into a dense generational store and assign `PaneId`.
 - [ ] Assign `ClientId` to accepted, control, and attached clients.
 - [ ] Preserve and integrate existing `WindowId` behavior.
 - [ ] Resolve every explicit command target at the core trust boundary.
-- [ ] Reject stale, cross-workspace, unauthorized, and type-confused IDs.
+- [ ] Reject stale, cross-space, unauthorized, and type-confused IDs.
 - [ ] Keep dense iteration and existing configured capacities.
 - [ ] Add create/remove/reuse/wraparound/stale-ID tests for every store.
 
@@ -150,7 +150,7 @@ others; update it in the same change.
 - [ ] Add explicit `--format=json` context, list, inspect, launch, capture, wait, cancel, and topology
       operations without exposing private attach framing.
 - [ ] Add a persistent same-user semantic socket for efficient scripts and AI agents.
-- [ ] Add bounded immutable workspace/window/pane/process snapshots and observable generation changes.
+- [ ] Add bounded immutable space/window/pane/process snapshots and observable generation changes.
 - [ ] Add bounded lifecycle/topology/configuration events with explicit loss and snapshot repair.
 - [ ] Add bounded pane output observation with sequence/gap identity, truncation, cancellation, and
       deadlines; do not turn it into terminal replication.
@@ -189,7 +189,7 @@ others; update it in the same change.
 - [ ] Accumulate newer output as canonical terminal damage rather than queued render history.
 - [ ] Force one full redraw after a blocked frame drains.
 - [ ] Disconnect clients that miss a bounded write-progress deadline.
-- [ ] Prove a blocked client cannot delay PTYs, control clients, or another workspace.
+- [ ] Prove a blocked client cannot delay PTYs, control clients, or another space.
 - [ ] Measure attach-to-visible, redraw recovery, bytes, and key-to-visible latency.
 
 # Daily-driver capability backlog
@@ -200,14 +200,14 @@ others; update it in the same change.
 - [ ] Add explicit `--help` and `--version`.
 - [ ] Return nonzero for invalid commands and failed attached-client loops.
 - [ ] Report capacity, no-effect, launch, and pane-exit status/reason visibly.
-- [ ] Apply invoking-client cwd and bounded environment to new workspaces.
+- [ ] Apply invoking-client cwd and bounded environment to new spaces.
 - [ ] Apply focused-pane cwd fallback to splits and new windows.
-- [ ] Add explicit daemon shutdown and safe no-workspace idle policy.
+- [ ] Add explicit daemon shutdown and safe no-space idle policy.
 - [ ] Document endpoint, daemon, process, logout, shutdown, and reboot behavior.
 
 ## Windows, panes, layout, and status
 
-- [ ] Add workspace rename and user-defined window names with rename commands.
+- [ ] Add space rename and user-defined window names with rename commands.
 - [ ] Add stable window reorder operations.
 - [ ] Distinguish user name, foreground process, and terminal title in status.
 - [ ] Store adjustable split ratios.
@@ -286,8 +286,11 @@ others; update it in the same change.
 - [ ] Support local versioned Lua packages/modules without requiring a marketplace.
 - [ ] Build the shipped tmux-like standard layer from the same commands/settings/UI values exposed to
       user extensions, with a minimal C++ fallback when Lua is unavailable.
-- [ ] Publish first-party workflow and agent-observer extensions that prove no core modification is
-      required for project/worktree and working/blocked/done views.
+- [ ] Publish a first-party workspace extension that creates/selects repository worktrees, associates
+      project metadata and layouts with one or more spaces, and launches project commands without a
+      core `Workspace` type.
+- [ ] Publish an agent-observer extension that proves working/blocked/done views require no core agent
+      type.
 - [ ] Keep provider-specific agent detection and orchestration in extensions rather than core stores.
 - [ ] Test blocked/crashed host behavior during input, output, reload, and shutdown.
 - [ ] Benchmark idle host overhead and keymap/command/automation dispatch latency.
