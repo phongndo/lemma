@@ -16,6 +16,6 @@ Protocol code does not open sockets, discover sessions, dispatch commands, parse
 hit-test layouts, or render frames. Every length, enum, version, capability, identifier, and generation is
 validated before authoritative mutation. The wire never contains Ghostty values or private layouts.
 
-The present `lemma-v8` format is unversioned and sends unframed daemon ANSI. It is the tested
+The present `lemma-v9` format is unversioned and sends unframed daemon ANSI. It is the tested
 migration baseline. The rolling `TODO.md` backlog replaces it incrementally while preserving daemon
 terminal and presentation ownership. See `docs/protocol.md`.

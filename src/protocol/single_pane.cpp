@@ -3,6 +3,7 @@
 #include "lemma/assert.hpp"
 
 #include <cstring>
+#include <limits>
 
 namespace lemma::protocol {
 namespace {
@@ -83,6 +84,19 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
   encode_u16(dimensions.columns, std::span(packet).subspan<0, 2>());
   encode_u16(dimensions.rows, std::span(packet).subspan<2, 2>());
   return packet;
+}
+
+[[nodiscard]] auto encode_bounded_size(const std::size_t size) noexcept
+    -> std::array<std::byte, 2> {
+  LEMMA_ASSERT(size <= std::numeric_limits<std::uint16_t>::max());
+  std::array<std::byte, 2> encoded{};
+  encode_u16(static_cast<std::uint16_t>(size), encoded);
+  return encoded;
+}
+
+[[nodiscard]] auto decode_bounded_size(const std::span<const std::byte, 2> bytes) noexcept
+    -> std::size_t {
+  return decode_u16(bytes.front(), bytes.back());
 }
 
 [[nodiscard]] auto encode_resize(const Dimensions dimensions) noexcept -> std::array<std::byte, 5> {

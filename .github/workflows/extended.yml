@@ -111,6 +111,7 @@ jobs:
           path: |
             build/release/benchmark-results.json
             build/release/mux-benchmark-results.json
+            build/release/mux-comparison-results.json
           if-no-files-found: error
           retention-days: 14
 

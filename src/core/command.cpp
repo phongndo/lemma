@@ -49,11 +49,18 @@ namespace {
 }
 
 [[nodiscard]] constexpr auto valid_target(const Command& command) noexcept -> bool {
-  if (command.target.pane.is_valid() && !command.target.tab.is_valid()) {
+  const bool has_session = command.target.session.is_valid();
+  const bool has_tab = command.target.tab.is_valid();
+  const bool has_pane = command.target.pane.is_valid();
+  const bool has_client = command.target.client.is_valid();
+  if ((has_tab && !has_session) || (has_pane && (!has_session || !has_tab)) ||
+      (has_client && !has_session)) {
     return false;
   }
-  if ((command.kind == CommandKind::detach_client || command.kind == CommandKind::stop_session) &&
-      (command.target.tab.is_valid() || command.target.pane.is_valid())) {
+  if (command.kind == CommandKind::stop_session && (has_tab || has_pane || has_client)) {
+    return false;
+  }
+  if (command.kind == CommandKind::detach_client && (has_tab || has_pane)) {
     return false;
   }
   return true;
@@ -62,16 +69,22 @@ namespace {
 } // namespace
 
 auto CommandDispatcher::dispatch(const Command& command) const noexcept -> CommandResult {
+  const auto complete = [&](const CommandResult result) {
+    if (observer_ != nullptr) {
+      observer_(observer_context_, command, result);
+    }
+    return result;
+  };
   if (!valid_kind(command.kind) || !valid_origin(command.origin) || !valid_argument(command)) {
-    return {.status = CommandStatus::invalid_command};
+    return complete({.status = CommandStatus::invalid_command});
   }
   if (!valid_target(command)) {
-    return {.status = CommandStatus::invalid_target};
+    return complete({.status = CommandStatus::invalid_target});
   }
   if (executor_ == nullptr) {
-    return {.status = CommandStatus::failed};
+    return complete({.status = CommandStatus::failed});
   }
-  return executor_(context_, command);
+  return complete(executor_(context_, command));
 }
 
 } // namespace lemma

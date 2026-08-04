@@ -49,9 +49,10 @@ Session creation, lookup, listing, and removal are handled by the authoritative 
 
 Owns up to 64 running sessions, 1,024 tabs, and 4,096 panes in one reactor. Each session is
 bounded to 16 tabs and 64 panes distributed across those tabs. Every pane owns one child
-process, PTY, terminal, and resolved rectangle. A generationally identified tab owns its split
-tree and focus/zoom state. The session owns its ordered tab slots, active-tab selection,
-attached daemon-side client descriptor, protocol-message state, frame scheduling, and backpressure
+process, PTY, terminal, stable pane ID, and resolved rectangle. A generationally identified tab owns
+its split tree and stable focus/zoom references. Sessions live in a fixed-capacity generational store;
+the session owns its ordered tab slots, active-tab selection, generated attached-client ID and
+descriptor, protocol-message state, frame scheduling, and backpressure
 state. The reactor borrows the daemon listener and remains the sole owner of mutable session and
 terminal state.
 
@@ -70,14 +71,14 @@ The runtime currently provides:
 
 - up to 64 validated named sessions in one per-user daemon;
 - up to 16 tabs and 64 shells, PTYs, and canonical Ghostty terminals per session;
-- generational tab IDs that reject stale slot references;
+- hierarchical generational session, tab, pane, and attached-client IDs that reject stale slots;
 - one attached client plus independent session/tab-list and kill control connections;
 - tmux-compatible tab create/cycle/select/kill and pane split/focus/close/zoom bindings;
 - one bounded binary split tree per tab, with one-cell pane separators;
 - a centered, one-row tab status with one-based numbers, focused-pane foreground process names,
   and bounded overflow;
 - terminal resize propagation from resolved pane rectangles;
-- bounded protocol and PTY read batches;
+- bounded protocol batches and a rotating 256 KiB aggregate PTY-read budget per reactor turn;
 - terminal-generated PTY responses;
 - dirty-row rendering and retained physical client state;
 - bounded composition of validated pane rectangles into one synchronized outer-terminal frame;
@@ -93,13 +94,15 @@ The runtime currently provides:
 The architecture is migrated and the first tab/split-pane behavior is implemented, with these
 limitations:
 
-- sessions and panes do not yet use separate generational stores; tabs use generational IDs
-  within their owning session;
+- session state uses a fixed-capacity generational store, while pane generations remain in bounded
+  tab-owned slots and attached-client generations remain session-owned rather than separate global
+  dense stores;
 - only one client may attach at a time;
 - keyboard prefix commands are implemented, but first-class mouse decoding, hit testing, application
   pass-through, selection, scrolling, and drag resizing are not;
 - the local protocol has no version or capability negotiation and still sends unframed daemon ANSI;
-- new sessions inherit the daemon's original environment and working directory;
+- production session creation captures a bounded invoking cwd and environment snapshot, but new
+  tabs/splits use the stored session cwd rather than inspecting the focused process;
 - the isolated Lua host can register a bounded generation, but command callbacks, snapshots, event
   delivery, rendered UI, process APIs, output subscriptions, and reload are not yet integrated;
 - tabs have numeric slots but no user-defined names or interactive rename prompt;

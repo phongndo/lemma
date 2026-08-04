@@ -136,6 +136,7 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
   auto prefix_deadline = std::chrono::steady_clock::time_point{};
   bool attached = true;
+  bool clean_detach = false;
   while (attached) {
     if (resize_pending != 0) {
       resize_pending = 0;
@@ -195,7 +196,7 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
         prefix_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
       }
       if (parsed.detach) {
-        static_cast<void>(send_all(connection, protocol::encode_detach()));
+        clean_detach = send_all(connection, protocol::encode_detach());
         attached = false;
       }
     }
@@ -208,7 +209,10 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
       "\x1B[?2004l\x1B[?25h\x1B[?7h\x1B[?1049l";
   static_cast<void>(write_text(STDOUT_FILENO, restore_terminal));
   close_descriptor(connection);
-  return 0;
+  if (!clean_detach) {
+    static_cast<void>(write_text(STDERR_FILENO, "lemma session ended or connection was lost\n"));
+  }
+  return clean_detach ? 0 : 1;
 }
 
 } // namespace

@@ -6,4 +6,4 @@ scripts/ci/configure debug \
   -DLEMMA_BUILD_BENCHMARKS=OFF
 cmake --build --preset debug --target lemma lemma_tests lemma_e2e_tests
 scripts/ci/test debug
-./build/debug/lemma >/dev/null
+./build/debug/lemma --help >/dev/null

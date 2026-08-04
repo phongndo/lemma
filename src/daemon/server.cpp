@@ -2,6 +2,7 @@
 
 #include "core/engine.hpp"
 #include "extension/host.hpp"
+#include "lemma/version.hpp"
 #include "platform/io.hpp"
 #include "protocol/single_pane.hpp"
 
@@ -20,6 +21,7 @@
 #include <thread>
 
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -27,6 +29,12 @@
 #include <sys/wait.h>
 #include <syslog.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <crt_externs.h>
+#elifdef __linux__
+extern char** environ;
+#endif
 
 namespace lemma::daemon {
 namespace {
@@ -278,6 +286,85 @@ void redirect_standard_descriptors() noexcept {
          send_all(connection, std::as_bytes(std::span(session.data(), session.size())));
 }
 
+[[nodiscard]] auto process_environment() noexcept -> char** {
+#ifdef __APPLE__
+  return *_NSGetEnviron();
+#elifdef __linux__
+  return ::environ;
+#endif
+}
+
+[[nodiscard]] auto capture_home_directory(const std::span<char> output) noexcept -> std::size_t {
+  std::array<char, std::size_t{16} * 1'024U> account_buffer{};
+  struct passwd account{};
+  struct passwd* result = nullptr;
+  if (::getpwuid_r(::getuid(), &account, account_buffer.data(), account_buffer.size(), &result) !=
+          0 ||
+      result == nullptr || account.pw_dir == nullptr) {
+    return 0;
+  }
+  const std::string_view home(account.pw_dir);
+  if (home.empty() || home.front() != '/' || home.size() >= output.size() || home.contains('\0')) {
+    return 0;
+  }
+  std::ranges::copy(home, output.begin());
+  return home.size();
+}
+
+[[nodiscard]] auto send_existing_session_request(const int connection,
+                                                 const std::string_view session) noexcept -> bool {
+  const auto unavailable_context =
+      protocol::encode_bounded_size(protocol::unavailable_working_directory_size);
+  return send_session_request(connection, protocol::ControlCommand::create_with_context, session) &&
+         send_all(connection, unavailable_context);
+}
+
+[[nodiscard]] auto send_create_request(const int connection,
+                                       const std::string_view session) noexcept -> bool {
+  std::array<char, protocol::working_directory_bytes_max + 1U> directory{};
+  bool used_home_directory = false;
+  if (::getcwd(directory.data(), directory.size()) == nullptr) {
+    if (capture_home_directory(directory) == 0) {
+      return send_existing_session_request(connection, session);
+    }
+    used_home_directory = true;
+  }
+  const std::string_view working_directory(directory.data());
+  std::array<std::byte, protocol::environment_bytes_max> environment{};
+  std::size_t environment_size = 0;
+  std::size_t environment_entries = 0;
+  // POSIX exposes the process environment as a null-terminated pointer vector.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  for (char** entry = process_environment(); entry != nullptr && *entry != nullptr; ++entry) {
+    const std::string_view value(*entry);
+    const auto encoded_size = value.size() + 1U;
+    if (encoded_size > environment.size() - environment_size ||
+        environment_entries == protocol::environment_entries_max) {
+      return send_existing_session_request(connection, session);
+    }
+    std::ranges::copy(std::as_bytes(std::span(value.data(), value.size())),
+                      std::span(environment).subspan(environment_size).begin());
+    environment_size += value.size();
+    std::span(environment).subspan(environment_size, 1).front() = std::byte{0};
+    ++environment_size;
+    ++environment_entries;
+  }
+  if (used_home_directory &&
+      !write_text(
+          STDERR_FILENO,
+          "warning: current directory unavailable; new session will use home directory\n")) {
+    return false;
+  }
+  const auto directory_size = protocol::encode_bounded_size(working_directory.size());
+  const auto encoded_environment_size = protocol::encode_bounded_size(environment_size);
+  return send_session_request(connection, protocol::ControlCommand::create_with_context, session) &&
+         send_all(connection, directory_size) &&
+         send_all(connection,
+                  std::as_bytes(std::span(working_directory.data(), working_directory.size()))) &&
+         send_all(connection, encoded_environment_size) &&
+         send_all(connection, std::span(environment).first(environment_size));
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_control_command(const RuntimeEndpoint& endpoint,
                                        const protocol::ControlCommand command,
@@ -329,6 +416,33 @@ void redirect_standard_descriptors() noexcept {
   return 0;
 }
 
+[[nodiscard]] auto run_shutdown_command(const RuntimeEndpoint& endpoint) -> int {
+  int connection = open_connection(std::string(endpoint.socket_path()));
+  if (connection < 0) {
+    static_cast<void>(write_text(STDERR_FILENO, "no lemma daemon\n"));
+    return 1;
+  }
+  const std::array command{protocol::wire_byte(protocol::ControlCommand::shutdown)};
+  if (!send_all(connection, command)) {
+    close_descriptor(connection);
+    static_cast<void>(write_text(STDERR_FILENO, "failed to shut down lemma daemon\n"));
+    return 1;
+  }
+
+  std::array<std::byte, protocol::shutdown_response.size()> response{};
+  const bool received = read_exact(connection, response);
+  close_descriptor(connection);
+  const auto expected = std::as_bytes(
+      std::span(protocol::shutdown_response.data(), protocol::shutdown_response.size()));
+  if (received && std::ranges::equal(response, expected)) {
+    return write_all(STDOUT_FILENO, expected) ? 0 : 1;
+  }
+  static_cast<void>(write_text(STDERR_FILENO, response.front() == response_capacity
+                                                  ? "lemma daemon connection capacity reached\n"
+                                                  : "failed to shut down lemma daemon\n"));
+  return 1;
+}
+
 } // namespace
 
 [[nodiscard]] auto validate_session(const std::string_view session) noexcept -> bool {
@@ -351,7 +465,8 @@ void redirect_standard_descriptors() noexcept {
 }
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint {
-  auto endpoint = RuntimeEndpoint::create("/tmp/lemma-v8-" + std::to_string(::getuid()) + ".sock");
+  auto endpoint = RuntimeEndpoint::create("/tmp/" + std::string(private_protocol_version) + "-" +
+                                          std::to_string(::getuid()) + ".sock");
   // The fixed production path is absolute and well below sockaddr_un::sun_path on supported hosts.
   if (!endpoint.has_value()) {
     std::abort();
@@ -378,8 +493,7 @@ void redirect_standard_descriptors() noexcept {
     return 1;
   }
   int connection = open_connection(path);
-  if (connection < 0 ||
-      !send_session_request(connection, protocol::ControlCommand::create, session)) {
+  if (connection < 0 || !send_create_request(connection, session)) {
     close_descriptor(connection);
     return 1;
   }
@@ -435,5 +549,7 @@ auto kill_all(const RuntimeEndpoint& endpoint) -> int {
   close_descriptor(connection);
   return run_control_command(endpoint, protocol::ControlCommand::kill_all, {}, false);
 }
+
+auto shutdown(const RuntimeEndpoint& endpoint) -> int { return run_shutdown_command(endpoint); }
 
 } // namespace lemma::daemon

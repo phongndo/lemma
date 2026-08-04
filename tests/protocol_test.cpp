@@ -102,6 +102,14 @@ TEST(ProtocolTest, EncodesAndDecodesPaneCommands) {
   EXPECT_EQ(message.pane_command, PaneCommand::split_left_right);
 }
 
+TEST(ProtocolTest, EncodesBoundedContextSize) {
+  const auto encoded = encode_bounded_size(4'096);
+
+  EXPECT_EQ(encoded.front(), std::byte{0x10});
+  EXPECT_EQ(encoded.back(), std::byte{0x00});
+  EXPECT_EQ(decode_bounded_size(encoded), 4'096U);
+}
+
 TEST(ProtocolTest, EncodesNamedAttachControlFields) {
   constexpr std::string_view session = "project";
 

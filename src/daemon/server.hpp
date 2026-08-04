@@ -56,6 +56,7 @@ struct ServeOptions final {
 [[nodiscard]] auto kill(const RuntimeEndpoint& endpoint, std::string_view session = default_session)
     -> int;
 [[nodiscard]] auto kill_all(const RuntimeEndpoint& endpoint) -> int;
+[[nodiscard]] auto shutdown(const RuntimeEndpoint& endpoint) -> int;
 
 } // namespace lemma::daemon
 

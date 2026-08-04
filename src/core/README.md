@@ -5,11 +5,16 @@ Home of Lemma's authoritative mux engine and dense state.
 The current engine owns up to 64 named sessions, 1,024 tabs, and 4,096 panes in one reactor.
 Each session is bounded to 16 tabs and 64 panes. Every pane owns one child process, PTY,
 canonical terminal adapter, resolved surface, and ordered bounded PTY write queue. Tabs own
-generational IDs, binary split trees, focus, and zoom. Sessions own order/selection, attached-client
+generational IDs, binary split trees, focus, and zoom. Sessions own order/selection, a bounded immutable launch cwd/environment snapshot, attached-client
 state, status, per-attachment view/prefix state, retained presentation state, and frame scheduling.
 
-The target core adds dense generational session/pane/client stores, actor/request origins, stored
-layout ratios, copy/search state, typed input, explicit render-redraw generations, immutable
+The current core uses a fixed-capacity generational session store, hierarchical generational tab and
+pane slots, generated attached-client IDs, and validated command targets. Pending attach
+reservations retain stable IDs rather than cross-turn session pointers. Each session retains a
+bounded deterministic command/result trace, and PTY reads use a rotating aggregate per-turn budget.
+The target core still adds a
+separate dense client store, actor/request origins, stored layout ratios, copy/search state, typed
+input, explicit render-redraw generations, immutable
 snapshots/events, bounded output observations, and complete typed command results. A lagging
 client retains only bounded frame work; canonical terminal damage represents newer state until one
 full redraw can be sent or the client is disconnected.

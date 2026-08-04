@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "suite": "core-mux-baseline",
+  "terminal": {
+    "columns": 80,
+    "rows": 24,
+    "term": "xterm-256color"
+  },
+  "pane_profiles": [
+    {
+      "id": "P1",
+      "panes": 1,
+      "purpose": "single interactive shell and steady-state overhead"
+    },
+    {
+      "id": "P4",
+      "panes": 4,
+      "purpose": "ordinary development layout"
+    },
+    {
+      "id": "P16",
+      "panes": 16,
+      "purpose": "heavy local workspace"
+    },
+    {
+      "id": "PMAX",
+      "panes": 64,
+      "purpose": "per-session supported capacity"
+    }
+  ],
+  "process_workloads": [
+    {
+      "id": "warm_scroll",
+      "input": "25000 79-column CRLF rows followed by a unique completion marker",
+      "completion": "the marker is observable in the attached client output",
+      "metrics": [
+        "latency_ns",
+        "client_bytes"
+      ]
+    },
+    {
+      "id": "idle_resources",
+      "input": "an attached warm shell with no injected input or output for one second per sample",
+      "completion": "the client and session remain attached for the complete sample interval",
+      "metrics": [
+        "cpu_time_ns",
+        "rss_bytes",
+        "wakeups_when_supported"
+      ]
+    },
+    {
+      "id": "blocked_pty",
+      "input": "a gated peer receives and verifies a 2 MiB payload while another session echoes unique tokens",
+      "completion": "the complete payload byte count and digest are rendered after the gate opens",
+      "metrics": [
+        "bytes_before_backpressure",
+        "key_to_pty_ns",
+        "key_to_visible_ns"
+      ]
+    }
+  ],
+  "comparison_policy": {
+    "multiplexers": [
+      "lemma",
+      "tmux",
+      "zellij"
+    ],
+    "rule": "Use identical PTY dimensions, peer binary, inputs, markers, and completion conditions. Record a failed completion as failure, never as a latency sample."
+  }
+}

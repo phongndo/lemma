@@ -150,6 +150,7 @@ public:
   void terminate() noexcept;
   [[nodiscard]] auto screen() -> std::string;
   [[nodiscard]] auto terminal_state_restored() const noexcept -> bool;
+  [[nodiscard]] auto status() const noexcept -> int { return status_; }
   [[nodiscard]] auto raw_tail() const noexcept -> const std::string& { return raw_tail_; }
 
 private:

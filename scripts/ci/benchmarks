@@ -4,6 +4,7 @@ set -euo pipefail
 readonly mode="${1:-smoke}"
 readonly output="build/release/benchmark-results.json"
 readonly mux_output="build/release/mux-benchmark-results.json"
+readonly comparison_output="build/release/mux-comparison-results.json"
 
 # Ghostty's current CMake wrapper writes every profile to the source checkout's
 # zig-out directory. CI lanes have isolated checkouts; locally, remove the
@@ -55,6 +56,11 @@ python3 benchmarks/mux_benchmark.py \
   --mode all \
   --repetitions "${mux_repetitions}" \
   --output "${mux_output}" >/dev/null
+rm -f "${comparison_output}"
+python3 benchmarks/compare_mux.py \
+  --lemma-report "${mux_output}" \
+  --repetitions "${mux_repetitions}" \
+  --output "${comparison_output}" >/dev/null
 
 if [[ ! -s "${output}" ]]; then
   printf 'benchmark did not create %s\n' "${output}" >&2
@@ -99,23 +105,46 @@ except (OSError, json.JSONDecodeError) as error:
     print(f"invalid mux benchmark report {path}: {error}", file=sys.stderr)
     raise SystemExit(1) from error
 
-workloads = report.get("workloads") if isinstance(report, dict) else None
-binaries = report.get("binaries") if isinstance(report, dict) else None
-required = {"warm_scroll", "blocked_pty"}
+if not isinstance(report, dict) or report.get("schema") != 3:
+    print(f"mux benchmark report {path} does not use schema 3", file=sys.stderr)
+    raise SystemExit(1)
+workloads = report.get("workloads")
+binaries = report.get("binaries")
+resources = report.get("resources_after_workloads")
+required = {"warm_scroll", "idle_resources", "blocked_pty"}
 if not isinstance(workloads, dict) or not required.issubset(workloads):
     print(f"mux benchmark report {path} is missing required workloads", file=sys.stderr)
     raise SystemExit(1)
 if not isinstance(binaries, dict) or not {"server", "cli", "workload"}.issubset(binaries):
     print(f"mux benchmark report {path} is missing binary provenance", file=sys.stderr)
     raise SystemExit(1)
-for name in ("warm_scroll",):
-    result = workloads[name]
-    if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
-        print(f"mux benchmark workload {name} has invalid latency samples", file=sys.stderr)
-        raise SystemExit(1)
+if not isinstance(resources, dict) or resources.get("available") is not True:
+    print(f"mux benchmark report {path} is missing its resource snapshot", file=sys.stderr)
+    raise SystemExit(1)
+warm = workloads["warm_scroll"]
+if (
+    not isinstance(warm, dict)
+    or warm.get("status") != "completed"
+    or not warm.get("samples_ns")
+    or warm.get("p50_ns", 0) <= 0
+):
+    print("mux benchmark workload warm_scroll has invalid latency samples", file=sys.stderr)
+    raise SystemExit(1)
+idle = workloads["idle_resources"]
+if (
+    not isinstance(idle, dict)
+    or idle.get("status") != "completed"
+    or not idle.get("cpu_time", {}).get("samples_ns")
+    or not idle.get("rss", {}).get("samples_bytes")
+):
+    print("mux benchmark workload idle_resources has invalid samples", file=sys.stderr)
+    raise SystemExit(1)
 blocked = workloads["blocked_pty"]
-for condition in ("idle", "blocked_other_pane"):
-    condition_result = blocked.get(condition) if isinstance(blocked, dict) else None
+if not isinstance(blocked, dict) or blocked.get("status") != "completed":
+    print("mux benchmark workload blocked_pty did not complete", file=sys.stderr)
+    raise SystemExit(1)
+for condition in ("idle", "blocked_other_session"):
+    condition_result = blocked.get(condition)
     for measurement in ("key_to_pty", "key_to_visible"):
         result = condition_result.get(measurement) if isinstance(condition_result, dict) else None
         if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
@@ -124,4 +153,52 @@ for condition in ("idle", "blocked_other_pane"):
                 file=sys.stderr,
             )
             raise SystemExit(1)
+PY
+
+python3 - "${comparison_output}" "benchmarks/workloads.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+comparison_path = Path(sys.argv[1])
+manifest_path = Path(sys.argv[2])
+try:
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    print(f"invalid core mux benchmark input: {error}", file=sys.stderr)
+    raise SystemExit(1) from error
+
+if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+    print(f"invalid workload manifest {manifest_path}", file=sys.stderr)
+    raise SystemExit(1)
+profiles = manifest.get("pane_profiles")
+if not isinstance(profiles, list) or [profile.get("panes") for profile in profiles] != [1, 4, 16, 64]:
+    print(f"workload manifest {manifest_path} has invalid pane profiles", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(comparison, dict) or comparison.get("schema") != 1:
+    print(f"invalid comparison report {comparison_path}", file=sys.stderr)
+    raise SystemExit(1)
+results = comparison.get("results")
+if not isinstance(results, list) or [result.get("multiplexer") for result in results] != [
+    "lemma",
+    "tmux",
+    "zellij",
+]:
+    print(f"comparison report {comparison_path} has invalid multiplexer results", file=sys.stderr)
+    raise SystemExit(1)
+for result in results:
+    workloads = result.get("workloads")
+    warm = workloads.get("warm_scroll") if isinstance(workloads, dict) else None
+    idle = workloads.get("idle_resources") if isinstance(workloads, dict) else None
+    blocked = workloads.get("blocked_pty") if isinstance(workloads, dict) else None
+    if not isinstance(warm, dict) or warm.get("status") != "completed":
+        print(f"{result.get('multiplexer')} did not complete warm_scroll", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(idle, dict) or idle.get("status") != "completed":
+        print(f"{result.get('multiplexer')} did not complete idle_resources", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(blocked, dict) or blocked.get("status") not in {"completed", "failed"}:
+        print(f"{result.get('multiplexer')} has no explicit blocked_pty outcome", file=sys.stderr)
+        raise SystemExit(1)
 PY

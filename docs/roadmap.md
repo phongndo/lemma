@@ -55,7 +55,7 @@ host. The client is thin and forwards daemon-rendered output into an outer termi
 
 P0 proved nonblocking accepted connections, bounded ordered PTY writes, slow-client and blocked-PTY
 isolation, exact response/input ordering, topology lifecycle, and process continuity across detach and
-client loss. The process benchmark records high-scroll and blocked-other-pane latency.
+client loss. The process benchmark records high-scroll and blocked-other-session latency.
 
 The checkpoint feasibility phase then proved that the pinned Ghostty API cannot reconstruct parser
 continuation, both screens, and progressive history in a client replica. That result is now a closed

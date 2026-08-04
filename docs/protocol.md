@@ -5,7 +5,7 @@
 The current protocol is the bounded local wire format used by the runtime. Its implementation remains
 in `src/protocol/single_pane.*` so framing can be tested independently of sockets and terminal state.
 It has no version negotiation and daemon-to-attached-client output is currently unframed ANSI.
-Incompatible changes therefore remain coordinated through the process-named `lemma-v8-<uid>.sock`
+Incompatible changes therefore remain coordinated through the process-named `lemma-v9-<uid>.sock`
 endpoint.
 
 The production direction is a bounded versioned **server-rendered** protocol. It preserves daemon
@@ -160,15 +160,21 @@ A newly accepted connection starts with exactly one control command:
 | Command | Byte | Following bytes | Meaning |
 | --- | ---: | --- | --- |
 | attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one session |
-| create | `N` | name length, name | Ensure one session exists |
+| create (legacy/test) | `N` | name length, name | Ensure one session exists with daemon launch context |
+| create with context | `C` | name, cwd, environment (bounded length-prefixed fields) | Production CLI creation with an invoking launch snapshot |
 | list | `L` | none | List every session and close |
 | list session | `Q` | name length, name | List one session and close |
 | list tabs | `W` | name length, name | List one session's tabs and close |
 | kill | `K` | name length, name | Stop one session and close |
 | kill all | `X` | none | Stop every session and close |
+| shutdown | `S` | none | Stop every session, flush the response, and stop the daemon |
 
-A name length is one byte followed by 1–32 validated ASCII session-name bytes. Create and attach
-return one response byte; a missing named session returns `M`:
+A name length is one byte followed by 1–32 validated ASCII session-name bytes. Production create
+then carries a big-endian two-byte length and 1–4,096 bytes of validated absolute cwd, followed by a
+two-byte length and up to 65,535 bytes/256 NUL-terminated environment entries. The session retains
+that immutable snapshot and terminal identity variables are overridden at launch. This remains a
+migration format rather than the final launch schema. Create and attach return one response byte; a
+missing named session returns `M`:
 
 | Response | Byte | Meaning |
 | --- | ---: | --- |
@@ -178,8 +184,10 @@ return one response byte; a missing named session returns `M`:
 | capacity | `C` | Session capacity is exhausted |
 | failed | `F` | Session creation failed |
 
-After attached `Y`, the daemon sends a complete reconstructed frame before nonblocking live
-operation.
+After attached `Y`, the daemon assigns a new internal `ClientId` and sends a complete reconstructed
+frame before nonblocking live operation. Current human-readable list/tab responses expose
+hierarchical session, tab, and focused-pane IDs, but this private control format still addresses
+sessions by name; explicit wire ID targets belong to the versioned replacement.
 
 ## Current attached-client stream
 
@@ -273,7 +281,7 @@ client.
 
 ## Migration and validation requirements
 
-The versioned endpoint may coexist with `lemma-v8` only for explicit migration tests. Peers never
+The versioned endpoint may coexist with `lemma-v9` only for explicit migration tests. Peers never
 silently speak one format to another. The production change requires:
 
 - golden encodings and round trips for every envelope and value;

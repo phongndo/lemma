@@ -72,9 +72,10 @@ covers every system exported by the Nix flake:
 - `x86_64-darwin`;
 - `aarch64-darwin`.
 
-It also runs benchmark smoke in an isolated release checkout, validates the microbenchmark and
-process-level JSON reports, and uploads them for inspection. Timing is evidence only; shared-runner
-latency is not a regression threshold. Platform component tests run in parallel; real PTY/socket
+It also runs benchmark smoke in an isolated release checkout, validates the microbenchmark, Lemma
+process-level, and pinned tmux/Zellij comparison JSON reports, and uploads them for inspection.
+Timing is evidence only; shared-runner latency is not a regression threshold. Platform component
+tests run in parallel; real PTY/socket
 process tests run serially to avoid host-resource contention while retaining per-test deadlines and
 isolated runtime paths.
 

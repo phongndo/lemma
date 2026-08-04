@@ -231,15 +231,19 @@ void benchmark_terminal_ansi_scroll_operations(benchmark::State& state) {
 
 void benchmark_terminal_multiple_panes(benchmark::State& state) {
   const auto pane_count = static_cast<std::size_t>(state.range(0));
-  std::size_t grid_columns = 4;
+  std::size_t grid_columns = 8;
   if (pane_count == 1) {
     grid_columns = 1;
   } else if (pane_count == 4) {
     grid_columns = 2;
+  } else if (pane_count == 16) {
+    grid_columns = 4;
   }
   const auto grid_rows = pane_count / grid_columns;
-  constexpr std::uint16_t pane_columns = 20;
-  constexpr std::uint16_t pane_rows = 6;
+  constexpr std::uint16_t viewport_columns = 240;
+  constexpr std::uint16_t viewport_rows = 80;
+  const auto pane_columns = static_cast<std::uint16_t>(viewport_columns / grid_columns);
+  const auto pane_rows = static_cast<std::uint16_t>(viewport_rows / grid_rows);
   std::vector<vt::Terminal> terminals;
   terminals.reserve(pane_count);
   vt::TerminalOptions options;
@@ -268,19 +272,21 @@ void benchmark_terminal_multiple_panes(benchmark::State& state) {
         .focused = pane == 0,
     });
   }
-  const render::Viewport viewport{
-      .columns = static_cast<std::uint16_t>(grid_columns * pane_columns),
-      .rows = static_cast<std::uint16_t>(grid_rows * pane_rows),
-  };
+  const render::Viewport viewport{.columns = viewport_columns, .rows = viewport_rows};
   std::array<std::byte, std::size_t{256} * 1'024U> frame{};
-  constexpr std::string_view input = "sparse update";
-  const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
+  constexpr std::string_view first = "\x1B[1;1HA";
+  constexpr std::string_view second = "\x1B[1;1HB";
   if (!render::compose_frame(panes, viewport, frame, true).has_value()) {
     state.SkipWithError("failed to compose initial frame");
     return;
   }
+  std::uint64_t output_bytes = 0;
+  bool use_first = false;
 
   for ([[maybe_unused]] const auto iteration : state) {
+    const auto input = use_first ? first : second;
+    use_first = !use_first;
+    const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
     for (auto& terminal : terminals) {
       terminal.write(bytes);
     }
@@ -290,7 +296,10 @@ void benchmark_terminal_multiple_panes(benchmark::State& state) {
       state.SkipWithError("failed to compose panes");
       return;
     }
+    output_bytes += rendered->bytes;
   }
+  state.counters["frame_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
 void benchmark_terminal_full_frames(benchmark::State& state) {
@@ -328,7 +337,7 @@ BENCHMARK(benchmark_terminal_render_updates);
 BENCHMARK(benchmark_terminal_ansi_damage_frames);
 BENCHMARK(benchmark_terminal_ansi_single_row);
 BENCHMARK(benchmark_terminal_ansi_scroll_operations);
-BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16);
+BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_terminal_full_frames);
 
 } // namespace

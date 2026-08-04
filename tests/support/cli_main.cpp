@@ -9,7 +9,7 @@
 int main(const int argc, char** argv) {
   try {
     const std::span arguments(argv, static_cast<std::size_t>(argc));
-    if (arguments.size() < 3) {
+    if (arguments.size() < 2) {
       return 2;
     }
     const auto endpoint =

@@ -7,11 +7,12 @@ scripts/ci/configure debug \
 # Clangd needs Ghostty's generated public header but not Lemma object files.
 cmake --build --preset debug --target zig_build_lib_vt
 
-# LLVM 22's isolated checker reports internal code-action failures for the standalone command
-# header and while testing refactors in loop- and macro-heavy runtime sources. Their production
+# LLVM 22's isolated checker reports internal code-action failures for standalone command/template
+# headers and while testing refactors in loop- and macro-heavy runtime sources. Their production
 # translation units and clang-tidy still cover these files.
 find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) \
   ! -path 'include/lemma/command.hpp' \
+  ! -path 'include/lemma/generational_store.hpp' \
   ! -path 'src/client/attached_client.cpp' \
   ! -path 'src/core/connection_output.hpp' \
   ! -path 'src/core/engine.cpp' \

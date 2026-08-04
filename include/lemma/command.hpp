@@ -45,6 +45,7 @@ struct CommandTarget final {
   SessionId session;
   TabId tab;
   PaneId pane;
+  ClientId client;
 };
 
 struct Command final {
@@ -61,6 +62,9 @@ enum class CommandStatus : std::uint8_t {
   detach_requested,
   invalid_command,
   invalid_target,
+  stale_target,
+  wrong_owner,
+  capacity,
   unavailable,
   failed,
 };
@@ -74,20 +78,33 @@ struct CommandResult final {
   }
 };
 
+struct CommandTraceEntry final {
+  std::uint64_t sequence{0};
+  Command command;
+  CommandResult result;
+};
+
 using CommandExecutor = CommandResult (*)(void* context, const Command& command) noexcept;
+using CommandObserver = void (*)(void* context, const Command& command,
+                                 CommandResult result) noexcept;
 
 // Validates bounded command values before invoking the reactor-owned state transition function.
 // The dispatcher itself performs no allocation or I/O.
 class CommandDispatcher final {
 public:
-  constexpr CommandDispatcher(const CommandExecutor executor, void* const context) noexcept
-      : executor_(executor), context_(context) {}
+  constexpr CommandDispatcher(const CommandExecutor executor, void* const context,
+                              const CommandObserver observer = nullptr,
+                              void* const observer_context = nullptr) noexcept
+      : executor_(executor), context_(context), observer_(observer),
+        observer_context_(observer_context) {}
 
   [[nodiscard]] auto dispatch(const Command& command) const noexcept -> CommandResult;
 
 private:
   CommandExecutor executor_{nullptr};
   void* context_{nullptr};
+  CommandObserver observer_{nullptr};
+  void* observer_context_{nullptr};
 };
 
 } // namespace lemma

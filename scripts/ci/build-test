@@ -12,4 +12,4 @@ cmake --build --preset debug
 scripts/ci/test debug
 
 # Exercise command dispatch without opening a PTY or creating persistent state.
-./build/debug/lemma >/dev/null
+./build/debug/lemma --help >/dev/null

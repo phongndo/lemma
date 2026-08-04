@@ -44,8 +44,10 @@ class MuxProcessTest : public testing::Test {
 protected:
   void SetUp() override {
     ASSERT_TRUE(runtime_.valid());
+    auto server_environment = runtime_.environment();
+    server_environment.emplace_back("LEMMA_DAEMON_SECRET=daemon-only");
     ASSERT_TRUE(
-        server_.spawn({LEMMA_TEST_SERVER_PATH, runtime_.socket_path()}, runtime_.environment()));
+        server_.spawn({LEMMA_TEST_SERVER_PATH, runtime_.socket_path()}, server_environment));
     ASSERT_TRUE(wait_for_endpoint(runtime_.socket_path(), deadline_after(5s))) << server_.output();
   }
 
@@ -226,6 +228,147 @@ named_request(const protocol::ControlCommand command, const std::string_view ses
     }
   }
   return false;
+}
+
+TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
+  const auto help = command({"--help"});
+  EXPECT_EQ(help.status, 0) << help.output;
+  EXPECT_TRUE(help.output.contains("Usage: lemma")) << help.output;
+  EXPECT_TRUE(help.output.contains("shutdown --confirm")) << help.output;
+  const auto version = command({"--version"});
+  EXPECT_EQ(version.status, 0) << version.output;
+  EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-v9")) << version.output;
+  const auto invalid = command({"not-a-command"});
+  EXPECT_EQ(invalid.status, 2) << invalid.output;
+  EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
+
+  PtyClient client;
+  ASSERT_TRUE(client.spawn({LEMMA_TEST_CLI_PATH, runtime_.socket_path()}, runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send(std::array{std::byte{0x02}, std::byte{'d'}}, deadline_after(2s)));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+  ASSERT_TRUE(wait_for_listing("default", "detached", deadline_after(3s)));
+
+  const auto unconfirmed_shutdown = command({"shutdown"});
+  EXPECT_NE(unconfirmed_shutdown.status, 0) << unconfirmed_shutdown.output;
+  EXPECT_TRUE(unconfirmed_shutdown.output.contains("WARNING")) << unconfirmed_shutdown.output;
+  EXPECT_TRUE(unconfirmed_shutdown.output.contains("shutdown --confirm"))
+      << unconfirmed_shutdown.output;
+  EXPECT_FALSE(server_.wait(deadline_after(100ms))) << server_.output();
+
+  const auto shutdown = command({"shutdown", "--confirm"});
+  EXPECT_EQ(shutdown.status, 0) << shutdown.output;
+  EXPECT_TRUE(shutdown.output.contains("WARNING")) << shutdown.output;
+  EXPECT_TRUE(shutdown.output.contains("lemma daemon stopped")) << shutdown.output;
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, CommitsShutdownWhenControlPeerDisconnectsBeforeAcknowledgement) {
+  RawPeer requester;
+  ASSERT_TRUE(requester.connect(runtime_.socket_path(), deadline_after(2s)));
+  const std::array request{protocol::wire_byte(protocol::ControlCommand::shutdown)};
+  ASSERT_TRUE(requester.send(request, deadline_after(2s)));
+  requester.close();
+
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, PreservesExplicitlyEmptyLaunchEnvironment) {
+  constexpr std::string_view session = "empty_context";
+  auto request = named_request(protocol::ControlCommand::create_with_context, session);
+  const auto directory_size = protocol::encode_bounded_size(runtime_.directory().size());
+  request.insert(request.end(), directory_size.begin(), directory_size.end());
+  const auto directory =
+      std::as_bytes(std::span(runtime_.directory().data(), runtime_.directory().size()));
+  request.insert(request.end(), directory.begin(), directory.end());
+  const auto environment_size = protocol::encode_bounded_size(0);
+  request.insert(request.end(), environment_size.begin(), environment_size.end());
+
+  RawPeer creator;
+  ASSERT_TRUE(creator.connect(runtime_.socket_path(), deadline_after(2s)));
+  ASSERT_TRUE(creator.send(request, deadline_after(2s)));
+  ASSERT_TRUE(creator.wait_for_byte(protocol::wire_byte(protocol::ControlResponse::ready),
+                                    deadline_after(2s)));
+  creator.close();
+
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("attach", session), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(
+      client.send("printf '__EMPTY_CONTEXT__%s__EMPTY_CONTEXT__\\n' \"$LEMMA_DAEMON_SECRET\"\r",
+                  deadline_after(2s)));
+  EXPECT_TRUE(client.wait_for_screen("__EMPTY_CONTEXT____EMPTY_CONTEXT__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send(std::array{std::byte{0x02}, std::byte{'d'}}, deadline_after(2s)));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, CapturesInvokingWorkingDirectoryForSessionPanes) {
+  const auto launch = "cd " + shell_quote(runtime_.directory()) + " && " +
+                      shell_quote(LEMMA_TEST_CLI_PATH) + " " + shell_quote(runtime_.socket_path()) +
+                      " start cwd";
+  ChildProcess creator;
+  auto creator_environment = runtime_.environment();
+  creator_environment.emplace_back("LEMMA_SESSION_TEST=invoking-client");
+  ASSERT_TRUE(creator.spawn({"/bin/sh", "-c", launch}, creator_environment));
+  ASSERT_TRUE(creator.wait(deadline_after(5s))) << creator.output();
+  auto creator_status = creator.status();
+  ASSERT_TRUE(WIFEXITED(creator_status));
+  ASSERT_EQ(WEXITSTATUS(creator_status), 0) << creator.output();
+
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("attach", "cwd"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send(
+      "printf '__CWD__%s__CWD__\\n__ENV__%s__ENV__\\n' \"$PWD\" \"$LEMMA_SESSION_TEST\"\r",
+      deadline_after(2s)));
+  const auto directory_name =
+      runtime_.directory().substr(runtime_.directory().find_last_of('/') + 1U);
+  ASSERT_TRUE(client.wait_for_screen(directory_name + "__CWD__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_screen("__ENV__invoking-client__ENV__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send(std::array{std::byte{0x02}, std::byte{'d'}}, deadline_after(2s)));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, ReusesExistingSessionAndFallsBackForFreshSessionWithoutCwd) {
+  ASSERT_EQ(command({"start", "existing"}).status, 0);
+  const auto deleted_directory = runtime_.owned_path("deleted-cwd");
+  const auto launch = "mkdir " + shell_quote(deleted_directory) + " && cd " +
+                      shell_quote(deleted_directory) + " && rmdir " +
+                      shell_quote(deleted_directory) + " && exec " +
+                      shell_quote(LEMMA_TEST_CLI_PATH) + " " + shell_quote(runtime_.socket_path()) +
+                      " start existing";
+  ChildProcess invoker;
+  ASSERT_TRUE(invoker.spawn({"/bin/sh", "-c", launch}, runtime_.environment()));
+  ASSERT_TRUE(invoker.wait(deadline_after(5s))) << invoker.output();
+  auto status = invoker.status();
+  ASSERT_TRUE(WIFEXITED(status)) << invoker.output();
+  EXPECT_EQ(WEXITSTATUS(status), 0) << invoker.output();
+  EXPECT_TRUE(invoker.output().contains("warning: current directory unavailable"))
+      << invoker.output();
+  EXPECT_TRUE(invoker.output().contains("existing")) << invoker.output();
+
+  const auto fresh_deleted_directory = runtime_.owned_path("fresh-deleted-cwd");
+  const auto fresh_launch = "mkdir " + shell_quote(fresh_deleted_directory) + " && cd " +
+                            shell_quote(fresh_deleted_directory) + " && rmdir " +
+                            shell_quote(fresh_deleted_directory) + " && exec " +
+                            shell_quote(LEMMA_TEST_CLI_PATH) + " " +
+                            shell_quote(runtime_.socket_path()) + " start fresh";
+  ChildProcess creator;
+  ASSERT_TRUE(creator.spawn({"/bin/sh", "-c", fresh_launch}, runtime_.environment()));
+  ASSERT_TRUE(creator.wait(deadline_after(5s))) << creator.output();
+  auto creator_status = creator.status();
+  ASSERT_TRUE(WIFEXITED(creator_status)) << creator.output();
+  EXPECT_EQ(WEXITSTATUS(creator_status), 0) << creator.output();
+  EXPECT_TRUE(creator.output().contains("warning: current directory unavailable"))
+      << creator.output();
+  EXPECT_TRUE(creator.output().contains("fresh")) << creator.output();
 }
 
 TEST_F(MuxProcessTest, CreatesAttachesRendersAndDetaches) {
@@ -472,8 +615,12 @@ TEST_F(MuxProcessTest, LastShellExitReclaimsSessionAndRestoresTerminal) {
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
   ASSERT_TRUE(client.send("exit\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait(deadline_after(5s))) << client.raw_tail();
+  auto client_status = client.status();
+  ASSERT_TRUE(WIFEXITED(client_status));
+  EXPECT_EQ(WEXITSTATUS(client_status), 1);
   EXPECT_TRUE(client.terminal_state_restored());
   EXPECT_NE(client.raw_tail().find("\x1B[?1049l"), std::string::npos) << client.raw_tail();
+  EXPECT_TRUE(client.raw_tail().contains("lemma session ended")) << client.raw_tail();
 
   const auto listing = command({"list"});
   ASSERT_EQ(listing.status, 0) << listing.output;
@@ -554,6 +701,27 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   EXPECT_TRUE(expect_close(oversized_name));
   const auto invalid_name = named_request(protocol::ControlCommand::create, "bad.name");
   EXPECT_TRUE(expect_close(invalid_name));
+
+  auto unavailable_context =
+      named_request(protocol::ControlCommand::create_with_context, "missingcontext");
+  const auto unavailable_size =
+      protocol::encode_bounded_size(protocol::unavailable_working_directory_size);
+  unavailable_context.insert(unavailable_context.end(), unavailable_size.begin(),
+                             unavailable_size.end());
+  EXPECT_TRUE(expect_close(unavailable_context));
+  EXPECT_NE(command({"list", "missingcontext"}).status, 0);
+
+  auto invalid_environment = named_request(protocol::ControlCommand::create_with_context, "badenv");
+  const auto cwd_size = protocol::encode_bounded_size(1);
+  invalid_environment.insert(invalid_environment.end(), cwd_size.begin(), cwd_size.end());
+  invalid_environment.push_back(std::byte{'/'});
+  const std::array malformed_environment{std::byte{'A'}, std::byte{0}};
+  const auto environment_size = protocol::encode_bounded_size(malformed_environment.size());
+  invalid_environment.insert(invalid_environment.end(), environment_size.begin(),
+                             environment_size.end());
+  invalid_environment.insert(invalid_environment.end(), malformed_environment.begin(),
+                             malformed_environment.end());
+  EXPECT_TRUE(expect_close(invalid_environment));
 
   const auto disconnecting_attach = named_request(protocol::ControlCommand::attach, "healthy",
                                                   protocol::Dimensions{.columns = 80, .rows = 24});
@@ -808,7 +976,11 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
       events.revents = 0;
     }
   }
-  EXPECT_TRUE(capacity_observed);
+  ASSERT_TRUE(capacity_observed);
+  const auto rejected_shutdown = command({"shutdown", "--confirm"});
+  EXPECT_NE(rejected_shutdown.status, 0) << rejected_shutdown.output;
+  EXPECT_TRUE(rejected_shutdown.output.contains("capacity")) << rejected_shutdown.output;
+  EXPECT_FALSE(server_.wait(deadline_after(100ms))) << server_.output();
   ASSERT_TRUE(client.send("printf '__CAPACITY_ISOLATED__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__CAPACITY_ISOLATED__", deadline_after(5s)));
   for (auto& peer : capacity_peers) {

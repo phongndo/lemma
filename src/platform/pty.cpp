@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -16,6 +17,7 @@
 #include <unistd.h>
 
 #ifdef __APPLE__
+#include <crt_externs.h>
 #include <libproc.h>
 #include <util.h>
 #elifdef __linux__
@@ -39,9 +41,62 @@ namespace {
   return size;
 }
 
+[[nodiscard]] auto install_environment(const std::span<char> environment,
+                                       const EnvironmentMode mode) noexcept -> bool {
+  if (mode == EnvironmentMode::inherit) {
+    return environment.empty();
+  }
+#ifdef __APPLE__
+  // Darwin setenv requires a writable allocated vector after replacing the inherited environment.
+  // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+  auto** const empty_environment = static_cast<char**>(std::calloc(1, sizeof(char*)));
+  if (empty_environment == nullptr) {
+    return false;
+  }
+  *_NSGetEnviron() = empty_environment;
+#elifdef __linux__
+  if (::clearenv() != 0) {
+    return false;
+  }
+#endif
+  std::size_t offset = 0;
+  while (offset < environment.size()) {
+    auto entry = environment.subspan(offset);
+    const auto terminator = std::ranges::find(entry, '\0');
+    if (terminator == entry.end()) {
+      return false;
+    }
+    const auto entry_size = static_cast<std::size_t>(std::distance(entry.begin(), terminator));
+    auto value = entry.first(entry_size);
+    const auto separator = std::ranges::find(value, '=');
+    if (separator == value.begin() || separator == value.end()) {
+      return false;
+    }
+    *separator = '\0';
+    if (::setenv(value.data(), std::to_address(separator + 1), 1) != 0) {
+      return false;
+    }
+    offset += entry_size + 1U;
+  }
+  return true;
+}
+
 } // namespace
 
-[[nodiscard]] auto spawn_login_shell(int& pty_descriptor) noexcept -> pid_t {
+[[nodiscard]] auto spawn_login_shell(int& pty_descriptor, const std::string_view working_directory,
+                                     const std::span<const std::byte> environment,
+                                     const EnvironmentMode environment_mode) noexcept -> pid_t {
+  std::array<char, (std::size_t{4} * 1'024U) + 1U> directory{};
+  if (working_directory.size() >= directory.size() || working_directory.contains('\0') ||
+      (!working_directory.empty() && working_directory.front() != '/')) {
+    return -1;
+  }
+  std::ranges::copy(working_directory, directory.begin());
+  std::array<char, std::size_t{64} * 1'024U> environment_copy{};
+  if (environment.size() > environment_copy.size()) {
+    return -1;
+  }
+  std::ranges::copy(environment, std::as_writable_bytes(std::span(environment_copy)).begin());
   winsize initial_size{.ws_row = 24, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0};
   const auto child = ::forkpty(&pty_descriptor, nullptr, nullptr, &initial_size);
   if (child != 0) {
@@ -69,7 +124,10 @@ namespace {
     }
   }
 
-  if (::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
+  if ((!working_directory.empty() && ::chdir(directory.data()) != 0) ||
+      !install_environment(std::span(environment_copy).first(environment.size()),
+                           environment_mode) ||
+      ::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
       ::setenv("TERM_PROGRAM", "lemma", 1) != 0) {
     ::_exit(127);
   }

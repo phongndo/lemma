@@ -56,12 +56,14 @@ latency does not justify moving Lua into the mux-critical path.
 
 [`../benchmarks/mux_benchmark.py`](../benchmarks/mux_benchmark.py) runs the real foreground daemon,
 attached client, shell PTY, terminal adapter, renderer, and deterministic workload executable through
-isolated endpoints. It records the Lemma commit, host/architecture, every latency sample, p50/p95/p99,
-and client bytes as JSON. It never touches the user's daemon. The benchmark driver removes Ghostty's
+isolated endpoints. It records the Lemma commit, mux version, host/architecture, every latency
+sample, p50/p95/p99, client bytes, idle CPU/RSS and OS-supported wakeup samples, and a labeled
+post-workload process-tree RSS/CPU snapshot as JSON. It never touches the user's daemon. The
+benchmark driver removes Ghostty's
 shared source-tree `zig-out` before and after the run so a prior ReleaseFast archive cannot taint the
 measurement or a later local debug/sanitizer build. Scheduled and manually dispatched extended CI
-runs the smoke mode in an isolated checkout and uploads both JSON reports; shared-runner timings are
-evidence, not thresholds.
+runs the smoke mode in an isolated checkout and uploads the microbenchmark, Lemma process, and
+cross-multiplexer JSON reports; shared-runner timings are evidence, not thresholds.
 
 Reproduce a release smoke or five-sample run with:
 
@@ -94,8 +96,14 @@ Five release samples on the Apple Silicon development machine on July 30, 2026 p
 
 The blocked reader accepted 1,125,222 bytes through the outer client before backpressure was
 observable in that run, then recovered the complete 2 MiB payload. Five samples are a smoke baseline,
-not a statistically stable regression budget. Cross-multiplexer results are intentionally omitted
-until checked-in adapters can reproduce the exact same workload and report binary versions.
+not a statistically stable regression budget.
+
+[`../benchmarks/compare_mux.py`](../benchmarks/compare_mux.py) now runs the same peer binary, PTY size,
+input, marker, and completion condition through pinned tmux and Zellij adapters. It records exact
+versions and preserves an incomplete workload as an explicit failure rather than a latency sample.
+The locked workload and pane profiles are in
+[`../benchmarks/workloads.json`](../benchmarks/workloads.json), and comparison/claim rules are in
+[`core-mux-quality.md`](core-mux-quality.md). No broad ranking is inferred from these two workloads.
 
 This benchmark does not replace future sparse editor, mouse, multi-pane, slow-client,
 large-scrollback, memory, resize-storm, or soak measurements.

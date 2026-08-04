@@ -15,6 +15,8 @@ versions:
     {{ nix }} ninja --version
     {{ nix }} ccache --version
     {{ nix }} conan --version
+    {{ nix }} tmux -V
+    {{ nix }} zellij --version
     {{ nix }} zig version
     {{ nix }} hk --version
 
@@ -53,7 +55,7 @@ test: build
 bench: build
     {{ nix }} ./build/{{ profile }}/lemma_benchmarks
 
-# Run release microbenchmarks plus checked-in process-level mux benchmarks.
+# Run release microbenchmarks and Lemma/tmux/Zellij process baselines.
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
 
@@ -80,6 +82,7 @@ lsp-check: configure
     {{ nix }} bash -c "find apps include src -type f \
         \\( -name '*.hpp' -o -name '*.cpp' \\) \
         ! -path 'include/lemma/command.hpp' \
+        ! -path 'include/lemma/generational_store.hpp' \
         ! -path 'src/client/attached_client.cpp' \
         ! -path 'src/core/connection_output.hpp' \
         ! -path 'src/core/engine.cpp' \

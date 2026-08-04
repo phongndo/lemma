@@ -9,6 +9,10 @@ Start here:
 - [`roadmap.md`](roadmap.md) — outcome areas, priority guidance, release gates, and deferred scope.
 - [`daily-driver-contract.md`](daily-driver-contract.md) — required mux behavior and its performance,
   robustness, compatibility, and adoption bar.
+- [`core-mux-quality.md`](core-mux-quality.md) — batteries-included workflows, permanent robustness
+  invariants, pane profiles, common completion semantics, and performance-claim policy.
+- [`core-mux-phase1.md`](core-mux-phase1.md) — authoritative identity, command trace, launch context,
+  lifecycle, scheduling bounds, and Phase 1 closeout evidence.
 - [`architecture.md`](architecture.md) — authoritative daemon, thin client, server rendering,
   ownership, dependencies, hot-path rules, and extension boundary.
 - [`single-pane-runtime.md`](single-pane-runtime.md) — currently implemented runtime ownership,

@@ -32,12 +32,12 @@ Status terms:
 | Start detached | Working | `lemma start [name]` creates a session and prints its listing. |
 | Attach/detach | Working | `lemma attach [name]`; `C-b d` detaches without ending pane processes. |
 | List/control | Working | List all/one session, list tabs, kill one session, or kill all sessions. |
-| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default session. |
-| Help/version/errors | Partial | Usage exists, but there are no dedicated help/version commands and unknown commands return usage rather than a precise failing diagnostic. |
+| Default invocation | Working | Plain `lemma` creates or enters the literal `default` session and visibly fails if it is already attached. |
+| Help/version/errors | Working | Dedicated help and version commands exist; invalid commands/arity report diagnostics and return status 2. |
 | Machine-readable automation | Absent | There is no `--format=json`, generated semantic schema, immutable snapshot API, or documented compatibility policy. |
 | Persistent agent/automation API | Absent | The current local socket is a private unversioned control/attach protocol; agents cannot discover typed commands, launch/capture/wait/cancel, subscribe to bounded events, or recover from stale IDs. |
 | Per-user daemon | Working | Double-forked daemon, lock file, stale-socket validation, `0600` Unix socket, one listener. |
-| Daemon shutdown | Absent | Session kill commands remove sessions; there is no explicit daemon shutdown/control command. |
+| Daemon shutdown | Working | `lemma shutdown` warns without mutating sessions; explicit `lemma shutdown --confirm` repeats the warning, stops owned sessions, flushes its response, and unwinds the daemon endpoint. |
 | Installable releases | Absent | Users currently build from source; no versioned binary archives or package are produced. |
 
 Session names are 1–32 ASCII letters, digits, underscores, or hyphens. The default explicit
@@ -52,10 +52,10 @@ session name is `default`.
 | Multiple attached clients | Absent | One client may attach to each session; another receives `busy`. |
 | Shell launch | Working | Every pane starts the account login shell in a PTY. |
 | Arbitrary launch command | Absent | Pane creation cannot currently select a command, cwd, or environment. |
-| cwd/environment policy | Partial | New panes inherit the daemon's original cwd/environment, not the invoking client's current context. |
+| cwd/environment policy | Partial | Production creation transports a validated absolute invoking cwd and a bounded 64 KiB/256-entry environment snapshot; all panes inherit that immutable session context and Lemma overrides terminal identity. Splits/new tabs still use the session cwd rather than inspecting the focused process. |
 | Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its tab and the last tab removes the session. |
 | Restart/reboot durability | Absent | Topology, scrollback, and processes are not persisted across daemon death or reboot. Zstandard is linked but no durable-session snapshot path exists; the planned attach checkpoint is not reboot persistence. |
-| Exit-status reporting | Absent | Pane exit status and reason are not presented to the user. |
+| Exit-status reporting | Partial | Unexpected session end or connection loss restores the outer terminal, reports a diagnostic, and returns nonzero; exact pane exit status/reason is not yet carried to the client. |
 
 ### Tabs
 
@@ -81,7 +81,7 @@ session name is `default`.
 | Zoom | Working | `C-b z` toggles the focused pane over the full pane viewport. |
 | Outer resize | Working | `SIGWINCH` updates the active layout and PTY sizes; too-small layouts are temporarily suspended. |
 | Interactive ratios | Absent | Every split is recalculated as an equal half; no keyboard or mouse resizing. |
-| Pane IDs/names/overlay | Absent | Pane storage uses local numeric slots without public generational IDs, names, or an identification overlay. |
+| Pane IDs/names/overlay | Partial | Session/tab/pane/client references use hierarchical generational IDs and listings expose session/tab/focused-pane IDs; names and an identification overlay remain absent. |
 | Mouse focus/drag | Absent | No pane hit testing, click-to-focus, or separator dragging. |
 
 The implemented hard limits derive to 64 panes per session and 64 panes in any one tab, with
@@ -141,27 +141,36 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 ### What is already strong
 
 - One reactor owns all mutable mux/terminal state.
-- Tab IDs reject stale generations; the public ID value type also defines session, pane, and
-  client IDs for future stores.
-- Client input, accepted connections, control output, PTY writes, extension frames, terminal
+- A fixed-capacity generational session store rejects stale IDs; tabs and pane slots retain
+  generations; attached clients receive generations; command targets validate the complete
+  session/tab/pane/client hierarchy before mutation. Pending attach reservations retain `SessionId`
+  rather than pointers.
+- Every dispatched session command is recorded in a bounded deterministic per-session trace with
+  its resolved stable target, sequence, and typed result; validation failures observed by the
+  dispatcher are traceable as results rather than hidden control flow.
+- Client input, accepted connections, control output, PTY reads/writes, extension frames, terminal
   responses, layouts, frame buffers, registration counts, and terminal allocations have explicit
   limits.
-- PTYs are drained before client input; terminal responses and user input share an ordered per-pane
-  queue; extension IPC is processed after PTY, client, queued-write, and frame work.
+- PTYs are drained before client input under a rotating aggregate 256 KiB read budget; terminal
+  responses and user input share an ordered per-pane queue; extension IPC is processed after PTY,
+  client, queued-write, and frame work.
 - Idle setup peers, blocked client frames, and temporarily blocked PTYs do not synchronously stop
   unrelated PTY progress.
 - Release-enabled assertions protect internal invariants.
 - CI covers `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`; scheduled Linux
   ASan/UBSan exists.
-- The current suite includes 72 component tests and 12 process-level mux tests. It covers
+- The current suite includes 75 component tests and 17 process-level mux tests. It covers
   IDs/queues, deterministic partial PTY/control writes and budgets, protocol fragmentation and
   bounds, key encoding, extension registration/isolation, terminal damage/allocation, pane composition,
   daemon/client lifecycle, complete existing focus/zoom/close/tab controls, topology retention,
   resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
   attach, real blocked-PTY recovery, cross-session fairness, and terminal-response/input ordering.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
-  scroll detection, 1/4/16 terminal surfaces, warm-session marker latency/client bytes, and separate
-  key-to-PTY and key-to-visible-frame latency with another session's PTY blocked.
+  scroll detection, 1/4/16/64 terminal surfaces in a fixed viewport, warm-session marker
+  latency/client bytes, separate key-to-PTY and key-to-visible-frame latency with another session's
+  PTY blocked, idle CPU/RSS and Darwin wakeup samples, and post-workload process-tree RSS/CPU
+  snapshots. Pinned tmux and Zellij adapters run
+  the same process inputs and completion markers and preserve incomplete work as explicit failure.
 
 ### Important robustness gaps
 
@@ -171,14 +180,17 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 2. **The outer-terminal client lifecycle is not signal-complete.** Normal detach/disconnect performs
    broad escape cleanup and ordinary unwinding restores termios, but fatal/default signals do not
    guarantee those paths execute.
-3. **Session and pane IDs are not authoritative stores.** Their public types exist, but core
-   commands can only explicitly validate the current tab; session/pane targets remain invalid.
+3. **Stable IDs are not yet a public control protocol.** Core state and commands validate
+   hierarchical generational session/tab/pane/client targets and listings expose IDs, but the private
+   name-oriented control protocol cannot yet receive an explicit ID target or return typed stale-ID
+   errors on the wire.
 4. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll
    marker latency/client bytes plus separate key-to-PTY and key-to-visible-frame latency with another
    PTY blocked. Mouse, slow-client distributions, memory-per-pane, resize-storm, and multi-day soak
    harnesses remain absent.
-5. **User-visible failures are coarse.** Attached-client loop failures generally return success after
-   cleanup, pane exit reasons are absent, and several capacity/no-effect outcomes have no attached UI.
+5. **User-visible failures are still coarse.** Unexpected attached-client termination now returns
+   nonzero after cleanup with a diagnostic, but exact pane exit reasons remain absent and several
+   capacity/no-effect outcomes have no attached UI.
 6. **The typed command model is not yet a public programmable spine.** Existing C++ commands cover a
    subset of attached mutations, but there is no schema/introspection, actor/request identity, JSON
    output, persistent semantic socket, bounded capture/wait/cancel, or Lua/agent command parity.

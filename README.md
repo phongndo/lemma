@@ -28,8 +28,9 @@ core IDs rather than mandatory kernel containers.
 
 The current vertical slice provides up to 64 named persistent sessions in one per-user daemon,
 each with up to 16 generationally identified tabs and 64 panes distributed across them. It
-supports start, attach, detach, list, tab-list, and kill commands, plus release-enabled invariant
-assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
+supports default entry, start, attach, detach, list, tab-list, kill, and explicit daemon shutdown,
+plus dedicated help/version/errors, release-enabled invariant assertions, hierarchical generational
+IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
 adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
 queues, and enforces a quota-tracked allocator. Lua command callbacks, first-class mouse/copy UX,
 remote release validation, agent APIs, and durability across daemon restarts remain roadmap work. The
@@ -40,8 +41,11 @@ the completed architecture review retained one authoritative daemon and thin cli
 [`docs/product-contract.md`](docs/product-contract.md) for committed direction versus open product
 questions, [`docs/current-capabilities.md`](docs/current-capabilities.md) for the audited present
 state, [`docs/roadmap.md`](docs/roadmap.md) for milestone and release gates,
-[`docs/daily-driver-contract.md`](docs/daily-driver-contract.md) for the local mux quality bar, and
-[`docs/performance.md`](docs/performance.md) for measured renderer and multiplexer results. The
+[`docs/daily-driver-contract.md`](docs/daily-driver-contract.md) for the local mux quality bar,
+[`docs/core-mux-quality.md`](docs/core-mux-quality.md) for the batteries-included workflow and
+measurement standard, [`docs/core-mux-phase1.md`](docs/core-mux-phase1.md) for the authoritative
+kernel closeout, and [`docs/performance.md`](docs/performance.md) for measured renderer and
+multiplexer results. The
 mutable execution backlog and current focus are tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
@@ -65,8 +69,8 @@ just test
 ```
 
 The first build lets Conan 2 download/build its pinned packages and lets Zig
-build the pinned Ghostty source under [`third_party/ghostty`](third_party/ghostty).
-Subsequent C++ compilations use ccache.
+build the pinned Ghostty source under [`third_party/ghostty`](third_party/ghostty). The shell also
+pins tmux and Zellij for common-workload comparison. Subsequent C++ compilations use ccache.
 
 ## Commands
 
@@ -78,7 +82,7 @@ just demo                   # Run the scripted libghostty-vt demo
 just build && ./build/debug/lemma new  # Start and attach to pane 0
 just test                   # GoogleTest and GoogleMock
 just bench                  # Google Benchmark microbenchmarks
-just mux-bench              # Release microbenchmarks + process-level mux workloads
+just mux-bench              # Release Lemma/tmux/Zellij core-mux baselines
 just fmt                    # Apply clang-format and nixpkgs-fmt
 just fmt-check              # Verify formatting only
 just lint                   # clang-tidy; every diagnostic is an error
@@ -117,6 +121,7 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 ## Sessions, tabs, and panes
 
 ```sh
+./build/debug/lemma                # create or enter session "default"
 ./build/debug/lemma new work       # start session "work" and attach
 # Press C-b d to detach.
 ./build/debug/lemma new logs       # create another session in the same daemon
@@ -124,11 +129,18 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 ./build/debug/lemma tabs work      # list work's tabs
 ./build/debug/lemma attach work    # reattach to work
 ./build/debug/lemma kill work      # stop one session
-./build/debug/lemma kill-all       # stop every session
+./build/debug/lemma kill-all       # stop every session, keep the daemon
+./build/debug/lemma shutdown              # show the destructive-operation warning
+./build/debug/lemma shutdown --confirm    # confirm stopping the daemon and owned processes
+./build/debug/lemma --help
+./build/debug/lemma --version
 ```
 
 Each session permits one attached client, owns an ordered set of tabs, and gives each pane its
-own login shell, PTY, and terminal. Lemma inherits the daemon's launch environment, advertises
+own login shell, PTY, and terminal. Session, tab, pane, and attached-client references use
+hierarchical generational IDs; `list` and `tabs` expose the current IDs. Session creation transports
+the invoking absolute cwd and a bounded environment snapshot; all session panes inherit that launch
+context. Panes advertise
 `xterm-256color`, and resizes pane PTYs from the active tab's split layout. Session names
 contain 1-32 ASCII letters, digits, underscores, or hyphens.
 The built-in key table follows tmux defaults:

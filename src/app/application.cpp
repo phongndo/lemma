@@ -3,6 +3,7 @@
 #include "client/attached_client.hpp"
 #include "daemon/server.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "lemma/version.hpp"
 
 #include <array>
 #include <charconv>
@@ -99,21 +100,43 @@ template <typename Integer>
   return write_summary(*update, effects, stats) ? 0 : 1;
 }
 
-[[nodiscard]] auto print_usage() noexcept -> int {
+[[nodiscard]] auto print_usage(std::FILE* const stream) noexcept -> int {
   return write_fragment(
-             stdout, "lemma\n\nCommands:\n  new [name]     start and attach\n  start [name]   "
-                     "start detached\n  attach [name]  attach\n  list [name]    list all or one\n  "
-                     "tabs [name] list tabs\n  kill [name]    stop one session\n  kill-all       "
-                     "stop every session\n  demo "
-                     "          "
-                     "VT demo\n\nThe default name is `default`. C-b % and C-b \" split panes; "
-                     "C-b c creates a tab; C-b n/p changes tabs; C-b d detaches.\n")
+             stream,
+             "Usage: lemma [command [session]]\n\nCommands:\n  new [name]      start and "
+             "attach\n  start [name]    start detached\n  attach [name]   attach\n  list "
+             "[name]     list all or one\n  tabs [name]     list tabs\n  kill [name]     stop "
+             "one session\n  kill-all        stop every session\n  shutdown        show "
+             "destructive "
+             "shutdown warning\n  shutdown --confirm\n                  stop the daemon and every "
+             "session\n"
+             "  help            show this help\n  version         show build and "
+             "protocol version\n  demo            VT demo\n\nWithout a command, Lemma creates or "
+             "enters `default`. C-b % and C-b \" split panes; C-b c creates a tab; C-b n/p "
+             "changes tabs; C-b d detaches.\n")
              ? 0
              : 1;
 }
 
+[[nodiscard]] auto print_version() noexcept -> int {
+  return write_fragment(stdout, "lemma ") && write_fragment(stdout, lemma::version) &&
+                 write_fragment(stdout, " (private protocol ") &&
+                 write_fragment(stdout, lemma::private_protocol_version) &&
+                 write_fragment(stdout, ")\n")
+             ? 0
+             : 1;
+}
+
+// CLI spellings deliberately converge on the small set of daemon/client operations.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto dispatch(const daemon::RuntimeEndpoint& endpoint, const std::string_view command,
                             const std::string_view session, const bool named) -> int {
+  if ((command == "help" || command == "--help" || command == "-h") && !named) {
+    return print_usage(stdout);
+  }
+  if ((command == "version" || command == "--version" || command == "-V") && !named) {
+    return print_version();
+  }
   if (command == "demo" && !named) {
     return run_demo();
   }
@@ -138,7 +161,26 @@ template <typename Integer>
   if (command == "kill-all" && !named) {
     return daemon::kill_all(endpoint);
   }
-  return print_usage();
+  if (command == "shutdown") {
+    constexpr std::string_view warning =
+        "WARNING: daemon shutdown ends every session and its pane processes.\n";
+    if (!named) {
+      static_cast<void>(write_fragment(stderr, warning));
+      static_cast<void>(write_fragment(stderr, "Re-run `lemma shutdown --confirm` to continue.\n"));
+      return 1;
+    }
+    if (session == "--confirm") {
+      if (!write_fragment(stderr, warning)) {
+        return 1;
+      }
+      return daemon::shutdown(endpoint);
+    }
+  }
+  static_cast<void>(write_fragment(stderr, "invalid lemma command or arguments: "));
+  static_cast<void>(write_fragment(stderr, command));
+  static_cast<void>(write_fragment(stderr, "\n"));
+  static_cast<void>(print_usage(stderr));
+  return 2;
 }
 
 } // namespace
@@ -146,8 +188,13 @@ template <typename Integer>
 [[nodiscard]] auto run(const daemon::RuntimeEndpoint& endpoint, const int argument_count,
                        char** argument_values) -> int {
   const std::span arguments(argument_values, static_cast<std::size_t>(argument_count));
+  if (arguments.size() == 1) {
+    return dispatch(endpoint, "new", daemon::default_session, false);
+  }
   if (arguments.size() != 2 && arguments.size() != 3) {
-    return print_usage();
+    static_cast<void>(write_fragment(stderr, "invalid number of arguments\n"));
+    static_cast<void>(print_usage(stderr));
+    return 2;
   }
 
   const std::string_view command(arguments.subspan(1, 1).front());

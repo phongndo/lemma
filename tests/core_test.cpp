@@ -1,5 +1,6 @@
 #include "lemma/bounded_byte_queue.hpp"
 #include "lemma/command.hpp"
+#include "lemma/generational_store.hpp"
 #include "lemma/id.hpp"
 
 #include <gmock/gmock.h>
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <type_traits>
 
@@ -20,7 +22,9 @@ static_assert(std::is_trivially_copyable_v<CommandResult>);
 
 struct CommandCapture final {
   Command command;
+  CommandResult result;
   std::size_t calls{0};
+  std::size_t observations{0};
 };
 
 [[nodiscard]] auto capture_command(void* const context, const Command& command) noexcept
@@ -31,15 +35,24 @@ struct CommandCapture final {
   return {.status = CommandStatus::applied};
 }
 
+void observe_command(void* const context, const Command& command,
+                     const CommandResult result) noexcept {
+  auto& capture = *static_cast<CommandCapture*>(context);
+  capture.command = command;
+  capture.result = result;
+  ++capture.observations;
+}
+
 TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   CommandCapture capture;
-  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const CommandDispatcher dispatcher(&capture_command, &capture, &observe_command, &capture);
   const Command command{
       .kind = CommandKind::select_tab,
       .origin = CommandOrigin::extension,
       .target = {.session = SessionId::from_parts(2, 3),
                  .tab = TabId::from_parts(4, 5),
-                 .pane = {}},
+                 .pane = {},
+                 .client = {}},
       .argument = 7,
   };
 
@@ -48,6 +61,8 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_TRUE(result.succeeded());
   EXPECT_EQ(result.status, CommandStatus::applied);
   EXPECT_EQ(capture.calls, 1U);
+  EXPECT_EQ(capture.observations, 1U);
+  EXPECT_EQ(capture.result.status, CommandStatus::applied);
   EXPECT_EQ(capture.command.kind, CommandKind::select_tab);
   EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
   EXPECT_EQ(capture.command.target.session, command.target.session);
@@ -57,7 +72,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
 
 TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
   CommandCapture capture;
-  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const CommandDispatcher dispatcher(&capture_command, &capture, &observe_command, &capture);
 
   EXPECT_EQ(dispatcher.dispatch({}).status, CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
@@ -69,7 +84,27 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::close_pane,
                            .origin = CommandOrigin::client,
-                           .target = {.session = {}, .tab = {}, .pane = PaneId::from_parts(1, 1)}})
+                           .target = {.session = {},
+                                      .tab = {},
+                                      .pane = PaneId::from_parts(1, 1),
+                                      .client = {}}})
+                .status,
+            CommandStatus::invalid_target);
+  EXPECT_EQ(
+      dispatcher
+          .dispatch(
+              {.kind = CommandKind::close_tab,
+               .origin = CommandOrigin::extension,
+               .target = {.session = {}, .tab = TabId::from_parts(1, 1), .pane = {}, .client = {}}})
+          .status,
+      CommandStatus::invalid_target);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::detach_client,
+                           .origin = CommandOrigin::client,
+                           .target = {.session = {},
+                                      .tab = {},
+                                      .pane = {},
+                                      .client = ClientId::from_parts(1, 1)}})
                 .status,
             CommandStatus::invalid_target);
   EXPECT_EQ(
@@ -79,6 +114,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
           .status,
       CommandStatus::invalid_command);
   EXPECT_EQ(capture.calls, 0U);
+  EXPECT_EQ(capture.observations, 6U);
 
   const CommandDispatcher missing_executor(nullptr, nullptr);
   EXPECT_EQ(missing_executor
@@ -97,6 +133,71 @@ TEST(GenerationalIdTest, InvalidUntilCreatedFromValidParts) {
   EXPECT_TRUE(session.is_valid());
   EXPECT_EQ(session.slot(), 7U);
   EXPECT_EQ(session.generation(), 3U);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(BoundedGenerationalStoreTest, RejectsStaleIdsAndReportsCapacity) {
+  struct Value final {
+    int number{0};
+  };
+  BoundedGenerationalStore<Value, SessionId, 2> store;
+
+  const auto first = store.insert(std::make_unique<Value>(Value{.number = 7}));
+  const auto second = store.insert(std::make_unique<Value>(Value{.number = 9}));
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  const auto first_id = first.value_or(SessionId{});
+  const auto second_id = second.value_or(SessionId{});
+  EXPECT_EQ(store.size(), 2U);
+  EXPECT_EQ(store.get(first_id)->number, 7);
+  EXPECT_EQ(store.get(second_id)->number, 9);
+  EXPECT_FALSE(store.insert(std::make_unique<Value>()).has_value());
+
+  ASSERT_TRUE(store.erase(first_id));
+  EXPECT_FALSE(store.contains(first_id));
+  EXPECT_EQ(store.get(first_id), nullptr);
+  const auto replacement = store.insert(std::make_unique<Value>(Value{.number = 11}));
+  ASSERT_TRUE(replacement.has_value());
+  const auto replacement_id = replacement.value_or(SessionId{});
+  EXPECT_EQ(replacement_id.slot(), first_id.slot());
+  EXPECT_NE(replacement_id.generation(), first_id.generation());
+  EXPECT_EQ(store.get(replacement_id)->number, 11);
+  EXPECT_FALSE(store.erase(first_id));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(BoundedGenerationalStoreTest, DeterministicChurnNeverRevivesStaleIds) {
+  struct Value final {
+    std::uint32_t number{0};
+  };
+  BoundedGenerationalStore<Value, PaneId, 8> store;
+  std::array<PaneId, 8> live{};
+  std::array<PaneId, 512> stale{};
+  std::size_t stale_count = 0;
+  std::uint32_t random = 0xC0FFEEU;
+
+  for (std::uint32_t operation = 0; operation < 4'096U; ++operation) {
+    random = (random * 1'664'525U) + 1'013'904'223U;
+    const auto slot = static_cast<std::size_t>(random % live.size());
+    auto& live_id = std::span(live).subspan(slot, 1).front();
+    if (live_id.is_valid()) {
+      ASSERT_TRUE(store.erase(live_id));
+      std::span(stale).subspan(stale_count % stale.size(), 1).front() = live_id;
+      ++stale_count;
+      live_id = {};
+    } else {
+      const auto id = store.insert(std::make_unique<Value>(Value{.number = operation}));
+      ASSERT_TRUE(id.has_value());
+      const auto inserted = id.value_or(PaneId{});
+      live_id = inserted;
+      EXPECT_EQ(store.get(inserted)->number, operation);
+    }
+    const auto retained = std::min(stale_count, stale.size());
+    for (std::size_t index = 0; index < retained; ++index) {
+      EXPECT_EQ(store.get(std::span(stale).subspan(index, 1).front()), nullptr);
+    }
+  }
 }
 
 TEST(BoundedByteQueueTest, PreservesOrderAcrossWraparound) {

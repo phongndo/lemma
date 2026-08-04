@@ -89,6 +89,8 @@
                 pkgs.nixpkgs-fmt
                 pkgs.python3
                 pkgs.shellcheck
+                pkgs.tmux
+                pkgs.zellij
                 zigPackage
                 hk.packages.${system}.default
               ];

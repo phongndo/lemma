@@ -125,8 +125,9 @@ not C++ target dependencies.
 ### Core — `src/core/`
 
 The core is the sole authoritative mux owner. Its canonical ownership hierarchy is
-`Session → Tab → Pane`. It contains dense generational stores, typed commands, bounded queues,
-scheduling policy, attachment state, and the daemon reactor. Sessions, tabs, panes, clients, focus,
+`Session → Tab → Pane`. It contains bounded generational stores/owner-local slots, typed commands and
+bounded command traces, queues, scheduling policy, immutable session launch context, attachment
+state, and the daemon reactor. Sessions, tabs, panes, clients, focus,
 layouts, viewports, and copy state are core data—not independently allocated services. Spaces,
 workspaces, projects, worktrees, tasks, and agent runs are extension policy expressed through stable
 IDs, metadata, commands, events, and retained views rather than additional core containers.
