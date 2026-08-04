@@ -35,10 +35,10 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   CommandCapture capture;
   const CommandDispatcher dispatcher(&capture_command, &capture);
   const Command command{
-      .kind = CommandKind::select_window,
+      .kind = CommandKind::select_tab,
       .origin = CommandOrigin::extension,
-      .target = {.space = SpaceId::from_parts(2, 3),
-                 .window = WindowId::from_parts(4, 5),
+      .target = {.session = SessionId::from_parts(2, 3),
+                 .tab = TabId::from_parts(4, 5),
                  .pane = {}},
       .argument = 7,
   };
@@ -48,10 +48,10 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_TRUE(result.succeeded());
   EXPECT_EQ(result.status, CommandStatus::applied);
   EXPECT_EQ(capture.calls, 1U);
-  EXPECT_EQ(capture.command.kind, CommandKind::select_window);
+  EXPECT_EQ(capture.command.kind, CommandKind::select_tab);
   EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
-  EXPECT_EQ(capture.command.target.space, command.target.space);
-  EXPECT_EQ(capture.command.target.window, command.target.window);
+  EXPECT_EQ(capture.command.target.session, command.target.session);
+  EXPECT_EQ(capture.command.target.tab, command.target.tab);
   EXPECT_EQ(capture.command.argument, 7U);
 }
 
@@ -61,15 +61,15 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
 
   EXPECT_EQ(dispatcher.dispatch({}).status, CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
-                .dispatch({.kind = CommandKind::select_window,
+                .dispatch({.kind = CommandKind::select_tab,
                            .origin = CommandOrigin::client,
-                           .argument = command_window_slots_max})
+                           .argument = command_tab_slots_max})
                 .status,
             CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::close_pane,
                            .origin = CommandOrigin::client,
-                           .target = {.space = {}, .window = {}, .pane = PaneId::from_parts(1, 1)}})
+                           .target = {.session = {}, .tab = {}, .pane = PaneId::from_parts(1, 1)}})
                 .status,
             CommandStatus::invalid_target);
   EXPECT_EQ(
@@ -88,15 +88,15 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
 }
 
 TEST(GenerationalIdTest, InvalidUntilCreatedFromValidParts) {
-  const SpaceId invalid;
-  const auto space = SpaceId::from_parts(7, 3);
+  const SessionId invalid;
+  const auto session = SessionId::from_parts(7, 3);
 
   EXPECT_FALSE(invalid.is_valid());
-  EXPECT_FALSE(SpaceId::try_from_parts(7, 0).has_value());
-  EXPECT_FALSE(SpaceId::try_from_parts(std::numeric_limits<std::uint32_t>::max(), 3).has_value());
-  EXPECT_TRUE(space.is_valid());
-  EXPECT_EQ(space.slot(), 7U);
-  EXPECT_EQ(space.generation(), 3U);
+  EXPECT_FALSE(SessionId::try_from_parts(7, 0).has_value());
+  EXPECT_FALSE(SessionId::try_from_parts(std::numeric_limits<std::uint32_t>::max(), 3).has_value());
+  EXPECT_TRUE(session.is_valid());
+  EXPECT_EQ(session.slot(), 7U);
+  EXPECT_EQ(session.generation(), 3U);
 }
 
 TEST(BoundedByteQueueTest, PreservesOrderAcrossWraparound) {

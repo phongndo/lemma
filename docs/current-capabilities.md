@@ -28,46 +28,46 @@ Status terms:
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Start and attach | Working | `lemma new [name]` ensures the daemon/space exists, then attaches. |
-| Start detached | Working | `lemma start [name]` creates a space and prints its listing. |
+| Start and attach | Working | `lemma new [name]` ensures the daemon/session exists, then attaches. |
+| Start detached | Working | `lemma start [name]` creates a session and prints its listing. |
 | Attach/detach | Working | `lemma attach [name]`; `C-b d` detaches without ending pane processes. |
-| List/control | Working | List all/one space, list windows, kill one space, or kill all spaces. |
-| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default space. |
+| List/control | Working | List all/one session, list tabs, kill one session, or kill all sessions. |
+| Default invocation | Partial | Plain `lemma` prints usage; it does not enter a default session. |
 | Help/version/errors | Partial | Usage exists, but there are no dedicated help/version commands and unknown commands return usage rather than a precise failing diagnostic. |
 | Machine-readable automation | Absent | There is no `--format=json`, generated semantic schema, immutable snapshot API, or documented compatibility policy. |
 | Persistent agent/automation API | Absent | The current local socket is a private unversioned control/attach protocol; agents cannot discover typed commands, launch/capture/wait/cancel, subscribe to bounded events, or recover from stale IDs. |
 | Per-user daemon | Working | Double-forked daemon, lock file, stale-socket validation, `0600` Unix socket, one listener. |
-| Daemon shutdown | Absent | Space kill commands remove spaces; there is no explicit daemon shutdown/control command. |
+| Daemon shutdown | Absent | Session kill commands remove sessions; there is no explicit daemon shutdown/control command. |
 | Installable releases | Absent | Users currently build from source; no versioned binary archives or package are produced. |
 
-Space names are 1–32 ASCII letters, digits, underscores, or hyphens. The default explicit
-space name is `default`.
+Session names are 1–32 ASCII letters, digits, underscores, or hyphens. The default explicit
+session name is `default`.
 
-### Space and process lifecycle
+### Session and process lifecycle
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Multiple spaces | Working | Up to 64 named spaces coexist in one daemon. |
+| Multiple sessions | Working | Up to 64 named sessions coexist in one daemon. |
 | Detached process continuity | Working | Shells and PTYs remain owned by the daemon when the client detaches or disconnects. |
-| Multiple attached clients | Absent | One client may attach to each space; another receives `busy`. |
+| Multiple attached clients | Absent | One client may attach to each session; another receives `busy`. |
 | Shell launch | Working | Every pane starts the account login shell in a PTY. |
 | Arbitrary launch command | Absent | Pane creation cannot currently select a command, cwd, or environment. |
 | cwd/environment policy | Partial | New panes inherit the daemon's original cwd/environment, not the invoking client's current context. |
-| Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its window and the last window removes the space. |
+| Child exit cleanup | Working | PTY closure removes the pane; the last pane removes its tab and the last tab removes the session. |
 | Restart/reboot durability | Absent | Topology, scrollback, and processes are not persisted across daemon death or reboot. Zstandard is linked but no durable-session snapshot path exists; the planned attach checkpoint is not reboot persistence. |
 | Exit-status reporting | Absent | Pane exit status and reason are not presented to the user. |
 
-### Windows
+### Tabs
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Multiple windows | Working | Up to 16 generationally identified numeric window slots per space. |
+| Multiple tabs | Working | Up to 16 generationally identified numeric tab slots per session. |
 | Create/cycle/select | Working | `C-b c`, `C-b n`, `C-b p`, and `C-b 0`–`9`. |
-| Close window | Working | `C-b &`; closing the final window ends the space. |
-| Active/previous state | Working | Active and previous windows are retained; inactive windows continue processing PTY output. |
-| Window listing/status | Working | CLI listing plus a centered one-row status with number and focused process title. |
-| User names/rename | Absent | Window labels are numeric and derive titles from the foreground process or terminal title. |
-| Reorder/link/move | Absent | Windows cannot be reordered or linked across spaces. |
+| Close tab | Working | `C-b &`; closing the final tab ends the session. |
+| Active/previous state | Working | Active and previous tabs are retained; inactive tabs continue processing PTY output. |
+| Tab listing/status | Working | CLI listing plus a centered one-row status with number and focused process title. |
+| User names/rename | Absent | Tab labels are numeric and derive titles from the foreground process or terminal title. |
+| Reorder/link/move | Absent | Tabs cannot be reordered or linked across sessions. |
 | Mouse status selection | Absent | The status row has no hit testing or pointer interaction. |
 
 ### Panes and layout
@@ -84,7 +84,7 @@ space name is `default`.
 | Pane IDs/names/overlay | Absent | Pane storage uses local numeric slots without public generational IDs, names, or an identification overlay. |
 | Mouse focus/drag | Absent | No pane hit testing, click-to-focus, or separator dragging. |
 
-The implemented hard limits derive to 64 panes per space and 64 panes in any one window, with
+The implemented hard limits derive to 64 panes per session and 64 panes in any one tab, with
 4,096 panes across the daemon.
 
 ### Keyboard, mouse, paste, and copy
@@ -112,7 +112,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 | VT parsing/effects | Working | UTF-8/VT input, terminal responses, title changes, bells, modes, reflow, and dirty state are captured behind the adapter. |
 | Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. |
 | Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. |
-| Reattach reconstruction | Working | Attach, active-window change, and resize can force complete visible-state reconstruction through daemon-rendered ANSI. |
+| Reattach reconstruction | Working | Attach, active-tab change, and resize can force complete visible-state reconstruction through daemon-rendered ANSI. |
 | Slow-client isolation | Working | Initial/live frames and control output flush nonblockingly; idle and non-reading peers are covered by isolated process tests. Broader latency benchmarking remains. |
 | Portable terminal checkpoint export/import | Intentionally absent | The archived feasibility gate proved deterministic counterexamples. Checkpoints and client terminal replicas are not part of the 1.0 architecture. |
 | Versioned server-rendered attachment | Absent | Current input is bounded but unversioned, daemon ANSI output is unframed, and mismatch/full-redraw epochs are not yet explicit protocol values. |
@@ -141,7 +141,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 ### What is already strong
 
 - One reactor owns all mutable mux/terminal state.
-- Window IDs reject stale generations; the public ID value type also defines space, pane, and
+- Tab IDs reject stale generations; the public ID value type also defines session, pane, and
   client IDs for future stores.
 - Client input, accepted connections, control output, PTY writes, extension frames, terminal
   responses, layouts, frame buffers, registration counts, and terminal allocations have explicit
@@ -156,12 +156,12 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 - The current suite includes 72 component tests and 12 process-level mux tests. It covers
   IDs/queues, deterministic partial PTY/control writes and budgets, protocol fragmentation and
   bounds, key encoding, extension registration/isolation, terminal damage/allocation, pane composition,
-  daemon/client lifecycle, complete existing focus/zoom/close/window controls, topology retention,
+  daemon/client lifecycle, complete existing focus/zoom/close/tab controls, topology retention,
   resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
-  attach, real blocked-PTY recovery, cross-space fairness, and terminal-response/input ordering.
+  attach, real blocked-PTY recovery, cross-session fairness, and terminal-response/input ordering.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
   scroll detection, 1/4/16 terminal surfaces, warm-session marker latency/client bytes, and separate
-  key-to-PTY and key-to-visible-frame latency with another space's PTY blocked.
+  key-to-PTY and key-to-visible-frame latency with another session's PTY blocked.
 
 ### Important robustness gaps
 
@@ -171,8 +171,8 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 2. **The outer-terminal client lifecycle is not signal-complete.** Normal detach/disconnect performs
    broad escape cleanup and ordinary unwinding restores termios, but fatal/default signals do not
    guarantee those paths execute.
-3. **Space and pane IDs are not authoritative stores.** Their public types exist, but core
-   commands can only explicitly validate the current window; space/pane targets remain invalid.
+3. **Session and pane IDs are not authoritative stores.** Their public types exist, but core
+   commands can only explicitly validate the current tab; session/pane targets remain invalid.
 4. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll
    marker latency/client bytes plus separate key-to-PTY and key-to-visible-frame latency with another
    PTY blocked. Mouse, slow-client distributions, memory-per-pane, resize-storm, and multi-day soak
@@ -192,7 +192,7 @@ presentation authority.
 
 The P0 foundation gate is complete: existing topology behavior is process-tested, accepted peers and
 PTY writes have adversarial coverage, blocked PTYs recover exact ordered input without starving
-another space, the process benchmark harness is checked in, and the first-release decisions are
+another session, the process benchmark harness is checked in, and the first-release decisions are
 recorded.
 
 Remaining work and current priority live only in [`../TODO.md`](../TODO.md); desired outcomes and

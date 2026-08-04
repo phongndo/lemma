@@ -22,6 +22,7 @@ snapshots, event delivery, client-rendered declarative sidebars, process/timer A
 subscriptions, and transactional replacement-host reload remain follow-up slices.
 
 Extensions receive stable IDs and immutable values, never C++ pointers or daemon-owned descriptors.
-They request typed core commands instead of mutating topology directly. `Space` remains the kernel
-mux object; a workspace package may associate repositories, worktrees, layouts, commands, and agent
-runs with one or more spaces. A native C++ plugin ABI is not planned.
+They request typed core commands instead of mutating topology directly. `Session → Tab → Pane`
+remains the kernel hierarchy. A space/workspace package may associate repositories, worktrees,
+layouts, commands, and agent runs with stable session or tab IDs without adding another core
+container. A native C++ plugin ABI is not planned.

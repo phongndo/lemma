@@ -36,7 +36,7 @@ Every production message is framed. The reviewed envelope must include or derive
 - closed message kind and flags;
 - bounded payload length;
 - request/result correlation ID where applicable;
-- stable space, window, pane, and client IDs in explicit targets; and
+- stable session, tab, pane, and client IDs in explicit targets; and
 - negotiated input, presentation, and effect capabilities.
 
 Frames, decoder storage, queued output, messages per turn, setup progress, and aggregate per-client
@@ -49,7 +49,7 @@ Lemma-owned and never expose Ghostty types or private layouts.
 The initial production protocol carries:
 
 - `client_hello`, `daemon_hello`, and actionable mismatch results;
-- attach/create/list/window-list/kill/shutdown requests and typed results;
+- attach/create/list/tab-list/kill/shutdown requests and typed results;
 - stable topology values needed by command results and diagnostics;
 - ordered key, text, paste, focus, mouse, resize, command, and detach input;
 - bounded complete ANSI render frames and full-redraw generation/epoch markers;
@@ -85,13 +85,13 @@ public semantic compatibility policy is independent from private attached-client
 A successful attach is an explicit transaction:
 
 1. exchange version/capability hello values;
-2. resolve the space and allocate daemon-side attachment state;
+2. resolve the session and allocate daemon-side attachment state;
 3. validate canonical dimensions;
 4. invalidate retained presentation state;
 5. queue one complete visible ANSI frame; and
 6. enter live input/output only after setup succeeds.
 
-Active-window changes, resize, reconnect, and presentation invalidation use the same complete-frame
+Active-tab changes, resize, reconnect, and presentation invalidation use the same complete-frame
 path. Reliable stream order preserves accepted frames.
 
 ### Backpressure and recovery
@@ -159,24 +159,24 @@ A newly accepted connection starts with exactly one control command:
 
 | Command | Byte | Following bytes | Meaning |
 | --- | ---: | --- | --- |
-| attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one space |
-| create | `N` | name length, name | Ensure one space exists |
-| list | `L` | none | List every space and close |
-| list space | `Q` | name length, name | List one space and close |
-| list windows | `W` | name length, name | List one space's windows and close |
-| kill | `K` | name length, name | Stop one space and close |
-| kill all | `X` | none | Stop every space and close |
+| attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one session |
+| create | `N` | name length, name | Ensure one session exists |
+| list | `L` | none | List every session and close |
+| list session | `Q` | name length, name | List one session and close |
+| list tabs | `W` | name length, name | List one session's tabs and close |
+| kill | `K` | name length, name | Stop one session and close |
+| kill all | `X` | none | Stop every session and close |
 
-A name length is one byte followed by 1–32 validated ASCII space-name bytes. Create and attach
-return one response byte; a missing named space returns `M`:
+A name length is one byte followed by 1–32 validated ASCII session-name bytes. Create and attach
+return one response byte; a missing named session returns `M`:
 
 | Response | Byte | Meaning |
 | --- | ---: | --- |
-| ready | `Y` | Space exists, or connection is now the streaming client |
-| busy | `B` | Space already has an attached client |
-| missing | `M` | Named space does not exist |
-| capacity | `C` | Space capacity is exhausted |
-| failed | `F` | Space creation failed |
+| ready | `Y` | Session exists, or connection is now the streaming client |
+| busy | `B` | Session already has an attached client |
+| missing | `M` | Named session does not exist |
+| capacity | `C` | Session capacity is exhausted |
+| failed | `F` | Session creation failed |
 
 After attached `Y`, the daemon sends a complete reconstructed frame before nonblocking live
 operation.
@@ -184,7 +184,7 @@ operation.
 ## Current attached-client stream
 
 Only the client sends framed messages. Daemon-to-client traffic is currently encoded outer-terminal
-bytes and deliberately unframed. Detach and pane/window packets become bounded `lemma::Command`
+bytes and deliberately unframed. Detach and pane/tab packets become bounded `lemma::Command`
 values and pass through the shared validating dispatcher.
 
 ### Input
@@ -220,10 +220,10 @@ The runtime clamps dimensions to hard limits, resizes pane PTYs, then resizes ca
    1 B           1 B
 ```
 
-The command byte is a closed enum for window create/next/previous/select/kill and pane left/right or
+The command byte is a closed enum for tab create/next/previous/select/kill and pane left/right or
 top/bottom splits, directional/next/previous focus, close, and zoom. Unknown values terminate the
-attached connection as protocol errors. The core applies commands only to the attached space and
-active window.
+attached connection as protocol errors. The core applies commands only to the attached session and
+active tab.
 
 ### Detach
 
@@ -234,7 +234,7 @@ active window.
    1 B
 ```
 
-Detach closes only the attached connection. It does not terminate the shell or space.
+Detach closes only the attached connection. It does not terminate the shell or session.
 
 ## Current decoder contract
 
@@ -259,9 +259,9 @@ The client recognizes a fixed tmux-compatible `C-b` prefix:
 - `C-b %` and `C-b "` split left/right and top/bottom;
 - `C-b Arrow`, `C-b o`, and `C-b ;` change pane focus;
 - `C-b x` and `C-b z` close and zoom;
-- `C-b c`, `C-b n`, and `C-b p` create/cycle windows;
-- `C-b 1` through `C-b 9` select windows 1–9, `C-b 0` selects window 10, and `C-b &` closes the
-  active window;
+- `C-b c`, `C-b n`, and `C-b p` create/cycle tabs;
+- `C-b 1` through `C-b 9` select tabs 1–9, `C-b 0` selects tab 10, and `C-b &` closes the
+  active tab;
 - `C-b d` detaches;
 - `C-b C-b` sends a literal prefix; and
 - unknown keys forward the literal prefix and key.
@@ -281,7 +281,7 @@ silently speak one format to another. The production change requires:
   progress-deadline, and output-backpressure cases;
 - complete-frame partial-write and forced-full-redraw tests;
 - blocked/non-reading client process scenarios proving unrelated PTY progress;
-- attach, resize, window-change, reconnect, and lag reconstruction tests;
+- attach, resize, tab-change, reconnect, and lag reconstruction tests;
 - one bounded protocol fuzz corpus;
 - precise mismatch diagnostics; and
 - preservation of every existing mux process scenario during cutover.

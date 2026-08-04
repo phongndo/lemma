@@ -74,7 +74,7 @@ struct StatusLabel final {
 }
 
 [[nodiscard]] auto
-status_label(const StatusWindow& window,
+status_label(const StatusTab& tab,
              const std::size_t title_columns_max = status_title_columns_max) noexcept
     -> StatusLabel {
   StatusLabel label;
@@ -82,11 +82,11 @@ status_label(const StatusWindow& window,
     std::span(label.text).subspan(label.size, 1).front() = character;
     ++label.size;
   };
-  if (window.active) {
+  if (tab.active) {
     append_character('[');
   }
-  const auto result = std::to_chars(std::span(label.text).subspan(label.size).data(),
-                                    label.text.end(), window.number);
+  const auto result =
+      std::to_chars(std::span(label.text).subspan(label.size).data(), label.text.end(), tab.number);
   if (result.ec != std::errc{}) {
     return {};
   }
@@ -94,9 +94,9 @@ status_label(const StatusWindow& window,
   if (title_columns_max > 0) {
     append_character(':');
     label.size += sanitized_title(
-        window.title, std::span(label.text).subspan(label.size).first(title_columns_max));
+        tab.title, std::span(label.text).subspan(label.size).first(title_columns_max));
   }
-  if (window.active) {
+  if (tab.active) {
     append_character(']');
   }
   return label;
@@ -150,38 +150,38 @@ status_label(const StatusWindow& window,
   return end + 1U >= labels.size() || append(output, used, " …");
 }
 
-// The visible status range is a pure function of the active window, labels, and viewport width.
+// The visible status range is a pure function of the active tab, labels, and viewport width.
 // Its branches implement bounded bidirectional fitting and narrow-terminal degradation.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto render_status_line(const StatusLine status, const Viewport viewport,
                                       const std::span<std::byte> output, std::size_t& used) noexcept
     -> bool {
-  if (status.windows.empty() || viewport.rows < 2) {
+  if (status.tabs.empty() || viewport.rows < 2) {
     return true;
   }
 
-  std::array<StatusLabel, status_windows_max> label_storage{};
-  auto labels = std::span(label_storage).first(status.windows.size());
+  std::array<StatusLabel, status_tabs_max> label_storage{};
+  auto labels = std::span(label_storage).first(status.tabs.size());
   std::size_t active = 0;
-  for (std::size_t index = 0; index < status.windows.size(); ++index) {
-    const auto& window = status.windows.subspan(index, 1).front();
-    labels.subspan(index, 1).front() = status_label(window);
-    if (window.active) {
+  for (std::size_t index = 0; index < status.tabs.size(); ++index) {
+    const auto& tab = status.tabs.subspan(index, 1).front();
+    labels.subspan(index, 1).front() = status_label(tab);
+    if (tab.active) {
       active = index;
     }
   }
 
   if (labels.subspan(active, 1).front().size > viewport.columns) {
-    const auto number_columns = status.windows.subspan(active, 1).front().number < 10 ? 1U : 2U;
+    const auto number_columns = status.tabs.subspan(active, 1).front().number < 10 ? 1U : 2U;
     const auto title_columns =
         viewport.columns > number_columns + 3U ? viewport.columns - number_columns - 3U : 0U;
     labels.subspan(active, 1).front() =
-        status_label(status.windows.subspan(active, 1).front(), title_columns);
+        status_label(status.tabs.subspan(active, 1).front(), title_columns);
   }
   if (labels.subspan(active, 1).front().size > viewport.columns) {
     auto& label = labels.subspan(active, 1).front();
     const auto result = std::to_chars(label.text.begin(), label.text.end(),
-                                      status.windows.subspan(active, 1).front().number);
+                                      status.tabs.subspan(active, 1).front().number);
     label.size =
         result.ec == std::errc{}
             ? std::min(viewport.columns,
@@ -282,16 +282,14 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 }
 
 [[nodiscard]] auto valid_status(const StatusLine status) noexcept -> bool {
-  return status.windows.size() <= status_windows_max &&
-         (status.windows.empty() ||
-          std::ranges::count(status.windows, true, &StatusWindow::active) == 1) &&
-         std::ranges::none_of(status.windows,
-                              [](const StatusWindow& window) { return window.number == 0; });
+  return status.tabs.size() <= status_tabs_max &&
+         (status.tabs.empty() || std::ranges::count(status.tabs, true, &StatusTab::active) == 1) &&
+         std::ranges::none_of(status.tabs, [](const StatusTab& tab) { return tab.number == 0; });
 }
 
 [[nodiscard]] auto pane_viewport(const Viewport viewport, const StatusLine status) noexcept
     -> Viewport {
-  const bool has_status = !status.windows.empty() && viewport.rows >= 2;
+  const bool has_status = !status.tabs.empty() && viewport.rows >= 2;
   return {
       .columns = viewport.columns,
       .rows = static_cast<std::uint16_t>(viewport.rows - (has_status ? 1U : 0U)),
@@ -568,8 +566,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
-  composition.status =
-      !status.windows.empty() && viewport.rows >= 2 && (force_full || status.dirty);
+  composition.status = !status.tabs.empty() && viewport.rows >= 2 && (force_full || status.dirty);
   const auto rendered = render_panes(panes, viewport, output, used, force_full, composition);
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());

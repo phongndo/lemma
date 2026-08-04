@@ -11,7 +11,7 @@
 
 namespace lemma::render {
 
-inline constexpr std::size_t status_windows_max = 16;
+inline constexpr std::size_t status_tabs_max = 16;
 
 struct Viewport final {
   std::uint16_t columns{0};
@@ -36,14 +36,14 @@ struct PaneSurface final {
   bool border_bottom{false};
 };
 
-struct StatusWindow final {
+struct StatusTab final {
   std::uint16_t number{0};
   std::string_view title;
   bool active{false};
 };
 
 struct StatusLine final {
-  std::span<const StatusWindow> windows;
+  std::span<const StatusTab> tabs;
   bool dirty{false};
 };
 

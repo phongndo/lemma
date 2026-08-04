@@ -15,7 +15,7 @@ inline constexpr std::size_t input_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t parser_bytes_max = std::size_t{16} * 1'024U;
 inline constexpr std::uint16_t columns_max = 500;
 inline constexpr std::uint16_t rows_max = 200;
-inline constexpr std::size_t space_name_bytes_max = 32;
+inline constexpr std::size_t session_name_bytes_max = 32;
 inline constexpr std::size_t prefix_actions_max = 64;
 
 struct Dimensions final {
@@ -27,8 +27,8 @@ enum class ControlCommand : std::uint8_t {
   attach = 'A',
   create = 'N',
   list = 'L',
-  list_space = 'Q',
-  list_windows = 'W',
+  list_session = 'Q',
+  list_tabs = 'W',
   kill = 'K',
   kill_all = 'X',
 };
@@ -53,20 +53,20 @@ enum class PaneCommand : std::uint8_t {
   focus_previous = ';',
   close = 'x',
   zoom = 'z',
-  create_window = 'c',
-  next_window = 'n',
-  previous_window = 'p',
-  kill_window = '&',
-  select_window_0 = '0',
-  select_window_1 = '1',
-  select_window_2 = '2',
-  select_window_3 = '3',
-  select_window_4 = '4',
-  select_window_5 = '5',
-  select_window_6 = '6',
-  select_window_7 = '7',
-  select_window_8 = '8',
-  select_window_9 = '9',
+  create_tab = 'c',
+  next_tab = 'n',
+  previous_tab = 'p',
+  kill_tab = '&',
+  select_tab_0 = '0',
+  select_tab_1 = '1',
+  select_tab_2 = '2',
+  select_tab_3 = '3',
+  select_tab_4 = '4',
+  select_tab_5 = '5',
+  select_tab_6 = '6',
+  select_tab_7 = '7',
+  select_tab_8 = '8',
+  select_tab_9 = '9',
 };
 
 enum class ClientMessageKind : std::uint8_t {
@@ -97,7 +97,7 @@ struct ClientMessage final {
   return static_cast<std::byte>(response);
 }
 
-[[nodiscard]] auto encode_space_header(ControlCommand command, std::string_view space) noexcept
+[[nodiscard]] auto encode_session_header(ControlCommand command, std::string_view session) noexcept
     -> std::array<std::byte, 2>;
 [[nodiscard]] auto encode_dimensions(Dimensions dimensions) noexcept -> std::array<std::byte, 4>;
 [[nodiscard]] auto encode_resize(Dimensions dimensions) noexcept -> std::array<std::byte, 5>;
@@ -105,7 +105,8 @@ struct ClientMessage final {
 [[nodiscard]] auto encode_detach() noexcept -> std::array<std::byte, 1>;
 [[nodiscard]] auto encode_pane_command(PaneCommand command) noexcept -> std::array<std::byte, 2>;
 [[nodiscard]] auto decode_dimensions(std::span<const std::byte, 4> bytes) noexcept -> Dimensions;
-[[nodiscard]] constexpr auto decode_space_name_size(const std::byte value) noexcept -> std::size_t {
+[[nodiscard]] constexpr auto decode_session_name_size(const std::byte value) noexcept
+    -> std::size_t {
   return std::to_integer<std::size_t>(value);
 }
 

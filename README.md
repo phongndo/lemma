@@ -8,8 +8,9 @@ sessions through one typed command model—without requiring a hosted service.
 
 In mathematics, a lemma is a small proven result used to establish something larger. This project
 follows the same philosophy: provide one dependable terminal primitive that people and agents can
-compose into their own workflows. Lemma calls each persistent multiplexer session a **space**; spaces
-contain windows and panes, while project/worktree workspaces remain extension-level concepts.
+compose into their own workflows. The core hierarchy is **session → tab → pane**. Spaces,
+project/worktree workspaces, tasks, and agent runs remain extension-level concepts built from stable
+core IDs rather than mandatory kernel containers.
 
 ## Why Lemma
 
@@ -25,9 +26,9 @@ contain windows and panes, while project/worktree workspaces remain extension-le
 - **Yours to operate:** Lemma runs as a per-user daemon, keeps working when clients detach, and is
   distributed under the permissive MIT license.
 
-The current vertical slice provides up to 64 named persistent spaces in one per-user daemon,
-each with up to 16 generationally identified windows and 64 panes distributed across them. It
-supports start, attach, detach, list, window-list, and kill commands, plus release-enabled invariant
+The current vertical slice provides up to 64 named persistent sessions in one per-user daemon,
+each with up to 16 generationally identified tabs and 64 panes distributed across them. It
+supports start, attach, detach, list, tab-list, and kill commands, plus release-enabled invariant
 assertions, generational IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
 adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
 queues, and enforces a quota-tracked allocator. Lua command callbacks, first-class mouse/copy UX,
@@ -113,35 +114,35 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 [`docs/protocol.md`](docs/protocol.md) for current and target wire contracts, and
 [`docs/single-pane-runtime.md`](docs/single-pane-runtime.md) for current ownership and limitations.
 
-## Spaces, windows, and panes
+## Sessions, tabs, and panes
 
 ```sh
-./build/debug/lemma new work       # start space "work" and attach
+./build/debug/lemma new work       # start session "work" and attach
 # Press C-b d to detach.
-./build/debug/lemma new logs       # create another space in the same daemon
-./build/debug/lemma list           # list all spaces
-./build/debug/lemma windows work   # list work's windows
+./build/debug/lemma new logs       # create another session in the same daemon
+./build/debug/lemma list           # list all sessions
+./build/debug/lemma tabs work      # list work's tabs
 ./build/debug/lemma attach work    # reattach to work
-./build/debug/lemma kill work      # stop one space
-./build/debug/lemma kill-all       # stop every space
+./build/debug/lemma kill work      # stop one session
+./build/debug/lemma kill-all       # stop every session
 ```
 
-Each space permits one attached client, owns an ordered set of windows, and gives each pane its
+Each session permits one attached client, owns an ordered set of tabs, and gives each pane its
 own login shell, PTY, and terminal. Lemma inherits the daemon's launch environment, advertises
-`xterm-256color`, and resizes pane PTYs from the active window's split layout. Space names
+`xterm-256color`, and resizes pane PTYs from the active tab's split layout. Session names
 contain 1-32 ASCII letters, digits, underscores, or hyphens.
 The built-in key table follows tmux defaults:
 
 - `C-b %` splits left/right and `C-b "` splits top/bottom;
 - `C-b Arrow` or `C-b o` changes focus, and `C-b ;` returns to the previous pane;
 - `C-b x` closes the focused pane and `C-b z` toggles zoom;
-- `C-b c` creates a window, `C-b n`/`C-b p` cycles windows, `C-b 1` through `C-b 9`
-  selects windows 1-9, and `C-b 0` selects window 10;
-- `C-b &` kills the active window, `C-b d` detaches, and `C-b C-b` sends a literal `C-b`.
+- `C-b c` creates a tab, `C-b n`/`C-b p` cycles tabs, `C-b 1` through `C-b 9`
+  selects tabs 1-9, and `C-b 0` selects tab 10;
+- `C-b &` kills the active tab, `C-b d` detaches, and `C-b C-b` sends a literal `C-b`.
 
-A minimal reverse-video status row is centered at the bottom. It shows windows as
-`number:foreground-process`, brackets the active window (`[1:zsh]`), automatically follows the
-focused pane's foreground process, and uses `…` when the complete window list does not fit.
+A minimal reverse-video status row is centered at the bottom. It shows tabs as
+`number:foreground-process`, brackets the active tab (`[1:zsh]`), automatically follows the
+focused pane's foreground process, and uses `…` when the complete tab list does not fit.
 
 Launch `lemma` directly from the normal shell rather than through `nix develop` when testing
 personal shell configuration.

@@ -39,20 +39,20 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
   case PaneCommand::focus_previous:
   case PaneCommand::close:
   case PaneCommand::zoom:
-  case PaneCommand::create_window:
-  case PaneCommand::next_window:
-  case PaneCommand::previous_window:
-  case PaneCommand::kill_window:
-  case PaneCommand::select_window_0:
-  case PaneCommand::select_window_1:
-  case PaneCommand::select_window_2:
-  case PaneCommand::select_window_3:
-  case PaneCommand::select_window_4:
-  case PaneCommand::select_window_5:
-  case PaneCommand::select_window_6:
-  case PaneCommand::select_window_7:
-  case PaneCommand::select_window_8:
-  case PaneCommand::select_window_9:
+  case PaneCommand::create_tab:
+  case PaneCommand::next_tab:
+  case PaneCommand::previous_tab:
+  case PaneCommand::kill_tab:
+  case PaneCommand::select_tab_0:
+  case PaneCommand::select_tab_1:
+  case PaneCommand::select_tab_2:
+  case PaneCommand::select_tab_3:
+  case PaneCommand::select_tab_4:
+  case PaneCommand::select_tab_5:
+  case PaneCommand::select_tab_6:
+  case PaneCommand::select_tab_7:
+  case PaneCommand::select_tab_8:
+  case PaneCommand::select_tab_9:
     return command;
   }
   return std::nullopt;
@@ -69,12 +69,12 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
 
 } // namespace
 
-[[nodiscard]] auto encode_space_header(const ControlCommand command,
-                                       const std::string_view space) noexcept
+[[nodiscard]] auto encode_session_header(const ControlCommand command,
+                                         const std::string_view session) noexcept
     -> std::array<std::byte, 2> {
-  LEMMA_ASSERT(!space.empty());
-  LEMMA_ASSERT(space.size() <= space_name_bytes_max);
-  return {wire_byte(command), static_cast<std::byte>(space.size())};
+  LEMMA_ASSERT(!session.empty());
+  LEMMA_ASSERT(session.size() <= session_name_bytes_max);
+  return {wire_byte(command), static_cast<std::byte>(session.size())};
 }
 
 [[nodiscard]] auto encode_dimensions(const Dimensions dimensions) noexcept
@@ -221,16 +221,16 @@ void encode_u16(const std::uint16_t value, const std::span<std::byte, 2> output)
       pane_command = PaneCommand::zoom;
       break;
     case std::byte{'c'}:
-      pane_command = PaneCommand::create_window;
+      pane_command = PaneCommand::create_tab;
       break;
     case std::byte{'n'}:
-      pane_command = PaneCommand::next_window;
+      pane_command = PaneCommand::next_tab;
       break;
     case std::byte{'p'}:
-      pane_command = PaneCommand::previous_window;
+      pane_command = PaneCommand::previous_tab;
       break;
     case std::byte{'&'}:
-      pane_command = PaneCommand::kill_window;
+      pane_command = PaneCommand::kill_tab;
       break;
     case std::byte{'0'}:
     case std::byte{'1'}:

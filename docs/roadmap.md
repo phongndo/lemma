@@ -49,7 +49,7 @@ visible frame from current daemon state.
 ## Current baseline
 
 Lemma already has a working server-rendered local vertical slice: one per-user daemon, named
-spaces, windows, nested split panes, focus/zoom/resize/detach, bounded queues, canonical Ghostty
+sessions, tabs, nested split panes, focus/zoom/resize/detach, bounded queues, canonical Ghostty
 terminals, retained ANSI damage rendering, typed existing commands, and an isolated transactional Lua
 host. The client is thin and forwards daemon-rendered output into an outer terminal.
 
@@ -66,12 +66,12 @@ daemon through 1.0.
 
 **Goal:** make every core object and client boundary explicit without changing terminal ownership.
 
-- Move spaces, panes, and clients into dense generational stores; retain `WindowId` behavior.
+- Move sessions, panes, and clients into dense generational stores; retain `TabId` behavior.
 - Resolve every command target at the core trust boundary and return typed results/errors.
 - Replace the development protocol with bounded versioned bidirectional framing.
 - Frame daemon ANSI output as complete bounded render messages.
 - Add protocol/version mismatch diagnostics and a distinct migration endpoint.
-- Preserve full visible reconstruction for attach, resize, window change, reconnect, and lag recovery.
+- Preserve full visible reconstruction for attach, resize, tab change, reconnect, and lag recovery.
 - Prove blocked clients retain only bounded presentation work and never stall PTYs.
 
 ### Exit criteria
@@ -86,7 +86,7 @@ daemon through 1.0.
 **Goal:** make Lemma credible as a primary local mux.
 
 - Implement plain `lemma`, help/version, precise errors, cwd/environment policy, and exit reporting.
-- Add space/window naming, stable reorder, pane identification, stored ratios, and keyboard resize.
+- Add session/tab naming, stable reorder, pane identification, stored ratios, and keyboard resize.
 - Add bounded typed key, text, paste, focus, resize, and mouse input.
 - Complete signal-safe/best-available outer-terminal restoration.
 - Add daemon-side status/pane/separator hit testing and application mouse forwarding.

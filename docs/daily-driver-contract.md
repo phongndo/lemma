@@ -30,20 +30,20 @@ Partial behavior remains labeled experimental or incomplete.
 
 ### Startup and lifecycle
 
-- Plain `lemma` predictably creates or enters the `default` space.
-- Named spaces can be created, listed, attached, detached, renamed, and killed.
-- Client EOF, crash, terminal closure, or network loss does not end space processes.
+- Plain `lemma` predictably creates or enters the `default` session.
+- Named sessions can be created, listed, attached, detached, renamed, and killed.
+- Client EOF, crash, terminal closure, or network loss does not end session processes.
 - Child exit, shell launch failure, capacity exhaustion, stale sockets, and incompatible clients
   produce actionable errors and nonzero statuses where appropriate.
 - Detach, logout, daemon failure, shutdown, and reboot guarantees are explicit and tested.
 - Endpoint permissions and ownership prevent another local user from controlling a daemon.
-- Space creation applies the documented cwd and bounded environment policy.
+- Session creation applies the documented cwd and bounded environment policy.
 
-### Windows
+### Tabs
 
-- Create, close, rename, list, directly select, cycle, and reorder windows.
-- Preserve stable identities, per-window layout, focus, zoom, ratios, and foreground-process title.
-- Keep the active window visible in bounded status output at narrow widths.
+- Create, close, rename, list, directly select, cycle, and reorder tabs.
+- Preserve stable identities, per-tab layout, focus, zoom, ratios, and foreground-process title.
+- Keep the active tab visible in bounded status output at narrow widths.
 - Provide keyboard and mouse selection through the same command dispatcher.
 
 ### Panes and layouts
@@ -55,7 +55,7 @@ Partial behavior remains labeled experimental or incomplete.
 - Make pane targets visible through status, borders, or a bounded identification overlay.
 - Handle child exit without corrupting the remaining split tree.
 
-Preset layouts, pane swapping, and moving panes between spaces are desirable only after these
+Preset layouts, pane swapping, and moving panes between sessions are desirable only after these
 operations are dependable.
 
 ### Keyboard, mouse, paste, and focus
@@ -101,7 +101,7 @@ operations are dependable.
   do not leak pane state into Lemma chrome.
 - Damage composition renders panes, separators, status, overlays, cursor, and outer modes without
   visible partial-topology transitions.
-- Attach, active-window change, resize, lag recovery, and reconnect reconstruct complete visible
+- Attach, active-tab change, resize, lag recovery, and reconnect reconstruct complete visible
   state from canonical daemon state.
 - Client frame queues and progress deadlines are bounded; a blocked client cannot stop PTYs or other
   work.
@@ -111,7 +111,7 @@ operations are dependable.
 
 - Missing configuration selects useful defaults.
 - Invalid configuration reports file/line context and preserves the previous valid generation.
-- Prefixes, keyboard/mouse bindings, status behavior, shell, and default space behavior are
+- Prefixes, keyboard/mouse bindings, status behavior, shell, and default session behavior are
   configurable through typed validated values.
 - Reload is transactional; blocked or crashed Lua cannot block input, PTYs, rendering, or process
   lifetime.
@@ -149,7 +149,7 @@ Performance is measured end to end. The daily-driver suite covers distributions 
 - click-to-focus, drag-to-layout, wheel-to-scroll, and application mouse pass-through;
 - sparse editor updates, full-screen redraws, synchronized updates, and high scroll;
 - one, four, sixteen, and maximum configured pane layouts;
-- active/inactive windows, attach reconstruction, full-redraw recovery, resize storms, and status
+- active/inactive tabs, attach reconstruction, full-redraw recovery, resize storms, and status
   changes;
 - slow/blocked clients, PTYs, and extension hosts;
 - idle CPU/wakeups, daemon baseline memory, incremental memory per pane/attachment, and peak bounded

@@ -76,14 +76,14 @@ protected:
     };
   }
 
-  [[nodiscard]] auto wait_for_listing(const std::string_view space,
+  [[nodiscard]] auto wait_for_listing(const std::string_view session,
                                       const std::string_view predicate, const Deadline deadline,
                                       PtyClient* const client = nullptr) -> bool {
     while (std::chrono::steady_clock::now() < deadline) {
       if (client != nullptr) {
         client->drain(std::min(deadline, deadline_after(5ms)));
       }
-      const auto listing = command({"list", std::string(space)});
+      const auto listing = command({"list", std::string(session)});
       if (listing.status == 0 && listing.output.contains(predicate)) {
         return true;
       }
@@ -93,16 +93,16 @@ protected:
   }
 
   template <typename Predicate>
-  [[nodiscard]] auto wait_for_space(const std::string_view space, Predicate predicate,
-                                    const Deadline deadline, PtyClient* const client = nullptr)
-      -> std::optional<SpaceListing> {
+  [[nodiscard]] auto wait_for_session(const std::string_view session, Predicate predicate,
+                                      const Deadline deadline, PtyClient* const client = nullptr)
+      -> std::optional<SessionListing> {
     while (std::chrono::steady_clock::now() < deadline) {
       if (client != nullptr) {
         client->drain(std::min(deadline, deadline_after(5ms)));
       }
-      const auto result = command({"list", std::string(space)});
+      const auto result = command({"list", std::string(session)});
       if (result.status == 0) {
-        auto listing = parse_space_listing(result.output);
+        auto listing = parse_session_listing(result.output);
         if (listing.has_value() && predicate(*listing)) {
           return listing;
         }
@@ -113,16 +113,16 @@ protected:
   }
 
   template <typename Predicate>
-  [[nodiscard]] auto wait_for_windows(const std::string_view space, Predicate predicate,
-                                      const Deadline deadline, PtyClient* const client = nullptr)
-      -> std::vector<WindowListing> {
+  [[nodiscard]] auto wait_for_tabs(const std::string_view session, Predicate predicate,
+                                   const Deadline deadline, PtyClient* const client = nullptr)
+      -> std::vector<TabListing> {
     while (std::chrono::steady_clock::now() < deadline) {
       if (client != nullptr) {
         client->drain(std::min(deadline, deadline_after(5ms)));
       }
-      const auto result = command({"windows", std::string(space)});
+      const auto result = command({"tabs", std::string(session)});
       if (result.status == 0) {
-        auto listings = parse_window_listings(result.output);
+        auto listings = parse_tab_listings(result.output);
         if (predicate(listings)) {
           return listings;
         }
@@ -144,9 +144,10 @@ protected:
   }
 
   [[nodiscard]] auto client_arguments(const std::string_view command,
-                                      const std::string_view space) const
+                                      const std::string_view session) const
       -> std::vector<std::string> {
-    return {LEMMA_TEST_CLI_PATH, runtime_.socket_path(), std::string(command), std::string(space)};
+    return {LEMMA_TEST_CLI_PATH, runtime_.socket_path(), std::string(command),
+            std::string(session)};
   }
 
   // GoogleTest's generated fixture subclass requires direct protected access.
@@ -157,12 +158,12 @@ protected:
 };
 
 [[nodiscard]] auto
-named_request(const protocol::ControlCommand command, const std::string_view space,
+named_request(const protocol::ControlCommand command, const std::string_view session,
               const std::optional<protocol::Dimensions> dimensions = std::nullopt)
     -> std::vector<std::byte> {
-  const auto header = protocol::encode_space_header(command, space);
+  const auto header = protocol::encode_session_header(command, session);
   std::vector<std::byte> request(header.begin(), header.end());
-  const auto name = std::as_bytes(std::span(space.data(), space.size()));
+  const auto name = std::as_bytes(std::span(session.data(), session.size()));
   request.insert(request.end(), name.begin(), name.end());
   if (dimensions.has_value()) {
     const auto encoded = protocol::encode_dimensions(*dimensions);
@@ -238,7 +239,7 @@ TEST_F(MuxProcessTest, CreatesAttachesRendersAndDetaches) {
       << server_.output();
   const auto attached_listing = command({"list", "basic"});
   ASSERT_EQ(attached_listing.status, 0) << attached_listing.output;
-  ASSERT_NE(attached_listing.output.find("1 window(s), 1 pane(s)"), std::string::npos)
+  ASSERT_NE(attached_listing.output.find("1 tab(s), 1 pane(s)"), std::string::npos)
       << attached_listing.output;
 
   const std::array detach{std::byte{0x02}, std::byte{'d'}};
@@ -258,7 +259,7 @@ TEST_F(MuxProcessTest, PreservesTopologyAcrossResizeAbruptExitAndReattach) {
                             std::byte{0x02}, std::byte{'c'}, std::byte{0x02}, std::byte{'p'},
                             std::byte{0x02}, std::byte{'z'}, std::byte{0x02}, std::byte{'z'}};
   ASSERT_TRUE(client.send(commands, deadline_after(2s)));
-  ASSERT_TRUE(wait_for_listing("topology", "2 window(s), 4 pane(s)", deadline_after(5s), &client))
+  ASSERT_TRUE(wait_for_listing("topology", "2 tab(s), 4 pane(s)", deadline_after(5s), &client))
       << command({"list", "topology"}).output << "\nraw:\n"
       << client.raw_tail();
   ASSERT_TRUE(client.resize(100, 30));
@@ -292,36 +293,36 @@ TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
   ASSERT_TRUE(client.spawn(client_arguments("new", "focus"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
 
-  const auto first = wait_for_space(
-      "focus", [](const SpaceListing& value) { return value.panes == 1; }, deadline_after(5s),
+  const auto first = wait_for_session(
+      "focus", [](const SessionListing& value) { return value.panes == 1; }, deadline_after(5s),
       &client);
   ASSERT_TRUE(first.has_value());
-  const auto pane_a = first.value_or(SpaceListing{}).focused_pid;
+  const auto pane_a = first.value_or(SessionListing{}).focused_pid;
 
   ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
-  const auto second = wait_for_space(
+  const auto second = wait_for_session(
       "focus",
-      [pane_a](const SpaceListing& value) {
+      [pane_a](const SessionListing& value) {
         return value.panes == 2 && value.focused_pid != pane_a;
       },
       deadline_after(5s), &client);
   ASSERT_TRUE(second.has_value());
-  const auto pane_b = second.value_or(SpaceListing{}).focused_pid;
+  const auto pane_b = second.value_or(SessionListing{}).focused_pid;
 
   ASSERT_TRUE(send_prefix(client, std::byte{'"'}));
-  const auto third = wait_for_space(
+  const auto third = wait_for_session(
       "focus",
-      [pane_a, pane_b](const SpaceListing& value) {
+      [pane_a, pane_b](const SessionListing& value) {
         return value.panes == 3 && value.focused_pid != pane_a && value.focused_pid != pane_b;
       },
       deadline_after(5s), &client);
   ASSERT_TRUE(third.has_value());
-  const auto pane_c = third.value_or(SpaceListing{}).focused_pid;
+  const auto pane_c = third.value_or(SessionListing{}).focused_pid;
 
   const auto expect_focus = [&](const pid_t expected) {
-    return wait_for_space(
+    return wait_for_session(
                "focus",
-               [expected](const SpaceListing& value) { return value.focused_pid == expected; },
+               [expected](const SessionListing& value) { return value.focused_pid == expected; },
                deadline_after(5s), &client)
         .has_value();
   };
@@ -350,16 +351,16 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "zoomclose"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  const auto first = wait_for_space(
-      "zoomclose", [](const SpaceListing& value) { return value.panes == 1; }, deadline_after(5s),
+  const auto first = wait_for_session(
+      "zoomclose", [](const SessionListing& value) { return value.panes == 1; }, deadline_after(5s),
       &client);
   ASSERT_TRUE(first.has_value());
-  const auto surviving_pid = first.value_or(SpaceListing{}).focused_pid;
+  const auto surviving_pid = first.value_or(SessionListing{}).focused_pid;
 
   ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
-  const auto split = wait_for_space(
+  const auto split = wait_for_session(
       "zoomclose",
-      [surviving_pid](const SpaceListing& value) {
+      [surviving_pid](const SessionListing& value) {
         return value.panes == 2 && value.focused_pid != surviving_pid;
       },
       deadline_after(5s), &client);
@@ -378,9 +379,9 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
       << client.raw_tail();
 
   ASSERT_TRUE(send_prefix(client, std::byte{'x'}));
-  const auto closed = wait_for_space(
+  const auto closed = wait_for_session(
       "zoomclose",
-      [surviving_pid](const SpaceListing& value) {
+      [surviving_pid](const SessionListing& value) {
         return value.panes == 1 && value.focused_pid == surviving_pid;
       },
       deadline_after(5s), &client);
@@ -397,55 +398,53 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_F(MuxProcessTest, CreatesCyclesSelectsAndClosesWindows) {
+TEST_F(MuxProcessTest, CreatesCyclesSelectsAndClosesTabs) {
   PtyClient client;
-  ASSERT_TRUE(client.spawn(client_arguments("new", "windows"), runtime_.environment()));
+  ASSERT_TRUE(client.spawn(client_arguments("new", "tabs"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
   ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
 
-  const auto active_window = [](const std::vector<WindowListing>& values,
-                                const std::size_t expected) {
-    return values.size() == 3 &&
-           std::ranges::any_of(values, [expected](const WindowListing& value) {
+  const auto active_tab = [](const std::vector<TabListing>& values, const std::size_t expected) {
+    return values.size() == 3 && std::ranges::any_of(values, [expected](const TabListing& value) {
              return value.number == expected && value.active;
            });
   };
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 3); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 3); },
                    deadline_after(5s), &client)
                    .empty());
   ASSERT_TRUE(send_prefix(client, std::byte{'p'}));
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 2); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 2); },
                    deadline_after(5s), &client)
                    .empty());
   ASSERT_TRUE(send_prefix(client, std::byte{'n'}));
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 3); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 3); },
                    deadline_after(5s), &client)
                    .empty());
   ASSERT_TRUE(send_prefix(client, std::byte{'1'}));
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 1); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 1); },
                    deadline_after(5s), &client)
                    .empty());
 
   ASSERT_TRUE(send_prefix(client, std::byte{'9'}));
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 1); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 1); },
                    deadline_after(2s), &client)
                    .empty());
   ASSERT_TRUE(send_prefix(client, std::byte{'3'}));
-  ASSERT_FALSE(wait_for_windows(
-                   "windows", [&](const auto& values) { return active_window(values, 3); },
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs", [&](const auto& values) { return active_tab(values, 3); },
                    deadline_after(5s), &client)
                    .empty());
   ASSERT_TRUE(send_prefix(client, std::byte{'&'}));
-  const auto after_close = wait_for_windows(
-      "windows",
-      [](const std::vector<WindowListing>& values) {
-        return values.size() == 2 && std::ranges::any_of(values, [](const WindowListing& value) {
+  const auto after_close = wait_for_tabs(
+      "tabs",
+      [](const std::vector<TabListing>& values) {
+        return values.size() == 2 && std::ranges::any_of(values, [](const TabListing& value) {
                  return value.number == 1 && value.active;
                });
       },
@@ -453,21 +452,21 @@ TEST_F(MuxProcessTest, CreatesCyclesSelectsAndClosesWindows) {
   ASSERT_EQ(after_close.size(), 2U);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'2'}));
-  ASSERT_TRUE(client.send("printf '__WINDOW_TWO_ALIVE__\\n'\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__WINDOW_TWO_ALIVE__", deadline_after(5s)));
+  ASSERT_TRUE(client.send("printf '__TAB_TWO_ALIVE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__TAB_TWO_ALIVE__", deadline_after(5s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'&'}));
-  const auto one_window = wait_for_windows(
-      "windows",
-      [](const std::vector<WindowListing>& values) {
+  const auto one_tab = wait_for_tabs(
+      "tabs",
+      [](const std::vector<TabListing>& values) {
         return values.size() == 1 && values.front().number == 1 && values.front().active;
       },
       deadline_after(5s), &client);
-  ASSERT_EQ(one_window.size(), 1U);
+  ASSERT_EQ(one_tab.size(), 1U);
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
-TEST_F(MuxProcessTest, LastShellExitReclaimsSpaceAndRestoresTerminal) {
+TEST_F(MuxProcessTest, LastShellExitReclaimsSessionAndRestoresTerminal) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "exitcase"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
@@ -478,7 +477,7 @@ TEST_F(MuxProcessTest, LastShellExitReclaimsSpaceAndRestoresTerminal) {
 
   const auto listing = command({"list"});
   ASSERT_EQ(listing.status, 0) << listing.output;
-  EXPECT_NE(listing.output.find("no lemma spaces"), std::string::npos) << listing.output;
+  EXPECT_NE(listing.output.find("no lemma sessions"), std::string::npos) << listing.output;
 }
 
 // GoogleTest assertion macros inflate the measured branch count.
@@ -494,7 +493,8 @@ TEST_F(MuxProcessTest, AcceptsCoalescedAndFragmentedSetupWithoutStallingPtys) {
 
   RawPeer coalesced;
   ASSERT_TRUE(coalesced.connect(runtime_.socket_path(), deadline_after(2s)));
-  const auto list_request = named_request(protocol::ControlCommand::list_space, "responsive_setup");
+  const auto list_request =
+      named_request(protocol::ControlCommand::list_session, "responsive_setup");
   ASSERT_TRUE(coalesced.send(list_request, deadline_after(2s)));
   const auto list_output = coalesced.read_until_close(std::size_t{64} * 1'024U, deadline_after(5s));
   ASSERT_TRUE(list_output.has_value());
@@ -550,7 +550,7 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   const std::array zero_name{protocol::wire_byte(protocol::ControlCommand::create), std::byte{0}};
   EXPECT_TRUE(expect_close(zero_name));
   const std::array oversized_name{protocol::wire_byte(protocol::ControlCommand::create),
-                                  std::byte{protocol::space_name_bytes_max + 1U}};
+                                  std::byte{protocol::session_name_bytes_max + 1U}};
   EXPECT_TRUE(expect_close(oversized_name));
   const auto invalid_name = named_request(protocol::ControlCommand::create, "bad.name");
   EXPECT_TRUE(expect_close(invalid_name));
@@ -596,7 +596,7 @@ TEST_F(MuxProcessTest, SlowControlAndInitialAttachReadersRecoverWithoutBlockingP
   ASSERT_EQ(command({"start", "slow_attach"}).status, 0);
   for (std::size_t index = 0; index < 60; ++index) {
     const auto suffix = std::to_string(index);
-    auto name = std::string(protocol::space_name_bytes_max - suffix.size(), 'f') + suffix;
+    auto name = std::string(protocol::session_name_bytes_max - suffix.size(), 'f') + suffix;
     ASSERT_EQ(command({"start", name}).status, 0) << name;
   }
 
@@ -686,8 +686,8 @@ TEST_F(MuxProcessTest, BackpressuresBlockedPtyAndRecoversInOrderWithoutStarvingP
   }
   ASSERT_GT(sent, 0U);
   ASSERT_LT(sent, payload.size()) << "the unread PTY never applied client backpressure";
-  const auto still_alive = wait_for_space(
-      "blocked_pty", [](const SpaceListing& value) { return value.attached && value.panes == 1; },
+  const auto still_alive = wait_for_session(
+      "blocked_pty", [](const SessionListing& value) { return value.attached && value.panes == 1; },
       deadline_after(2s));
   ASSERT_TRUE(still_alive.has_value());
 
@@ -738,7 +738,7 @@ TEST_F(MuxProcessTest, RoutesTerminalResponsesAndClientInputToPtyPeers) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSpace) {
+TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
   ASSERT_EQ(command({"start", "blocked"}).status, 0);
   ASSERT_EQ(command({"start", "responsive"}).status, 0);
 
@@ -761,8 +761,8 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSpace) {
 
   RawPeer fragmented;
   ASSERT_TRUE(fragmented.connect(runtime_.socket_path(), deadline_after(2s)));
-  const std::array list_space{protocol::wire_byte(protocol::ControlCommand::list_space)};
-  ASSERT_TRUE(fragmented.send(list_space, deadline_after(2s)));
+  const std::array list_session{protocol::wire_byte(protocol::ControlCommand::list_session)};
+  ASSERT_TRUE(fragmented.send(list_session, deadline_after(2s)));
   ASSERT_TRUE(client.send("printf '__FRAGMENTED_SETUP__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__FRAGMENTED_SETUP__", deadline_after(5s)));
   const std::array name_size{static_cast<std::byte>(std::string_view("responsive").size())};

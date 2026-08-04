@@ -103,13 +103,13 @@ TEST(ProtocolTest, EncodesAndDecodesPaneCommands) {
 }
 
 TEST(ProtocolTest, EncodesNamedAttachControlFields) {
-  constexpr std::string_view space = "project";
+  constexpr std::string_view session = "project";
 
-  const auto header = encode_space_header(ControlCommand::attach, space);
+  const auto header = encode_session_header(ControlCommand::attach, session);
   const auto dimensions = encode_dimensions({.columns = 132, .rows = 43});
 
   EXPECT_EQ(header.front(), wire_byte(ControlCommand::attach));
-  EXPECT_EQ(decode_space_name_size(header.back()), space.size());
+  EXPECT_EQ(decode_session_name_size(header.back()), session.size());
   const auto decoded_dimensions = decode_dimensions(dimensions);
   EXPECT_EQ(decoded_dimensions.columns, 132);
   EXPECT_EQ(decoded_dimensions.rows, 43);
@@ -194,7 +194,7 @@ TEST(ProtocolTest, PrefixParserCapturesTmuxSplitsInInputOrder) {
   EXPECT_EQ(second_action.command, PaneCommand::split_top_bottom);
 }
 
-TEST(ProtocolTest, PrefixParserCapturesWindowCommandsInInputOrder) {
+TEST(ProtocolTest, PrefixParserCapturesTabCommandsInInputOrder) {
   PrefixParser parser;
   const std::array input{
       std::byte{0x02}, std::byte{'c'},  std::byte{0x02}, std::byte{'n'},  std::byte{0x02},
@@ -207,16 +207,16 @@ TEST(ProtocolTest, PrefixParserCapturesWindowCommandsInInputOrder) {
   EXPECT_EQ(result.bytes, 0U);
   ASSERT_EQ(result.action_count, 5U);
   const auto actions = std::span(result.actions);
-  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::create_window);
-  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::next_window);
-  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::previous_window);
-  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::kill_window);
-  EXPECT_EQ((actions.subspan<4, 1>().front().command), PaneCommand::select_window_3);
+  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::create_tab);
+  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::next_tab);
+  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::previous_tab);
+  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::kill_tab);
+  EXPECT_EQ((actions.subspan<4, 1>().front().command), PaneCommand::select_tab_3);
 }
 
-TEST(ProtocolTest, DecodesWindowCommandPacket) {
+TEST(ProtocolTest, DecodesTabCommandPacket) {
   ClientDecoder decoder;
-  const auto packet = encode_pane_command(PaneCommand::select_window_9);
+  const auto packet = encode_pane_command(PaneCommand::select_tab_9);
   std::ranges::copy(packet, decoder.writable_bytes().begin());
   ASSERT_TRUE(decoder.commit(packet.size()).has_value());
 
@@ -226,7 +226,7 @@ TEST(ProtocolTest, DecodesWindowCommandPacket) {
   ASSERT_TRUE(decoded->has_value());
   // value() turns malformed or incomplete test output into an explicit test exception.
   // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-  EXPECT_EQ(decoded.value().value().pane_command, PaneCommand::select_window_9);
+  EXPECT_EQ(decoded.value().value().pane_command, PaneCommand::select_tab_9);
 }
 
 TEST(ProtocolTest, PrefixParserCapturesFragmentedArrowKey) {

@@ -7,7 +7,7 @@
 
 namespace lemma::client {
 
-[[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, std::string_view space) -> int;
+[[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, std::string_view session) -> int;
 
 } // namespace lemma::client
 

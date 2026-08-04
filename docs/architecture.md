@@ -54,7 +54,7 @@ The architecture is a modular monolith around one daemon reactor, not a collecti
 5. State transitions are explicit and exhaustive.
 6. PTY output, terminal responses, and accepted application input preserve their required order.
 7. Only the daemon parses PTY output, generates PTY responses, and encodes mode-dependent input.
-8. Attach, window changes, resize, and presentation recovery reconstruct visible state from canonical
+8. Attach, tab changes, resize, and presentation recovery reconstruct visible state from canonical
    daemon state; no replay log is required for correctness.
 9. Client lag is repaired by a bounded full redraw or disconnect, never an unbounded output queue.
 10. Steady-state terminal parsing and damage rendering avoid the general heap.
@@ -73,9 +73,9 @@ violations use release-enabled assertions and terminate rather than continuing w
 
 The daemon owns:
 
-- space, window, pane, connection, and attachment identities;
+- session, tab, pane, connection, and attachment identities;
 - child-process and PTY lifetime;
-- logical split topology, resolved presentation rectangles, focus, zoom, ratios, and active windows;
+- logical split topology, resolved presentation rectangles, focus, zoom, ratios, and active tabs;
 - canonical terminal dimensions, Ghostty state, scrollback, effects, and input modes;
 - per-attachment prefix state, viewport, copy/search/selection state, and presentation cache;
 - command validation, application-input encoding, and terminal-generated PTY responses;
@@ -83,7 +83,7 @@ The daemon owns:
 - extension registrations, validated retained UI models, and configuration generations; and
 - permissions and controller policy if multiple attachments are added later.
 
-The current one-client-per-space rule keeps dimension and presentation ownership unambiguous.
+The current one-client-per-session rule keeps dimension and presentation ownership unambiguous.
 Future viewers require separate daemon-owned attachment state and an explicit controlling client;
 they do not require terminal replicas.
 
@@ -124,10 +124,12 @@ not C++ target dependencies.
 
 ### Core — `src/core/`
 
-The core is the sole authoritative mux owner. It contains dense generational stores, typed commands,
-bounded queues, scheduling policy, attachment state, and the daemon reactor. Spaces, windows,
-panes, clients, focus, layouts, viewports, and copy state are core data—not independently allocated
-services.
+The core is the sole authoritative mux owner. Its canonical ownership hierarchy is
+`Session → Tab → Pane`. It contains dense generational stores, typed commands, bounded queues,
+scheduling policy, attachment state, and the daemon reactor. Sessions, tabs, panes, clients, focus,
+layouts, viewports, and copy state are core data—not independently allocated services. Spaces,
+workspaces, projects, worktrees, tasks, and agent runs are extension policy expressed through stable
+IDs, metadata, commands, events, and retained views rather than additional core containers.
 
 The core may orchestrate platform, terminal, protocol, renderer, and extension interfaces. It must
 not know CLI syntax, Lua stack details, Unix socket naming conventions, or Ghostty C types.
@@ -191,7 +193,7 @@ The client must not infer mux state from ANSI output.
 
 The daemon component owns endpoint naming, lock and listener lifecycle, daemonization, endpoint
 security, shutdown coordination, and transport bootstrap. It lends accepted connections to the core
-reactor; it does not own space or terminal state.
+reactor; it does not own session or terminal state.
 
 ### Extension host — `src/extension/`
 
@@ -212,7 +214,7 @@ roles, and wires components together. It owns no mux, terminal, or presentation 
 A successful attachment is an explicit transaction:
 
 1. negotiate daemon/client protocol versions and presentation/input capabilities;
-2. resolve the space and allocate bounded daemon-side attachment state;
+2. resolve the session and allocate bounded daemon-side attachment state;
 3. establish canonical dimensions and resize the active layout;
 4. invalidate the new attachment's retained presentation cache;
 5. generate and queue one complete visible ANSI frame; and
@@ -235,7 +237,7 @@ that frame is completed or the connection is retired; it is never spliced with a
 Each client has strict frame, byte, time, and per-turn budgets. While a frame is blocked, newer damage
 remains represented by canonical state rather than accumulating an output log. After the blocked
 frame completes, the renderer emits a full redraw from the latest state. A client that cannot make
-bounded progress before its deadline is disconnected without affecting its space.
+bounded progress before its deadline is disconnected without affecting its session.
 
 Reconnect always begins with a fresh full frame. Resume/delta replay is an optional optimization and
 is never required for correctness.

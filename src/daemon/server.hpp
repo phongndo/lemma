@@ -8,7 +8,7 @@
 
 namespace lemma::daemon {
 
-inline constexpr std::string_view default_space = "default";
+inline constexpr std::string_view default_session = "default";
 
 // Immutable process runtime routing. Socket naming policy stays in the daemon boundary; callers
 // may only construct a validated absolute endpoint and pass it through component APIs.
@@ -35,7 +35,7 @@ struct ServeOptions final {
 };
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint;
-[[nodiscard]] auto validate_space(std::string_view space) noexcept -> bool;
+[[nodiscard]] auto validate_session(std::string_view session) noexcept -> bool;
 
 // Runs the production listener/core path in the calling process. The endpoint is owned until the
 // core reactor exits. Tests use this entry point with extensions disabled.
@@ -46,14 +46,14 @@ struct ServeOptions final {
 // -1 means the daemon is unavailable.
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
 
-[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, std::string_view space) -> int;
-[[nodiscard]] auto start(const RuntimeEndpoint& endpoint, std::string_view space = default_space)
-    -> int;
+[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, std::string_view session) -> int;
+[[nodiscard]] auto start(const RuntimeEndpoint& endpoint,
+                         std::string_view session = default_session) -> int;
 [[nodiscard]] auto list(const RuntimeEndpoint& endpoint) -> int;
-[[nodiscard]] auto list(const RuntimeEndpoint& endpoint, std::string_view space) -> int;
-[[nodiscard]] auto list_windows(const RuntimeEndpoint& endpoint,
-                                std::string_view space = default_space) -> int;
-[[nodiscard]] auto kill(const RuntimeEndpoint& endpoint, std::string_view space = default_space)
+[[nodiscard]] auto list(const RuntimeEndpoint& endpoint, std::string_view session) -> int;
+[[nodiscard]] auto list_tabs(const RuntimeEndpoint& endpoint,
+                             std::string_view session = default_session) -> int;
+[[nodiscard]] auto kill(const RuntimeEndpoint& endpoint, std::string_view session = default_session)
     -> int;
 [[nodiscard]] auto kill_all(const RuntimeEndpoint& endpoint) -> int;
 

@@ -18,12 +18,12 @@ namespace {
   case CommandKind::focus_previous:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
-  case CommandKind::create_window:
-  case CommandKind::next_window:
-  case CommandKind::previous_window:
-  case CommandKind::close_window:
-  case CommandKind::select_window:
-  case CommandKind::stop_space:
+  case CommandKind::create_tab:
+  case CommandKind::next_tab:
+  case CommandKind::previous_tab:
+  case CommandKind::close_tab:
+  case CommandKind::select_tab:
+  case CommandKind::stop_session:
     return true;
   }
   return false;
@@ -44,16 +44,16 @@ namespace {
 }
 
 [[nodiscard]] constexpr auto valid_argument(const Command& command) noexcept -> bool {
-  return command.kind == CommandKind::select_window ? command.argument < command_window_slots_max
-                                                    : command.argument == 0;
+  return command.kind == CommandKind::select_tab ? command.argument < command_tab_slots_max
+                                                 : command.argument == 0;
 }
 
 [[nodiscard]] constexpr auto valid_target(const Command& command) noexcept -> bool {
-  if (command.target.pane.is_valid() && !command.target.window.is_valid()) {
+  if (command.target.pane.is_valid() && !command.target.tab.is_valid()) {
     return false;
   }
-  if ((command.kind == CommandKind::detach_client || command.kind == CommandKind::stop_space) &&
-      (command.target.window.is_valid() || command.target.pane.is_valid())) {
+  if ((command.kind == CommandKind::detach_client || command.kind == CommandKind::stop_session) &&
+      (command.target.tab.is_valid() || command.target.pane.is_valid())) {
     return false;
   }
   return true;

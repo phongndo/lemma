@@ -108,8 +108,8 @@ private:
   std::string received_tail_;
 };
 
-struct SpaceListing final {
-  std::size_t windows{0};
+struct SessionListing final {
+  std::size_t tabs{0};
   std::size_t panes{0};
   pid_t focused_pid{-1};
   std::uint16_t columns{0};
@@ -117,14 +117,14 @@ struct SpaceListing final {
   bool attached{false};
 };
 
-struct WindowListing final {
+struct TabListing final {
   std::size_t number{0};
   std::size_t panes{0};
   bool active{false};
 };
 
-[[nodiscard]] auto parse_space_listing(std::string_view output) -> std::optional<SpaceListing>;
-[[nodiscard]] auto parse_window_listings(std::string_view output) -> std::vector<WindowListing>;
+[[nodiscard]] auto parse_session_listing(std::string_view output) -> std::optional<SessionListing>;
+[[nodiscard]] auto parse_tab_listings(std::string_view output) -> std::vector<TabListing>;
 
 class PtyClient final {
 public:

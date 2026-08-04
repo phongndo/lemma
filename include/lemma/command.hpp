@@ -7,7 +7,7 @@
 
 namespace lemma {
 
-inline constexpr std::uint16_t command_window_slots_max = 16;
+inline constexpr std::uint16_t command_tab_slots_max = 16;
 
 enum class CommandKind : std::uint8_t {
   none = 0,
@@ -22,12 +22,12 @@ enum class CommandKind : std::uint8_t {
   focus_previous,
   close_pane,
   toggle_zoom,
-  create_window,
-  next_window,
-  previous_window,
-  close_window,
-  select_window,
-  stop_space,
+  create_tab,
+  next_tab,
+  previous_tab,
+  close_tab,
+  select_tab,
+  stop_session,
 };
 
 enum class CommandOrigin : std::uint8_t {
@@ -42,8 +42,8 @@ enum class CommandOrigin : std::uint8_t {
 // Invalid IDs mean "the current object". Explicit IDs are retained in the command value so future
 // CLI, remote, and extension transports can use the same dispatcher without exposing core pointers.
 struct CommandTarget final {
-  SpaceId space;
-  WindowId window;
+  SessionId session;
+  TabId tab;
   PaneId pane;
 };
 
@@ -51,7 +51,7 @@ struct Command final {
   CommandKind kind{CommandKind::none};
   CommandOrigin origin{CommandOrigin::none};
   CommandTarget target{};
-  // select_window uses a zero-based bounded slot. Other current commands require zero.
+  // select_tab uses a zero-based bounded slot. Other current commands require zero.
   std::uint16_t argument{0};
 };
 

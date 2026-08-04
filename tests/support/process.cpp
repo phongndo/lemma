@@ -580,9 +580,8 @@ namespace {
   return true;
 }
 
-[[nodiscard]] auto parse_window_listing(const std::string_view line)
-    -> std::optional<WindowListing> {
-  constexpr std::string_view prefix = "lemma window ";
+[[nodiscard]] auto parse_tab_listing(const std::string_view line) -> std::optional<TabListing> {
+  constexpr std::string_view prefix = "lemma tab ";
   if (!line.starts_with(prefix)) {
     return std::nullopt;
   }
@@ -602,7 +601,7 @@ namespace {
       *panes > std::numeric_limits<std::size_t>::max()) {
     return std::nullopt;
   }
-  return WindowListing{
+  return TabListing{
       .number = static_cast<std::size_t>(*number),
       .panes = static_cast<std::size_t>(*panes),
       .active = active,
@@ -611,15 +610,15 @@ namespace {
 
 } // namespace
 
-[[nodiscard]] auto parse_space_listing(const std::string_view output)
-    -> std::optional<SpaceListing> {
+[[nodiscard]] auto parse_session_listing(const std::string_view output)
+    -> std::optional<SessionListing> {
   const auto prefix = output.find(": ");
   if (prefix == std::string_view::npos) {
     return std::nullopt;
   }
   std::size_t offset = prefix + 2U;
-  const auto windows = parse_unsigned(output, offset);
-  if (!windows.has_value() || !consume_text(output, offset, " window(s), ")) {
+  const auto tabs = parse_unsigned(output, offset);
+  if (!tabs.has_value() || !consume_text(output, offset, " tab(s), ")) {
     return std::nullopt;
   }
   const auto panes = parse_unsigned(output, offset);
@@ -641,15 +640,15 @@ namespace {
     return std::nullopt;
   }
   const auto rows = parse_unsigned(output, offset);
-  if (!rows.has_value() || *windows > std::numeric_limits<std::size_t>::max() ||
+  if (!rows.has_value() || *tabs > std::numeric_limits<std::size_t>::max() ||
       *panes > std::numeric_limits<std::size_t>::max() ||
       *focused_pid > static_cast<std::uint64_t>(std::numeric_limits<pid_t>::max()) ||
       *columns > std::numeric_limits<std::uint16_t>::max() ||
       *rows > std::numeric_limits<std::uint16_t>::max()) {
     return std::nullopt;
   }
-  return SpaceListing{
-      .windows = static_cast<std::size_t>(*windows),
+  return SessionListing{
+      .tabs = static_cast<std::size_t>(*tabs),
       .panes = static_cast<std::size_t>(*panes),
       .focused_pid = static_cast<pid_t>(*focused_pid),
       .columns = static_cast<std::uint16_t>(*columns),
@@ -658,18 +657,17 @@ namespace {
   };
 }
 
-[[nodiscard]] auto parse_window_listings(const std::string_view output)
-    -> std::vector<WindowListing> {
-  std::vector<WindowListing> listings;
+[[nodiscard]] auto parse_tab_listings(const std::string_view output) -> std::vector<TabListing> {
+  std::vector<TabListing> listings;
   std::size_t line_start = 0;
   while (line_start < output.size()) {
     const auto line_end = output.find('\n', line_start);
     const auto line =
         output.substr(line_start, line_end == std::string_view::npos ? output.size() - line_start
                                                                      : line_end - line_start);
-    const auto parsed = parse_window_listing(line);
+    const auto parsed = parse_tab_listing(line);
     if (parsed.has_value()) {
-      listings.push_back(parsed.value_or(WindowListing{}));
+      listings.push_back(parsed.value_or(TabListing{}));
     }
     if (line_end == std::string_view::npos) {
       break;

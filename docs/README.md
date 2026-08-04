@@ -12,7 +12,7 @@ Start here:
 - [`architecture.md`](architecture.md) — authoritative daemon, thin client, server rendering,
   ownership, dependencies, hot-path rules, and extension boundary.
 - [`single-pane-runtime.md`](single-pane-runtime.md) — currently implemented runtime ownership,
-  window/split behavior, and limitations.
+  tab/split behavior, and limitations.
 - [`protocol.md`](protocol.md) — current wire format and versioned server-rendered evolution contract.
 - [`performance.md`](performance.md) — benchmark methodology, current results, and production bounds.
 - [`ci.md`](ci.md) — CI lanes, supported platforms, and local checks.

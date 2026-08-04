@@ -286,17 +286,17 @@ class LemmaRuntime:
             timeout=5.0,
         )
 
-    def attach(self, space: str) -> PtyProcess:
+    def attach(self, session: str) -> PtyProcess:
         client = PtyProcess(
-            [str(self.cli_path), str(self.socket_path), "attach", space], self.environment
+            [str(self.cli_path), str(self.socket_path), "attach", session], self.environment
         )
         self.clients.append(client)
         client.read_until(ALT_SCREEN, 5.0)
         return client
 
-    def start_and_attach(self, space: str) -> PtyProcess:
-        self.command("start", space)
-        return self.attach(space)
+    def start_and_attach(self, session: str) -> PtyProcess:
+        self.command("start", session)
+        return self.attach(session)
 
     def close(self) -> None:
         for client in self.clients:

@@ -40,11 +40,11 @@ using platform::send_all;
 using platform::write_all;
 using platform::write_text;
 
-[[nodiscard]] constexpr auto valid_space_name(const std::string_view space) noexcept -> bool {
-  if (space.empty() || space.size() > protocol::space_name_bytes_max) {
+[[nodiscard]] constexpr auto valid_session_name(const std::string_view session) noexcept -> bool {
+  if (session.empty() || session.size() > protocol::session_name_bytes_max) {
     return false;
   }
-  return std::ranges::all_of(space, [](const char character) {
+  return std::ranges::all_of(session, [](const char character) {
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
@@ -270,17 +270,18 @@ void redirect_standard_descriptors() noexcept {
   return server_available(path) || launch_server(path);
 }
 
-[[nodiscard]] auto send_space_request(const int connection, const protocol::ControlCommand command,
-                                      const std::string_view space) noexcept -> bool {
-  const auto header = protocol::encode_space_header(command, space);
+[[nodiscard]] auto send_session_request(const int connection,
+                                        const protocol::ControlCommand command,
+                                        const std::string_view session) noexcept -> bool {
+  const auto header = protocol::encode_session_header(command, session);
   return send_all(connection, header) &&
-         send_all(connection, std::as_bytes(std::span(space.data(), space.size())));
+         send_all(connection, std::as_bytes(std::span(session.data(), session.size())));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_control_command(const RuntimeEndpoint& endpoint,
                                        const protocol::ControlCommand command,
-                                       const std::string_view space, const bool report_missing)
+                                       const std::string_view session, const bool report_missing)
     -> int {
   int connection = open_connection(std::string(endpoint.socket_path()));
   if (connection < 0) {
@@ -289,9 +290,9 @@ void redirect_standard_descriptors() noexcept {
     }
     return 1;
   }
-  const bool named = !space.empty();
+  const bool named = !session.empty();
   const std::array encoded_command{protocol::wire_byte(command)};
-  const bool sent = named ? send_space_request(connection, command, space)
+  const bool sent = named ? send_session_request(connection, command, session)
                           : send_all(connection, encoded_command);
   if (!sent) {
     close_descriptor(connection);
@@ -314,7 +315,7 @@ void redirect_standard_descriptors() noexcept {
     }
     const auto bytes = std::span(response).first(static_cast<std::size_t>(bytes_read));
     if (first && bytes.front() == response_missing) {
-      static_cast<void>(write_text(STDERR_FILENO, "no lemma space\n"));
+      static_cast<void>(write_text(STDERR_FILENO, "no lemma session\n"));
       close_descriptor(connection);
       return 1;
     }
@@ -330,13 +331,13 @@ void redirect_standard_descriptors() noexcept {
 
 } // namespace
 
-[[nodiscard]] auto validate_space(const std::string_view space) noexcept -> bool {
-  if (valid_space_name(space)) {
+[[nodiscard]] auto validate_session(const std::string_view session) noexcept -> bool {
+  if (valid_session_name(session)) {
     return true;
   }
-  static_cast<void>(
-      write_text(STDERR_FILENO,
-                 "invalid space name; use 1-32 ASCII letters, digits, underscores, or hyphens\n"));
+  static_cast<void>(write_text(
+      STDERR_FILENO,
+      "invalid session name; use 1-32 ASCII letters, digits, underscores, or hyphens\n"));
   return false;
 }
 
@@ -367,8 +368,8 @@ void redirect_standard_descriptors() noexcept {
   return open_connection(std::string(endpoint.socket_path()));
 }
 
-[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
-  if (!validate_space(space)) {
+[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
+  if (!validate_session(session)) {
     return 1;
   }
   const std::string path(endpoint.socket_path());
@@ -377,7 +378,8 @@ void redirect_standard_descriptors() noexcept {
     return 1;
   }
   int connection = open_connection(path);
-  if (connection < 0 || !send_space_request(connection, protocol::ControlCommand::create, space)) {
+  if (connection < 0 ||
+      !send_session_request(connection, protocol::ControlCommand::create, session)) {
     close_descriptor(connection);
     return 1;
   }
@@ -388,40 +390,40 @@ void redirect_standard_descriptors() noexcept {
     return 0;
   }
   static_cast<void>(write_text(STDERR_FILENO, received && response.front() == response_capacity
-                                                  ? "lemma space capacity reached\n"
-                                                  : "failed to create lemma space\n"));
+                                                  ? "lemma session capacity reached\n"
+                                                  : "failed to create lemma session\n"));
   return 1;
 }
 
-auto start(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
-  return ensure(endpoint, space) == 0 ? list(endpoint, space) : 1;
+auto start(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
+  return ensure(endpoint, session) == 0 ? list(endpoint, session) : 1;
 }
 
 auto list(const RuntimeEndpoint& endpoint) -> int {
   int connection = open_server_connection(endpoint);
   if (connection < 0) {
-    static_cast<void>(write_text(STDOUT_FILENO, "no lemma spaces\n"));
+    static_cast<void>(write_text(STDOUT_FILENO, "no lemma sessions\n"));
     return 0;
   }
   close_descriptor(connection);
   return run_control_command(endpoint, protocol::ControlCommand::list, {}, false);
 }
 
-auto list(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
-  return validate_space(space)
-             ? run_control_command(endpoint, protocol::ControlCommand::list_space, space, true)
+auto list(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
+  return validate_session(session)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_session, session, true)
              : 1;
 }
 
-auto list_windows(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
-  return validate_space(space)
-             ? run_control_command(endpoint, protocol::ControlCommand::list_windows, space, true)
+auto list_tabs(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
+  return validate_session(session)
+             ? run_control_command(endpoint, protocol::ControlCommand::list_tabs, session, true)
              : 1;
 }
 
-auto kill(const RuntimeEndpoint& endpoint, const std::string_view space) -> int {
-  return validate_space(space)
-             ? run_control_command(endpoint, protocol::ControlCommand::kill, space, true)
+auto kill(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
+  return validate_session(session)
+             ? run_control_command(endpoint, protocol::ControlCommand::kill, session, true)
              : 1;
 }
 

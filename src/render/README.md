@@ -4,7 +4,7 @@ Home of Lemma's daemon-owned ANSI compositor.
 
 The renderer consumes canonical terminal damage, resolved topology, daemon-owned per-attachment view
 state, status, overlays, and retained extension UI models. It clips regions, composes synchronized
-frames, retains physical outer-terminal state, and emits bounded ANSI. Attach, window changes,
+frames, retains physical outer-terminal state, and emits bounded ANSI. Attach, tab changes,
 resize, lag recovery, and reconnect can invalidate retained state and force a complete redraw.
 
 Rendering is synchronous, deterministic, allocation-bounded, and limited to affected terminals and
