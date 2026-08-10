@@ -9,20 +9,20 @@ not universal rankings. They measure the selected daemon-authoritative, server-r
 The workload uses an 80x24 Ghostty terminal. `full_frames` uses Ghostty's complete VT formatter.
 `ansi_damage_frames` continuously appends styled lines. `ansi_single_row` alternates styled content
 on one fixed row. `ansi_scroll_operations` verifies that each one-row shift is encoded with `SU`
-rather than rewriting the 23 retained rows. Results are medians from three release repetitions on
-July 15, 2026.
+rather than rewriting the 23 retained rows. Results are medians from three clean release
+repetitions on August 9, 2026.
 
 | Renderer | CPU per frame | Bytes per frame |
 |---|---:|---:|
-| Full-frame formatter | 177.8 us | 39,283 |
-| Styled scrolling damage | 62.0 us | 49 average |
-| Detected one-row scroll | 17.0 us | 90 |
-| One changed cell span | 3.02 us | 90 |
+| Full-frame formatter | 177.2 us | 39,404 average |
+| Styled scrolling damage | 72.5 us | 49 average |
+| Detected one-row scroll | 16.8 us | 90 |
+| One changed cell span | 3.14 us | 90 |
 
 The detected-scroll case is approximately 10.5x faster than full formatting and emits over 400x
-fewer bytes. The sparse changed-span case is approximately 59x faster. Cell-span tracking adds a
+fewer bytes. The sparse changed-span case is approximately 56x faster. Cell-span tracking adds a
 bounded physical-cell array and performs no general allocation while rendering. Large VT parsing
-measures approximately 1.2 GiB/s.
+measured 1.22 GiB/s.
 
 Reproduce the microbenchmarks with:
 
@@ -34,14 +34,14 @@ just profile=release bench
 
 `benchmark_command_dispatch` measures validation plus one call through the allocation-free typed C++
 dispatcher. It excludes the command-specific topology mutation so future CLI, keymap, and extension
-transport measurements can separate dispatch overhead from the requested operation. The initial
-Apple Silicon release smoke measured approximately 1.5 ns per dispatch on July 24, 2026; this is a
-local regression baseline, not a cross-machine latency claim.
+transport measurements can separate dispatch overhead from the requested operation. The clean F0
+release measured 2.63 ns per dispatch on August 9, 2026; this is a local baseline, not a
+cross-machine latency claim.
 
 `benchmark_extension_registration_codec` measures one bounded typed command-registration encode and
 incremental decode. It isolates framing cost from process scheduling so future socket round-trip,
 event-flood, blocked-host, and pane-output backpressure benchmarks can report those costs separately.
-Run it with:
+The same clean release measured 138 ns per registration encode/decode. Run it with:
 
 ```sh
 ./build/release/lemma_benchmarks \
@@ -52,61 +52,244 @@ The extension host is never sampled from the PTY or renderer benchmark loops. An
 crashed host must leave those baselines unchanged within measurement noise; end-to-end extension
 latency does not justify moving Lua into the mux-critical path.
 
-## Checked-in process benchmarks
+## F0 release process baseline
 
 [`../benchmarks/mux_benchmark.py`](../benchmarks/mux_benchmark.py) runs the real foreground daemon,
 attached client, shell PTY, terminal adapter, renderer, and deterministic workload executable through
-isolated endpoints. It records the Lemma commit, mux version, host/architecture, every latency
-sample, p50/p95/p99, client bytes, idle CPU/RSS and OS-supported wakeup samples, and a labeled
-post-workload process-tree RSS/CPU snapshot as JSON. It never touches the user's daemon. The
-benchmark driver removes Ghostty's
-shared source-tree `zig-out` before and after the run so a prior ReleaseFast archive cannot taint the
-measurement or a later local debug/sanitizer build. Scheduled and manually dispatched extended CI
-runs the smoke mode in an isolated checkout and uploads the microbenchmark, Lemma process, and
-cross-multiplexer JSON reports; shared-runner timings are evidence, not thresholds.
+isolated endpoints. Each workload and pane-profile condition gets a fresh runtime; attach-to-visible
+also uses a fresh runtime per repetition and an untimed observe/detach validation before the measured
+client, so the retained marker is known to be canonical before timing. Schema 4 records every latency
+sample,
+p50/p95/p99, client bytes, direct daemon/client roles, unclassified pane or mux children, the optional
+extension-host outcome, and the complete process tree. A workload that does not reach its completion
+marker remains a failure.
 
-Reproduce a release smoke or five-sample run with:
+The benchmark never touches the user's daemon. The CI driver removes Ghostty's shared source-tree
+`zig-out` before and after the run. Reproduce the clean five-sample baseline with:
 
 ```sh
-scripts/ci/benchmarks smoke
-python3 benchmarks/mux_benchmark.py --mode all --repetitions 5 \
-  --output build/release/mux-benchmark-results.json
+rm -rf build/release
+scripts/ci/benchmarks extended
 ```
 
-The warm-scroll workload attaches an 80x24 client to a warm daemon/session, writes 25,000
-79-column CRLF-terminated rows (approximately 2 MiB), then emits a completion marker. Time runs from
-command submission until the marker is observable in the client render stream. Client bytes count
-multiplexer-to-terminal output, not PTY input; the workload intentionally allows final-state
-coalescing.
+This creates the raw reports under `build/release/`:
 
-The blocked-PTY workload gates a foreground reader and sends a 2 MiB input payload until the attached
-client is backpressured. In another session, a deterministic peer acknowledges each input token over
-a fixture-owned Unix datagram socket immediately after reading it from the PTY, then echoes the token
-to the rendered client stream. The report records separate `key_to_pty` and `key_to_visible`
-distributions at idle and while the first PTY remains blocked. Finally, the harness releases the reader
-and verifies exact byte-count/digest recovery.
+- `benchmark-results.json` (three release microbenchmark repetitions);
+- `mux-benchmark-results.json` (five complete Lemma workload repetitions);
+- `mux-comparison-results.json` (the same five repetitions through Lemma, tmux, and Zellij); and
+- `mux-profile-results.json` (P1/P4/P16/PMAX idle and active conditions).
 
-Five release samples on the Apple Silicon development machine on July 30, 2026 produced:
+A clean pre-change parent run is retained as `f0-parent-119e8f8-*.json`. On unchanged workloads, the
+parent/current warm-scroll results were 2.716/19.258 ms and 16.944/17.816 ms p50/p95; the current
+five-sample run landed in a clustered slow mode described below. Parent/current renderer medians were
+74.57/72.54 us for styled damage, 3.22/3.14 us for one changed span, 17.39/16.85 us for detected
+scroll, and 179.49/177.21 us for a full frame. The expanded token and fresh-runtime semantics make
+the other process rows baseline
+replacements rather than strict parent comparisons. No scheduling policy changed.
 
-| Workload | p50 | p95 | p99 | Median client bytes |
-| --- | ---: | ---: | ---: | ---: |
-| Warm 2 MiB scroll marker | 2.41 ms | 2.78 ms | 2.78 ms | 328 B |
-| Responsive session, idle peer (key-to-visible) | 2.43 ms | 2.48 ms | 2.48 ms | not recorded per sample |
-| Responsive session, other PTY blocked (key-to-visible) | 2.45 ms | 2.50 ms | 2.50 ms | not recorded per sample |
+The August 9, 2026 run used commit `119e8f8c0f4ff4ac99e964d8d0697f9b985d98f7`
+with an intentionally dirty benchmark worktree on a MacBook Pro (Mac16,5), Apple M4 Max (12
+performance plus 4 efficiency cores), 64 GiB RAM, macOS 26.5.2 / Darwin 25.5.0, Apple Clang 21.0.0,
+CMake 4.3.4, and Python 3.14.7. The adapters resolved tmux 3.7b and Zellij 0.44.3. This was the
+physical development host, not a shared runner. It was on local power but was not a
+laboratory-isolated machine; host load and all raw samples are therefore retained. These five-sample
+comparison distributions are descriptive; the larger pinned-host distributions and reviewed budgets
+appear below.
 
-The blocked reader accepted 1,125,222 bytes through the outer client before backpressure was
-observable in that run, then recovered the complete 2 MiB payload. Five samples are a smoke baseline,
-not a statistically stable regression budget.
+The comparison workloads are:
 
-[`../benchmarks/compare_mux.py`](../benchmarks/compare_mux.py) now runs the same peer binary, PTY size,
-input, marker, and completion condition through pinned tmux and Zellij adapters. It records exact
-versions and preserves an incomplete workload as an explicit failure rather than a latency sample.
-The locked workload and pane profiles are in
-[`../benchmarks/workloads.json`](../benchmarks/workloads.json), and comparison/claim rules are in
-[`core-mux-quality.md`](core-mux-quality.md). No broad ranking is inferred from these two workloads.
+- **warm scroll:** approximately 2 MiB of fixed rows followed by a visible completion marker;
+- **attach to visible:** process launch and attach through observation of a marker already retained in
+  the daemon's canonical screen;
+- **interactive under output:** same-pane bounded continuous output while each token is acknowledged
+  from the PTY and then observed in the outer client stream;
+- **idle resources:** five one-second attached-shell samples; and
+- **blocked PTY:** exact 2 MiB backpressure/recovery while a second session remains interactive.
 
-This benchmark does not replace future sparse editor, mouse, multi-pane, slow-client,
-large-scrollback, memory, resize-storm, or soak measurements.
+### Five-sample mux comparison
+
+All latency values below are p50/p95/p99. Bytes are the median mux-to-outer-terminal bytes. These are
+workload-specific observations, not a general mux ranking.
+
+| Mux | Workload | Latency | Client bytes |
+|---|---|---:|---:|
+| Lemma | Warm scroll | 2.36 / 2.64 / 2.64 ms | 675 B |
+| tmux | Warm scroll | 50.31 / 146.02 / 146.02 ms | 31,810 B |
+| Zellij | Warm scroll | 44.89 / 45.07 / 45.07 ms | 20,396 B |
+| Lemma | Attach to visible | 2.79 / 2.87 / 2.87 ms | 1,031 B |
+| tmux | Attach to visible | 5.04 / 5.49 / 5.49 ms | 514 B |
+| Zellij | Attach to visible | 47.56 / 48.20 / 48.20 ms | 7,985 B |
+| Lemma | Interactive under output, key to visible | 2.52 / 2.53 / 2.53 ms | 738 B |
+| tmux | Interactive under output, key to visible | 1.31 / 1.37 / 1.37 ms | 113 B |
+| Zellij | Interactive under output, key to visible | 11.80 / 12.53 / 12.53 ms | 6,144 B |
+
+All five final Lemma warm-scroll samples were 2.24–2.64 ms. Earlier retained five- and thirty-sample
+runs exercised a second approximately 17–20 ms mode; one thirty-sample run had seven samples above
+10 ms while p50 remained 2.44 ms and p95 was 19.02 ms. F0 retains both modes and uses the larger
+distribution for thresholds. Under the blocked-PTY workload, Lemma's other-session key-to-visible
+result was 2.43/2.47/2.47 ms versus 2.37/2.41/2.41 ms with an idle peer; all 2 MiB were recovered.
+tmux completed with 0.12/0.13/0.13 ms under backpressure. Zellij lost the
+connection and is recorded as failed, not as a fast sample.
+
+### Pane profiles and process roles
+
+An idle profile contains only live shells during its resource interval and launches its latency peer
+afterward. An active profile emits bounded continuous output only in the focused pane while the other
+panes remain live and idle. CPU is process-tree CPU consumed per one-second interval. Latency is the
+focused pane's key-to-visible p50/p95; PMAX is the supported 64-pane per-session capacity.
+
+| Profile | Condition | Tree RSS | Daemon RSS | Client RSS | CPU / s | Key to visible |
+|---|---|---:|---:|---:|---:|---:|
+| P1 | idle | 28.22 MiB | 23.73 MiB | 1.55 MiB | 0.00 ms | 2.38 / 2.44 ms |
+| P1 | active | 27.42 MiB | 24.50 MiB | 1.55 MiB | 2.58 ms | 2.48 / 2.59 ms |
+| P4 | idle | 38.28 MiB | 25.00 MiB | 1.55 MiB | 0.00 ms | 2.48 / 2.51 ms |
+| P4 | active | 37.48 MiB | 25.75 MiB | 1.55 MiB | 1.70 ms | 2.48 / 2.52 ms |
+| P16 | idle | 77.98 MiB | 29.45 MiB | 1.55 MiB | 0.00 ms | 2.48 / 2.51 ms |
+| P16 | active | 77.27 MiB | 30.23 MiB | 1.55 MiB | 1.99 ms | 2.50 / 3.74 ms |
+| PMAX | idle | 236.41 MiB | 46.88 MiB | 1.55 MiB | 0.00 ms | 2.57 / 2.62 ms |
+| PMAX | active | 235.55 MiB | 47.64 MiB | 1.55 MiB | 3.07 ms | 2.62 / 2.75 ms |
+
+The empty benchmark configuration explicitly disables the extension host, which is reported as
+unavailable rather than folded into another role. P1 idle measured 0 daemon, 0 attached-client, and 0
+total wakeups in every one-second sample. The reviewed Darwin mechanism is
+`proc_pid_rusage(RUSAGE_INFO_V0)` package-idle plus interrupt wakeups; platforms without a reviewed
+per-process wakeup counter report unavailable and do not substitute context switches or another
+unrelated counter. tmux P1 idle process-tree RSS was 9.89 MiB under the same completion semantics.
+
+## Reviewed F0 regression budgets
+
+Run the pinned-host gate with:
+
+```sh
+scripts/ci/regression-budgets
+```
+
+The command forces tracing off, performs ten raw microbenchmark repetitions, thirty process-workload
+repetitions, and twenty repetitions of every pane-profile condition, then evaluates the raw samples
+with [`../benchmarks/check_regression.py`](../benchmarks/check_regression.py). The manifest in
+[`../benchmarks/workloads.json`](../benchmarks/workloads.json) is the source of truth. It records the
+host scope, minimum sample counts, nearest-rank statistic, units, and thresholds. Shared CI validates
+that manifest but does not apply pinned-host thresholds.
+
+The reviewed runs retained `regression-{microbenchmarks,process-workloads,pane-profiles}.json` and
+`regression-budget-results.json` under `build/release/`; the final 66-check evaluation passed. The
+largest relevant statistic observed across repeated gate and targeted confirmation runs and its
+limit were:
+
+| Gate | Observed | Maximum |
+|---|---:|---:|
+| Styled damage CPU p95 | 78.89 us | 87.00 us |
+| One-row span CPU p95 | 3.45 us | 3.80 us |
+| Detected-scroll CPU p95 | 19.25 us | 21.20 us |
+| Full-frame CPU p95 | 182.03 us | 200.00 us |
+| Warm-scroll latency p50 / p95 | 2.57 / 19.83 ms | 3.00 / 21.00 ms |
+| Warm-scroll bytes p50 / p95 | 687 / 1,998 B | 720 / 2,200 B |
+| Attach-to-visible p50 / p95 | 4.21 / 4.82 ms | 4.70 / 5.40 ms |
+| Same-pane-output key-to-PTY p50 / p95 | 1.26 / 1.38 ms | 1.40 / 1.50 ms |
+| Same-pane-output key-to-visible p50 / p95 | 2.73 / 3.63 ms | 3.00 / 4.00 ms |
+| Same-pane-output bytes p95 | 806 B | 1,100 B |
+| Idle tree CPU p95 / wakeups max | 0 ms / 0 | 1 ms / 0 |
+| Idle peer key-to-visible p95 | 3.26 ms | 3.60 ms |
+| Other-session blocked key-to-PTY p95 | 0.310 ms | 0.350 ms |
+| Other-session blocked key-to-visible p95 | 4.24 ms | 4.50 ms |
+
+Warm scroll produced three approximately 20 ms samples among thirty; its p95 budget includes that
+measured mode instead of dropping it. The same-pane-output fixture now waits for a peer receipt after
+its bounded post-echo rendering opportunity, outside the next measured interval. Its reviewed limits
+include the resulting startup byte transients rather than discarding them. Renderer CPU and byte
+limits cover the largest p95 seen across repeated runs plus approximately 10% outward rounding.
+Latency and codec limits likewise cover the multi-run envelope, rather than only the fastest run.
+Tree-RSS limits are 32/50/112/360 MiB
+for P1/P4/P16/PMAX. The larger profiles were refreshed from the current release footprint with an
+approximately 10% outward margin for page-level allocator and OS variance. Every profile also gates p95 CPU,
+key-to-PTY, and key-to-visible; the exact values remain machine-readable in the manifest.
+
+A missing sample, wrong unit, incomplete workload, report from outside the reviewed host class, or
+unavailable process-report wakeup measurement is an invalid gate rather than a pass. The gate also
+matches every report against the reviewed hostname, Mac16,5 model, Apple M4 Max CPU, 16 physical
+cores, and 64-GiB memory fingerprint; merely running on another 16-core arm64 Mac is not sufficient.
+A measured value above a limit is a regression failure. Threshold changes require retaining a new raw
+distribution and reviewing the manifest change; shared-runner observations alone do not justify
+widening a budget.
+
+## Opt-in key-to-visible trace
+
+Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state
+fields. `LEMMA_ENABLE_LATENCY_TRACE` defaults to `OFF`, and the release benchmark script passes `OFF`
+explicitly. A diagnostic build must opt in at
+both build time and runtime:
+
+```sh
+scripts/ci/configure release -DLEMMA_BUILD_TESTS=OFF \
+  -DLEMMA_ENABLE_LATENCY_TRACE=ON
+cmake --build --preset release --target \
+  lemma_test_server lemma_test_cli lemma_test_pty_peer
+rm -rf build/release/f0-trace-correlated-v2-100
+python3 benchmarks/mux_benchmark.py --mode blocked-pty --repetitions 100 \
+  --trace-directory build/release/f0-trace-correlated-v2-100 \
+  --output build/release/f0-trace-correlated-v2-100-benchmark.json
+python3 benchmarks/latency_trace.py \
+  --directory build/release/f0-trace-correlated-v2-100 \
+  --input-bytes 29 --input-bytes 32 \
+  --output build/release/f0-trace-correlated-v2-100-events.json
+# Restore the ordinary release configuration before non-diagnostic measurements.
+scripts/ci/configure release -DLEMMA_BUILD_TESTS=OFF \
+  -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+```
+
+`LEMMA_LATENCY_TRACE` names a user-owned absolute directory. Each daemon or attached client writes
+one 1,310,784-byte mmap file containing a 64-byte header and at most 32,768 fixed 40-byte events.
+Overflow retains the bounded prefix and increments `dropped`; there is no allocation, formatting, or
+trace-output syscall per event. The decoder rejects invalid magic, versions, roles, sizes, stages,
+sequence, and bounds.
+
+Trace version 2 adds a 64-bit correlation field. Each controlled input contains a unique bounded
+`_XXXXXXXX__` suffix. Trace-enabled code encodes the exact eight-letter payload independently when the
+attached client reads it, the daemon decodes it, the focused PTY actually accepts it, and the peer's
+exact echo is read back. The resulting focused frame retains that token through Ghostty damage,
+composition, daemon socket progress, client receipt, and outer-terminal write completion. The client
+accepts a visible suffix only when it matches its single pending controlled input; this avoids
+mistaking autonomous uppercase output for causality. All matchers, the per-pane input/output state,
+the per-session pending frame token, and the per-client output token are fixed-size and exist only in
+trace-enabled builds.
+
+The schema-3 decoder requires the same nonzero token at every ordered boundary and requires all client
+stages to come from the physical-input process. It never falls back to a timestamp window. Two
+hundred isolated idle/blocked inputs produced 11,325 raw events, 200 complete paths, zero rejected
+paths, and zero drops. A separate same-pane autonomous-output run produced 1,479 raw events and 100
+complete paths with zero rejections and zero drops, demonstrating token attribution while unrelated
+output is interleaved. Adjacent-stage distributions for the isolated idle/blocked run were:
+
+| Correlated monotonic interval | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| Client input read → daemon input decoded | 22 us | 57 us | 66 us |
+| Daemon decode → focused PTY write | 12 us | 30 us | 35 us |
+| PTY write → exact echoed PTY output read | 30 us | 48 us | 83 us |
+| Echoed PTY output read → composition start | 2,336 us | 2,413 us | 2,571 us |
+| Composition start → Ghostty damage report | 5 us | 14 us | 17 us |
+| Ghostty damage report → composition finish | 152 us | 187 us | 251 us |
+| Composition finish → daemon socket progress | 5 us | 15 us | 21 us |
+| Daemon socket progress → matching client read | 13 us | 20 us | 27 us |
+| Client read → outer write start | 0 us | 1 us | 1 us |
+| Outer write start → finish | 5 us | 15 us | 29 us |
+
+Physical input to outer-write completion was 2.580/2.764/3.172 ms p50/p95/p99. The dominant
+adjacent interval is the 2.336 ms median between resulting PTY output and composition start, which
+identifies the unchanged delayed-frame floor without changing scheduling policy.
+
+A separate 100-sample same-pane-output comparison measured a normal trace-compiled-out release
+against an active trace-version-2 build after the same bounded cooldown. Key-to-visible was
+2.640/2.801/2.861 ms compiled out and 2.634/2.846/3.086 ms active. The active median was 5.6 us
+lower; p95 increased 44.5 us (1.59%), and p99 increased 224.6 us (7.85%). The raw distributions are
+reported without treating the faster median as negative overhead. This is a diagnostic-build cost,
+not production hot-path work; all raw samples are retained in
+`build/release/f0-trace-{compiled-off,enabled}-v2-100.json`.
+
+[`../benchmarks/compare_mux.py`](../benchmarks/compare_mux.py) runs the common peer binary, PTY size,
+input, marker, and completion condition through pinned adapters. The locked definitions are in
+[`../benchmarks/workloads.json`](../benchmarks/workloads.json), and comparison rules are in
+[`core-mux-quality.md`](core-mux-quality.md). This baseline does not replace future sparse-editor,
+slow-client, large-scrollback, resize-storm, or soak measurements.
 
 ## Checkpoint feasibility measurements
 

@@ -179,14 +179,16 @@ control planes, and live process migration remain explicitly deferred.
 
 ## Current priority guidance
 
-This is guidance, not a fixed implementation sequence. Reorder the rolling `TODO.md` focus whenever a
-small end-to-end spike, benchmark, user test, or dependency discovery changes the best next move.
-Current highest-value work is:
+The rolling [`TODO.md`](../TODO.md) plan currently freezes product-surface expansion and concentrates
+on the smallest robust local mux foundation. Current highest-value work is:
 
-- establish authoritative IDs, actor/request origins, and one typed command/result schema;
-- prove a narrow command through C++, JSON, persistent agent access, and Lua before expanding breadth;
-- define the common tmux-workflow parity matrix and build features as reusable semantic commands;
-- version/frame the private attached-client path while preserving daemon rendering and P0 behavior;
-- iterate daily-driver UX, extension primitives, and automation together so none becomes a wrapper;
-- continuously test bounds and competitor workloads rather than postponing performance to closeout;
-- package, test ordinary SSH, stress/soak, and recruit daily users only as implemented behavior earns it.
+- expose and remove the fixed interactive-rendering latency floor;
+- make attached-client output progress and reactor fairness explicit and bounded;
+- reduce baseline and marginal memory using an ownership census rather than guesses;
+- version and frame only the private attach path needed by the local mux; and
+- prove terminal correctness, cleanup, isolation, and resource stability with reproducible stress,
+  soak, and Lemma/tmux comparison evidence.
+
+Public automation, agent access, broader extension/UI work, mouse, copy mode, packaging, and release
+adoption remain roadmap outcomes, not current execution work. Reconsider their order only after the
+foundational mux completion gate in `TODO.md` is met.

@@ -9,11 +9,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <ranges>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 
 namespace lemma {
 namespace {
@@ -342,3 +348,73 @@ BENCHMARK(benchmark_terminal_full_frames);
 
 } // namespace
 } // namespace lemma
+
+namespace {
+
+#ifdef __APPLE__
+[[nodiscard]] auto sysctl_string(const char* const name) -> std::optional<std::string> {
+  std::size_t size = 0;
+  constexpr std::size_t value_bytes_max = 4'096;
+  if (::sysctlbyname(name, nullptr, &size, nullptr, 0) != 0 || size == 0 ||
+      size > value_bytes_max) {
+    return std::nullopt;
+  }
+  std::string value(size, '\0');
+  if (::sysctlbyname(name, value.data(), &size, nullptr, 0) != 0 || size == 0) {
+    return std::nullopt;
+  }
+  value.resize(size);
+  while (!value.empty() && value.back() == '\0') {
+    value.pop_back();
+  }
+  return value.empty() ? std::nullopt : std::optional<std::string>{std::move(value)};
+}
+
+[[nodiscard]] auto sysctl_unsigned(const char* const name) -> std::optional<std::uint64_t> {
+  std::uint64_t value = 0;
+  std::size_t size = sizeof(value);
+  if (::sysctlbyname(name, &value, &size, nullptr, 0) != 0 ||
+      (size != sizeof(std::uint32_t) && size != sizeof(value))) {
+    return std::nullopt;
+  }
+  return value;
+}
+#endif
+
+void add_host_fingerprint_context() {
+#ifdef __APPLE__
+  const auto model = sysctl_string("hw.model");
+  const auto cpu = sysctl_string("machdep.cpu.brand_string");
+  const auto physical_cpus = sysctl_unsigned("hw.physicalcpu");
+  const auto memory = sysctl_unsigned("hw.memsize");
+  benchmark::AddCustomContext("host_model_identifier", model.value_or("unavailable"));
+  benchmark::AddCustomContext("host_cpu_model", cpu.value_or("unavailable"));
+  benchmark::AddCustomContext("host_physical_cpu_count", physical_cpus.has_value()
+                                                             ? std::to_string(*physical_cpus)
+                                                             : "unavailable");
+  benchmark::AddCustomContext("host_memory_bytes",
+                              memory.has_value() ? std::to_string(*memory) : "unavailable");
+#else
+  benchmark::AddCustomContext("host_model_identifier", "unavailable");
+  benchmark::AddCustomContext("host_cpu_model", "unavailable");
+  benchmark::AddCustomContext("host_physical_cpu_count", "unavailable");
+  benchmark::AddCustomContext("host_memory_bytes", "unavailable");
+#endif
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  try {
+    benchmark::Initialize(&argc, argv);
+    if (benchmark::ReportUnrecognizedArguments(argc, argv)) {
+      return 1;
+    }
+    add_host_fingerprint_context();
+    static_cast<void>(benchmark::RunSpecifiedBenchmarks());
+    benchmark::Shutdown();
+    return 0;
+  } catch (...) {
+    return 1;
+  }
+}

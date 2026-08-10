@@ -4,6 +4,7 @@
 #include "core/extension_runtime.hpp"
 #include "core/input.hpp"
 #include "core/pty_writer.hpp"
+#include "diagnostic/latency_trace.hpp"
 #include "lemma/command.hpp"
 #include "lemma/generational_store.hpp"
 #include "lemma/id.hpp"
@@ -106,10 +107,32 @@ private:
 struct PtyDrainResult final {
   bool alive{true};
   bool changed{false};
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  std::uint64_t correlation{0};
+#endif
 };
 
-[[nodiscard]] auto drain_pty(const int pty, vt::Terminal& terminal,
-                             PanePtyWriteQueue& pending_writes, std::size_t& global_budget) noexcept
+[[nodiscard]] auto
+trace_pty_output([[maybe_unused]] PtyDrainResult& drain,
+                 [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher,
+                 [[maybe_unused]] const std::span<const std::byte> bytes) noexcept
+    -> std::uint64_t {
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  LEMMA_ASSERT(trace_matcher != nullptr);
+  const auto correlation = trace_matcher->observe(bytes);
+  if (correlation != 0) {
+    drain.correlation = correlation;
+  }
+  return correlation;
+#else
+  return 0;
+#endif
+}
+
+[[nodiscard]] auto
+drain_pty(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writes,
+          std::size_t& global_budget,
+          [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept
     -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
@@ -121,6 +144,10 @@ struct PtyDrainResult final {
     if (bytes_read > 0) {
       const auto size = static_cast<std::size_t>(bytes_read);
       global_budget -= size;
+      const auto trace_correlation =
+          trace_pty_output(drain, trace_matcher, std::span(output).first(size));
+      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_output_read,
+                                       static_cast<std::uint32_t>(pty), size, trace_correlation);
       terminal.write(std::span(output).first(size));
       drain.changed = true;
       if (!queue_terminal_responses(pending_writes, terminal)) {
@@ -221,6 +248,10 @@ struct Pane final {
   std::array<char, process_name_bytes_max> process_name{};
   std::size_t process_name_size{0};
   PanePtyWriteQueue pending_writes;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
+  diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
+#endif
   bool active{true};
 };
 
@@ -320,6 +351,10 @@ struct Session final {
     frame_pending = false;
     force_full_pending = false;
     input_backpressured = false;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+    decoded_input_trace_matcher.reset();
+    frame_trace_correlation = 0;
+#endif
   }
 
   SessionId id;
@@ -351,6 +386,10 @@ struct Session final {
   std::uint64_t status_signature{0};
   std::array<CommandTraceEntry, command_trace_entries_max> command_trace{};
   std::uint64_t command_sequence{0};
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  diagnostic::LatencyTraceMarkerMatcher decoded_input_trace_matcher;
+  std::uint64_t frame_trace_correlation{0};
+#endif
   std::chrono::steady_clock::time_point frame_deadline;
 };
 
@@ -1465,6 +1504,13 @@ enum class ParseResult : std::uint8_t {
       if (pane == nullptr) {
         return ParseResult::error;
       }
+      std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+      trace_correlation = session.decoded_input_trace_matcher.observe(message.input);
+#endif
+      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
+                                       static_cast<std::uint32_t>(pane->pty), message.input.size(),
+                                       trace_correlation);
       const auto queued =
           queue_normalized_input(pane->pending_writes, pane->terminal, message.input);
       if (queued == InputQueueResult::full) {
@@ -2147,12 +2193,23 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
     return;
   }
-  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes, global_budget);
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  auto* const trace_matcher = &pane.output_trace_matcher;
+#else
+  diagnostic::LatencyTraceMarkerMatcher* const trace_matcher = nullptr;
+#endif
+  const auto drained =
+      drain_pty(pane.pty, pane.terminal, pane.pending_writes, global_budget, trace_matcher);
   pane.active = drained.alive;
   const bool process_changed = refresh_process_name(pane);
   if ((!drained.changed && !process_changed) || session.client < 0) {
     return;
   }
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  if (drained.correlation != 0 && tab.id == session.active_tab && pane.id == tab.focused_pane) {
+    session.frame_trace_correlation = drained.correlation;
+  }
+#endif
   if (tab.id == session.active_tab) {
     schedule_frame(session, false, !drained.alive);
   } else if (!session.status_valid ||
@@ -2185,13 +2242,23 @@ void process_client_events(Session& session, const pollfd& events) noexcept {
 [[nodiscard]] auto write_pane_pty(void* const context,
                                   const std::span<const std::byte> bytes) noexcept
     -> PtyWriteAttempt {
-  const int descriptor = *static_cast<int*>(context);
-  const auto written = ::write(descriptor, bytes.data(), bytes.size());
+  auto& pane = *static_cast<Pane*>(context);
+  const auto written = ::write(pane.pty, bytes.data(), bytes.size());
+  if (written > 0) {
+    std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+    trace_correlation =
+        pane.input_trace_matcher.observe(bytes.first(static_cast<std::size_t>(written)));
+#endif
+    diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_write_progress,
+                                     static_cast<std::uint32_t>(pane.pty),
+                                     static_cast<std::uint64_t>(written), trace_correlation);
+  }
   return {.bytes = written, .error = written < 0 ? errno : 0};
 }
 
 [[nodiscard]] auto flush_pane_writes(Pane& pane, std::size_t& global_budget) noexcept -> bool {
-  return flush_pty_write_queue(pane.pending_writes, global_budget, &write_pane_pty, &pane.pty) !=
+  return flush_pty_write_queue(pane.pending_writes, global_budget, &write_pane_pty, &pane) !=
          PtyFlushStatus::hard_error;
 }
 
@@ -2227,11 +2294,18 @@ void queue_due_frames(Sessions& sessions) noexcept {
     std::array<render::StatusTab, render::status_tabs_max> status_storage{};
     const auto surfaces = collect_surfaces(*session, surface_storage);
     const auto status = collect_status_line(*session, status_storage);
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+    diagnostic::set_latency_trace_correlation(session->frame_trace_correlation);
+#endif
     if (!render::queue_composed_frame(
             session->client, surfaces, {.columns = session->columns, .rows = session->rows},
             *session->frame, session->output, session->force_full_pending, status)) {
       session->detach_client();
     }
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+    diagnostic::set_latency_trace_correlation(0);
+    session->frame_trace_correlation = 0;
+#endif
     session->frame_pending = false;
     session->force_full_pending = false;
   }
@@ -2319,6 +2393,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const extension_context, const ExtensionErrorReporter report_extension_error,
                 void* const extension_error_context, const StopRequested stop_requested) noexcept
     -> int {
+  diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
   auto pending_storage =

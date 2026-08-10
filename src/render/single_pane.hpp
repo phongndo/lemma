@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace lemma::render {
 
@@ -15,11 +16,22 @@ using FrameBuffer = std::array<std::byte, frame_bytes_max>;
 struct ClientOutputState final {
   std::size_t size{0};
   std::size_t offset{0};
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  std::uint64_t latency_trace_correlation{0};
+#endif
 
   [[nodiscard]] auto busy() const noexcept -> bool { return offset < size; }
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  [[nodiscard]] auto trace_correlation() const noexcept -> std::uint64_t {
+    return latency_trace_correlation;
+  }
+#endif
   void reset() noexcept {
     size = 0;
     offset = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+    latency_trace_correlation = 0;
+#endif
   }
 };
 

@@ -13,6 +13,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LEMMA_BUILD_TESTS "Build the test suite" ON)
 option(LEMMA_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(LEMMA_ENABLE_LATENCY_TRACE "Compile the opt-in key-to-visible diagnostic trace" OFF)
+
+if(LEMMA_ENABLE_LATENCY_TRACE)
+  add_compile_definitions(LEMMA_ENABLE_LATENCY_TRACE=1)
+endif()
 
 add_library(lemma_warnings INTERFACE)
 target_compile_options(
@@ -72,11 +77,14 @@ endfunction()
 add_library(lemma_base STATIC src/core/assert.cpp)
 lemma_internal_target(lemma_base)
 
+add_library(lemma_diagnostic STATIC src/diagnostic/latency_trace.cpp)
+lemma_internal_target(lemma_diagnostic)
+
 # This is the only target that may include Ghostty headers. The final executable receives the
 # static archive as a link-only implementation requirement; Ghostty is not part of Lemma's API.
 add_library(lemma_terminal STATIC src/terminal/terminal.cpp)
 lemma_internal_target(lemma_terminal)
-target_link_libraries(lemma_terminal PRIVATE lemma_base ghostty-vt-static)
+target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
 
 add_library(
   lemma_platform STATIC
@@ -100,7 +108,9 @@ add_library(
   src/render/single_pane.cpp
 )
 lemma_internal_target(lemma_render)
-target_link_libraries(lemma_render PRIVATE lemma_base lemma_platform lemma_terminal)
+target_link_libraries(
+  lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal
+)
 
 add_library(lemma_extension STATIC src/extension/host.cpp)
 lemma_internal_target(lemma_extension)
@@ -122,6 +132,7 @@ target_link_libraries(
   lemma_core
   PRIVATE
     lemma_base
+    lemma_diagnostic
     lemma_platform
     lemma_protocol
     lemma_render
@@ -141,7 +152,7 @@ add_library(lemma_client STATIC src/client/attached_client.cpp)
 lemma_internal_target(lemma_client)
 target_link_libraries(
   lemma_client
-  PRIVATE lemma_daemon lemma_platform lemma_protocol
+  PRIVATE lemma_daemon lemma_diagnostic lemma_platform lemma_protocol
 )
 
 add_library(lemma_app STATIC src/app/application.cpp)
@@ -192,6 +203,7 @@ if(LEMMA_BUILD_TESTS)
     tests/extension_test.cpp
     tests/core_test.cpp
     tests/lemma_test.cpp
+    tests/latency_trace_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
     tests/pty_writer_test.cpp
@@ -202,6 +214,7 @@ if(LEMMA_BUILD_TESTS)
     lemma_tests
     PRIVATE
       lemma::lib
+      lemma_diagnostic
       lemma_platform
       lemma_protocol
       lemma_render
@@ -241,6 +254,6 @@ if(LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_benchmarks benchmarks/lemma_benchmark.cpp)
   target_link_libraries(
     lemma_benchmarks
-    PRIVATE lemma::lib lemma_warnings benchmark::benchmark_main
+    PRIVATE lemma::lib lemma_warnings benchmark::benchmark
   )
 endif()

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 3,
   "suite": "core-mux-baseline",
   "terminal": {
     "columns": 80,
@@ -28,6 +28,10 @@
       "purpose": "per-session supported capacity"
     }
   ],
+  "profile_conditions": {
+    "idle": "all panes are live shells with no injected activity during resource sampling; focused-pane interaction is measured after the idle sample",
+    "active": "the focused pane emits bounded continuous output while resource and interaction samples are collected; all remaining panes stay live and idle"
+  },
   "process_workloads": [
     {
       "id": "warm_scroll",
@@ -39,12 +43,36 @@
       ]
     },
     {
+      "id": "attach_to_visible",
+      "input": "attach a new physical client to a detached session whose canonical screen contains a unique marker",
+      "completion": "the retained marker from the daemon's complete attach frame is observable in the outer client PTY",
+      "metrics": [
+        "latency_ns",
+        "client_bytes"
+      ]
+    },
+    {
+      "id": "interactive_under_output",
+      "input": "a same-pane peer emits bounded continuous output while acknowledging and echoing unique input tokens",
+      "completion": "each token is acknowledged from the PTY and observable in the attached client output",
+      "metrics": [
+        "key_to_pty_ns",
+        "key_to_visible_ns",
+        "client_bytes"
+      ]
+    },
+    {
       "id": "idle_resources",
       "input": "an attached warm shell with no injected input or output for one second per sample",
       "completion": "the client and session remain attached for the complete sample interval",
       "metrics": [
-        "cpu_time_ns",
-        "rss_bytes",
+        "daemon_cpu_time_ns",
+        "daemon_rss_bytes",
+        "attached_client_cpu_time_ns",
+        "attached_client_rss_bytes",
+        "extension_host_when_present",
+        "process_tree_cpu_time_ns",
+        "process_tree_rss_bytes",
         "wakeups_when_supported"
       ]
     },
@@ -59,6 +87,262 @@
       ]
     }
   ],
+  "latency_trace": {
+    "build_option": "LEMMA_ENABLE_LATENCY_TRACE",
+    "runtime_variable": "LEMMA_LATENCY_TRACE",
+    "trace_version": 2,
+    "event_capacity_per_process": 32768,
+    "event_bytes": 40,
+    "overflow_policy": "retain the first bounded events and increment a dropped counter",
+    "correlation_policy": "derive one bounded token from the exact _XXXXXXXX__ fixture suffix independently observed at client input, daemon input, PTY write, PTY output, frame, socket, and outer-terminal boundaries",
+    "clock": "CLOCK_MONOTONIC"
+  },
+  "regression_budgets": {
+    "schema": 1,
+    "status": "reviewed",
+    "scope": {
+      "label": "Apple M4 Max 16-core 64-GiB pinned development host",
+      "policy": "Dedicated-host gates use the nearest-rank statistic over raw samples. Shared CI validates the manifest and reports but does not enforce host-specific thresholds.",
+      "approved_host": {
+        "host_name": "Phongs-MacBook-Pro.local",
+        "model_identifier": "Mac16,5",
+        "cpu_model": "Apple M4 Max",
+        "physical_cpu_count": 16,
+        "memory_bytes": 68719476736
+      },
+      "process_report_requirements": {
+        "system": "Darwin",
+        "architecture": "arm64",
+        "build_profile": "release"
+      },
+      "micro_context_requirements": {
+        "num_cpus": 16,
+        "library_build_type": "release"
+      }
+    },
+    "microbenchmarks": {
+      "minimum_repetitions": 10,
+      "checks": [
+        {
+          "id": "command_dispatch_cpu_p95",
+          "benchmark": "benchmark_command_dispatch",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 3.0,
+          "unit": "ns"
+        },
+        {
+          "id": "extension_registration_codec_cpu_p95",
+          "benchmark": "benchmark_extension_registration_codec",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 230,
+          "unit": "ns"
+        },
+        {
+          "id": "terminal_large_write_cpu_p95",
+          "benchmark": "benchmark_terminal_large_writes",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 58000,
+          "unit": "ns"
+        },
+        {
+          "id": "styled_damage_cpu_p95",
+          "benchmark": "benchmark_terminal_ansi_damage_frames",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 87000,
+          "unit": "ns"
+        },
+        {
+          "id": "single_row_cpu_p95",
+          "benchmark": "benchmark_terminal_ansi_single_row",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 3800,
+          "unit": "ns"
+        },
+        {
+          "id": "scroll_operation_cpu_p95",
+          "benchmark": "benchmark_terminal_ansi_scroll_operations",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 21200,
+          "unit": "ns"
+        },
+        {
+          "id": "full_frame_cpu_p95",
+          "benchmark": "benchmark_terminal_full_frames",
+          "field": "cpu_time",
+          "statistic": "p95",
+          "maximum": 200000,
+          "unit": "ns"
+        }
+      ]
+    },
+    "process_workloads": {
+      "minimum_repetitions": 30,
+      "checks": [
+        {
+          "id": "warm_scroll_latency_p50",
+          "samples_path": ["workloads", "warm_scroll", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 3000000,
+          "unit": "ns"
+        },
+        {
+          "id": "warm_scroll_latency_p95",
+          "samples_path": ["workloads", "warm_scroll", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 21000000,
+          "unit": "ns"
+        },
+        {
+          "id": "warm_scroll_bytes_p50",
+          "samples_path": ["workloads", "warm_scroll", "client_bytes"],
+          "statistic": "p50",
+          "maximum": 720,
+          "unit": "bytes"
+        },
+        {
+          "id": "warm_scroll_bytes_p95",
+          "samples_path": ["workloads", "warm_scroll", "client_bytes"],
+          "statistic": "p95",
+          "maximum": 2200,
+          "unit": "bytes"
+        },
+        {
+          "id": "attach_to_visible_latency_p50",
+          "samples_path": ["workloads", "attach_to_visible", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 4700000,
+          "unit": "ns"
+        },
+        {
+          "id": "attach_to_visible_latency_p95",
+          "samples_path": ["workloads", "attach_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 5400000,
+          "unit": "ns"
+        },
+        {
+          "id": "attach_to_visible_bytes_p95",
+          "samples_path": ["workloads", "attach_to_visible", "client_bytes"],
+          "statistic": "p95",
+          "maximum": 1080,
+          "unit": "bytes"
+        },
+        {
+          "id": "interactive_output_key_to_pty_p50",
+          "samples_path": ["workloads", "interactive_under_output", "key_to_pty", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 1400000,
+          "unit": "ns"
+        },
+        {
+          "id": "interactive_output_key_to_pty_p95",
+          "samples_path": ["workloads", "interactive_under_output", "key_to_pty", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 1500000,
+          "unit": "ns"
+        },
+        {
+          "id": "interactive_output_key_to_visible_p50",
+          "samples_path": ["workloads", "interactive_under_output", "key_to_visible", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 3000000,
+          "unit": "ns"
+        },
+        {
+          "id": "interactive_output_key_to_visible_p95",
+          "samples_path": ["workloads", "interactive_under_output", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 4000000,
+          "unit": "ns"
+        },
+        {
+          "id": "interactive_output_bytes_p95",
+          "samples_path": ["workloads", "interactive_under_output", "client_bytes"],
+          "statistic": "p95",
+          "maximum": 1100,
+          "unit": "bytes"
+        },
+        {
+          "id": "idle_cpu_time_p95",
+          "samples_path": ["workloads", "idle_resources", "cpu_time", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 1000000,
+          "unit": "ns"
+        },
+        {
+          "id": "idle_rss_p95",
+          "samples_path": ["workloads", "idle_resources", "rss", "samples_bytes"],
+          "statistic": "p95",
+          "maximum": 33554432,
+          "unit": "bytes"
+        },
+        {
+          "id": "idle_wakeups_max",
+          "samples_path": ["workloads", "idle_resources", "wakeups", "samples_count"],
+          "statistic": "max",
+          "maximum": 0,
+          "unit": "count"
+        },
+        {
+          "id": "idle_peer_key_to_pty_p95",
+          "samples_path": ["workloads", "blocked_pty", "idle", "key_to_pty", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 250000,
+          "unit": "ns"
+        },
+        {
+          "id": "idle_peer_key_to_visible_p95",
+          "samples_path": ["workloads", "blocked_pty", "idle", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 3600000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_peer_key_to_pty_p95",
+          "samples_path": ["workloads", "blocked_pty", "blocked_other_session", "key_to_pty", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 350000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_peer_key_to_visible_p95",
+          "samples_path": ["workloads", "blocked_pty", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 4500000,
+          "unit": "ns"
+        }
+      ]
+    },
+    "pane_profiles": {
+      "minimum_repetitions": 20,
+      "maximum_p95_rss_bytes": {
+        "P1": 33554432,
+        "P4": 52428800,
+        "P16": 117440512,
+        "PMAX": 377487360
+      },
+      "conditions": {
+        "idle": {
+          "maximum_p95_cpu_time_ns": 1000000,
+          "maximum_p95_key_to_pty_ns": 500000,
+          "maximum_p50_key_to_visible_ns": 3000000,
+          "maximum_p95_key_to_visible_ns": 4000000
+        },
+        "active": {
+          "maximum_p95_cpu_time_ns": 5000000,
+          "maximum_p95_key_to_pty_ns": 1600000,
+          "maximum_p50_key_to_visible_ns": 3000000,
+          "maximum_p95_key_to_visible_ns": 4000000
+        }
+      }
+    }
+  },
   "comparison_policy": {
     "multiplexers": [
       "lemma",

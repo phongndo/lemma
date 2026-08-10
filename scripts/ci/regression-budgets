@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly micro_output="build/release/regression-microbenchmarks.json"
+readonly process_output="build/release/regression-process-workloads.json"
+readonly profile_output="build/release/regression-pane-profiles.json"
+readonly result_output="build/release/regression-budget-results.json"
+
+cleanup_ghostty_output() {
+  rm -rf third_party/ghostty/zig-out
+}
+trap cleanup_ghostty_output EXIT
+
+python3 benchmarks/check_regression.py --validate-manifest
+python3 benchmarks/benchmark_tools_test.py >/dev/null
+
+rm -rf third_party/ghostty/zig-out
+scripts/ci/configure release \
+  -DLEMMA_BUILD_TESTS=OFF \
+  -DLEMMA_BUILD_BENCHMARKS=ON \
+  -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+cmake --build --preset release --target \
+  lemma_benchmarks lemma_test_server lemma_test_cli lemma_test_pty_peer
+
+# Do not benchmark immediately after the ReleaseFast archive and C++ targets heat the host.
+sleep 30
+
+rm -f "${micro_output}" "${process_output}" "${profile_output}" "${result_output}"
+./build/release/lemma_benchmarks \
+  --benchmark_filter='benchmark_(command_dispatch|extension_registration_codec|terminal_large_writes|terminal_ansi_damage_frames|terminal_ansi_single_row|terminal_ansi_scroll_operations|terminal_full_frames)$' \
+  --benchmark_min_time=0.2s \
+  --benchmark_repetitions=10 \
+  --benchmark_out="${micro_output}" \
+  --benchmark_out_format=json >/dev/null
+python3 benchmarks/mux_benchmark.py \
+  --mode comparison \
+  --repetitions 30 \
+  --output "${process_output}" >/dev/null
+python3 benchmarks/mux_benchmark.py \
+  --mode profiles \
+  --repetitions 20 \
+  --output "${profile_output}" >/dev/null
+python3 benchmarks/check_regression.py \
+  --micro-report "${micro_output}" \
+  --process-report "${process_output}" \
+  --profile-report "${profile_output}" \
+  --output "${result_output}" >/dev/null
+
+printf 'regression budgets passed; report: %s\n' "${result_output}"

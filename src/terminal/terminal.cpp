@@ -1,5 +1,6 @@
 #include "lemma/terminal/terminal.hpp"
 
+#include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
 #include "lemma/bounded_byte_queue.hpp"
 
@@ -1101,6 +1102,10 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
   if (!dirty.has_value()) {
     impl_->ansi_physical_valid = false;
     return std::unexpected(dirty.error());
+  }
+  if (focused) {
+    diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::ghostty_damage_reported, 0,
+                                     static_cast<std::uint64_t>(*dirty));
   }
   const bool full = force_full || !impl_->ansi_physical_valid;
 

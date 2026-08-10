@@ -1,0 +1,81 @@
+#ifndef LEMMA_DIAGNOSTIC_LATENCY_TRACE_HPP
+#define LEMMA_DIAGNOSTIC_LATENCY_TRACE_HPP
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+
+namespace lemma::diagnostic {
+
+enum class LatencyTraceRole : std::uint8_t {
+  daemon = 1,
+  attached_client = 2,
+};
+
+enum class LatencyTraceStage : std::uint8_t {
+  client_physical_input_read = 1,
+  daemon_input_message_received = 2,
+  daemon_pty_write_progress = 3,
+  daemon_pty_output_read = 4,
+  ghostty_damage_reported = 5,
+  frame_composition_started = 6,
+  frame_composition_finished = 7,
+  daemon_socket_write_progress = 8,
+  client_socket_read = 9,
+  client_outer_terminal_write_started = 10,
+  client_outer_terminal_write_finished = 11,
+};
+
+// Controlled latency fixtures echo one bounded _XXXXXXXX__ token (eight uppercase payload bytes).
+// The same token is observed independently at the client, daemon input, actual PTY writes, and
+// resulting PTY output; it is not inferred from a timestamp window.
+class LatencyTraceMarkerMatcher final {
+public:
+  [[nodiscard]] auto observe(std::span<const std::byte> bytes) noexcept -> std::uint64_t;
+  [[nodiscard]] auto observe_expected_visible(std::span<const std::byte> bytes,
+                                              std::uint64_t expected) noexcept -> std::uint64_t;
+  void reset() noexcept;
+
+private:
+  static constexpr std::size_t marker_bytes = 11;
+
+  std::array<std::byte, marker_bytes> marker_{};
+  std::size_t marker_size_{0};
+  std::array<std::byte, 8> visible_{};
+  std::size_t visible_size_{0};
+};
+
+[[nodiscard]] auto latency_trace_marker_token(std::span<const std::byte> bytes) noexcept
+    -> std::uint64_t;
+
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+
+// Diagnostic trace files are enabled only when the build-time option and the
+// LEMMA_LATENCY_TRACE directory are both present. Each process owns one bounded mmap file.
+void set_latency_trace_role(LatencyTraceRole role) noexcept;
+void set_latency_trace_correlation(std::uint64_t correlation) noexcept;
+[[nodiscard]] auto latency_trace_correlation() noexcept -> std::uint64_t;
+void record_latency_trace(LatencyTraceStage stage, std::uint32_t subject = 0,
+                          std::uint64_t value = 0, std::uint64_t correlation = 0) noexcept;
+
+#else
+
+namespace detail {
+void latency_trace_disabled_translation_unit() noexcept;
+} // namespace detail
+
+inline void set_latency_trace_role([[maybe_unused]] const LatencyTraceRole role) noexcept {}
+inline void
+set_latency_trace_correlation([[maybe_unused]] const std::uint64_t correlation) noexcept {}
+[[nodiscard]] inline auto latency_trace_correlation() noexcept -> std::uint64_t { return 0; }
+inline void record_latency_trace([[maybe_unused]] const LatencyTraceStage stage,
+                                 [[maybe_unused]] const std::uint32_t subject = 0,
+                                 [[maybe_unused]] const std::uint64_t value = 0,
+                                 [[maybe_unused]] const std::uint64_t correlation = 0) noexcept {}
+
+#endif
+
+} // namespace lemma::diagnostic
+
+#endif // LEMMA_DIAGNOSTIC_LATENCY_TRACE_HPP

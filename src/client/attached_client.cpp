@@ -1,6 +1,7 @@
 #include "client/attached_client.hpp"
 
 #include "daemon/server.hpp"
+#include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
 #include "platform/io.hpp"
 #include "platform/terminal_mode.hpp"
@@ -88,6 +89,7 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto attach_client(const daemon::RuntimeEndpoint& endpoint,
                                  const std::string_view session) -> int {
+  diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::attached_client);
   if (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0) {
     static_cast<void>(write_text(STDERR_FILENO, "lemma attach requires a terminal\n"));
     return 1;
@@ -134,6 +136,11 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
   std::array<std::byte, protocol::input_bytes_max> input{};
   std::array<std::byte, protocol::input_bytes_max * 2U> encoded_input{};
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
+  diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
+  std::uint64_t pending_trace_correlation = 0;
+#endif
   auto prefix_deadline = std::chrono::steady_clock::time_point{};
   bool attached = true;
   bool clean_detach = false;
@@ -176,10 +183,30 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
     const auto& server_events = descriptors.back();
     if ((server_events.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
       const auto bytes_read = ::recv(connection, output.data(), output.size(), 0);
-      if (bytes_read <= 0 || !write_all(STDOUT_FILENO, std::span(output).first(
-                                                           static_cast<std::size_t>(bytes_read)))) {
+      if (bytes_read <= 0) {
         break;
       }
+      const auto size = static_cast<std::size_t>(bytes_read);
+      std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+      trace_correlation = output_trace_matcher.observe_expected_visible(
+          std::span(output).first(size), pending_trace_correlation);
+      if (trace_correlation != 0) {
+        pending_trace_correlation = 0;
+      }
+#endif
+      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::client_socket_read,
+                                       static_cast<std::uint32_t>(connection), size,
+                                       trace_correlation);
+      diagnostic::record_latency_trace(
+          diagnostic::LatencyTraceStage::client_outer_terminal_write_started,
+          static_cast<std::uint32_t>(STDOUT_FILENO), size, trace_correlation);
+      if (!write_all(STDOUT_FILENO, std::span(output).first(size))) {
+        break;
+      }
+      diagnostic::record_latency_trace(
+          diagnostic::LatencyTraceStage::client_outer_terminal_write_finished,
+          static_cast<std::uint32_t>(STDOUT_FILENO), size, trace_correlation);
     }
 
     if ((input_events.revents & POLLIN) != 0) {
@@ -187,8 +214,18 @@ void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resi
       if (bytes_read <= 0) {
         break;
       }
-      const auto parsed = prefix_parser.parse(
-          std::span(input).first(static_cast<std::size_t>(bytes_read)), encoded_input);
+      const auto size = static_cast<std::size_t>(bytes_read);
+      std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+      trace_correlation = input_trace_matcher.observe(std::span(input).first(size));
+      if (trace_correlation != 0) {
+        pending_trace_correlation = trace_correlation;
+      }
+#endif
+      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::client_physical_input_read,
+                                       static_cast<std::uint32_t>(STDIN_FILENO), size,
+                                       trace_correlation);
+      const auto parsed = prefix_parser.parse(std::span(input).first(size), encoded_input);
       if (!send_prefixed_input(connection, parsed, std::span(encoded_input).first(parsed.bytes))) {
         break;
       }

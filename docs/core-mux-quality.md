@@ -16,8 +16,8 @@ measurement details and recorded results remain in [`performance.md`](performanc
 The standard is established: required workflows are inventoried, permanent invariants are recorded,
 P1/P4/P16/PMAX profiles are machine-readable, common process workloads have exact completion
 semantics, and pinned tmux/Zellij adapters produce versioned comparison reports. Release smoke
-validates all report schemas and uploads the evidence. Timing thresholds remain deliberately unset
-until repeated dedicated-host samples establish normal variance.
+validates all report schemas and uploads the evidence. Repeated dedicated-host distributions now own
+reviewed machine-scoped regression budgets; shared-runner timing remains evidence rather than a gate.
 
 ## Definition of “best”
 
@@ -109,12 +109,34 @@ A warm attached shell runs the same fixture binary for every multiplexer. The fi
 79-column CRLF rows (about 2 MiB) and a unique marker. Time ends only when that marker is observable
 in client output. The report retains every latency sample and client byte count.
 
+### Attach to visible
+
+A detached session retains a marker produced by the common fixture in its canonical daemon-owned
+screen. Before timing, an untimed validation client observes the marker and detaches cleanly, proving
+that PTY drain and canonical rendering have completed. Each repetition uses a fresh isolated runtime,
+starts a new physical client, and ends only when that retained marker is observable from the complete
+attach frame in the outer PTY.
+
+### Same-pane interaction under output
+
+A bounded fixture emits continuous output while acknowledging each unique input token immediately
+after PTY receipt and then rendering it. The harness drains client output concurrently and records
+key-to-PTY, key-to-visible, and client bytes without introducing outer-PTY backpressure.
+
 ### Idle resources
 
-After the warm workload settles, the harness samples an attached shell for one second per repetition.
-It records process-tree CPU-time deltas and ending RSS. On Darwin it also records package-idle and
-interrupt wakeup deltas from `proc_pid_rusage`; systems without a reviewed wakeup counter report that
-metric as unavailable rather than substituting context switches.
+A fresh runtime samples an attached shell for one second per repetition. It records direct daemon and
+attached-client roles, the optional extension-host outcome, unclassified mux/pane children, and the
+complete process tree. On Darwin it also records package-idle and interrupt wakeup deltas from
+`proc_pid_rusage`; systems without a reviewed wakeup counter report that metric as unavailable rather
+than substituting context switches.
+
+### Pane-profile resources
+
+P1/P4/P16/PMAX each run in fresh idle and active runtimes. Idle resource sampling precedes the
+focused-pane latency peer. Active sampling uses bounded continuous output only in the focused pane;
+all other panes remain live and idle. Reports retain per-role and process-tree CPU/RSS plus focused
+key-to-PTY and key-to-visible distributions.
 
 ### Blocked PTY isolation
 
@@ -137,8 +159,10 @@ reports a failed workload; it does not receive a latency result for incomplete w
 | Damage rendering | sparse row, scroll, full frame, encoded bytes | Google Benchmark |
 | Pane scaling | composition at P1/P4/P16/PMAX | Google Benchmark |
 | Warm output | marker latency and daemon-to-client bytes | Process harness |
+| Attach | process start/attach to retained visible marker | Process harness |
+| Loaded interaction | same-pane key-to-PTY/key-to-visible and bytes | Process harness |
 | Isolation | key-to-PTY, key-to-visible, backpressure, digest recovery | Process harness |
-| Process footprint | post-workload process-tree RSS and consumed CPU time | Process harness |
+| Process footprint | direct-role and process-tree RSS/CPU at P1/P4/P16/PMAX | Process harness |
 | Idle operation | CPU, wakeups, and baseline RSS | Process harness; wakeups are OS-labeled |
 | Interaction | paste, focus, mouse, resize, copy, and search latency | Added with each feature |
 | Stress | output/resize floods, repeated lifecycle, and soak distributions | Required before release |
@@ -159,19 +183,26 @@ share one server in one mux and use separate servers in another; process-tree re
 results deliberately include that choice. Default presentation remains enabled, while user
 configuration, startup tips, release notes, and session serialization are disabled.
 
-Run the reproducible suites with:
+Run the clean reproducible suite with:
 
 ```sh
-just profile=release bench
-python3 benchmarks/mux_benchmark.py --mode all --repetitions 5 \
-  --output build/release/mux-benchmark-results.json
-python3 benchmarks/compare_mux.py \
-  --lemma-report build/release/mux-benchmark-results.json \
-  --repetitions 5 --output build/release/mux-comparison-results.json
+rm -rf build/release
+scripts/ci/benchmarks extended
 ```
 
-`just mux-bench` builds the release binaries, runs microbenchmarks, runs Lemma's process suite, and
-produces the three-multiplexer comparison report.
+`just mux-bench` runs the same extended command. It produces microbenchmark, common Lemma workload,
+P1/P4/P16/PMAX profile, and three-multiplexer comparison reports under `build/release/`.
+
+Run the reviewed pinned-host regression gate separately with:
+
+```sh
+scripts/ci/regression-budgets
+```
+
+This gate requires ten raw microbenchmark repetitions, thirty process-workload repetitions, and
+twenty repetitions of each pane-profile condition. `benchmarks/workloads.json` owns the machine scope,
+statistics, units, and limits; `benchmarks/check_regression.py` rejects insufficient or incompatible
+reports before comparing values.
 
 ## Regression and claim policy
 

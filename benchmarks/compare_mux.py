@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import Any
 
 
@@ -18,13 +18,15 @@ def load_report(path: Path, expected_mux: str) -> dict[str, Any]:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid {expected_mux} report {path}: {error}") from error
-    if not isinstance(report, dict) or report.get("schema") != 3:
-        raise RuntimeError(f"{expected_mux} report does not use process schema 3")
+    if not isinstance(report, dict) or report.get("schema") != 4:
+        raise RuntimeError(f"{expected_mux} report does not use process schema 4")
     if report.get("multiplexer") != expected_mux:
         raise RuntimeError(f"expected {expected_mux} report, got {report.get('multiplexer')!r}")
     workloads = report.get("workloads")
     if not isinstance(workloads, dict) or not {
         "warm_scroll",
+        "attach_to_visible",
+        "interactive_under_output",
         "idle_resources",
         "blocked_pty",
     }.issubset(workloads):
@@ -59,7 +61,7 @@ def run_competitor(
             "--peer",
             str(peer),
             "--mode",
-            "all",
+            "comparison",
             "--repetitions",
             str(repetitions),
             "--allow-workload-failures",
@@ -117,7 +119,7 @@ def main() -> int:
         parser.error(str(error))
 
     report = {
-        "schema": 1,
+        "schema": 2,
         "suite": "core-mux-comparison",
         "contract": "docs/core-mux-quality.md",
         "policy": (

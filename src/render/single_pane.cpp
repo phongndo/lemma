@@ -2,6 +2,7 @@
 
 #include "render/pane_composition.hpp"
 
+#include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
 
 #include <algorithm>
@@ -26,6 +27,12 @@ namespace lemma::render {
     const auto sent = ::send(client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
     if (sent > 0) {
       const auto size = static_cast<std::size_t>(sent);
+      std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+      trace_correlation = output.trace_correlation();
+#endif
+      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_socket_write_progress,
+                                       static_cast<std::uint32_t>(client), size, trace_correlation);
       output.offset += size;
       budget -= size;
       continue;
@@ -49,7 +56,15 @@ namespace lemma::render {
                                         ClientOutputState& output, const bool force_full,
                                         const StatusLine status) noexcept -> bool {
   LEMMA_ASSERT(!output.busy());
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  output.latency_trace_correlation = diagnostic::latency_trace_correlation();
+#endif
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_started,
+                                   static_cast<std::uint32_t>(client), panes.size());
   const auto rendered = compose_frame(panes, viewport, frame, force_full, status);
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
+                                   static_cast<std::uint32_t>(client),
+                                   rendered.has_value() ? rendered->bytes : 0);
   if (!rendered.has_value()) {
     return false;
   }
