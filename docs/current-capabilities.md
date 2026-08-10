@@ -159,9 +159,10 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 - Release-enabled assertions protect internal invariants.
 - CI covers `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`; scheduled Linux
   ASan/UBSan exists.
-- The current suite includes 75 component tests and 17 process-level mux tests. It covers
-  IDs/queues, deterministic partial PTY/control writes and budgets, protocol fragmentation and
-  bounds, key encoding, extension registration/isolation, terminal damage/allocation, pane composition,
+- The current suite includes 85 component tests and 17 process-level mux tests. It covers
+  IDs/queues, deterministic frame urgency/deadline policy, partial PTY/control writes and budgets,
+  protocol fragmentation and bounds, key encoding, extension registration/isolation, terminal
+  damage/allocation, pane composition,
   daemon/client lifecycle, complete existing focus/zoom/close/tab controls, topology retention,
   resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
   attach, real blocked-PTY recovery, cross-session fairness, and terminal-response/input ordering.

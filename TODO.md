@@ -86,17 +86,17 @@ variance on a dedicated host.
 Replace the boolean immediate/delayed scheduling convention in `src/core/engine.cpp` with a small,
 deterministically testable urgency policy.
 
-- [ ] Define explicit frame urgency such as `interactive`, `state_change`, and `burst`.
-- [ ] Mark accepted input for the focused pane as latency-sensitive without introducing an unbounded
+- [x] Define explicit frame urgency such as `interactive`, `state_change`, and `burst`.
+- [x] Mark accepted input for the focused pane as latency-sensitive without introducing an unbounded
       causal log.
-- [ ] Render the first resulting visible damage immediately.
-- [ ] Render focus, layout, resize, attach, exit, and status mutations immediately.
-- [ ] Retain bounded coalescing for sustained autonomous output.
-- [ ] Keep at most one pending deadline and let higher urgency advance, never postpone, it.
-- [ ] Ensure no rendering timer or periodic wakeup exists while idle.
-- [ ] Add deterministic scheduler tests for deadline promotion, burst continuation, blocked output,
+- [x] Render the first resulting visible damage immediately.
+- [x] Render focus, layout, resize, attach, exit, and status mutations immediately.
+- [x] Retain bounded coalescing for sustained autonomous output.
+- [x] Keep at most one pending deadline and let higher urgency advance, never postpone, it.
+- [x] Ensure no rendering timer or periodic wakeup exists while idle.
+- [x] Add deterministic scheduler tests for deadline promotion, burst continuation, blocked output,
       resize, detach, and no-client cases.
-- [ ] Measure idle and loaded key-to-PTY/key-to-visible distributions before and after the change.
+- [x] Measure idle and loaded key-to-PTY/key-to-visible distributions before and after the change.
 
 ### F1 provisional performance gate
 
@@ -107,6 +107,14 @@ deterministically testable urgency policy.
 - Regress warm-scroll latency, emitted bytes, or renderer CPU by no more than 5% outside established
   benchmark variance.
 - Produce no periodic idle wakeups attributable to frame scheduling.
+
+F1 completed on the pinned development host with 200/200 exact causal paths and no trace drops. The
+PTY-output-to-composition interval fell from 2.336 ms p50 to 18 us p50, and physical input to outer
+write completion fell from 2.580/2.764/3.172 ms to 0.180/0.226/0.244 ms p50/p95/p99. Thirty-sample
+idle and blocked-peer key-to-visible distributions were 0.168/0.234 ms and 0.227/0.257 ms p50/p95;
+all idle profile wakeup samples remained zero. The reviewed gate now has 68 checks and tighter F1
+idle and loaded latency limits. Raw report names and the complete before/after accounting are in
+`docs/performance.md`.
 
 ## F2: make output progress and reactor fairness explicit
 

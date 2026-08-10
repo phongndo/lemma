@@ -212,6 +212,76 @@ A measured value above a limit is a regression failure. Threshold changes requir
 distribution and reviewing the manifest change; shared-runner observations alone do not justify
 widening a budget.
 
+## F1 interactive urgency results
+
+F1 replaces the immediate/delayed boolean with the allocation-free `FrameScheduler`. Its explicit
+urgencies are `interactive`, `state_change`, and `burst`. Keystroke-sized physical input messages of
+1–64 bytes set one bounded bit on the pane that was focused when the daemon accepted the input; the
+first subsequent visible damage from that pane promotes the session deadline to now. Larger physical
+input chunks retain burst coalescing so bounded paste and generated bulk input do not turn every
+chunk into a frame. Focus, layout, resize, attach, pane exit, and status changes are immediate.
+Autonomous output retains the 2 ms coalescing deadline.
+
+The scheduler owns one deadline and one full-redraw bit. A later request can only advance the
+existing deadline, never postpone it. A blocked frame retains canonical damage but exposes no timer
+deadline until the retained output drains. Detach cancels the deadline, and requests without an
+attached client are ignored. Consequently an idle attached or detached session has no frame timer.
+Deterministic component tests cover input classification, promotion, burst continuation, blocked
+output, resize, detach, and no-client behavior.
+
+The final tracing-off release gate retained raw output in
+`regression-{microbenchmarks,process-workloads,pane-profiles}.json`. The F0 comparison column below is
+from the retained `f0-budget-lemma-30.json`; F1 is the final thirty-sample process report. Values are
+p50/p95.
+
+| Workload and metric | F0 | F1 |
+|---|---:|---:|
+| Idle peer key to PTY | 0.095 / 0.214 ms | 0.065 / 0.102 ms |
+| Idle peer key to visible | 2.615 / 3.014 ms | 0.168 / 0.234 ms |
+| Peer key to PTY with another session blocked | 0.086 / 0.228 ms | 0.070 / 0.096 ms |
+| Peer key to visible with another session blocked | 2.609 / 3.098 ms | 0.227 / 0.257 ms |
+| Same-pane output, key to PTY | 1.170 / 1.291 ms | 1.222 / 1.281 ms |
+| Same-pane output, key to visible | 2.503 / 2.546 ms | 1.371 / 1.409 ms |
+| Warm-scroll completion | 2.567 / 19.825 ms | 2.415 / 16.358 ms |
+| Warm-scroll client bytes | 675 / 1,867 B | 675 / 1,764 B |
+
+The loaded same-pane fixture deliberately includes its approximately 1.2 ms key-to-PTY peer time;
+its remaining PTY-to-visible interval no longer contains the 2 ms frame floor. The isolated local
+path meets the provisional end-to-end target directly. In the trace-enabled final run, idle and
+blocked-peer key-to-visible were 0.185/0.245/0.254 ms and 0.226/0.263/0.279 ms p50/p95/p99.
+
+Causal trace version 2 accepted all 200 idle/blocked inputs with exact tokens, zero rejected paths,
+and zero drops. The final report is `f1-trace-correlated-final-100-events.json`:
+
+| Correlated monotonic interval | F0 p50 | F1 p50 | F1 p95 | F1 p99 |
+|---|---:|---:|---:|---:|
+| Client input read → daemon input decoded | 22 us | 15 us | 28 us | 34 us |
+| Daemon decode → focused PTY write | 12 us | 7 us | 15 us | 18 us |
+| PTY write → exact echoed PTY output read | 30 us | 20 us | 36 us | 40 us |
+| Echoed PTY output read → composition start | 2,336 us | 18 us | 28 us | 40 us |
+| Composition start → Ghostty damage report | 5 us | 2 us | 5 us | 14 us |
+| Ghostty damage report → composition finish | 152 us | 94 us | 125 us | 137 us |
+| Composition finish → daemon socket progress | 5 us | 2 us | 5 us | 7 us |
+| Daemon socket progress → matching client read | 13 us | 8 us | 12 us | 15 us |
+| Client read → outer write start | 0 us | 0 us | 1 us | 1 us |
+| Outer write start → finish | 5 us | 2 us | 3 us | 5 us |
+
+Physical input to outer-write completion is 0.180/0.226/0.244 ms p50/p95/p99, down from
+2.580/2.764/3.172 ms. This removes the causally identified floor rather than shifting it to another
+stage.
+
+Warm-scroll p50 bytes were unchanged, while p95 bytes and latency improved in this distribution.
+F1/F0 renderer medians were 76.14/72.54 us for styled damage, 3.26/3.14 us for one changed row span,
+17.69/16.85 us for detected scroll, and 175.84/177.21 us for a full frame. The incremental medians
+changed by 3.9–5.0%, within the established distribution and unchanged F0 p95 limits; full frames
+improved by 0.8%. Thirty idle-resource repetitions and every twenty-sample P1/P4/P16/PMAX idle
+profile reported zero wakeups.
+
+The reviewed manifest now applies 68 checks. It tightens process idle/blocked key-to-visible p95 to
+0.5 ms, adds p50 limits of 0.25/0.30 ms, tightens same-pane p50/p95 to 1.6/1.8 ms, and sets profile
+idle p50/p95 to 0.25/0.5 ms and active p50/p95 to 1.6/1.8 ms. No F0 CPU, byte, memory, key-to-PTY,
+wakeup, correctness, or completion gate was widened.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state
@@ -342,7 +412,9 @@ presentation snapshots/deltas and requires its own end-to-end evidence.
 
 - PTY parsing never waits for a steady-state client write.
 - A reactor turn reads at most 256 KiB from the PTY.
-- Output bursts are coalesced behind a 2 ms deadline.
+- Keystroke-sized accepted input and visible mux state changes promote frame composition immediately.
+- Sustained autonomous output remains coalesced behind one non-postponing 2 ms deadline.
+- A blocked frame exposes no rendering timer, and idle operation has no frame deadline.
 - Only one bounded frame can be in flight per client.
 - Ghostty dirty state accumulates while a client frame is blocked.
 - A resize or attach invalidates physical row and cell state and forces a complete redraw.

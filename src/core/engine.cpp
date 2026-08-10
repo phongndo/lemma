@@ -2,6 +2,7 @@
 
 #include "core/connection_output.hpp"
 #include "core/extension_runtime.hpp"
+#include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
 #include "core/pty_writer.hpp"
 #include "diagnostic/latency_trace.hpp"
@@ -107,6 +108,8 @@ private:
 struct PtyDrainResult final {
   bool alive{true};
   bool changed{false};
+  bool render_damage{false};
+  bool damage_capture_failed{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   std::uint64_t correlation{0};
 #endif
@@ -129,14 +132,47 @@ trace_pty_output([[maybe_unused]] PtyDrainResult& drain,
 #endif
 }
 
+void write_pty_output(vt::Terminal& terminal, const std::span<const std::byte> bytes,
+                      bool& capture_damage, PtyDrainResult& drain) noexcept {
+  if (!capture_damage) {
+    terminal.write(bytes);
+    return;
+  }
+  const auto damage = terminal.write_and_report_damage(bytes);
+  if (!damage.has_value()) {
+    drain.damage_capture_failed = true;
+    capture_damage = false;
+    return;
+  }
+  if (*damage != vt::DirtyState::clean) {
+    drain.render_damage = true;
+    capture_damage = false;
+  }
+}
+
+[[nodiscard]] auto
+process_pty_output(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writes,
+                   const std::span<const std::byte> bytes, bool& capture_damage,
+                   PtyDrainResult& drain,
+                   diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept -> bool {
+  const auto trace_correlation = trace_pty_output(drain, trace_matcher, bytes);
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_output_read,
+                                   static_cast<std::uint32_t>(pty), bytes.size(),
+                                   trace_correlation);
+  write_pty_output(terminal, bytes, capture_damage, drain);
+  drain.changed = true;
+  return queue_terminal_responses(pending_writes, terminal);
+}
+
 [[nodiscard]] auto
 drain_pty(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writes,
-          std::size_t& global_budget,
+          std::size_t& global_budget, const bool capture_interactive_damage,
           [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept
     -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
   PtyDrainResult drain{};
+  bool capture_damage = capture_interactive_damage;
   for (std::size_t read_count = 0; read_count < reads_per_turn_max && global_budget > 0;
        ++read_count) {
     const auto available = std::min(output.size(), global_budget);
@@ -144,13 +180,9 @@ drain_pty(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writ
     if (bytes_read > 0) {
       const auto size = static_cast<std::size_t>(bytes_read);
       global_budget -= size;
-      const auto trace_correlation =
-          trace_pty_output(drain, trace_matcher, std::span(output).first(size));
-      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_output_read,
-                                       static_cast<std::uint32_t>(pty), size, trace_correlation);
-      terminal.write(std::span(output).first(size));
-      drain.changed = true;
-      if (!queue_terminal_responses(pending_writes, terminal)) {
+      const auto bytes = std::span(output).first(size);
+      if (!process_pty_output(pty, terminal, pending_writes, bytes, capture_damage, drain,
+                              trace_matcher)) {
         drain.alive = false;
         return drain;
       }
@@ -248,6 +280,7 @@ struct Pane final {
   std::array<char, process_name_bytes_max> process_name{};
   std::size_t process_name_size{0};
   PanePtyWriteQueue pending_writes;
+  InteractiveDamageLatch interactive_damage;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
   diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
@@ -348,9 +381,17 @@ struct Session final {
     client_id = {};
     decoder.reset();
     output.reset();
-    frame_pending = false;
-    force_full_pending = false;
+    frame_scheduler.cancel();
     input_backpressured = false;
+    for (auto& tab_slot : tabs) {
+      if (tab_slot.tab != nullptr) {
+        for (auto& pane_slot : tab_slot.tab->panes) {
+          if (pane_slot.pane != nullptr) {
+            pane_slot.pane->interactive_damage.reset();
+          }
+        }
+      }
+    }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
     decoded_input_trace_matcher.reset();
     frame_trace_correlation = 0;
@@ -379,8 +420,6 @@ struct Session final {
   std::uint16_t columns{80};
   std::uint16_t rows{24};
   bool active{true};
-  bool frame_pending{false};
-  bool force_full_pending{false};
   bool status_valid{false};
   bool input_backpressured{false};
   std::uint64_t status_signature{0};
@@ -390,7 +429,7 @@ struct Session final {
   diagnostic::LatencyTraceMarkerMatcher decoded_input_trace_matcher;
   std::uint64_t frame_trace_correlation{0};
 #endif
-  std::chrono::steady_clock::time_point frame_deadline;
+  FrameScheduler frame_scheduler;
 };
 
 [[nodiscard]] constexpr auto pane_rows(const std::uint16_t viewport_rows) noexcept
@@ -746,15 +785,16 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_tab_max>;
   return resolved;
 }
 
-void schedule_frame(Session& session, const bool force_full, const bool immediate = true) noexcept {
-  constexpr auto frame_delay = std::chrono::milliseconds(2);
-  const auto deadline =
-      immediate ? std::chrono::steady_clock::now() : std::chrono::steady_clock::now() + frame_delay;
-  if (!session.frame_pending || deadline < session.frame_deadline) {
-    session.frame_deadline = deadline;
+[[nodiscard]] auto frame_sink_state(const Session& session) noexcept -> FrameSinkState {
+  if (session.client < 0) {
+    return FrameSinkState::unavailable;
   }
-  session.frame_pending = true;
-  session.force_full_pending = session.force_full_pending || force_full;
+  return session.output.busy() ? FrameSinkState::blocked : FrameSinkState::ready;
+}
+
+void schedule_frame(Session& session, const FrameUrgency urgency, const bool force_full) noexcept {
+  session.frame_scheduler.request(urgency, force_full, std::chrono::steady_clock::now(),
+                                  frame_sink_state(session));
 }
 
 [[nodiscard]] auto fit_tab_to_viewport(Session& session, Tab& tab) noexcept -> bool {
@@ -787,7 +827,7 @@ void schedule_frame(Session& session, const bool force_full, const bool immediat
     session.active = false;
     return false;
   }
-  schedule_frame(session, true);
+  schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
@@ -818,7 +858,7 @@ void remove_tab(Session& session, const TabId id) noexcept {
     return;
   }
   if (session.active_tab != id) {
-    schedule_frame(session, false);
+    schedule_frame(session, FrameUrgency::state_change, false);
     return;
   }
   for (std::size_t offset = 1; offset <= session.tabs.size(); ++offset) {
@@ -832,7 +872,7 @@ void remove_tab(Session& session, const TabId id) noexcept {
         session.active = false;
         return;
       }
-      schedule_frame(session, true);
+      schedule_frame(session, FrameUrgency::state_change, true);
       return;
     }
   }
@@ -848,7 +888,7 @@ void create_tab(Session& session) noexcept {
     session.active = false;
     return;
   }
-  schedule_frame(session, true);
+  schedule_frame(session, FrameUrgency::state_change, true);
 }
 
 // Splitting is an explicit bounded topology transaction.
@@ -953,7 +993,7 @@ void create_tab(Session& session) noexcept {
   if (!resolve_session_layout(session, tab)) {
     return false;
   }
-  schedule_frame(session, true);
+  schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
@@ -1003,7 +1043,7 @@ void create_tab(Session& session) noexcept {
   if (!resolve_session_layout(session, tab)) {
     return false;
   }
-  schedule_frame(session, true);
+  schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
@@ -1016,7 +1056,7 @@ void focus_pane(Session& session, Tab& tab, const PaneId pane_id) noexcept {
   if (tab.zoomed && !resolve_session_layout(session, tab)) {
     return;
   }
-  schedule_frame(session, tab.zoomed);
+  schedule_frame(session, FrameUrgency::state_change, tab.zoomed);
 }
 
 void focus_next(Session& session, Tab& tab, const PaneId source_pane) noexcept {
@@ -1295,7 +1335,7 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     if (!resolve_session_layout(session, *tab)) {
       return {.status = CommandStatus::failed};
     }
-    schedule_frame(session, true);
+    schedule_frame(session, FrameUrgency::state_change, true);
     return {.status = CommandStatus::applied};
   case CommandKind::create_tab: {
     if (tab_count(session) >= session.tabs.size() || pane_count(session) >= panes_per_session_max) {
@@ -1459,7 +1499,7 @@ collect_surfaces(Session& session,
   if (tab == nullptr || !fit_tab_to_viewport(session, *tab)) {
     return false;
   }
-  schedule_frame(session, true);
+  schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
@@ -1511,6 +1551,7 @@ enum class ParseResult : std::uint8_t {
       diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
                                        static_cast<std::uint32_t>(pane->pty), message.input.size(),
                                        trace_correlation);
+      const auto queued_bytes_before = pane->pending_writes.size();
       const auto queued =
           queue_normalized_input(pane->pending_writes, pane->terminal, message.input);
       if (queued == InputQueueResult::full) {
@@ -1518,6 +1559,9 @@ enum class ParseResult : std::uint8_t {
       }
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
+      }
+      if (latency_sensitive_input(message.input.size())) {
+        pane->interactive_damage.await_write(queued_bytes_before, pane->pending_writes.size());
       }
       break;
     }
@@ -2111,8 +2155,7 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   session->decoder.reset();
   session->output.reset();
   session->input_backpressured = false;
-  session->frame_pending = false;
-  session->force_full_pending = false;
+  session->frame_scheduler.cancel();
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
   const auto surfaces = collect_surfaces(*session, surface_storage);
@@ -2156,6 +2199,25 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   return action == PendingAction::shutdown;
 }
 
+[[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const FrameScheduler::TimePoint now,
+                                      int timeout) noexcept -> int {
+  for (const auto& session : sessions) {
+    if (session != nullptr && session->active) {
+      const auto deadline = session->frame_scheduler.deadline(frame_sink_state(*session));
+      if (deadline.has_value()) {
+        if (now >= *deadline) {
+          return 0;
+        }
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
+        const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+        timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
+      }
+    }
+  }
+  return timeout;
+}
+
 [[nodiscard]] auto poll_timeout(const Sessions& sessions, const PendingConnections& pending,
                                 const ExtensionRuntime& extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
@@ -2172,20 +2234,53 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
     const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
   }
-  for (const auto& session : sessions) {
-    if (session == nullptr || !session->active || !session->frame_pending || session->client < 0 ||
-        session->output.busy()) {
-      continue;
-    }
-    if (now >= session->frame_deadline) {
-      return 0;
-    }
-    const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(session->frame_deadline - now);
-    const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
-    timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
+  return frame_poll_timeout(sessions, now, timeout);
+}
+
+struct PaneDamageAssessment final {
+  bool interactive{false};
+  bool status_changed{false};
+};
+
+[[nodiscard]] auto assess_pane_damage(Session& session, Pane& pane, const PtyDrainResult& drained,
+                                      const bool track_interactive_damage,
+                                      const std::uint64_t interactive_status_before) noexcept
+    -> PaneDamageAssessment {
+  const auto status_after = current_status_signature(session);
+  const bool interactive_status_damage =
+      track_interactive_damage && status_after != interactive_status_before;
+  const bool status_changed = !session.status_valid || status_after != session.status_signature;
+  const bool visible_damage =
+      drained.render_damage || interactive_status_damage || drained.damage_capture_failed;
+  const bool interactive_damage = pane.interactive_damage.pending() && visible_damage;
+  if (interactive_damage) {
+    // Damage in an inactive tab is already covered by its next full redraw. Do not let the input
+    // latch promote an unrelated update after the tab becomes active again.
+    static_cast<void>(pane.interactive_damage.consume());
   }
-  return timeout;
+  return {.interactive = interactive_damage, .status_changed = status_changed};
+}
+
+[[nodiscard]] auto frame_urgency(const PtyDrainResult& drained, const bool process_changed,
+                                 const PaneDamageAssessment damage) noexcept -> FrameUrgency {
+  if (drained.damage_capture_failed) {
+    return FrameUrgency::state_change;
+  }
+  if (damage.interactive) {
+    return FrameUrgency::interactive;
+  }
+  if (!drained.alive || process_changed || damage.status_changed) {
+    return FrameUrgency::state_change;
+  }
+  return FrameUrgency::burst;
+}
+
+[[nodiscard]] auto pane_event_changed(const Session& session, const PtyDrainResult& drained,
+                                      const bool process_changed) noexcept -> bool {
+  if (session.client < 0) {
+    return false;
+  }
+  return drained.changed || process_changed;
 }
 
 void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& events,
@@ -2198,23 +2293,28 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
 #else
   diagnostic::LatencyTraceMarkerMatcher* const trace_matcher = nullptr;
 #endif
-  const auto drained =
-      drain_pty(pane.pty, pane.terminal, pane.pending_writes, global_budget, trace_matcher);
+  const bool track_interactive_damage = session.client >= 0 && pane.interactive_damage.pending();
+  const auto interactive_status_before =
+      track_interactive_damage ? current_status_signature(session) : 0;
+  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes, global_budget,
+                                 track_interactive_damage, trace_matcher);
   pane.active = drained.alive;
   const bool process_changed = refresh_process_name(pane);
-  if ((!drained.changed && !process_changed) || session.client < 0) {
+  if (!pane_event_changed(session, drained, process_changed)) {
     return;
   }
+  const auto damage = assess_pane_damage(session, pane, drained, track_interactive_damage,
+                                         interactive_status_before);
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   if (drained.correlation != 0 && tab.id == session.active_tab && pane.id == tab.focused_pane) {
     session.frame_trace_correlation = drained.correlation;
   }
 #endif
   if (tab.id == session.active_tab) {
-    schedule_frame(session, false, !drained.alive);
-  } else if (!session.status_valid ||
-             current_status_signature(session) != session.status_signature) {
-    schedule_frame(session, false);
+    schedule_frame(session, frame_urgency(drained, process_changed, damage),
+                   drained.damage_capture_failed);
+  } else if (damage.status_changed) {
+    schedule_frame(session, FrameUrgency::state_change, false);
   }
 }
 
@@ -2245,10 +2345,11 @@ void process_client_events(Session& session, const pollfd& events) noexcept {
   auto& pane = *static_cast<Pane*>(context);
   const auto written = ::write(pane.pty, bytes.data(), bytes.size());
   if (written > 0) {
+    const auto size = static_cast<std::size_t>(written);
+    pane.interactive_damage.record_write(size);
     std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
-    trace_correlation =
-        pane.input_trace_matcher.observe(bytes.first(static_cast<std::size_t>(written)));
+    trace_correlation = pane.input_trace_matcher.observe(bytes.first(size));
 #endif
     diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_write_progress,
                                      static_cast<std::uint32_t>(pane.pty),
@@ -2286,8 +2387,8 @@ void reclaim_dead_panes(Session& session) noexcept {
 void queue_due_frames(Sessions& sessions) noexcept {
   const auto now = std::chrono::steady_clock::now();
   for (auto& session : sessions) {
-    if (session == nullptr || !session->active || !session->frame_pending || session->client < 0 ||
-        session->output.busy() || now < session->frame_deadline) {
+    if (session == nullptr || !session->active ||
+        !session->frame_scheduler.due(now, frame_sink_state(*session))) {
       continue;
     }
     std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
@@ -2299,15 +2400,14 @@ void queue_due_frames(Sessions& sessions) noexcept {
 #endif
     if (!render::queue_composed_frame(
             session->client, surfaces, {.columns = session->columns, .rows = session->rows},
-            *session->frame, session->output, session->force_full_pending, status)) {
+            *session->frame, session->output, session->frame_scheduler.force_full(), status)) {
       session->detach_client();
     }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
     diagnostic::set_latency_trace_correlation(0);
     session->frame_trace_correlation = 0;
 #endif
-    session->frame_pending = false;
-    session->force_full_pending = false;
+    session->frame_scheduler.complete();
   }
 }
 

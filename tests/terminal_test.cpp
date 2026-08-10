@@ -68,6 +68,35 @@ TEST(TerminalTest, ParsesUtf8AndReportsDamage) {
   EXPECT_EQ(clean->dirty_rows, 0U);
 }
 
+TEST(TerminalTest, ReportsNewDamageWithoutConsumingPreviouslyPendingRows) {
+  auto terminal = make_terminal();
+  ASSERT_TRUE(terminal.update_render_state().has_value());
+  ASSERT_TRUE(terminal.mark_rendered().has_value());
+
+  constexpr std::string_view query_text = "\x1B[5n";
+  const auto query = terminal.write_and_report_damage(
+      std::as_bytes(std::span(query_text.data(), query_text.size())));
+  ASSERT_TRUE(query.has_value());
+  EXPECT_EQ(*query, DirtyState::clean);
+  EXPECT_GT(terminal.pending_pty_response_bytes(), 0U);
+
+  constexpr std::string_view visible_text = "visible";
+  const auto visible = terminal.write_and_report_damage(
+      std::as_bytes(std::span(visible_text.data(), visible_text.size())));
+  ASSERT_TRUE(visible.has_value());
+  EXPECT_NE(*visible, DirtyState::clean);
+
+  const auto query_after_damage = terminal.write_and_report_damage(
+      std::as_bytes(std::span(query_text.data(), query_text.size())));
+  ASSERT_TRUE(query_after_damage.has_value());
+  EXPECT_EQ(*query_after_damage, DirtyState::clean);
+
+  const auto retained = terminal.update_render_state();
+  ASSERT_TRUE(retained.has_value());
+  EXPECT_NE(retained->dirty, DirtyState::clean);
+  EXPECT_GE(retained->dirty_rows, 1U);
+}
+
 TEST(TerminalTest, FormatsDiagnosticSnapshotsIntoCallerStorage) {
   auto terminal = make_terminal();
   write_text(terminal, "plain \x1B[1;32mgreen\x1B[0m");

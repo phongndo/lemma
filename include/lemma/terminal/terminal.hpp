@@ -188,6 +188,13 @@ public:
   ~Terminal();
 
   void write(std::span<const std::byte> bytes) noexcept;
+
+  // Writes bytes exactly once and reports only render damage acquired from this write. Damage
+  // already pending in the retained render snapshot is preserved but is not included in the
+  // result. An error means damage inspection failed; the bytes have still been parsed.
+  [[nodiscard]] auto write_and_report_damage(std::span<const std::byte> bytes) noexcept
+      -> std::expected<DirtyState, Error>;
+
   [[nodiscard]] auto resize(const TerminalSize& size) noexcept -> std::expected<void, Error>;
 
   [[nodiscard]] auto update_render_state() noexcept -> std::expected<RenderUpdate, Error>;

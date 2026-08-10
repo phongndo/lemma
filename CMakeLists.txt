@@ -123,6 +123,7 @@ add_library(
   src/core/command.cpp
   src/core/engine.cpp
   src/core/extension_runtime.cpp
+  src/core/frame_scheduler.cpp
   src/core/lemma.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
@@ -202,6 +203,7 @@ if(LEMMA_BUILD_TESTS)
     tests/core_input_test.cpp
     tests/extension_test.cpp
     tests/core_test.cpp
+    tests/frame_scheduler_test.cpp
     tests/lemma_test.cpp
     tests/latency_trace_test.cpp
     tests/platform_test.cpp

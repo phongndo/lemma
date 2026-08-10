@@ -226,9 +226,12 @@ time from its canonical terminals and topology.
 
 ### Live output
 
-PTY output is parsed once by the daemon. Damage accumulates in canonical terminal state. At a bounded
-coalescing deadline the daemon composes one frame from the latest state, queues it nonblockingly, and
-continues processing PTYs. Reliable stream order preserves accepted frames.
+PTY output is parsed once by the daemon. Damage accumulates in canonical terminal state. One bounded
+urgency scheduler composes keystroke-sized interactive damage and visible mux state changes
+immediately while retaining a 2 ms coalescing deadline for sustained autonomous output. A higher
+urgency may advance but never postpone the one pending deadline; blocked output and idle or clientless
+sessions expose no rendering timer. The daemon composes from latest canonical state, queues the frame
+nonblockingly, and continues processing PTYs. Reliable stream order preserves accepted frames.
 
 Only complete bounded frames enter the attachment queue. Once bytes from a frame have begun writing,
 that frame is completed or the connection is retired; it is never spliced with another frame.

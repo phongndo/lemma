@@ -83,7 +83,9 @@ The runtime currently provides:
 - dirty-row rendering and retained physical client state;
 - bounded composition of validated pane rectangles into one synchronized outer-terminal frame;
 - focused-pane cursor and outer-terminal mode ownership in the composition layer;
-- a 2 ms frame-coalescing deadline;
+- one deterministic frame deadline: immediate for keystroke-sized input and visible state changes,
+  with 2 ms coalescing only for sustained autonomous output;
+- no frame timer while output is blocked or the session is idle, detached, or clientless;
 - partial nonblocking live-frame writes;
 - full visible-state reconstruction on reattach and active-tab changes;
 - PTY progress for inactive tabs without rendering them;

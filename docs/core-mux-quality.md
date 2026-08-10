@@ -19,6 +19,13 @@ semantics, and pinned tmux/Zellij adapters produce versioned comparison reports.
 validates all report schemas and uploads the evidence. Repeated dedicated-host distributions now own
 reviewed machine-scoped regression budgets; shared-runner timing remains evidence rather than a gate.
 
+F1 replaces the frame-delay boolean with one deterministic urgency scheduler. Keystroke-sized
+accepted input and visible mux state changes compose immediately, sustained autonomous output keeps
+bounded 2 ms coalescing, blocked output creates no timer wakeup, and detach/no-client states cancel or
+reject pending work. The pinned-host causal trace reduced physical-input-to-outer-write completion
+from 2.580/2.764/3.172 ms to 0.180/0.226/0.244 ms p50/p95/p99 with 200 complete exact-token paths.
+The regression manifest was tightened to preserve the improvement without widening any F0 gate.
+
 ## Definition of “best”
 
 A “best” claim requires all three dimensions:
@@ -214,3 +221,6 @@ reports before comparing values.
   time.
 - Performance documentation may claim only the measured workload on the recorded systems.
 - Correctness, isolation, or bounded-memory regressions block an optimization regardless of speed.
+- The F1 pinned-host gate requires idle profile key-to-visible p50/p95 at or below 0.25/0.5 ms,
+  active profile and same-pane-output p50/p95 at or below 1.6/1.8 ms, and zero idle wakeups. The
+  loaded limits include the fixture's separately gated approximately 1.2 ms key-to-PTY interval.

@@ -576,6 +576,27 @@ struct Terminal::Impl final {
     return std::unexpected(Error::invalid_state);
   }
 
+  [[nodiscard]] auto set_dirty_state(const DirtyState dirty) const noexcept
+      -> std::expected<void, Error> {
+    auto ghostty_dirty = [dirty]() noexcept {
+      switch (dirty) {
+      case DirtyState::clean:
+        return GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+      case DirtyState::partial:
+        return GHOSTTY_RENDER_STATE_DIRTY_PARTIAL;
+      case DirtyState::full:
+        return GHOSTTY_RENDER_STATE_DIRTY_FULL;
+      }
+      return GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+    }();
+    const auto result =
+        ghostty_render_state_set(render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &ghostty_dirty);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(map_error(result));
+    }
+    return {};
+  }
+
   [[nodiscard]] auto populate_render_metadata(RenderUpdate& update) const noexcept
       -> std::expected<void, Error> {
     const std::array keys{
@@ -965,6 +986,53 @@ void Terminal::write(const std::span<const std::byte> bytes) noexcept {
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
     ghostty_terminal_vt_write(impl_->terminal, data, bytes.size());
   }
+}
+
+auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes) noexcept
+    -> std::expected<DirtyState, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_->render_state != nullptr);
+
+  auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
+  if (result != GHOSTTY_SUCCESS) {
+    write(bytes);
+    return std::unexpected(map_error(result));
+  }
+  const auto prior_damage = impl_->dirty_state();
+  if (!prior_damage.has_value()) {
+    write(bytes);
+    return std::unexpected(prior_damage.error());
+  }
+  const auto cleared = impl_->set_dirty_state(DirtyState::clean);
+  if (!cleared.has_value()) {
+    write(bytes);
+    return std::unexpected(cleared.error());
+  }
+
+  write(bytes);
+  result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
+  if (result != GHOSTTY_SUCCESS) {
+    const auto restored = impl_->set_dirty_state(*prior_damage);
+    if (!restored.has_value()) {
+      return std::unexpected(restored.error());
+    }
+    return std::unexpected(map_error(result));
+  }
+  const auto acquired_damage = impl_->dirty_state();
+  if (!acquired_damage.has_value()) {
+    const auto restored = impl_->set_dirty_state(*prior_damage);
+    if (!restored.has_value()) {
+      return std::unexpected(restored.error());
+    }
+    return std::unexpected(acquired_damage.error());
+  }
+  const auto accumulated_damage = std::max(*prior_damage, *acquired_damage);
+  const auto restored = impl_->set_dirty_state(accumulated_damage);
+  if (!restored.has_value()) {
+    return std::unexpected(restored.error());
+  }
+  return *acquired_damage;
 }
 
 auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, Error> {
