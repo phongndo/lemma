@@ -33,6 +33,7 @@ namespace lemma::extension {
 namespace {
 
 constexpr std::size_t config_source_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+constexpr std::size_t lua_allocation_bytes_max = std::size_t{16} * 1'024U * 1'024U;
 constexpr std::size_t commands_max = 64;
 constexpr std::size_t keymaps_max = 128;
 constexpr std::size_t subscriptions_max = 64;
@@ -91,6 +92,42 @@ struct Sidebar final {
       lines{};
   std::size_t line_count{0};
 };
+
+struct LuaAllocationOwner final {
+  std::size_t bytes_current{0};
+  std::size_t bytes_peak{0};
+};
+
+// Lua's allocator ABI requires realloc/free. The isolated host owns one checked 16-MiB quota; a
+// failed growth leaves the old block and accounting valid and becomes an ordinary Lua memory error.
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
+void* allocate_lua(void* const context, void* const memory, const std::size_t old_size,
+                   const std::size_t new_size) noexcept {
+  auto& owner = *static_cast<LuaAllocationOwner*>(context);
+  if (memory != nullptr && old_size > owner.bytes_current) {
+    return nullptr;
+  }
+  if (new_size == 0) {
+    std::free(memory);
+    if (memory != nullptr) {
+      owner.bytes_current -= old_size;
+    }
+    return nullptr;
+  }
+
+  const auto retained = memory == nullptr ? owner.bytes_current : owner.bytes_current - old_size;
+  if (new_size > lua_allocation_bytes_max - retained) {
+    return nullptr;
+  }
+  void* const replacement = std::realloc(memory, new_size);
+  if (replacement == nullptr) {
+    return nullptr;
+  }
+  owner.bytes_current = retained + new_size;
+  owner.bytes_peak = std::max(owner.bytes_peak, owner.bytes_current);
+  return replacement;
+}
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 struct HostState final {
   int connection{-1};
@@ -462,7 +499,8 @@ void wait_for_disconnect(const int connection) noexcept {
 }
 
 [[nodiscard]] auto run_host(const int connection, const char* config_path) noexcept -> int {
-  lua_State* const state = luaL_newstate();
+  LuaAllocationOwner allocation;
+  lua_State* const state = lua_newstate(&allocate_lua, &allocation, luaL_makeseed(nullptr));
   if (state == nullptr) {
     return 1;
   }
@@ -477,6 +515,9 @@ void wait_for_disconnect(const int connection) noexcept {
     wait_for_disconnect(connection);
   }
   lua_close(state);
+  if (allocation.bytes_current != 0 || allocation.bytes_peak > lua_allocation_bytes_max) {
+    return 1;
+  }
   return sent ? 0 : 1;
 }
 

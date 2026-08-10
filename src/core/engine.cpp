@@ -343,11 +343,9 @@ struct TabSlot final {
 struct Session final {
   Session(const std::string_view session_name, const std::string_view initial_working_directory,
           const std::span<const std::byte> initial_environment,
-          const platform::EnvironmentMode initial_environment_mode,
-          std::unique_ptr<FrameBuffer> created_frame) noexcept
+          const platform::EnvironmentMode initial_environment_mode) noexcept
       : name_size(session_name.size()), working_directory_size(initial_working_directory.size()),
-        environment_size(initial_environment.size()), environment_mode(initial_environment_mode),
-        frame(std::move(created_frame)) {
+        environment_size(initial_environment.size()), environment_mode(initial_environment_mode) {
     std::memcpy(name.data(), session_name.data(), session_name.size());
     if (!initial_working_directory.empty()) {
       std::memcpy(working_directory.data(), initial_working_directory.data(),
@@ -380,6 +378,7 @@ struct Session final {
     client_id = {};
     decoder.reset();
     output.reset();
+    frame.release();
     frame_scheduler.cancel();
     input_backpressured = false;
     for (auto& tab_slot : tabs) {
@@ -405,7 +404,7 @@ struct Session final {
   std::array<std::byte, protocol::environment_bytes_max> environment{};
   std::size_t environment_size{0};
   platform::EnvironmentMode environment_mode{platform::EnvironmentMode::inherit};
-  std::unique_ptr<FrameBuffer> frame;
+  FrameBuffer frame;
   std::array<TabSlot, tabs_per_session_max> tabs{};
   TabId active_tab;
   TabId previous_tab;
@@ -447,8 +446,10 @@ struct Session final {
   if (!terminal_result.has_value()) {
     return nullptr;
   }
-  auto pane = std::unique_ptr<Pane>(new (std::nothrow) Pane(std::move(*terminal_result)));
-  if (pane == nullptr) {
+  std::unique_ptr<Pane> pane;
+  try {
+    pane = std::make_unique<Pane>(std::move(*terminal_result));
+  } catch (const std::bad_alloc&) {
     return nullptr;
   }
   pane->child =
@@ -556,8 +557,10 @@ struct Session final {
     }
     const auto generation = next_generation(slot.generation);
     const auto id = TabId::from_parts(static_cast<std::uint32_t>(index), generation);
-    auto created = std::unique_ptr<Tab>(new (std::nothrow) Tab(id, std::move(first_pane)));
-    if (created == nullptr) {
+    std::unique_ptr<Tab> created;
+    try {
+      created = std::make_unique<Tab>(id, std::move(first_pane));
+    } catch (const std::bad_alloc&) {
       return nullptr;
     }
     created->layout_columns = session.columns;
@@ -576,13 +579,13 @@ struct Session final {
     const std::span<const std::byte> environment = {},
     const platform::EnvironmentMode environment_mode = platform::EnvironmentMode::inherit) noexcept
     -> std::unique_ptr<Session> {
-  auto frame = std::unique_ptr<FrameBuffer>(new (std::nothrow) FrameBuffer{});
-  if (frame == nullptr) {
+  std::unique_ptr<Session> session;
+  try {
+    session = std::make_unique<Session>(name, working_directory, environment, environment_mode);
+  } catch (const std::bad_alloc&) {
     return nullptr;
   }
-  auto session = std::unique_ptr<Session>(new (std::nothrow) Session(
-      name, working_directory, environment, environment_mode, std::move(frame)));
-  if (session == nullptr || allocate_tab(*session) == nullptr) {
+  if (allocate_tab(*session) == nullptr) {
     return nullptr;
   }
   session->previous_tab = session->active_tab;
@@ -1483,6 +1486,12 @@ collect_surfaces(Session& session,
     -> bool {
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
+  // Frame capacity changes only at this lifecycle boundary. Allocation failure preserves the old
+  // storage and all terminal geometry, so the caller can reject the resize without partial state.
+  const auto retained_frame_bytes = session.output.busy() ? session.output.size() : 0;
+  if (!session.frame.prepare({.columns = columns, .rows = rows}, retained_frame_bytes)) {
+    return false;
+  }
   // Record every physical resize and discard any unsent frame composed for the previous viewport.
   // A transiently tiny outer terminal is valid, but pane geometry cannot represent the split tree
   // until it fits again. Preserve that geometry and send a surface-free clear frame constrained to
@@ -1679,7 +1688,7 @@ collect_status_line(Session& session,
                                    static_cast<std::uint32_t>(session.client), surfaces.size());
   const auto rendered =
       render::compose_retained_frame(surfaces, {.columns = session.columns, .rows = session.rows},
-                                     *session.frame, force_full, status);
+                                     session.frame, force_full, status);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.client),
                                    rendered.has_value() ? rendered->bytes : 0);
@@ -1829,7 +1838,17 @@ struct PendingConnection final {
   std::chrono::steady_clock::time_point setup_deadline;
 };
 
-using PendingConnections = std::array<PendingConnection, limits::pending_connections_hard_max>;
+// Pending setup storage is materialized only after accept claims a slot. The fixed table owns one
+// optional RAII object per live setup instead of eagerly touching 128 x 135 KiB at daemon startup.
+using PendingConnections =
+    std::array<std::unique_ptr<PendingConnection>, limits::pending_connections_hard_max>;
+using PendingConnectionGenerations =
+    std::array<std::uint32_t, limits::pending_connections_hard_max>;
+static_assert(sizeof(PendingConnection) <= std::size_t{136} * 1'024U);
+static_assert(sizeof(PendingConnections) ==
+              limits::pending_connections_hard_max * sizeof(std::unique_ptr<PendingConnection>));
+static_assert(sizeof(PendingConnectionGenerations) ==
+              limits::pending_connections_hard_max * sizeof(std::uint32_t));
 
 constexpr auto setup_progress_timeout = std::chrono::seconds(5);
 constexpr auto setup_total_timeout = std::chrono::seconds(10);
@@ -1854,19 +1873,22 @@ void release_attach_reservation(PendingConnection& pending, const std::size_t sl
       session->pending_attach_generation == pending.generation) {
     session->pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
     session->pending_attach_generation = 0;
+    if (session->client < 0) {
+      session->frame.release();
+    }
   }
   pending.attach_session = {};
 }
 
-void close_pending(PendingConnection& pending, const std::size_t slot,
+void close_pending(PendingConnections& connections, const std::size_t slot,
                    Sessions& sessions) noexcept {
-  release_attach_reservation(pending, slot, sessions);
-  close_descriptor(pending.descriptor);
-  pending.output.reset();
-  pending.state = PendingState::unused;
-  pending.field_size = 0;
-  pending.field_target = 0;
-  pending.action = PendingAction::close;
+  auto& owner = std::span(connections).subspan(slot, 1).front();
+  if (owner == nullptr) {
+    return;
+  }
+  release_attach_reservation(*owner, slot, sessions);
+  close_descriptor(owner->descriptor);
+  owner.reset();
 }
 
 void finish_pending_output(PendingConnection& pending,
@@ -1889,12 +1911,17 @@ void fail_pending_output(PendingConnection& pending) noexcept {
   finish_pending_byte(pending, response_failed);
 }
 
+[[nodiscard]] auto extension_error(const ExtensionRuntime* const extensions) noexcept
+    -> std::string_view {
+  return extensions == nullptr ? std::string_view{} : extensions->last_error();
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
-                             const ExtensionRuntime& extensions) noexcept {
+                             const ExtensionRuntime* const extensions) noexcept {
   bool prepared = true;
   if (pending.command == command_list) {
-    prepared = append_extension_error(pending.output, extensions.last_error()) &&
+    prepared = append_extension_error(pending.output, extension_error(extensions)) &&
                append_all_listings(pending.output, sessions);
   } else if (pending.command == command_kill_all || pending.command == command_shutdown) {
     const Command stop{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
@@ -1920,7 +1947,7 @@ void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_named_command(PendingConnection& pending, Sessions& sessions,
-                           const ExtensionRuntime& extensions) noexcept {
+                           const ExtensionRuntime* const extensions) noexcept {
   Session* session = find_session(sessions, pending.session.view());
   if (pending.command == command_create || pending.command == command_create_with_context) {
     if (session != nullptr) {
@@ -1958,7 +1985,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     return;
   }
   if (pending.command == command_list_session) {
-    if (!append_extension_error(pending.output, extensions.last_error()) ||
+    if (!append_extension_error(pending.output, extension_error(extensions)) ||
         !append_listing(pending.output, *session)) {
       fail_pending_output(pending);
     } else {
@@ -1967,7 +1994,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     return;
   }
   if (pending.command == command_list_tabs) {
-    if (!append_extension_error(pending.output, extensions.last_error()) ||
+    if (!append_extension_error(pending.output, extension_error(extensions)) ||
         !append_tab_listings(pending.output, *session)) {
       fail_pending_output(pending);
     } else {
@@ -2003,6 +2030,7 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
   if (dimensions.columns == 0 || dimensions.rows == 0 ||
       dimensions.columns > protocol::columns_max || dimensions.rows > protocol::rows_max ||
       !resize_session(*session, dimensions)) {
+    session->frame.release();
     finish_pending_byte(pending, response_failed);
     return;
   }
@@ -2014,7 +2042,8 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
-                            const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
+                            const ExtensionRuntime* const extensions,
+                            const std::size_t slot) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
@@ -2115,20 +2144,25 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   }
 }
 
-void process_pending_fields(PendingConnection& pending, Sessions& sessions,
-                            const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
+// The branches are the bounded outcomes of one nonblocking setup read.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void process_pending_fields(PendingConnections& connections, Sessions& sessions,
+                            const ExtensionRuntime* const extensions,
+                            const std::size_t slot) noexcept {
+  auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+  LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
-  for (std::size_t operation = 0; operation < operations_per_turn_max && pending.active() &&
-                                  pending.state != PendingState::flush_response;
+  for (std::size_t operation = 0; operation < operations_per_turn_max && pending->active() &&
+                                  pending->state != PendingState::flush_response;
        ++operation) {
-    auto available = std::span(pending.field)
-                         .subspan(pending.field_size, pending.field_target - pending.field_size);
-    const auto received = ::recv(pending.descriptor, available.data(), available.size(), 0);
+    auto available = std::span(pending->field)
+                         .subspan(pending->field_size, pending->field_target - pending->field_size);
+    const auto received = ::recv(pending->descriptor, available.data(), available.size(), 0);
     if (received > 0) {
-      pending.field_size += static_cast<std::size_t>(received);
-      record_pending_progress(pending);
-      if (pending.field_size == pending.field_target) {
-        complete_pending_field(pending, sessions, extensions, slot);
+      pending->field_size += static_cast<std::size_t>(received);
+      record_pending_progress(*pending);
+      if (pending->field_size == pending->field_target) {
+        complete_pending_field(*pending, sessions, extensions, slot);
       }
       continue;
     }
@@ -2138,39 +2172,44 @@ void process_pending_fields(PendingConnection& pending, Sessions& sessions,
     if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       return;
     }
-    close_pending(pending, slot, sessions);
+    close_pending(connections, slot, sessions);
     return;
   }
-  if (!pending.active()) {
-    close_pending(pending, slot, sessions);
+  if (!pending->active()) {
+    close_pending(connections, slot, sessions);
   }
 }
 
-void process_pending_read(PendingConnection& pending, Sessions& sessions,
-                          const ExtensionRuntime& extensions, const std::size_t slot) noexcept {
-  if (std::chrono::steady_clock::now() >= pending.setup_deadline) {
-    close_pending(pending, slot, sessions);
+void process_pending_read(PendingConnections& connections, Sessions& sessions,
+                          const ExtensionRuntime* const extensions,
+                          const std::size_t slot) noexcept {
+  auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+  LEMMA_ASSERT(pending != nullptr);
+  if (std::chrono::steady_clock::now() >= pending->setup_deadline) {
+    close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(pending, sessions, extensions, slot);
+  process_pending_fields(connections, sessions, extensions, slot);
 }
 
-void handoff_attached_connection(PendingConnection& pending, const std::size_t slot,
+void handoff_attached_connection(PendingConnections& connections, const std::size_t slot,
                                  Sessions& sessions) noexcept {
+  auto& owner = std::span(connections).subspan(slot, 1).front();
+  LEMMA_ASSERT(owner != nullptr);
+  auto& pending = *owner;
   Session* const session = sessions.get(pending.attach_session);
   if (session == nullptr || !session->active || session->pending_attach_slot != slot ||
       session->pending_attach_generation != pending.generation) {
-    close_pending(pending, slot, sessions);
+    close_pending(connections, slot, sessions);
     return;
   }
 
   const int connection = pending.descriptor;
   pending.descriptor = -1;
-  release_attach_reservation(pending, slot, sessions);
-  pending.output.reset();
-  pending.state = PendingState::unused;
-
   session->client = connection;
+  release_attach_reservation(pending, slot, sessions);
+  owner.reset();
+
   session->client_generation = next_generation(session->client_generation);
   session->client_id = ClientId::from_parts(session->id.slot(), session->client_generation);
   session->decoder.reset();
@@ -2196,23 +2235,25 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   return {.bytes = sent, .error = sent < 0 ? errno : 0};
 }
 
-[[nodiscard]] auto flush_pending_output(PendingConnection& pending, const std::size_t slot,
+[[nodiscard]] auto flush_pending_output(PendingConnections& connections, const std::size_t slot,
                                         std::size_t& global_budget, Sessions& sessions) noexcept
     -> bool {
-  const auto action = pending.action;
+  auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+  LEMMA_ASSERT(pending != nullptr);
+  const auto action = pending->action;
   const auto status =
-      flush_connection_output(pending.output, global_budget, &write_pending_output, &pending);
+      flush_connection_output(pending->output, global_budget, &write_pending_output, pending);
   if (status == ConnectionFlushStatus::hard_error) {
-    close_pending(pending, slot, sessions);
+    close_pending(connections, slot, sessions);
     return action == PendingAction::shutdown;
   }
-  if (!pending.active() || status != ConnectionFlushStatus::drained) {
+  if (!pending->active() || status != ConnectionFlushStatus::drained) {
     return false;
   }
   if (action == PendingAction::attach) {
-    handoff_attached_connection(pending, slot, sessions);
+    handoff_attached_connection(connections, slot, sessions);
   } else {
-    close_pending(pending, slot, sessions);
+    close_pending(connections, slot, sessions);
   }
   return action == PendingAction::shutdown;
 }
@@ -2243,18 +2284,18 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
 }
 
 [[nodiscard]] auto poll_timeout(const Sessions& sessions, const PendingConnections& pending,
-                                const ExtensionRuntime& extensions) noexcept -> int {
+                                const ExtensionRuntime* const extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
-  auto timeout = extensions.poll_timeout(now);
+  auto timeout = extensions == nullptr ? -1 : extensions->poll_timeout(now);
   for (const auto& connection : pending) {
-    if (!connection.active()) {
+    if (connection == nullptr || !connection->active()) {
       continue;
     }
-    if (now >= connection.deadline) {
+    if (now >= connection->deadline) {
       return 0;
     }
     const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(connection.deadline - now);
+        std::chrono::duration_cast<std::chrono::milliseconds>(connection->deadline - now);
     const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
   }
@@ -2452,7 +2493,7 @@ void flush_attached_client_frames(Sessions& sessions,
     LEMMA_ASSERT(count < storage.size());
     storage.subspan(count, 1).front() = {
         .descriptor = session->client,
-        .frame = session->frame.get(),
+        .frame = &session->frame,
         .output = &session->output,
         .write = &write_attached_client,
         .context = session.get(),
@@ -2476,9 +2517,9 @@ void expire_pending_connections(PendingConnections& pending_connections,
                                 Sessions& sessions) noexcept {
   const auto now = std::chrono::steady_clock::now();
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
-    auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-    if (pending.active() && now >= pending.deadline) {
-      close_pending(pending, slot, sessions);
+    const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+    if (pending != nullptr && pending->active() && now >= pending->deadline) {
+      close_pending(pending_connections, slot, sessions);
     }
   }
 }
@@ -2486,15 +2527,15 @@ void expire_pending_connections(PendingConnections& pending_connections,
 [[nodiscard]] auto empty_pending_slot(PendingConnections& pending_connections) noexcept
     -> std::optional<std::size_t> {
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
-    if (!std::span(pending_connections).subspan(slot, 1).front().active()) {
+    if (std::span(pending_connections).subspan(slot, 1).front() == nullptr) {
       return slot;
     }
   }
   return std::nullopt;
 }
 
-void accept_pending_connections(const int listener,
-                                PendingConnections& pending_connections) noexcept {
+void accept_pending_connections(const int listener, PendingConnections& pending_connections,
+                                PendingConnectionGenerations& generations) noexcept {
   constexpr std::size_t accepts_per_turn_max = 8;
   for (std::size_t accepted = 0; accepted < accepts_per_turn_max; ++accepted) {
     int connection = ::accept(listener, nullptr, nullptr);
@@ -2514,19 +2555,21 @@ void accept_pending_connections(const int listener,
       close_descriptor(connection);
       continue;
     }
-    auto& pending = std::span(pending_connections).subspan(*available, 1).front();
-    pending.descriptor = connection;
-    pending.generation = next_generation(pending.generation);
-    pending.output.reset();
-    pending.session = {};
-    pending.working_directory = {};
-    pending.environment_size = 0;
-    pending.attach_session = {};
-    pending.action = PendingAction::close;
+    auto& owner = std::span(pending_connections).subspan(*available, 1).front();
+    try {
+      owner = std::make_unique<PendingConnection>();
+    } catch (const std::bad_alloc&) {
+      close_descriptor(connection);
+      continue;
+    }
+    owner->descriptor = connection;
+    auto& generation = std::span(generations).subspan(*available, 1).front();
+    generation = next_generation(generation);
+    owner->generation = generation;
     const auto now = std::chrono::steady_clock::now();
-    pending.deadline = now + setup_progress_timeout;
-    pending.setup_deadline = now + setup_total_timeout;
-    begin_pending_field(pending, PendingState::read_command, 1);
+    owner->deadline = now + setup_progress_timeout;
+    owner->setup_deadline = now + setup_total_timeout;
+    begin_pending_field(*owner, PendingState::read_command, 1);
   }
 }
 
@@ -2541,7 +2584,6 @@ struct DescriptorOwner final {
   Session* session{nullptr};
   Tab* tab{nullptr};
   Pane* pane{nullptr};
-  PendingConnection* pending{nullptr};
   std::size_t pending_slot{0};
   DescriptorKind kind{DescriptorKind::client};
 };
@@ -2557,14 +2599,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
-  auto pending_storage =
-      std::unique_ptr<PendingConnections>(new (std::nothrow) PendingConnections{});
-  if (pending_storage == nullptr) {
-    return 1;
+  PendingConnections pending_connections;
+  PendingConnectionGenerations pending_generations{};
+  std::unique_ptr<ExtensionRuntime> extensions;
+  if (acquire_extension != nullptr) {
+    try {
+      extensions = std::make_unique<ExtensionRuntime>(
+          acquire_extension, extension_context, report_extension_error, extension_error_context);
+    } catch (const std::bad_alloc&) {
+      return 1;
+    }
   }
-  auto& pending_connections = *pending_storage;
-  ExtensionRuntime extensions(acquire_extension, extension_context, report_extension_error,
-                              extension_error_context);
   if (!set_nonblocking(listener)) {
     return 1;
   }
@@ -2583,7 +2628,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    extensions.connect_if_due(std::chrono::steady_clock::now());
+    if (extensions != nullptr) {
+      extensions->connect_if_due(std::chrono::steady_clock::now());
+    }
     std::size_t descriptor_count = 1;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
     for (const auto& session : sessions) {
@@ -2622,27 +2669,27 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
     for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
-      auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-      if (!pending.active()) {
+      const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+      if (pending == nullptr || !pending->active()) {
         continue;
       }
       const auto events =
-          static_cast<short>(pending.state == PendingState::flush_response ? POLLOUT : POLLIN);
+          static_cast<short>(pending->state == PendingState::flush_response ? POLLOUT : POLLIN);
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
-          .fd = pending.descriptor, .events = events, .revents = 0};
-      std::span(owners).subspan(descriptor_count, 1).front() = {
-          .pending = &pending, .pending_slot = slot, .kind = DescriptorKind::pending};
+          .fd = pending->descriptor, .events = events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.pending_slot = slot,
+                                                                .kind = DescriptorKind::pending};
       ++descriptor_count;
     }
-    if (extensions.descriptor() >= 0) {
+    if (extensions != nullptr && extensions->descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
-          .fd = extensions.descriptor(), .events = POLLIN, .revents = 0};
+          .fd = extensions->descriptor(), .events = POLLIN, .revents = 0};
       std::span(owners).subspan(descriptor_count, 1).front() = {.kind = DescriptorKind::extension};
       ++descriptor_count;
     }
 
     const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(sessions, pending_connections, extensions));
+                                    poll_timeout(sessions, pending_connections, extensions.get()));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -2687,13 +2734,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind != DescriptorKind::pending || !owner.pending->active()) {
+      if (owner.kind != DescriptorKind::pending) {
+        continue;
+      }
+      const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
+      if (pending == nullptr || !pending->active()) {
         continue;
       }
       const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-      if (owner.pending->state != PendingState::flush_response &&
+      if (pending->state != PendingState::flush_response &&
           (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-        process_pending_read(*owner.pending, sessions, extensions, owner.pending_slot);
+        process_pending_read(pending_connections, sessions, extensions.get(), owner.pending_slot);
       }
     }
 
@@ -2751,13 +2802,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     bool shutdown_after_outputs = false;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind != DescriptorKind::pending || !owner.pending->active() ||
-          owner.pending->state != PendingState::flush_response) {
+      if (owner.kind != DescriptorKind::pending) {
+        continue;
+      }
+      const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
+      if (pending == nullptr || !pending->active() ||
+          pending->state != PendingState::flush_response) {
         continue;
       }
       const auto events = std::span(descriptors).subspan(index, 1).front().revents;
       if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
-        if (flush_pending_output(*owner.pending, owner.pending_slot, pending_output_budget,
+        if (flush_pending_output(pending_connections, owner.pending_slot, pending_output_budget,
                                  sessions)) {
           shutdown_after_outputs = true;
           break;
@@ -2782,12 +2837,13 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::extension) {
-        extensions.process(std::span(descriptors).subspan(index, 1).front().revents);
+        LEMMA_ASSERT(extensions != nullptr);
+        extensions->process(std::span(descriptors).subspan(index, 1).front().revents);
       }
     }
 
     if ((descriptors.front().revents & POLLIN) != 0) {
-      accept_pending_connections(listener, pending_connections);
+      accept_pending_connections(listener, pending_connections, pending_generations);
     }
     reclaim_inactive_sessions(sessions);
   }

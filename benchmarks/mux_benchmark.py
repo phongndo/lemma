@@ -1088,7 +1088,13 @@ class TmuxRuntime:
                 self._command("kill-server", check=False)
             except subprocess.SubprocessError:
                 pass
-        self.temporary.cleanup()
+        for _ in range(20):
+            try:
+                self.temporary.cleanup()
+                return
+            except OSError:
+                time.sleep(0.01)
+        shutil.rmtree(self.temporary.name, ignore_errors=True)
 
 
 class ZellijRuntime:
@@ -1396,6 +1402,46 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         receipts.close()
 
 
+def component_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("component resources require Lemma")
+    baseline = sample_resources(runtime, repetitions)
+    runtime.command("start", "component_resources")
+    detached = sample_resources(runtime, repetitions)
+    client = runtime.attach("component_resources")
+    client.drain()
+    attached = sample_resources(runtime, repetitions, client)
+    runtime.detach(client, "component_resources")
+    detached_after_attach = sample_resources(runtime, repetitions)
+    return {
+        "status": "completed",
+        "baseline": baseline,
+        "detached_session": detached,
+        "attached_session": attached,
+        "detached_after_attach": detached_after_attach,
+    }
+
+
+def history_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("history resources require Lemma")
+    client = runtime.start_and_attach("history_resources")
+    client.drain()
+    empty = sample_resources(runtime, repetitions, client)
+    command = f"{shlex.quote(str(runtime.peer_path))} warm-scroll\r".encode()
+    client.write_all(command, 2.0)
+    client.read_until(WARM_MARKER, 60.0)
+    client.drain()
+    populated = sample_resources(runtime, repetitions, client)
+    return {
+        "status": "completed",
+        "history_input_rows": 25_000,
+        "terminal_history_quota_bytes": 10_000,
+        "empty": empty,
+        "populated": populated,
+    }
+
+
 def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     if not isinstance(runtime, LemmaRuntime):
         raise TypeError("blocked-client workload requires Lemma")
@@ -1460,18 +1506,26 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         receipts.close()
 
 
-def wait_for_lemma_panes(
-    runtime: LemmaRuntime, client: PtyProcess, session: str, panes: int
+def wait_for_profile_panes(
+    runtime: LemmaRuntime | TmuxRuntime,
+    client: PtyProcess,
+    session: str,
+    panes: int,
 ) -> None:
     deadline = time.monotonic() + 5.0
-    expected = f", {panes} pane(s),"
     while time.monotonic() < deadline:
         client.drain(0.005)
-        listing = runtime.command("list", session).stdout
-        if expected in listing:
+        if isinstance(runtime, LemmaRuntime):
+            reached = f", {panes} pane(s)," in runtime.command("list", session).stdout
+        else:
+            listing = runtime._command(
+                "list-panes", "-a", "-t", session, "-F", "#{pane_id}"
+            ).stdout
+            reached = len(listing.splitlines()) == panes
+        if reached:
             return
         time.sleep(0.005)
-    raise TimeoutError(f"Lemma did not reach {panes} panes")
+    raise TimeoutError(f"{runtime.multiplexer} did not reach {panes} panes")
 
 
 def send_prefix(client: PtyProcess, command: bytes) -> None:
@@ -1479,7 +1533,9 @@ def send_prefix(client: PtyProcess, command: bytes) -> None:
 
 
 def launch_latency_peer(
-    runtime: LemmaRuntime, client: PtyProcess, autonomous_output: bool
+    runtime: LemmaRuntime | TmuxRuntime,
+    client: PtyProcess,
+    autonomous_output: bool,
 ) -> None:
     mode = "latency-output" if autonomous_output else "latency"
     ready = LATENCY_OUTPUT_READY if autonomous_output else LATENCY_READY
@@ -1492,10 +1548,11 @@ def launch_latency_peer(
     client.drain(0.005)
 
 
-def build_lemma_profile(
-    runtime: LemmaRuntime,
+def build_profile(
+    runtime: LemmaRuntime | TmuxRuntime,
     client: PtyProcess,
     panes: int,
+    session: str = "profile",
 ) -> None:
     pane_index = 1
     tab_count = 1 if panes == 1 else panes // 4
@@ -1505,30 +1562,34 @@ def build_lemma_profile(
 
         send_prefix(client, b"%")
         pane_index += 1
-        wait_for_lemma_panes(runtime, client, "profile", pane_index)
+        wait_for_profile_panes(runtime, client, session, pane_index)
 
         send_prefix(client, b'"')
         pane_index += 1
-        wait_for_lemma_panes(runtime, client, "profile", pane_index)
+        wait_for_profile_panes(runtime, client, session, pane_index)
 
         send_prefix(client, b"o")
         send_prefix(client, b'"')
         pane_index += 1
-        wait_for_lemma_panes(runtime, client, "profile", pane_index)
+        wait_for_profile_panes(runtime, client, session, pane_index)
 
         if tab_index + 1 < tab_count:
             send_prefix(client, b"c")
-            wait_for_lemma_panes(runtime, client, "profile", pane_index + 1)
+            wait_for_profile_panes(runtime, client, session, pane_index + 1)
             pane_index += 1
 
 
-def lemma_pane_profile(
-    runtime: LemmaRuntime, profile: str, panes: int, active: bool, repetitions: int
+def pane_profile(
+    runtime: LemmaRuntime | TmuxRuntime,
+    profile: str,
+    panes: int,
+    active: bool,
+    repetitions: int,
 ) -> dict[str, Any]:
     receipts = PtyReceiptChannel(runtime.receipt_path)
     try:
         client = runtime.start_and_attach("profile")
-        build_lemma_profile(runtime, client, panes)
+        build_profile(runtime, client, panes)
         if not active:
             resources = sample_resources(runtime, repetitions, client)
             launch_latency_peer(runtime, client, False)
@@ -1551,6 +1612,46 @@ def lemma_pane_profile(
         }
     finally:
         receipts.close()
+
+
+def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("lifecycle churn requires Lemma")
+    tree_rss: list[int] = []
+    daemon_rss: list[int] = []
+    for _ in range(repetitions):
+        runtime.command("start", "lifecycle_churn")
+        client = runtime.attach("lifecycle_churn")
+        build_profile(runtime, client, 4, "lifecycle_churn")
+        for expected in (3, 2, 1):
+            send_prefix(client, b"x")
+            wait_for_profile_panes(runtime, client, "lifecycle_churn", expected)
+        runtime.detach(client, "lifecycle_churn")
+        runtime.command("kill", "lifecycle_churn")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            listing = runtime.command("list").stdout
+            if "lifecycle_churn" not in listing:
+                break
+            time.sleep(0.005)
+        else:
+            raise TimeoutError("lifecycle churn session was not reclaimed")
+        snapshot = runtime_resource_snapshot(runtime)
+        if snapshot.get("available") is not True:
+            raise RuntimeError("lifecycle churn resource snapshot is unavailable")
+        daemon = snapshot.get("roles", {}).get("daemon", {})
+        if daemon.get("available") is not True:
+            raise RuntimeError("lifecycle churn daemon snapshot is unavailable")
+        tree_rss.append(int(snapshot["rss_bytes"]))
+        daemon_rss.append(int(daemon["rss_bytes"]))
+
+    return {
+        "status": "completed",
+        "cycles": repetitions,
+        "operations_per_cycle": ["create", "attach", "split", "close", "detach", "kill"],
+        "tree_rss": metric_summary(tree_rss, "bytes"),
+        "daemon_rss": metric_summary(daemon_rss, "bytes"),
+    }
 
 
 def git_provenance() -> tuple[str, bool | None]:
@@ -1639,6 +1740,9 @@ def main() -> int:
             "idle-resources",
             "blocked-pty",
             "blocked-client",
+            "component-resources",
+            "history-resources",
+            "lifecycle-churn",
             "comparison",
             "profiles",
             "all",
@@ -1670,10 +1774,19 @@ def main() -> int:
             )
     if not arguments.peer.is_file():
         parser.error(f"missing executable: {arguments.peer}")
-    if arguments.mode in ("profiles", "all") and arguments.multiplexer != "lemma":
-        parser.error("pane profiles currently require --multiplexer lemma")
-    if arguments.mode == "blocked-client" and arguments.multiplexer != "lemma":
-        parser.error("blocked-client currently requires --multiplexer lemma")
+    if arguments.mode in ("profiles", "all") and arguments.multiplexer == "zellij":
+        parser.error("pane profiles currently require --multiplexer lemma or tmux")
+    if (
+        arguments.mode
+        in {
+            "blocked-client",
+            "component-resources",
+            "history-resources",
+            "lifecycle-churn",
+        }
+        and arguments.multiplexer != "lemma"
+    ):
+        parser.error(f"{arguments.mode} currently requires --multiplexer lemma")
     if arguments.trace_directory is not None:
         arguments.trace_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if any(arguments.trace_directory.glob("*.ltrace")):
@@ -1758,6 +1871,9 @@ def main() -> int:
             "idle-resources": ("idle_resources", idle_resources),
             "blocked-pty": ("blocked_pty", blocked_pty),
             "blocked-client": ("blocked_client", blocked_client),
+            "component-resources": ("component_resources", component_resources),
+            "history-resources": ("history_resources", history_resources),
+            "lifecycle-churn": ("lifecycle_churn", lifecycle_churn),
         }
         if arguments.mode in individual:
             selected.append(individual[arguments.mode])
@@ -1806,11 +1922,9 @@ def main() -> int:
                     pane_count: int = panes,
                     active: bool = activity,
                 ) -> dict[str, Any]:
-                    if not isinstance(runtime, LemmaRuntime):
-                        raise TypeError("pane profile requires Lemma runtime")
-                    return lemma_pane_profile(
-                        runtime, profile_id, pane_count, active, repetitions
-                    )
+                    if not isinstance(runtime, (LemmaRuntime, TmuxRuntime)):
+                        raise TypeError("pane profile requires Lemma or tmux runtime")
+                    return pane_profile(runtime, profile_id, pane_count, active, repetitions)
 
                 pane_profiles[profile][key] = run_operation(profile_operation)
 

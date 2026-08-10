@@ -285,6 +285,30 @@ TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, GrowsAndPrunesScrollbackUnderItsOwnerQuota) {
+  TerminalOptions options;
+  options.size = {.columns = 10, .rows = 2};
+  options.scrollback_bytes_max = 1'000;
+  auto terminal = make_terminal(options);
+  constexpr std::string_view line = "history\r\n";
+  constexpr std::size_t input_rows = 10'000;
+
+  const auto initial = terminal.scrollback_rows();
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_EQ(*initial, 0U);
+  for (std::size_t row = 0; row < input_rows; ++row) {
+    write_text(terminal, line);
+  }
+
+  const auto retained = terminal.scrollback_rows();
+  ASSERT_TRUE(retained.has_value());
+  EXPECT_GT(*retained, 0U);
+  EXPECT_LT(*retained, input_rows);
+  EXPECT_LE(options.scrollback_bytes_max, limits::terminal_scrollback_bytes_hard_max);
+}
+
 TEST(TerminalTest, TracksQuotaAllocatorUsage) {
   auto terminal = make_terminal();
   const auto stats = terminal.allocation_stats();

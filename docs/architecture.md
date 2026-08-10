@@ -198,10 +198,12 @@ reactor; it does not own session or terminal state.
 
 ### Extension host — `src/extension/`
 
-One persistent Lua host per daemon loads trusted user configuration. It registers settings, keymaps,
-commands, subscriptions, and declarative UI through bounded versioned IPC. C++ validates a complete
-candidate generation before atomically committing it. A blocked or crashed host cannot block the
-daemon, and the daemon restarts it with bounded backoff.
+When an explicit configuration file exists, one isolated Lua host loads that trusted user
+configuration. With no file, the foundational path allocates no extension runtime and starts no host
+process. The opted-in host registers settings, keymaps, commands, subscriptions, and declarative UI
+through bounded versioned IPC; its Lua allocator has a 16 MiB owner quota. C++ validates a complete
+candidate generation before atomically committing it. A blocked, over-quota, or crashed host cannot
+block the daemon, and the daemon restarts it with bounded backoff.
 
 ### Application — `src/app/` and `apps/lemma/`
 
@@ -222,7 +224,11 @@ A successful attachment is an explicit transaction:
 6. enter bounded live input/render operation only after setup succeeds.
 
 No terminal history replay or checkpoint is needed. The daemon can regenerate visible state at any
-time from its canonical terminals and topology.
+time from its canonical terminals and topology. Frame storage is a single session-owned RAII buffer
+allocated only at attach/resize. Its capacity is derived from the renderer's per-cell bound and
+clamped between 64 KiB and 4 MiB. Growth preserves any in-flight prefix transactionally, and detach
+releases it. Rendering and flush
+operations receive only non-owning spans and cannot grow the buffer.
 
 ### Live output
 
@@ -233,10 +239,11 @@ urgency may advance but never postpone the one pending deadline; blocked output 
 sessions expose no rendering timer. The daemon composes from latest canonical state, queues the frame
 nonblockingly, and continues processing PTYs. Reliable stream order preserves accepted frames.
 
-Only complete bounded frames enter the attachment queue. Composition performs no descriptor I/O.
-The core flushes retained bytes nonblockingly after composition and control handoff. Once bytes from a
-frame have begun writing, that frame is completed or the connection is retired; it is never spliced
-with another frame.
+Only complete bounded frames enter the attachment queue. Composition performs no descriptor I/O or
+steady-state frame allocation. The core flushes retained bytes nonblockingly after composition and
+control handoff. Once bytes from a frame have begun writing, that frame is completed or the
+connection is retired; it is never spliced with another frame. PTY queues are independently quota
+owned, grow lazily, and retain drained capacity for reuse until their pane owner is destroyed.
 
 ### Lag and redraw recovery
 

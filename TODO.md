@@ -45,6 +45,12 @@ foundation.
    testable policy or ownership boundaries needed by this plan.
 9. Each hot-path change must include a release benchmark comparison against its parent commit.
 10. A failed or incomplete workload is a failure, never a fast sample.
+11. Prefer stack/automatic storage for small, compile-time-bounded, non-escaping scratch state. Large
+    or persistent state requires one explicit RAII owner; do not move multi-megabyte or long-lived
+    buffers onto the stack merely to avoid the heap.
+12. General-purpose capacity growth belongs at reviewed control-plane lifecycle boundaries, never
+    in steady-state render or flush work. Any unavoidable content-proportional PTY history growth
+    must use an owner-scoped quota. Expose owned storage to leaf operations as non-owning spans.
 
 ## Current focus — F0: lock the baseline and expose latency
 
@@ -160,6 +166,30 @@ names and the complete accounting are in `docs/performance.md`.
 
 ## F3: reduce baseline and marginal memory
 
+Apply a TigerStyle-inspired memory discipline, adapted to a dynamic local mux rather than copying
+TigerBeetle's allocate-everything-at-startup rule literally. Prioritize safety, then performance,
+then developer experience. Put a checked limit on every memory owner and prefer this storage order:
+
+1. small, bounded, non-escaping scratch state in stack/automatic storage;
+2. small fixed-capacity state inline with its lifetime owner when the census justifies the eager cost;
+3. bounded startup-owned pools for resources shared across many short-lived operations;
+4. large or variable storage in one RAII owner, sized only at an explicit control-plane boundary such
+   as startup, connection setup, create, attach, or resize, then reused without data-plane allocation;
+   content-proportional terminal history is the reviewed exception and must remain quota-owned.
+
+Stack-first is not stack-only. Large retained frames, scrollback, and other state that outlives a call
+must not become large stack locals. New F3 paths must avoid recursion, document a bounded stack
+high-water estimate, and use `std::span` or another non-owning view below the owner. Do not introduce
+naked `new`/`delete`, default shared ownership, or a general allocator framework without measured
+need.
+
+For every material allocation, record its owner, lifetime, minimum/current/maximum bytes, allocation
+and release points, failure behavior, whether pages are touched eagerly, and whether allocator work
+can occur on a reactor data path. Capacity changes must use checked arithmetic, prepare replacement
+storage before mutation, and commit only after success so failure leaves the old state valid. Pair
+runtime assertions across producer/consumer boundaries and use compile-time assertions for limit and
+type-size relationships.
+
 Measure memory as:
 
 ```text
@@ -168,20 +198,29 @@ M(N, H) = M_base + N * M_pane + M_history(H) + M_fragmentation
 
 Do not count configured hard maxima as acceptable resident cost.
 
-- [ ] Produce a byte-level ownership census for daemon baseline, session, tab, pane, terminal,
-      scrollback, decoder, frame, PTY queue, pending connection, and extension-host state.
-- [ ] Replace the 64 KiB eager output array in every pending-connection slot with lazy storage or a
+- [x] Produce a byte-level ownership census for daemon baseline, session, tab, pane, terminal,
+      scrollback, decoder, frame, PTY queue, pending connection, and extension-host state, including
+      storage class, lifetime, eager/lazy page use, stack contribution, and allocation call site.
+- [x] Replace the 64 KiB eager output array in every pending-connection slot with lazy storage or a
       bounded shared pool; preserve aggregate and per-connection limits.
-- [ ] Allocate frame storage only for attached sessions and release it on detach when evidence shows
+- [x] Allocate frame storage only for attached sessions and release it on detach when evidence shows
       that doing so improves resident memory without attach churn or fragmentation regressions.
-- [ ] Replace the eager 4 MiB frame allocation with bounded viewport-derived capacity that grows only
+- [x] Replace the eager 4 MiB frame allocation with bounded viewport-derived capacity that grows only
       on attach/resize and performs no steady-state render allocation.
-- [ ] Verify that PTY write queues and Ghostty scrollback grow lazily and remain under daemon-wide and
+- [x] Verify that PTY write queues and Ghostty scrollback grow lazily and remain under daemon-wide and
       per-pane bounds.
-- [ ] Measure allocator retention and fragmentation after repeated create/split/close/attach/detach
+- [x] Measure allocator retention and fragmentation after repeated create/split/close/attach/detach
       cycles.
-- [ ] Record stripped executable sizes and dependency/process contributions; make the extension host
+- [x] Record stripped executable sizes and dependency/process contributions; make the extension host
       lazy or absent from the foundational path if it contributes idle cost without configuration.
+- [x] Add deterministic allocation-boundary tests: rejected capacity calculations, failed lifecycle
+      growth with old-state preservation, no allocator calls in steady-state composition/flush, and
+      compile-time size/limit assertions for new scratch storage.
+
+Implement F3 evidence-first: capture the census and P1/P4/P16/PMAX baseline, rank owners by measured
+resident cost, change one dominant owner at a time, and rerun correctness, latency, bytes, CPU, and
+memory evidence after each change. Do not optimize an owner merely because its configured maximum is
+large.
 
 ### F3 completion gate
 
@@ -192,7 +231,27 @@ Do not count configured hard maxima as acceptable resident cost.
   semantics. If this is not achievable, stop and review the measured irreducible owner rather than
   weakening or hiding the metric.
 - Repeated lifecycle and output workloads return to a stable memory plateau.
-- Rendering remains allocation-free after attach/resize capacity is established.
+- Rendering and attached-client flushing remain allocation-free after attach/resize capacity is
+  established; PTY queue/history growth occurs only through documented owner quotas and reuses
+  existing capacity whenever sufficient.
+- Stack high-water use for new F3 paths is documented and safely bounded; no large persistent buffer
+  is disguised as a stack allocation.
+- Every lifecycle allocation has one RAII owner, a checked maximum, a deterministic failure path, and
+  tests that preserve the previous valid state on failure.
+
+F3 completed evidence-first on the pinned host. The initial compiler census ranked the eagerly
+materialized pending-connection table (17,318,912 bytes) and one eager 4 MiB frame per session as the
+dominant owners. Isolated P1 daemon reruns fell from 24,952,832 to 7,716,864 bytes after lazy pending
+slots, then to 3,719,168 bytes after attached-only viewport frames. Final P1 idle process-tree RSS was
+7.70 MiB versus tmux's 10.00 MiB (0.770x), down from 28.30 MiB. One hundred complete lifecycle cycles
+reached a stable 4,800,512-byte daemon plateau at cycle 67 and stayed there for the final 34 cycles.
+Rendering and attached flush have deterministic no-growth coverage; failed frame growth preserves the
+old frame; PTY queues reuse quota-owned capacity; scrollback remains terminal-quota-owned; and an
+unconfigured foundational daemon has no extension runtime or host process. The final unchanged
+80-check F0-F2 release gate passed after two retained profile failures and a clean retry, then passed
+again in the retained post-review run; no limit was widened. Reproduction, raw report names, byte
+owners, stack high-water, binary sizes, and performance
+comparisons are in `docs/memory.md` and `docs/performance.md`.
 
 ## F4: bound and version the private attach path
 

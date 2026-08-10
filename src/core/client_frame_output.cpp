@@ -30,10 +30,11 @@ namespace lemma::core {
 
 [[nodiscard]] auto ClientFrameOutput::readable(const render::FrameBuffer& frame) const noexcept
     -> std::span<const std::byte> {
-  if (size_ > frame.size() || offset_ > size_) {
+  const auto bytes = frame.readable(size_);
+  if (offset_ > size_ || bytes.size() != size_) {
     return {};
   }
-  return std::span(frame).first(size_).subspan(offset_);
+  return bytes.subspan(offset_);
 }
 
 #ifdef LEMMA_ENABLE_LATENCY_TRACE

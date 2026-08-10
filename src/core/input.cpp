@@ -44,7 +44,9 @@ auto PanePtyWriteQueue::consume(const std::size_t bytes) noexcept -> bool {
   read_offset_ += bytes;
   size_ -= bytes;
   if (size_ == 0) {
-    release_storage();
+    // Keep this pane-owned capacity for the next input/terminal-response packet. Lifecycle clear or
+    // destruction releases it; ordinary flush progress never re-enters the allocator.
+    read_offset_ = 0;
   }
   return true;
 }
@@ -119,10 +121,11 @@ auto PanePtyWriteQueue::replace_storage(const std::size_t new_capacity) noexcept
   }
   // Runtime-sized non-throwing storage cannot use std::array.
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-  auto replacement = std::unique_ptr<std::byte[]>(
-      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-      new (std::nothrow) std::byte[new_capacity]);
-  if (replacement == nullptr) {
+  std::unique_ptr<std::byte[]> replacement;
+  try {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    replacement = std::make_unique_for_overwrite<std::byte[]>(new_capacity);
+  } catch (const std::bad_alloc&) {
     release_allocation(new_capacity);
     return false;
   }

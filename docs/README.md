@@ -19,6 +19,7 @@ Start here:
   tab/split behavior, and limitations.
 - [`protocol.md`](protocol.md) — current wire format and versioned server-rendered evolution contract.
 - [`performance.md`](performance.md) — benchmark methodology, current results, and production bounds.
+- [`memory.md`](memory.md) — byte-level owner census, pane/history scaling, churn, and F3 evidence.
 - [`ci.md`](ci.md) — CI lanes, supported platforms, and local checks.
 
 Planning uses only the mutable [`../TODO.md`](../TODO.md) execution backlog and

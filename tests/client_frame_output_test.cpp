@@ -7,8 +7,10 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -29,6 +31,27 @@ struct ScriptedClientWriter final {
   std::size_t written_size{0};
   std::size_t calls{0};
 };
+
+struct ScriptedFrameAllocator final {
+  std::size_t calls{0};
+  bool fail{false};
+};
+
+[[nodiscard]] auto allocate_test_frame(void* const context, const std::size_t bytes) noexcept
+    -> render::FrameStorage {
+  auto& script = *static_cast<ScriptedFrameAllocator*>(context);
+  ++script.calls;
+  if (script.fail) {
+    return nullptr;
+  }
+  try {
+    // Test allocation mirrors runtime-sized frame ownership.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    return std::make_unique_for_overwrite<std::byte[]>(bytes);
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+}
 
 [[nodiscard]] auto scripted_client_write(void* const context,
                                          const std::span<const std::byte> bytes) noexcept
@@ -52,7 +75,9 @@ struct ScriptedClientWriter final {
 }
 
 [[nodiscard]] auto make_frame() -> std::unique_ptr<render::FrameBuffer> {
-  return std::make_unique<render::FrameBuffer>();
+  auto frame = std::make_unique<render::FrameBuffer>();
+  EXPECT_TRUE(frame->prepare({.columns = 80, .rows = 24}));
+  return frame;
 }
 
 [[nodiscard]] auto target_for(render::FrameBuffer& frame, ClientFrameOutput& output,
@@ -67,10 +92,109 @@ struct ScriptedClientWriter final {
   };
 }
 
+TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecycleGrowth) {
+  ScriptedFrameAllocator allocator;
+  render::FrameBuffer frame(&allocate_test_frame, &allocator);
+
+  const auto invalid = render::frame_capacity_for_viewport({.columns = 0, .rows = 24});
+  ASSERT_FALSE(invalid.has_value());
+  EXPECT_EQ(invalid.error(), render::FrameCapacityError::invalid_viewport);
+  EXPECT_FALSE(frame.prepare(
+      {.columns = static_cast<std::uint16_t>(limits::terminal_columns_hard_max + 1U), .rows = 24}));
+  EXPECT_EQ(allocator.calls, 0U);
+
+  const auto protocol_maximum = render::frame_capacity_for_viewport({.columns = 500, .rows = 200});
+  ASSERT_TRUE(protocol_maximum.has_value());
+  EXPECT_EQ(*protocol_maximum, render::frame_bytes_max);
+
+  ASSERT_TRUE(frame.prepare({.columns = 80, .rows = 24}));
+  ASSERT_FALSE(frame.writable().empty());
+  frame.writable().front() = std::byte{0x5A};
+  const auto previous_capacity = frame.capacity();
+  const auto* const previous_storage = frame.writable().data();
+  allocator.fail = true;
+
+  constexpr render::Viewport larger_viewport{.columns = 500, .rows = 200};
+  EXPECT_FALSE(frame.prepare(larger_viewport));
+  EXPECT_EQ(frame.capacity(), previous_capacity);
+  EXPECT_EQ(frame.writable().data(), previous_storage);
+  EXPECT_EQ(frame.writable().front(), std::byte{0x5A});
+  EXPECT_EQ(allocator.calls, 2U);
+
+  allocator.fail = false;
+  EXPECT_FALSE(frame.prepare(larger_viewport, previous_capacity + 1U));
+  EXPECT_EQ(allocator.calls, 2U);
+  ASSERT_TRUE(frame.prepare(larger_viewport, 1));
+  EXPECT_GT(frame.capacity(), previous_capacity);
+  EXPECT_NE(frame.writable().data(), previous_storage);
+  EXPECT_EQ(frame.writable().front(), std::byte{0x5A});
+  EXPECT_EQ(allocator.calls, 3U);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ClientFrameOutputTest, SizesFrameForRendererBoundAndComposesAlternatingStyles) {
+  constexpr std::uint16_t columns = 80;
+  constexpr std::uint16_t rows = 24;
+  vt::TerminalOptions options;
+  options.size = {.columns = columns, .rows = rows};
+  auto terminal_result = vt::Terminal::create(options);
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+
+  constexpr std::string_view first_style = "\x1B[1;31m";
+  constexpr std::string_view second_style = "\x1B[1;32m";
+  std::string contents;
+  const auto cell_count = static_cast<std::size_t>(columns) * rows;
+  contents.reserve(cell_count * (first_style.size() + 1U));
+  for (std::size_t cell = 0; cell < cell_count; ++cell) {
+    contents.append(cell % 2U == 0 ? first_style : second_style);
+    contents.push_back('X');
+  }
+  terminal.write(std::as_bytes(std::span(contents.data(), contents.size())));
+
+  render::FrameBuffer frame;
+  ASSERT_TRUE(frame.prepare({.columns = columns, .rows = rows}));
+  EXPECT_EQ(frame.capacity(), render::frame_fixed_overhead_bytes +
+                                  (cell_count * render::frame_bytes_per_viewport_cell));
+
+  const auto composition = render::compose_retained_single_pane(terminal, frame, true);
+  ASSERT_TRUE(composition.has_value());
+  EXPECT_LE(composition->bytes, frame.capacity());
+}
+
+TEST(ClientFrameOutputTest, CompositionAndFlushDoNotAllocateFrameStorage) {
+  ScriptedFrameAllocator allocator;
+  render::FrameBuffer frame(&allocate_test_frame, &allocator);
+  ASSERT_TRUE(frame.prepare({.columns = 80, .rows = 24}));
+  ASSERT_EQ(allocator.calls, 1U);
+  auto terminal_result = vt::Terminal::create({});
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  ASSERT_TRUE(render::compose_retained_single_pane(terminal, frame, true).has_value());
+  constexpr std::string_view damage = "steady state";
+  terminal.write(std::as_bytes(std::span(damage.data(), damage.size())));
+  const auto terminal_allocations = terminal.allocation_stats().allocations_total;
+
+  const auto composition = render::compose_retained_single_pane(terminal, frame, false);
+  ASSERT_TRUE(composition.has_value());
+  EXPECT_EQ(allocator.calls, 1U);
+  EXPECT_EQ(terminal.allocation_stats().allocations_total, terminal_allocations);
+
+  ClientFrameOutput output;
+  ASSERT_TRUE(output.queue(composition->bytes, origin));
+  ScriptedClientWriter writer;
+  auto target = target_for(frame, output, writer);
+  std::size_t budget = attached_client_write_bytes_per_turn_max;
+  EXPECT_EQ(flush_client_frame(target, budget, origin), ClientFrameFlushStatus::drained);
+  EXPECT_EQ(allocator.calls, 1U);
+}
+
 TEST(ClientFrameOutputTest, BlockedClientRetainsPartialWritesAcrossEintrAndEagain) {
   auto frame = make_frame();
   constexpr std::string_view message = "retained-frame";
-  std::ranges::copy(std::as_bytes(std::span(message.data(), message.size())), frame->begin());
+  std::ranges::copy(std::as_bytes(std::span(message.data(), message.size())),
+                    frame->writable().begin());
   ClientFrameOutput output;
   ASSERT_TRUE(output.queue(message.size(), origin));
   ScriptedClientWriter writer;

@@ -77,6 +77,37 @@
       ]
     },
     {
+      "id": "component_resources",
+      "input": "sample an empty daemon, one detached session, the same attached session, and the same session after detach",
+      "completion": "each lifecycle state remains stable for every one-second resource sample",
+      "metrics": [
+        "baseline_daemon_rss_bytes",
+        "detached_session_daemon_rss_bytes",
+        "attached_session_daemon_rss_bytes",
+        "detached_after_attach_daemon_rss_bytes"
+      ]
+    },
+    {
+      "id": "history_resources",
+      "input": "25,000 fixed rows populate one attached 80x24 terminal whose history remains under the 10,000-byte owner quota",
+      "completion": "the warm-scroll marker is visible before post-history resource sampling",
+      "metrics": [
+        "empty_process_tree_rss_bytes",
+        "populated_process_tree_rss_bytes",
+        "empty_daemon_rss_bytes",
+        "populated_daemon_rss_bytes"
+      ]
+    },
+    {
+      "id": "lifecycle_churn",
+      "input": "repeated create, attach, split to four panes, close to one pane, detach, and kill cycles",
+      "completion": "the session and all pane children are reclaimed after every cycle",
+      "metrics": [
+        "daemon_rss_bytes_per_cycle",
+        "process_tree_rss_bytes_per_cycle"
+      ]
+    },
+    {
       "id": "blocked_pty",
       "input": "a gated peer receives and verifies a 2 MiB payload while another session echoes unique tokens",
       "completion": "the complete payload byte count and digest are rendered after the gate opens",

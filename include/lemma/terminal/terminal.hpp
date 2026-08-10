@@ -75,6 +75,13 @@ struct AnsiRenderResult final {
   bool full{false};
 };
 
+inline constexpr std::size_t pane_ansi_grapheme_bytes_max = 256;
+// Per-cell allocation contract for a composed pane: one maximum grapheme, a 78-byte full SGR
+// transition, a conservatively per-cell 14-byte absolute position (normally once per row), and the
+// 4-byte reset emitted once per nonempty pane.
+inline constexpr std::size_t pane_ansi_bytes_per_cell_max =
+    pane_ansi_grapheme_bytes_max + 78U + 14U + 4U;
+
 // Placement and outer-terminal policy for one surface in a composed frame. Coordinates are
 // zero-based. The compositor, rather than the pane, owns synchronized-update framing and clearing.
 struct PaneRenderOptions final {
@@ -226,6 +233,7 @@ public:
 
   // The borrowed title remains valid only until the next terminal mutation.
   [[nodiscard]] auto title() const noexcept -> std::expected<std::string_view, Error>;
+  [[nodiscard]] auto scrollback_rows() const noexcept -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto take_effects() noexcept -> EffectBatch;
 
   [[nodiscard]] auto pending_pty_response_bytes() const noexcept -> std::size_t;

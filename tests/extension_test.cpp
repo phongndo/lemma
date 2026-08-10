@@ -408,6 +408,29 @@ TEST(ExtensionHostTest, LoadsFullLuaAndRegistersBoundedGenerationOutOfProcess) {
   EXPECT_EQ(::unlink(probe_path), 0);
 }
 
+TEST(ExtensionHostTest, ReportsDeterministicLuaQuotaFailureWithoutRestarting) {
+  std::array<char, 64> path_template{};
+  constexpr std::string_view pattern = "/tmp/lemma-extension-quota-test-XXXXXX";
+  std::ranges::copy(pattern, path_template.begin());
+  int config = ::mkstemp(path_template.data());
+  ASSERT_GE(config, 0);
+  constexpr std::string_view source = "local value = string.rep('x', 32 * 1024 * 1024)";
+  ASSERT_TRUE(platform::write_all(config, std::as_bytes(std::span(source.data(), source.size()))));
+  platform::close_descriptor(config);
+
+  SpawnContext context{.path = path_template.data()};
+  ErrorContext errors;
+  {
+    core::ExtensionRuntime runtime(&spawn_host, &context, &report_error, &errors);
+    ASSERT_TRUE(wait_for_error(runtime));
+    EXPECT_TRUE(runtime.last_error().contains("memory"));
+    EXPECT_EQ(errors.reports, 1U);
+    EXPECT_EQ(context.starts, 1U);
+    EXPECT_GE(runtime.descriptor(), 0);
+  }
+  EXPECT_EQ(::unlink(path_template.data()), 0);
+}
+
 TEST(ExtensionHostTest, ReportsEmptyLuaErrorWithoutRestarting) {
   std::array<char, 64> path_template{};
   constexpr std::string_view pattern = "/tmp/lemma-extension-error-test-XXXXXX";

@@ -340,6 +340,67 @@ blocked-PTY run produced 9,102 events, sixty complete exact-token paths, zero re
 drops. PTY output to composition was 23/48/91 us and composition finish to core socket progress was
 3/6/13 us p50/p95/p99, preserving the F1 trace boundary after descriptor progress moved into core.
 
+## F3 memory ownership results
+
+F3 began with an untouched-code compiler layout census and dedicated five-sample Lemma/tmux
+P1/P4/P16/PMAX reports. The raw pre-change files are
+`f3-baseline-ce1173c-{lemma,tmux}-profiles-5.json` and
+`f3-baseline-ce1173c-engine-record-layouts.txt`. The first owner was the 17,318,912-byte eager table
+of 128 pending setup objects. Making each live setup one lazy slot-owned RAII object reduced P1
+daemon RSS from 24,952,832 B to 7,716,864 B. The next owner was the eager 4-MiB/session retained
+frame. Replacing it with attached-only viewport capacity reduced P1 daemon RSS to 3,719,168 B. No
+smaller owner was changed before those isolated reruns.
+
+The final frame owner is 32 inline bytes, zero dynamic bytes while detached, 679,936 B at 80x24,
+and at most 4 MiB. Its viewport rule is `4 KiB + 352 B/cell`, clamped to 64 KiB–4 MiB. Growth
+occurs only at attach/resize, prepares replacement storage before commit, preserves an in-flight
+frame prefix, and leaves old state valid on failure. Composition and client
+flush receive spans and make no frame allocation. PTY queues remain lazy under a 1,114,112-byte
+per-pane/128-MiB aggregate quota, but now reuse drained capacity. A no-config daemon allocates no
+extension runtime and launches no Lua process; an opted-in host has a deterministic 16-MiB Lua
+allocation quota.
+
+`scripts/ci/memory extended` reproduces the complete census and final reports. P1 idle process-tree
+RSS fell from 28.30 MiB to 7.70 MiB; identical tmux completion semantics measured 10.00 MiB, for a
+0.770 ratio against the 1.5 limit. Final idle tree/daemon RSS was 17.83/4.52 MiB at P4,
+57.55/8.98 MiB at P16, and 216.12/26.64 MiB at PMAX. Shell descendants, not daemon allocations,
+dominate the larger tree totals. The byte-level owner table, component deltas, stripped executable
+sizes, stack bound, and interpretation are in [`memory.md`](memory.md).
+
+The 25,000-row history workload increased daemon RSS by 802,816 B while remaining under the
+terminal's 10,000-byte logical history quota. Ghostty page granularity and active/page-pool retention
+are reported rather than hidden. A 100-cycle create/attach/split/close/detach/kill workload reached
+4,800,512 B at cycle 67 and stayed exactly there for the final 34 cycles; its final 25-sample range
+was zero.
+
+The final tracing-off release evaluation combines `regression-microbenchmarks.json`,
+`regression-process-workloads.json`, `regression-pane-profiles.json`, and
+`regression-budget-results.json`. All 80 unchanged F0-F2 checks passed. The complete post-review run
+is also retained in the four `f3-final-postreview-*.json` reports (microbenchmarks-10,
+process-workloads-30, pane-profiles-20, and budget-results). Two earlier complete profile runs that
+exceeded unchanged loaded-latency
+limits remain retained as `f3-regression-pane-profiles-failed-20.json` and
+`f3-final-pane-profiles-retry-20.json`; no budget was widened. The final twenty-sample run passed
+every profile CPU, RSS, key-to-PTY, and key-to-visible limit. All thirty idle-resource wakeup samples
+were zero.
+
+Selected F2-parent/F3 results are:
+
+| Metric | F2 final | F3 final |
+|---|---:|---:|
+| Warm-scroll p50 / p95 | 2.295 / 2.428 ms | 2.297 / 2.403 ms |
+| Warm-scroll bytes p50 / p95 | 687 / 687 B | 687 / 687 B |
+| Same-pane key-to-PTY p50 / p95 | 1.236 / 1.309 ms | 1.220 / 1.281 ms |
+| Same-pane key-to-visible p50 / p95 / p99 | 1.427 / 1.483 / 1.518 ms | 1.424 / 1.492 / 1.678 ms |
+| Styled damage CPU median | 78.98 us pre-F3 | 72.17 us |
+| One-row span CPU median | 3.30 us pre-F3 | 3.11 us |
+| Detected-scroll CPU median | 18.14 us pre-F3 | 16.92 us |
+| Full-frame CPU median | 180.24 us pre-F3 | 175.65 us |
+
+The p99 same-pane sample moved within the existing measured host distribution while p50/p95, bytes,
+and every reviewed threshold passed. Blocked-client loaded/idle key-to-visible p95 remained 0.589,
+below the unchanged 1.10 isolation limit.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state

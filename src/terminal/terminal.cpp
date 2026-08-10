@@ -763,7 +763,7 @@ struct Terminal::Impl final {
       }
       const auto style = ansi_style(ghostty_style);
 
-      std::array<std::uint8_t, 256> grapheme{};
+      std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
       GhosttyBuffer grapheme_buffer{
           .ptr = grapheme.data(),
           .cap = grapheme.size(),
@@ -902,8 +902,10 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
     return std::unexpected(Error::invalid_options);
   }
 
-  auto impl = std::unique_ptr<Impl>(new (std::nothrow) Impl(options));
-  if (impl == nullptr) {
+  std::unique_ptr<Impl> impl;
+  try {
+    impl = std::make_unique<Impl>(options);
+  } catch (const std::bad_alloc&) {
     return std::unexpected(Error::out_of_memory);
   }
 
@@ -942,9 +944,11 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
 
   impl->row_hash_count = options.size.rows;
   impl->physical_cell_count = static_cast<std::size_t>(options.size.columns) * options.size.rows;
-  impl->physical_cell_hashes =
-      CellHashStorage(new (std::nothrow) std::uint64_t[impl->physical_cell_count]{});
-  if (impl->physical_cell_hashes == nullptr) {
+  try {
+    // Runtime-sized cell storage cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    impl->physical_cell_hashes = std::make_unique<std::uint64_t[]>(impl->physical_cell_count);
+  } catch (const std::bad_alloc&) {
     return std::unexpected(Error::out_of_memory);
   }
 
@@ -1044,9 +1048,12 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   }
 
   const auto physical_cell_count = static_cast<std::size_t>(size.columns) * size.rows;
-  auto physical_cell_hashes =
-      CellHashStorage(new (std::nothrow) std::uint64_t[physical_cell_count]{});
-  if (physical_cell_hashes == nullptr) {
+  CellHashStorage physical_cell_hashes;
+  try {
+    // Runtime-sized cell storage cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    physical_cell_hashes = std::make_unique<std::uint64_t[]>(physical_cell_count);
+  } catch (const std::bad_alloc&) {
     return std::unexpected(Error::out_of_memory);
   }
 
@@ -1429,6 +1436,19 @@ auto Terminal::title() const noexcept -> std::expected<std::string_view, Error> 
   // Ghostty exposes UTF-8 as uint8_t while string_view uses char.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   return std::string_view(reinterpret_cast<const char*>(title.ptr), title.len);
+}
+
+auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  std::size_t rows = 0;
+  const auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &rows);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(map_error(result));
+  }
+  return rows;
 }
 
 auto Terminal::take_effects() noexcept -> EffectBatch {

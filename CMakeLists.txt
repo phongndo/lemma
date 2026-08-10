@@ -260,4 +260,8 @@ if(LEMMA_BUILD_BENCHMARKS)
     lemma_benchmarks
     PRIVATE lemma::lib lemma_warnings benchmark::benchmark
   )
+
+  add_executable(lemma_memory_census benchmarks/terminal_memory.cpp)
+  lemma_internal_target(lemma_memory_census)
+  target_link_libraries(lemma_memory_census PRIVATE lemma_render lemma_terminal)
 endif()

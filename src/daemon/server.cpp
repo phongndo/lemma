@@ -166,6 +166,19 @@ void release_owned_endpoint(void* const context) noexcept {
   close_descriptor(endpoint.server_lock);
 }
 
+[[nodiscard]] auto extension_config_available(const std::string& path) noexcept -> bool {
+  if (path.empty()) {
+    return false;
+  }
+  struct stat info{};
+  if (::stat(path.c_str(), &info) == 0) {
+    return true;
+  }
+  // Missing configuration means the foundational path has no extension process. Other errors are
+  // handed to the host so its existing bounded diagnostic remains observable.
+  return errno != ENOENT;
+}
+
 [[nodiscard]] auto acquire_extension_host(void* const context) noexcept
     -> core::ExtensionConnection {
   const auto& endpoint = *static_cast<const OwnedEndpoint*>(context);
@@ -201,18 +214,20 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
       .server_lock = server_lock,
       .extension_config = {},
   };
+  bool start_extension_host = false;
   if (options.extensions_enabled) {
     try {
       endpoint.extension_config = extension::default_config_path();
+      start_extension_host = extension_config_available(endpoint.extension_config);
     } catch (...) {
       release_owned_endpoint(&endpoint);
       return 1;
     }
   }
   return core::run_server(listener, &release_owned_endpoint, &endpoint,
-                          options.extensions_enabled ? &acquire_extension_host : nullptr,
-                          options.extensions_enabled ? &endpoint : nullptr,
-                          options.extensions_enabled ? &report_extension_error : nullptr, nullptr,
+                          start_extension_host ? &acquire_extension_host : nullptr,
+                          start_extension_host ? &endpoint : nullptr,
+                          start_extension_host ? &report_extension_error : nullptr, nullptr,
                           options.stop_requested);
 }
 

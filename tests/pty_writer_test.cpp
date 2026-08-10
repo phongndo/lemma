@@ -149,18 +149,22 @@ TEST(PtyWriterTest, ReportsHardErrorsWithoutConsumingUnwrittenSuffix) {
   EXPECT_EQ(budget, 1'023U);
 }
 
-TEST(PtyWriterTest, ReleasesAggregateAllocationAfterDrainAndDestruction) {
+TEST(PtyWriterTest, ReusesDrainedCapacityAndReleasesItAtOwnerDestruction) {
   const auto baseline = PanePtyWriteQueue::allocated_bytes_current();
   {
     PanePtyWriteQueue queue;
     const std::vector<std::byte> input(std::size_t{8} * 1'024U, std::byte{'q'});
     ASSERT_TRUE(queue.append(input));
-    EXPECT_GT(PanePtyWriteQueue::allocated_bytes_current(), baseline);
+    const auto allocated = PanePtyWriteQueue::allocated_bytes_current();
+    EXPECT_GT(allocated, baseline);
     std::size_t budget = input.size();
     ScriptedWriter script;
     EXPECT_EQ(flush_pty_write_queue(queue, budget, &scripted_write, &script),
               PtyFlushStatus::drained);
-    EXPECT_EQ(PanePtyWriteQueue::allocated_bytes_current(), baseline);
+    EXPECT_EQ(PanePtyWriteQueue::allocated_bytes_current(), allocated);
+
+    ASSERT_TRUE(queue.append(input));
+    EXPECT_EQ(PanePtyWriteQueue::allocated_bytes_current(), allocated);
   }
   EXPECT_EQ(PanePtyWriteQueue::allocated_bytes_current(), baseline);
 }

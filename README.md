@@ -44,8 +44,9 @@ state, [`docs/roadmap.md`](docs/roadmap.md) for milestone and release gates,
 [`docs/daily-driver-contract.md`](docs/daily-driver-contract.md) for the local mux quality bar,
 [`docs/core-mux-quality.md`](docs/core-mux-quality.md) for the batteries-included workflow and
 measurement standard, [`docs/core-mux-phase1.md`](docs/core-mux-phase1.md) for the authoritative
-kernel closeout, and [`docs/performance.md`](docs/performance.md) for measured renderer and
-multiplexer results. The
+kernel closeout, [`docs/performance.md`](docs/performance.md) for measured renderer and
+multiplexer results, and [`docs/memory.md`](docs/memory.md) for the byte-level ownership census and
+memory evidence. The
 mutable execution backlog and current focus are tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
