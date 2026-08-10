@@ -70,6 +70,7 @@ TEST(FrameSchedulerTest, BlockedOutputRetainsOnePendingRequestWithoutADeadlineWa
   scheduler.request(FrameUrgency::interactive, false, origin, FrameSinkState::blocked);
 
   EXPECT_TRUE(scheduler.pending());
+  EXPECT_TRUE(scheduler.force_full());
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::blocked).has_value());
   EXPECT_FALSE(scheduler.due(origin + 1s, FrameSinkState::blocked));
   EXPECT_TRUE(scheduler.due(origin + 1s, FrameSinkState::ready));

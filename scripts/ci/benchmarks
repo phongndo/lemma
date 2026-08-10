@@ -128,6 +128,7 @@ required = {
     "interactive_under_output",
     "idle_resources",
     "blocked_pty",
+    "blocked_client",
 }
 if not isinstance(workloads, dict) or not required.issubset(workloads):
     print(f"mux benchmark report {path} is missing required workloads", file=sys.stderr)
@@ -186,6 +187,20 @@ for condition in ("idle", "blocked_other_session"):
         if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
             print(
                 f"mux benchmark workload blocked_pty.{condition}.{measurement} is invalid",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+blocked_client = workloads["blocked_client"]
+if not isinstance(blocked_client, dict) or blocked_client.get("status") != "completed":
+    print("mux benchmark workload blocked_client did not complete", file=sys.stderr)
+    raise SystemExit(1)
+for condition in ("idle", "blocked_other_session"):
+    condition_result = blocked_client.get(condition)
+    for measurement in ("key_to_pty", "key_to_visible"):
+        result = condition_result.get(measurement) if isinstance(condition_result, dict) else None
+        if not isinstance(result, dict) or not result.get("samples_ns") or result.get("p50_ns", 0) <= 0:
+            print(
+                f"mux benchmark workload blocked_client.{condition}.{measurement} is invalid",
                 file=sys.stderr,
             )
             raise SystemExit(1)

@@ -26,6 +26,12 @@ reject pending work. The pinned-host causal trace reduced physical-input-to-oute
 from 2.580/2.764/3.172 ms to 0.180/0.226/0.244 ms p50/p95/p99 with 200 complete exact-token paths.
 The regression manifest was tightened to preserve the improvement without widening any F0 gate.
 
+F2 moves all attached-client descriptor progress into the core. Per-client/global byte and attempt
+budgets, round-robin fairness, one retained frame, forced-full recovery, and progress/total deadlines
+are deterministic policy. The pinned non-reader plus pane-flood workload disconnected at 5.016 s and
+reduced unrelated p95 from 0.288 ms to 0.159 ms; its loaded/idle p95 ratio is gated at 1.10. The final
+80-check release evaluation passed without widening an F0/F1 limit.
+
 ## Definition of “best”
 
 A “best” claim requires all three dimensions:
@@ -157,6 +163,14 @@ A multiplexer that buffers the complete payload reports that fact rather than be
 Lemma's backpressure policy. A multiplexer that disconnects or cannot produce the completion marker
 reports a failed workload; it does not receive a latency result for incomplete work.
 
+### Blocked attached-client isolation
+
+A raw 500x200 client requests a 4 KiB receive buffer, attaches without reading its initial frame, and
+starts an unbounded pane-output flood. A second session records exact-token key-to-PTY and
+key-to-visible distributions before and during the flood. Completion requires every token and detach
+of the non-reader at the daemon's progress deadline. This Lemma-specific isolation workload is not a
+cross-multiplexer comparison because its purpose is to enforce Lemma's internal frame/deadline policy.
+
 ## Measurement matrix
 
 | Area | Required observations | Phase 0 implementation |
@@ -169,6 +183,7 @@ reports a failed workload; it does not receive a latency result for incomplete w
 | Attach | process start/attach to retained visible marker | Process harness |
 | Loaded interaction | same-pane key-to-PTY/key-to-visible and bytes | Process harness |
 | Isolation | key-to-PTY, key-to-visible, backpressure, digest recovery | Process harness |
+| Client-output isolation | blocked-client deadline, pane flood, loaded/idle p50/p95/p99 ratio | Process harness |
 | Process footprint | direct-role and process-tree RSS/CPU at P1/P4/P16/PMAX | Process harness |
 | Idle operation | CPU, wakeups, and baseline RSS | Process harness; wakeups are OS-labeled |
 | Interaction | paste, focus, mouse, resize, copy, and search latency | Added with each feature |
@@ -224,3 +239,5 @@ reports before comparing values.
 - The F1 pinned-host gate requires idle profile key-to-visible p50/p95 at or below 0.25/0.5 ms,
   active profile and same-pane-output p50/p95 at or below 1.6/1.8 ms, and zero idle wakeups. The
   loaded limits include the fixture's separately gated approximately 1.2 ms key-to-PTY interval.
+- The F2 gate adds p99 checks and absolute blocked-client checks plus a p95 loaded/idle ratio no
+  greater than 1.10. It does not replace or widen any earlier check.

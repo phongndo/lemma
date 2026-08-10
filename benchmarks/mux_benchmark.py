@@ -35,6 +35,13 @@ LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 PAYLOAD_SIZE = 2 * 1024 * 1024
+BLOCKED_CLIENT_NO_PROGRESS_TIMEOUT_NS = 5_000_000_000
+# The workload starts its clock at the flood command rather than at the first queued daemon frame.
+# Allow a bounded startup and CLI polling margin without weakening the five-second contract.
+BLOCKED_CLIENT_DISCONNECT_TOLERANCE_NS = 500_000_000
+BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS = (
+    BLOCKED_CLIENT_NO_PROGRESS_TIMEOUT_NS + BLOCKED_CLIENT_DISCONNECT_TOLERANCE_NS
+)
 ATTACH_STARTUP_SHELLS = {
     "sh",
     "dash",
@@ -104,6 +111,8 @@ INTERACTION_LABEL_CODES = {
     "OUTPUT": b"OUT",
     "IDLE": b"IDL",
     "BLOCKED": b"BLK",
+    "CLIENT_IDLE": b"CID",
+    "CLIENT_BLOCKED": b"CBL",
     "P1_IDLE": b"PAI",
     "P1_ACTIVE": b"PAA",
     "P4_IDLE": b"PBI",
@@ -1387,6 +1396,70 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         receipts.close()
 
 
+def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("blocked-client workload requires Lemma")
+    receipts = PtyReceiptChannel(runtime.receipt_path)
+    blocked: socket.socket | None = None
+    try:
+        runtime.command("start", "blocked_client")
+        responsive = runtime.start_and_attach("responsive_client_peer")
+        receipt_launch = (
+            f"exec {shlex.quote(str(runtime.peer_path))} latency "
+            f"{shlex.quote(str(runtime.receipt_path))}\r"
+        ).encode()
+        responsive.write_all(receipt_launch, 2.0)
+        responsive.read_until(LATENCY_READY, 5.0)
+        responsive.drain(0.01)
+        idle = latency_samples(responsive, receipts, "CLIENT_IDLE", repetitions)
+
+        blocked = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        blocked.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1_024)
+        blocked.settimeout(5.0)
+        blocked.connect(str(runtime.socket_path))
+        session = b"blocked_client"
+        blocked.sendall(b"A" + bytes((len(session),)) + session + struct.pack("!HH", 500, 200))
+        if blocked.recv(1) != b"Y":
+            raise RuntimeError("blocked client did not receive attach readiness")
+        flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"
+        blocked.sendall(b"I" + struct.pack("!H", len(flood_command)) + flood_command)
+        blocked_since_ns = time.monotonic_ns()
+        time.sleep(0.05)
+
+        under_backpressure = latency_samples(
+            responsive, receipts, "CLIENT_BLOCKED", repetitions
+        )
+        disconnect_deadline_ns = blocked_since_ns + BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS
+        while time.monotonic_ns() <= disconnect_deadline_ns:
+            if ", detached," in runtime.command("list", "blocked_client").stdout:
+                break
+            responsive.drain(0.005)
+            time.sleep(0.01)
+        else:
+            raise TimeoutError(
+                "blocked attached client exceeded its no-progress disconnect bound"
+            )
+        disconnect_latency_ns = time.monotonic_ns() - blocked_since_ns
+        if disconnect_latency_ns > BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS:
+            raise TimeoutError(
+                "blocked attached client was observed detached after its no-progress "
+                f"disconnect bound: {disconnect_latency_ns}ns > "
+                f"{BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS}ns"
+            )
+
+        return {
+            "status": "completed",
+            "receive_buffer_bytes": 4 * 1_024,
+            "disconnect_latency_ns": disconnect_latency_ns,
+            "idle": idle,
+            "blocked_other_session": under_backpressure,
+        }
+    finally:
+        if blocked is not None:
+            blocked.close()
+        receipts.close()
+
+
 def wait_for_lemma_panes(
     runtime: LemmaRuntime, client: PtyProcess, session: str, panes: int
 ) -> None:
@@ -1565,6 +1638,7 @@ def main() -> int:
             "interactive-output",
             "idle-resources",
             "blocked-pty",
+            "blocked-client",
             "comparison",
             "profiles",
             "all",
@@ -1598,6 +1672,8 @@ def main() -> int:
         parser.error(f"missing executable: {arguments.peer}")
     if arguments.mode in ("profiles", "all") and arguments.multiplexer != "lemma":
         parser.error("pane profiles currently require --multiplexer lemma")
+    if arguments.mode == "blocked-client" and arguments.multiplexer != "lemma":
+        parser.error("blocked-client currently requires --multiplexer lemma")
     if arguments.trace_directory is not None:
         arguments.trace_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if any(arguments.trace_directory.glob("*.ltrace")):
@@ -1672,6 +1748,8 @@ def main() -> int:
     ]
     if arguments.mode in ("comparison", "all"):
         selected.extend(comparison_workloads)
+        if arguments.multiplexer == "lemma":
+            selected.append(("blocked_client", blocked_client))
     else:
         individual = {
             "warm-scroll": ("warm_scroll", warm_scroll),
@@ -1679,6 +1757,7 @@ def main() -> int:
             "interactive-output": ("interactive_under_output", interactive_under_output),
             "idle-resources": ("idle_resources", idle_resources),
             "blocked-pty": ("blocked_pty", blocked_pty),
+            "blocked-client": ("blocked_client", blocked_client),
         }
         if arguments.mode in individual:
             selected.append(individual[arguments.mode])

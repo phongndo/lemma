@@ -113,7 +113,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 | Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. |
 | Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. |
 | Reattach reconstruction | Working | Attach, active-tab change, and resize can force complete visible-state reconstruction through daemon-rendered ANSI. |
-| Slow-client isolation | Working | Initial/live frames and control output flush nonblockingly; idle and non-reading peers are covered by isolated process tests. Broader latency benchmarking remains. |
+| Slow-client isolation | Working | Core-owned initial/live frame writes have partial-write/EAGAIN handling, per-client/global turn budgets, round-robin fairness, one retained frame, full-redraw recovery, and progress/total deadlines. Deterministic policy tests and a pinned non-reader plus pane-flood latency workload cover isolation. |
 | Portable terminal checkpoint export/import | Intentionally absent | The archived feasibility gate proved deterministic counterexamples. Checkpoints and client terminal replicas are not part of the 1.0 architecture. |
 | Versioned server-rendered attachment | Absent | Current input is bounded but unversioned, daemon ANSI output is unframed, and mismatch/full-redraw epochs are not yet explicit protocol values. |
 | Ordinary SSH operation | Partial | Lemma may be run on a remote host through SSH like another terminal program, but no supported compatibility/process/performance suite or remote documentation exists yet. |
@@ -148,9 +148,9 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 - Every dispatched session command is recorded in a bounded deterministic per-session trace with
   its resolved stable target, sequence, and typed result; validation failures observed by the
   dispatcher are traceable as results rather than hidden control flow.
-- Client input, accepted connections, control output, PTY reads/writes, extension frames, terminal
-  responses, layouts, frame buffers, registration counts, and terminal allocations have explicit
-  limits.
+- Client input, accepted connections, control output, PTY reads/writes, attached-client frame writes,
+  extension frames, terminal responses, layouts, frame buffers, registration counts, and terminal
+  allocations have explicit limits.
 - PTYs are drained before client input under a rotating aggregate 256 KiB read budget; terminal
   responses and user input share an ordered per-pane queue; extension IPC is processed after PTY,
   client, queued-write, and frame work.
@@ -159,18 +159,19 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 - Release-enabled assertions protect internal invariants.
 - CI covers `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`; scheduled Linux
   ASan/UBSan exists.
-- The current suite includes 85 component tests and 17 process-level mux tests. It covers
-  IDs/queues, deterministic frame urgency/deadline policy, partial PTY/control writes and budgets,
-  protocol fragmentation and bounds, key encoding, extension registration/isolation, terminal
-  damage/allocation, pane composition,
-  daemon/client lifecycle, complete existing focus/zoom/close/tab controls, topology retention,
+- The current suite includes 91 component tests and 17 process-level mux tests. It covers
+  IDs/queues, deterministic frame urgency/deadline policy, partial PTY/control/client writes and
+  budgets, client progress deadlines, many-client round-robin fairness, flooded-pane full-redraw
+  recovery, protocol fragmentation and bounds, key encoding, extension registration/isolation,
+  terminal damage/allocation, pane composition, daemon/client lifecycle, complete existing
+  focus/zoom/close/tab controls, topology retention,
   resize, abrupt disconnect, child exit, restoration, malformed/slow setup peers, non-reading initial
   attach, real blocked-PTY recovery, cross-session fairness, and terminal-response/input ordering.
 - Benchmarks exist for command dispatch, extension registration codec, VT parsing, damage rendering,
   scroll detection, 1/4/16/64 terminal surfaces in a fixed viewport, warm-session marker
   latency/client bytes, separate key-to-PTY and key-to-visible-frame latency with another session's
-  PTY blocked, idle CPU/RSS and Darwin wakeup samples, and post-workload process-tree RSS/CPU
-  snapshots. Pinned tmux and Zellij adapters run
+  PTY blocked, a non-reading client plus unbounded pane flood, idle CPU/RSS and Darwin wakeup samples,
+  and post-workload process-tree RSS/CPU snapshots. Pinned tmux and Zellij adapters run
   the same process inputs and completion markers and preserve incomplete work as explicit failure.
 
 ### Important robustness gaps
@@ -185,10 +186,9 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
    hierarchical generational session/tab/pane/client targets and listings expose IDs, but the private
    name-oriented control protocol cannot yet receive an explicit ID target or return typed stale-ID
    errors on the wire.
-4. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll
-   marker latency/client bytes plus separate key-to-PTY and key-to-visible-frame latency with another
-   PTY blocked. Mouse, slow-client distributions, memory-per-pane, resize-storm, and multi-day soak
-   harnesses remain absent.
+4. **Performance coverage is still narrow.** The checked-in process harness measures warm-scroll,
+   attach, loaded interaction, blocked-PTY, blocked-client/pane-flood, pane-profile, and resource
+   distributions. Mouse, memory-per-pane, resize-storm, and multi-day soak harnesses remain absent.
 5. **User-visible failures are still coarse.** Unexpected attached-client termination now returns
    nonzero after cleanup with a diagnostic, but exact pane exit reasons remain absent and several
    capacity/no-effect outcomes have no attached UI.

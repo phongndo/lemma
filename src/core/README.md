@@ -12,7 +12,10 @@ The current core uses a fixed-capacity generational session store, hierarchical 
 pane slots, generated attached-client IDs, and validated command targets. Pending attach
 reservations retain stable IDs rather than cross-turn session pointers. Each session retains a
 bounded deterministic command/result trace, and PTY reads use a rotating aggregate per-turn budget.
-The target core still adds a
+Attached-client descriptor progress is core-owned: one retained frame per client uses partial-write
+and EAGAIN handling, 64 KiB per-client and 256 KiB global turn budgets, a persistent round-robin
+cursor, and 5 s no-progress/30 s total-frame deadlines. Damage behind a blocked frame collapses into
+one full recovery redraw. The target core still adds a
 separate dense client store, actor/request origins, stored layout ratios, copy/search state, typed
 input, explicit render-redraw generations, immutable
 snapshots/events, bounded output observations, and complete typed command results. A lagging

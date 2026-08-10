@@ -1,5 +1,6 @@
 #include "core/engine.hpp"
 
+#include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
 #include "core/extension_runtime.hpp"
 #include "core/frame_scheduler.hpp"
@@ -67,8 +68,6 @@ static_assert(tabs_per_session_max > 0);
 static_assert(tabs_per_session_max <= render::status_tabs_max);
 using platform::close_descriptor;
 using platform::set_nonblocking;
-using render::ClientOutputState;
-using render::flush_frame;
 using render::FrameBuffer;
 
 class EndpointReleaseGuard final {
@@ -411,7 +410,7 @@ struct Session final {
   TabId active_tab;
   TabId previous_tab;
   protocol::ClientDecoder decoder;
-  ClientOutputState output;
+  ClientFrameOutput output;
   int client{-1};
   ClientId client_id;
   std::uint32_t client_generation{0};
@@ -822,7 +821,6 @@ void schedule_frame(Session& session, const FrameUrgency urgency, const bool for
   }
   session.previous_tab = session.active_tab;
   session.active_tab = id;
-  session.output.reset();
   if (!fit_tab_to_viewport(session, *selected)) {
     session.active = false;
     return false;
@@ -867,7 +865,6 @@ void remove_tab(Session& session, const TabId id) noexcept {
     if (slot.tab != nullptr) {
       session.active_tab = slot.tab->id;
       session.previous_tab = session.active_tab;
-      session.output.reset();
       if (!fit_tab_to_viewport(session, *slot.tab)) {
         session.active = false;
         return;
@@ -883,7 +880,6 @@ void create_tab(Session& session) noexcept {
   if (created == nullptr) {
     return;
   }
-  session.output.reset();
   if (!fit_tab_to_viewport(session, *created)) {
     session.active = false;
     return;
@@ -1494,7 +1490,6 @@ collect_surfaces(Session& session,
   // tree also prevents an undersized viewport from becoming latent while zoomed.
   session.columns = columns;
   session.rows = rows;
-  session.output.reset();
   auto* const tab = active_tab(session);
   if (tab == nullptr || !fit_tab_to_viewport(session, *tab)) {
     return false;
@@ -1667,6 +1662,32 @@ collect_status_line(Session& session,
   session.status_signature = signature;
   session.status_valid = true;
   return {.tabs = std::span(storage).first(count), .dirty = dirty};
+}
+
+[[nodiscard]] auto compose_session_frame(Session& session, const bool force_full,
+                                         const ClientFrameOutput::TimePoint now) noexcept -> bool {
+  std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
+  std::array<render::StatusTab, render::status_tabs_max> status_storage{};
+  const auto surfaces = collect_surfaces(session, surface_storage);
+  const auto status = collect_status_line(session, status_storage);
+  std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  trace_correlation = session.frame_trace_correlation;
+  diagnostic::set_latency_trace_correlation(trace_correlation);
+#endif
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_started,
+                                   static_cast<std::uint32_t>(session.client), surfaces.size());
+  const auto rendered =
+      render::compose_retained_frame(surfaces, {.columns = session.columns, .rows = session.rows},
+                                     *session.frame, force_full, status);
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
+                                   static_cast<std::uint32_t>(session.client),
+                                   rendered.has_value() ? rendered->bytes : 0);
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  diagnostic::set_latency_trace_correlation(0);
+  session.frame_trace_correlation = 0;
+#endif
+  return rendered.has_value() && session.output.queue(rendered->bytes, now, trace_correlation);
 }
 
 template <typename Id>
@@ -2156,13 +2177,10 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
   session->output.reset();
   session->input_backpressured = false;
   session->frame_scheduler.cancel();
-  std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
-  std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-  const auto surfaces = collect_surfaces(*session, surface_storage);
-  const auto status = collect_status_line(*session, status_storage);
-  if (!render::queue_composed_frame(connection, surfaces,
-                                    {.columns = session->columns, .rows = session->rows},
-                                    *session->frame, session->output, true, status)) {
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  session->frame_trace_correlation = 0;
+#endif
+  if (!compose_session_frame(*session, true, std::chrono::steady_clock::now())) {
     session->detach_client();
   }
 }
@@ -2201,18 +2219,24 @@ void handoff_attached_connection(PendingConnection& pending, const std::size_t s
 
 [[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const FrameScheduler::TimePoint now,
                                       int timeout) noexcept -> int {
+  const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
+    if (!deadline.has_value()) {
+      return false;
+    }
+    if (now >= *deadline) {
+      timeout = 0;
+      return true;
+    }
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
+    const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+    timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
+    return false;
+  };
   for (const auto& session : sessions) {
-    if (session != nullptr && session->active) {
-      const auto deadline = session->frame_scheduler.deadline(frame_sink_state(*session));
-      if (deadline.has_value()) {
-        if (now >= *deadline) {
-          return 0;
-        }
-        const auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
-        const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
-        timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
-      }
+    if (session != nullptr && session->active &&
+        (tighten(session->frame_scheduler.deadline(frame_sink_state(*session))) ||
+         tighten(session->output.deadline()))) {
+      return 0;
     }
   }
   return timeout;
@@ -2391,23 +2415,60 @@ void queue_due_frames(Sessions& sessions) noexcept {
         !session->frame_scheduler.due(now, frame_sink_state(*session))) {
       continue;
     }
-    std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
-    std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-    const auto surfaces = collect_surfaces(*session, surface_storage);
-    const auto status = collect_status_line(*session, status_storage);
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-    diagnostic::set_latency_trace_correlation(session->frame_trace_correlation);
-#endif
-    if (!render::queue_composed_frame(
-            session->client, surfaces, {.columns = session->columns, .rows = session->rows},
-            *session->frame, session->output, session->frame_scheduler.force_full(), status)) {
+    if (!compose_session_frame(*session, session->frame_scheduler.force_full(), now)) {
       session->detach_client();
     }
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-    diagnostic::set_latency_trace_correlation(0);
-    session->frame_trace_correlation = 0;
-#endif
     session->frame_scheduler.complete();
+  }
+}
+
+[[nodiscard]] auto write_attached_client(void* const context,
+                                         const std::span<const std::byte> bytes) noexcept
+    -> ClientFrameWriteAttempt {
+  auto& session = *static_cast<Session*>(context);
+  const auto sent = ::send(session.client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+}
+
+void expire_attached_client_frames(Sessions& sessions,
+                                   const ClientFrameOutput::TimePoint now) noexcept {
+  for (auto& session : sessions) {
+    if (session != nullptr && session->active && session->client >= 0 &&
+        session->output.expired(now)) {
+      session->detach_client();
+    }
+  }
+}
+
+void flush_attached_client_frames(Sessions& sessions,
+                                  const std::span<ClientFrameFlushTarget> storage,
+                                  std::size_t& cursor,
+                                  const ClientFrameOutput::TimePoint now) noexcept {
+  std::size_t count = 0;
+  for (auto& session : sessions) {
+    if (session == nullptr || !session->active || session->client < 0) {
+      continue;
+    }
+    LEMMA_ASSERT(count < storage.size());
+    storage.subspan(count, 1).front() = {
+        .descriptor = session->client,
+        .frame = session->frame.get(),
+        .output = &session->output,
+        .write = &write_attached_client,
+        .context = session.get(),
+    };
+    ++count;
+  }
+
+  std::size_t global_budget = attached_client_write_bytes_per_turn_max;
+  auto active_targets = storage.first(count);
+  flush_ready_client_frames(active_targets, cursor, global_budget, now);
+  for (std::size_t index = 0; index < active_targets.size(); ++index) {
+    const auto status = active_targets.subspan(index, 1).front().status;
+    if (status == ClientFrameFlushStatus::hard_error ||
+        status == ClientFrameFlushStatus::deadline_exceeded) {
+      static_cast<Session*>(active_targets.subspan(index, 1).front().context)->detach_client();
+    }
   }
 }
 
@@ -2512,8 +2573,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                         limits::pending_connections_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
+  std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
+      client_flush_targets{};
   std::size_t pty_read_cursor = 0;
   std::size_t pty_flush_cursor = 0;
+  std::size_t client_flush_cursor = 0;
 
   while (true) {
     if (stop_requested != nullptr && stop_requested()) {
@@ -2585,6 +2649,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
       return 1;
     }
+    expire_attached_client_frames(sessions, std::chrono::steady_clock::now());
 
     // Drain every ready PTY before handling client input, then remove exited panes so input is
     // always routed to a live focused pane selected by close_pane.
@@ -2614,6 +2679,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::client && owner.session->active) {
         const auto& events = std::span(descriptors).subspan(index, 1).front();
+        if ((events.revents & (POLLOUT | POLLHUP | POLLERR)) != 0) {
+          owner.session->output.mark_write_ready();
+        }
         process_client_events(*owner.session, events);
       }
     }
@@ -2679,15 +2747,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
 
-    queue_due_frames(sessions);
-    for (auto& session : sessions) {
-      if (session != nullptr && session->active && session->client >= 0 && session->output.busy() &&
-          !flush_frame(session->client, *session->frame, session->output)) {
-        session->detach_client();
-      }
-    }
-
     std::size_t pending_output_budget = std::size_t{256} * 1'024U;
+    bool shutdown_after_outputs = false;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind != DescriptorKind::pending || !owner.pending->active() ||
@@ -2698,9 +2759,20 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
         if (flush_pending_output(*owner.pending, owner.pending_slot, pending_output_budget,
                                  sessions)) {
-          return 0;
+          shutdown_after_outputs = true;
+          break;
         }
       }
+    }
+
+    queue_due_frames(sessions);
+    // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
+    // composed and newly handed-off attach frames get one immediate attempt; a blocked frame is
+    // retried only after poll reports write readiness or its progress deadline expires.
+    flush_attached_client_frames(sessions, client_flush_targets, client_flush_cursor,
+                                 std::chrono::steady_clock::now());
+    if (shutdown_after_outputs) {
+      return 0;
     }
     expire_pending_connections(pending_connections, sessions);
     reclaim_inactive_sessions(sessions);

@@ -49,7 +49,9 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
     urgency_ = urgency;
   }
   pending_ = true;
-  force_full_ = force_full_ || force_full;
+  // Composition has already advanced retained physical state for the in-flight frame. Canonical
+  // damage that arrives behind it collapses into one complete repair frame after it drains.
+  force_full_ = force_full_ || force_full || sink == FrameSinkState::blocked;
 }
 
 [[nodiscard]] auto FrameScheduler::deadline(const FrameSinkState sink) const noexcept

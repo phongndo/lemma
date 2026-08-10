@@ -97,10 +97,14 @@ path. Reliable stream order preserves accepted frames.
 ### Backpressure and recovery
 
 Only complete bounded frames enter an attachment queue. Once a frame begins writing it is completed
-or the connection is retired; bytes from different frames are never spliced. While a frame is
-blocked, new PTY output remains represented by canonical terminal damage instead of growing an output
-log. When the frame drains, the daemon emits a full redraw at a newer generation. A client that misses
-its bounded progress deadline is disconnected without affecting pane processes or unrelated work.
+or the connection is retired; bytes from different frames are never spliced. This policy is already
+implemented for the current unframed daemon stream: core-owned partial writes allow 64 KiB/32 attempts
+per client and 256 KiB globally per reactor turn, rotate through a persistent round-robin cursor, and
+enforce 5 s no-progress plus 30 s total-frame deadlines. While a frame is blocked, new PTY output
+remains represented by canonical terminal damage instead of growing an output log. When the frame
+drains, the daemon emits one full redraw; the F4 protocol adds the explicit generation. A client that
+misses its bounded progress deadline is disconnected without affecting pane processes or unrelated
+work.
 
 A reconnect always receives a fresh complete frame. Delta resume may be added as a measured
 optimization, but correctness never depends on retained render history or acknowledgements.

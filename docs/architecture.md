@@ -233,15 +233,20 @@ urgency may advance but never postpone the one pending deadline; blocked output 
 sessions expose no rendering timer. The daemon composes from latest canonical state, queues the frame
 nonblockingly, and continues processing PTYs. Reliable stream order preserves accepted frames.
 
-Only complete bounded frames enter the attachment queue. Once bytes from a frame have begun writing,
-that frame is completed or the connection is retired; it is never spliced with another frame.
+Only complete bounded frames enter the attachment queue. Composition performs no descriptor I/O.
+The core flushes retained bytes nonblockingly after composition and control handoff. Once bytes from a
+frame have begun writing, that frame is completed or the connection is retired; it is never spliced
+with another frame.
 
 ### Lag and redraw recovery
 
-Each client has strict frame, byte, time, and per-turn budgets. While a frame is blocked, newer damage
-remains represented by canonical state rather than accumulating an output log. After the blocked
-frame completes, the renderer emits a full redraw from the latest state. A client that cannot make
-bounded progress before its deadline is disconnected without affecting its session.
+Each client has strict frame, byte, time, and per-turn budgets. The current path retains one frame,
+limits a client to 64 KiB/32 attempts per turn, shares 256 KiB across all attached clients through a
+persistent round-robin cursor, and disconnects after 5 s without progress or 30 s total frame time.
+While a frame is blocked, newer damage remains represented by canonical state rather than accumulating
+an output log. After the blocked frame completes, the renderer emits a full redraw from the latest
+state. A client that cannot make bounded progress before its deadline is disconnected without
+affecting its session.
 
 Reconnect always begins with a fresh full frame. Resume/delta replay is an optional optimization and
 is never required for correctness.

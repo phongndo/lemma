@@ -6,45 +6,23 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
+#include <expected>
+#include <span>
 
 namespace lemma::render {
 
 inline constexpr std::size_t frame_bytes_max = std::size_t{4} * 1'024U * 1'024U;
 using FrameBuffer = std::array<std::byte, frame_bytes_max>;
 
-struct ClientOutputState final {
-  std::size_t size{0};
-  std::size_t offset{0};
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-  std::uint64_t latency_trace_correlation{0};
-#endif
+// Composition only fills one retained bounded frame. Descriptor progress is owned by the core.
+[[nodiscard]] auto compose_retained_frame(std::span<const PaneSurface> panes, Viewport viewport,
+                                          FrameBuffer& frame, bool force_full,
+                                          StatusLine status = {}) noexcept
+    -> std::expected<CompositionResult, CompositionError>;
 
-  [[nodiscard]] auto busy() const noexcept -> bool { return offset < size; }
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-  [[nodiscard]] auto trace_correlation() const noexcept -> std::uint64_t {
-    return latency_trace_correlation;
-  }
-#endif
-  void reset() noexcept {
-    size = 0;
-    offset = 0;
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-    latency_trace_correlation = 0;
-#endif
-  }
-};
-
-// Initial attach and live updates share the same bounded partial-write state.
-[[nodiscard]] auto flush_frame(int client, const FrameBuffer& frame,
-                               ClientOutputState& output) noexcept -> bool;
-[[nodiscard]] auto queue_frame(int client, vt::Terminal& terminal, FrameBuffer& frame,
-                               ClientOutputState& output) noexcept -> bool;
-
-[[nodiscard]] auto queue_composed_frame(int client, std::span<const PaneSurface> panes,
-                                        Viewport viewport, FrameBuffer& frame,
-                                        ClientOutputState& output, bool force_full,
-                                        StatusLine status = {}) noexcept -> bool;
+[[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,
+                                                bool force_full = false) noexcept
+    -> std::expected<CompositionResult, CompositionError>;
 
 } // namespace lemma::render
 

@@ -90,12 +90,17 @@ def checked_samples(value: Any, label: str, minimum_samples: int) -> list[float]
 
 
 def require_completed_process_workloads(
-    process_report: dict[str, Any], checks: list[dict[str, Any]]
+    process_report: dict[str, Any],
+    checks: list[dict[str, Any]],
+    comparative_checks: list[dict[str, Any]] | None = None,
 ) -> None:
     workloads = process_report.get("workloads")
     if not isinstance(workloads, dict):
         raise BudgetError("process report has no workloads")
     required = {str(check["samples_path"][1]) for check in checks}
+    for check in comparative_checks or []:
+        required.add(str(check["baseline_samples_path"][1]))
+        required.add(str(check["loaded_samples_path"][1]))
     for workload_name in sorted(required):
         workload = workloads.get(workload_name)
         if not isinstance(workload, dict) or workload.get("status") != "completed":
@@ -125,6 +130,25 @@ def validate_check(check: Any, label: str, *, micro: bool) -> dict[str, Any]:
             )
         for index, component in enumerate(path):
             require_string(component, f"{label}.samples_path[{index}]")
+    return check
+
+
+def validate_comparative_check(check: Any, label: str) -> dict[str, Any]:
+    if not isinstance(check, dict):
+        raise BudgetError(f"{label} must be an object")
+    require_string(check.get("id"), f"{label}.id")
+    require_string(check.get("statistic"), f"{label}.statistic")
+    if check["statistic"] not in {"p50", "p95", "p99", "max"}:
+        raise BudgetError(f"{label}.statistic is unsupported")
+    maximum = require_number(check.get("maximum_ratio"), f"{label}.maximum_ratio")
+    if maximum < 1:
+        raise BudgetError(f"{label}.maximum_ratio must be at least 1")
+    for path_name in ("baseline_samples_path", "loaded_samples_path"):
+        path = check.get(path_name)
+        if not isinstance(path, list) or len(path) < 3 or path[0] != "workloads":
+            raise BudgetError(f"{label}.{path_name} must identify a process workload field")
+        for index, component in enumerate(path):
+            require_string(component, f"{label}.{path_name}[{index}]")
     return check
 
 
@@ -181,15 +205,22 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
 
     micro_checks = micro.get("checks")
     process_checks = process.get("checks")
+    comparative_checks = process.get("comparative_checks", [])
     if not isinstance(micro_checks, list) or not micro_checks:
         raise BudgetError("microbenchmarks.checks must be a non-empty array")
     if not isinstance(process_checks, list) or not process_checks:
         raise BudgetError("process_workloads.checks must be a non-empty array")
+    if not isinstance(comparative_checks, list):
+        raise BudgetError("process_workloads.comparative_checks must be an array")
     for index, check in enumerate(micro_checks):
         validate_check(check, f"microbenchmarks.checks[{index}]", micro=True)
     for index, check in enumerate(process_checks):
         validate_check(check, f"process_workloads.checks[{index}]", micro=False)
-    identifiers = [check["id"] for check in [*micro_checks, *process_checks]]
+    for index, check in enumerate(comparative_checks):
+        validate_comparative_check(check, f"process_workloads.comparative_checks[{index}]")
+    identifiers = [
+        check["id"] for check in [*micro_checks, *process_checks, *comparative_checks]
+    ]
     if len(identifiers) != len(set(identifiers)):
         raise BudgetError("regression budget check IDs must be unique")
 
@@ -330,7 +361,11 @@ def evaluate(
     if process_report.get("schema") != 4 or process_report.get("multiplexer") != "lemma":
         raise BudgetError("process workload report must be a schema-4 Lemma report")
     require_int(process_report.get("repetitions"), "process report repetitions", minimum=process_minimum)
-    require_completed_process_workloads(process_report, process_budget["checks"])
+    require_completed_process_workloads(
+        process_report,
+        process_budget["checks"],
+        process_budget.get("comparative_checks", []),
+    )
     for check in process_budget["checks"]:
         samples = checked_samples(
             value_at_path(process_report, check["samples_path"], check["id"]),
@@ -344,6 +379,33 @@ def evaluate(
             check["statistic"],
             float(check["maximum"]),
             check["unit"],
+        )
+    for check in process_budget.get("comparative_checks", []):
+        baseline = checked_samples(
+            value_at_path(process_report, check["baseline_samples_path"], check["id"]),
+            f"{check['id']} baseline",
+            process_minimum,
+        )
+        loaded = checked_samples(
+            value_at_path(process_report, check["loaded_samples_path"], check["id"]),
+            f"{check['id']} loaded",
+            process_minimum,
+        )
+        baseline_statistic = statistic(baseline, check["statistic"])
+        if baseline_statistic <= 0:
+            raise BudgetError(f"{check['id']} baseline statistic must be positive")
+        observed = statistic(loaded, check["statistic"]) / baseline_statistic
+        maximum = float(check["maximum_ratio"])
+        results.append(
+            {
+                "id": check["id"],
+                "samples": min(len(baseline), len(loaded)),
+                "statistic": check["statistic"],
+                "observed": observed,
+                "maximum": maximum,
+                "unit": "ratio",
+                "status": "passed" if observed <= maximum else "failed",
+            }
         )
 
     profile_budget = budgets["pane_profiles"]

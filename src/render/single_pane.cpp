@@ -2,87 +2,28 @@
 
 #include "render/pane_composition.hpp"
 
-#include "diagnostic/latency_trace.hpp"
-#include "lemma/assert.hpp"
-
-#include <algorithm>
-#include <cerrno>
-#include <cstddef>
 #include <span>
-
-#include <sys/socket.h>
 
 namespace lemma::render {
 
-[[nodiscard]] auto flush_frame(const int client, const FrameBuffer& frame,
-                               ClientOutputState& output) noexcept -> bool {
-  constexpr std::size_t bytes_per_turn_max = std::size_t{64} * 1'024U;
-  constexpr std::size_t attempts_per_turn_max = 32;
-  std::size_t budget = bytes_per_turn_max;
-  std::size_t attempts = 0;
-  while (output.busy() && budget > 0 && attempts < attempts_per_turn_max) {
-    ++attempts;
-    const auto remaining = std::span(frame).first(output.size).subspan(output.offset);
-    const auto bytes = remaining.first(std::min(remaining.size(), budget));
-    const auto sent = ::send(client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-    if (sent > 0) {
-      const auto size = static_cast<std::size_t>(sent);
-      std::uint64_t trace_correlation = 0;
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-      trace_correlation = output.trace_correlation();
-#endif
-      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_socket_write_progress,
-                                       static_cast<std::uint32_t>(client), size, trace_correlation);
-      output.offset += size;
-      budget -= size;
-      continue;
-    }
-    if (sent < 0 && errno == EINTR) {
-      continue;
-    }
-    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      return true;
-    }
-    return false;
-  }
-  if (!output.busy()) {
-    output.reset();
-  }
-  return true;
+[[nodiscard]] auto compose_retained_frame(const std::span<const PaneSurface> panes,
+                                          const Viewport viewport, FrameBuffer& frame,
+                                          const bool force_full, const StatusLine status) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
+  return compose_frame(panes, viewport, frame, force_full, status);
 }
 
-[[nodiscard]] auto queue_composed_frame(const int client, const std::span<const PaneSurface> panes,
-                                        const Viewport viewport, FrameBuffer& frame,
-                                        ClientOutputState& output, const bool force_full,
-                                        const StatusLine status) noexcept -> bool {
-  LEMMA_ASSERT(!output.busy());
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-  output.latency_trace_correlation = diagnostic::latency_trace_correlation();
-#endif
-  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_started,
-                                   static_cast<std::uint32_t>(client), panes.size());
-  const auto rendered = compose_frame(panes, viewport, frame, force_full, status);
-  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
-                                   static_cast<std::uint32_t>(client),
-                                   rendered.has_value() ? rendered->bytes : 0);
-  if (!rendered.has_value()) {
-    return false;
-  }
-  output.size = rendered->bytes;
-  output.offset = 0;
-  return flush_frame(client, frame, output);
-}
-
-[[nodiscard]] auto queue_frame(const int client, vt::Terminal& terminal, FrameBuffer& frame,
-                               ClientOutputState& output) noexcept -> bool {
+[[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,
+                                                const bool force_full) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
   const auto size = terminal.size();
   const PaneSurface pane{
       .terminal = &terminal,
       .rectangle = {.columns = size.columns, .rows = size.rows},
       .focused = true,
   };
-  return queue_composed_frame(client, std::span(&pane, 1),
-                              {.columns = size.columns, .rows = size.rows}, frame, output, false);
+  return compose_retained_frame(std::span(&pane, 1), {.columns = size.columns, .rows = size.rows},
+                                frame, force_full);
 }
 
 } // namespace lemma::render

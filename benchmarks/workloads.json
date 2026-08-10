@@ -85,6 +85,16 @@
         "key_to_pty_ns",
         "key_to_visible_ns"
       ]
+    },
+    {
+      "id": "blocked_client",
+      "input": "a 500x200 non-reading attached client runs an unbounded pane-output flood while another session echoes unique tokens",
+      "completion": "all peer tokens are visible and the non-reading client is disconnected by its no-progress deadline",
+      "metrics": [
+        "disconnect_latency_ns",
+        "key_to_pty_ns",
+        "key_to_visible_ns"
+      ]
     }
   ],
   "latency_trace": {
@@ -262,6 +272,13 @@
           "unit": "ns"
         },
         {
+          "id": "interactive_output_key_to_visible_p99",
+          "samples_path": ["workloads", "interactive_under_output", "key_to_visible", "samples_ns"],
+          "statistic": "p99",
+          "maximum": 2100000,
+          "unit": "ns"
+        },
+        {
           "id": "interactive_output_bytes_p95",
           "samples_path": ["workloads", "interactive_under_output", "client_bytes"],
           "statistic": "p95",
@@ -311,6 +328,13 @@
           "unit": "ns"
         },
         {
+          "id": "idle_peer_key_to_visible_p99",
+          "samples_path": ["workloads", "blocked_pty", "idle", "key_to_visible", "samples_ns"],
+          "statistic": "p99",
+          "maximum": 750000,
+          "unit": "ns"
+        },
+        {
           "id": "blocked_peer_key_to_pty_p95",
           "samples_path": ["workloads", "blocked_pty", "blocked_other_session", "key_to_pty", "samples_ns"],
           "statistic": "p95",
@@ -330,6 +354,78 @@
           "statistic": "p95",
           "maximum": 500000,
           "unit": "ns"
+        },
+        {
+          "id": "blocked_peer_key_to_visible_p99",
+          "samples_path": ["workloads", "blocked_pty", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p99",
+          "maximum": 750000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_idle_key_to_pty_p95",
+          "samples_path": ["workloads", "blocked_client", "idle", "key_to_pty", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 250000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_idle_key_to_visible_p50",
+          "samples_path": ["workloads", "blocked_client", "idle", "key_to_visible", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 250000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_idle_key_to_visible_p95",
+          "samples_path": ["workloads", "blocked_client", "idle", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 500000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_idle_key_to_visible_p99",
+          "samples_path": ["workloads", "blocked_client", "idle", "key_to_visible", "samples_ns"],
+          "statistic": "p99",
+          "maximum": 750000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_peer_key_to_pty_p95",
+          "samples_path": ["workloads", "blocked_client", "blocked_other_session", "key_to_pty", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 350000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_peer_key_to_visible_p50",
+          "samples_path": ["workloads", "blocked_client", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p50",
+          "maximum": 250000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_peer_key_to_visible_p95",
+          "samples_path": ["workloads", "blocked_client", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum": 500000,
+          "unit": "ns"
+        },
+        {
+          "id": "blocked_client_peer_key_to_visible_p99",
+          "samples_path": ["workloads", "blocked_client", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p99",
+          "maximum": 750000,
+          "unit": "ns"
+        }
+      ],
+      "comparative_checks": [
+        {
+          "id": "blocked_client_peer_key_to_visible_p95_ratio",
+          "baseline_samples_path": ["workloads", "blocked_client", "idle", "key_to_visible", "samples_ns"],
+          "loaded_samples_path": ["workloads", "blocked_client", "blocked_other_session", "key_to_visible", "samples_ns"],
+          "statistic": "p95",
+          "maximum_ratio": 1.10
         }
       ]
     },

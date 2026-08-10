@@ -120,22 +120,23 @@ idle and loaded latency limits. Raw report names and the complete before/after a
 
 Rendering should produce bounded bytes; the core reactor should own descriptor progress and fairness.
 
-- [ ] Remove `send()` from `src/render/single_pane.cpp`; make composition only fill retained bounded
+- [x] Remove `send()` from `src/render/single_pane.cpp`; make composition only fill retained bounded
       frame state.
-- [ ] Move attached-client writes behind a core-owned bounded flush operation with injectable unit-test
+- [x] Move attached-client writes behind a core-owned bounded flush operation with injectable unit-test
       writers, matching the PTY and pending-control output patterns.
-- [ ] Add a daemon-wide attached-client write budget and a round-robin cursor so session iteration
+- [x] Add a daemon-wide attached-client write budget and a round-robin cursor so session iteration
       order cannot dominate progress.
-- [ ] Record output progress time and disconnect a client that exceeds a reviewed no-progress or total
+- [x] Record output progress time and disconnect a client that exceeds a reviewed no-progress or total
       frame deadline.
-- [ ] Preserve one retained frame per attached client; accumulate later changes as canonical terminal
+- [x] Preserve one retained frame per attached client; accumulate later changes as canonical terminal
       damage and repair with a complete redraw when required.
-- [ ] Measure whether draining every ready PTY before client input harms loaded p95/p99 latency.
-- [ ] If measured, introduce a bounded latency lane that first drains output required for the focused
-      pane's terminal-response ordering, handles client input, and then round-robins bulk PTY work.
-- [ ] Preserve the 256 KiB global PTY-read bound and per-pane/global PTY-write bounds unless a benchmark
+- [x] Measure whether draining every ready PTY before client input harms loaded p95/p99 latency.
+- [x] If measured, introduce a bounded latency lane that first drains output required for the focused
+      pane's terminal-response ordering, handles client input, and then round-robins bulk PTY work. The
+      direct blocked-client/flood distribution improved, so this conditional lane was not introduced.
+- [x] Preserve the 256 KiB global PTY-read bound and per-pane/global PTY-write bounds unless a benchmark
       and isolation test justify a reviewed change.
-- [ ] Add blocked-client, many-writable-client, flooded-pane, and session-order fairness tests.
+- [x] Add blocked-client, many-writable-client, flooded-pane, and session-order fairness tests.
 
 ### F2 completion gate
 
@@ -145,6 +146,17 @@ Rendering should produce bounded bytes; the core reactor should own descriptor p
   workload, or a stricter evidence-based budget.
 - Every ready class makes bounded progress without descriptor-order starvation.
 - Warm-scroll and sparse-frame advantages remain intact.
+
+F2 completed with one 4 MiB-bounded retained frame per attached client, 64 KiB per-client and
+256 KiB daemon-wide write limits per reactor turn, a persistent round-robin cursor, and 5 s
+no-progress/30 s total-frame deadlines. Damage behind a retained frame collapses into one forced full
+redraw after drain; no renderer source performs socket I/O. Deterministic tests cover partial writes,
+EINTR/EAGAIN, blocked and flooded clients, recovery, deadlines, many clients, global/per-client
+budgets, and low-slot starvation. The new pinned-host non-reader plus unbounded pane-flood workload
+disconnected at 5.016 s while unrelated key-to-visible improved from 0.203/0.288/0.294 ms to
+0.147/0.159/0.168 ms p50/p95/p99. Its reviewed p95 loaded/idle ratio gate is 1.10; the final observed
+ratio was 0.552. The final 80-check release gate passed without widening any F0/F1 limit; raw report
+names and the complete accounting are in `docs/performance.md`.
 
 ## F3: reduce baseline and marginal memory
 

@@ -120,6 +120,7 @@ target_link_libraries(
 
 add_library(
   lemma_core STATIC
+  src/core/client_frame_output.cpp
   src/core/command.cpp
   src/core/engine.cpp
   src/core/extension_runtime.cpp
@@ -199,6 +200,7 @@ if(LEMMA_BUILD_TESTS)
 
   add_executable(
     lemma_tests
+    tests/client_frame_output_test.cpp
     tests/connection_output_test.cpp
     tests/core_input_test.cpp
     tests/extension_test.cpp

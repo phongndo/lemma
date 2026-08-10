@@ -15,6 +15,7 @@ from check_regression import (
     require_completed_process_workloads,
     require_scope,
     statistic,
+    validate_comparative_check,
 )
 from latency_trace import input_paths
 from mux_benchmark import (
@@ -40,6 +41,19 @@ class BenchmarkStatisticsTest(unittest.TestCase):
 
 
 class RegressionWorkloadTest(unittest.TestCase):
+    def test_validates_a_bounded_loaded_to_baseline_ratio(self) -> None:
+        check = {
+            "id": "blocked_client_ratio",
+            "statistic": "p95",
+            "maximum_ratio": 1.10,
+            "baseline_samples_path": ["workloads", "blocked", "idle", "samples_ns"],
+            "loaded_samples_path": ["workloads", "blocked", "loaded", "samples_ns"],
+        }
+
+        self.assertIs(validate_comparative_check(check, "ratio"), check)
+        with self.assertRaisesRegex(BudgetError, "at least 1"):
+            validate_comparative_check({**check, "maximum_ratio": 0.99}, "ratio")
+
     def test_rejects_samples_from_a_failed_workload(self) -> None:
         checks = [{"samples_path": ["workloads", "interactive", "samples_ns"]}]
         report = {

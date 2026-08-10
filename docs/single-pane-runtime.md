@@ -52,15 +52,15 @@ bounded to 16 tabs and 64 panes distributed across those tabs. Every pane owns o
 process, PTY, terminal, stable pane ID, and resolved rectangle. A generationally identified tab owns
 its split tree and stable focus/zoom references. Sessions live in a fixed-capacity generational store;
 the session owns its ordered tab slots, active-tab selection, generated attached-client ID and
-descriptor, protocol-message state, frame scheduling, and backpressure
-state. The reactor borrows the daemon listener and remains the sole owner of mutable session and
-terminal state.
+descriptor, protocol-message state, frame scheduling, retained-frame progress/deadlines, and backpressure state.
+The reactor borrows the daemon listener and remains the sole owner of mutable session and terminal
+state.
 
 ### Supporting components
 
 - `src/platform/`: descriptor I/O, PTY/process operations, and terminal mode;
 - `src/protocol/`: bounded packet encoding, prefix parsing, and incremental decoding;
-- `src/render/`: retained frame buffers and partial nonblocking client writes;
+- `src/render/`: bounded retained-frame composition with no descriptor I/O;
 - `src/terminal/`: the sole private `libghostty-vt` adapter;
 - `src/extension/`: an isolated full-Lua host that sends transactional registrations over bounded
   IPC after loading the host machine's optional `init.lua`.
@@ -86,7 +86,10 @@ The runtime currently provides:
 - one deterministic frame deadline: immediate for keystroke-sized input and visible state changes,
   with 2 ms coalescing only for sustained autonomous output;
 - no frame timer while output is blocked or the session is idle, detached, or clientless;
-- partial nonblocking live-frame writes;
+- core-owned partial nonblocking live-frame writes with a 64 KiB per-client/256 KiB global turn
+  budget, round-robin client fairness, and 5 s no-progress/30 s total-frame deadlines;
+- one retained frame per attached client, canonical damage accumulation while blocked, and one full
+  recovery redraw after drain;
 - full visible-state reconstruction on reattach and active-tab changes;
 - PTY progress for inactive tabs without rendering them;
 - deterministic child, descriptor, socket, and lock cleanup.

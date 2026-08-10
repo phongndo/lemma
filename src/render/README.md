@@ -8,8 +8,9 @@ frames, retains physical outer-terminal state, and emits bounded ANSI. Attach, t
 resize, lag recovery, and reconnect can invalidate retained state and force a complete redraw.
 
 Rendering is synchronous, deterministic, allocation-bounded, and limited to affected terminals and
-presentation regions. It does not poll descriptors, mutate topology, parse PTY streams, generate
-terminal responses, or execute Lua.
+presentation regions. It only fills retained caller-owned frame storage; core owns all attached-client
+write progress, budgets, fairness, and deadlines. The renderer does not open, poll, read, or write
+descriptors, mutate topology, parse PTY streams, generate terminal responses, or execute Lua.
 
 A later native backend may consume replaceable Lemma-owned presentation snapshots/deltas derived
 from the same canonical state. Such values are presentation, not a client terminal replica; native

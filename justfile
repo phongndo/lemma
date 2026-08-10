@@ -84,6 +84,7 @@ lsp-check: configure
         ! -path 'include/lemma/command.hpp' \
         ! -path 'include/lemma/generational_store.hpp' \
         ! -path 'src/client/attached_client.cpp' \
+        ! -path 'src/core/client_frame_output.cpp' \
         ! -path 'src/core/connection_output.hpp' \
         ! -path 'src/core/engine.cpp' \
         ! -path 'src/core/input.cpp' \

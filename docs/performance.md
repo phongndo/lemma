@@ -282,6 +282,64 @@ The reviewed manifest now applies 68 checks. It tightens process idle/blocked ke
 idle p50/p95 to 0.25/0.5 ms and active p50/p95 to 1.6/1.8 ms. No F0 CPU, byte, memory, key-to-PTY,
 wakeup, correctness, or completion gate was widened.
 
+## F2 attached-client output results
+
+F2 removes descriptor I/O from `src/render/`. Composition fills one retained frame; the core owns
+partial writes, EINTR/EAGAIN handling, readiness, progress timestamps, deadlines, and disconnect.
+One client can write at most 64 KiB in 32 attempts per turn, all attached clients share a 256 KiB
+turn budget, and a persistent cursor rotates the first visited client. A frame has a 5 s no-progress
+and 30 s total deadline. Poll uses the earlier deadline, so a blocked client has one deadline wakeup
+rather than retrying on unrelated PTY activity. These limits are separate from and do not change the
+256 KiB PTY-read, 64 KiB per-pane PTY-write, or 1 MiB global PTY-write bounds.
+
+An in-flight frame is never replaced, including by resize or tab change. New damage remains in the
+canonical terminals. The scheduler records one pending forced-full request without exposing a render
+timer while blocked; after the old frame drains, one complete frame repairs the latest viewport. The
+renderer has no socket headers or calls. Injectable-writer tests force partial progress, EINTR,
+EAGAIN, per-client/global exhaustion, no-progress and total expiry, sixteen writable clients,
+continuous low-slot replenishment, a 100-update pane flood, and actual forced-full composition.
+
+The release process workload adds a raw 500x200 attached peer with a 4 KiB requested receive buffer.
+After its initial frame blocks, that pane runs an unbounded `yes` flood while a different session
+runs thirty exact-token interactions. Completion requires every token and automatic detach of the
+non-reader. The final run detached it after 5.016 s. Draining ready PTYs before ordinary client input
+did not harm this direct flooded condition, so the conditional focused latency lane was not added:
+
+| Blocked-client workload | Idle p50 / p95 / p99 | Flood + non-reader p50 / p95 / p99 |
+|---|---:|---:|
+| Other-session key to PTY | 0.077 / 0.099 / 0.103 ms | 0.046 / 0.060 / 0.062 ms |
+| Other-session key to visible | 0.203 / 0.288 / 0.294 ms | 0.147 / 0.159 / 0.168 ms |
+
+The loaded/idle key-to-visible p95 ratio was 0.552. The reviewed comparative limit is 1.10; a faster
+loaded sample is retained as observed rather than treated as negative overhead. Absolute p50/p95/p99
+and key-to-PTY limits also apply. Nearest-rank p99 limits cover the largest retained thirty-sample
+host modes (up to 0.734 ms in isolation runs) while the tighter pre-existing p50/p95 gates remain
+unchanged.
+
+The final trace-off release evaluation combines `f2-final-microbenchmarks.json`,
+`f2-final-process-workloads.json`, `f2-final-pane-profiles.json`, and
+`f2-final-budget-results.json`. It passed 80 checks. One complete profile run
+hit 1.801 ms for P1 active p95 and 0.715 ms for PMAX idle p95; that failed report is retained as
+`f2-pane-profiles-loaded-failure-20.json`, and a complete twenty-sample profile retry passed the
+unchanged 1.8/0.5 ms limits. No threshold was widened. Parent/F2 selected results are:
+
+| Metric | F1 parent | F2 final |
+|---|---:|---:|
+| Warm-scroll p50 / p95 | 2.415 / 16.358 ms | 2.295 / 2.428 ms |
+| Warm-scroll bytes p50 / p95 | 687 / 1,764 B | 687 / 687 B |
+| Same-pane key-to-PTY p50 / p95 | 1.222 / 1.281 ms | 1.236 / 1.309 ms |
+| Same-pane key-to-visible p50 / p95 / p99 | 1.371 / 1.409 / 1.418 ms | 1.427 / 1.483 / 1.518 ms |
+| Styled damage CPU p95 | 76.80 us | 74.24 us |
+| One-row span CPU p95 | 3.29 us | 3.21 us |
+| Detected-scroll CPU p95 | 17.82 us | 17.80 us |
+| Full-frame CPU p95 | 181.37 us | 183.93 us |
+
+All twenty idle profile repetitions at P1/P4/P16/PMAX and all thirty idle-resource repetitions still
+reported zero wakeups. Tree RSS stayed inside the unchanged limits. A trace-enabled thirty-sample
+blocked-PTY run produced 9,102 events, sixty complete exact-token paths, zero rejected paths, and zero
+drops. PTY output to composition was 23/48/91 us and composition finish to core socket progress was
+3/6/13 us p50/p95/p99, preserving the F1 trace boundary after descriptor progress moved into core.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state
@@ -415,8 +473,11 @@ presentation snapshots/deltas and requires its own end-to-end evidence.
 - Keystroke-sized accepted input and visible mux state changes promote frame composition immediately.
 - Sustained autonomous output remains coalesced behind one non-postponing 2 ms deadline.
 - A blocked frame exposes no rendering timer, and idle operation has no frame deadline.
-- Only one bounded frame can be in flight per client.
-- Ghostty dirty state accumulates while a client frame is blocked.
+- Only one bounded frame can be in flight per client; renderer code performs no socket I/O.
+- Core client writes are limited to 64 KiB/32 attempts per client and 256 KiB globally per turn, with
+  a persistent round-robin cursor.
+- An in-flight frame has a 5 s no-progress and 30 s total deadline.
+- Ghostty dirty state accumulates while a client frame is blocked and repairs with one full redraw.
 - A resize or attach invalidates physical row and cell state and forces a complete redraw.
 - Dirty full-screen shifts are checked against bounded raw-cell row fingerprints.
 - Dirty partial rows emit only their changed prefix/suffix span.
