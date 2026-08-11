@@ -122,7 +122,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Check formatting
-        run: nix develop --command scripts/ci/format
+        run: nix develop .#ci --command scripts/ci/format
 
   build-test:
     name: Build and test
@@ -154,7 +154,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
 
       - name: Build and run tests
-        run: nix develop --command scripts/ci/build-test
+        run: nix develop .#ci --command scripts/ci/build-test
 
       - name: Save trusted debug cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -197,7 +197,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
 
       - name: Run clang-tidy
-        run: nix develop --command scripts/ci/lint
+        run: nix develop .#ci --command scripts/ci/lint
 
   clangd:
     name: Clangd
@@ -229,7 +229,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
 
       - name: Run clangd checks
-        run: nix develop --command scripts/ci/lsp
+        run: nix develop .#ci --command scripts/ci/lsp
 
   sanitizers:
     name: Address and undefined behavior sanitizers
@@ -261,7 +261,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
 
       - name: Run sanitizer suite
-        run: nix develop --command scripts/ci/sanitizers
+        run: nix develop .#ci --command scripts/ci/sanitizers
 
       - name: Save trusted sanitizer cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -39,6 +39,37 @@
               zig.packages.${system}.brew."0.15.2"
             else
               zig.packages.${system}."0.15.2";
+          ciHk =
+            if isDarwin then
+              hk.packages.${system}.default
+            else
+              let
+                release =
+                  if pkgs.stdenv.hostPlatform.isAarch64 then
+                    {
+                      target = "aarch64-unknown-linux-gnu";
+                      hash = "sha256-dZ94LCTbIJVLRx3mSwqvGxAVftCqG2Tsqbj23E98/As=";
+                    }
+                  else
+                    {
+                      target = "x86_64-unknown-linux-gnu";
+                      hash = "sha256-qGoZtRJ3QBQQ/PrXb2ULUXKILZGm5iSmO54g+Bpkdrw=";
+                    };
+              in
+              pkgs.stdenvNoCC.mkDerivation {
+                pname = "hk";
+                version = "1.50.0-bin";
+                src = pkgs.fetchurl {
+                  url = "https://github.com/jdx/hk/releases/download/v1.50.0/hk-${release.target}.tar.gz";
+                  inherit (release) hash;
+                };
+                dontUnpack = true;
+                installPhase = ''
+                  mkdir -p "$out/bin"
+                  tar -xzf "$src" -C "$out/bin"
+                  chmod +x "$out/bin/hk"
+                '';
+              };
           darwinClang = pkgs.writeShellScriptBin "clang" ''
             exec /usr/bin/clang "$@"
           '';
@@ -64,39 +95,20 @@
               --extra-arg-before="$resource_dir" \
               "$@"
           '';
-        in
-        {
-          default = pkgs.mkShell {
-            packages =
-              pkgs.lib.optionals isDarwin [
-                darwinClang
-                darwinClangxx
-                darwinClangd
-                darwinClangFormat
-                darwinClangTidy
-              ]
-              ++ pkgs.lib.optionals (!isDarwin) [
-                llvm.clang
-                llvm.clang-tools
-              ]
-              ++ [
-                pkgs.actionlint
-                pkgs.ccache
-                pkgs.cmake
-                pkgs.conan
-                pkgs.just
-                pkgs.ninja
-                pkgs.nixpkgs-fmt
-                pkgs.python3
-                pkgs.shellcheck
-                pkgs.tmux
-                pkgs.zellij
-                zigPackage
-                hk.packages.${system}.default
-              ];
-
+          compilerPackages =
+            pkgs.lib.optionals isDarwin [
+              darwinClang
+              darwinClangxx
+              darwinClangd
+              darwinClangFormat
+              darwinClangTidy
+            ]
+            ++ pkgs.lib.optionals (!isDarwin) [
+              llvm.clang
+              llvm.clang-tools
+            ];
+          shellEnvironment = {
             CMAKE_GENERATOR = "Ninja";
-
             shellHook =
               if isDarwin then ''
                 export PATH="${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
@@ -109,6 +121,44 @@
                 export CXX="${llvm.clang}/bin/clang++"
               '';
           };
+        in
+        {
+          default = pkgs.mkShell (shellEnvironment // {
+            packages = compilerPackages ++ [
+              pkgs.actionlint
+              pkgs.ccache
+              pkgs.cmake
+              pkgs.conan
+              pkgs.just
+              pkgs.ninja
+              pkgs.nixpkgs-fmt
+              pkgs.python3
+              pkgs.shellcheck
+              pkgs.tmux
+              pkgs.zellij
+              zigPackage
+              hk.packages.${system}.default
+            ];
+          });
+
+          # Merge-blocking C++ lanes do not need the large actionlint, multiplexer, or shell-lint
+          # closures from the interactive shell. Keeping a dedicated shell avoids realizing those
+          # unrelated tools independently on every ephemeral CI runner.
+          ci = pkgs.mkShell (shellEnvironment // {
+            packages = compilerPackages ++ [
+              pkgs.ccache
+              pkgs.cmake
+              pkgs.conan
+              pkgs.just
+              pkgs.ninja
+              pkgs.nixpkgs-fmt
+              pkgs.python3
+              zigPackage
+              # CI uses hk's hash-pinned release binary instead of rebuilding its Rust dependency
+              # graph on every ephemeral Linux runner.
+              ciHk
+            ];
+          });
         }
       );
 
