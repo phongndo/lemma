@@ -1933,6 +1933,7 @@ static_assert(sizeof(CapacityRejectionConnections) <= std::size_t{4} * 1'024U);
 
 constexpr auto setup_progress_timeout = std::chrono::seconds(5);
 constexpr auto setup_total_timeout = std::chrono::seconds(10);
+constexpr auto capacity_discriminator_timeout = std::chrono::milliseconds(250);
 
 void record_pending_progress(PendingConnection& pending) noexcept {
   pending.deadline =
@@ -2809,26 +2810,26 @@ void expire_capacity_rejections(CapacityRejectionConnections& connections) noexc
   return std::nullopt;
 }
 
-[[nodiscard]] auto
-capacity_rejection_slot_for_accept(CapacityRejectionConnections& connections) noexcept
+[[nodiscard]] auto empty_capacity_rejection_slot(CapacityRejectionConnections& connections) noexcept
     -> std::optional<std::size_t> {
   for (std::size_t slot = 0; slot < connections.size(); ++slot) {
     if (!std::span(connections).subspan(slot, 1).front().active()) {
       return slot;
     }
   }
-  // Silent overflow peers must not occupy every responder and prevent a later peer that supplies a
-  // discriminator from receiving its wire-compatible rejection. Reuse only a connection that has
-  // not started a response; retained partial response bytes keep their original owner.
-  for (std::size_t slot = 0; slot < connections.size(); ++slot) {
-    if (!std::span(connections).subspan(slot, 1).front().flush_response) {
-      return slot;
-    }
-  }
   return std::nullopt;
 }
 
+[[nodiscard]] auto can_accept_connection(PendingConnections& pending_connections,
+                                         CapacityRejectionConnections& capacity_rejections) noexcept
+    -> bool {
+  return empty_pending_slot(pending_connections).has_value() ||
+         empty_capacity_rejection_slot(capacity_rejections).has_value();
+}
+
 // Acceptance exhaustively handles primary slots, bounded rejection slots, and allocation failure.
+// When both tables are occupied, the listener is left queued until a short discriminator deadline
+// releases a responder; accepting and immediately closing would race a peer's first write.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void accept_pending_connections(const int listener, PendingConnections& pending_connections,
                                 PendingConnectionGenerations& generations,
@@ -2838,7 +2839,10 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
     const auto available = empty_pending_slot(pending_connections);
     std::optional<std::size_t> rejection_slot;
     if (!available.has_value()) {
-      rejection_slot = capacity_rejection_slot_for_accept(capacity_rejections);
+      rejection_slot = empty_capacity_rejection_slot(capacity_rejections);
+      if (!rejection_slot.has_value()) {
+        return;
+      }
     }
 
     int connection = ::accept(listener, nullptr, nullptr);
@@ -2853,18 +2857,12 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
       continue;
     }
     if (!available.has_value()) {
-      if (!rejection_slot.has_value()) {
-        // The bounded responder pool is reserved for peers whose protocol can still be identified.
-        // Shed additional peers so silent saturated connections cannot gate listener service.
-        close_descriptor(connection);
-        continue;
-      }
+      LEMMA_ASSERT(rejection_slot.has_value());
       auto& rejection = std::span(capacity_rejections).subspan(*rejection_slot, 1).front();
-      close_descriptor(rejection.descriptor);
       rejection.descriptor = connection;
       rejection.output.reset();
       rejection.flush_response = false;
-      rejection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+      rejection.deadline = std::chrono::steady_clock::now() + capacity_discriminator_timeout;
       continue;
     }
     auto& owner = std::span(pending_connections).subspan(*available, 1).front();
@@ -2948,7 +2946,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       extensions->connect_if_due(std::chrono::steady_clock::now());
     }
     std::size_t descriptor_count = 1;
-    descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
+    const auto listener_events = static_cast<short>(
+        can_accept_connection(pending_connections, capacity_rejections) ? POLLIN : 0);
+    descriptors.front() = {.fd = listener, .events = listener_events, .revents = 0};
     for (const auto& session : sessions) {
       if (session == nullptr || !session->active) {
         continue;
