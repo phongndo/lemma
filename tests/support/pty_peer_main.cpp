@@ -276,7 +276,8 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   }
 
   bool stopped = false;
-  const auto deadline = std::chrono::steady_clock::now() + 15s;
+  // This is only a leaked-peer lifetime guard; the test's existing assertion deadlines stay fixed.
+  const auto deadline = std::chrono::steady_clock::now() + 60s;
   while (!stopped && std::chrono::steady_clock::now() < deadline) {
     pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
     const auto polled = ::poll(&event, 1, 1);
