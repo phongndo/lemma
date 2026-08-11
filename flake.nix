@@ -111,12 +111,13 @@
             CMAKE_GENERATOR = "Ninja";
             shellHook =
               if isDarwin then ''
-                export PATH="${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
+                export PATH="$PWD/build/debug:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
                 export CC=/usr/bin/clang
                 export CXX=/usr/bin/clang++
                 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
                 export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
               '' else ''
+                export PATH="$PWD/build/debug:$PATH"
                 export CC="${llvm.clang}/bin/clang"
                 export CXX="${llvm.clang}/bin/clang++"
               '';

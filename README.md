@@ -59,7 +59,8 @@ Nix LLVM 22 toolchain. It also supplies CMake, Ninja, ccache, Conan 2, Zig
 formatters. Conan supplies GoogleTest, GoogleMock, and Google Benchmark. CMake
 accepts Clang and Apple Clang, requires C++23 without compiler extensions,
 exports the compilation database for clangd, and promotes the strict warning
-set to errors.
+set to errors. The development shell adds `build/debug` to `PATH`, so the local
+debug build is available as `lemma` after `just build`.
 
 ```sh
 git submodule update --init --recursive
@@ -80,7 +81,7 @@ just configure              # Conan install + CMake/Ninja generation
 just build                  # Debug build (`just profile=release build` for release)
 just run                    # Show lemma usage
 just demo                   # Run the scripted libghostty-vt demo
-just build && ./build/debug/lemma new  # Start and attach to pane 0
+just build && lemma new        # Start and attach to pane 0
 just test                   # GoogleTest and GoogleMock
 just bench                  # Google Benchmark microbenchmarks
 just mux-bench              # Release Lemma/tmux/Zellij core-mux baselines
@@ -122,19 +123,19 @@ agreed decisions, [`docs/architecture.md`](docs/architecture.md) for the target 
 ## Sessions, tabs, and panes
 
 ```sh
-./build/debug/lemma                # create or enter session "default"
-./build/debug/lemma new work       # start session "work" and attach
+lemma                # create or enter session "default"
+lemma new work       # start session "work" and attach
 # Press C-b d to detach.
-./build/debug/lemma new logs       # create another session in the same daemon
-./build/debug/lemma list           # list all sessions
-./build/debug/lemma tabs work      # list work's tabs
-./build/debug/lemma attach work    # reattach to work
-./build/debug/lemma kill work      # stop one session
-./build/debug/lemma kill-all       # stop every session, keep the daemon
-./build/debug/lemma shutdown              # show the destructive-operation warning
-./build/debug/lemma shutdown --confirm    # confirm stopping the daemon and owned processes
-./build/debug/lemma --help
-./build/debug/lemma --version
+lemma new logs       # create another session in the same daemon
+lemma list           # list all sessions
+lemma tabs work      # list work's tabs
+lemma attach work    # reattach to work
+lemma kill work      # stop one session
+lemma kill-all       # stop every session, keep the daemon
+lemma shutdown              # show the destructive-operation warning
+lemma shutdown --confirm    # confirm stopping the daemon and owned processes
+lemma --help
+lemma --version
 ```
 
 Each session permits one attached client, owns an ordered set of tabs, and gives each pane its
@@ -157,8 +158,8 @@ A minimal reverse-video status row is centered at the bottom. It shows tabs as
 `number:foreground-process`, brackets the active tab (`[1:zsh]`), automatically follows the
 focused pane's foreground process, and uses `…` when the complete tab list does not fit.
 
-Launch `lemma` directly from the normal shell rather than through `nix develop` when testing
-personal shell configuration.
+When testing personal shell configuration, leave `nix develop` and invoke
+`./build/debug/lemma` directly so the development shell does not affect the result.
 
 ## Editor and commit hooks
 
