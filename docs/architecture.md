@@ -13,9 +13,9 @@ portable terminal checkpoints, or client-side VT parsing. The retained
 pinned Ghostty API cannot support deterministic checkpoint continuation, so the smart-replica design
 was rejected in favor of server-rendered authority.
 
-The current implementation already follows the essential ownership model. Its unversioned protocol,
-input surface, daily-driver UX, configuration integration, remote validation, and release engineering
-remain incomplete; implemented behavior is audited in
+The current implementation follows the ownership model and ships private framed attach protocol 1.0.
+Its broader input surface, daily-driver UX, configuration integration, remote validation, and F5
+long-soak evidence remain incomplete; implemented behavior is audited in
 [`current-capabilities.md`](current-capabilities.md).
 
 ## Product goal
@@ -164,15 +164,15 @@ state, or a second terminal authority. Native presentation is not a 1.0 requirem
 
 ### Protocol — `src/protocol/`
 
-The private production attach protocol is bounded and bidirectional. It carries hello/mismatch,
-attach/control, ordered physical input/commands, bounded ANSI render frames, full-redraw epochs, and
-typed client effects. It is version-coupled to the binary and is not the public automation API.
+The shipped private attach protocol is bounded and bidirectional. It carries exact-version hello,
+ordered physical input and pane commands, resize, detach, bounded ANSI render frames, full-redraw
+generations, and typed disconnect reasons. It is version-coupled to the binary and is not the public
+automation API. The one-request create/list/list-tabs/kill/shutdown control prefix shares the listener
+but does not enter an attached framed stream.
 
-One shared semantic model separately defines stable IDs, actors, commands, results/errors,
-capabilities, snapshots, events, launch/capture/wait/cancel values, deadlines, cancellation, and
-request/idempotency identity. `--format=json`, the isolated Lua host, and a public versioned same-user
-automation socket bind to that model. AI agents use this semantic surface and never parse render
-frames or bypass the command dispatcher.
+A broader shared semantic model for stable IDs, actors, commands, snapshots, events, and
+launch/capture/wait/cancel remains deferred. There is no shipped `--format=json` or public persistent
+automation socket; extensions use their separate bounded registration protocol.
 
 Protocol code owns schemas, encoding, incremental decoding, limits, and versions. It does not open
 sockets, dispatch commands, parse terminal bytes, hit-test layouts, or render frames.
@@ -216,7 +216,7 @@ roles, and wires components together. It owns no mux, terminal, or presentation 
 
 A successful attachment is an explicit transaction:
 
-1. negotiate daemon/client protocol versions and presentation/input capabilities;
+1. validate exact private protocol version 1.0, session name, dimensions, and sequence;
 2. resolve the session and allocate bounded daemon-side attachment state;
 3. establish canonical dimensions and resize the active layout;
 4. invalidate the new attachment's retained presentation cache;
@@ -260,16 +260,15 @@ is never required for correctness.
 
 ### Remote operation
 
-The 1.0 baseline supports operation through an ordinary SSH terminal:
+The ownership model permits running the ordinary local client on a host reached through SSH:
 
 ```sh
 ssh -t host lemma
 ```
 
-Remote machine-readable control uses ordinary SSH commands such as
-`ssh host lemma list --format=json`. A later `lemma connect HOST` may carry the same framed attach
-protocol over SSH stdio, but it keeps the daemon-rendered presentation model and is not a prerequisite
-for local daily-driver quality.
+F5 does not claim SSH compatibility evidence, and machine-readable `--format=json` is not shipped.
+A later `lemma connect HOST` could carry the same framed attach protocol over SSH stdio, but remote
+transport and automation remain outside the frozen foundational mux.
 
 ## Authoritative execution model
 
@@ -345,7 +344,7 @@ The internal targets remain:
 - `lemma_base`: assertions and dependency-free foundations;
 - `lemma_terminal`: the sole authoritative Ghostty adapter;
 - `lemma_platform`: operating-system mechanisms;
-- `lemma_protocol`: private attach plus public semantic automation and extension framing;
+- `lemma_protocol`: private attach/control and extension framing (no public automation protocol);
 - `lemma_render`: daemon-owned ANSI composition and future presentation values;
 - `lemma_core`: authoritative stores, commands, attachment/view state, and reactor policy;
 - `lemma_extension`: Lua configuration and isolated host process;

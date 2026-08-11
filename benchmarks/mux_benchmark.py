@@ -21,12 +21,20 @@ import socket
 import struct
 import subprocess
 import tempfile
+import termios
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
 ALT_SCREEN = b"\x1b[?1049h"
+# Exact outer-terminal cleanup emitted by src/client/attached_client.cpp.
+LEMMA_OUTER_TERMINAL_RESTORE = (
+    b"\x1b[0m\x1b[?2026l\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l"
+    b"\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l\x1b[?1016l"
+    b"\x1b[?2004l\x1b[?25h\x1b[?7h\x1b[?1049l"
+)
+FINAL_PTY_OUTPUT_BYTES = 64 * 1024
 WARM_MARKER = b"__LEMMA_WARM_SCROLL_DONE__"
 BLOCK_READY = b"__LEMMA_PTY_READY__"
 BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
@@ -349,6 +357,50 @@ def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
     }
 
 
+def open_descriptor_snapshot(pid: int) -> dict[str, Any]:
+    if pid <= 0:
+        return {"available": False, "reason": "invalid process"}
+    if platform.system() == "Linux":
+        try:
+            return {
+                "available": True,
+                "source": "/proc/PID/fd",
+                "count": len(list(Path(f"/proc/{pid}/fd").iterdir())),
+            }
+        except OSError as error:
+            return {"available": False, "reason": str(error)}
+    if platform.system() == "Darwin":
+        # proc_fdinfo is two int32 values. A fixed 4,096-entry buffer is well above Lemma's
+        # reviewed descriptor bounds and avoids a size-probe race.
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            proc_pidinfo = libproc.proc_pidinfo
+            proc_pidinfo.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            proc_pidinfo.restype = ctypes.c_int
+            entry_bytes = ctypes.sizeof(ctypes.c_int32) * 2
+            capacity = 4_096
+            storage = ctypes.create_string_buffer(entry_bytes * capacity)
+            received = proc_pidinfo(pid, 1, 0, storage, len(storage))
+            if received <= 0 or received % entry_bytes != 0:
+                return {"available": False, "reason": "proc_pidinfo(PROC_PIDLISTFDS) failed"}
+            if received == len(storage):
+                return {"available": False, "reason": "descriptor census exceeded 4,096 entries"}
+            return {
+                "available": True,
+                "source": "proc_pidinfo PROC_PIDLISTFDS",
+                "count": received // entry_bytes,
+            }
+        except (AttributeError, OSError) as error:
+            return {"available": False, "reason": str(error)}
+    return {"available": False, "reason": "unsupported platform"}
+
+
 def process_group_snapshot(
     pids: set[int], processes: dict[int, tuple[int, int, int]]
 ) -> dict[str, Any]:
@@ -513,12 +565,13 @@ def sample_resources(
     sample_seconds = 1.0
     before_samples: list[dict[str, Any]] = []
     after_samples: list[dict[str, Any]] = []
+    outer_bytes: list[int] = []
     for _ in range(repetitions):
         before = runtime_resource_snapshot(runtime)
         if client is None:
             time.sleep(sample_seconds)
         else:
-            client.drain(sample_seconds)
+            outer_bytes.append(client.drain(sample_seconds))
         after = runtime_resource_snapshot(runtime)
         if before.get("available") is not True or after.get("available") is not True:
             raise RuntimeError("resource snapshot is unavailable")
@@ -550,10 +603,39 @@ def sample_resources(
             )
             role_results[role] = {"available": False, "reason": reason}
 
+    sampled_output = (
+        {
+            "available": True,
+            **metric_summary(outer_bytes, "bytes"),
+        }
+        if client is not None
+        else {
+            "available": False,
+            "reason": "no attached outer client was sampled",
+            "samples_bytes": [],
+        }
+    )
+    sampled_throughput = (
+        {
+            "available": True,
+            **metric_summary(
+                [int(value / sample_seconds) for value in outer_bytes],
+                "bytes_per_second",
+            ),
+        }
+        if client is not None
+        else {
+            "available": False,
+            "reason": "no attached outer client was sampled",
+            "samples_bytes_per_second": [],
+        }
+    )
     return {
         "status": "completed",
         "sample_duration_ns": int(sample_seconds * 1_000_000_000),
         **summarize_resource_samples(before_samples, after_samples),
+        "outer_bytes": sampled_output,
+        "outer_throughput": sampled_throughput,
         "roles": role_results,
     }
 
@@ -565,7 +647,13 @@ def idle_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
 
 
 class PtyProcess:
-    def __init__(self, arguments: list[str], environment: dict[str, str]) -> None:
+    def __init__(
+        self,
+        arguments: list[str],
+        environment: dict[str, str],
+        *,
+        terminal_restore_sequence: bytes | None = None,
+    ) -> None:
         release_read, release_write = os.pipe()
         try:
             pid, descriptor = pty.fork()
@@ -587,8 +675,14 @@ class PtyProcess:
         self.pid = pid
         self.descriptor = descriptor
         self.pending_read = b""
+        self.initial_terminal_attributes: list[Any] | None = None
+        self.terminal_restore_sequence = terminal_restore_sequence
+        self.final_output = b""
+        self.terminal_modes_restored: bool | None = None
+        self.terminal_state_restored: bool | None = None
         try:
-            fcntl.ioctl(descriptor, termios_tiocswinsz(), struct.pack("HHHH", 24, 80, 0, 0))
+            fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            self.initial_terminal_attributes = termios.tcgetattr(descriptor)
             flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
             fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             os.write(release_write, b"\0")
@@ -601,16 +695,40 @@ class PtyProcess:
     def wait_for_exit(self, timeout: float) -> None:
         if self.pid <= 0:
             return
+        self.final_output = b""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            # Detaching clients restore terminal modes before exit. Keep consuming the PTY so a
-            # complete restoration sequence cannot fill the outer PTY and block the child in write.
-            self.drain(min(0.01, max(0.0, deadline - time.monotonic())))
+            # Detaching clients restore terminal modes before exit. Keep consuming and retaining
+            # the final PTY output so cleanup cannot block and escape-controlled modes are checked.
+            self.drain(
+                min(0.01, max(0.0, deadline - time.monotonic())),
+                retain_final_output=True,
+            )
             try:
                 waited, status = os.waitpid(self.pid, os.WNOHANG)
             except ChildProcessError as error:
                 raise RuntimeError("PTY child was reaped unexpectedly") from error
             if waited == self.pid:
+                # Consume bytes queued immediately before exit before inspecting the cleanup tail.
+                self.drain(0.05, retain_final_output=True)
+                try:
+                    current_attributes = termios.tcgetattr(self.descriptor)
+                    attributes_restored = (
+                        self.initial_terminal_attributes is not None
+                        and current_attributes == self.initial_terminal_attributes
+                    )
+                except termios.error:
+                    attributes_restored = False
+                if self.terminal_restore_sequence is None:
+                    self.terminal_modes_restored = None
+                    self.terminal_state_restored = attributes_restored
+                else:
+                    self.terminal_modes_restored = (
+                        self.terminal_restore_sequence in self.final_output
+                    )
+                    self.terminal_state_restored = (
+                        attributes_restored and self.terminal_modes_restored is True
+                    )
                 try:
                     os.close(self.descriptor)
                 except OSError:
@@ -683,6 +801,22 @@ class PtyProcess:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"PTY write timed out after {offset}/{len(data)} bytes")
 
+    def resize(self, columns: int, rows: int) -> None:
+        if not 0 < columns <= 500 or not 0 < rows <= 200 or self.pid <= 0:
+            raise ValueError("PTY resize is outside the private attach bounds")
+        encoded = struct.pack("HHHH", rows, columns, 0, 0)
+        fcntl.ioctl(self.descriptor, termios.TIOCSWINSZ, encoded)
+        actual = fcntl.ioctl(
+            self.descriptor, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0)
+        )
+        actual_rows, actual_columns, _, _ = struct.unpack("HHHH", actual)
+        if (actual_columns, actual_rows) != (columns, rows):
+            raise RuntimeError("outer PTY did not retain the requested dimensions")
+        try:
+            os.killpg(self.pid, signal.SIGWINCH)
+        except ProcessLookupError:
+            raise RuntimeError("attached client exited during resize") from None
+
     def fill_until_stalled(self, data: bytes, stall_seconds: float = 0.25) -> int:
         offset = 0
         last_progress = time.monotonic()
@@ -750,9 +884,15 @@ class PtyProcess:
                     )
         raise TimeoutError(f"did not observe {marker!r}; tail={retained[-4096:]!r}")
 
-    def drain(self, duration: float = 0.05) -> int:
+    def drain(
+        self, duration: float = 0.05, *, retain_final_output: bool = False
+    ) -> int:
         deadline = time.monotonic() + duration
         total = len(self.pending_read)
+        if retain_final_output and self.pending_read:
+            self.final_output = (self.final_output + self.pending_read)[
+                -FINAL_PTY_OUTPUT_BYTES:
+            ]
         self.pending_read = b""
         while time.monotonic() < deadline:
             readable, _, _ = select.select([self.descriptor], [], [], 0.005)
@@ -760,11 +900,17 @@ class PtyProcess:
                 continue
             try:
                 data = os.read(self.descriptor, 64 * 1024)
-            except (BlockingIOError, OSError):
-                break
+            except BlockingIOError:
+                continue
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
             if not data:
                 break
             total += len(data)
+            if retain_final_output:
+                self.final_output = (self.final_output + data)[-FINAL_PTY_OUTPUT_BYTES:]
         return total
 
 
@@ -866,13 +1012,6 @@ class PtyReceiptChannel:
             pass
 
 
-def termios_tiocswinsz() -> int:
-    # TIOCSWINSZ is stable on the supported Darwin and Linux hosts.
-    import termios
-
-    return termios.TIOCSWINSZ
-
-
 class MuxRuntime(Protocol):
     multiplexer: str
     version: str
@@ -962,7 +1101,9 @@ class LemmaRuntime:
 
     def attach(self, session: str) -> PtyProcess:
         client = PtyProcess(
-            [str(self.cli_path), str(self.socket_path), "attach", session], self.environment
+            [str(self.cli_path), str(self.socket_path), "attach", session],
+            self.environment,
+            terminal_restore_sequence=LEMMA_OUTER_TERMINAL_RESTORE,
         )
         self.clients.append(client)
         client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)
@@ -1665,16 +1806,38 @@ def pane_profile(
 def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     if not isinstance(runtime, LemmaRuntime):
         raise TypeError("lifecycle churn requires Lemma")
+    baseline = runtime_resource_snapshot(runtime)
+    if baseline.get("available") is not True:
+        raise RuntimeError("lifecycle churn baseline resource snapshot is unavailable")
+    baseline_descriptors = open_descriptor_snapshot(runtime.server.pid)
+    if baseline_descriptors.get("available") is not True:
+        raise RuntimeError("lifecycle churn descriptor baseline is unavailable")
+
     tree_rss: list[int] = []
     daemon_rss: list[int] = []
+    process_counts: list[int] = []
+    descriptor_counts: list[int] = []
+    focused_pids: list[int] = []
+    restored_clients = 0
     for _ in range(repetitions):
         runtime.command("start", "lifecycle_churn")
         client = runtime.attach("lifecycle_churn")
         build_profile(runtime, client, 4, "lifecycle_churn")
+        listing = runtime.command("list", "lifecycle_churn").stdout
+        try:
+            focused_pid = int(listing.split("focused pid ", 1)[1].split(",", 1)[0])
+        except (IndexError, ValueError) as error:
+            raise RuntimeError("lifecycle churn could not identify its live pane") from error
+        if focused_pid <= 0:
+            raise RuntimeError("lifecycle churn observed an invalid focused pane identity")
+        focused_pids.append(focused_pid)
         for expected in (3, 2, 1):
             send_prefix(client, b"x")
             wait_for_profile_panes(runtime, client, "lifecycle_churn", expected)
         runtime.detach(client, "lifecycle_churn")
+        if client.terminal_state_restored is not True:
+            raise RuntimeError("lifecycle churn leaked attached-client terminal state")
+        restored_clients += 1
         runtime.command("kill", "lifecycle_churn")
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
@@ -1690,15 +1853,77 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         daemon = snapshot.get("roles", {}).get("daemon", {})
         if daemon.get("available") is not True:
             raise RuntimeError("lifecycle churn daemon snapshot is unavailable")
+        descriptor_snapshot = open_descriptor_snapshot(runtime.server.pid)
+        if descriptor_snapshot.get("available") is not True:
+            raise RuntimeError("lifecycle churn descriptor snapshot is unavailable")
+        process_count = int(snapshot["process_count"])
+        descriptor_count = int(descriptor_snapshot["count"])
+        if process_count != int(baseline["process_count"]):
+            raise RuntimeError("lifecycle churn left a pane or client process live")
+        if descriptor_count != int(baseline_descriptors["count"]):
+            raise RuntimeError("lifecycle churn leaked a daemon descriptor")
         tree_rss.append(int(snapshot["rss_bytes"]))
         daemon_rss.append(int(daemon["rss_bytes"]))
+        process_counts.append(process_count)
+        descriptor_counts.append(descriptor_count)
+
+    plateau_cycles = min(100, max(25, repetitions // 10))
+    plateau: dict[str, Any]
+    if repetitions >= plateau_cycles * 2:
+        preceding = daemon_rss[-(plateau_cycles * 2) : -plateau_cycles]
+        final = daemon_rss[-plateau_cycles:]
+        final_range = max(final) - min(final)
+        preceding_p95 = percentile(preceding, 0.95)
+        final_p95 = percentile(final, 0.95)
+        x_mean = (plateau_cycles - 1) / 2
+        denominator = sum((index - x_mean) ** 2 for index in range(plateau_cycles))
+        final_mean = sum(final) / len(final)
+        numerator = sum(
+            (index - x_mean) * (value - final_mean)
+            for index, value in enumerate(final)
+        )
+        slope = numerator / denominator
+        plateau = {
+            "evaluated": True,
+            "window_cycles": plateau_cycles,
+            "preceding_p95_bytes": preceding_p95,
+            "final_p95_bytes": final_p95,
+            "final_range_bytes": final_range,
+            "final_slope_bytes_per_cycle": slope,
+            "maximum_final_range_bytes": 2 * 1_024 * 1_024,
+            "maximum_p95_growth_bytes": 1 * 1_024 * 1_024,
+            "maximum_final_slope_bytes_per_cycle": 4_096,
+        }
+        if (
+            final_range > plateau["maximum_final_range_bytes"]
+            or final_p95 > preceding_p95 + plateau["maximum_p95_growth_bytes"]
+            or slope > plateau["maximum_final_slope_bytes_per_cycle"]
+        ):
+            raise RuntimeError("lifecycle churn did not return to a bounded memory plateau")
+    else:
+        plateau = {
+            "evaluated": False,
+            "reason": f"at least {plateau_cycles * 2} cycles are required",
+        }
 
     return {
         "status": "completed",
         "cycles": repetitions,
         "operations_per_cycle": ["create", "attach", "split", "close", "detach", "kill"],
+        "identity_check": (
+            "each incarnation exposed a positive live focused pane PID and the reused session "
+            "name was absent before the next create"
+        ),
+        "focused_pids": focused_pids,
+        "terminal_restorations": restored_clients,
         "tree_rss": metric_summary(tree_rss, "bytes"),
         "daemon_rss": metric_summary(daemon_rss, "bytes"),
+        "process_counts": metric_summary(process_counts, "count"),
+        "daemon_open_descriptors": {
+            "source": baseline_descriptors["source"],
+            **metric_summary(descriptor_counts, "count"),
+        },
+        "memory_plateau": plateau,
     }
 
 

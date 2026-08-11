@@ -2,11 +2,14 @@
 set -euo pipefail
 
 # Keep sanitizer flags and objects out of the ordinary debug cache so running
-# this suite locally cannot change later `just build` or hook behavior.
+# this suite locally cannot change later `just build` or hook behavior. Ghostty's wrapper shares one
+# source-tree output across profiles, so force the Debug archive required by this lane.
+rm -rf third_party/ghostty/zig-out
 scripts/ci/configure sanitizers \
   -DLEMMA_BUILD_TESTS=ON \
   -DLEMMA_BUILD_BENCHMARKS=OFF
-cmake --build --preset sanitizers --target lemma lemma_tests lemma_e2e_tests
+cmake --build --preset sanitizers --target \
+  lemma lemma_tests lemma_e2e_tests lemma_steady_state_allocation_audit
 
 leak_detection=1
 if [[ "$(uname -s)" == Darwin ]]; then

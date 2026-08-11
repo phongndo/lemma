@@ -250,6 +250,21 @@ if(LEMMA_BUILD_TESTS)
     lemma_e2e_tests
     PROPERTIES TIMEOUT 120 LABELS "integration;pty"
   )
+
+  add_executable(lemma_steady_state_allocation_audit tests/steady_state_allocation_audit.cpp)
+  lemma_internal_target(lemma_steady_state_allocation_audit)
+  target_link_libraries(
+    lemma_steady_state_allocation_audit
+    PRIVATE lemma_core lemma_render lemma_terminal
+  )
+  add_test(
+    NAME steady_state_allocation_audit
+    COMMAND lemma_steady_state_allocation_audit
+  )
+  set_tests_properties(
+    steady_state_allocation_audit
+    PROPERTIES TIMEOUT 30 LABELS "component;allocation"
+  )
 endif()
 
 if(LEMMA_BUILD_BENCHMARKS)

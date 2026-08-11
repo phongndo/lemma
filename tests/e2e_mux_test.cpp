@@ -1143,6 +1143,48 @@ TEST_F(MuxProcessTest, BackpressuresBlockedPtyAndRecoversInOrderWithoutStarvingP
   ASSERT_TRUE(responsive.wait(deadline_after(5s)));
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, SurvivesRapidResizeOutputFloodAndFocusedChildExit) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "resize_flood_exit"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("yes __LEMMA_RESIZE_FLOOD__\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FLOOD__", deadline_after(5s)));
+
+  constexpr std::size_t resize_count = 500;
+  for (std::size_t index = 0; index < resize_count; ++index) {
+    const auto columns = static_cast<std::uint16_t>(20U + ((index * 37U) % 141U));
+    const auto rows = static_cast<std::uint16_t>(5U + ((index * 17U) % 56U));
+    ASSERT_TRUE(client.resize(columns, rows)) << "resize " << index;
+    client.drain(deadline_after(1ms));
+  }
+  ASSERT_TRUE(client.resize(111, 37));
+  const std::array interrupt{std::byte{0x03}};
+  ASSERT_TRUE(client.send(interrupt, deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__LEMMA_RESIZE_FINAL__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FINAL__ 36 111", deadline_after(10s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("resize_flood_exit", "2 pane(s)", deadline_after(5s), &client));
+  ASSERT_TRUE(
+      client.send("printf '__LEMMA_CHILD_EXIT__\\n'; read ignored; exit\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_CHILD_EXIT__", deadline_after(5s)));
+  ASSERT_TRUE(client.send("\r", deadline_after(2s)));
+  const auto reclaimed = wait_for_session(
+      "resize_flood_exit", [](const SessionListing& value) { return value.panes == 1; },
+      deadline_after(5s), &client);
+  ASSERT_TRUE(reclaimed.has_value()) << command({"list", "resize_flood_exit"}).output;
+  ASSERT_TRUE(client.send("printf '__LEMMA_SURVIVED_STRESS__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_SURVIVED_STRESS__", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+  EXPECT_TRUE(client.terminal_state_restored());
+}
+
 // Queue contention is covered deterministically by PtyWriterTest; this process case verifies the
 // terminal-adapter response round trip through the daemon and a real PTY.
 TEST_F(MuxProcessTest, RoutesTerminalResponsesAndClientInputToPtyPeers) {

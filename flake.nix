@@ -126,16 +126,23 @@
           default = pkgs.mkShell (shellEnvironment // {
             packages = compilerPackages ++ [
               pkgs.actionlint
+              pkgs.bashInteractive
               pkgs.ccache
               pkgs.cmake
               pkgs.conan
+              pkgs.fish
+              pkgs.htop
               pkgs.just
+              pkgs.less
+              pkgs.neovim
               pkgs.ninja
               pkgs.nixpkgs-fmt
               pkgs.python3
               pkgs.shellcheck
               pkgs.tmux
+              pkgs.vim
               pkgs.zellij
+              pkgs.zsh
               zigPackage
               hk.packages.${system}.default
             ];

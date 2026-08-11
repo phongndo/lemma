@@ -1,0 +1,175 @@
+#include "core/client_frame_output.hpp"
+#include "lemma/terminal/terminal.hpp"
+#include "render/single_pane.hpp"
+
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <cstdlib>
+#include <new>
+#include <print>
+#include <span>
+#include <string_view>
+#include <utility>
+
+namespace {
+
+std::atomic<bool> audit_enabled{false};
+std::atomic<std::size_t> audited_allocations{0};
+std::atomic<std::size_t> audited_bytes{0};
+
+void record_allocation(const std::size_t bytes) noexcept {
+  if (audit_enabled.load(std::memory_order_relaxed)) {
+    audited_allocations.fetch_add(1, std::memory_order_relaxed);
+    audited_bytes.fetch_add(bytes, std::memory_order_relaxed);
+  }
+}
+
+[[nodiscard]] auto allocate_unaligned(const std::size_t bytes) -> void* {
+  const auto requested = bytes == 0 ? std::size_t{1} : bytes;
+  // Global allocation replacement must delegate below the C++ allocation layer.
+  // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+  void* const storage = std::malloc(requested);
+  if (storage == nullptr) {
+    throw std::bad_alloc{};
+  }
+  record_allocation(requested);
+  return storage;
+}
+
+[[nodiscard]] auto allocate_aligned(const std::size_t bytes, const std::size_t alignment) -> void* {
+  const auto requested = bytes == 0 ? std::size_t{1} : bytes;
+  void* storage = nullptr;
+  if (::posix_memalign(&storage, alignment, requested) != 0) {
+    throw std::bad_alloc{};
+  }
+  record_allocation(requested);
+  return storage;
+}
+
+[[nodiscard]] auto audited_write(void* const context,
+                                 const std::span<const std::byte> bytes) noexcept
+    -> lemma::core::ClientFrameWriteAttempt {
+  *static_cast<std::size_t*>(context) += bytes.size();
+  return {.bytes = static_cast<std::ptrdiff_t>(bytes.size())};
+}
+
+[[nodiscard]] auto write_and_compose(lemma::vt::Terminal& terminal,
+                                     lemma::render::FrameBuffer& frame,
+                                     const std::string_view text) noexcept -> std::size_t {
+  const auto input = std::as_bytes(std::span(text.data(), text.size()));
+  const auto damage = terminal.write_and_report_damage(input);
+  if (!damage.has_value()) {
+    return 0;
+  }
+  const auto composition = lemma::render::compose_retained_single_pane(terminal, frame, false);
+  return composition.has_value() ? composition->bytes : 0;
+}
+
+} // namespace
+
+// These are the replaceable throwing forms. The standard library's nothrow and sized forms route
+// through them; defining placement deallocators here would make Clang's allocator builtins reject
+// the audit translation unit.
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,cppcoreguidelines-no-malloc,readability-identifier-naming)
+void* operator new(const std::size_t __sz) { return allocate_unaligned(__sz); }
+void* operator new[](const std::size_t __sz) { return allocate_unaligned(__sz); }
+void* operator new(const std::size_t __sz, const std::align_val_t alignment) {
+  return allocate_aligned(__sz, static_cast<std::size_t>(alignment));
+}
+void* operator new[](const std::size_t __sz, const std::align_val_t alignment) {
+  return allocate_aligned(__sz, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* const __p) noexcept { std::free(__p); }
+void operator delete[](void* const __p) noexcept { std::free(__p); }
+void operator delete(void* const __p, const std::align_val_t /*alignment*/) noexcept {
+  std::free(__p);
+}
+void operator delete[](void* const __p, const std::align_val_t /*alignment*/) noexcept {
+  std::free(__p);
+}
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,cppcoreguidelines-no-malloc,readability-identifier-naming)
+
+// The explicit failure branches make audit setup and each measured operation independently visible;
+// output formatting runs only after measurement is disabled and can report allocation failure.
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
+int main() {
+  constexpr std::size_t warmup_iterations = 256;
+  constexpr std::size_t audited_iterations = 10'000;
+  constexpr std::string_view first = "\x1B[12;1H\x1B[1;32msteady-state alpha \xE2\x98\x83\x1B[0m";
+  constexpr std::string_view second = "\x1B[12;1H\x1B[1;34msteady-state beta  \xE2\x98\x83\x1B[0m";
+
+  auto terminal_result = lemma::vt::Terminal::create({});
+  if (!terminal_result.has_value()) {
+    return 2;
+  }
+  auto terminal = std::move(*terminal_result);
+  lemma::render::FrameBuffer frame;
+  if (!frame.prepare({.columns = 80, .rows = 24}) ||
+      !lemma::render::compose_retained_single_pane(terminal, frame, true).has_value()) {
+    return 2;
+  }
+  for (std::size_t iteration = 0; iteration < warmup_iterations; ++iteration) {
+    const auto bytes = write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
+    if (bytes == 0) {
+      return 2;
+    }
+  }
+
+  const auto terminal_before = terminal.allocation_stats();
+  audited_allocations.store(0, std::memory_order_relaxed);
+  audited_bytes.store(0, std::memory_order_relaxed);
+  audit_enabled.store(true, std::memory_order_release);
+
+  std::size_t flushed_bytes = 0;
+  for (std::size_t iteration = 0; iteration < audited_iterations; ++iteration) {
+    const auto frame_bytes =
+        write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
+    if (frame_bytes == 0) {
+      audit_enabled.store(false, std::memory_order_release);
+      return 2;
+    }
+    lemma::core::ClientFrameOutput output;
+    constexpr auto now = lemma::core::ClientFrameOutput::TimePoint{};
+    if (!output.queue_frame(frame_bytes, 2, 1, false, now)) {
+      audit_enabled.store(false, std::memory_order_release);
+      return 2;
+    }
+    lemma::core::ClientFrameFlushTarget target{
+        .descriptor = 7,
+        .frame = &frame,
+        .output = &output,
+        .write = &audited_write,
+        .context = &flushed_bytes,
+    };
+    std::size_t budget = lemma::core::attached_client_write_bytes_per_turn_max;
+    if (lemma::core::flush_client_frame(target, budget, now) !=
+        lemma::core::ClientFrameFlushStatus::drained) {
+      audit_enabled.store(false, std::memory_order_release);
+      return 2;
+    }
+  }
+  audit_enabled.store(false, std::memory_order_release);
+
+  const auto terminal_after = terminal.allocation_stats();
+  const auto general_allocations = audited_allocations.load(std::memory_order_relaxed);
+  const auto general_bytes = audited_bytes.load(std::memory_order_relaxed);
+  const auto terminal_allocations =
+      terminal_after.allocations_total - terminal_before.allocations_total;
+  const bool passed = general_allocations == 0 && general_bytes == 0 && terminal_allocations == 0;
+  std::println(R"({{
+  "schema": 1,
+  "suite": "steady-state-allocation-audit",
+  "status": "{}",
+  "warmup_iterations": {},
+  "audited_iterations": {},
+  "general_allocation_calls": {},
+  "general_allocation_bytes": {},
+  "terminal_quota_allocation_calls": {},
+  "flushed_wire_bytes": {}
+}})",
+               passed ? "passed" : "failed", warmup_iterations, audited_iterations,
+               general_allocations, general_bytes, terminal_allocations, flushed_bytes);
+  return passed ? 0 : 1;
+}

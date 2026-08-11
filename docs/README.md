@@ -17,7 +17,9 @@ Start here:
   ownership, dependencies, hot-path rules, and extension boundary.
 - [`single-pane-runtime.md`](single-pane-runtime.md) — currently implemented runtime ownership,
   tab/split behavior, and limitations.
-- [`protocol.md`](protocol.md) — current wire format and versioned server-rendered evolution contract.
+- [`protocol.md`](protocol.md) — shipped private protocol 1.0 wire format and bounds.
+- [`operations.md`](operations.md) — foundational CLI/keymap runbook, limits, cleanup, and F5 evidence commands.
+- [`issues.md`](issues.md) — evidence-derived F5 problems and the proof required to close them.
 - [`performance.md`](performance.md) — benchmark methodology, current results, and production bounds.
 - [`memory.md`](memory.md) — byte-level owner census, pane/history scaling, churn, and F3 evidence.
 - [`ci.md`](ci.md) — CI lanes, supported platforms, and local checks.

@@ -127,4 +127,6 @@ EAGAIN, budgets, deadlines, typed-disconnect recovery, blocked output, and force
 tests cover incompatible and malformed local peers, no-partial mismatch mutation, setup slot reuse,
 blocked readers, tab/resize/reconnect generations, malformed-peer recovery, daemon loss, EOF,
 startup rejection, normal detach, all handled signals, and signal restoration while outer-terminal
-output is blocked.
+output is blocked. F5's stress lane repeats malformed live/setup peers, setup-capacity exhaustion,
+non-reading clients, blocked PTYs, resize/output floods, child exit, and recovery against fresh real
+daemons; its raw GoogleTest and blocked-client reports are retained as `build/release/f5-*`.

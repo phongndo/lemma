@@ -73,8 +73,11 @@ covers every system exported by the Nix flake:
 - `aarch64-darwin`.
 
 It also runs benchmark smoke in an isolated release checkout, validates the microbenchmark, Lemma
-process-level, and pinned tmux/Zellij comparison JSON reports, and uploads them for inspection.
-Timing is evidence only; shared-runner latency is not a regression threshold. Platform component
+process-level, and pinned tmux/Zellij comparison JSON reports, and uploads them for inspection. A
+separate F5 foundation smoke builds release tests, audits steady-state allocations, exercises the
+locked real-application matrix and repeated adversarial cases, records a short mixed-output soak,
+and uploads every `build/release/f5-*` report. Short scheduled smoke does not satisfy the 24-hour
+soak gate. Timing is evidence only; shared-runner latency is not a regression threshold. Platform component
 tests run in parallel; real PTY/socket
 process tests run serially to avoid host-resource contention while retaining per-test deadlines and
 isolated runtime paths.
@@ -130,7 +133,12 @@ Scheduled suites can be reproduced with:
 ```sh
 scripts/ci/platform
 scripts/ci/benchmarks smoke
+nix develop --command scripts/ci/f5 smoke
 ```
+
+The finite F5 gate is `nix develop --command scripts/ci/f5 extended`. The release and sanitizer
+24-hour soaks are intentionally separate `scripts/ci/f5-soak <profile> 86400 300` commands and are
+never inferred from a successful finite or scheduled smoke.
 
 CI always passes `conan.lock` explicitly. If dependencies change, regenerate and review the lock
 rather than bypassing it with a partial or unlocked install.

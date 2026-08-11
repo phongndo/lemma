@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import f5_soak
 
 from check_regression import (
     BudgetError,
@@ -20,10 +24,12 @@ from check_regression import (
 from latency_trace import input_paths
 from mux_benchmark import (
     INTERACTION_LABEL_CODES,
+    LEMMA_OUTER_TERMINAL_RESTORE,
     PtyProcess,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
+    open_descriptor_snapshot,
     percentile,
 )
 
@@ -102,6 +108,26 @@ class RegressionScopeTest(unittest.TestCase):
 
         with self.assertRaisesRegex(BudgetError, "approved pinned host"):
             require_scope(budgets, micro_report, process_report, profile_report)
+
+
+class DescriptorSnapshotTest(unittest.TestCase):
+    def test_rejects_a_zero_byte_darwin_descriptor_census(self) -> None:
+        class ProcPidInfo:
+            def __call__(self, *arguments: object) -> int:
+                del arguments
+                return 0
+
+        class Libproc:
+            proc_pidinfo = ProcPidInfo()
+
+        with (
+            mock.patch("mux_benchmark.platform.system", return_value="Darwin"),
+            mock.patch("mux_benchmark.ctypes.CDLL", return_value=Libproc()),
+        ):
+            snapshot = open_descriptor_snapshot(42)
+
+        self.assertFalse(snapshot["available"])
+        self.assertIn("proc_pidinfo", snapshot["reason"])
 
 
 class LatencyTraceCorrelationTest(unittest.TestCase):
@@ -261,6 +287,142 @@ class MuxFixtureTest(unittest.TestCase):
             install_attach_shell_startup(environment, Path("/tmp/peer"))
 
 
+class F5SoakReportTest(unittest.TestCase):
+    class Clock:
+        def __init__(self) -> None:
+            self.now_ns = 0
+
+        def monotonic_ns(self) -> int:
+            return self.now_ns
+
+        def advance(self, seconds: float) -> None:
+            self.now_ns += round(seconds * 1_000_000_000)
+
+    def run_soak(
+        self, output: Path, *, interrupt_background: bool
+    ) -> tuple[int, dict[str, object]]:
+        clock = self.Clock()
+
+        class Client:
+            terminal_state_restored = True
+
+            def __init__(self) -> None:
+                self.drain_calls = 0
+
+            def write_all(self, data: bytes, timeout: float) -> None:
+                del data, timeout
+
+            def read_until(self, marker: bytes, timeout: float) -> None:
+                del marker, timeout
+
+            def resize(self, columns: int, rows: int) -> None:
+                del columns, rows
+
+            def drain(self, duration: float = 0.05) -> int:
+                self.drain_calls += 1
+                if self.drain_calls == 1:
+                    clock.advance(2.0)
+                    return 0
+                if interrupt_background:
+                    raise InterruptedError("test interruption during background drain")
+                clock.advance(duration)
+                return 17
+
+        client = Client()
+
+        class Runtime:
+            def __init__(self, server: Path, cli: Path, peer: Path) -> None:
+                del server, cli
+                self.peer_path = peer
+                self.receipt_path = output.parent / "receipt"
+
+            def start_and_attach(self, session: str) -> Client:
+                del session
+                return client
+
+            def attach(self, session: str) -> Client:
+                del session
+                return client
+
+            def detach(self, attached: Client, session: str) -> None:
+                del attached, session
+
+            def close(self) -> None:
+                pass
+
+        class Receipts:
+            def __init__(self, path: Path) -> None:
+                del path
+
+            def close(self) -> None:
+                pass
+
+        def sample_latency(*args: object, **kwargs: object) -> dict[str, object]:
+            del args, kwargs
+            clock.advance(0.1)
+            return {
+                "key_to_pty": {"samples_ns": [10]},
+                "key_to_visible": {"samples_ns": [20]},
+                "client_bytes": [30],
+            }
+
+        executable = Path(sys.executable)
+        argv = [
+            "f5_soak.py",
+            "--duration-seconds",
+            "1",
+            "--interaction-interval-seconds",
+            "1",
+            "--reattach-every",
+            "100",
+            "--resource-interval-seconds",
+            "60",
+            "--server",
+            str(executable),
+            "--cli",
+            str(executable),
+            "--peer",
+            str(executable),
+            "--output",
+            str(output),
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(f5_soak, "LemmaRuntime", Runtime),
+            mock.patch.object(f5_soak, "PtyReceiptChannel", Receipts),
+            mock.patch.object(f5_soak, "latency_samples", sample_latency),
+            mock.patch.object(f5_soak, "resource_sample", return_value={"elapsed_ns": 0}),
+            mock.patch.object(f5_soak, "git_provenance", return_value=("test", True)),
+            mock.patch.object(f5_soak, "host_fingerprint", return_value={}),
+            mock.patch.object(f5_soak.signal, "signal"),
+            mock.patch.object(f5_soak.time, "monotonic_ns", clock.monotonic_ns),
+        ):
+            status = f5_soak.main()
+        return status, json.loads(output.read_text(encoding="utf-8"))
+
+    def test_interruption_during_background_drain_retains_a_failed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "soak.json"
+            status, report = self.run_soak(output, interrupt_background=True)
+
+        self.assertEqual(status, 1)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("InterruptedError", str(report["failure"]))
+        self.assertEqual(report["interactions"], [])
+
+    def test_active_duration_excludes_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "soak.json"
+            status, report = self.run_soak(output, interrupt_background=False)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(report["status"], "completed")
+        self.assertEqual(report["setup_elapsed_ns"], 2_000_000_000)
+        self.assertEqual(report["elapsed_ns"], 1_000_000_000)
+        self.assertEqual(report["total_elapsed_ns"], 3_000_000_000)
+        self.assertEqual(len(report["interactions"]), 1)
+
+
 class PtyProcessBufferingTest(unittest.TestCase):
     def test_wait_for_exit_drains_child_output(self) -> None:
         script = (
@@ -273,6 +435,35 @@ class PtyProcessBufferingTest(unittest.TestCase):
         try:
             process.wait_for_exit(5.0)
             self.assertEqual(process.pid, -1)
+            self.assertTrue(process.terminal_state_restored)
+        finally:
+            process.close()
+
+    def test_requires_configured_terminal_mode_cleanup(self) -> None:
+        process = PtyProcess(
+            [sys.executable, "-c", "pass"],
+            dict(os.environ),
+            terminal_restore_sequence=LEMMA_OUTER_TERMINAL_RESTORE,
+        )
+        try:
+            process.wait_for_exit(5.0)
+            self.assertFalse(process.terminal_modes_restored)
+            self.assertFalse(process.terminal_state_restored)
+        finally:
+            process.close()
+
+    def test_retains_configured_terminal_mode_cleanup(self) -> None:
+        script = f"import os; os.write(1, {LEMMA_OUTER_TERMINAL_RESTORE!r})"
+        process = PtyProcess(
+            [sys.executable, "-c", script],
+            dict(os.environ),
+            terminal_restore_sequence=LEMMA_OUTER_TERMINAL_RESTORE,
+        )
+        try:
+            process.wait_for_exit(5.0)
+            self.assertTrue(process.terminal_modes_restored)
+            self.assertTrue(process.terminal_state_restored)
+            self.assertIn(LEMMA_OUTER_TERMINAL_RESTORE, process.final_output)
         finally:
             process.close()
 

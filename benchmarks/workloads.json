@@ -32,6 +32,17 @@
     "idle": "all panes are live shells with no injected activity during resource sampling; focused-pane interaction is measured after the idle sample",
     "active": "the focused pane emits bounded continuous output while resource and interaction samples are collected; all remaining panes stay live and idle"
   },
+  "pane_profile_metrics": [
+    "key_to_pty_ns",
+    "key_to_visible_ns",
+    "interaction_client_bytes",
+    "outer_bytes_per_one_second_sample",
+    "outer_throughput_bytes_per_second",
+    "process_tree_cpu_time_ns",
+    "process_tree_rss_bytes",
+    "wakeups_when_supported",
+    "direct_role_cpu_and_rss"
+  ],
   "process_workloads": [
     {
       "id": "warm_scroll",
@@ -125,6 +136,30 @@
         "disconnect_latency_ns",
         "key_to_pty_ns",
         "key_to_visible_ns"
+      ]
+    },
+    {
+      "id": "f5_compatibility",
+      "input": "isolated real bash, zsh, fish, Neovim, Vim, less, Python, and htop interactions through a fresh Lemma attachment",
+      "completion": "each program renders its category marker or full-screen state, exits normally, and leaves the client terminal restored",
+      "metrics": [
+        "marker_latency_ns",
+        "outer_bytes",
+        "terminal_state_restored"
+      ]
+    },
+    {
+      "id": "f5_mixed_soak",
+      "input": "continuous bounded same-pane output plus exact-token interaction, rotating dimensions, periodic detach, and reattach",
+      "completion": "the requested monotonic duration elapses, all tokens complete, every resource census succeeds, and every detach restores terminal state",
+      "metrics": [
+        "key_to_pty_ns",
+        "key_to_visible_ns",
+        "outer_bytes",
+        "daemon_and_client_cpu_time_ns",
+        "daemon_and_tree_rss_bytes",
+        "wakeups_when_supported",
+        "daemon_open_descriptors"
       ]
     }
   ],

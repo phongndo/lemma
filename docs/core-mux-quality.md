@@ -32,6 +32,12 @@ are deterministic policy. The pinned non-reader plus pane-flood workload disconn
 reduced unrelated p95 from 0.288 ms to 0.159 ms; its loaded/idle p95 ratio is gated at 1.10. The final
 80-check release evaluation passed without widening an F0/F1 limit.
 
+F3 removed eager hard-maximum storage, established the memory owner census and stable churn plateau,
+and kept composition/flush allocation-free. F4 shipped exact private protocol 1.0 framing, redraw
+generations, typed disconnects, and signal-complete outer-terminal restoration. F5 now owns the
+finite application/stress/lifecycle/allocation/profile gate and separate explicit 24-hour soak
+commands. The foundation is not complete while those long-soak reports remain unfinished.
+
 ## Definition of “best”
 
 A “best” claim requires all three dimensions:
@@ -69,9 +75,9 @@ IDs are stable test and benchmark vocabulary; they are not public command IDs.
 | H2 | Search and select by keyboard and mouse through one model | Absent |
 | H3 | Copy correct text with an explicit bounded clipboard policy | Absent |
 | R1 | Parse each PTY once and compose bounded terminal damage | Working |
-| R2 | Reconstruct complete visible state on attach, resize, tab change, and lag recovery | Partial |
-| R3 | Restore every outer-terminal mode on normal, failure, disconnect, and signal exits | Partial |
-| C1 | Run representative shells, editors, pagers, REPLs, and TUIs locally | Partial |
+| R2 | Reconstruct complete visible state on attach, resize, tab change, and lag recovery | Working |
+| R3 | Restore every outer-terminal mode on normal, failure, disconnect, and handled-signal exits | Working |
+| C1 | Run representative shells, editors, pagers, REPLs, and TUIs locally | Working |
 | C2 | Run the same supported interaction baseline through ordinary SSH | Partial |
 | O1 | Provide actionable help, version, diagnostics, and explicit lifecycle guarantees | Partial |
 
@@ -187,7 +193,7 @@ cross-multiplexer comparison because its purpose is to enforce Lemma's internal 
 | Process footprint | direct-role and process-tree RSS/CPU at P1/P4/P16/PMAX | Process harness |
 | Idle operation | CPU, wakeups, and baseline RSS | Process harness; wakeups are OS-labeled |
 | Interaction | paste, focus, mouse, resize, copy, and search latency | Added with each feature |
-| Stress | output/resize floods, repeated lifecycle, and soak distributions | Required before release |
+| Stress | output/resize floods, repeated lifecycle, and soak distributions | Finite suites implemented; 24-hour runs unfinished |
 
 Portable process reports use `ps` for labeled RSS and CPU snapshots. Darwin wakeups use
 `proc_pid_rusage`; other systems keep the wakeup field explicitly unavailable until they gain a

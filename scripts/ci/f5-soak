@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly profile="${1:-release}"
+readonly duration_seconds="${2:-86400}"
+readonly reattach_every="${3:-300}"
+readonly output_directory="build/release"
+
+cleanup_ghostty_output() {
+  rm -rf third_party/ghostty/zig-out
+}
+trap cleanup_ghostty_output EXIT
+
+case "${profile}" in
+  release)
+    leak_detection=0
+    ;;
+  sanitizers)
+    leak_detection=1
+    if [[ "$(uname -s)" == Darwin ]]; then
+      # Apple's ASan runtime has no LeakSanitizer implementation.
+      leak_detection=0
+    fi
+    ;;
+  *)
+    printf 'usage: %s <release|sanitizers> [duration-seconds] [reattach-cycles]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+if ! [[ "${duration_seconds}" =~ ^[0-9]+$ ]] || (( duration_seconds < 1 || duration_seconds > 172800 )); then
+  printf 'duration must be an integer between 1 and 172800 seconds\n' >&2
+  exit 2
+fi
+if ! [[ "${reattach_every}" =~ ^[0-9]+$ ]] || (( reattach_every < 1 || reattach_every > 100000 )); then
+  printf 'reattach interval must be an integer between 1 and 100000 cycles\n' >&2
+  exit 2
+fi
+
+# Ghostty's wrapper shares one source-tree output across build profiles.
+rm -rf third_party/ghostty/zig-out
+if [[ "${profile}" == release ]]; then
+  scripts/ci/configure release \
+    -DLEMMA_BUILD_TESTS=ON \
+    -DLEMMA_BUILD_BENCHMARKS=ON \
+    -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+else
+  scripts/ci/configure sanitizers \
+    -DLEMMA_BUILD_TESTS=ON \
+    -DLEMMA_BUILD_BENCHMARKS=OFF \
+    -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+  export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
+  export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+fi
+cmake --build --preset "${profile}" --target \
+  lemma_test_server lemma_test_cli lemma_test_pty_peer
+
+mkdir -p "${output_directory}"
+readonly report="${output_directory}/f5-${profile}-soak-${duration_seconds}s.json"
+readonly log="${output_directory}/f5-${profile}-soak-${duration_seconds}s.log"
+rm -f "${report}" "${log}"
+python3 benchmarks/f5_soak.py \
+  --duration-seconds "${duration_seconds}" \
+  --reattach-every "${reattach_every}" \
+  --server "build/${profile}/lemma_test_server" \
+  --cli "build/${profile}/lemma_test_cli" \
+  --peer "build/${profile}/lemma_test_pty_peer" \
+  --output "${report}" 2>&1 | tee "${log}"
+
+test -s "${report}"

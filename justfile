@@ -153,6 +153,22 @@ ci-check:
     {{ nix }} scripts/ci/sanitizers
     {{ nix }} scripts/ci/workflows
 
+# Run the short F5 evidence smoke (use the default Nix shell for compatibility tools).
+f5-smoke:
+    {{ nix }} scripts/ci/f5 smoke
+
+# Run the complete finite F5 gate; 24-hour soaks remain separate explicit commands.
+f5-extended:
+    {{ nix }} scripts/ci/f5 extended
+
+# Run one 24-hour optimized release mixed-output soak.
+f5-release-soak:
+    {{ nix }} scripts/ci/f5-soak release 86400 300
+
+# Run one 24-hour ASan/UBSan mixed-output soak.
+f5-sanitizer-soak:
+    {{ nix }} scripts/ci/f5-soak sanitizers 86400 300
+
 # Configure the debug tree and install this repository's hk hooks.
 hooks:
     {{ nix }} bash -c 'scripts/ci/configure debug -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON && hk validate && hk install'

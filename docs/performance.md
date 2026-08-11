@@ -461,6 +461,81 @@ complete failed attempts are retained as `f4-regression-*-failed-*.json`. These 
 reviewed threshold and demonstrate no material F4 regression outside the concurrently reproduced
 host variance, while honestly retaining the unavailable clean absolute-gate outcome.
 
+## F5 evidence status
+
+F5 adds no product behavior. Its checked-in drivers separate finite evidence from long soaks and name
+every raw artifact `build/release/f5-*`; see [`operations.md`](operations.md). The concise
+problem register is [`issues.md`](issues.md). The audit began from
+HEAD `b92d0aa` with a dirty implementation worktree on the same physical Mac16,5 host, now named
+`Mac-2497`, on August 11, 2026. The reviewed manifest still requires its former exact hostname, so a
+formal pinned-host gate is scope-invalid until that identity change is reviewed; the raw measurements
+also exceed unchanged limits as reported below. Evidence is recorded as completed only after the
+corresponding command actually exits successfully.
+
+Completed evidence so far:
+
+- `f5-release-tests.log`: all 97 GoogleTest component cases, the standalone allocation audit, and all
+  22 serialized process cases passed in release (120 CTest entries total).
+- `f5-steady-state-allocation-audit.json`: after 256 warmups, 10,000 parse/damage/compose/frame-flush
+  iterations made zero C++ general-allocation calls, zero general-allocation bytes, and zero new
+  terminal-quota allocations while flushing 2,150,000 framed bytes.
+- `f5-compatibility.json`: isolated real bash, zsh, fish, Neovim, Vim, less, Python, and htop sessions
+  all rendered their completion state, exited, and restored the attached outer terminal. Executable
+  paths and versions are retained in the report.
+- `f5-config-validation.log`, `f5-{format,clang-tidy,clangd,workflows}.log`, and
+  `f5-asan-ubsan-tests.log`: hk/flake validation,
+  formatting, clang-tidy, clangd, CI-contract/ShellCheck/Actionlint, and combined ASan/UBSan lanes
+  passed; both the 98-entry component/allocation set and all 22 process cases passed under
+  sanitizers. LeakSanitizer is
+  unavailable in Apple's runtime as already documented; hosted Linux keeps leak detection
+  authoritative.
+- `f5-release-stress-smoke.{json,log}` and
+  `f5-release-blocked-client-smoke-summary.json`: two repetitions each of the rapid 500-resize/output
+  flood, child exit, malformed setup/live peer, capacity, blocked PTY, non-reader, and recovery cases
+  passed. Both independent blocked-client floods disconnected within the unchanged 5 s plus 0.5 s
+  observation bound; the maximum observed detach was 5.272 s.
+- `f5-lifecycle-1000.json`: all 1,000 create/attach/split-to-four/close-to-one/detach/kill cycles
+  restored terminal state. The post-cycle tree always returned to one process and the daemon to five
+  descriptors. Daemon RSS reached 7,061,504 bytes and was exactly flat for the final 100 cycles; the
+  final-window range and fitted slope were both zero.
+- `f5-pane-profiles-30.json`: 30 completed samples for every P1/P4/P16/PMAX idle and active
+  condition retain focused key-to-PTY/key-to-visible latency, interaction bytes, one-second outer
+  bytes and throughput, process/role CPU and RSS, and native Darwin wakeups. The raw outcomes are
+  shown below; they are not relabeled because several unchanged performance limits failed.
+
+| Profile | Condition | Key-to-visible p50 / p95 / p99 | CPU p95 / s | Tree RSS p95 | Outer throughput p50 | Wakeups p95 |
+|---|---|---:|---:|---:|---:|---:|
+| P1 | idle | 0.184 / 1.335 / 1.901 ms | 0 ms | 11.58 MiB | 0 B/s | 0 |
+| P1 | active | 2.510 / 2.790 / 2.838 ms | 13.92 ms | 10.16 MiB | 45,904 B/s | 2,095 |
+| P4 | idle | 0.199 / 0.278 / 0.282 ms | 0 ms | 25.75 MiB | 0 B/s | 0 |
+| P4 | active | 1.734 / 1.852 / 1.881 ms | 17.55 ms | 24.31 MiB | 335,658 B/s | 2,245 |
+| P16 | idle | 0.274 / 0.426 / 0.459 ms | 0 ms | 82.08 MiB | 0 B/s | 0 |
+| P16 | active | 1.599 / 21.701 / 25.409 ms | 18.00 ms | 80.44 MiB | 330,731 B/s | 2,224 |
+| PMAX | idle | 0.201 / 0.259 / 0.268 ms | 0 ms | 306.34 MiB | 0 B/s | 0 |
+| PMAX | active | 1.527 / 19.945 / 24.733 ms | 18.17 ms | 304.62 MiB | 327,943 B/s | 2,233 |
+
+The F1/F2 profile budgets remain 0.25/0.5 ms idle p50/p95, 1.6/1.8 ms active p50/p95, and 1/5 ms
+idle/active CPU p95. The P1 and P16 idle conditions, every active condition, and every active CPU
+profile therefore contain real failures. A same-run full mux attempt was observed to exceed the
+unchanged 5 s plus 0.5 s blocked-client observation bound, but that invocation captured only stdout
+and left its log
+empty. It is therefore a required JSON reproduction, not retained proof of a Lemma defect; the F5
+driver now requests failure JSON rather than accepting a partial report. No threshold or timeout was
+widened.
+
+Still unfinished, and therefore not F5 completion evidence:
+
+- one successful aggregate `scripts/ci/f5 extended` result: its constituent quality lanes passed,
+  but 20x stress, complete process measurements, and unchanged pinned-host budget evaluation have
+  not produced a passing aggregate;
+- the optimized release soak for 86,400 seconds; and
+- the mixed-output ASan/UBSan soak for 86,400 seconds.
+
+`f5-{release,sanitizers}-soak-10s.json` are successful short harness qualifications. Each completed
+ten exact-token interactions, rotating resize, three detach/reattach cycles plus final restoration,
+RSS/CPU/wakeup sampling, and descriptor census; the sanitizer report records the active ASan/UBSan
+options. Ten seconds must not be cited as a 24-hour result. No F0–F4 threshold has been changed.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state
