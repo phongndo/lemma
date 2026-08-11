@@ -5,14 +5,15 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
+#include <ranges>
 #include <span>
 
 namespace lemma::core {
 
-[[nodiscard]] auto ClientFrameOutput::queue(const std::size_t bytes, const TimePoint now,
-                                            const std::uint64_t trace_correlation) noexcept
+[[nodiscard]] auto ClientFrameOutput::begin_queue(const std::size_t bytes, const TimePoint now,
+                                                  const std::uint64_t trace_correlation) noexcept
     -> bool {
-  if (busy() || bytes == 0 || bytes > render::frame_bytes_max) {
+  if (busy() || bytes == 0) {
     return false;
   }
   size_ = bytes;
@@ -28,13 +29,60 @@ namespace lemma::core {
   return true;
 }
 
+[[nodiscard]] auto
+ClientFrameOutput::queue_frame(const std::size_t frame_bytes, const std::uint32_t sequence,
+                               const std::uint32_t full_redraw_generation, const bool full_redraw,
+                               const TimePoint now, const std::uint64_t trace_correlation) noexcept
+    -> bool {
+  static_assert(protocol::render_ansi_bytes_max == render::frame_bytes_max);
+  if (frame_bytes == 0 || frame_bytes > render::frame_bytes_max || sequence == 0 ||
+      full_redraw_generation == 0 ||
+      !begin_queue(frame_header_.size() + frame_bytes, now, trace_correlation)) {
+    return false;
+  }
+  frame_header_ = protocol::encode_render_frame_header(frame_bytes, sequence,
+                                                       full_redraw_generation, full_redraw);
+  frame_bytes_ = frame_bytes;
+  source_ = Source::frame;
+  return true;
+}
+
+[[nodiscard]] auto ClientFrameOutput::queue_disconnect(const protocol::DisconnectReason reason,
+                                                       const std::string_view diagnostic,
+                                                       const std::uint32_t sequence,
+                                                       const TimePoint now) noexcept -> bool {
+  if (diagnostic.size() > protocol::diagnostic_bytes_max || sequence == 0) {
+    return false;
+  }
+  const auto encoded = protocol::encode_disconnect(reason, diagnostic, sequence);
+  if (!begin_queue(encoded.bytes().size(), now, 0)) {
+    return false;
+  }
+  std::ranges::copy(encoded.bytes(), inline_message_.begin());
+  frame_bytes_ = 0;
+  source_ = Source::inline_message;
+  return true;
+}
+
 [[nodiscard]] auto ClientFrameOutput::readable(const render::FrameBuffer& frame) const noexcept
     -> std::span<const std::byte> {
-  const auto bytes = frame.readable(size_);
-  if (offset_ > size_ || bytes.size() != size_) {
+  if (offset_ > size_) {
     return {};
   }
-  return bytes.subspan(offset_);
+  if (source_ == Source::inline_message) {
+    return std::span(inline_message_).first(size_).subspan(offset_);
+  }
+  if (source_ != Source::frame) {
+    return {};
+  }
+  if (offset_ < frame_header_.size()) {
+    return std::span(frame_header_).subspan(offset_);
+  }
+  const auto bytes = frame.readable(frame_bytes_);
+  const auto frame_offset = offset_ - frame_header_.size();
+  return bytes.size() == frame_bytes_ && frame_offset <= bytes.size()
+             ? bytes.subspan(frame_offset)
+             : std::span<const std::byte>{};
 }
 
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -74,9 +122,11 @@ void ClientFrameOutput::mark_write_ready() noexcept {
 
 void ClientFrameOutput::reset() noexcept {
   size_ = 0;
+  frame_bytes_ = 0;
   offset_ = 0;
   queued_at_ = {};
   last_progress_at_ = {};
+  source_ = Source::none;
   write_ready_ = false;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   latency_trace_correlation_ = 0;

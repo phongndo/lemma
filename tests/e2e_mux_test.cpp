@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <span>
 #include <string>
@@ -14,7 +15,6 @@
 #include <vector>
 
 #include <fcntl.h>
-#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -159,19 +159,21 @@ protected:
   ChildProcess server_;
 };
 
-[[nodiscard]] auto
-named_request(const protocol::ControlCommand command, const std::string_view session,
-              const std::optional<protocol::Dimensions> dimensions = std::nullopt)
-    -> std::vector<std::byte> {
+[[nodiscard]] auto named_request(const protocol::ControlCommand command,
+                                 const std::string_view session) -> std::vector<std::byte> {
   const auto header = protocol::encode_session_header(command, session);
   std::vector<std::byte> request(header.begin(), header.end());
   const auto name = std::as_bytes(std::span(session.data(), session.size()));
   request.insert(request.end(), name.begin(), name.end());
-  if (dimensions.has_value()) {
-    const auto encoded = protocol::encode_dimensions(*dimensions);
-    request.insert(request.end(), encoded.begin(), encoded.end());
-  }
   return request;
+}
+
+[[nodiscard]] auto
+attach_request(const std::string_view session, const protocol::Dimensions dimensions,
+               const protocol::ProtocolVersion version = protocol::current_version)
+    -> std::vector<std::byte> {
+  const auto encoded = protocol::encode_client_hello(session, dimensions, 1, version);
+  return {encoded.bytes().begin(), encoded.bytes().end()};
 }
 
 [[nodiscard]] auto shell_quote(const std::string_view value) -> std::string {
@@ -197,29 +199,126 @@ named_request(const protocol::ControlCommand command, const std::string_view ses
   return ::close(descriptor) == 0;
 }
 
-[[nodiscard]] auto input_request(const std::string_view input) -> std::vector<std::byte> {
-  const auto header = protocol::encode_input_header(input.size());
+[[nodiscard]] auto input_request(const std::string_view input, const std::uint32_t sequence = 2)
+    -> std::vector<std::byte> {
+  const auto header = protocol::encode_input_header(input.size(), sequence);
   std::vector<std::byte> request(header.begin(), header.end());
   const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
   request.insert(request.end(), bytes.begin(), bytes.end());
   return request;
 }
 
-[[nodiscard]] auto read_until_contains(RawPeer& peer, const std::string_view marker,
+[[nodiscard]] auto fill_server_decoder(RawPeer& peer, protocol::ServerDecoder& decoder,
                                        const Deadline deadline) -> bool {
+  auto available = decoder.writable_bytes();
+  if (available.empty()) {
+    return false;
+  }
+  constexpr std::size_t read_bytes_max = std::size_t{64} * 1'024U;
+  const auto count =
+      peer.read_some(available.first(std::min(available.size(), read_bytes_max)), deadline);
+  return count > 0 && decoder.commit(static_cast<std::size_t>(count)).has_value();
+}
+
+[[nodiscard]] auto wait_for_server_hello(RawPeer& peer, protocol::ServerDecoder& decoder,
+                                         const Deadline deadline) -> bool {
+  if (!decoder.prepare().has_value()) {
+    return false;
+  }
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto decoded = decoder.next();
+    if (!decoded.has_value()) {
+      return false;
+    }
+    if (decoded->has_value()) {
+      const bool hello = (**decoded).kind == protocol::ServerMessageKind::hello;
+      decoder.consume();
+      return hello;
+    }
+    if (!fill_server_decoder(peer, decoder, deadline)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] auto wait_for_disconnect(RawPeer& peer, protocol::ServerDecoder& decoder,
+                                       const protocol::DisconnectReason expected,
+                                       const Deadline deadline) -> bool {
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto decoded = decoder.next();
+    if (!decoded.has_value()) {
+      return false;
+    }
+    if (decoded->has_value()) {
+      return (**decoded).kind == protocol::ServerMessageKind::disconnect &&
+             (**decoded).reason == expected && !(**decoded).diagnostic.empty();
+    }
+    if (!fill_server_decoder(peer, decoder, deadline)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] auto wait_for_disconnect(RawPeer& peer, const protocol::DisconnectReason expected,
+                                       const Deadline deadline) -> bool {
+  protocol::ServerDecoder decoder;
+  return decoder.prepare().has_value() && wait_for_disconnect(peer, decoder, expected, deadline);
+}
+
+[[nodiscard]] auto wait_for_full_generation(RawPeer& peer, protocol::ServerDecoder& decoder,
+                                            const std::uint32_t generation, const Deadline deadline)
+    -> bool {
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto decoded = decoder.next();
+    if (!decoded.has_value()) {
+      return false;
+    }
+    if (decoded->has_value()) {
+      const auto& message = **decoded;
+      const bool matched = message.kind == protocol::ServerMessageKind::render_frame &&
+                           message.full_redraw && message.full_redraw_generation == generation &&
+                           !message.ansi.empty();
+      decoder.consume();
+      if (matched) {
+        return true;
+      }
+      continue;
+    }
+    if (!fill_server_decoder(peer, decoder, deadline)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto read_until_contains(RawPeer& peer, protocol::ServerDecoder& decoder,
+                                       const std::string_view marker, const Deadline deadline)
+    -> bool {
   std::string received;
   constexpr std::size_t received_bytes_max = std::size_t{8} * 1'024U * 1'024U;
   constexpr std::size_t retained_bytes = std::size_t{64} * 1'024U;
   while (std::chrono::steady_clock::now() < deadline && received.size() < received_bytes_max) {
-    std::array<std::byte, std::size_t{64} * 1'024U> bytes{};
-    const auto count = peer.read_some(bytes, deadline);
-    if (count <= 0) {
+    const auto decoded = decoder.next();
+    if (!decoded.has_value()) {
       return false;
     }
-    const auto data = std::span(bytes).first(static_cast<std::size_t>(count));
+    if (!decoded->has_value()) {
+      if (!fill_server_decoder(peer, decoder, deadline)) {
+        return false;
+      }
+      continue;
+    }
+    const auto& message = **decoded;
+    if (message.kind != protocol::ServerMessageKind::render_frame) {
+      return false;
+    }
     // Byte and character storage have the same object representation.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    received.append(reinterpret_cast<const char*>(data.data()), data.size());
+    received.append(reinterpret_cast<const char*>(message.ansi.data()), message.ansi.size());
+    decoder.consume();
     if (received.contains(marker)) {
       return true;
     }
@@ -238,7 +337,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-v9")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-1.0")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -431,6 +530,44 @@ TEST_F(MuxProcessTest, PreservesTopologyAcrossResizeAbruptExitAndReattach) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, FullRedrawGenerationsRecoverTabResizeAndReconnect) {
+  ASSERT_EQ(command({"start", "framed_recovery"}).status, 0);
+  RawPeer attached;
+  ASSERT_TRUE(attached.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto hello = attach_request("framed_recovery", {.columns = 80, .rows = 24});
+  ASSERT_TRUE(attached.send(hello, deadline_after(2s)));
+  protocol::ServerDecoder decoder;
+  ASSERT_TRUE(wait_for_server_hello(attached, decoder, deadline_after(5s)));
+  ASSERT_TRUE(wait_for_full_generation(attached, decoder, 1, deadline_after(5s)));
+
+  const auto create_tab = protocol::encode_pane_command(protocol::PaneCommand::create_tab, 2);
+  ASSERT_TRUE(attached.send(create_tab.bytes(), deadline_after(2s)));
+  ASSERT_TRUE(wait_for_full_generation(attached, decoder, 2, deadline_after(5s)));
+
+  const auto resize = protocol::encode_resize({.columns = 100, .rows = 30}, 3);
+  ASSERT_TRUE(attached.send(resize.bytes(), deadline_after(2s)));
+  ASSERT_TRUE(wait_for_full_generation(attached, decoder, 3, deadline_after(5s)));
+
+  const auto detach = protocol::encode_detach(4);
+  ASSERT_TRUE(attached.send(detach.bytes(), deadline_after(2s)));
+  attached.close();
+  ASSERT_TRUE(wait_for_listing("framed_recovery", "detached", deadline_after(3s)));
+
+  RawPeer reattached;
+  ASSERT_TRUE(reattached.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto reconnect = attach_request("framed_recovery", {.columns = 80, .rows = 24});
+  ASSERT_TRUE(reattached.send(reconnect, deadline_after(2s)));
+  protocol::ServerDecoder reconnect_decoder;
+  ASSERT_TRUE(wait_for_server_hello(reattached, reconnect_decoder, deadline_after(5s)));
+  ASSERT_TRUE(wait_for_full_generation(reattached, reconnect_decoder, 1, deadline_after(5s)));
+  const auto reconnect_detach = protocol::encode_detach(2);
+  ASSERT_TRUE(reattached.send(reconnect_detach.bytes(), deadline_after(2s)));
+  ASSERT_TRUE(reattached.wait_for_close(deadline_after(5s)));
+  ASSERT_TRUE(wait_for_listing("framed_recovery", "detached", deadline_after(3s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "focus"), runtime_.environment()));
@@ -609,6 +746,83 @@ TEST_F(MuxProcessTest, CreatesCyclesSelectsAndClosesTabs) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, RestoresTerminalOnStartupRejectionAndHandledSignals) {
+  ASSERT_EQ(command({"start", "busy_restore"}).status, 0);
+  PtyClient owner;
+  ASSERT_TRUE(owner.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  PtyClient rejected;
+  ASSERT_TRUE(rejected.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
+  ASSERT_TRUE(rejected.wait(deadline_after(5s)));
+  EXPECT_TRUE(rejected.terminal_state_restored());
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1049h"));
+  ASSERT_TRUE(send_prefix(owner, std::byte{'d'}));
+  ASSERT_TRUE(owner.wait(deadline_after(5s)));
+  EXPECT_TRUE(owner.terminal_state_restored());
+
+  const std::array signals{SIGINT, SIGTERM, SIGHUP, SIGQUIT};
+  for (std::size_t index = 0; index < signals.size(); ++index) {
+    const auto session = "signal_" + std::to_string(index);
+    ASSERT_EQ(command({"start", session}).status, 0);
+    PtyClient client;
+    ASSERT_TRUE(client.spawn(client_arguments("attach", session), runtime_.environment()));
+    ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+    const auto signal_number = std::span(signals).subspan(index, 1).front();
+    ASSERT_TRUE(client.send_signal(signal_number));
+    ASSERT_TRUE(client.wait(deadline_after(5s)));
+    auto status = client.status();
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 128 + signal_number);
+    EXPECT_TRUE(client.terminal_state_restored());
+    EXPECT_TRUE(client.raw_tail().contains("\x1B[?1049l"));
+    EXPECT_TRUE(client.raw_tail().contains("lemma attach interrupted by signal"));
+    EXPECT_TRUE(wait_for_listing(session, "detached", deadline_after(3s)));
+  }
+
+  constexpr std::string_view blocked_session = "signal_blocked_output";
+  ASSERT_EQ(command({"start", std::string(blocked_session)}).status, 0);
+  PtyClient blocked;
+  ASSERT_TRUE(blocked.spawn(client_arguments("attach", blocked_session), runtime_.environment()));
+  ASSERT_TRUE(blocked.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(blocked.send("yes __LEMMA_BLOCKED_SIGNAL__\r", deadline_after(2s)));
+  // Stop consuming the outer PTY until its output queue fills and the attached client blocks in a
+  // render write. A handled signal must unwind without the test making that descriptor writable.
+  std::this_thread::sleep_for(500ms);
+  ASSERT_TRUE(blocked.send_signal(SIGTERM));
+  const auto restore_deadline = deadline_after(3s);
+  while (!blocked.terminal_state_restored() &&
+         std::chrono::steady_clock::now() < restore_deadline) {
+    std::this_thread::sleep_for(5ms);
+  }
+  ASSERT_TRUE(blocked.terminal_state_restored());
+  ASSERT_TRUE(blocked.wait(deadline_after(5s)));
+  auto blocked_status = blocked.status();
+  ASSERT_TRUE(WIFEXITED(blocked_status));
+  EXPECT_EQ(WEXITSTATUS(blocked_status), 128 + SIGTERM);
+  EXPECT_TRUE(blocked.terminal_state_restored());
+  ASSERT_TRUE(blocked.wait_for_raw("lemma attach interrupted by signal", deadline_after(5s)))
+      << blocked.raw_tail();
+  EXPECT_TRUE(blocked.raw_tail().contains("\x1B[?1049l"));
+  const auto stopped = command({"kill", std::string(blocked_session)});
+  EXPECT_EQ(stopped.status, 0) << stopped.output;
+}
+
+TEST_F(MuxProcessTest, RestoresTerminalWhenDaemonConnectionIsLost) {
+  ASSERT_EQ(command({"start", "daemon_loss"}).status, 0);
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("attach", "daemon_loss"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+
+  server_.terminate();
+
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+  EXPECT_TRUE(client.terminal_state_restored());
+  EXPECT_TRUE(client.raw_tail().contains("\x1B[?1049l"));
+  EXPECT_TRUE(client.raw_tail().contains("connection was lost"));
+}
+
 TEST_F(MuxProcessTest, LastShellExitReclaimsSessionAndRestoresTerminal) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "exitcase"), runtime_.environment()));
@@ -660,16 +874,19 @@ TEST_F(MuxProcessTest, AcceptsCoalescedAndFragmentedSetupWithoutStallingPtys) {
 
   RawPeer attached;
   ASSERT_TRUE(attached.connect(runtime_.socket_path(), deadline_after(2s)));
-  const auto attach_request = named_request(protocol::ControlCommand::attach, "rawattach",
-                                            protocol::Dimensions{.columns = 80, .rows = 24});
-  ASSERT_TRUE(attached.send(attach_request, deadline_after(2s)));
-  ASSERT_TRUE(attached.wait_for_byte(protocol::wire_byte(protocol::ControlResponse::ready),
-                                     deadline_after(5s)));
   constexpr std::string_view marker_command = "printf '__RAW_ATTACHED__\\n'\r";
   const auto marker_input = input_request(marker_command);
-  ASSERT_TRUE(attached.send(marker_input, deadline_after(2s)));
-  ASSERT_TRUE(read_until_contains(attached, "__RAW_ATTACHED__", deadline_after(5s)))
+  auto attach = attach_request("rawattach", protocol::Dimensions{.columns = 80, .rows = 24});
+  attach.insert(attach.end(), marker_input.begin(), marker_input.end());
+  ASSERT_TRUE(attached.send(attach, deadline_after(2s)));
+  protocol::ServerDecoder attached_decoder;
+  ASSERT_TRUE(wait_for_server_hello(attached, attached_decoder, deadline_after(5s)));
+  ASSERT_TRUE(
+      read_until_contains(attached, attached_decoder, "__RAW_ATTACHED__", deadline_after(5s)))
       << attached.received_tail();
+  const auto detach = protocol::encode_detach(3);
+  ASSERT_TRUE(attached.send(detach.bytes(), deadline_after(2s)));
+  ASSERT_TRUE(attached.wait_for_close(deadline_after(5s)));
 
   ASSERT_TRUE(send_prefix(responsive, std::byte{'d'}));
   ASSERT_TRUE(responsive.wait(deadline_after(5s)));
@@ -723,8 +940,8 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
                              malformed_environment.end());
   EXPECT_TRUE(expect_close(invalid_environment));
 
-  const auto disconnecting_attach = named_request(protocol::ControlCommand::attach, "healthy",
-                                                  protocol::Dimensions{.columns = 80, .rows = 24});
+  const auto disconnecting_attach =
+      attach_request("healthy", protocol::Dimensions{.columns = 80, .rows = 24});
   for (std::size_t prefix = 0; prefix < disconnecting_attach.size(); ++prefix) {
     RawPeer disconnected;
     ASSERT_TRUE(disconnected.connect(runtime_.socket_path(), deadline_after(2s)));
@@ -743,10 +960,10 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
         protocol::Dimensions{.columns = 80, .rows = protocol::rows_max + 1U}}) {
     RawPeer invalid;
     ASSERT_TRUE(invalid.connect(runtime_.socket_path(), deadline_after(2s)));
-    const auto request = named_request(protocol::ControlCommand::attach, "healthy", dimensions);
+    const auto request = attach_request("healthy", dimensions);
     ASSERT_TRUE(invalid.send(request, deadline_after(2s)));
-    ASSERT_TRUE(invalid.wait_for_byte(protocol::wire_byte(protocol::ControlResponse::failed),
-                                      deadline_after(2s)));
+    ASSERT_TRUE(wait_for_disconnect(invalid, protocol::DisconnectReason::protocol_error,
+                                    deadline_after(2s)));
     ASSERT_TRUE(invalid.wait_for_close(deadline_after(2s)));
     ASSERT_TRUE(expect_healthy());
   }
@@ -755,6 +972,51 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   ASSERT_TRUE(idle.connect(runtime_.socket_path(), deadline_after(2s)));
   ASSERT_TRUE(idle.wait_for_close(deadline_after(7s)));
   EXPECT_TRUE(expect_healthy());
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, RejectsVersionMismatchAndLiveMalformedPeerWithTypedReasons) {
+  ASSERT_EQ(command({"start", "mismatch"}).status, 0);
+  RawPeer mismatch;
+  ASSERT_TRUE(mismatch.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto incompatible =
+      attach_request("mismatch", {.columns = 200, .rows = 80}, {.major = 2, .minor = 0});
+  ASSERT_TRUE(mismatch.send(incompatible, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_disconnect(mismatch, protocol::DisconnectReason::version_mismatch,
+                                  deadline_after(2s)));
+  ASSERT_TRUE(mismatch.wait_for_close(deadline_after(2s)));
+  const auto unchanged = wait_for_session(
+      "mismatch",
+      [](const SessionListing& value) {
+        return !value.attached && value.columns == 80 && value.rows == 24;
+      },
+      deadline_after(3s));
+  ASSERT_TRUE(unchanged.has_value());
+
+  RawPeer malformed;
+  ASSERT_TRUE(malformed.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto valid = attach_request("mismatch", {.columns = 80, .rows = 24});
+  ASSERT_TRUE(malformed.send(valid, deadline_after(2s)));
+  protocol::ServerDecoder decoder;
+  ASSERT_TRUE(wait_for_server_hello(malformed, decoder, deadline_after(5s)));
+  ASSERT_TRUE(wait_for_full_generation(malformed, decoder, 1, deadline_after(5s)));
+  const auto wrong_sequence = protocol::encode_header(protocol::MessageKind::input, 0, 1, 4);
+  std::vector<std::byte> invalid(wrong_sequence.begin(), wrong_sequence.end());
+  invalid.push_back(std::byte{'x'});
+  ASSERT_TRUE(malformed.send(invalid, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_disconnect(malformed, decoder, protocol::DisconnectReason::protocol_error,
+                                  deadline_after(2s)));
+  ASSERT_TRUE(malformed.wait_for_close(deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("mismatch", "detached", deadline_after(3s)));
+
+  PtyClient recovered;
+  ASSERT_TRUE(recovered.spawn(client_arguments("attach", "mismatch"), runtime_.environment()));
+  ASSERT_TRUE(recovered.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(recovered.send("printf '__MALFORMED_RECOVERED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(recovered.wait_for_screen("__MALFORMED_RECOVERED__", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(recovered, std::byte{'d'}));
+  ASSERT_TRUE(recovered.wait(deadline_after(5s)));
 }
 
 // GoogleTest assertion macros inflate the measured branch count.
@@ -776,11 +1038,11 @@ TEST_F(MuxProcessTest, SlowControlAndInitialAttachReadersRecoverWithoutBlockingP
   RawPeer slow_attach;
   ASSERT_TRUE(slow_attach.connect(runtime_.socket_path(), deadline_after(2s)));
   ASSERT_TRUE(slow_attach.set_receive_buffer(4'096));
-  const auto attach_request = named_request(protocol::ControlCommand::attach, "slow_attach",
-                                            protocol::Dimensions{.columns = 200, .rows = 80});
-  ASSERT_TRUE(slow_attach.send(attach_request, deadline_after(2s)));
-  ASSERT_TRUE(slow_attach.wait_for_byte(protocol::wire_byte(protocol::ControlResponse::ready),
-                                        deadline_after(5s)))
+  const auto slow_attach_request =
+      attach_request("slow_attach", protocol::Dimensions{.columns = 200, .rows = 80});
+  ASSERT_TRUE(slow_attach.send(slow_attach_request, deadline_after(2s)));
+  protocol::ServerDecoder slow_attach_decoder;
+  ASSERT_TRUE(wait_for_server_hello(slow_attach, slow_attach_decoder, deadline_after(5s)))
       << "peer errno: " << slow_attach.last_error() << "\nserver:\n"
       << server_.output();
 
@@ -807,7 +1069,8 @@ TEST_F(MuxProcessTest, SlowControlAndInitialAttachReadersRecoverWithoutBlockingP
 
   constexpr std::string_view marker_command = "printf '__SLOW_ATTACH_RECOVERED__\\n'\r";
   ASSERT_TRUE(slow_attach.send(input_request(marker_command), deadline_after(5s)));
-  ASSERT_TRUE(read_until_contains(slow_attach, "__SLOW_ATTACH_RECOVERED__", deadline_after(10s)))
+  ASSERT_TRUE(read_until_contains(slow_attach, slow_attach_decoder, "__SLOW_ATTACH_RECOVERED__",
+                                  deadline_after(10s)))
       << slow_attach.received_tail();
 
   ASSERT_TRUE(send_prefix(responsive, std::byte{'d'}));
@@ -915,9 +1178,11 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
 
   RawPeer nonreader;
   ASSERT_TRUE(nonreader.connect(runtime_.socket_path(), deadline_after(2s)));
-  const auto blocked_attach = named_request(protocol::ControlCommand::attach, "blocked",
-                                            protocol::Dimensions{.columns = 500, .rows = 200});
+  const auto blocked_attach =
+      attach_request("blocked", protocol::Dimensions{.columns = 500, .rows = 200});
   ASSERT_TRUE(nonreader.send(blocked_attach, deadline_after(2s)));
+  protocol::ServerDecoder nonreader_decoder;
+  ASSERT_TRUE(wait_for_server_hello(nonreader, nonreader_decoder, deadline_after(5s)));
 
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("attach", "responsive"), runtime_.environment()));
@@ -941,42 +1206,29 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
   }
   fragmented.close();
 
-  // Use a full limit of excess peers so connect/accept scheduling cannot leave the only rejected
-  // connection hidden at the tail of the listener backlog.
-  constexpr auto capacity_peer_count = limits::pending_connections_hard_max * 2U;
+  // Fill every setup slot with peers that have not yet supplied a protocol discriminator.
+  constexpr auto capacity_peer_count = limits::pending_connections_hard_max;
   std::array<RawPeer, capacity_peer_count> capacity_peers;
   for (auto& peer : capacity_peers) {
     ASSERT_TRUE(peer.connect(runtime_.socket_path(), deadline_after(2s)));
   }
-  std::array<pollfd, capacity_peer_count> capacity_events{};
-  for (std::size_t index = 0; index < capacity_peers.size(); ++index) {
-    std::span(capacity_events).subspan(index, 1).front() = {
-        .fd = std::span(capacity_peers).subspan(index, 1).front().native_handle(),
-        .events = POLLIN,
-        .revents = 0,
-    };
-  }
-  bool capacity_observed = false;
-  for (std::size_t attempt = 0; attempt < 20 && !capacity_observed; ++attempt) {
-    ASSERT_GE(::poll(capacity_events.data(), static_cast<nfds_t>(capacity_events.size()), 100), 0);
-    for (std::size_t index = 0; index < capacity_events.size(); ++index) {
-      auto& events = std::span(capacity_events).subspan(index, 1).front();
-      if ((events.revents & (POLLIN | POLLHUP)) != 0) {
-        std::array<std::byte, 1> response{};
-        auto& peer = std::span(capacity_peers).subspan(index, 1).front();
-        if (peer.read_some(response, deadline_after(100ms)) == 1 &&
-            response.front() == protocol::wire_byte(protocol::ControlResponse::capacity)) {
-          capacity_observed = true;
-          break;
-        }
-      }
-      if ((events.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-        events.fd = -1;
-      }
-      events.revents = 0;
-    }
-  }
-  ASSERT_TRUE(capacity_observed);
+
+  RawPeer rejected_control;
+  ASSERT_TRUE(rejected_control.connect(runtime_.socket_path(), deadline_after(2s)));
+  const std::array list_command{protocol::wire_byte(protocol::ControlCommand::list)};
+  ASSERT_TRUE(rejected_control.send(list_command, deadline_after(2s)));
+  ASSERT_TRUE(rejected_control.wait_for_byte(
+      protocol::wire_byte(protocol::ControlResponse::capacity), deadline_after(2s)));
+
+  RawPeer rejected_attach;
+  ASSERT_TRUE(rejected_attach.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto rejected_hello =
+      attach_request("blocked", protocol::Dimensions{.columns = 80, .rows = 24});
+  ASSERT_TRUE(rejected_attach.send(rejected_hello, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_disconnect(rejected_attach, protocol::DisconnectReason::capacity,
+                                  deadline_after(2s)));
+  ASSERT_TRUE(rejected_attach.wait_for_close(deadline_after(2s)));
+
   const auto rejected_shutdown = command({"shutdown", "--confirm"});
   EXPECT_NE(rejected_shutdown.status, 0) << rejected_shutdown.output;
   EXPECT_TRUE(rejected_shutdown.output.contains("capacity")) << rejected_shutdown.output;

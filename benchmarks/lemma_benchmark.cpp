@@ -2,6 +2,7 @@
 #include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "protocol/extension.hpp"
+#include "protocol/single_pane.hpp"
 #include "render/pane_composition.hpp"
 
 #include <benchmark/benchmark.h>
@@ -79,6 +80,31 @@ void benchmark_extension_registration_codec(benchmark::State& state) {
     auto registration_value = *registration;
     benchmark::DoNotOptimize(registration_value);
   }
+}
+
+void benchmark_private_attach_input_codec(benchmark::State& state) {
+  constexpr std::array payload{std::byte{'i'}, std::byte{'n'}, std::byte{'p'}, std::byte{'u'},
+                               std::byte{'t'}};
+  const auto header = protocol::encode_input_header(payload.size(), 2);
+  protocol::ClientDecoder decoder;
+  for ([[maybe_unused]] const auto iteration : state) {
+    decoder.reset(2, false);
+    auto destination = std::ranges::copy(header, decoder.writable_bytes().begin()).out;
+    std::ranges::copy(payload, destination);
+    if (!decoder.commit(header.size() + payload.size()).has_value()) {
+      state.SkipWithError("failed to commit private attach frame");
+      return;
+    }
+    const auto decoded = decoder.next();
+    if (!decoded.has_value() || !decoded->has_value()) {
+      state.SkipWithError("failed to decode private attach frame");
+      return;
+    }
+    auto message = **decoded;
+    benchmark::DoNotOptimize(message);
+    decoder.consume();
+  }
+  state.counters["wire_overhead_bytes"] = static_cast<double>(protocol::attach_header_bytes);
 }
 
 void benchmark_terminal_small_writes(benchmark::State& state) {
@@ -337,6 +363,7 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
 BENCHMARK(benchmark_greeting);
 BENCHMARK(benchmark_command_dispatch);
 BENCHMARK(benchmark_extension_registration_codec);
+BENCHMARK(benchmark_private_attach_input_codec);
 BENCHMARK(benchmark_terminal_small_writes);
 BENCHMARK(benchmark_terminal_large_writes);
 BENCHMARK(benchmark_terminal_render_updates);

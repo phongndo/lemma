@@ -1,21 +1,22 @@
 # Protocol
 
-Home of bounded messages between Lemma clients, the daemon, and the extension host. This component
-owns schemas, limits, versions, capabilities, encoding, and incremental decoding.
+This component owns Lemma's bounded private wire codecs. It does not open sockets, dispatch commands,
+parse terminal output, render frames, or expose a public RPC.
 
-The production client protocol is bidirectional and server-rendered. It carries hello/mismatch,
-attach/control requests, typed commands/results/errors, stable IDs, ordered key/text/paste/focus/
-mouse/resize input, bounded complete ANSI render frames, full-redraw generations, and explicit client
-effects where policy requires. This attached-client framing remains private and version-coupled.
+The attached terminal path is private protocol 1.0. Both directions use a deterministic 16-byte
+magic/version/kind/flags/length/sequence envelope. Its closed messages are hello, input, resize,
+pane command, detach, complete ANSI render frame with full-redraw generation, and typed disconnect.
+Every envelope and typed payload field is validated by bounded incremental decoders before core or
+outer-terminal mutation. Render payloads are limited to 4 MiB; client input is limited to 8 KiB.
 
-A separate public semantic schema is shared by JSON CLI, Lua, and the same-user automation socket. It
-carries actors/requests, stable IDs, commands/results/errors, capabilities, snapshots, bounded events,
-and launch/capture/wait/cancel operations. Agents use that schema rather than render frames.
+The daemon decoder owns 8,208 inline bytes. The client prepares one connection-lifetime 4,194,324-byte
+RAII owner before terminal mutation and exposes only borrowed spans below it. Both support arbitrary
+fragmentation, coalescing, and retry of an unconsumed message.
 
-Protocol code does not open sockets, discover sessions, dispatch commands, parse terminal bytes,
-hit-test layouts, or render frames. Every length, enum, version, capability, identifier, and generation is
-validated before authoritative mutation. The wire never contains Ghostty values or private layouts.
+The isolated Lua host continues to use its independent bounded extension protocol in `extension.*`.
+The older one-shot create/list/kill/shutdown control format remains an internal CLI setup path; it
+cannot enter the versioned attached stream. No public automation, capture, or semantic RPC schema is
+implemented here.
 
-The present `lemma-v9` format is unversioned and sends unframed daemon ANSI. It is the tested
-migration baseline. The rolling `TODO.md` backlog replaces it incrementally while preserving daemon
-terminal and presentation ownership. See `docs/protocol.md`.
+See [`docs/protocol.md`](../../docs/protocol.md) for the exact wire contract, validation order,
+backpressure, redraw recovery, and terminal-cleanup guarantees.

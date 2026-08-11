@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -12,7 +13,7 @@
 namespace lemma::protocol {
 
 inline constexpr std::size_t input_bytes_max = std::size_t{4} * 1'024U;
-inline constexpr std::size_t parser_bytes_max = std::size_t{16} * 1'024U;
+inline constexpr std::size_t input_message_bytes_max = input_bytes_max * 2U;
 inline constexpr std::uint16_t columns_max = 500;
 inline constexpr std::uint16_t rows_max = 200;
 inline constexpr std::size_t session_name_bytes_max = 32;
@@ -28,10 +29,11 @@ inline constexpr std::string_view shutdown_response = "lemma daemon stopped\n";
 struct Dimensions final {
   std::uint16_t columns{80};
   std::uint16_t rows{24};
+
+  [[nodiscard]] constexpr auto operator==(const Dimensions&) const noexcept -> bool = default;
 };
 
 enum class ControlCommand : std::uint8_t {
-  attach = 'A',
   create = 'N',
   create_with_context = 'C',
   list = 'L',
@@ -44,7 +46,6 @@ enum class ControlCommand : std::uint8_t {
 
 enum class ControlResponse : std::uint8_t {
   ready = 'Y',
-  busy = 'B',
   missing = 'M',
   capacity = 'C',
   failed = 'F',
@@ -78,24 +79,130 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
+// Private attach protocol v1.0. Every envelope is exactly 16 bytes:
+// magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
+struct ProtocolVersion final {
+  std::uint8_t major{1};
+  std::uint8_t minor{0};
+
+  [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
+};
+
+inline constexpr ProtocolVersion current_version{};
+inline constexpr std::array<std::byte, 4> attach_magic{std::byte{0x89}, std::byte{'L'},
+                                                       std::byte{'M'}, std::byte{'A'}};
+inline constexpr std::size_t attach_header_bytes = 16;
+inline constexpr std::size_t render_generation_bytes = 4;
+inline constexpr std::size_t render_ansi_bytes_max = std::size_t{4} * 1'024U * 1'024U;
+inline constexpr std::size_t render_payload_bytes_max =
+    render_generation_bytes + render_ansi_bytes_max;
+inline constexpr std::size_t diagnostic_bytes_max = 255;
+inline constexpr std::size_t small_message_bytes_max =
+    attach_header_bytes + 1U + diagnostic_bytes_max;
+inline constexpr std::size_t client_decoder_bytes_max =
+    attach_header_bytes + input_message_bytes_max;
+inline constexpr std::size_t server_decoder_bytes_max =
+    attach_header_bytes + render_payload_bytes_max;
+inline constexpr std::uint8_t render_full_redraw_flag = 0x01;
+
+static_assert(small_message_bytes_max >= attach_header_bytes + 5U + session_name_bytes_max);
+static_assert(client_decoder_bytes_max < std::size_t{16} * 1'024U);
+static_assert(server_decoder_bytes_max <= (std::size_t{4} * 1'024U * 1'024U) + 32U);
+
+enum class MessageKind : std::uint8_t {
+  hello = 1,
+  input = 2,
+  resize = 3,
+  pane_command = 4,
+  detach = 5,
+  render_frame = 6,
+  disconnect = 7,
+};
+
+enum class DisconnectReason : std::uint8_t {
+  normal = 1,
+  protocol_error = 2,
+  version_mismatch = 3,
+  session_busy = 4,
+  session_missing = 5,
+  capacity = 6,
+  setup_failed = 7,
+  frame_timeout = 8,
+  daemon_shutdown = 9,
+  internal_error = 10,
+};
+
 enum class ClientMessageKind : std::uint8_t {
+  hello,
   input,
   resize,
   detach,
   pane_command,
 };
 
+enum class ServerMessageKind : std::uint8_t {
+  hello,
+  render_frame,
+  disconnect,
+};
+
 enum class DecodeError : std::uint8_t {
-  invalid_type,
-  input_too_large,
+  invalid_magic,
+  version_mismatch,
+  invalid_kind,
+  invalid_flags,
+  invalid_length,
+  oversized,
+  invalid_sequence,
+  invalid_enum,
+  invalid_dimensions,
+  invalid_session,
+  invalid_generation,
   buffer_full,
+  allocation_failed,
 };
 
 struct ClientMessage final {
   ClientMessageKind kind{ClientMessageKind::detach};
   Dimensions dimensions{};
   PaneCommand pane_command{PaneCommand::none};
+  std::string_view session;
   std::span<const std::byte> input;
+  std::uint32_t sequence{0};
+};
+
+struct ServerMessage final {
+  ServerMessageKind kind{ServerMessageKind::disconnect};
+  Dimensions dimensions{};
+  DisconnectReason reason{DisconnectReason::internal_error};
+  std::string_view diagnostic;
+  std::span<const std::byte> ansi;
+  std::uint32_t sequence{0};
+  std::uint32_t full_redraw_generation{0};
+  bool full_redraw{false};
+};
+
+class SmallMessage final {
+public:
+  [[nodiscard]] auto bytes() const noexcept -> std::span<const std::byte> {
+    return std::span(storage_).first(size_);
+  }
+
+private:
+  friend auto encode_client_hello(std::string_view session, Dimensions dimensions,
+                                  std::uint32_t sequence, ProtocolVersion version) noexcept
+      -> SmallMessage;
+  friend auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence) noexcept
+      -> SmallMessage;
+  friend auto encode_resize(Dimensions dimensions, std::uint32_t sequence) noexcept -> SmallMessage;
+  friend auto encode_detach(std::uint32_t sequence) noexcept -> SmallMessage;
+  friend auto encode_pane_command(PaneCommand command, std::uint32_t sequence) noexcept
+      -> SmallMessage;
+  friend auto encode_disconnect(DisconnectReason reason, std::string_view diagnostic,
+                                std::uint32_t sequence) noexcept -> SmallMessage;
+
+  std::array<std::byte, small_message_bytes_max> storage_{};
+  std::size_t size_{0};
 };
 
 [[nodiscard]] constexpr auto wire_byte(const ControlCommand command) noexcept -> std::byte {
@@ -110,16 +217,37 @@ struct ClientMessage final {
     -> std::array<std::byte, 2>;
 [[nodiscard]] auto encode_dimensions(Dimensions dimensions) noexcept -> std::array<std::byte, 4>;
 [[nodiscard]] auto encode_bounded_size(std::size_t size) noexcept -> std::array<std::byte, 2>;
-[[nodiscard]] auto encode_resize(Dimensions dimensions) noexcept -> std::array<std::byte, 5>;
-[[nodiscard]] auto encode_input_header(std::size_t bytes) noexcept -> std::array<std::byte, 3>;
-[[nodiscard]] auto encode_detach() noexcept -> std::array<std::byte, 1>;
-[[nodiscard]] auto encode_pane_command(PaneCommand command) noexcept -> std::array<std::byte, 2>;
 [[nodiscard]] auto decode_dimensions(std::span<const std::byte, 4> bytes) noexcept -> Dimensions;
 [[nodiscard]] auto decode_bounded_size(std::span<const std::byte, 2> bytes) noexcept -> std::size_t;
 [[nodiscard]] constexpr auto decode_session_name_size(const std::byte value) noexcept
     -> std::size_t {
   return std::to_integer<std::size_t>(value);
 }
+
+[[nodiscard]] auto encode_header(MessageKind kind, std::uint8_t flags, std::uint32_t payload_bytes,
+                                 std::uint32_t sequence,
+                                 ProtocolVersion version = current_version) noexcept
+    -> std::array<std::byte, attach_header_bytes>;
+[[nodiscard]] auto encode_client_hello(std::string_view session, Dimensions dimensions,
+                                       std::uint32_t sequence = 1,
+                                       ProtocolVersion version = current_version) noexcept
+    -> SmallMessage;
+[[nodiscard]] auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence = 1) noexcept
+    -> SmallMessage;
+[[nodiscard]] auto encode_input_header(std::size_t bytes, std::uint32_t sequence) noexcept
+    -> std::array<std::byte, attach_header_bytes>;
+[[nodiscard]] auto encode_resize(Dimensions dimensions, std::uint32_t sequence) noexcept
+    -> SmallMessage;
+[[nodiscard]] auto encode_detach(std::uint32_t sequence) noexcept -> SmallMessage;
+[[nodiscard]] auto encode_pane_command(PaneCommand command, std::uint32_t sequence) noexcept
+    -> SmallMessage;
+[[nodiscard]] auto encode_render_frame_header(std::size_t ansi_bytes, std::uint32_t sequence,
+                                              std::uint32_t full_redraw_generation,
+                                              bool full_redraw) noexcept
+    -> std::array<std::byte, attach_header_bytes + render_generation_bytes>;
+[[nodiscard]] auto encode_disconnect(DisconnectReason reason, std::string_view diagnostic,
+                                     std::uint32_t sequence = 1) noexcept -> SmallMessage;
+[[nodiscard]] auto decode_error_diagnostic(DecodeError error) noexcept -> std::string_view;
 
 struct PrefixAction final {
   std::size_t input_bytes{0};
@@ -153,20 +281,52 @@ private:
   std::byte escape_introducer_{'['};
 };
 
-// Incremental decoder for the attached-client stream. A returned message borrows decoder storage
-// and remains valid until consume() or reset().
+// Daemon-side incremental decoder. Returned payload views borrow storage until consume() or
+// reset().
 class ClientDecoder final {
 public:
   [[nodiscard]] auto writable_bytes() noexcept -> std::span<std::byte>;
   [[nodiscard]] auto commit(std::size_t bytes) noexcept -> std::expected<void, DecodeError>;
   [[nodiscard]] auto next() noexcept -> std::expected<std::optional<ClientMessage>, DecodeError>;
   void consume() noexcept;
-  void reset() noexcept;
+  void reset(std::uint32_t expected_sequence = 1, bool expect_hello = true) noexcept;
 
 private:
-  std::array<std::byte, parser_bytes_max> storage_{};
+  std::array<std::byte, client_decoder_bytes_max> storage_{};
   std::size_t used_{0};
   std::size_t pending_size_{0};
+  std::uint32_t expected_sequence_{1};
+  bool expect_hello_{true};
+};
+
+// Attached-client incremental decoder. Its one bounded RAII allocation is prepared before terminal
+// mutation; render payloads borrow it until consume() or reset().
+class ServerDecoder final {
+public:
+  ServerDecoder() = default;
+  ServerDecoder(const ServerDecoder&) = delete;
+  auto operator=(const ServerDecoder&) -> ServerDecoder& = delete;
+  ServerDecoder(ServerDecoder&&) = delete;
+  auto operator=(ServerDecoder&&) -> ServerDecoder& = delete;
+  ~ServerDecoder() = default;
+
+  [[nodiscard]] auto prepare() noexcept -> std::expected<void, DecodeError>;
+  [[nodiscard]] auto writable_bytes() noexcept -> std::span<std::byte>;
+  [[nodiscard]] auto commit(std::size_t bytes) noexcept -> std::expected<void, DecodeError>;
+  [[nodiscard]] auto next() noexcept -> std::expected<std::optional<ServerMessage>, DecodeError>;
+  void consume() noexcept;
+  void reset(std::uint32_t expected_sequence = 1, bool expect_hello = true) noexcept;
+
+private:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> storage_;
+  std::size_t used_{0};
+  std::size_t pending_size_{0};
+  std::uint32_t expected_sequence_{1};
+  std::uint32_t full_redraw_generation_{0};
+  std::uint32_t pending_generation_{0};
+  bool pending_full_redraw_{false};
+  bool expect_hello_{true};
 };
 
 } // namespace lemma::protocol

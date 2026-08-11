@@ -6,7 +6,7 @@
 namespace lemma {
 
 inline constexpr std::string_view version = "0.1.0";
-inline constexpr std::string_view private_protocol_version = "lemma-v9";
+inline constexpr std::string_view private_protocol_version = "lemma-private-1.0";
 
 } // namespace lemma
 

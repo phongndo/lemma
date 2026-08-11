@@ -147,6 +147,7 @@ public:
   [[nodiscard]] auto wait_for_raw(std::string_view text, Deadline deadline) -> bool;
   void drain(Deadline deadline) noexcept;
   [[nodiscard]] auto wait(Deadline deadline) -> bool;
+  [[nodiscard]] auto send_signal(int signal_number) const noexcept -> bool;
   void terminate() noexcept;
   [[nodiscard]] auto screen() -> std::string;
   [[nodiscard]] auto terminal_state_restored() const noexcept -> bool;

@@ -40,7 +40,6 @@
 namespace lemma::core {
 namespace {
 
-constexpr auto command_attach = protocol::wire_byte(protocol::ControlCommand::attach);
 constexpr auto command_create = protocol::wire_byte(protocol::ControlCommand::create);
 constexpr auto command_create_with_context =
     protocol::wire_byte(protocol::ControlCommand::create_with_context);
@@ -51,7 +50,6 @@ constexpr auto command_kill = protocol::wire_byte(protocol::ControlCommand::kill
 constexpr auto command_kill_all = protocol::wire_byte(protocol::ControlCommand::kill_all);
 constexpr auto command_shutdown = protocol::wire_byte(protocol::ControlCommand::shutdown);
 constexpr auto response_ready = protocol::wire_byte(protocol::ControlResponse::ready);
-constexpr auto response_busy = protocol::wire_byte(protocol::ControlResponse::busy);
 constexpr auto response_missing = protocol::wire_byte(protocol::ControlResponse::missing);
 constexpr auto response_capacity = protocol::wire_byte(protocol::ControlResponse::capacity);
 constexpr auto response_failed = protocol::wire_byte(protocol::ControlResponse::failed);
@@ -340,6 +338,12 @@ struct TabSlot final {
   std::uint32_t generation{0};
 };
 
+enum class ClientCloseState : std::uint8_t {
+  none,
+  queue_disconnect,
+  disconnect_queued,
+};
+
 struct Session final {
   Session(const std::string_view session_name, const std::string_view initial_working_directory,
           const std::span<const std::byte> initial_environment,
@@ -379,6 +383,9 @@ struct Session final {
     decoder.reset();
     output.reset();
     frame.release();
+    server_sequence = 2;
+    full_redraw_generation = 0;
+    client_close_state = ClientCloseState::none;
     frame_scheduler.cancel();
     input_backpressured = false;
     for (auto& tab_slot : tabs) {
@@ -410,6 +417,8 @@ struct Session final {
   TabId previous_tab;
   protocol::ClientDecoder decoder;
   ClientFrameOutput output;
+  std::uint32_t server_sequence{2};
+  std::uint32_t full_redraw_generation{0};
   int client{-1};
   ClientId client_id;
   std::uint32_t client_generation{0};
@@ -420,6 +429,7 @@ struct Session final {
   bool active{true};
   bool status_valid{false};
   bool input_backpressured{false};
+  ClientCloseState client_close_state{ClientCloseState::none};
   std::uint64_t status_signature{0};
   std::array<CommandTraceEntry, command_trace_entries_max> command_trace{};
   std::uint64_t command_sequence{0};
@@ -1488,7 +1498,7 @@ collect_surfaces(Session& session,
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
   // Frame capacity changes only at this lifecycle boundary. Allocation failure preserves the old
   // storage and all terminal geometry, so the caller can reject the resize without partial state.
-  const auto retained_frame_bytes = session.output.busy() ? session.output.size() : 0;
+  const auto retained_frame_bytes = session.output.busy() ? session.output.frame_bytes() : 0;
   if (!session.frame.prepare({.columns = columns, .rows = rows}, retained_frame_bytes)) {
     return false;
   }
@@ -1527,6 +1537,8 @@ enum class ParseResult : std::uint8_t {
     }
     const auto& message = **decoded;
     switch (message.kind) {
+    case protocol::ClientMessageKind::hello:
+      return ParseResult::error;
     case protocol::ClientMessageKind::detach: {
       const Command command{.kind = CommandKind::detach_client, .origin = CommandOrigin::client};
       const auto result = dispatch_session_command(session, command);
@@ -1696,7 +1708,25 @@ collect_status_line(Session& session,
   diagnostic::set_latency_trace_correlation(0);
   session.frame_trace_correlation = 0;
 #endif
-  return rendered.has_value() && session.output.queue(rendered->bytes, now, trace_correlation);
+  if (!rendered.has_value() || session.server_sequence == 0 ||
+      session.server_sequence == std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  auto generation = session.full_redraw_generation;
+  if (rendered->full) {
+    if (generation == std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    ++generation;
+  }
+  if (generation == 0 ||
+      !session.output.queue_frame(rendered->bytes, session.server_sequence, generation,
+                                  rendered->full, now, trace_correlation)) {
+    return false;
+  }
+  ++session.server_sequence;
+  session.full_redraw_generation = generation;
+  return true;
 }
 
 template <typename Id>
@@ -1802,13 +1832,13 @@ void reclaim_inactive_sessions(Sessions& sessions) noexcept {
 enum class PendingState : std::uint8_t {
   unused,
   read_command,
+  read_attach,
   read_name_size,
   read_name,
   read_working_directory_size,
   read_working_directory,
   read_environment_size,
   read_environment,
-  read_dimensions,
   flush_response,
 };
 
@@ -1833,6 +1863,8 @@ struct PendingConnection final {
   std::size_t field_size{0};
   std::size_t field_target{0};
   ConnectionOutput output;
+  protocol::ClientDecoder attach_decoder;
+  protocol::Dimensions attach_dimensions{};
   SessionId attach_session;
   std::chrono::steady_clock::time_point deadline;
   std::chrono::steady_clock::time_point setup_deadline;
@@ -1844,11 +1876,60 @@ using PendingConnections =
     std::array<std::unique_ptr<PendingConnection>, limits::pending_connections_hard_max>;
 using PendingConnectionGenerations =
     std::array<std::uint32_t, limits::pending_connections_hard_max>;
-static_assert(sizeof(PendingConnection) <= std::size_t{136} * 1'024U);
+static_assert(sizeof(PendingConnection) <= std::size_t{152} * 1'024U);
 static_assert(sizeof(PendingConnections) ==
               limits::pending_connections_hard_max * sizeof(std::unique_ptr<PendingConnection>));
 static_assert(sizeof(PendingConnectionGenerations) ==
               limits::pending_connections_hard_max * sizeof(std::uint32_t));
+
+// Once setup capacity is occupied, a small independent pool reads only the protocol discriminator
+// needed to return a wire-compatible capacity response. These responders do not consume setup
+// slots, so an attach peer can receive its framed rejection even while every setup slot is busy.
+class CapacityRejectionOutput final {
+public:
+  [[nodiscard]] auto append(const std::span<const std::byte> bytes) noexcept -> bool {
+    if (bytes.size() > storage_.size() - size_) {
+      return false;
+    }
+    std::ranges::copy(bytes, std::span(storage_).subspan(size_).begin());
+    size_ += bytes.size();
+    return true;
+  }
+  [[nodiscard]] auto readable() const noexcept -> std::span<const std::byte> {
+    return std::span(storage_).first(size_).subspan(offset_);
+  }
+  [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
+  [[nodiscard]] auto consume(const std::size_t bytes) noexcept -> bool {
+    if (bytes > size_ - offset_) {
+      return false;
+    }
+    offset_ += bytes;
+    return true;
+  }
+  void reset() noexcept {
+    size_ = 0;
+    offset_ = 0;
+  }
+
+private:
+  std::array<std::byte, protocol::small_message_bytes_max> storage_{};
+  std::size_t size_{0};
+  std::size_t offset_{0};
+};
+
+struct CapacityRejectionConnection final {
+  [[nodiscard]] auto active() const noexcept -> bool { return descriptor >= 0; }
+
+  int descriptor{-1};
+  CapacityRejectionOutput output;
+  std::chrono::steady_clock::time_point deadline;
+  bool flush_response{false};
+};
+
+constexpr std::size_t capacity_rejection_connections_max = 8;
+using CapacityRejectionConnections =
+    std::array<CapacityRejectionConnection, capacity_rejection_connections_max>;
+static_assert(sizeof(CapacityRejectionConnections) <= std::size_t{4} * 1'024U);
 
 constexpr auto setup_progress_timeout = std::chrono::seconds(5);
 constexpr auto setup_total_timeout = std::chrono::seconds(10);
@@ -1891,6 +1972,14 @@ void close_pending(PendingConnections& connections, const std::size_t slot,
   owner.reset();
 }
 
+void close_capacity_rejection(CapacityRejectionConnections& connections,
+                              const std::size_t slot) noexcept {
+  auto& connection = std::span(connections).subspan(slot, 1).front();
+  close_descriptor(connection.descriptor);
+  connection.output.reset();
+  connection.flush_response = false;
+}
+
 void finish_pending_output(PendingConnection& pending,
                            const PendingAction action = PendingAction::close) noexcept {
   pending.action = action;
@@ -1909,6 +1998,15 @@ void finish_pending_byte(PendingConnection& pending, const std::byte response,
 
 void fail_pending_output(PendingConnection& pending) noexcept {
   finish_pending_byte(pending, response_failed);
+}
+
+void finish_pending_disconnect(PendingConnection& pending, const protocol::DisconnectReason reason,
+                               const std::string_view diagnostic) noexcept {
+  pending.output.reset();
+  const auto encoded = protocol::encode_disconnect(reason, diagnostic);
+  const bool appended = pending.output.append(encoded.bytes());
+  LEMMA_ASSERT(appended);
+  finish_pending_output(pending);
 }
 
 [[nodiscard]] auto extension_error(const ExtensionRuntime* const extensions) noexcept
@@ -2018,40 +2116,49 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
                     const std::size_t slot) noexcept {
   Session* const session = find_session(sessions, pending.session.view());
   if (session == nullptr) {
-    finish_pending_byte(pending, response_missing);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::session_missing,
+                              "no lemma session");
     return;
   }
   if (session->client >= 0 ||
       session->pending_attach_slot != std::numeric_limits<std::uint32_t>::max()) {
-    finish_pending_byte(pending, response_busy);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::session_busy,
+                              "lemma session is already attached");
     return;
   }
-  const auto dimensions = protocol::decode_dimensions(std::span(pending.field).first<4>());
-  if (dimensions.columns == 0 || dimensions.rows == 0 ||
-      dimensions.columns > protocol::columns_max || dimensions.rows > protocol::rows_max ||
-      !resize_session(*session, dimensions)) {
+  if (!resize_session(*session, pending.attach_dimensions)) {
     session->frame.release();
-    finish_pending_byte(pending, response_failed);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                              "failed to prepare attached viewport");
     return;
   }
   session->pending_attach_slot = static_cast<std::uint32_t>(slot);
   session->pending_attach_generation = pending.generation;
   pending.attach_session = session->id;
-  finish_pending_byte(pending, response_ready, PendingAction::attach);
+  pending.output.reset();
+  const auto hello = protocol::encode_daemon_hello(pending.attach_dimensions);
+  const bool appended = pending.output.append(hello.bytes());
+  LEMMA_ASSERT(appended);
+  finish_pending_output(pending, PendingAction::attach);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
-                            const ExtensionRuntime* const extensions,
-                            const std::size_t slot) noexcept {
+                            const ExtensionRuntime* const extensions) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
-    if (pending.command == command_list || pending.command == command_kill_all ||
-        pending.command == command_shutdown) {
+    if (pending.command == protocol::attach_magic.front()) {
+      pending.attach_decoder.reset();
+      pending.attach_decoder.writable_bytes().front() = pending.command;
+      const auto committed = pending.attach_decoder.commit(1);
+      LEMMA_ASSERT(committed.has_value());
+      pending.state = PendingState::read_attach;
+    } else if (pending.command == command_list || pending.command == command_kill_all ||
+               pending.command == command_shutdown) {
       pending.output.reset();
       prepare_unnamed_command(pending, sessions, extensions);
-    } else if (pending.command == command_attach || pending.command == command_create ||
+    } else if (pending.command == command_create ||
                pending.command == command_create_with_context ||
                pending.command == command_list_session || pending.command == command_list_tabs ||
                pending.command == command_kill) {
@@ -2059,6 +2166,9 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     } else {
       pending.state = PendingState::unused;
     }
+    break;
+  case PendingState::read_attach:
+    LEMMA_ASSERT(false);
     break;
   case PendingState::read_name_size: {
     const auto size = protocol::decode_session_name_size(pending.field.front());
@@ -2075,8 +2185,6 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
                       std::as_writable_bytes(std::span(pending.session.bytes)).begin());
     if (!valid_session_name(pending.session.view())) {
       pending.state = PendingState::unused;
-    } else if (pending.command == command_attach) {
-      begin_pending_field(pending, PendingState::read_dimensions, 4);
     } else if (pending.command == command_create_with_context) {
       begin_pending_field(pending, PendingState::read_working_directory_size, 2);
     } else {
@@ -2134,9 +2242,6 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       prepare_named_command(pending, sessions, extensions);
     }
     break;
-  case PendingState::read_dimensions:
-    prepare_attach(pending, sessions, slot);
-    break;
   case PendingState::unused:
   case PendingState::flush_response:
     LEMMA_ASSERT(false);
@@ -2155,6 +2260,53 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
   for (std::size_t operation = 0; operation < operations_per_turn_max && pending->active() &&
                                   pending->state != PendingState::flush_response;
        ++operation) {
+    if (pending->state == PendingState::read_attach) {
+      const auto decoded = pending->attach_decoder.next();
+      if (!decoded.has_value()) {
+        const auto reason = decoded.error() == protocol::DecodeError::version_mismatch
+                                ? protocol::DisconnectReason::version_mismatch
+                                : protocol::DisconnectReason::protocol_error;
+        finish_pending_disconnect(*pending, reason,
+                                  protocol::decode_error_diagnostic(decoded.error()));
+        continue;
+      }
+      if (decoded->has_value()) {
+        const auto& message = **decoded;
+        LEMMA_ASSERT(message.kind == protocol::ClientMessageKind::hello);
+        pending->session = {};
+        pending->session.size = message.session.size();
+        std::ranges::copy(message.session, pending->session.bytes.begin());
+        pending->attach_dimensions = message.dimensions;
+        pending->attach_decoder.consume();
+        prepare_attach(*pending, sessions, slot);
+        continue;
+      }
+      auto available = pending->attach_decoder.writable_bytes();
+      if (available.empty()) {
+        finish_pending_disconnect(*pending, protocol::DisconnectReason::protocol_error,
+                                  "attach decoder buffer exhausted");
+        continue;
+      }
+      const auto received = ::recv(pending->descriptor, available.data(), available.size(), 0);
+      if (received > 0) {
+        if (!pending->attach_decoder.commit(static_cast<std::size_t>(received)).has_value()) {
+          finish_pending_disconnect(*pending, protocol::DisconnectReason::protocol_error,
+                                    "attach decoder buffer exhausted");
+        } else {
+          record_pending_progress(*pending);
+        }
+        continue;
+      }
+      if (received < 0 && errno == EINTR) {
+        continue;
+      }
+      if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return;
+      }
+      close_pending(connections, slot, sessions);
+      return;
+    }
+
     auto available = std::span(pending->field)
                          .subspan(pending->field_size, pending->field_target - pending->field_size);
     const auto received = ::recv(pending->descriptor, available.data(), available.size(), 0);
@@ -2162,7 +2314,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
       pending->field_size += static_cast<std::size_t>(received);
       record_pending_progress(*pending);
       if (pending->field_size == pending->field_target) {
-        complete_pending_field(*pending, sessions, extensions, slot);
+        complete_pending_field(*pending, sessions, extensions);
       }
       continue;
     }
@@ -2192,6 +2344,8 @@ void process_pending_read(PendingConnections& connections, Sessions& sessions,
   process_pending_fields(connections, sessions, extensions, slot);
 }
 
+void handle_client_parse_result(Session& session, ParseResult result) noexcept;
+
 void handoff_attached_connection(PendingConnections& connections, const std::size_t slot,
                                  Sessions& sessions) noexcept {
   auto& owner = std::span(connections).subspan(slot, 1).front();
@@ -2207,21 +2361,26 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   const int connection = pending.descriptor;
   pending.descriptor = -1;
   session->client = connection;
+  session->decoder = pending.attach_decoder;
   release_attach_reservation(pending, slot, sessions);
   owner.reset();
 
   session->client_generation = next_generation(session->client_generation);
   session->client_id = ClientId::from_parts(session->id.slot(), session->client_generation);
-  session->decoder.reset();
   session->output.reset();
+  session->server_sequence = 2;
+  session->full_redraw_generation = 0;
   session->input_backpressured = false;
+  session->client_close_state = ClientCloseState::none;
   session->frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   session->frame_trace_correlation = 0;
 #endif
   if (!compose_session_frame(*session, true, std::chrono::steady_clock::now())) {
     session->detach_client();
+    return;
   }
+  handle_client_parse_result(*session, parse_client_packets(*session));
 }
 
 [[nodiscard]] auto write_pending_output(void* const context,
@@ -2258,6 +2417,55 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   return action == PendingAction::shutdown;
 }
 
+void process_capacity_rejection_read(CapacityRejectionConnections& connections,
+                                     const std::size_t slot) noexcept {
+  auto& connection = std::span(connections).subspan(slot, 1).front();
+  LEMMA_ASSERT(connection.active() && !connection.flush_response);
+  std::byte discriminator{};
+  const auto received = ::recv(connection.descriptor, &discriminator, 1, 0);
+  if (received > 0) {
+    connection.output.reset();
+    if (discriminator == protocol::attach_magic.front()) {
+      const auto rejection = protocol::encode_disconnect(
+          protocol::DisconnectReason::capacity, "daemon pending connection capacity exhausted");
+      const bool appended = connection.output.append(rejection.bytes());
+      LEMMA_ASSERT(appended);
+    } else {
+      const bool appended = connection.output.append(std::span(&response_capacity, 1));
+      LEMMA_ASSERT(appended);
+    }
+    connection.flush_response = true;
+    connection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+    return;
+  }
+  if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+    return;
+  }
+  close_capacity_rejection(connections, slot);
+}
+
+[[nodiscard]] auto write_capacity_rejection_output(void* const context,
+                                                   const std::span<const std::byte> bytes) noexcept
+    -> ConnectionWriteAttempt {
+  auto& connection = *static_cast<CapacityRejectionConnection*>(context);
+  const auto sent = ::send(connection.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+  if (sent > 0) {
+    connection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+  }
+  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+}
+
+void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
+                                     const std::size_t slot, std::size_t& global_budget) noexcept {
+  auto& connection = std::span(connections).subspan(slot, 1).front();
+  LEMMA_ASSERT(connection.active() && connection.flush_response);
+  const auto status = flush_connection_output(connection.output, global_budget,
+                                              &write_capacity_rejection_output, &connection);
+  if (status == ConnectionFlushStatus::drained || status == ConnectionFlushStatus::hard_error) {
+    close_capacity_rejection(connections, slot);
+  }
+}
+
 [[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const FrameScheduler::TimePoint now,
                                       int timeout) noexcept -> int {
   const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
@@ -2284,20 +2492,29 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 }
 
 [[nodiscard]] auto poll_timeout(const Sessions& sessions, const PendingConnections& pending,
+                                const CapacityRejectionConnections& capacity_rejections,
                                 const ExtensionRuntime* const extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
   auto timeout = extensions == nullptr ? -1 : extensions->poll_timeout(now);
-  for (const auto& connection : pending) {
-    if (connection == nullptr || !connection->active()) {
-      continue;
-    }
-    if (now >= connection->deadline) {
-      return 0;
+  const auto tighten = [now, &timeout](const auto& connection) {
+    if (now >= connection.deadline) {
+      return true;
     }
     const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(connection->deadline - now);
+        std::chrono::duration_cast<std::chrono::milliseconds>(connection.deadline - now);
     const auto candidate = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
+    return false;
+  };
+  for (const auto& connection : pending) {
+    if (connection != nullptr && connection->active() && tighten(*connection)) {
+      return 0;
+    }
+  }
+  for (const auto& connection : capacity_rejections) {
+    if (connection.active() && tighten(connection)) {
+      return 0;
+    }
   }
   return frame_poll_timeout(sessions, now, timeout);
 }
@@ -2348,8 +2565,10 @@ struct PaneDamageAssessment final {
   return drained.changed || process_changed;
 }
 
+constexpr std::size_t blocked_sink_pty_read_bytes_per_turn_max = std::size_t{4} * 1'024U;
+
 void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& events,
-                         std::size_t& global_budget) noexcept {
+                         std::size_t& global_budget, std::size_t& blocked_session_budget) noexcept {
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
     return;
   }
@@ -2361,8 +2580,23 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   const bool track_interactive_damage = session.client >= 0 && pane.interactive_damage.pending();
   const auto interactive_status_before =
       track_interactive_damage ? current_status_signature(session) : 0;
-  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes, global_budget,
+  // A client-blocked session keeps consuming canonical PTY state, but all of its ready panes share
+  // one isolation slice so a many-pane session cannot spend the daemon-wide allowance by taking a
+  // fresh slice for every pane.
+  const bool blocked_sink = session.output.busy();
+  std::size_t pane_budget =
+      blocked_sink ? std::min(global_budget, blocked_session_budget) : global_budget;
+  if (pane_budget == 0) {
+    return;
+  }
+  const auto pane_budget_before = pane_budget;
+  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes, pane_budget,
                                  track_interactive_damage, trace_matcher);
+  const auto bytes_drained = pane_budget_before - pane_budget;
+  global_budget -= bytes_drained;
+  if (blocked_sink) {
+    blocked_session_budget -= bytes_drained;
+  }
   pane.active = drained.alive;
   const bool process_changed = refresh_process_name(pane);
   if (!pane_event_changed(session, drained, process_changed)) {
@@ -2383,6 +2617,35 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   }
 }
 
+void queue_client_disconnect_if_ready(Session& session) noexcept {
+  if (session.client_close_state != ClientCloseState::queue_disconnect || session.output.busy()) {
+    return;
+  }
+  if (session.server_sequence == 0 ||
+      session.server_sequence == std::numeric_limits<std::uint32_t>::max() ||
+      !session.output.queue_disconnect(protocol::DisconnectReason::protocol_error,
+                                       "invalid client protocol message", session.server_sequence,
+                                       std::chrono::steady_clock::now())) {
+    session.detach_client();
+    return;
+  }
+  ++session.server_sequence;
+  session.client_close_state = ClientCloseState::disconnect_queued;
+}
+
+void handle_client_parse_result(Session& session, const ParseResult result) noexcept {
+  session.input_backpressured = result == ParseResult::backpressure;
+  if (result == ParseResult::detach) {
+    session.detach_client();
+    return;
+  }
+  if (result == ParseResult::error) {
+    session.client_close_state = ClientCloseState::queue_disconnect;
+    session.input_backpressured = false;
+    queue_client_disconnect_if_ready(session);
+  }
+}
+
 void process_client_events(Session& session, const pollfd& events) noexcept {
   // Consume resizes before flushing queued output so resize_session can discard bytes composed
   // for the previous physical viewport. A decoder-held input message is retried even without new
@@ -2393,14 +2656,9 @@ void process_client_events(Session& session, const pollfd& events) noexcept {
     session.detach_client();
     return;
   }
-  if (session.client >= 0 &&
+  if (session.client >= 0 && session.client_close_state == ClientCloseState::none &&
       (session.input_backpressured || (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
-    const auto received = receive_client(session);
-    session.input_backpressured = received == ParseResult::backpressure;
-    if (received == ParseResult::detach || received == ParseResult::error) {
-      session.detach_client();
-      return;
-    }
+    handle_client_parse_result(session, receive_client(session));
   }
 }
 
@@ -2453,6 +2711,7 @@ void queue_due_frames(Sessions& sessions) noexcept {
   const auto now = std::chrono::steady_clock::now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active ||
+        session->client_close_state != ClientCloseState::none ||
         !session->frame_scheduler.due(now, frame_sink_state(*session))) {
       continue;
     }
@@ -2505,10 +2764,16 @@ void flush_attached_client_frames(Sessions& sessions,
   auto active_targets = storage.first(count);
   flush_ready_client_frames(active_targets, cursor, global_budget, now);
   for (std::size_t index = 0; index < active_targets.size(); ++index) {
-    const auto status = active_targets.subspan(index, 1).front().status;
+    auto& target = active_targets.subspan(index, 1).front();
+    auto& session = *static_cast<Session*>(target.context);
+    const auto status = target.status;
     if (status == ClientFrameFlushStatus::hard_error ||
-        status == ClientFrameFlushStatus::deadline_exceeded) {
-      static_cast<Session*>(active_targets.subspan(index, 1).front().context)->detach_client();
+        status == ClientFrameFlushStatus::deadline_exceeded ||
+        (status == ClientFrameFlushStatus::drained &&
+         session.client_close_state == ClientCloseState::disconnect_queued)) {
+      session.detach_client();
+    } else if (status == ClientFrameFlushStatus::drained) {
+      queue_client_disconnect_if_ready(session);
     }
   }
 }
@@ -2524,6 +2789,16 @@ void expire_pending_connections(PendingConnections& pending_connections,
   }
 }
 
+void expire_capacity_rejections(CapacityRejectionConnections& connections) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  for (std::size_t slot = 0; slot < connections.size(); ++slot) {
+    const auto& connection = std::span(connections).subspan(slot, 1).front();
+    if (connection.active() && now >= connection.deadline) {
+      close_capacity_rejection(connections, slot);
+    }
+  }
+}
+
 [[nodiscard]] auto empty_pending_slot(PendingConnections& pending_connections) noexcept
     -> std::optional<std::size_t> {
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
@@ -2534,10 +2809,29 @@ void expire_pending_connections(PendingConnections& pending_connections,
   return std::nullopt;
 }
 
+[[nodiscard]] auto empty_capacity_rejection_slot(CapacityRejectionConnections& connections) noexcept
+    -> std::optional<std::size_t> {
+  for (std::size_t slot = 0; slot < connections.size(); ++slot) {
+    if (!std::span(connections).subspan(slot, 1).front().active()) {
+      return slot;
+    }
+  }
+  return std::nullopt;
+}
+
+// Acceptance exhaustively handles primary slots, bounded rejection slots, and allocation failure.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void accept_pending_connections(const int listener, PendingConnections& pending_connections,
-                                PendingConnectionGenerations& generations) noexcept {
+                                PendingConnectionGenerations& generations,
+                                CapacityRejectionConnections& capacity_rejections) noexcept {
   constexpr std::size_t accepts_per_turn_max = 8;
   for (std::size_t accepted = 0; accepted < accepts_per_turn_max; ++accepted) {
+    const auto available = empty_pending_slot(pending_connections);
+    std::optional<std::size_t> rejection_slot;
+    if (!available.has_value()) {
+      rejection_slot = empty_capacity_rejection_slot(capacity_rejections);
+    }
+
     int connection = ::accept(listener, nullptr, nullptr);
     if (connection < 0) {
       if (errno == EINTR) {
@@ -2549,10 +2843,18 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
       close_descriptor(connection);
       continue;
     }
-    const auto available = empty_pending_slot(pending_connections);
     if (!available.has_value()) {
-      static_cast<void>(::send(connection, &response_capacity, 1, MSG_NOSIGNAL));
-      close_descriptor(connection);
+      if (!rejection_slot.has_value()) {
+        // The bounded responder pool is reserved for peers whose protocol can still be identified.
+        // Shed additional peers so silent saturated connections cannot gate listener service.
+        close_descriptor(connection);
+        continue;
+      }
+      auto& rejection = std::span(capacity_rejections).subspan(*rejection_slot, 1).front();
+      rejection.descriptor = connection;
+      rejection.output.reset();
+      rejection.flush_response = false;
+      rejection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
       continue;
     }
     auto& owner = std::span(pending_connections).subspan(*available, 1).front();
@@ -2577,6 +2879,7 @@ enum class DescriptorKind : std::uint8_t {
   pane,
   client,
   pending,
+  capacity_rejection,
   extension,
 };
 
@@ -2585,6 +2888,7 @@ struct DescriptorOwner final {
   Tab* tab{nullptr};
   Pane* pane{nullptr};
   std::size_t pending_slot{0};
+  std::size_t capacity_rejection_slot{0};
   DescriptorKind kind{DescriptorKind::client};
 };
 
@@ -2601,6 +2905,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   Sessions sessions;
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
+  CapacityRejectionConnections capacity_rejections{};
   std::unique_ptr<ExtensionRuntime> extensions;
   if (acquire_extension != nullptr) {
     try {
@@ -2615,7 +2920,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   }
   constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::sessions_hard_max) +
-                                        limits::pending_connections_hard_max;
+                                        limits::pending_connections_hard_max +
+                                        capacity_rejection_connections_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
@@ -2658,9 +2964,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
       }
       if (session->client >= 0) {
-        const auto client_events =
-            static_cast<short>((session->input_backpressured ? 0 : POLLIN) |
-                               (session->output.busy() ? static_cast<short>(POLLOUT) : 0));
+        const auto client_events = static_cast<short>(
+            (session->input_backpressured || session->client_close_state != ClientCloseState::none
+                 ? 0
+                 : POLLIN) |
+            (session->output.busy() ? static_cast<short>(POLLOUT) : 0));
         std::span(descriptors).subspan(descriptor_count, 1).front() = {
             .fd = session->client, .events = client_events, .revents = 0};
         std::span(owners).subspan(descriptor_count, 1).front() = {.session = session.get(),
@@ -2681,6 +2989,18 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .kind = DescriptorKind::pending};
       ++descriptor_count;
     }
+    for (std::size_t slot = 0; slot < capacity_rejections.size(); ++slot) {
+      const auto& rejection = std::span(capacity_rejections).subspan(slot, 1).front();
+      if (!rejection.active()) {
+        continue;
+      }
+      const auto events = static_cast<short>(rejection.flush_response ? POLLOUT : POLLIN);
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = rejection.descriptor, .events = events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {
+          .capacity_rejection_slot = slot, .kind = DescriptorKind::capacity_rejection};
+      ++descriptor_count;
+    }
     if (extensions != nullptr && extensions->descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = extensions->descriptor(), .events = POLLIN, .revents = 0};
@@ -2688,8 +3008,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       ++descriptor_count;
     }
 
-    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(sessions, pending_connections, extensions.get()));
+    const auto poll_result =
+        ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
+               poll_timeout(sessions, pending_connections, capacity_rejections, extensions.get()));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -2701,6 +3022,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     // Drain every ready PTY before handling client input, then remove exited panes so input is
     // always routed to a live focused pane selected by close_pane.
     std::size_t pty_read_budget = std::size_t{256} * 1'024U;
+    std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
+        blocked_session_read_budgets{};
+    blocked_session_read_budgets.fill(blocked_sink_pty_read_bytes_per_turn_max);
     const auto ready_owner_count = descriptor_count - 1U;
     if (ready_owner_count > 0) {
       pty_read_cursor %= ready_owner_count;
@@ -2710,7 +3034,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         const auto owner = std::span(owners).subspan(index, 1).front();
         if (owner.kind == DescriptorKind::pane) {
           const auto& events = std::span(descriptors).subspan(index, 1).front();
-          process_pane_events(*owner.session, *owner.tab, *owner.pane, events, pty_read_budget);
+          auto& blocked_session_budget =
+              std::span(blocked_session_read_budgets).subspan(owner.session->id.slot(), 1).front();
+          process_pane_events(*owner.session, *owner.tab, *owner.pane, events, pty_read_budget,
+                              blocked_session_budget);
         }
       }
       pty_read_cursor = (pty_read_cursor + visited) % ready_owner_count;
@@ -2734,17 +3061,24 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind != DescriptorKind::pending) {
-        continue;
-      }
-      const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
-      if (pending == nullptr || !pending->active()) {
-        continue;
-      }
-      const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-      if (pending->state != PendingState::flush_response &&
-          (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-        process_pending_read(pending_connections, sessions, extensions.get(), owner.pending_slot);
+      if (owner.kind == DescriptorKind::pending) {
+        const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
+        if (pending == nullptr || !pending->active()) {
+          continue;
+        }
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        if (pending->state != PendingState::flush_response &&
+            (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+          process_pending_read(pending_connections, sessions, extensions.get(), owner.pending_slot);
+        }
+      } else if (owner.kind == DescriptorKind::capacity_rejection) {
+        const auto& rejection =
+            std::span(capacity_rejections).subspan(owner.capacity_rejection_slot, 1).front();
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        if (rejection.active() && !rejection.flush_response &&
+            (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+          process_capacity_rejection_read(capacity_rejections, owner.capacity_rejection_slot);
+        }
       }
     }
 
@@ -2802,20 +3136,26 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     bool shutdown_after_outputs = false;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind != DescriptorKind::pending) {
-        continue;
-      }
-      const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
-      if (pending == nullptr || !pending->active() ||
-          pending->state != PendingState::flush_response) {
-        continue;
-      }
       const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-      if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
-        if (flush_pending_output(pending_connections, owner.pending_slot, pending_output_budget,
+      if (owner.kind == DescriptorKind::pending) {
+        const auto& pending = std::span(pending_connections).subspan(owner.pending_slot, 1).front();
+        if (pending == nullptr || !pending->active() ||
+            pending->state != PendingState::flush_response) {
+          continue;
+        }
+        if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0 &&
+            flush_pending_output(pending_connections, owner.pending_slot, pending_output_budget,
                                  sessions)) {
           shutdown_after_outputs = true;
           break;
+        }
+      } else if (owner.kind == DescriptorKind::capacity_rejection) {
+        const auto& rejection =
+            std::span(capacity_rejections).subspan(owner.capacity_rejection_slot, 1).front();
+        if (rejection.active() && rejection.flush_response &&
+            (events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
+          flush_capacity_rejection_output(capacity_rejections, owner.capacity_rejection_slot,
+                                          pending_output_budget);
         }
       }
     }
@@ -2830,6 +3170,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       return 0;
     }
     expire_pending_connections(pending_connections, sessions);
+    expire_capacity_rejections(capacity_rejections);
     reclaim_inactive_sessions(sessions);
 
     // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
@@ -2843,7 +3184,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
 
     if ((descriptors.front().revents & POLLIN) != 0) {
-      accept_pending_connections(listener, pending_connections, pending_generations);
+      accept_pending_connections(listener, pending_connections, pending_generations,
+                                 capacity_rejections);
     }
     reclaim_inactive_sessions(sessions);
   }

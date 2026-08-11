@@ -401,6 +401,66 @@ The p99 same-pane sample moved within the existing measured host distribution wh
 and every reviewed threshold passed. Blocked-client loaded/idle key-to-visible p95 remained 0.589,
 below the unchanged 1.10 isolation limit.
 
+## F4 private attach framing results
+
+F4 replaces the attach byte stream with private protocol 1.0 while leaving renderer authority and
+F2's retained-output ownership intact. The fixed cost is 16 bytes on every message and another four
+bytes on every render frame for its full-redraw generation. `benchmark_private_attach_input_codec`
+measures deterministic framed-byte copy, validation, decode, and consume at 6.18 ns median in the
+final three-repetition release run; the header is prepared outside the timed loop. This codec cost is separate from end-to-end scheduling evidence.
+
+The framing-aware trace run `f4-framing-trace-interactive-30-benchmark.json` retained its raw mmap
+files in `f4-framing-trace-interactive-30/` and its decoded paths in
+`f4-framing-trace-interactive-30-events.json`. Forty-eight composed frames carried 21,434 ANSI bytes;
+the F2 socket queue wrote 22,394 bytes. The exact 960-byte difference is 48 x 20-byte framing,
+or **4.48%**. `f4-framing-overhead.json` retains the stage counts, byte sums, formula, and provenance.
+Outer-terminal byte metrics intentionally remain ANSI-only because the client strips validated
+framing before writing the terminal; every schema-4 Lemma report now says so explicitly.
+
+The final five-repetition trace-off extended run is retained in the four
+`f4-final-{benchmark-results,mux-benchmark-results,mux-comparison-results,mux-profile-results}.json`
+reports. Selected results are:
+
+| Metric | F3 final | F4 final extended |
+|---|---:|---:|
+| Warm-scroll p50 / p95 | 2.297 / 2.403 ms | 2.730 / 18.942 ms |
+| Warm-scroll outer ANSI bytes p50 | 687 B | 687 B |
+| Attach-to-visible p50 / p95 | 3.020 / 3.417 ms parent gate | 7.367 / 8.032 ms post-review |
+| Same-pane key-to-PTY p50 / p95 | 1.220 / 1.281 ms | 1.332 / 1.482 ms |
+| Same-pane key-to-visible p50 / p95 | 1.424 / 1.492 ms | 1.401 / 1.639 ms |
+| Same-pane outer ANSI bytes p50 | workload-dependent | 283 B |
+| Blocked-client other-session visible p50 / p95 | 0.147 / 0.159 ms | 0.095 / 0.102 ms |
+| Blocked-client disconnect | 5.016 s | 5.008 s |
+| P1 idle tree / daemon RSS | 7.70 / 3.20 MiB | 8.83 / 3.19 MiB |
+
+Adding framing initially exposed a host mode in which a non-reading 500x200 session's unbounded PTY
+flood could consume the whole 256 KiB daemon read allowance before unrelated input ran. The final
+reactor preserves that daemon-wide limit but gives a session with retained blocked output a 4 KiB
+PTY-read isolation slice per turn. The final five-sample loaded/idle p95 ratio was 0.685, and the
+30-sample retained run measured 0.162 ms loaded p95. This is the F4 adaptation of F2 fairness, not a
+new latency lane or feature.
+
+The attached client's bounded 4,194,324-byte decoder allocation remains lazy. Final P1 client RSS
+was 1.62 MiB. The bounded signal-restoration helper adds a measured 1,130,496-B P1 child marginal;
+including it, P1 tree RSS remained 0.890x tmux. One hundred lifecycle cycles reached a stable
+4,997,120-byte daemon plateau for the final 21 samples, and history increased daemon RSS by 786,432
+B. Complete raw F3-preservation evidence is copied under `f4-final-memory-*`.
+
+The pinned host entered a slower scheduling mode during the final absolute 80-check gate attempts.
+The retained `f4-final-regression-budget-results.json` is marked failed rather than relabeled: the
+post-review safety helper also makes attach startup exceed its old 4.7/5.4 ms p50/p95 limits
+(7.367/8.032 ms in `f4-final-attach-visible-30.json`), while steady same-pane key-to-PTY remained
+1.332/1.482 ms and several idle/profile tails also crossed unchanged limits. No limit was widened. To distinguish code effect from host state, an
+unchanged `185c395` release worktree was built and run on the same host in the same interval.
+`f4-concurrent-parent-process-workloads.json`, `f4-concurrent-parent-pane-profiles.json`, and
+`f4-concurrent-comparison.json` retain the raw comparison. The parent itself missed the same absolute
+budgets (same-pane key-to-PTY 1.499/1.648 ms p50/p95); F4 measured 1.450/1.547 ms in the paired run.
+Same-pane visible p50 was within 0.3%, p95 was +4.62%, profile active CPU medians differed by at most
+1.3%, attach improved, outer bytes did not increase, and blocked-client isolation improved. Earlier
+complete failed attempts are retained as `f4-regression-*-failed-*.json`. These results preserve every
+reviewed threshold and demonstrate no material F4 regression outside the concurrently reproduced
+host variance, while honestly retaining the unavailable clean absolute-gate outcome.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state

@@ -900,6 +900,15 @@ void PtyClient::signal_group(const int signal_number) const noexcept {
   }
 }
 
+[[nodiscard]] auto PtyClient::send_signal(const int signal_number) const noexcept -> bool {
+  if (process_ <= 0 || signal_number <= 0) {
+    return false;
+  }
+  const bool group_signaled = ::kill(-process_, signal_number) == 0;
+  const bool process_signaled = ::kill(process_, signal_number) == 0;
+  return group_signaled || process_signaled;
+}
+
 void PtyClient::terminate() noexcept {
   if (process_ > 0) {
     signal_group(SIGTERM);

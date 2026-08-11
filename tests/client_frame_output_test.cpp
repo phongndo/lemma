@@ -92,6 +92,13 @@ struct ScriptedFrameAllocator final {
   };
 }
 
+[[nodiscard]] auto queue_frame(ClientFrameOutput& output, const std::size_t bytes,
+                               const ClientFrameOutput::TimePoint now,
+                               const std::uint32_t sequence = 2, const std::uint32_t generation = 1,
+                               const bool full = true) noexcept -> bool {
+  return output.queue_frame(bytes, sequence, generation, full, now);
+}
+
 TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecycleGrowth) {
   ScriptedFrameAllocator allocator;
   render::FrameBuffer frame(&allocate_test_frame, &allocator);
@@ -182,7 +189,7 @@ TEST(ClientFrameOutputTest, CompositionAndFlushDoNotAllocateFrameStorage) {
   EXPECT_EQ(terminal.allocation_stats().allocations_total, terminal_allocations);
 
   ClientFrameOutput output;
-  ASSERT_TRUE(output.queue(composition->bytes, origin));
+  ASSERT_TRUE(queue_frame(output, composition->bytes, origin));
   ScriptedClientWriter writer;
   auto target = target_for(frame, output, writer);
   std::size_t budget = attached_client_write_bytes_per_turn_max;
@@ -196,7 +203,7 @@ TEST(ClientFrameOutputTest, BlockedClientRetainsPartialWritesAcrossEintrAndEagai
   std::ranges::copy(std::as_bytes(std::span(message.data(), message.size())),
                     frame->writable().begin());
   ClientFrameOutput output;
-  ASSERT_TRUE(output.queue(message.size(), origin));
+  ASSERT_TRUE(queue_frame(output, message.size(), origin));
   ScriptedClientWriter writer;
   writer.attempts = {
       {.bytes = 2}, {.bytes = -1, .error = EINTR}, {.bytes = 3}, {.bytes = -1, .error = EAGAIN}};
@@ -205,16 +212,49 @@ TEST(ClientFrameOutputTest, BlockedClientRetainsPartialWritesAcrossEintrAndEagai
 
   EXPECT_EQ(flush_client_frame(target, budget, origin + 1ms), ClientFrameFlushStatus::blocked);
   EXPECT_EQ(output.offset(), 5U);
-  EXPECT_EQ(output.size(), message.size());
+  EXPECT_EQ(output.size(),
+            message.size() + protocol::attach_header_bytes + protocol::render_generation_bytes);
   EXPECT_EQ(budget, 1'019U);
   EXPECT_FALSE(output.write_ready());
 
   output.mark_write_ready();
   EXPECT_EQ(flush_client_frame(target, budget, origin + 2ms), ClientFrameFlushStatus::drained);
   EXPECT_FALSE(output.busy());
-  const auto expected = std::as_bytes(std::span(message.data(), message.size()));
+  const auto header = protocol::encode_render_frame_header(message.size(), 2, 1, true);
+  std::array<std::byte, header.size() + message.size()> expected{};
+  auto* const destination = std::ranges::copy(header, expected.begin()).out;
+  std::ranges::copy(std::as_bytes(std::span(message.data(), message.size())), destination);
   EXPECT_TRUE(std::ranges::equal(std::span(writer.written).first(writer.written_size), expected));
 }
+
+// Assertions above each access make optional test failures explicit.
+// NOLINTBEGIN(bugprone-unchecked-optional-access)
+TEST(ClientFrameOutputTest, TypedDisconnectRetainsPartialWritesAndDecodesAfterRecovery) {
+  auto frame = make_frame();
+  ClientFrameOutput output;
+  ASSERT_TRUE(output.queue_disconnect(protocol::DisconnectReason::protocol_error, "malformed peer",
+                                      1, origin));
+  ScriptedClientWriter writer;
+  writer.attempts = {{.bytes = 3}, {.bytes = -1, .error = EAGAIN}};
+  auto target = target_for(*frame, output, writer);
+  std::size_t budget = 1'024;
+
+  ASSERT_EQ(flush_client_frame(target, budget, origin), ClientFrameFlushStatus::blocked);
+  EXPECT_EQ(output.offset(), 3U);
+  output.mark_write_ready();
+  ASSERT_EQ(flush_client_frame(target, budget, origin + 1ms), ClientFrameFlushStatus::drained);
+
+  protocol::ServerDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
+  std::ranges::copy(std::span(writer.written).first(writer.written_size),
+                    decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(writer.written_size).has_value());
+  const auto decoded = decoder.next();
+  ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+  EXPECT_EQ((**decoded).reason, protocol::DisconnectReason::protocol_error);
+  EXPECT_EQ((**decoded).diagnostic, "malformed peer");
+}
+// NOLINTEND(bugprone-unchecked-optional-access)
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -229,7 +269,7 @@ TEST(ClientFrameOutputTest, FloodedPaneKeepsOneFrameAndCollapsesDamageIntoFullRe
   ASSERT_TRUE(initial_frame.has_value());
 
   ClientFrameOutput output;
-  ASSERT_TRUE(output.queue(initial_frame->bytes, origin));
+  ASSERT_TRUE(queue_frame(output, initial_frame->bytes, origin));
   ScriptedClientWriter writer;
   writer.attempts = {{.bytes = -1, .error = EAGAIN}};
   auto target = target_for(*frame, output, writer);
@@ -242,7 +282,7 @@ TEST(ClientFrameOutputTest, FloodedPaneKeepsOneFrameAndCollapsesDamageIntoFullRe
     terminal.write(std::as_bytes(std::span(damage.data(), damage.size())));
     scheduler.request(FrameUrgency::burst, false, origin + 1ms, FrameSinkState::blocked);
   }
-  EXPECT_FALSE(output.queue(initial_frame->bytes, origin + 1ms))
+  EXPECT_FALSE(queue_frame(output, initial_frame->bytes, origin + 1ms))
       << "an in-flight frame must not be replaced";
   EXPECT_TRUE(scheduler.pending());
   EXPECT_TRUE(scheduler.force_full());
@@ -255,13 +295,13 @@ TEST(ClientFrameOutputTest, FloodedPaneKeepsOneFrameAndCollapsesDamageIntoFullRe
       render::compose_retained_single_pane(terminal, *frame, scheduler.force_full());
   ASSERT_TRUE(recovery.has_value());
   EXPECT_TRUE(recovery->full);
-  EXPECT_TRUE(output.queue(recovery->bytes, origin + 1s));
+  EXPECT_TRUE(queue_frame(output, recovery->bytes, origin + 1s, 3, 2));
 }
 
 TEST(ClientFrameOutputTest, FloodedWritableClientCannotExceedItsPerTurnBudget) {
   auto frame = make_frame();
   ClientFrameOutput output;
-  ASSERT_TRUE(output.queue(attached_client_write_bytes_per_client_turn_max + 1U, origin));
+  ASSERT_TRUE(queue_frame(output, attached_client_write_bytes_per_client_turn_max + 1U, origin));
   ScriptedClientWriter writer;
   auto target = target_for(*frame, output, writer);
   std::size_t budget = attached_client_write_bytes_per_client_turn_max * 2U;
@@ -281,7 +321,7 @@ TEST(ClientFrameOutputTest, ManyWritableClientsShareOneGlobalBudget) {
   std::array<ScriptedClientWriter, client_count> writers;
   std::array<ClientFrameFlushTarget, client_count> targets;
   for (std::size_t index = 0; index < client_count; ++index) {
-    ASSERT_TRUE(std::span(outputs).subspan(index, 1).front().queue(frame_size, origin));
+    ASSERT_TRUE(queue_frame(std::span(outputs).subspan(index, 1).front(), frame_size, origin));
     std::span(targets).subspan(index, 1).front() =
         target_for(*frame, std::span(outputs).subspan(index, 1).front(),
                    std::span(writers).subspan(index, 1).front(), static_cast<int>(index));
@@ -289,7 +329,8 @@ TEST(ClientFrameOutputTest, ManyWritableClientsShareOneGlobalBudget) {
 
   std::size_t cursor = 0;
   for (std::size_t turn = 0; turn < 4; ++turn) {
-    std::size_t budget = frame_size * 4U;
+    std::size_t budget =
+        (frame_size + protocol::attach_header_bytes + protocol::render_generation_bytes) * 4U;
     flush_ready_client_frames(targets, cursor, budget, origin + std::chrono::milliseconds(turn));
     EXPECT_EQ(budget, 0U);
   }
@@ -297,7 +338,8 @@ TEST(ClientFrameOutputTest, ManyWritableClientsShareOneGlobalBudget) {
     EXPECT_FALSE(output.busy());
   }
   for (const auto& writer : writers) {
-    EXPECT_EQ(writer.written_size, frame_size);
+    EXPECT_EQ(writer.written_size,
+              frame_size + protocol::attach_header_bytes + protocol::render_generation_bytes);
   }
 }
 
@@ -316,7 +358,7 @@ TEST(ClientFrameOutputTest, RoundRobinCursorPreventsLowSlotFloodStarvation) {
       auto& output = std::span(outputs).subspan(index, 1).front();
       if (!output.busy() &&
           (index == 0 || std::span(writers).subspan(index, 1).front().calls == 0)) {
-        ASSERT_TRUE(output.queue(1, origin + std::chrono::milliseconds(turn)));
+        ASSERT_TRUE(queue_frame(output, 1, origin + std::chrono::milliseconds(turn)));
       }
       std::span(targets).subspan(index, 1).front() = target_for(
           *frame, output, std::span(writers).subspan(index, 1).front(), static_cast<int>(index));
@@ -332,11 +374,11 @@ TEST(ClientFrameOutputTest, RoundRobinCursorPreventsLowSlotFloodStarvation) {
 }
 
 TEST(ClientFrameOutputTest, ProgressAndTotalFrameDeadlinesAreBothBounded) {
+  auto frame = make_frame();
   ClientFrameOutput no_progress;
-  ASSERT_TRUE(no_progress.queue(10, origin));
+  ASSERT_TRUE(queue_frame(no_progress, 10, origin));
   EXPECT_FALSE(no_progress.expired(origin + attached_client_no_progress_timeout - 1ns));
   EXPECT_TRUE(no_progress.expired(origin + attached_client_no_progress_timeout));
-  auto frame = make_frame();
   ScriptedClientWriter writer;
   auto target = target_for(*frame, no_progress, writer);
   std::size_t budget = 1'024;
@@ -345,7 +387,7 @@ TEST(ClientFrameOutputTest, ProgressAndTotalFrameDeadlinesAreBothBounded) {
   EXPECT_EQ(writer.calls, 0U);
 
   ClientFrameOutput trickling;
-  ASSERT_TRUE(trickling.queue(10, origin));
+  ASSERT_TRUE(queue_frame(trickling, 10, origin));
   ASSERT_TRUE(trickling.consume(1, origin + attached_client_frame_total_timeout - 1s));
   EXPECT_FALSE(trickling.expired(origin + attached_client_frame_total_timeout - 1ns));
   EXPECT_TRUE(trickling.expired(origin + attached_client_frame_total_timeout));

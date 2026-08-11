@@ -1,13 +1,16 @@
 #ifndef LEMMA_CORE_CLIENT_FRAME_OUTPUT_HPP
 #define LEMMA_CORE_CLIENT_FRAME_OUTPUT_HPP
 
+#include "protocol/single_pane.hpp"
 #include "render/single_pane.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace lemma::core {
 
@@ -23,12 +26,18 @@ public:
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
 
-  [[nodiscard]] auto queue(std::size_t bytes, TimePoint now,
-                           std::uint64_t trace_correlation = 0) noexcept -> bool;
+  [[nodiscard]] auto queue_frame(std::size_t frame_bytes, std::uint32_t sequence,
+                                 std::uint32_t full_redraw_generation, bool full_redraw,
+                                 TimePoint now, std::uint64_t trace_correlation = 0) noexcept
+      -> bool;
+  [[nodiscard]] auto queue_disconnect(protocol::DisconnectReason reason,
+                                      std::string_view diagnostic, std::uint32_t sequence,
+                                      TimePoint now) noexcept -> bool;
   [[nodiscard]] auto readable(const render::FrameBuffer& frame) const noexcept
       -> std::span<const std::byte>;
   [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] auto frame_bytes() const noexcept -> std::size_t { return frame_bytes_; }
   [[nodiscard]] auto offset() const noexcept -> std::size_t { return offset_; }
   [[nodiscard]] auto write_ready() const noexcept -> bool { return write_ready_; }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -43,10 +52,24 @@ public:
   void reset() noexcept;
 
 private:
+  enum class Source : std::uint8_t {
+    none,
+    frame,
+    inline_message,
+  };
+
+  [[nodiscard]] auto begin_queue(std::size_t bytes, TimePoint now,
+                                 std::uint64_t trace_correlation) noexcept -> bool;
+
+  std::array<std::byte, protocol::attach_header_bytes + protocol::render_generation_bytes>
+      frame_header_{};
+  std::array<std::byte, protocol::small_message_bytes_max> inline_message_{};
   std::size_t size_{0};
+  std::size_t frame_bytes_{0};
   std::size_t offset_{0};
   TimePoint queued_at_;
   TimePoint last_progress_at_;
+  Source source_{Source::none};
   bool write_ready_{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   std::uint64_t latency_trace_correlation_{0};

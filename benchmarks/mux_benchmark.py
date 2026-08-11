@@ -34,6 +34,12 @@ LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
+ATTACH_MAGIC = b"\x89LMA"
+ATTACH_PROTOCOL_MAJOR = 1
+ATTACH_PROTOCOL_MINOR = 0
+ATTACH_HEADER_BYTES = 16
+ATTACH_KIND_HELLO = 1
+ATTACH_KIND_INPUT = 2
 PAYLOAD_SIZE = 2 * 1024 * 1024
 BLOCKED_CLIENT_NO_PROGRESS_TIMEOUT_NS = 5_000_000_000
 # The workload starts its clock at the flood command rather than at the first queued daemon frame.
@@ -86,6 +92,48 @@ def host_fingerprint() -> dict[str, Any]:
         "physical_cpu_count": integer_sysctl("hw.physicalcpu"),
         "memory_bytes": integer_sysctl("hw.memsize"),
     }
+
+
+def attach_frame(kind: int, payload: bytes, sequence: int, flags: int = 0) -> bytes:
+    if not 0 < sequence <= 0xFFFF_FFFF or len(payload) > 0xFFFF_FFFF:
+        raise ValueError("private attach frame exceeds its wire bounds")
+    return struct.pack(
+        "!4sBBBBII",
+        ATTACH_MAGIC,
+        ATTACH_PROTOCOL_MAJOR,
+        ATTACH_PROTOCOL_MINOR,
+        kind,
+        flags,
+        len(payload),
+        sequence,
+    ) + payload
+
+
+def receive_exact(peer: socket.socket, size: int) -> bytes:
+    received = bytearray()
+    while len(received) < size:
+        fragment = peer.recv(size - len(received))
+        if not fragment:
+            raise RuntimeError("private attach peer closed during a framed message")
+        received.extend(fragment)
+    return bytes(received)
+
+
+def receive_attach_hello(peer: socket.socket) -> None:
+    header = receive_exact(peer, ATTACH_HEADER_BYTES)
+    magic, major, minor, kind, flags, payload_bytes, sequence = struct.unpack(
+        "!4sBBBBII", header
+    )
+    if (
+        magic != ATTACH_MAGIC
+        or (major, minor) != (ATTACH_PROTOCOL_MAJOR, ATTACH_PROTOCOL_MINOR)
+        or kind != ATTACH_KIND_HELLO
+        or flags != 0
+        or payload_bytes != 4
+        or sequence != 1
+    ):
+        raise RuntimeError("blocked client received an invalid daemon hello")
+    receive_exact(peer, payload_bytes)
 
 
 def percentile(samples: list[int], quantile: float) -> int:
@@ -1464,11 +1512,11 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         blocked.settimeout(5.0)
         blocked.connect(str(runtime.socket_path))
         session = b"blocked_client"
-        blocked.sendall(b"A" + bytes((len(session),)) + session + struct.pack("!HH", 500, 200))
-        if blocked.recv(1) != b"Y":
-            raise RuntimeError("blocked client did not receive attach readiness")
+        hello_payload = bytes((len(session),)) + struct.pack("!HH", 500, 200) + session
+        blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
+        receive_attach_hello(blocked)
         flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"
-        blocked.sendall(b"I" + struct.pack("!H", len(flood_command)) + flood_command)
+        blocked.sendall(attach_frame(ATTACH_KIND_INPUT, flood_command, 2))
         blocked_since_ns = time.monotonic_ns()
         time.sleep(0.05)
 
@@ -1947,6 +1995,17 @@ def main() -> int:
         "binaries": binary_provenance,
         "build_profile": build_profile,
         "latency_trace": latency_trace_metadata(arguments.trace_directory),
+        "private_attach_framing": (
+            {
+                "version": "1.0",
+                "envelope_bytes_per_message": ATTACH_HEADER_BYTES,
+                "render_generation_bytes_per_frame": 4,
+                "render_wire_overhead_bytes_per_frame": ATTACH_HEADER_BYTES + 4,
+                "client_bytes_metric_excludes_private_framing": True,
+            }
+            if arguments.multiplexer == "lemma"
+            else None
+        ),
         "workloads": workloads,
         "pane_profiles": pane_profiles,
     }

@@ -91,6 +91,7 @@ lsp-check: configure
         ! -path 'src/core/pty_writer.cpp' \
         ! -path 'src/daemon/server.cpp' \
         ! -path 'src/platform/io.cpp' \
+        ! -path 'src/platform/terminal_mode.cpp' \
         ! -path 'src/protocol/single_pane.cpp' \
         ! -path 'src/render/single_pane.cpp' -print0 | sort -z | \
         xargs -0 cmake/check-clangd.sh"

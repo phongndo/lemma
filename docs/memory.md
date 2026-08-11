@@ -1,4 +1,4 @@
-# Memory ownership and F3 evidence
+# Memory ownership and F3/F4 evidence
 
 Lemma treats configured maxima as safety limits, not acceptable resident cost. The working model is:
 
@@ -15,10 +15,12 @@ scripts/ci/memory extended
 It performs a release build with tracing disabled, emits compiler record layouts, records stripped
 binary/dependency sizes, runs identical Lemma/tmux P1/P4/P16/PMAX profiles, measures empty/detached/
 attached lifecycle states, populates terminal history, and completes 100 create/attach/split/close/
-detach/kill cycles. Raw files and provenance are retained as `build/release/f3-memory-*`; the compact
-result is `build/release/f3-memory-summary.json`. The measurements below are from commit
-`ce1173c0ab08b5de8ea2b7499bd06ce4090087e7` with the documented F3 worktree on the pinned Mac16,5,
-Apple M4 Max, 64-GiB host on August 10, 2026.
+detach/kill cycles. The F3 baseline files remain under `build/release/f3-memory-*`; F4's complete
+rerun is retained under `build/release/f4-final-memory-*`. The owner ranking and history analysis
+below are from commit `ce1173c0ab08b5de8ea2b7499bd06ce4090087e7` with the documented F3 worktree.
+The exact layout census and final profile/lifecycle values were refreshed for F4 at pinned parent
+`185c395500a0c90cb3031200166df904de5ff433`. Both ran on the Mac16,5 Apple M4 Max 64-GiB host on
+August 10, 2026.
 
 ## Evidence-first owner ranking
 
@@ -46,9 +48,11 @@ full render. “Touched” describes expected page behavior rather than virtual 
 | Owner | Storage/lifetime | Min / current / maximum bytes | Allocation and release | Failure and page behavior | Reactor allocator work |
 |---|---|---:|---|---|---|
 | Session slot table | fixed automatic reactor owner | 1,032 / 1,032 / 1,032 | reactor entry/exit | infallible; eagerly touched | none |
-| Session | one `unique_ptr` per live session | 100,856 inline each | create / session reclaim | `make_unique` failure rejects create; fixed members are eagerly initialized | create only |
+| Session | one `unique_ptr` per live session | 93,000 inline each | create / session reclaim | `make_unique` failure rejects create; fixed members are eagerly initialized | create only |
 | Session launch context | inline in `Session` | 69,704 included above | create / session reclaim | bounded name, cwd, and 65,535-B environment; preserves launch semantics | create only |
-| Client decoder | inline in `Session` | 16,400 included above | session create/reclaim | fixed parser storage, no allocation | none |
+| Client decoder | inline in `Session` | 8,232 included above | session create/reclaim | fixed 8,208-B framed parser storage, no allocation | none |
+| Attached-client server decoder | one RAII owner in the thin client | 0 detached; 4,194,324-byte virtual bound while attached | before handshake / client exit | allocation failure precedes raw/alternate-screen mutation; for-overwrite pages are touched only by received complete frames | outside daemon reactor; no growth after setup |
+| Emergency termios restorer | one dormant forked helper while a client is in raw mode | P1 child RSS marginal 1,130,496 B; zero CPU in the final idle median | raw entry / client cleanup | fork/pipe/open failure aborts attach and restores synchronously; control-only child exits with its parent and never renders or mutates mux state | outside daemon reactor; sleeps until signal cleanup |
 | Command trace | inline in `Session` | 14,336 included above | session create/reclaim | fixed 256-entry ring, no allocation | none |
 | Tab | one `unique_ptr` per live tab | 3,600 each | tab create / close | allocation failure leaves prior topology valid | create only |
 | Pane shell owner | one `unique_ptr` per live pane | 160 plus terminal state | pane create / close | shell/PTY/terminal creation completes before topology commit | create only |
@@ -58,9 +62,9 @@ full render. “Touched” describes expected page behavior rather than virtual 
 | Scrollback page list | Ghostty terminal owner | active-screen minimum; 10,000-B default logical history quota; 1,000,000-B hard quota | grows/prunes on PTY output / pane close | page-granular and lazy; content is pruned under owner quota; allocator/page retention is measured separately | quota-owned PTY history exception |
 | PTY write queue | one `PanePtyWriteQueue` per pane | 32 inline + 0 dynamic; typically 4,096 after first packet; 1,114,112 per-pane maximum | grows on accepted input/terminal response; releases at pane close or explicit clear | checked replacement before commit; 128-MiB daemon aggregate; exhausted quota backpressures without mutation | rare quota-owned growth on input/response; flush never allocates; drained capacity is reused |
 | Frame buffer | 32-B `FrameBuffer` in each session; dynamic only while attached | 0 detached; 679,936 at 80x24; 4,194,304 hard maximum | attach/resize / detach | checked `4 KiB + 352 B/cell`, clamped to 64 KiB–4 MiB; failed growth preserves old storage; an in-flight prefix is copied before commit; allocation is for-overwrite and pages are touched by composition | attach/resize only; composition and flush use spans |
-| Client frame progress | inline in `Session` | 40 | session lifetime | fixed offsets/deadlines; no allocation | none |
+| Client frame progress | inline in `Session` | 344 | session lifetime | fixed framed-header, typed-disconnect, offsets, and deadlines; no allocation | none |
 | Pending slot table | 128 fixed `unique_ptr` slots plus persistent generations | 1,536 / 1,536 / 1,536 | reactor entry/exit | infallible pointer/generation tables, eagerly touched; generations survive slot churn | none |
-| Pending connection | one RAII object per accepted setup | 0 when idle; 135,304 per live setup; 17,318,912 aggregate maximum | accept / close or attach handoff | allocation failure closes only the new descriptor; object includes 65,535-B field and 65,552-B output storage; pages are touched for that live setup only | accept/control setup only; control flush never allocates |
+| Pending connection | one RAII object per accepted setup | 0 when idle; 143,544 per live setup; 18,373,632 aggregate maximum | accept / close or attach handoff | allocation failure closes only the new descriptor; object includes the 8,232-B attach decoder, 65,535-B control field, and 65,552-B output storage; pages are touched for that live setup only | accept/control setup only; control flush never allocates |
 | Extension daemon state | one optional `ExtensionRuntime` | 0 without config; 189,272 with config | daemon startup when config exists / shutdown | allocation failure fails startup before reactor mutation | no foundational-path owner; IPC processing is fixed-capacity |
 | Extension host state | isolated process stack plus quota-owned Lua state | 78,728 fixed `HostState`; 16-MiB Lua allocation maximum when opted in | config-host start / process exit | failed Lua growth preserves accounting and reports a config memory error; host failure cannot retain daemon work or stop panes; no host exists when config is absent | outside daemon reactor |
 | Reactor descriptor scratch | bounded automatic storage | about 243,816 parent-frame bytes | reactor entry/exit | fixed arrays for 4,290 descriptors/owners, 64 frame targets, and 4,096 writable pane pointers | none |
@@ -86,36 +90,38 @@ Five dedicated final samples used identical 80x24 shells and completion semantic
 
 | Profile | Lemma idle tree / daemon | tmux idle tree / daemon | Lemma active tree / daemon |
 |---|---:|---:|---:|
-| P1 | 7.70 / 3.20 MiB | 10.00 / 4.22 MiB | 6.91 / 3.97 MiB |
-| P4 | 17.83 / 4.52 MiB | 18.86 / 4.23 MiB | 17.02 / 5.27 MiB |
-| P16 | 57.55 / 8.98 MiB | 54.27 / 4.44 MiB | 56.75 / 9.75 MiB |
-| PMAX | 216.12 / 26.64 MiB | 195.86 / 4.98 MiB | 215.34 / 27.33 MiB |
+| P1 | 8.83 / 3.19 MiB | 9.92 / 4.12 MiB | 8.02 / 3.94 MiB |
+| P4 | 18.94 / 4.48 MiB | 18.83 / 4.23 MiB | 18.14 / 5.25 MiB |
+| P16 | 58.66 / 8.95 MiB | 54.33 / 4.47 MiB | 57.86 / 9.72 MiB |
+| PMAX | 217.11 / 26.42 MiB | 195.58 / 4.75 MiB | 216.31 / 27.20 MiB |
 
 The shell descendants dominate large process trees and are nearly identical between muxes. Lemma's
 idle daemon marginal from P4 to P16 was 0.372 MiB/pane and from P16 to PMAX was 0.368 MiB/pane. The
-component workload measured a 1.05-MiB daemon delta from empty daemon to one cold detached session,
-a 0.188-MiB attach delta, and a 0.188-MiB post-detach retained delta caused by canonical Ghostty
+component workload measured a 1.016-MiB daemon delta from empty daemon to one cold detached session,
+a 0.156-MiB attach delta, and a 0.156-MiB post-detach retained delta caused by canonical Ghostty
 render state/allocator pages, not retained frame ownership. The frame owner itself returns to zero
 capacity on detach.
 
-P1 idle fell from 28.30 MiB pre-F3 to 7.70 MiB, a 72.8% reduction. The final Lemma/tmux ratio is
-0.770, below the 1.5 completion limit without excluding the shell or attached client.
+P1 idle fell from 28.30 MiB pre-F3 to 8.83 MiB. After F4's bidirectional decoders and dormant
+signal-restoration helper, the final Lemma/tmux ratio is 0.890, below the 1.5 completion limit without
+excluding the shell, helper, or attached client. The client's 4 MiB virtual decoder bound remains
+lazy: attached-client RSS was 1.62 MiB in the final P1 median.
 
 ## History and allocator retention
 
-After 25,000 rows, P1 daemon RSS rose by 802,816 B and process-tree RSS by 819,200 B. This resident
+After 25,000 rows, P1 daemon RSS rose by 786,432 B and process-tree RSS by 802,816 B. This resident
 page cost is intentionally reported rather than equated to the 10,000-byte logical quota. The quota
 bounds retained content; Ghostty's active pages, page granularity, and allocator retention account for
 the larger RSS delta.
 
-The 100-cycle lifecycle workload returned to a stable plateau. Daemon RSS warmed from 3,833,856 B,
-reached 4,800,512 B at cycle 67, and remained exactly 4,800,512 B for the final 34 cycles; the final
-25-sample range was zero. Every cycle completed create, attach, split to four panes, close to one,
+The 100-cycle lifecycle workload returned to a stable plateau. Daemon RSS warmed from 3,801,088 B,
+reached 4,997,120 B at cycle 80, and remained exactly 4,997,120 B for the final 21 cycles; the final
+25-sample range was 163,840 B and the final 21-sample range was zero. Every cycle completed create, attach, split to four panes, close to one,
 detach, kill, and child/session reclamation.
 
 ## Executable and process contribution
 
-The release `lemma` executable was 2,218,712 B unstripped and 1,935,912 B after `strip -x`. Its only
+The release `lemma` executable was 2,259,016 B unstripped and 1,972,872 B after `strip -x`. Its only
 dynamic dependencies were system `libc++` and `libSystem`; Ghostty, Lua, and zstd were statically
 linked. The pinned tmux executable was 1,126,944 B. No extension host contributes to the foundational
 no-config process tree. With an explicit config, its 78,728-B fixed host state and Lua runtime are a

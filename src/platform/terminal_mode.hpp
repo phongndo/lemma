@@ -1,8 +1,10 @@
 #ifndef LEMMA_PLATFORM_TERMINAL_MODE_HPP
 #define LEMMA_PLATFORM_TERMINAL_MODE_HPP
 
+#include <chrono>
 #include <cstdint>
 
+#include <sys/types.h>
 #include <termios.h>
 
 namespace lemma::platform {
@@ -25,10 +27,30 @@ public:
   ~RawTerminal();
 
   [[nodiscard]] auto enter(int descriptor) noexcept -> bool;
+  [[nodiscard]] auto restore() noexcept -> bool;
+  [[nodiscard]] auto
+  wait_for_emergency_restore(std::chrono::steady_clock::time_point deadline) noexcept -> bool;
+  [[nodiscard]] auto restore_bounded() noexcept -> bool;
+  [[nodiscard]] auto restore_bounded(std::chrono::steady_clock::time_point deadline) noexcept
+      -> bool;
+  [[nodiscard]] auto restore_bounded_after_output_abort(
+      int output_descriptor, std::chrono::steady_clock::time_point deadline) noexcept -> bool;
+  [[nodiscard]] auto restore_wakeup_descriptor() const noexcept -> int {
+    return restore_wakeup_descriptor_;
+  }
 
 private:
+  [[nodiscard]] auto start_emergency_restorer(int output_descriptor,
+                                              int cleanup_descriptor) noexcept -> bool;
+  [[nodiscard]] auto consume_emergency_restore() noexcept -> bool;
+  void stop_emergency_restorer() noexcept;
+
   termios original_{};
-  int descriptor_{-1};
+  int entry_descriptor_{-1};
+  int restore_descriptor_{-1};
+  int restore_wakeup_descriptor_{-1};
+  int restore_result_descriptor_{-1};
+  pid_t restore_process_{-1};
   bool active_{false};
 };
 

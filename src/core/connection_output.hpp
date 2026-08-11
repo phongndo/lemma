@@ -104,9 +104,10 @@ inline constexpr std::size_t connection_write_attempts_per_turn_max = 16;
 
 // Flushes retained control output without consuming bytes until the writer reports progress.
 // global_budget is reduced only by bytes actually written.
+template <typename Output>
 [[nodiscard]] inline auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-flush_connection_output(ConnectionOutput& output, std::size_t& global_budget,
+flush_connection_output(Output& output, std::size_t& global_budget,
                         const ConnectionWriteOperation write, void* const context) noexcept
     -> ConnectionFlushStatus {
   if (!output.busy()) {

@@ -1,301 +1,130 @@
-# Lemma local protocol
+# Lemma private local protocol
 
 ## Status and scope
 
-The current protocol is the bounded local wire format used by the runtime. Its implementation remains
-in `src/protocol/single_pane.*` so framing can be tested independently of sockets and terminal state.
-It has no version negotiation and daemon-to-attached-client output is currently unframed ANSI.
-Incompatible changes therefore remain coordinated through the process-named `lemma-v9-<uid>.sock`
-endpoint.
+The attached terminal path uses private protocol **1.0** on the per-user
+`lemma-private-1.0-<uid>.sock` endpoint. It is version-coupled to the Lemma binary and is not a
+public RPC, automation, capture, or extension API. The daemon remains authoritative for sessions,
+tabs, panes, PTYs, canonical terminal state, layout, and ANSI composition. The attached client only
+decodes physical input, transports validated messages, writes complete ANSI frame payloads to the
+outer terminal, and restores that terminal.
 
-The production direction is a bounded versioned **server-rendered** protocol. It preserves daemon
-terminal and presentation authority, frames both directions, and does not carry terminal checkpoints,
-raw PTY event tails, or client VT replicas. Migration priority is maintained in the rolling
-[`TODO.md`](../TODO.md) backlog.
+The existing bounded one-request CLI control commands (create, list, list-tabs, kill, and shutdown)
+share the local listener but are not accepted after an attach hello and cannot enter the attached
+stream. F4 deliberately does not add semantic automation or public commands.
 
-All integers in the current format are unsigned big-endian. Current one-byte ASCII-looking type
-values are diagnostic conveniences, not text protocol values.
+## Envelope
 
-## Production server-rendered protocol contract
-
-```text
-client -- typed key/text/paste/focus/mouse/resize/command --> daemon
-client <-- typed result/error/effect + bounded ANSI frame -- daemon
-```
-
-The daemon owns canonical terminals, topology, resolved rectangles, per-attachment view state,
-application-input encoding, and ANSI composition. The client owns physical input decoding, transport,
-outer-terminal writes, and cleanup. Attach and recovery regenerate complete visible state from the
-daemon; no replay log is needed.
-
-### Envelope
-
-Every production message is framed. The reviewed envelope must include or derive:
-
-- magic and major/minor protocol version;
-- closed message kind and flags;
-- bounded payload length;
-- request/result correlation ID where applicable;
-- stable session, tab, pane, and client IDs in explicit targets; and
-- negotiated input, presentation, and effect capabilities.
-
-Frames, decoder storage, queued output, messages per turn, setup progress, and aggregate per-client
-memory all have explicit limits. Unknown required versions, kinds, flags, enum values, IDs, or
-capabilities produce typed errors or disconnect before partial state mutation. Wire values are
-Lemma-owned and never expose Ghostty types or private layouts.
-
-### Message families
-
-The initial production protocol carries:
-
-- `client_hello`, `daemon_hello`, and actionable mismatch results;
-- attach/create/list/tab-list/kill/shutdown requests and typed results;
-- stable topology values needed by command results and diagnostics;
-- ordered key, text, paste, focus, mouse, resize, command, and detach input;
-- bounded complete ANSI render frames and full-redraw generation/epoch markers;
-- title, bell, clipboard, notification, or other typed client effects where explicit client policy is
-  required; and
-- ping/progress/error values needed for bounded setup and cleanup.
-
-The attached-client envelope remains private and version-coupled to the binary. It is not exposed as
-an automation protocol.
-
-### Public semantic automation
-
-One transport-independent semantic schema is shared by `--format=json`, the isolated Lua host, and a
-versioned same-user automation socket for scripts and AI agents. It includes:
-
-- stable object and actor/client IDs, request correlation, deadlines, cancellation, and optional
-  idempotency keys;
-- typed commands, arguments, success/no-effect/capacity/unavailable/stale/malformed errors, and
-  capability/schema introspection;
-- immutable topology, process, terminal-observation, configuration, and extension snapshots;
-- typed launch with executable/arguments, cwd, bounded environment, PTY, and remain-on-exit policy;
-- bounded capture, send-text/key/paste, wait-for-output/exit, signal, cancel, restart, and close;
-- bounded lifecycle/topology/configuration/output events with sequence, truncation, gap, and snapshot-
-  repair semantics; and
-- generated machine-readable schemas plus a maintained agent skill.
-
-Automation never receives ANSI render frames as state, Ghostty/private values, or direct descriptors.
-Every supported human semantic mutation has an equivalent request or a documented exclusion. The
-public semantic compatibility policy is independent from private attached-client framing.
-
-### Attach and full redraw
-
-A successful attach is an explicit transaction:
-
-1. exchange version/capability hello values;
-2. resolve the session and allocate daemon-side attachment state;
-3. validate canonical dimensions;
-4. invalidate retained presentation state;
-5. queue one complete visible ANSI frame; and
-6. enter live input/output only after setup succeeds.
-
-Active-tab changes, resize, reconnect, and presentation invalidation use the same complete-frame
-path. Reliable stream order preserves accepted frames.
-
-### Backpressure and recovery
-
-Only complete bounded frames enter an attachment queue. Once a frame begins writing it is completed
-or the connection is retired; bytes from different frames are never spliced. This policy is already
-implemented for the current unframed daemon stream: core-owned partial writes allow 64 KiB/32 attempts
-per client and 256 KiB globally per reactor turn, rotate through a persistent round-robin cursor, and
-enforce 5 s no-progress plus 30 s total-frame deadlines. While a frame is blocked, new PTY output
-remains represented by canonical terminal damage instead of growing an output log. When the frame
-drains, the daemon emits one full redraw; the F4 protocol adds the explicit generation. A client that
-misses its bounded progress deadline is disconnected without affecting pane processes or unrelated
-work.
-
-A reconnect always receives a fresh complete frame. Delta resume may be added as a measured
-optimization, but correctness never depends on retained render history or acknowledgements.
-
-### Typed control and input
-
-Commands use the same semantic values as built-in key and Lua operations, with typed success,
-no-effect, capacity, unavailable, invalid-target, malformed, mismatch, and internal errors.
-
-Input preserves the order of bounded key, text, paste, focus, resize, mouse, command, and detach
-values. Clients decode physical sequences; the daemon owns prefix/keymap interpretation, presentation
-hit testing, stable target resolution, and application-input encoding. Application mouse values are
-translated from outer coordinates to validated pane-local cells using the daemon's current layout and
-canonical terminal modes.
-
-### Remote use
-
-The 1.0 remote baseline is ordinary SSH terminal operation:
-
-```sh
-ssh -t host lemma
-ssh host lemma list --format=json
-```
-
-That path runs the normal thin attached client on the remote host and lets SSH carry terminal bytes.
-A later local client may carry the same framed protocol through an SSH-stdio bridge, but such a
-transport does not change terminal/presentation ownership and is not a 1.0 requirement.
-
-## Extension-host protocol
-
-The isolated Lua host uses a separate implemented protocol in `src/protocol/extension.*`. Every
-frame has a 20-byte header:
+Every attached message in both directions has this 16-byte big-endian envelope:
 
 ```text
-+------------+---------+------+-------+--------------+------------+
-| "FEX1": 4 | ver: u16| kind | flags | length: u32  | id: u64    |
-+------------+---------+------+-------+--------------+------------+
++-----------+-------+-------+------+-------+------------+--------------+
+| 89 L M A | major | minor | kind | flags | length:u32 | sequence:u32 |
++-----------+-------+-------+------+-------+------------+--------------+
+     4 B       1 B     1 B    1 B    1 B       4 B          4 B
 ```
 
-Version 1 currently carries one host-to-daemon transactional generation: begin, bounded command and
-keymap registrations, event subscriptions, retained sidebar declarations, commit, or configuration
-error. Payloads are limited to 16 KiB and the incremental decoder owns 32 KiB. A message borrows
-decoder storage only until consumption. The core reads at most a bounded message/read batch after
-PTYs, client input, and rendering; it never waits for Lua.
+- Version is exactly `1.0`; this private protocol performs no downgrade or feature negotiation.
+- Sequence starts at one independently in each direction and must increase by exactly one.
+- Sequence zero, wrap, unknown kind or flags, a bad magic/version, and a kind-specific invalid
+  length are terminal protocol errors.
+- Header validation occurs as soon as 16 bytes are available. A payload is not exposed until its
+  complete bounded bytes and every typed field have been validated.
+- No C++ layout, Ghostty value, pointer, descriptor, or native-endian integer is placed on the wire.
 
-A valid commit atomically replaces the active registration generation. A configuration error rejects
-the candidate and preserves the prior generation. Disconnect removes active extension registrations
-and schedules an isolated host restart. Command invocation, snapshots, event delivery, UI updates,
-and output streams add versioned message kinds without exposing C++ storage.
+The daemon's incremental decoder owns 8,208 inline bytes. The attached client prepares one bounded
+4,194,324-byte RAII decoder allocation before entering raw or alternate-screen mode; pages are
+faulted only for received bytes. Borrowed payload views remain valid only until `consume()` or
+`reset()`. Decoders accept arbitrary fragmentation and coalescing and retain an unconsumed message
+for downstream backpressure.
 
-The schemas below describe the independent currently implemented client/daemon protocol.
+## Closed message set
 
-## Current control connection
+| Kind | Direction | Flags | Payload | Bound and validation |
+|---|---|---:|---|---|
+| `hello` (1) | client to daemon | 0 | name length:u8, columns:u16, rows:u16, name | 6–37 B; 1–32 validated session bytes; dimensions 1–500 by 1–200 |
+| `hello` (1) | daemon to client | 0 | columns:u16, rows:u16 | exactly 4 B and must echo the accepted viewport |
+| `input` (2) | client to daemon | 0 | normalized input bytes | 1–8,192 B |
+| `resize` (3) | client to daemon | 0 | columns:u16, rows:u16 | exactly 4 B; dimensions validated before resize |
+| `pane_command` (4) | client to daemon | 0 | closed `PaneCommand`:u8 | exactly 1 B; unknown/`none` rejected |
+| `detach` (5) | client to daemon | 0 | none | exactly 0 B |
+| `render_frame` (6) | daemon to client | bit 0 = full redraw | generation:u32, ANSI bytes | 5–4,194,308 B; generation nonzero; ANSI at most 4 MiB |
+| `disconnect` (7) | daemon to client | 0 | reason:u8, printable diagnostic | 1–256 B; closed reason enum |
 
-A newly accepted connection starts with exactly one control command:
+Pane commands are limited to the built-in split, focus, close, zoom, create/cycle/select/kill-tab
+operations already reachable through the prefix keymap. Input remains ordered with commands, resize,
+and detach by the client sequence. No list, capture, arbitrary target, RPC correlation, automation,
+mouse, clipboard, or extension message exists in this protocol.
 
-| Command | Byte | Following bytes | Meaning |
-| --- | ---: | --- | --- |
-| attach | `A` | name length, name, 2-byte columns, 2-byte rows | Attach to one session |
-| create (legacy/test) | `N` | name length, name | Ensure one session exists with daemon launch context |
-| create with context | `C` | name, cwd, environment (bounded length-prefixed fields) | Production CLI creation with an invoking launch snapshot |
-| list | `L` | none | List every session and close |
-| list session | `Q` | name length, name | List one session and close |
-| list tabs | `W` | name length, name | List one session's tabs and close |
-| kill | `K` | name length, name | Stop one session and close |
-| kill all | `X` | none | Stop every session and close |
-| shutdown | `S` | none | Stop every session, flush the response, and stop the daemon |
+Disconnect reasons are `normal`, `protocol_error`, `version_mismatch`, `session_busy`,
+`session_missing`, `capacity`, `setup_failed`, `frame_timeout`, `daemon_shutdown`, and
+`internal_error`. Setup rejection carries a printable actionable diagnostic in a complete framed
+message. A version mismatch is rejected before session lookup, reservation, frame allocation,
+terminal resize, or attach mutation.
 
-A name length is one byte followed by 1–32 validated ASCII session-name bytes. Production create
-then carries a big-endian two-byte length and 1–4,096 bytes of validated absolute cwd, followed by a
-two-byte length and up to 65,535 bytes/256 NUL-terminated environment entries. The session retains
-that immutable snapshot and terminal identity variables are overridden at launch. This remains a
-migration format rather than the final launch schema. Create and attach return one response byte; a
-missing named session returns `M`:
+## Attach transaction and validation
 
-| Response | Byte | Meaning |
-| --- | ---: | --- |
-| ready | `Y` | Session exists, or connection is now the streaming client |
-| busy | `B` | Session already has an attached client |
-| missing | `M` | Named session does not exist |
-| capacity | `C` | Session capacity is exhausted |
-| failed | `F` | Session creation failed |
+1. The client allocates its bounded server decoder and sends client `hello` sequence 1.
+2. The daemon incrementally validates magic, exact version, kind, flags, length, sequence, session
+   syntax, and dimensions before looking up or mutating a session.
+3. Missing/busy/failed setup returns `disconnect` sequence 1 and closes after its bounded partial
+   write completes. A successful setup reserves one attachment and returns daemon `hello` sequence 1.
+4. Only after that hello drains does the daemon hand off the descriptor, initialize live client
+   sequence 2, initialize server sequence 2, invalidate retained presentation, and compose a full
+   frame.
+5. The client enters raw and alternate-screen modes only after a valid daemon hello. Any startup
+   failure before that point leaves the terminal untouched.
 
-After attached `Y`, the daemon assigns a new internal `ClientId` and sends a complete reconstructed
-frame before nonblocking live operation. Current human-readable list/tab responses expose
-hierarchical session, tab, and focused-pane IDs, but this private control format still addresses
-sessions by name; explicit wire ID targets belong to the versioned replacement.
+For live messages, the decoder validates all wire fields before command dispatch, PTY queueing, or
+resize. Input payload bytes are opaque only after their envelope is complete; normalized key
+encoding and PTY queue capacity remain daemon-owned. A malformed live peer receives a typed protocol
+disconnect through the same bounded partial-write machinery when output progress permits, then the
+connection is retired without terminating pane processes.
 
-## Current attached-client stream
+## Render generations, backpressure, and recovery
 
-Only the client sends framed messages. Daemon-to-client traffic is currently encoded outer-terminal
-bytes and deliberately unframed. Detach and pane/tab packets become bounded `lemma::Command`
-values and pass through the shared validating dispatcher.
+A transport render message is one complete retained ANSI frame, never an ambiguous socket byte
+stream. It has 20 bytes of wire overhead: the 16-byte envelope plus the four-byte full-redraw
+generation. The client strips these bytes and writes only the validated ANSI payload to the outer
+terminal.
 
-### Input
+The first render after every attach is full redraw generation 1. A full redraw increments generation
+by exactly one; incremental frames repeat the current generation. The client rejects a delta before
+the first full frame, a skipped/repeated full generation, or a delta carrying another generation.
+Resize, active-tab changes, reconnect, and lag repair all use the daemon's forced-full composition
+path. A reconnect starts a fresh attachment and generation 1 rather than replaying a log.
 
-```text
-+--------+----------------+-------------------+
-| 'I'    | length: u16be  | length input bytes|
-+--------+----------------+-------------------+
-   1 B          2 B             0..8192 B
-```
+F2 output policy is unchanged and counts framing bytes against its budgets:
 
-The client prefix parser may emit at most twice the terminal read batch. The decoder rejects larger
-lengths before exposing a message. Recognized control/navigation sequences are normalized and encoded
-through the canonical terminal adapter rather than blindly forwarded.
+- one retained output per attached client;
+- at most 64 KiB per client and 256 KiB daemon-wide socket-write progress per reactor turn;
+- at most 32 write attempts per client per turn with a persistent round-robin cursor;
+- 5 s no-progress and 30 s total-message deadlines;
+- partial writes resume at the exact envelope/payload offset; and
+- damage arriving behind an in-flight frame stays in canonical terminal state and collapses into one
+  later forced full redraw.
 
-### Resize
+A started message is completed or the connection is retired; bytes from messages are never spliced.
+A blocked peer therefore has bounded memory, CPU, and lifetime and cannot grow an ANSI event log.
 
-```text
-+--------+----------------+-------------+
-| 'R'    | columns: u16be | rows: u16be |
-+--------+----------------+-------------+
-   1 B          2 B            2 B
-```
+## Terminal cleanup
 
-The runtime clamps dimensions to hard limits, resizes pane PTYs, then resizes canonical terminals.
+The client installs handlers for `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, and `SIGWINCH` before raw
+mode. A termination handler records signal state, writes nonblocking wakeups, retires a blocked render
+writer, and wakes a pre-created control-only restorer. That bounded helper owns an independent tty
+endpoint, restores the original termios without waiting for presentation output, and reports the
+result to normal scope unwind. The client then emits the outer-mode cleanup through a separate bounded
+writer. Clean detach, typed disconnect, EOF, daemon loss, protocol failure, outer-terminal write
+failure, and startup failure after raw entry use the same RAII-owned terminal state without the signal
+handoff.
 
-### Pane command
+## Reproduction coverage
 
-```text
-+--------+--------------------+
-| 'P'    | pane command: u8   |
-+--------+--------------------+
-   1 B           1 B
-```
-
-The command byte is a closed enum for tab create/next/previous/select/kill and pane left/right or
-top/bottom splits, directional/next/previous focus, close, and zoom. Unknown values terminate the
-attached connection as protocol errors. The core applies commands only to the attached session and
-active tab.
-
-### Detach
-
-```text
-+--------+
-| 'D'    |
-+--------+
-   1 B
-```
-
-Detach closes only the attached connection. It does not terminate the shell or session.
-
-## Current decoder contract
-
-`protocol::ClientDecoder` owns a fixed 16 KiB buffer and supports arbitrary fragmentation and
-coalescing. The caller:
-
-1. obtains `writable_bytes()`;
-2. receives at most that span's size;
-3. calls `commit(received)`;
-4. calls `next()` until incomplete;
-5. processes each borrowed message synchronously; and
-6. calls `consume()` before receiving or decoding another message.
-
-A span in `ClientMessage` borrows decoder storage and becomes invalid on `consume()` or `reset()`. It
-must never be retained in core state or passed to deferred extension work. Unknown types, oversized
-lengths, and buffer exhaustion are terminal protocol errors and never partially mutate mux state.
-
-## Current prefix parser
-
-The client recognizes a fixed tmux-compatible `C-b` prefix:
-
-- `C-b %` and `C-b "` split left/right and top/bottom;
-- `C-b Arrow`, `C-b o`, and `C-b ;` change pane focus;
-- `C-b x` and `C-b z` close and zoom;
-- `C-b c`, `C-b n`, and `C-b p` create/cycle tabs;
-- `C-b 1` through `C-b 9` select tabs 1–9, `C-b 0` selects tab 10, and `C-b &` closes the
-  active tab;
-- `C-b d` detaches;
-- `C-b C-b` sends a literal prefix; and
-- unknown keys forward the literal prefix and key.
-
-Incomplete prefix sequences remain pending for at most 50 ms, then forward literally. Command
-actions retain offsets among ordinary input so packet emission preserves order. The eventual
-configurable key-table system replaces this fixed policy without moving command authority into the
-client.
-
-## Migration and validation requirements
-
-The versioned endpoint may coexist with `lemma-v9` only for explicit migration tests. Peers never
-silently speak one format to another. The production change requires:
-
-- golden encodings and round trips for every envelope and value;
-- fragmentation, coalescing, malformed, truncated, stale-ID, oversized, version, capability,
-  progress-deadline, and output-backpressure cases;
-- complete-frame partial-write and forced-full-redraw tests;
-- blocked/non-reading client process scenarios proving unrelated PTY progress;
-- attach, resize, tab-change, reconnect, and lag reconstruction tests;
-- one bounded protocol fuzz corpus;
-- precise mismatch diagnostics; and
-- preservation of every existing mux process scenario during cutover.
-
-Current implementation priority and completion checks are maintained in [`TODO.md`](../TODO.md).
+`ProtocolTest` retains deterministic golden encodings and covers fragmented/coalesced decode,
+length/type/flag/enum/dimension/session/sequence/version/generation failures, oversize rejection,
+typed diagnostics, and redraw recovery. `ClientFrameOutputTest` injects partial writes, EINTR,
+EAGAIN, budgets, deadlines, typed-disconnect recovery, blocked output, and forced redraw. Process
+tests cover incompatible and malformed local peers, no-partial mismatch mutation, setup slot reuse,
+blocked readers, tab/resize/reconnect generations, malformed-peer recovery, daemon loss, EOF,
+startup rejection, normal detach, all handled signals, and signal restoration while outer-terminal
+output is blocked.
