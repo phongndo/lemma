@@ -1206,8 +1206,9 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
   }
   fragmented.close();
 
-  // Fill every setup slot with peers that have not yet supplied a protocol discriminator.
-  constexpr auto capacity_peer_count = limits::pending_connections_hard_max;
+  // Fill every setup slot and overflow the bounded responder pool with peers that have not yet
+  // supplied a protocol discriminator. Silent overflow peers must not gate a later identified peer.
+  constexpr auto capacity_peer_count = limits::pending_connections_hard_max + 16U;
   std::array<RawPeer, capacity_peer_count> capacity_peers;
   for (auto& peer : capacity_peers) {
     ASSERT_TRUE(peer.connect(runtime_.socket_path(), deadline_after(2s)));

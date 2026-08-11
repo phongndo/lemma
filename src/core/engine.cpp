@@ -2809,10 +2809,19 @@ void expire_capacity_rejections(CapacityRejectionConnections& connections) noexc
   return std::nullopt;
 }
 
-[[nodiscard]] auto empty_capacity_rejection_slot(CapacityRejectionConnections& connections) noexcept
+[[nodiscard]] auto
+capacity_rejection_slot_for_accept(CapacityRejectionConnections& connections) noexcept
     -> std::optional<std::size_t> {
   for (std::size_t slot = 0; slot < connections.size(); ++slot) {
     if (!std::span(connections).subspan(slot, 1).front().active()) {
+      return slot;
+    }
+  }
+  // Silent overflow peers must not occupy every responder and prevent a later peer that supplies a
+  // discriminator from receiving its wire-compatible rejection. Reuse only a connection that has
+  // not started a response; retained partial response bytes keep their original owner.
+  for (std::size_t slot = 0; slot < connections.size(); ++slot) {
+    if (!std::span(connections).subspan(slot, 1).front().flush_response) {
       return slot;
     }
   }
@@ -2829,7 +2838,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
     const auto available = empty_pending_slot(pending_connections);
     std::optional<std::size_t> rejection_slot;
     if (!available.has_value()) {
-      rejection_slot = empty_capacity_rejection_slot(capacity_rejections);
+      rejection_slot = capacity_rejection_slot_for_accept(capacity_rejections);
     }
 
     int connection = ::accept(listener, nullptr, nullptr);
@@ -2851,6 +2860,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
         continue;
       }
       auto& rejection = std::span(capacity_rejections).subspan(*rejection_slot, 1).front();
+      close_descriptor(rejection.descriptor);
       rejection.descriptor = connection;
       rejection.output.reset();
       rejection.flush_response = false;
