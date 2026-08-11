@@ -19,10 +19,11 @@ semantics, and pinned tmux/Zellij adapters produce versioned comparison reports.
 validates all report schemas and uploads the evidence. Repeated dedicated-host distributions now own
 reviewed machine-scoped regression budgets; shared-runner timing remains evidence rather than a gate.
 
-F1 replaces the frame-delay boolean with one deterministic urgency scheduler. Keystroke-sized
-accepted input and visible mux state changes compose immediately, sustained autonomous output keeps
-bounded 2 ms coalescing, blocked output creates no timer wakeup, and detach/no-client states cancel or
-reject pending work. The pinned-host causal trace reduced physical-input-to-outer-write completion
+F1 replaced the frame-delay boolean with one deterministic urgency scheduler. Keystroke-sized
+accepted input and visible mux state changes compose immediately. Autonomous output starts with
+bounded 2 ms coalescing and, after 50 ms with gaps no larger than 10 ms, uses a 16 ms sustained
+cadence; blocked output creates no timer wakeup, and detach/no-client states cancel or reject pending
+work. The pinned-host causal trace reduced physical-input-to-outer-write completion
 from 2.580/2.764/3.172 ms to 0.180/0.226/0.244 ms p50/p95/p99 with 200 complete exact-token paths.
 The regression manifest was tightened to preserve the improvement without widening any F0 gate.
 
@@ -244,6 +245,7 @@ reports before comparing values.
 - Correctness, isolation, or bounded-memory regressions block an optimization regardless of speed.
 - The F1 pinned-host gate requires idle profile key-to-visible p50/p95 at or below 0.25/0.5 ms,
   active profile and same-pane-output p50/p95 at or below 1.6/1.8 ms, and zero idle wakeups. The
-  loaded limits include the fixture's separately gated approximately 1.2 ms key-to-PTY interval.
+  active peer blocks in a one-millisecond output-deadline poll so input wakes it immediately; the
+  former `poll(0) + sleep(1 ms)` fixture delay is not part of the mux budget.
 - The F2 gate adds p99 checks and absolute blocked-client checks plus a p95 loaded/idle ratio no
   greater than 1.10. It does not replace or widen any earlier check.

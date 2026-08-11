@@ -560,7 +560,9 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
       .panes = panes.size(),
       .full = force_full,
   };
-  if (!draw_borders(panes, output, used)) {
+  // Separators are outside every pane surface and can only change with a layout/full redraw.
+  // Re-emitting them for ordinary pane damage wastes bytes and CPU without changing presentation.
+  if (force_full && !draw_borders(panes, output, used)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {

@@ -30,7 +30,7 @@
   ],
   "profile_conditions": {
     "idle": "all panes are live shells with no injected activity during resource sampling; focused-pane interaction is measured after the idle sample",
-    "active": "the focused pane emits bounded continuous output while resource and interaction samples are collected; all remaining panes stay live and idle"
+    "active": "the focused pane emits bounded continuous output from a one-millisecond input-aware poll deadline while resource and interaction samples are collected; all remaining panes stay live and idle"
   },
   "pane_profile_metrics": [
     "key_to_pty_ns",
@@ -64,7 +64,7 @@
     },
     {
       "id": "interactive_under_output",
-      "input": "a same-pane peer emits bounded continuous output while acknowledging and echoing unique input tokens",
+      "input": "a same-pane peer emits bounded continuous output from a one-millisecond input-aware poll deadline while acknowledging and echoing unique input tokens",
       "completion": "each token is acknowledged from the PTY and observable in the attached client output",
       "metrics": [
         "key_to_pty_ns",

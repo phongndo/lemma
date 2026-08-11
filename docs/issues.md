@@ -8,6 +8,11 @@ several findings still need paired reproduction on the approved host.
 
 No threshold, timeout, or scope check may be widened merely to close an item.
 
+A post-snapshot remediation pass is recorded in [`performance.md`](performance.md). It preserves the
+original observations below while adding current status from the staged and thirty-sample
+`build/release/perf-*` reports. It does not by itself complete F5 or replace the required aggregate
+and soak evidence.
+
 ## F5-001 — Idle visible-latency tails exceed the frozen profile budgets
 
 **Class:** observed performance failure; foundational gate blocker
@@ -24,6 +29,12 @@ P4 and PMAX idle latency passed, and every idle CPU and profile RSS limit passed
 **Resolution evidence required:** paired 30-or-more-sample runs on the reviewed benchmark host that
 identify code versus host variance, followed by a code fix if reproducible and a passing unchanged
 budget evaluation.
+
+**Current remediation status:** two post-change thirty-sample runs measured idle visible p50/p95 of
+0.240/0.499 and 0.243/0.615 ms (P1), 0.173/0.405 and 0.165/0.444 ms (P4), 0.170/0.419 and
+0.174/0.423 ms (P16), and 0.210/0.557 and 0.171/0.501 ms (PMAX). The original P16 median failure no
+longer reproduces and P1's old 1.335 ms tail is much smaller, but p95 misses migrate between P1 and
+PMAX. The idle blocker therefore remains open rather than selecting only the passing conditions.
 
 ## F5-002 — Active latency fails at low pane counts and has large high-pane tails
 
@@ -47,6 +58,13 @@ F5 has not yet established whether its source is scheduler behavior, host interf
 host scheduling without enabling diagnostic work in production measurements; then pass the existing
 latency limits on the reviewed host.
 
+**Current remediation status:** the active peer used `poll(0) + sleep(1 ms)`, and causal tracing put
+1.335/1.446/1.472 ms p50/p95/p99 between accepted PTY write and peer echo. A one-millisecond blocking
+poll preserves the output cadence but wakes immediately for input. Together with the product hot-path
+changes, the larger active p50/p95 from two final runs is 0.337/0.744 ms (P1), 0.216/0.479 ms
+(P4), 0.256/0.465 ms (P16), and 0.215/0.886 ms (PMAX). Every active profile now passes the unchanged
+1.6/1.8 ms limits; the fixture correction is reported separately from the Lemma optimizations.
+
 ## F5-003 — Every active pane profile exceeds the CPU budget
 
 **Class:** observed resource failure; foundational gate blocker
@@ -65,6 +83,13 @@ than an idle spin or a profile-memory budget failure.
 
 **Resolution evidence required:** attribute CPU by daemon/client/pane role, remove reproducible mux
 overhead, and pass the unchanged active CPU limit in a valid pinned-host report.
+
+**Current remediation status:** profiling identified over-frequent burst composition, incremental
+separator repaint, and foreground-process syscalls. After adaptive 2/16 ms burst cadence, full-only
+separator drawing, and 100 ms process-title refresh limiting, the larger p95 from two final runs is
+1.007 ms (P1), 0.891 ms (P4), 1.086 ms (P16), and 1.934 ms (PMAX). All pass the unchanged 5.000 ms
+limit. The P1 result is below the same-host resource-only Herdr 0.8.0 reference of 1.415 ms p95; see
+`perf-herdr-p1-active-30.json` and the comparison caveats in `performance.md`.
 
 ## F5-004 — A blocked-client deadline failure was observed but not reproducibly retained
 
@@ -86,6 +111,12 @@ frame progress, deadline arming, disconnect, and observer scheduling. If the ser
 bound, fix it; if only the observer was delayed, retain paired host-scheduling evidence. In either
 case, the complete repeated workload must pass without widening the bound.
 
+**Current remediation status:** two post-change thirty-interaction process runs completed the
+non-reading client workload and observed disconnect after 5.026 and 5.029 seconds, inside the
+unchanged 5.5-second observation bound. Together with the two retained smoke repetitions (maximum
+5.272 seconds), the earlier unretained observation has not reproduced in four controlled runs. No
+current retained report shows a Lemma deadline violation; the aggregate F5 run is still required.
+
 ## F5-005 — The benchmark host no longer satisfies the pinned identity
 
 **Class:** evidence-scope failure; foundational gate blocker
@@ -100,6 +131,10 @@ current raw measurements cannot produce a formally valid pinned-host gate.
 **Resolution evidence required:** run on the reviewed identity, or deliberately review and record a
 new dedicated-host distribution and manifest identity. Do not bypass or silently loosen scope
 validation.
+
+**Current remediation status:** the current host again reports `Phongs-MacBook-Pro.local`, and the
+post-change reports match the complete approved Mac16,5 fingerprint. This resolves scope for those
+new reports only; it does not retroactively make the `Mac-2497` F5 artifact valid.
 
 ## F5-006 — No successful aggregate finite F5 result exists
 

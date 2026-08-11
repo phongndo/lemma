@@ -41,7 +41,7 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
   if (sink == FrameSinkState::unavailable) {
     return;
   }
-  const auto candidate = urgency == FrameUrgency::burst ? now + burst_delay : now;
+  const auto candidate = urgency == FrameUrgency::burst ? burst_deadline(now) : now;
   if (!pending_ || candidate < deadline_) {
     deadline_ = candidate;
   }
@@ -74,15 +74,32 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
 
 [[nodiscard]] auto FrameScheduler::urgency() const noexcept -> FrameUrgency { return urgency_; }
 
-void FrameScheduler::complete() noexcept { reset(); }
+void FrameScheduler::complete() noexcept { clear_pending(); }
 
 void FrameScheduler::cancel() noexcept { reset(); }
 
-void FrameScheduler::reset() noexcept {
+[[nodiscard]] auto FrameScheduler::burst_deadline(const TimePoint now) noexcept -> TimePoint {
+  if (!tracking_burst_ || now - last_burst_request_at_ > burst_continuity_window) {
+    burst_started_at_ = now;
+    tracking_burst_ = true;
+  }
+  last_burst_request_at_ = now;
+  const bool sustained = now - burst_started_at_ >= sustained_burst_threshold;
+  return now + (sustained ? sustained_burst_delay : burst_delay);
+}
+
+void FrameScheduler::clear_pending() noexcept {
   pending_ = false;
   force_full_ = false;
   urgency_ = FrameUrgency::burst;
   deadline_ = {};
+}
+
+void FrameScheduler::reset() noexcept {
+  clear_pending();
+  burst_started_at_ = {};
+  last_burst_request_at_ = {};
+  tracking_burst_ = false;
 }
 
 } // namespace lemma::core

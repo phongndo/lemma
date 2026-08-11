@@ -60,6 +60,7 @@ constexpr std::size_t tabs_per_session_max =
 constexpr std::size_t panes_per_tab_max = panes_per_session_max;
 constexpr std::size_t layout_nodes_per_tab_max = (panes_per_tab_max * 2U) - 1U;
 constexpr std::size_t process_name_bytes_max = 64;
+constexpr auto process_name_refresh_interval = std::chrono::milliseconds{100};
 constexpr std::size_t command_trace_entries_max = 256;
 static_assert(panes_per_session_max > 0);
 static_assert(tabs_per_session_max > 0);
@@ -276,6 +277,7 @@ struct Pane final {
   pid_t child{-1};
   std::array<char, process_name_bytes_max> process_name{};
   std::size_t process_name_size{0};
+  std::chrono::steady_clock::time_point next_process_name_refresh;
   PanePtyWriteQueue pending_writes;
   InteractiveDamageLatch interactive_damage;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -484,6 +486,16 @@ struct Session final {
   std::ranges::copy(std::span(current).first(size), pane.process_name.begin());
   pane.process_name_size = size;
   return true;
+}
+
+[[nodiscard]] auto
+refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_point now) noexcept
+    -> bool {
+  if (now < pane.next_process_name_refresh) {
+    return false;
+  }
+  pane.next_process_name_refresh = now + process_name_refresh_interval;
+  return refresh_process_name(pane);
 }
 
 [[nodiscard]] constexpr auto next_generation(const std::uint32_t generation) noexcept
@@ -2598,7 +2610,7 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     blocked_session_budget -= bytes_drained;
   }
   pane.active = drained.alive;
-  const bool process_changed = refresh_process_name(pane);
+  const bool process_changed = refresh_process_name_if_due(pane, std::chrono::steady_clock::now());
   if (!pane_event_changed(session, drained, process_changed)) {
     return;
   }

@@ -285,7 +285,10 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   auto deadline = std::chrono::steady_clock::now() + 120s;
   while (std::chrono::steady_clock::now() < deadline) {
     pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
-    const auto polled = ::poll(&event, 1, autonomous_output ? 0 : 100);
+    // Keep autonomous output near 1 kHz, but block on input until the next output deadline. A
+    // zero-time poll followed by sleep made token acknowledgement wait for the sleep and measured
+    // fixture scheduling rather than mux latency.
+    const auto polled = ::poll(&event, 1, autonomous_output ? 1 : 100);
     if (polled < 0 && errno == EINTR) {
       continue;
     }
@@ -297,9 +300,6 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
       if (autonomous_output && !write_background_line()) {
         static_cast<void>(::close(receipt));
         return 1;
-      }
-      if (autonomous_output) {
-        std::this_thread::sleep_for(1ms);
       }
       continue;
     }

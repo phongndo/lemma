@@ -103,6 +103,29 @@ Every generated raw report/log is named `build/release/f5-*`. `build/` is intent
 archive the complete set together because Git provenance includes both the HEAD and dirty-worktree
 flag.
 
+For a focused tracing-off performance-remediation distribution without running the other F5 lanes:
+
+```sh
+python3 benchmarks/mux_benchmark.py \
+  --mode profiles --multiplexer lemma --repetitions 30 \
+  --output build/release/perf-profiles-30.json
+python3 benchmarks/mux_benchmark.py \
+  --mode comparison --multiplexer lemma --repetitions 30 --allow-workload-failures \
+  --output build/release/perf-process-30.json
+./build/release/lemma_benchmarks \
+  --benchmark_min_time=0.2s --benchmark_repetitions=10 \
+  --benchmark_out=build/release/perf-microbenchmarks-10.json --benchmark_out_format=json
+python3 benchmarks/check_regression.py \
+  --micro-report build/release/perf-microbenchmarks-10.json \
+  --process-report build/release/perf-process-30.json \
+  --profile-report build/release/perf-profiles-30.json \
+  --output build/release/perf-regression-budget.json
+```
+
+Run each command sequentially on the reviewed host; concurrent benchmark commands invalidate latency
+comparison. A failed unchanged-budget evaluation must remain failed even if the targeted metric
+improved.
+
 The 24-hour runs are deliberately separate, so a finite gate cannot accidentally imply that a long
 soak happened:
 

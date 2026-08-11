@@ -177,6 +177,14 @@ TEST(PaneCompositionTest, DrawsDeclaredPaneSeparators) {
   const auto encoded = as_text(std::span(output).first(result->bytes));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;5H│"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;5H│"));
+
+  write_text(terminal, "changed");
+  const auto incremental =
+      compose_frame(std::span(&pane, 1), {.columns = 5, .rows = 2}, output, false);
+  ASSERT_TRUE(incremental.has_value());
+  const auto incremental_encoded = as_text(std::span(output).first(incremental->bytes));
+  EXPECT_THAT(incremental_encoded, testing::Not(testing::HasSubstr("│")));
+  EXPECT_THAT(incremental_encoded, testing::Not(testing::HasSubstr("\x1B[90m")));
 }
 
 TEST(PaneCompositionTest, ConnectsNestedSplitBordersAtJunctions) {

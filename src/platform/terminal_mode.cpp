@@ -9,6 +9,7 @@
 #include <thread>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -341,16 +342,34 @@ constexpr int terminal_restore_action = TCSANOW;
     return false;
   }
   const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-  while (std::chrono::steady_clock::now() < ready_deadline) {
+  while (true) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= ready_deadline) {
+      break;
+    }
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(ready_deadline - now);
+    pollfd ready_event{.fd = restore_result_descriptor_, .events = POLLIN, .revents = 0};
+    const auto polled =
+        ::poll(&ready_event, 1, static_cast<int>(std::max(remaining.count(), std::int64_t{1})));
+    if (polled < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    if (polled == 0) {
+      continue;
+    }
     std::byte ready{1};
     const auto received = ::read(restore_result_descriptor_, &ready, sizeof(ready));
     if (received == sizeof(ready) && ready == std::byte{0}) {
       return true;
     }
-    if (received < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-      break;
+    if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+      continue;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    break;
   }
   stop_emergency_restorer();
   return false;

@@ -536,6 +536,138 @@ ten exact-token interactions, rotating resize, three detach/reattach cycles plus
 RSS/CPU/wakeup sampling, and descriptor census; the sanitizer report records the active ASan/UBSan
 options. Ten seconds must not be cited as a 24-hour result. No F0–F4 threshold has been changed.
 
+## Post-F5 performance remediation
+
+The F5 active-profile failures were profiled and changed one cause at a time on the approved
+Mac16,5 host. `perf-optimization-summary.json` indexes the staged metrics and their raw report names.
+The initial and intermediate reports are
+`perf-{baseline,sustained-scheduler,incremental-borders,process-title}-profiles-10.json`; each has ten
+one-second samples for every P1/P4/P16/PMAX idle and active condition. A ten-second macOS `sample`
+profile attributed 901 samples to frame composition in the original active loop. After reducing its
+frequency, repeated foreground-process discovery (`tcgetpgrp`/`proc_pidinfo`) accounted for 32 of
+151 non-`poll` samples. Those observations produced three retained product changes:
+
+1. Autonomous output starts with the existing non-postponing 2 ms deadline. After 50 ms of output
+   whose gaps remain at most 10 ms, it uses a 16 ms display cadence. Interactive damage and state
+   changes still advance the deadline to now, and a gap starts a fresh 2 ms burst. This reduced
+   active tree-CPU p95 by 24–51% and outer bytes by 84–85% across the staged profiles.
+2. Pane separators are emitted only by full/layout redraws. Pane rendering cannot address separator
+   cells, so repainting unchanged borders in every incremental frame had no presentation effect.
+   Relative to the scheduler-only run, this removed 88% of P4/P16/PMAX outer bytes and reduced their
+   tree-CPU p95 by 8–18%.
+3. Foreground-process title discovery is limited to once per 100 ms per output-active pane. Titles
+   still refresh on the first eligible output and full status collection, but a 1 kHz stream no
+   longer performs a terminal/process syscall for every PTY read. This reduced tree-CPU p95 by a
+   further 15–32% without changing outer bytes.
+
+The staged results were:
+
+| Retained stage | P1 CPU p95 | P4 CPU p95 | P16 CPU p95 | PMAX CPU p95 | P1 outer B/s p50 | P4/P16/PMAX outer B/s p50 |
+|---|---:|---:|---:|---:|---:|---:|
+| Original | 3.029 ms | 2.380 ms | 2.683 ms | 3.051 ms | 63,384 | 535,767 / 531,893 / 528,028 |
+| Sustained cadence | 1.481 ms | 1.435 ms | 1.571 ms | 2.327 ms | 9,576 | 82,240 / 81,963 / 81,963 |
+| Static incremental borders | 1.477 ms | 1.319 ms | 1.388 ms | 1.907 ms | 9,009 | 9,765 / 9,765 / 9,765 |
+| Bounded process-title refresh | 1.002 ms | 0.902 ms | 1.042 ms | 1.616 ms | 9,009 | 9,765 / 9,765 / 9,765 |
+
+The active fixture also had a measurement defect: it polled input with a zero timeout and then slept
+for 1 ms before polling again. Causal tracing put 1.335/1.446/1.472 ms p50/p95/p99 between accepted
+PTY write and the peer's echo in the PMAX active case; the mux intervals before and after that stage
+were hundreds of microseconds. Replacing `poll(0) + sleep(1 ms)` with a one-millisecond blocking
+`poll` preserves the same approximately 1 kHz autonomous output and exact receipt/visibility
+semantics while waking immediately for input. In paired thirty-sample same-pane runs, key-to-PTY p95
+fell from 1.565 to 0.195 ms and key-to-visible p95 from 2.018 to 0.733 ms. This is a fixture
+correction, not a Lemma latency optimization, and historical results that included the artificial
+peer delay remain labeled as such.
+
+Two final thirty-sample reports are `perf-final-event-peer-profiles-30.json` and
+`perf-final-event-peer-profiles-30-repeat.json`. The table uses the larger observed statistic from
+the pair rather than selecting the faster run:
+
+| Active profile | Tree CPU p95 / s | Daemon CPU p95 / s | Wakeups p95 / s | Outer B/s p50 | Key-to-visible p50 / p95 |
+|---|---:|---:|---:|---:|---:|
+| P1 | 1.007 ms | 0.630 ms | 953 | 9,009 | 0.337 / 0.744 ms |
+| P4 | 0.891 ms | 0.506 ms | 943 | 9,765 | 0.216 / 0.479 ms |
+| P16 | 1.086 ms | 0.708 ms | 947 | 9,765 | 0.256 / 0.465 ms |
+| PMAX | 1.934 ms | 1.526 ms | 1,030 | 9,765 | 0.215 / 0.886 ms |
+
+Two thirty-sample process runs retained short-burst behavior: their larger warm-scroll p50/p95 was
+2.586/2.857 ms with 554 B median outer output, inside the unchanged 3/21 ms and 720/2,200 B limits.
+Their blocked clients disconnected after 5.026 and 5.029 seconds, inside the unchanged 5.5-second
+observation bound.
+
+Every active CPU and latency result in both runs passes the unchanged 5.0 ms CPU and 1.6/1.8 ms
+visible limits. All idle CPU and wakeup samples remained zero. Paired idle visible p50/p95 was
+0.240/0.499 and 0.243/0.615 ms at P1, 0.173/0.405 and 0.165/0.444 ms at P4, 0.170/0.419 and
+0.174/0.423 ms at P16, and 0.210/0.557 and 0.171/0.501 ms at PMAX. The first run therefore missed
+PMAX p95 by 0.057 ms; the repeat missed P1 by 0.115 ms and PMAX by 0.001 ms. These migrating idle
+tails are not relabeled. Trace-enabled PMAX idle input-to-outer-write
+measured 0.206/0.535/0.646 ms p50/p95/p99 across 100 exact-token paths at the available correlated
+boundaries. The client socket-read event did not retain the token, so these are diagnostic stage
+sums rather than schema-complete paths; no single code interval dominated, and host/peer wakeup and
+observation tails remain under investigation.
+
+A resource-only Herdr 0.8.0 reference used the same isolated 80x24 peer and thirty one-second
+samples in `perf-herdr-p1-active-30.json`. Herdr measured 1.415 ms tree-CPU p95, 1.050 ms daemon-CPU
+p95, and 915 wakeups p95; the larger paired Lemma P1 values were 1.007 ms, 0.630 ms, and 953.
+Lemma was 28.9% below that tree-CPU reference and 40.0% below its daemon-CPU reference in this
+resource workload. Herdr emitted zero outer bytes after the repeated viewport stabilized, whereas
+Lemma retained 9,009 B/s under its current server-rendered scroll protocol. This is not a relative
+bytes or latency claim and does
+not replace a checked-in Herdr adapter.
+
+A post-remediation thirty-sample adapter comparison used the same host, peer, completion markers,
+and current tmux 3.7b and Zellij 0.44.3 versions. The raw reports are
+`perf-current-{lemma,tmux,zellij}-comparison-30.json`, with a compact index in
+`perf-current-comparison-summary.json`:
+
+| Mux | Workload | p50 / p95 | Median outer bytes |
+|---|---|---:|---:|
+| Lemma | Warm scroll | 2.694 / 17.276 ms | 402 |
+| tmux | Warm scroll | 145.289 / 150.976 ms | 33,995 |
+| Zellij | Warm scroll | 56.110 / 56.816 ms | 22,377 |
+| Lemma | Attach to visible | 7.247 / 9.187 ms | 1,016 |
+| tmux | Attach to visible | 6.365 / 7.003 ms | 514 |
+| Zellij | Attach to visible | 50.847 / 52.467 ms | 7,985 |
+| Lemma | Interactive under output | 0.449 / 0.764 ms | 620 |
+| tmux | Interactive under output | 0.190 / 0.831 ms | 85 |
+| Zellij | Interactive under output | 12.397 / 13.694 ms | 6,144 |
+
+Lemma's warm-scroll median was 54x faster than tmux and 21x faster than Zellij, although its known
+approximately 17 ms secondary mode remains visible at p95. tmux won attach by 12% at p50 and 24% at
+p95. tmux also had the faster interactive median, while Lemma had the lower p95 and p99 in this run.
+Zellij was substantially slower on all three latency workloads. Lemma and tmux completed the exact
+2 MiB blocked-PTY recovery; Zellij failed with a lost connection. Idle CPU was negligible for all
+three. Lemma/tmux/Zellij idle tree RSS medians were 8.97/9.95/109.23 MiB and wakeup p95 values were
+0/2/6 per second.
+
+A separate current thirty-sample tmux profile report is
+`perf-current-tmux-profiles-30.json`. Against the larger Lemma statistic from the two final profile
+runs, active tree-CPU p95 was:
+
+| Profile | Lemma | tmux | Lemma reduction |
+|---|---:|---:|---:|
+| P1 | 1.007 ms | 1.715 ms | 41% |
+| P4 | 0.891 ms | 1.971 ms | 55% |
+| P16 | 1.086 ms | 2.213 ms | 51% |
+| PMAX | 1.934 ms | 3.224 ms | 40% |
+
+Zellij has no equivalent pane-profile adapter, and Herdr remains resource-only, so neither is
+silently projected into this table.
+
+Finally, replacing the emergency terminal restorer's one-millisecond readiness polling loop with a
+bounded descriptor `poll` reduced attach-to-visible from 6.808/7.246 to 5.941/6.552 ms p50/p95 in
+paired thirty-sample runs (`perf-final-process-30.json` and
+`perf-poll-restorer-attach-30.json`). That 12.7%/9.6% improvement retains the safety helper and its
+100 ms failure deadline. A later complete process repeat measured 6.298/7.821 ms, and the current
+mux comparison measured 7.247/9.187 ms, exposing further host tails. Attach still exceeds the
+unchanged 4.7/5.4 ms budget, so no aggregate F5 pass is claimed. One complete 121-entry release CTest
+run passed after
+these changes. A preceding attempt had one teardown-status failure in
+`SlowControlAndInitialAttachReadersRecoverWithoutBlockingPtys`; the isolated test and complete suite
+retry passed, and both logs are retained as `perf-final-ctest-{failed,passed}.log`. All 121
+ASan/UBSan CTest entries also passed. Renderer microbenchmarks and allocation checks remained within
+their existing limits. No threshold was widened.
+
 ## Opt-in key-to-visible trace
 
 Normal builds compile the trace-recording API to inline no-ops and omit trace-only matcher/state
@@ -667,7 +799,9 @@ presentation snapshots/deltas and requires its own end-to-end evidence.
 - PTY parsing never waits for a steady-state client write.
 - A reactor turn reads at most 256 KiB from the PTY.
 - Keystroke-sized accepted input and visible mux state changes promote frame composition immediately.
-- Sustained autonomous output remains coalesced behind one non-postponing 2 ms deadline.
+- Autonomous output starts with a non-postponing 2 ms deadline; after 50 ms with gaps no larger
+  than 10 ms it uses a 16 ms sustained-display deadline, while interactive/state work remains
+  immediate.
 - A blocked frame exposes no rendering timer, and idle operation has no frame deadline.
 - Only one bounded frame can be in flight per client; renderer code performs no socket I/O.
 - Core client writes are limited to 64 KiB/32 attempts per client and 256 KiB globally per turn, with

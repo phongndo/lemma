@@ -33,6 +33,13 @@ applications, repetition, sanitizers, resource measurement, and long-running mix
   latency and CPU budgets failed, so this is raw evidence rather than a passing gate.
 - [x] Ten-second release and sanitizer soak qualifications passed. They do not count as the required
   24-hour runs.
+- [x] The post-F5 performance pass attributed and removed active mux overhead: every thirty-sample
+  active CPU and latency profile now passes the unchanged limits, and P1 tree CPU is below the
+  same-host resource-only Herdr reference. The original P16 median failure no longer reproduces, but
+  paired idle p95 misses migrate between P1 and PMAX against the unchanged 0.500 ms limit.
+- [x] The active benchmark peer's artificial `poll(0) + sleep(1 ms)` acknowledgement delay was
+  replaced by an event-driven one-millisecond poll without changing output cadence or completion
+  semantics. The terminal-restorer readiness path also improved attach p50/p95 by 12.7%/9.6%.
 
 The evidence-derived problems are listed in [`docs/issues.md`](docs/issues.md). Exact reports
 and observed values are summarized in [`docs/performance.md`](docs/performance.md). Reproduction and
@@ -42,14 +49,14 @@ evidence-retention commands live in [`docs/operations.md`](docs/operations.md).
 
 1. [ ] Explain and remove the finite-gate failures rather than hiding them with partial reports or
    wider limits.
-   - Reproduce and diagnose the P1/P16 idle latency, active P1/P4/P16/PMAX latency, and active CPU
-     failures.
-   - Reproduce the full-process blocked-client case that exceeded the 5 s deadline plus 0.5 s
-     observation bound.
-   - Distinguish code effects from host scheduling with paired raw evidence. Fix code regressions;
-     keep environment-only failures explicit.
-   - Resolve the pinned-host identity mismatch by running on the reviewed identity or by reviewing a
-     new dedicated-host distribution and manifest. Do not bypass machine-scope validation.
+   - [x] Attribute and remove the active CPU failures; all active P1/P4/P16/PMAX profiles now pass.
+   - [x] Separate the active fixture delay from mux latency and pass every active latency profile.
+   - [ ] Resolve the remaining P1/PMAX idle visible p95 tails and the attach/isolated process tails;
+     keep paired host-scheduling evidence explicit rather than selecting only passing retries.
+   - [x] Re-run the earlier full-process blocked-client observation: two thirty-interaction runs
+     disconnected at 5.026/5.029 s, and the two prior smoke repetitions also remain inside 5.5 s.
+   - [x] Run new evidence on the complete reviewed host identity; the host again reports
+     `Phongs-MacBook-Pro.local`. Do not retroactively relabel the old `Mac-2497` artifact.
 2. [ ] Produce one successful aggregate finite result with
    `nix develop --command scripts/ci/f5 extended`. It must include the 20-repetition release and
    sanitizer stress lanes, complete process/profile reports, 1,000 lifecycle cycles, allocation and

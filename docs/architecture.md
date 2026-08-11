@@ -234,7 +234,8 @@ operations receive only non-owning spans and cannot grow the buffer.
 
 PTY output is parsed once by the daemon. Damage accumulates in canonical terminal state. One bounded
 urgency scheduler composes keystroke-sized interactive damage and visible mux state changes
-immediately while retaining a 2 ms coalescing deadline for sustained autonomous output. A higher
+immediately. Autonomous output starts with a 2 ms deadline, moves to a 16 ms display cadence after
+50 ms of continuous output, and resets to the short deadline after a gap longer than 10 ms. A higher
 urgency may advance but never postpone the one pending deadline; blocked output and idle or clientless
 sessions expose no rendering timer. The daemon composes from latest canonical state, queues the frame
 nonblockingly, and continues processing PTYs. Reliable stream order preserves accepted frames.

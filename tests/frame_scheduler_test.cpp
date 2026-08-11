@@ -65,6 +65,27 @@ TEST(FrameSchedulerTest, BurstContinuationGetsOneBoundedCoalescingDeadlinePerFra
   EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 5ms);
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(FrameSchedulerTest, SustainedBurstUsesDisplayCadenceWithoutDelayingShortBursts) {
+  FrameScheduler scheduler;
+  for (auto elapsed : {0ms, 9ms, 18ms, 27ms, 36ms, 45ms}) {
+    scheduler.request(FrameUrgency::burst, false, origin + elapsed, FrameSinkState::ready);
+    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + elapsed + 2ms);
+    scheduler.complete();
+  }
+
+  scheduler.request(FrameUrgency::burst, false, origin + 54ms, FrameSinkState::ready);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 70ms);
+  scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 55ms);
+  scheduler.complete();
+
+  // A gap outside the continuity window starts a fresh low-latency burst.
+  scheduler.request(FrameUrgency::burst, false, origin + 65ms, FrameSinkState::ready);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 67ms);
+}
+
 TEST(FrameSchedulerTest, BlockedOutputRetainsOnePendingRequestWithoutADeadlineWakeup) {
   FrameScheduler scheduler;
   scheduler.request(FrameUrgency::interactive, false, origin, FrameSinkState::blocked);
@@ -86,7 +107,9 @@ TEST(FrameSchedulerTest, ResizePromotesBurstAndRetainsFullRedrawRequirement) {
   EXPECT_TRUE(scheduler.force_full());
 }
 
-TEST(FrameSchedulerTest, DetachCancelsPendingDeadlineAndFullRedraw) {
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(FrameSchedulerTest, DetachCancelsPendingDeadlineFullRedrawAndBurstHistory) {
   FrameScheduler scheduler;
   scheduler.request(FrameUrgency::state_change, true, origin, FrameSinkState::ready);
   scheduler.cancel();
@@ -94,6 +117,17 @@ TEST(FrameSchedulerTest, DetachCancelsPendingDeadlineAndFullRedraw) {
   EXPECT_FALSE(scheduler.pending());
   EXPECT_FALSE(scheduler.force_full());
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
+
+  for (auto elapsed : {0ms, 9ms, 18ms, 27ms, 36ms, 45ms}) {
+    scheduler.request(FrameUrgency::burst, false, origin + elapsed, FrameSinkState::ready);
+    scheduler.complete();
+  }
+  scheduler.request(FrameUrgency::burst, false, origin + 54ms, FrameSinkState::ready);
+  ASSERT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 70ms);
+
+  scheduler.cancel();
+  scheduler.request(FrameUrgency::burst, false, origin + 55ms, FrameSinkState::ready);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 57ms);
 }
 
 TEST(FrameSchedulerTest, NoClientDoesNotCreatePendingWorkOrAnIdleTimer) {
