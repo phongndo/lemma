@@ -549,7 +549,9 @@ void RawPeer::retain_received(const std::span<const std::byte> bytes) noexcept {
       return true;
     }
     if (received < 0) {
-      return false;
+      // A peer that closes with unread request bytes can produce ECONNRESET on Linux after its
+      // complete response has already been received. The connection is closed either way.
+      return last_error_ == ECONNRESET;
     }
   }
   last_error_ = ETIMEDOUT;
