@@ -32,8 +32,6 @@
 
 #ifdef __APPLE__
 #include <crt_externs.h>
-#elifdef __linux__
-extern char** environ;
 #endif
 
 namespace lemma::daemon {
