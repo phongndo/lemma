@@ -13,6 +13,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <termios.h>
@@ -252,6 +253,83 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   return flags >= 0 && ::fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
+// Keep resize stress independent of interactive-shell job-control and signal timing.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_resize_flood() noexcept -> int {
+  termios original_terminal{};
+  if (::tcgetattr(STDIN_FILENO, &original_terminal) != 0) {
+    return 1;
+  }
+  auto raw_terminal = original_terminal;
+  ::cfmakeraw(&raw_terminal);
+  // fcntl is variadic even when F_GETFL has no third argument.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const auto output_flags = ::fcntl(STDOUT_FILENO, F_GETFL);
+  bool output_nonblocking = false;
+  if (output_flags >= 0) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    output_nonblocking = ::fcntl(STDOUT_FILENO, F_SETFL, output_flags | O_NONBLOCK) == 0;
+  }
+  if (output_flags < 0 || ::tcsetattr(STDIN_FILENO, TCSANOW, &raw_terminal) != 0 ||
+      !write_all("\r\n__LEMMA_RESIZE_FLOOD__\r\n") || !output_nonblocking) {
+    return 1;
+  }
+
+  bool stopped = false;
+  const auto deadline = std::chrono::steady_clock::now() + 15s;
+  while (!stopped && std::chrono::steady_clock::now() < deadline) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 1);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0) {
+      break;
+    }
+    if (polled > 0 && (event.revents & POLLIN) != 0) {
+      std::array<char, 64> input{};
+      const auto count = ::read(STDIN_FILENO, input.data(), input.size());
+      if (count > 0) {
+        const auto received = std::span(input).first(static_cast<std::size_t>(count));
+        stopped = std::ranges::find(received, 'q') != received.end();
+      } else if (count == 0 || errno != EINTR) {
+        break;
+      }
+    }
+    if (!stopped && !write_background_line()) {
+      break;
+    }
+  }
+
+  // fcntl and ioctl are variadic because their final argument depends on the request.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const bool output_restored = ::fcntl(STDOUT_FILENO, F_SETFL, output_flags) == 0;
+  const bool terminal_restored = ::tcsetattr(STDIN_FILENO, TCSANOW, &original_terminal) == 0;
+  winsize size{};
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const bool size_read = ::ioctl(STDIN_FILENO, TIOCGWINSZ, &size) == 0;
+  if (!stopped || !output_restored || !terminal_restored || !size_read) {
+    return 1;
+  }
+
+  std::array<char, 16> rows{};
+  std::array<char, 16> columns{};
+  const auto encoded_rows = std::to_chars(rows.data(), std::to_address(rows.end()), size.ws_row);
+  const auto encoded_columns =
+      std::to_chars(columns.data(), std::to_address(columns.end()), size.ws_col);
+  if (encoded_rows.ec != std::errc{} || encoded_columns.ec != std::errc{} ||
+      !write_all("\r\n__LEMMA_RESIZE_FINAL__ ") ||
+      !write_all({rows.data(), static_cast<std::size_t>(encoded_rows.ptr - rows.data())}) ||
+      !write_all(" ") ||
+      !write_all(
+          {columns.data(), static_cast<std::size_t>(encoded_columns.ptr - columns.data())}) ||
+      !write_all("\r\n")) {
+    return 1;
+  }
+  linger_for_render();
+  return 0;
+}
+
 // This benchmark peer keeps each framed receipt and echo bounded and explicit.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_latency(const std::string_view receipt_path,
@@ -418,6 +496,8 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
 
 } // namespace
 
+// Command dispatch is deliberately explicit so invalid argument shapes remain rejected.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main(const int argc, char** const argv) {
   const auto arguments = std::span(argv, static_cast<std::size_t>(argc));
   if (arguments.size() == 2 &&
@@ -430,6 +510,10 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "resize-flood") {
+    return run_resize_flood();
   }
   if (arguments.size() == 3 && std::string_view(arguments.subspan(1, 1).front()) == "latency") {
     return run_latency(arguments.subspan(2, 1).front());

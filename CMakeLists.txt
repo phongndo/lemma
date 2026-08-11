@@ -253,6 +253,10 @@ if(LEMMA_BUILD_TESTS)
 
   add_executable(lemma_steady_state_allocation_audit tests/steady_state_allocation_audit.cpp)
   lemma_internal_target(lemma_steady_state_allocation_audit)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    # The audit replaces every sized delete form so malloc-backed global new remains ASan-correct.
+    target_compile_options(lemma_steady_state_allocation_audit PRIVATE -fsized-deallocation)
+  endif()
   target_link_libraries(
     lemma_steady_state_allocation_audit
     PRIVATE lemma_core lemma_render lemma_terminal

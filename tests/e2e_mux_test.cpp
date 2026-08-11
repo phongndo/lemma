@@ -1148,7 +1148,8 @@ TEST_F(MuxProcessTest, SurvivesRapidResizeOutputFloodAndFocusedChildExit) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "resize_flood_exit"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  ASSERT_TRUE(client.send("yes __LEMMA_RESIZE_FLOOD__ & lemma_flood_pid=$!\r", deadline_after(2s)));
+  const auto flood = shell_quote(LEMMA_TEST_PTY_PEER_PATH) + " resize-flood\r";
+  ASSERT_TRUE(client.send(flood, deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FLOOD__", deadline_after(5s)));
 
   constexpr std::size_t resize_count = 500;
@@ -1159,9 +1160,7 @@ TEST_F(MuxProcessTest, SurvivesRapidResizeOutputFloodAndFocusedChildExit) {
     client.drain(deadline_after(1ms));
   }
   ASSERT_TRUE(client.resize(111, 37));
-  ASSERT_TRUE(client.send("kill \"$lemma_flood_pid\"; wait \"$lemma_flood_pid\" 2>/dev/null; "
-                          "printf '__LEMMA_RESIZE_FINAL__ '; stty size\r",
-                          deadline_after(2s)));
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FINAL__ 36 111", deadline_after(10s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail() << "\nserver:\n"
