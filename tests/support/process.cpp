@@ -335,8 +335,16 @@ RawPeer::~RawPeer() { close(); }
     }
 
     auto connection_error = errno;
+    if (connection_error == EAGAIN || connection_error == EWOULDBLOCK) {
+      // Linux AF_UNIX reports a full listen backlog as EAGAIN without starting an asynchronous
+      // connection. SO_ERROR can still read as zero, so polling this descriptor would produce a
+      // false success followed by ENOTCONN on the first send. Retry with a fresh socket instead.
+      last_error_ = connection_error;
+      close();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
     if (connection_error == EINPROGRESS || connection_error == EALREADY ||
-        connection_error == EAGAIN || connection_error == EWOULDBLOCK ||
         connection_error == EINTR) {
       while (std::chrono::steady_clock::now() < deadline) {
         pollfd event{.fd = descriptor_, .events = POLLOUT, .revents = 0};
