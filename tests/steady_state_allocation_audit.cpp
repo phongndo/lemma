@@ -69,9 +69,10 @@ void record_allocation(const std::size_t bytes) noexcept {
 
 } // namespace
 
-// These are the replaceable throwing forms. The standard library's nothrow and sized forms route
-// through them; defining placement deallocators here would make Clang's allocator builtins reject
-// the audit translation unit.
+// Define every replaceable throwing allocation and supported deallocation form. Linux ASan
+// observes sized deallocation before runtime delegation, so supported sized forms must pair
+// directly with the malloc-backed audit allocator. Apple's libc++ routes sized forms through the
+// unsized replacements and its Clang tooling rejects explicit sized definitions.
 // NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,cppcoreguidelines-no-malloc,readability-identifier-naming)
 void* operator new(const std::size_t __sz) { return allocate_unaligned(__sz); }
 void* operator new[](const std::size_t __sz) { return allocate_unaligned(__sz); }
@@ -83,12 +84,26 @@ void* operator new[](const std::size_t __sz, const std::align_val_t alignment) {
 }
 void operator delete(void* const __p) noexcept { std::free(__p); }
 void operator delete[](void* const __p) noexcept { std::free(__p); }
+#if defined(__cpp_sized_deallocation) && !defined(__APPLE__)
+void operator delete(void* const __p, const std::size_t /*size*/) noexcept { std::free(__p); }
+void operator delete[](void* const __p, const std::size_t /*size*/) noexcept { std::free(__p); }
+#endif
 void operator delete(void* const __p, const std::align_val_t /*alignment*/) noexcept {
   std::free(__p);
 }
 void operator delete[](void* const __p, const std::align_val_t /*alignment*/) noexcept {
   std::free(__p);
 }
+#if defined(__cpp_sized_deallocation) && !defined(__APPLE__)
+void operator delete(void* const __p, const std::size_t /*size*/,
+                     const std::align_val_t /*alignment*/) noexcept {
+  std::free(__p);
+}
+void operator delete[](void* const __p, const std::size_t /*size*/,
+                       const std::align_val_t /*alignment*/) noexcept {
+  std::free(__p);
+}
+#endif
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,cppcoreguidelines-no-malloc,readability-identifier-naming)
 
 // The explicit failure branches make audit setup and each measured operation independently visible;

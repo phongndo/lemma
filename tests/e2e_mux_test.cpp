@@ -1111,15 +1111,14 @@ TEST_F(MuxProcessTest, BackpressuresBlockedPtyAndRecoversInOrderWithoutStarvingP
     if (consumed > 0) {
       sent += consumed;
       last_progress = std::chrono::steady_clock::now();
-    } else {
-      std::this_thread::sleep_for(1ms);
     }
+    responsive.drain(std::min(fill_deadline, deadline_after(1ms)));
   }
   ASSERT_GT(sent, 0U);
   ASSERT_LT(sent, payload.size()) << "the unread PTY never applied client backpressure";
   const auto still_alive = wait_for_session(
       "blocked_pty", [](const SessionListing& value) { return value.attached && value.panes == 1; },
-      deadline_after(2s));
+      deadline_after(2s), &responsive);
   ASSERT_TRUE(still_alive.has_value());
 
   const auto responsiveness_started = std::chrono::steady_clock::now();
@@ -1149,7 +1148,7 @@ TEST_F(MuxProcessTest, SurvivesRapidResizeOutputFloodAndFocusedChildExit) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "resize_flood_exit"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  ASSERT_TRUE(client.send("yes __LEMMA_RESIZE_FLOOD__\r", deadline_after(2s)));
+  ASSERT_TRUE(client.send("yes __LEMMA_RESIZE_FLOOD__ & lemma_flood_pid=$!\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FLOOD__", deadline_after(5s)));
 
   constexpr std::size_t resize_count = 500;
@@ -1160,9 +1159,9 @@ TEST_F(MuxProcessTest, SurvivesRapidResizeOutputFloodAndFocusedChildExit) {
     client.drain(deadline_after(1ms));
   }
   ASSERT_TRUE(client.resize(111, 37));
-  const std::array interrupt{std::byte{0x03}};
-  ASSERT_TRUE(client.send(interrupt, deadline_after(2s)));
-  ASSERT_TRUE(client.send("printf '__LEMMA_RESIZE_FINAL__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.send("kill \"$lemma_flood_pid\"; wait \"$lemma_flood_pid\" 2>/dev/null; "
+                          "printf '__LEMMA_RESIZE_FINAL__ '; stty size\r",
+                          deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__LEMMA_RESIZE_FINAL__ 36 111", deadline_after(10s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail() << "\nserver:\n"
