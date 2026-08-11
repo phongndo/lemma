@@ -1205,10 +1205,14 @@ TEST_F(MuxProcessTest, IdleAndNonreadingPeersCannotBlockAnotherSession) {
     ASSERT_TRUE(fragmented.send(byte, deadline_after(2s)));
   }
   fragmented.close();
+  // Observe a later daemon round trip so the closed fragmented setup cannot still own a slot.
+  ASSERT_TRUE(client.send("printf '__FRAGMENTED_RELEASED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__FRAGMENTED_RELEASED__", deadline_after(5s)));
 
-  // Fill every setup slot and overflow the bounded responder pool with peers that have not yet
-  // supplied a protocol discriminator. Silent overflow peers must not gate a later identified peer.
-  constexpr auto capacity_peer_count = limits::pending_connections_hard_max + 16U;
+  // The idle peer above owns one setup slot; fill exactly the remainder without consuming the
+  // separate bounded pool reserved for typed capacity responses.
+  static_assert(limits::pending_connections_hard_max > 1U);
+  constexpr auto capacity_peer_count = limits::pending_connections_hard_max - 1U;
   std::array<RawPeer, capacity_peer_count> capacity_peers;
   for (auto& peer : capacity_peers) {
     ASSERT_TRUE(peer.connect(runtime_.socket_path(), deadline_after(2s)));
