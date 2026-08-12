@@ -35,10 +35,7 @@
           isDarwin = pkgs.stdenv.isDarwin;
           darwinTools = llvm.clang-tools;
           zigPackage =
-            if isDarwin then
-              zig.packages.${system}.brew."0.15.2"
-            else
-              zig.packages.${system}."0.15.2";
+            if isDarwin then zig.packages.${system}.brew."0.15.2" else zig.packages.${system}."0.15.2";
           ciHk =
             if isDarwin then
               hk.packages.${system}.default
@@ -107,69 +104,86 @@
               llvm.clang
               llvm.clang-tools
             ];
+          projectPackages = compilerPackages ++ [
+            pkgs.ccache
+            pkgs.cmake
+            pkgs.conan
+            pkgs.git
+            pkgs.just
+            pkgs.ninja
+            pkgs.nixd
+            pkgs.nixpkgs-fmt
+            pkgs.python3
+            zigPackage
+          ];
+          qualityPackages = [
+            pkgs.actionlint
+            pkgs.shellcheck
+            hk.packages.${system}.default
+          ];
+          benchmarkPackages = [
+            pkgs.tmux
+            pkgs.zellij
+          ];
           shellEnvironment = {
             CMAKE_GENERATOR = "Ninja";
             shellHook =
-              if isDarwin then ''
-                export PATH="$PWD/build/debug:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
-                export CC=/usr/bin/clang
-                export CXX=/usr/bin/clang++
-                export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-                export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
-              '' else ''
-                export PATH="$PWD/build/debug:$PATH"
-                export CC="${llvm.clang}/bin/clang"
-                export CXX="${llvm.clang}/bin/clang++"
-              '';
+              if isDarwin then
+                ''
+                  export PATH="$PWD/build/debug:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
+                  export CC=/usr/bin/clang
+                  export CXX=/usr/bin/clang++
+                  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+                  export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+                ''
+              else
+                ''
+                  export PATH="$PWD/build/debug:$PATH"
+                  export CC="${llvm.clang}/bin/clang"
+                  export CXX="${llvm.clang}/bin/clang++"
+                '';
           };
         in
         {
-          default = pkgs.mkShell (shellEnvironment // {
-            packages = compilerPackages ++ [
-              pkgs.actionlint
-              pkgs.bashInteractive
-              pkgs.ccache
-              pkgs.cmake
-              pkgs.conan
-              pkgs.fish
-              pkgs.htop
-              pkgs.just
-              pkgs.less
-              pkgs.neovim
-              pkgs.ninja
-              pkgs.nixpkgs-fmt
-              pkgs.python3
-              pkgs.shellcheck
-              pkgs.tmux
-              pkgs.vim
-              pkgs.zellij
-              pkgs.zsh
-              zigPackage
-              hk.packages.${system}.default
-            ];
-          });
+          default = pkgs.mkShell (
+            shellEnvironment
+            // {
+              packages = projectPackages ++ qualityPackages;
+            }
+          );
 
-          # Merge-blocking C++ lanes do not need the large actionlint, multiplexer, or shell-lint
-          # closures from the interactive shell. Keeping a dedicated shell avoids realizing those
-          # unrelated tools independently on every ephemeral CI runner.
-          ci = pkgs.mkShell (shellEnvironment // {
-            packages = compilerPackages ++ [
-              pkgs.ccache
-              pkgs.cmake
-              pkgs.conan
-              pkgs.just
-              pkgs.ninja
-              pkgs.nixpkgs-fmt
-              pkgs.python3
-              zigPackage
-              # CI uses hk's hash-pinned release binary instead of rebuilding its Rust dependency
-              # graph on every ephemeral Linux runner.
-              ciHk
-            ];
-          });
+          # tmux and Zellij are benchmark subjects, not general development tools.
+          benchmarks = pkgs.mkShell (
+            shellEnvironment
+            // {
+              packages = projectPackages ++ benchmarkPackages;
+            }
+          );
+
+          # Merge-blocking C++ lanes do not need workflow linters or benchmark subjects.
+          ci = pkgs.mkShell (
+            shellEnvironment
+            // {
+              packages = projectPackages ++ [
+                # CI uses hk's hash-pinned release binary instead of rebuilding its Rust dependency
+                # graph on every ephemeral Linux runner.
+                ciHk
+              ];
+            }
+          );
         }
       );
 
-      formatter = forAllSystems (system: (import nixpkgs { inherit system; }).nixpkgs-fmt);
+      formatter = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        pkgs.writeShellApplication {
+          name = "format-flake";
+          runtimeInputs = [ pkgs.nixpkgs-fmt ];
+          text = ''exec nixpkgs-fmt "$PWD/flake.nix"'';
+        }
+      );
     };
 }

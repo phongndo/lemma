@@ -15,10 +15,13 @@ versions:
     {{ nix }} ninja --version
     {{ nix }} ccache --version
     {{ nix }} conan --version
-    {{ nix }} tmux -V
-    {{ nix }} zellij --version
     {{ nix }} zig version
     {{ nix }} hk --version
+
+# Show versions of the optional multiplexer benchmark subjects.
+benchmark-versions:
+    {{ nix }} tmux -V
+    {{ nix }} zellij --version
 
 # Install Conan dependencies for the selected profile.
 deps:

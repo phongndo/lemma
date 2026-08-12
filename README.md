@@ -71,8 +71,9 @@ just test
 ```
 
 The first build lets Conan 2 download/build its pinned packages and lets Zig
-build the pinned Ghostty source under [`third_party/ghostty`](third_party/ghostty). The shell also
-pins tmux and Zellij for common-workload comparison. Subsequent C++ compilations use ccache.
+build the pinned Ghostty source under [`third_party/ghostty`](third_party/ghostty). Subsequent C++
+compilations use ccache. The optional `nix develop .#benchmarks` shell adds the pinned tmux and
+Zellij binaries used for common-workload comparisons without placing them in the default shell.
 
 ## Commands
 
@@ -84,6 +85,7 @@ just demo                   # Run the scripted libghostty-vt demo
 just build && lemma new        # Start and attach to pane 0
 just test                   # GoogleTest and GoogleMock
 just bench                  # Google Benchmark microbenchmarks
+nix develop .#benchmarks    # Enter the optional tmux/Zellij comparison shell
 just mux-bench              # Release Lemma/tmux/Zellij core-mux baselines
 just fmt                    # Apply clang-format and nixpkgs-fmt
 just fmt-check              # Verify formatting only
