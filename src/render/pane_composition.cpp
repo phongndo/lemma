@@ -221,9 +221,10 @@ status_label(const StatusTab& tab,
     width = labels.subspan(active, 1).front().size;
   }
   const auto start_column = static_cast<std::uint16_t>(((viewport.columns - width) / 2U) + 1U);
-  if (!append_position(output, used, viewport.rows, 1) || !append(output, used, "\x1B[0;7m") ||
+  constexpr std::uint16_t status_row = 1;
+  if (!append_position(output, used, status_row, 1) || !append(output, used, "\x1B[0;7m") ||
       !append_spaces(output, used, viewport.columns) ||
-      !append_position(output, used, viewport.rows, start_column)) {
+      !append_position(output, used, status_row, start_column)) {
     return false;
   }
   if (show_range) {
@@ -287,12 +288,17 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
          std::ranges::none_of(status.tabs, [](const StatusTab& tab) { return tab.number == 0; });
 }
 
+[[nodiscard]] constexpr auto has_visible_status(const Viewport viewport,
+                                                const StatusLine status) noexcept -> bool {
+  return !status.tabs.empty() && viewport.rows >= 2;
+}
+
 [[nodiscard]] auto pane_viewport(const Viewport viewport, const StatusLine status) noexcept
     -> Viewport {
-  const bool has_status = !status.tabs.empty() && viewport.rows >= 2;
   return {
       .columns = viewport.columns,
-      .rows = static_cast<std::uint16_t>(viewport.rows - (has_status ? 1U : 0U)),
+      .rows = static_cast<std::uint16_t>(viewport.rows -
+                                         (has_visible_status(viewport, status) ? 1U : 0U)),
   };
 }
 
@@ -342,12 +348,12 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 
 [[nodiscard]] auto render_surface(const PaneSurface& pane, const std::span<std::byte> output,
                                   std::size_t& used, const bool force_full,
-                                  const bool allow_terminal_scroll,
+                                  const bool allow_terminal_scroll, const std::uint16_t row_offset,
                                   CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
   const vt::PaneRenderOptions options{
       .column = pane.rectangle.column,
-      .row = pane.rectangle.row,
+      .row = static_cast<std::uint16_t>(pane.rectangle.row + row_offset),
       .force_full = force_full,
       .focused = pane.focused,
       .allow_terminal_scroll = allow_terminal_scroll,
@@ -366,13 +372,14 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 
 [[nodiscard]] auto render_panes(const std::span<const PaneSurface> panes, const Viewport viewport,
                                 const std::span<std::byte> output, std::size_t& used,
-                                const bool force_full, CompositionResult& composition) noexcept
+                                const bool force_full, const std::uint16_t row_offset,
+                                CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
-  const bool allow_terminal_scroll = is_single_full_viewport(panes, viewport);
+  const bool allow_terminal_scroll = row_offset == 0 && is_single_full_viewport(panes, viewport);
   for (const auto& pane : panes) {
     if (!pane.focused) {
-      const auto rendered =
-          render_surface(pane, output, used, force_full, allow_terminal_scroll, composition);
+      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
+                                           row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;
@@ -381,8 +388,8 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   }
   for (const auto& pane : panes) {
     if (pane.focused) {
-      const auto rendered =
-          render_surface(pane, output, used, force_full, allow_terminal_scroll, composition);
+      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
+                                           row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;
@@ -445,15 +452,15 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 
 [[nodiscard]] auto draw_right_border(const PaneSurface& pane,
                                      const std::span<const PaneSurface> panes,
-                                     const std::span<std::byte> output, std::size_t& used) noexcept
-    -> bool {
+                                     const std::span<std::byte> output, std::size_t& used,
+                                     const std::uint16_t row_offset) noexcept -> bool {
   if (!pane.border_right) {
     return true;
   }
   const auto column = static_cast<std::uint16_t>(pane.rectangle.column + pane.rectangle.columns);
   const auto bottom = static_cast<std::uint16_t>(pane.rectangle.row + pane.rectangle.rows);
   for (std::uint16_t row = pane.rectangle.row; row < bottom; ++row) {
-    if (!append_position(output, used, static_cast<std::uint16_t>(row + 1U),
+    if (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
                          static_cast<std::uint16_t>(column + 1U)) ||
         !append(output, used, border_glyph(panes, row, column))) {
       return false;
@@ -464,15 +471,15 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 
 [[nodiscard]] auto draw_bottom_border(const PaneSurface& pane,
                                       const std::span<const PaneSurface> panes,
-                                      const std::span<std::byte> output, std::size_t& used) noexcept
-    -> bool {
+                                      const std::span<std::byte> output, std::size_t& used,
+                                      const std::uint16_t row_offset) noexcept -> bool {
   if (!pane.border_bottom) {
     return true;
   }
   const auto row = static_cast<std::uint16_t>(pane.rectangle.row + pane.rectangle.rows);
   const auto right = static_cast<std::uint16_t>(pane.rectangle.column + pane.rectangle.columns);
   for (std::uint16_t column = pane.rectangle.column; column < right; ++column) {
-    if (!append_position(output, used, static_cast<std::uint16_t>(row + 1U),
+    if (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
                          static_cast<std::uint16_t>(column + 1U)) ||
         !append(output, used, border_glyph(panes, row, column))) {
       return false;
@@ -484,8 +491,8 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 // Junction candidates are bounded by the visible pane count squared.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto draw_junctions(const std::span<const PaneSurface> panes,
-                                  const std::span<std::byte> output, std::size_t& used) noexcept
-    -> bool {
+                                  const std::span<std::byte> output, std::size_t& used,
+                                  const std::uint16_t row_offset) noexcept -> bool {
   for (const auto& vertical : panes) {
     if (vertical.border_right) {
       const auto column =
@@ -501,7 +508,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
               (row > 0 && border_cell(panes, static_cast<std::uint16_t>(row - 1U), column)) ||
               border_cell(panes, static_cast<std::uint16_t>(row + 1U), column);
           if (horizontal_neighbor && vertical_neighbor &&
-              (!append_position(output, used, static_cast<std::uint16_t>(row + 1U),
+              (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
                                 static_cast<std::uint16_t>(column + 1U)) ||
                !append(output, used, border_glyph(panes, row, column)))) {
             return false;
@@ -514,18 +521,18 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 }
 
 [[nodiscard]] auto draw_borders(const std::span<const PaneSurface> panes,
-                                const std::span<std::byte> output, std::size_t& used) noexcept
-    -> bool {
+                                const std::span<std::byte> output, std::size_t& used,
+                                const std::uint16_t row_offset) noexcept -> bool {
   if (!append(output, used, "\x1B[90m")) {
     return false;
   }
   for (const auto& pane : panes) {
-    if (!draw_right_border(pane, panes, output, used) ||
-        !draw_bottom_border(pane, panes, output, used)) {
+    if (!draw_right_border(pane, panes, output, used, row_offset) ||
+        !draw_bottom_border(pane, panes, output, used, row_offset)) {
       return false;
     }
   }
-  return draw_junctions(panes, output, used) && append(output, used, "\x1B[0m");
+  return draw_junctions(panes, output, used, row_offset) && append(output, used, "\x1B[0m");
 }
 
 [[nodiscard]] auto finish_frame(const std::span<std::byte> output, std::size_t& used,
@@ -560,16 +567,18 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
       .panes = panes.size(),
       .full = force_full,
   };
+  const std::uint16_t row_offset = has_visible_status(viewport, status) ? 1U : 0U;
   // Separators are outside every pane surface and can only change with a layout/full redraw.
   // Re-emitting them for ordinary pane damage wastes bytes and CPU without changing presentation.
-  if (force_full && !draw_borders(panes, output, used)) {
+  if (force_full && !draw_borders(panes, output, used, row_offset)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
-  composition.status = !status.tabs.empty() && viewport.rows >= 2 && (force_full || status.dirty);
-  const auto rendered = render_panes(panes, viewport, output, used, force_full, composition);
+  composition.status = has_visible_status(viewport, status) && (force_full || status.dirty);
+  const auto rendered =
+      render_panes(panes, viewport, output, used, force_full, row_offset, composition);
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
   }

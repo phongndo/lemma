@@ -52,7 +52,7 @@ struct Command final {
   CommandKind kind{CommandKind::none};
   CommandOrigin origin{CommandOrigin::none};
   CommandTarget target{};
-  // select_tab uses a zero-based bounded slot. Other current commands require zero.
+  // select_tab uses a zero-based live display position. Other current commands require zero.
   std::uint16_t argument{0};
 };
 

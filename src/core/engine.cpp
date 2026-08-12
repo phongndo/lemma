@@ -563,6 +563,21 @@ refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_po
       std::ranges::count_if(session.tabs, [](const TabSlot& slot) { return slot.tab != nullptr; }));
 }
 
+[[nodiscard]] auto tab_at_position(const Session& session, const std::size_t position) noexcept
+    -> const Tab* {
+  std::size_t current = 0;
+  for (const auto& slot : session.tabs) {
+    if (slot.tab == nullptr) {
+      continue;
+    }
+    if (current == position) {
+      return slot.tab.get();
+    }
+    ++current;
+  }
+  return nullptr;
+}
+
 [[nodiscard]] auto allocate_tab(Session& session) noexcept -> Tab* {
   if (pane_count(session) >= panes_per_session_max) {
     return nullptr;
@@ -1450,12 +1465,10 @@ void record_session_command(void* const context, const Command& command,
     resolved.target.client = session.client_id;
   }
   if (resolved.kind == CommandKind::select_tab && !resolved.target.tab.is_valid()) {
-    const auto slot_index = static_cast<std::size_t>(resolved.argument);
-    if (slot_index < session.tabs.size()) {
-      const auto& slot = std::span(session.tabs).subspan(slot_index, 1).front();
-      if (slot.tab != nullptr) {
-        resolved.target.tab = slot.tab->id;
-      }
+    const auto* const selected =
+        tab_at_position(session, static_cast<std::size_t>(resolved.argument));
+    if (selected != nullptr) {
+      resolved.target.tab = selected->id;
     }
   } else if (resolved.kind != CommandKind::detach_client &&
              resolved.kind != CommandKind::stop_session && !resolved.target.tab.is_valid()) {
@@ -1652,12 +1665,13 @@ enum class ParseResult : std::uint8_t {
     signature ^= value;
     signature *= prime;
   };
-  for (std::size_t index = 0; index < session.tabs.size(); ++index) {
-    const auto& slot = std::span(session.tabs).subspan(index, 1).front();
+  std::uint8_t position = 0;
+  for (const auto& slot : session.tabs) {
     if (slot.tab == nullptr) {
       continue;
     }
-    mix(static_cast<std::uint8_t>(index + 1U));
+    ++position;
+    mix(position);
     mix(slot.tab->id == session.active_tab ? 1U : 0U);
     const auto title = tab_title(*slot.tab);
     for (const char character : std::span(title).first(std::min(title.size(), std::size_t{16}))) {
@@ -1684,7 +1698,7 @@ collect_status_line(Session& session,
       static_cast<void>(refresh_process_name(*focused));
     }
     std::span(storage).subspan(count, 1).front() = {
-        .number = static_cast<std::uint16_t>(index + 1U),
+        .number = static_cast<std::uint16_t>(count + 1U),
         .title = tab_title(*slot.tab),
         .active = slot.tab->id == session.active_tab,
     };
@@ -1776,14 +1790,15 @@ template <typename Id>
 
 [[nodiscard]] auto append_tab_listings(ConnectionOutput& output, const Session& session) noexcept
     -> bool {
-  for (std::size_t index = 0; index < session.tabs.size(); ++index) {
-    const auto& slot = std::span(session.tabs).subspan(index, 1).front();
+  std::size_t position = 0;
+  for (const auto& slot : session.tabs) {
     if (slot.tab == nullptr) {
       continue;
     }
+    ++position;
     const auto& tab = *slot.tab;
     const auto title_value = tab_title(tab);
-    if (!output.append_text("lemma tab ") || !output.append_number(index + 1U) ||
+    if (!output.append_text("lemma tab ") || !output.append_number(position) ||
         !output.append_text(": ") || !output.append_number(pane_count(tab)) ||
         !output.append_text(" pane(s), ") ||
         !output.append_text(tab.id == session.active_tab ? "active, title \""

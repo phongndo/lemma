@@ -46,6 +46,10 @@ build: configure
 run: build
     {{ nix }} ./build/{{ profile }}/lemma
 
+# Stop the running daemon so the next launch uses the current build.
+kill: build
+    {{ nix }} ./build/{{ profile }}/lemma shutdown --confirm
+
 # Run the scripted libghostty-vt demo.
 demo: build
     {{ nix }} ./build/{{ profile }}/lemma demo

@@ -73,8 +73,9 @@ TEST(PaneCompositionTest, PlacesMultipleTerminalSurfacesInOneAtomicFrame) {
   EXPECT_EQ(occurrences(encoded, "\x1B[2J"), 1U);
 }
 
-TEST(PaneCompositionTest, CentersMinimalTabStatus) {
+TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   auto terminal = make_terminal(40, 2);
+  write_text(terminal, "content");
   const PaneSurface pane{
       .terminal = &terminal,
       .rectangle = {.columns = 40, .rows = 2},
@@ -93,10 +94,33 @@ TEST(PaneCompositionTest, CentersMinimalTabStatus) {
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->status);
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[3;9H1:zsh  [2:nvim]  3:logs"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;9H1:zsh  [2:nvim]  3:logs"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
+  EXPECT_THAT(encoded, testing::HasSubstr("content"));
 }
 
-TEST(PaneCompositionTest, RejectsPaneGeometryThatOverlapsStatusRow) {
+TEST(PaneCompositionTest, OffsetsPaneSeparatorsBelowTopStatus) {
+  auto terminal = make_terminal(4, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 4, .rows = 2},
+      .focused = true,
+      .border_right = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 5, .rows = 3}, output, true,
+                                    {.tabs = tabs, .dirty = true});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;5H│"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[3;5H│"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[1;5H│")));
+}
+
+TEST(PaneCompositionTest, RejectsPaneGeometryThatExceedsStatusReservedContent) {
   auto terminal = make_terminal(20, 3);
   const PaneSurface pane{
       .terminal = &terminal,

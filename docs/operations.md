@@ -47,8 +47,10 @@ The fixed prefix is `C-b`.
 | Select tab 0–9 | `C-b 0` … `C-b 9` |
 | Close active tab | `C-b &` |
 
-Closing a final pane removes its tab; closing the final tab ends its session. One status row is
-reserved, so a single pane in an 80x24 outer terminal receives 80x23 cells. Very small layouts are
+Closing a tab immediately reindexes the remaining display positions, and numeric selection follows
+the displayed positions. Closing a final pane removes its tab; closing the final tab ends its
+session. One top status row is reserved, so a single pane in an 80x24 outer terminal receives
+80x23 cells. Very small layouts are
 suspended until a valid resize arrives rather than being partially applied.
 
 ## Bounds and failure behavior

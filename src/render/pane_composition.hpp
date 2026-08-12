@@ -65,9 +65,10 @@ struct CompositionResult final {
   bool status{false};
 };
 
-// Composes already-resolved pane rectangles into one synchronized outer-terminal update. The
-// focused surface is encoded last so its cursor and terminal modes remain authoritative. Callers
-// must force a full frame after changing pane geometry.
+// Composes already-resolved content-area pane rectangles into one synchronized outer-terminal
+// update. A visible status line occupies the top row, and pane content and separators are offset
+// below it. The focused surface is encoded last so its cursor and terminal modes remain
+// authoritative. Callers must force a full frame after changing pane geometry.
 [[nodiscard]] auto compose_frame(std::span<const PaneSurface> panes, Viewport viewport,
                                  std::span<std::byte> output, bool force_full,
                                  StatusLine status = {}) noexcept

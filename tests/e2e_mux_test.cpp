@@ -720,20 +720,28 @@ TEST_F(MuxProcessTest, CreatesCyclesSelectsAndClosesTabs) {
                    "tabs", [&](const auto& values) { return active_tab(values, 3); },
                    deadline_after(5s), &client)
                    .empty());
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'1'}));
   ASSERT_TRUE(send_prefix(client, std::byte{'&'}));
   const auto after_close = wait_for_tabs(
       "tabs",
       [](const std::vector<TabListing>& values) {
-        return values.size() == 2 && std::ranges::any_of(values, [](const TabListing& value) {
-                 return value.number == 1 && value.active;
-               });
+        return values.size() == 2 && values.front().number == 1 && values.front().active &&
+               values.back().number == 2 && !values.back().active;
       },
       deadline_after(5s), &client);
   ASSERT_EQ(after_close.size(), 2U);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'2'}));
-  ASSERT_TRUE(client.send("printf '__TAB_TWO_ALIVE__\\n'\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__TAB_TWO_ALIVE__", deadline_after(5s)));
+  ASSERT_FALSE(wait_for_tabs(
+                   "tabs",
+                   [](const auto& values) {
+                     return values.size() == 2 && values.back().number == 2 && values.back().active;
+                   },
+                   deadline_after(5s), &client)
+                   .empty());
+  ASSERT_TRUE(client.send("printf '__REINDEXED_TAB_TWO_ALIVE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__REINDEXED_TAB_TWO_ALIVE__", deadline_after(5s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'&'}));
   const auto one_tab = wait_for_tabs(
       "tabs",
