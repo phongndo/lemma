@@ -112,11 +112,13 @@ local fast = new Mapping<String, Step | Group> {
 
 // Pre-push adds incremental build/test and static analysis. Hook installation
 // configures the debug tree first, and the build step refreshes Conan/CMake so
-// dependency and build-system edits cannot use stale generated files.
+// dependency and build-system edits cannot use stale generated files. Keep the
+// build exclusive because Ninja consumes the machine; then fan static analysis
+// out across both steps and their affected translation units.
 local full = new Mapping<String, Step | Group> {
   ["build-test"] {
     glob = buildImpact
-    check = "scripts/ci/configure debug -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON && cmake --build --preset debug && ctest --preset debug --no-tests=error"
+    check = "scripts/ci/configure debug -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON && cmake --build --preset debug && scripts/ci/test debug"
     exclusive = true
   }
 
@@ -125,13 +127,14 @@ local full = new Mapping<String, Step | Group> {
   ["submodule-build-test"] {
     check = "scripts/ci/submodule-build-test {{files}}"
     stdin = #"{{ hook_stdin | default(value="") }}"#
-    exclusive = true
+    depends = "build-test"
   }
 
   ["clang-tidy"] {
     glob = cppSources
     check = "clang-tidy --quiet -p build/debug {{files}}"
-    exclusive = true
+    batch = true
+    depends = List("build-test", "submodule-build-test")
   }
 
   ["clangd"] {
@@ -141,7 +144,8 @@ local full = new Mapping<String, Step | Group> {
     // translation units and clang-tidy still cover these files.
     exclude = "{include/lemma/command.hpp,include/lemma/generational_store.hpp,src/client/attached_client.cpp,src/core/client_frame_output.cpp,src/core/connection_output.hpp,src/core/engine.cpp,src/core/input.cpp,src/core/pty_writer.cpp,src/daemon/server.cpp,src/platform/io.cpp,src/platform/terminal_mode.cpp,src/protocol/single_pane.cpp,src/render/single_pane.cpp}"
     check = "cmake/check-clangd.sh {{files}}"
-    exclusive = true
+    batch = true
+    depends = List("build-test", "submodule-build-test")
   }
 }
 
