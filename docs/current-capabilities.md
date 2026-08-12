@@ -66,7 +66,7 @@ session name is `default`.
 | Create/cycle/select | Working | `C-b c`, `C-b n`, `C-b p`, and `C-b 0`–`9`. |
 | Close tab | Working | `C-b &`; closing the final tab ends the session. |
 | Active/previous state | Working | Active and previous tabs are retained; inactive tabs continue processing PTY output. |
-| Tab listing/status | Working | CLI listing plus a centered top-row status with live position and focused process title. |
+| Tab listing/status | Working | CLI listing plus a top-row status with a leading session-name block, live position, and focused process title. |
 | User names/rename | Absent | Tab labels are numeric and derive titles from the foreground process or terminal title. |
 | Reorder/link/move | Absent | Tabs cannot be reordered or linked across sessions. |
 | Mouse status selection | Absent | The status row has no hit testing or pointer interaction. |

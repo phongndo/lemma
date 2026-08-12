@@ -157,11 +157,12 @@ The built-in key table follows tmux defaults:
   selects tabs 1-9, and `C-b 0` selects tab 10;
 - `C-b &` kills the active tab, `C-b d` detaches, and `C-b C-b` sends a literal `C-b`.
 
-A minimal reverse-video status row is centered at the top. It shows tabs as
-`number:foreground-process`, brackets the active tab (`[1:zsh]`), automatically follows the
-focused pane's foreground process, and uses `…` when the complete tab list does not fit. Tab
-numbers are contiguous live positions: closing a tab immediately reindexes the survivors, and the
-`C-b 0`–`9` bindings follow those displayed positions.
+A minimal dark status row sits at the top. A contrasting leading block shows the session name,
+while the tabs remain centered across the terminal whenever space permits. Tabs appear as
+`number:foreground-process`, bracket the active tab (`[1:zsh]`), automatically follow the focused
+pane's foreground process, and use `…` when the complete tab list does not fit. Tab numbers are
+contiguous live positions: closing a tab immediately reindexes the survivors, and the `C-b 0`–`9`
+bindings follow those displayed positions.
 
 When testing personal shell configuration, leave `nix develop` and invoke
 `./build/debug/lemma` directly so the development shell does not affect the result.

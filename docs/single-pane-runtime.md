@@ -75,8 +75,8 @@ The runtime currently provides:
 - one attached client plus independent session/tab-list and kill control connections;
 - tmux-compatible tab create/cycle/select/kill and pane split/focus/close/zoom bindings;
 - one bounded binary split tree per tab, with one-cell pane separators;
-- a centered, one-row tab status with one-based numbers, focused-pane foreground process names,
-  and bounded overflow;
+- a one-row status with a contrasting session-name block, centered one-based tabs,
+  focused-pane foreground process names, and bounded overflow;
 - terminal resize propagation from resolved pane rectangles;
 - bounded protocol batches and a rotating 256 KiB aggregate PTY-read budget per reactor turn;
 - terminal-generated PTY responses;

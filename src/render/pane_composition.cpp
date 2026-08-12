@@ -42,7 +42,10 @@ namespace {
 }
 
 constexpr std::size_t status_title_columns_max = 16;
-constexpr std::size_t status_label_bytes_max = 24;
+constexpr std::size_t status_session_columns_max = 32;
+constexpr std::size_t status_label_bytes_max = status_session_columns_max + 2U;
+constexpr std::string_view status_style = "\x1B[0;38;5;252;48;5;236m";
+constexpr std::string_view status_session_style = "\x1B[0;1;38;5;255;48;5;239m";
 
 struct StatusLabel final {
   std::array<char, status_label_bytes_max> text{};
@@ -99,6 +102,23 @@ status_label(const StatusTab& tab,
   if (tab.active) {
     append_character(']');
   }
+  return label;
+}
+
+[[nodiscard]] auto session_label(const std::string_view session_name,
+                                 const std::size_t columns_max) noexcept -> StatusLabel {
+  StatusLabel label;
+  const auto bounded_columns = std::min(columns_max, status_session_columns_max + std::size_t{2});
+  if (session_name.empty() || bounded_columns < 3U) {
+    return label;
+  }
+  label.text.front() = ' ';
+  label.size = 1U;
+  label.size += sanitized_title(
+      session_name,
+      std::span(label.text).subspan(label.size).first(bounded_columns - std::size_t{2}));
+  std::span(label.text).subspan(label.size, 1).front() = ' ';
+  ++label.size;
   return label;
 }
 
@@ -171,27 +191,33 @@ status_label(const StatusTab& tab,
     }
   }
 
-  if (labels.subspan(active, 1).front().size > viewport.columns) {
+  const auto active_width = labels.subspan(active, 1).front().size;
+  const auto session_columns_max =
+      active_width < viewport.columns ? viewport.columns - active_width : 0U;
+  const auto session = session_label(status.session_name, session_columns_max);
+  const auto tab_columns = viewport.columns - session.size;
+
+  if (labels.subspan(active, 1).front().size > tab_columns) {
     const auto number_columns = status.tabs.subspan(active, 1).front().number < 10 ? 1U : 2U;
     const auto title_columns =
-        viewport.columns > number_columns + 3U ? viewport.columns - number_columns - 3U : 0U;
+        tab_columns > number_columns + 3U ? tab_columns - number_columns - 3U : 0U;
     labels.subspan(active, 1).front() =
         status_label(status.tabs.subspan(active, 1).front(), title_columns);
   }
-  if (labels.subspan(active, 1).front().size > viewport.columns) {
+  if (labels.subspan(active, 1).front().size > tab_columns) {
     auto& label = labels.subspan(active, 1).front();
     const auto result = std::to_chars(label.text.begin(), label.text.end(),
                                       status.tabs.subspan(active, 1).front().number);
     label.size =
         result.ec == std::errc{}
-            ? std::min(viewport.columns,
-                       static_cast<std::uint16_t>(std::distance(label.text.begin(), result.ptr)))
+            ? std::min(tab_columns,
+                       static_cast<std::size_t>(std::distance(label.text.begin(), result.ptr)))
             : 0;
   }
 
   std::size_t begin = active;
   std::size_t end = active;
-  if (status_width(labels, begin, end) <= viewport.columns) {
+  if (status_width(labels, begin, end) <= tab_columns) {
     bool try_left = true;
     bool left_blocked = begin == 0;
     bool right_blocked = end + 1U == labels.size();
@@ -199,7 +225,7 @@ status_label(const StatusTab& tab,
       const bool use_left = (try_left && !left_blocked) || right_blocked;
       const auto candidate_begin = use_left ? begin - 1U : begin;
       const auto candidate_end = use_left ? end : end + 1U;
-      if (status_width(labels, candidate_begin, candidate_end) <= viewport.columns) {
+      if (status_width(labels, candidate_begin, candidate_end) <= tab_columns) {
         begin = candidate_begin;
         end = candidate_end;
       } else if (use_left) {
@@ -214,17 +240,28 @@ status_label(const StatusTab& tab,
   }
 
   auto width = status_width(labels, begin, end);
-  bool show_range = width <= viewport.columns;
+  bool show_range = width <= tab_columns;
   if (!show_range) {
     begin = active;
     end = active;
     width = labels.subspan(active, 1).front().size;
   }
-  const auto start_column = static_cast<std::uint16_t>(((viewport.columns - width) / 2U) + 1U);
+  const auto centered_column = ((viewport.columns - width) / 2U) + std::size_t{1};
+  const auto start_column =
+      static_cast<std::uint16_t>(std::max(centered_column, session.size + std::size_t{1}));
   constexpr std::uint16_t status_row = 1;
-  if (!append_position(output, used, status_row, 1) || !append(output, used, "\x1B[0;7m") ||
-      !append_spaces(output, used, viewport.columns) ||
-      !append_position(output, used, status_row, start_column)) {
+  if (!append_position(output, used, status_row, 1) || !append(output, used, status_style) ||
+      !append_spaces(output, used, viewport.columns)) {
+    return false;
+  }
+  if (session.size > 0 &&
+      (!append_position(output, used, status_row, 1) ||
+       !append(output, used, status_session_style) ||
+       !append(output, used, std::string_view(session.text.data(), session.size)) ||
+       !append(output, used, status_style))) {
+    return false;
+  }
+  if (!append_position(output, used, status_row, start_column)) {
     return false;
   }
   if (show_range) {

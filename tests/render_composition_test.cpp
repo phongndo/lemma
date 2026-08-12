@@ -89,7 +89,7 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   std::array<std::byte, std::size_t{16} * 1'024U> output{};
 
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 40, .rows = 3}, output, true,
-                                    {.tabs = tabs, .dirty = true});
+                                    {.session_name = {}, .tabs = tabs, .dirty = true});
 
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->status);
@@ -97,6 +97,30 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;9H1:zsh  [2:nvim]  3:logs"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
+}
+
+TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
+  auto terminal = make_terminal(40, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 40, .rows = 2},
+      .focused = true,
+  };
+  const std::array tabs{
+      StatusTab{.number = 1, .title = "zsh"},
+      StatusTab{.number = 2, .title = "nvim", .active = true},
+      StatusTab{.number = 3, .title = "logs"},
+  };
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 40, .rows = 3}, output, true,
+                                    {.session_name = "lemma", .tabs = tabs, .dirty = true});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1;38;5;255;48;5;239m lemma "
+                                          "\x1B[0;38;5;252;48;5;236m\x1B[1;9H"));
+  EXPECT_THAT(encoded, testing::HasSubstr("1:zsh  [2:nvim]  3:logs"));
 }
 
 TEST(PaneCompositionTest, OffsetsPaneSeparatorsBelowTopStatus) {
@@ -111,7 +135,7 @@ TEST(PaneCompositionTest, OffsetsPaneSeparatorsBelowTopStatus) {
   std::array<std::byte, std::size_t{16} * 1'024U> output{};
 
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 5, .rows = 3}, output, true,
-                                    {.tabs = tabs, .dirty = true});
+                                    {.session_name = {}, .tabs = tabs, .dirty = true});
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
@@ -131,7 +155,7 @@ TEST(PaneCompositionTest, RejectsPaneGeometryThatExceedsStatusReservedContent) {
   std::array<std::byte, std::size_t{16} * 1'024U> output{};
 
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output, true,
-                                    {.tabs = tabs, .dirty = true});
+                                    {.session_name = {}, .tabs = tabs, .dirty = true});
 
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error(), CompositionError::invalid_pane);
@@ -154,7 +178,7 @@ TEST(PaneCompositionTest, KeepsActiveTabVisibleWhenStatusOverflows) {
   std::array<std::byte, std::size_t{16} * 1'024U> output{};
 
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 18, .rows = 3}, output, true,
-                                    {.tabs = tabs, .dirty = true});
+                                    {.session_name = {}, .tabs = tabs, .dirty = true});
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
@@ -173,11 +197,11 @@ TEST(PaneCompositionTest, OmitsCleanStatusFromIncrementalFrame) {
   const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
   std::array<std::byte, std::size_t{16} * 1'024U> output{};
   ASSERT_TRUE(compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 3}, output, true,
-                            {.tabs = tabs, .dirty = true})
+                            {.session_name = {}, .tabs = tabs, .dirty = true})
                   .has_value());
 
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 3}, output, false,
-                                    {.tabs = tabs, .dirty = false});
+                                    {.session_name = {}, .tabs = tabs, .dirty = false});
 
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(result->status);

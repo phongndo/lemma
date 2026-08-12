@@ -1708,7 +1708,11 @@ collect_status_line(Session& session,
   const bool dirty = !session.status_valid || signature != session.status_signature;
   session.status_signature = signature;
   session.status_valid = true;
-  return {.tabs = std::span(storage).first(count), .dirty = dirty};
+  return {
+      .session_name = session.session_name(),
+      .tabs = std::span(storage).first(count),
+      .dirty = dirty,
+  };
 }
 
 [[nodiscard]] auto compose_session_frame(Session& session, const bool force_full,

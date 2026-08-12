@@ -43,6 +43,7 @@ struct StatusTab final {
 };
 
 struct StatusLine final {
+  std::string_view session_name;
   std::span<const StatusTab> tabs;
   bool dirty{false};
 };
