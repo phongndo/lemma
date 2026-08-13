@@ -8,10 +8,23 @@ if [[ ! -f "${compile_commands}" ]]; then
 fi
 
 for source_file in "$@"; do
-  clangd \
-    --check="${source_file}" \
-    --check-locations=0 \
-    --compile-commands-dir="$(dirname "${compile_commands}")" \
-    --enable-config \
-    --log=error
+  diagnostics="$(
+    clangd \
+      --check="${source_file}" \
+      --check-locations=0 \
+      --check-warnings \
+      --compile-commands-dir="$(dirname "${compile_commands}")" \
+      --enable-config \
+      --log=error 2>&1
+  )" || {
+    status=$?
+    printf '%s\n' "${diagnostics}" >&2
+    exit "${status}"
+  }
+
+  # Check mode logs warning-level diagnostics but does not make them affect its exit status.
+  if [[ -n "${diagnostics}" ]]; then
+    printf '%s\n' "${diagnostics}" >&2
+    exit 1
+  fi
 done

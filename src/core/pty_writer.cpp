@@ -1,5 +1,6 @@
 #include "core/pty_writer.hpp"
 
+#include "core/input.hpp"
 #include "lemma/assert.hpp"
 
 #include <algorithm>

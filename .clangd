@@ -23,6 +23,16 @@ Diagnostics:
       - readability-identifier-length
       - readability-magic-numbers
   UnusedIncludes: Strict
+  Includes:
+    # These dependencies expose deliberate umbrella headers. Their generated/platform-specific
+    # implementation headers are not portable include targets, so keep Include Cleaner focused on
+    # project and standard-library ownership.
+    IgnoreHeader:
+      - (bits|machine|malloc|sys)/.*
+      - .*/_types/.*
+      - ghostty/vt/.*
+      - l(auxlib|ua|ualib)\.h
+      - _?(signal|stdlib)\.h
   MissingIncludes: Strict
 
 Hover:

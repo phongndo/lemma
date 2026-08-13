@@ -15,10 +15,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <fcntl.h>
 #include <pwd.h>

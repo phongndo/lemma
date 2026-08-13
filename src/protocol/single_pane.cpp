@@ -3,9 +3,17 @@
 #include "lemma/assert.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <expected>
 #include <limits>
+#include <memory>
 #include <new>
+#include <optional>
+#include <span>
+#include <string_view>
 
 // Fixed wire offsets are checked against compile-time-sized headers and validated payload bounds.
 // NOLINTBEGIN(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)

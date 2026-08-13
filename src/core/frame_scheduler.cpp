@@ -1,5 +1,8 @@
 #include "core/frame_scheduler.hpp"
 
+#include <cstddef>
+#include <optional>
+
 namespace lemma::core {
 
 [[nodiscard]] auto latency_sensitive_input(const std::size_t bytes) noexcept -> bool {

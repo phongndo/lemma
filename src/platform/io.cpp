@@ -1,6 +1,9 @@
 #include "platform/io.hpp"
 
 #include <cerrno>
+#include <cstddef>
+#include <span>
+#include <string_view>
 
 #include <fcntl.h>
 #include <sys/socket.h>

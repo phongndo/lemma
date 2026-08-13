@@ -1,8 +1,14 @@
 #include "protocol/extension.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <expected>
 #include <limits>
+#include <optional>
+#include <span>
+#include <string_view>
 
 namespace lemma::protocol::extension {
 namespace {

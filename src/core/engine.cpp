@@ -7,6 +7,7 @@
 #include "core/input.hpp"
 #include "core/pty_writer.hpp"
 #include "diagnostic/latency_trace.hpp"
+#include "lemma/assert.hpp"
 #include "lemma/command.hpp"
 #include "lemma/generational_store.hpp"
 #include "lemma/id.hpp"
@@ -14,7 +15,9 @@
 #include "lemma/terminal/terminal.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
+#include "protocol/extension.hpp"
 #include "protocol/single_pane.hpp"
+#include "render/pane_composition.hpp"
 #include "render/single_pane.hpp"
 
 #include <algorithm>
@@ -25,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>

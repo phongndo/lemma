@@ -1,12 +1,16 @@
 #include "core/client_frame_output.hpp"
 
 #include "diagnostic/latency_trace.hpp"
+#include "protocol/single_pane.hpp"
+#include "render/single_pane.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
-#include <ranges>
+#include <cstdint>
+#include <optional>
 #include <span>
+#include <string_view>
 
 namespace lemma::core {
 

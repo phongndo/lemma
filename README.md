@@ -175,8 +175,10 @@ Xcode resource headers alongside the generated Apple Clang compilation database.
 [`.clangd`](.clangd) uses `build/debug/compile_commands.json`, strict missing/unused
 include diagnostics, only clang-tidy checks measured fast enough for interactive use, persistent
 background indexing, and inlay hints. `just lsp-check` disables clangd check mode's unrelated
-per-token hover/code-action stress tests while retaining parsing and diagnostics. Run
-`just configure` before opening the project in an editor.
+per-token hover/code-action stress tests while retaining parsing and making every emitted warning,
+including missing/unused include advice, fail validation. Platform, Lua, and Ghostty implementation
+headers behind their supported umbrella headers are explicitly ignored. Run `just configure` before
+opening the project in an editor.
 
 [`hk.pkl`](hk.pkl) keeps pre-commit fast: it fixes staged C++/Nix/just
 formatting and runs staged-file hygiene, actionlint, ShellCheck, and CI contract

@@ -3,6 +3,7 @@
 #include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
 #include "lemma/bounded_byte_queue.hpp"
+#include "lemma/limits.hpp"
 
 #include <ghostty/vt.h>
 
@@ -11,8 +12,10 @@
 #include <bit>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <expected>
 #include <iterator>
 #include <limits>
 #include <memory>

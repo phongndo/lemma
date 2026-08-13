@@ -4,11 +4,11 @@
 #include "core/engine.hpp"
 #include "protocol/extension.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ranges>
 #include <string_view>
 
 namespace lemma::core {

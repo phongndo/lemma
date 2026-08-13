@@ -1,10 +1,13 @@
 #include "core/input.hpp"
 
 #include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
 #include "protocol/single_pane.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

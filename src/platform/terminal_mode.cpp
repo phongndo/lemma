@@ -6,6 +6,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
 #include <thread>
 
 #include <fcntl.h>
@@ -13,6 +14,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 namespace lemma::platform {

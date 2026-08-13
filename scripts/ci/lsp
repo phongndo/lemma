@@ -7,8 +7,8 @@ scripts/ci/configure debug \
 # Clangd needs Ghostty's generated public header but not Lemma object files.
 cmake --build --preset debug --target zig_build_lib_vt
 
-# check-clangd.sh disables check mode's per-token feature tests, so this lane can validate every
-# production source/header without spending most of its time exercising hover and code actions.
+# check-clangd.sh disables per-token feature tests and promotes all emitted warnings to failures, so
+# this lane can validate every production source/header without exercising hover and code actions.
 find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 |
   sort -z |
   xargs -0 -n 1 -P "${CLANGD_JOBS:-4}" cmake/check-clangd.sh

@@ -3,13 +3,17 @@
 #include "render/pane_composition.hpp"
 
 #include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <expected>
 #include <limits>
 #include <memory>
 #include <new>
 #include <span>
+#include <utility>
 
 namespace lemma::render {
 namespace {

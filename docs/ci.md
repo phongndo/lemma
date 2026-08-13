@@ -35,8 +35,9 @@ The lanes perform these checks:
   production, test, and benchmark translation units, including the expensive Clang Static Analyzer
   checks omitted from interactive and pre-push feedback.
 - **Clangd:** independent locked configuration followed by parallel isolated parse/diagnostic checks
-  over every production source and public/internal header; per-token hover/code-action stress tests
-  are not part of this diagnostics lane.
+  over every production source and public/internal header. Every emitted warning, including
+  missing/unused include advice, fails the lane; per-token hover/code-action stress tests are not part
+  of this diagnostics lane.
 - **ASan/UBSan:** an independent Linux build and the complete component/process suite with leak
   detection and undefined-behavior failures enabled.
 

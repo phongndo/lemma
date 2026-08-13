@@ -1,12 +1,15 @@
 #include "core/extension_runtime.hpp"
 
+#include "core/engine.hpp"
 #include "platform/io.hpp"
+#include "protocol/extension.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 
 #include <poll.h>

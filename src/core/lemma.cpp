@@ -1,6 +1,11 @@
 #include "lemma/lemma.hpp"
 
 #include "lemma/terminal/terminal.hpp"
+
+#include <cstdint>
+#include <span>
+#include <string_view>
+
 #include <lua.h>
 #include <zstd.h>
 

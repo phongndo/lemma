@@ -14,7 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <expected>
-#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
