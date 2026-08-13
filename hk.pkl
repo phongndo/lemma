@@ -132,6 +132,8 @@ local full = new Mapping<String, Step | Group> {
 
   ["clang-tidy"] {
     glob = cppSources
+    // The Static Analyzer remains merge-blocking in scripts/ci/lint, but is too expensive for the
+    // pre-push feedback path.
     check = "clang-tidy --quiet -p build/debug {{files}}"
     batch = true
     depends = List("build-test", "submodule-build-test")
@@ -139,10 +141,7 @@ local full = new Mapping<String, Step | Group> {
 
   ["clangd"] {
     glob = clangdFiles
-    // LLVM 22's isolated checker reports internal code-action failures for standalone command/template
-    // headers and while testing refactors in loop- and macro-heavy runtime sources. Their production
-    // translation units and clang-tidy still cover these files.
-    exclude = "{include/lemma/command.hpp,include/lemma/generational_store.hpp,src/client/attached_client.cpp,src/core/client_frame_output.cpp,src/core/connection_output.hpp,src/core/engine.cpp,src/core/input.cpp,src/core/pty_writer.cpp,src/daemon/server.cpp,src/platform/io.cpp,src/platform/terminal_mode.cpp,src/protocol/single_pane.cpp,src/render/single_pane.cpp}"
+    // Diagnostics-only check mode avoids the slow and failure-prone per-token code-action tests.
     check = "cmake/check-clangd.sh {{files}}"
     batch = true
     depends = List("build-test", "submodule-build-test")

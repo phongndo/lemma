@@ -7,22 +7,8 @@ scripts/ci/configure debug \
 # Clangd needs Ghostty's generated public header but not Lemma object files.
 cmake --build --preset debug --target zig_build_lib_vt
 
-# LLVM 22's isolated checker reports internal code-action failures for standalone command/template
-# headers and while testing refactors in loop- and macro-heavy runtime sources. Their production
-# translation units and clang-tidy still cover these files.
-find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) \
-  ! -path 'include/lemma/command.hpp' \
-  ! -path 'include/lemma/generational_store.hpp' \
-  ! -path 'src/client/attached_client.cpp' \
-  ! -path 'src/core/client_frame_output.cpp' \
-  ! -path 'src/core/connection_output.hpp' \
-  ! -path 'src/core/engine.cpp' \
-  ! -path 'src/core/input.cpp' \
-  ! -path 'src/core/pty_writer.cpp' \
-  ! -path 'src/daemon/server.cpp' \
-  ! -path 'src/platform/io.cpp' \
-  ! -path 'src/platform/terminal_mode.cpp' \
-  ! -path 'src/protocol/single_pane.cpp' \
-  ! -path 'src/render/single_pane.cpp' -print0 |
+# check-clangd.sh disables check mode's per-token feature tests, so this lane can validate every
+# production source/header without spending most of its time exercising hover and code actions.
+find apps include src -type f \( -name '*.hpp' -o -name '*.cpp' \) -print0 |
   sort -z |
   xargs -0 -n 1 -P "${CLANGD_JOBS:-4}" cmake/check-clangd.sh

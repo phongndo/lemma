@@ -7,5 +7,8 @@ scripts/ci/configure debug \
 # Analysis needs Ghostty's generated public header but not Lemma object files.
 cmake --build --preset debug --target zig_build_lib_vt
 
+# The default config omits the expensive Static Analyzer from interactive and pre-push linting.
+# Keep it merge-blocking here, where this lane runs independently from developer feedback.
 find apps src tests benchmarks -type f -name '*.cpp' -print0 |
-  xargs -0 -n 1 -P "${CLANG_TIDY_JOBS:-4}" clang-tidy --quiet -p build/debug
+  xargs -0 -n 1 -P "${CLANG_TIDY_JOBS:-4}" \
+    clang-tidy --quiet '-checks=clang-analyzer-*' -p build/debug

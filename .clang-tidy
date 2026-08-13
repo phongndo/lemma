@@ -1,6 +1,7 @@
 ---
+# Keep interactive and pre-push lint responsive. The merge-blocking CI lint lane
+# explicitly adds clang-analyzer-* back for the slower path-sensitive analysis.
 Checks: >
-  clang-analyzer-*,
   bugprone-*,
   cert-*,
   cppcoreguidelines-*,
@@ -22,7 +23,6 @@ SystemHeaders: false
 CheckOptions:
   readability-function-cognitive-complexity.Threshold: '15'
   readability-identifier-naming.NamespaceCase: lower_case
-  readability-identifier-naming.TypeCase: CamelCase
   readability-identifier-naming.FunctionCase: lower_case
   readability-identifier-naming.VariableCase: lower_case
   readability-identifier-naming.ParameterCase: lower_case

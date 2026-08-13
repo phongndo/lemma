@@ -31,9 +31,12 @@ The lanes perform these checks:
 - **Format:** clang-format, Nix formatting, and `justfile` formatting.
 - **Build and test:** hk/flake validation, locked debug configuration, compilation including the
   benchmark binary, parallel component tests, serialized process tests, and command-dispatch smoke.
-- **Clang-tidy:** independent locked configuration followed by static analysis of application,
-  production, test, and benchmark translation units.
-- **Clangd:** independent locked configuration followed by isolated parse/diagnostic checks.
+- **Clang-tidy:** independent locked configuration followed by parallel analysis of application,
+  production, test, and benchmark translation units, including the expensive Clang Static Analyzer
+  checks omitted from interactive and pre-push feedback.
+- **Clangd:** independent locked configuration followed by parallel isolated parse/diagnostic checks
+  over every production source and public/internal header; per-token hover/code-action stress tests
+  are not part of this diagnostics lane.
 - **ASan/UBSan:** an independent Linux build and the complete component/process suite with leak
   detection and undefined-behavior failures enabled.
 
@@ -87,8 +90,9 @@ isolated runtime paths.
 [`hk.pkl`](../hk.pkl) mirrors the validation tiers without making every commit wait for a build.
 Pre-commit operates only on staged files, applies safe formatters, preserves unstaged changes, and
 runs hygiene/actionlint/ShellCheck or classifier tests only when their inputs are staged. Pre-push
-adds one incremental Conan/CMake refresh and debug build/test pass, then clang-tidy and clangd only
-for affected C++ files. Linux sanitizers remain merge-blocking CI; platform matrices and benchmark
+adds one incremental Conan/CMake refresh and debug build/test pass, then responsive clang-tidy
+checks (without the Static Analyzer) and clangd only for affected C++ files. Full analyzer checks and
+Linux sanitizers remain merge-blocking CI; platform matrices and benchmark
 execution remain scheduled.
 
 Install both hooks with `just hooks`. Use `just hooks-check` to run fast and pre-push checks over the

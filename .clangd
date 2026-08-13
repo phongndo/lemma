@@ -4,6 +4,8 @@ CompileFlags:
 
 Diagnostics:
   ClangTidy:
+    # Never put checks known to hurt interactive latency on the editor path.
+    FastCheckFilter: Strict
     Add:
       - bugprone-*
       - cert-*

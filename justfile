@@ -79,29 +79,17 @@ fmt-check:
         xargs -0 clang-format --dry-run --Werror"
     {{ nix }} nixpkgs-fmt --check flake.nix
 
-# Run clang-tidy with all diagnostics promoted to errors.
+# Run responsive clang-tidy checks in parallel; ci-lint adds the slower Static Analyzer.
 lint: configure
     {{ nix }} bash -c "find apps src tests benchmarks -type f -name '*.cpp' -print0 | \
-        xargs -0 clang-tidy --quiet -p build/{{ profile }}"
+        xargs -0 -n 1 -P \"\${CLANG_TIDY_JOBS:-4}\" \
+        clang-tidy --quiet -p build/{{ profile }}"
 
-# Check public headers and production translation units through clangd.
+# Check every public header and production translation unit through clangd in parallel.
 lsp-check: configure
     {{ nix }} bash -c "find apps include src -type f \
-        \\( -name '*.hpp' -o -name '*.cpp' \\) \
-        ! -path 'include/lemma/command.hpp' \
-        ! -path 'include/lemma/generational_store.hpp' \
-        ! -path 'src/client/attached_client.cpp' \
-        ! -path 'src/core/client_frame_output.cpp' \
-        ! -path 'src/core/connection_output.hpp' \
-        ! -path 'src/core/engine.cpp' \
-        ! -path 'src/core/input.cpp' \
-        ! -path 'src/core/pty_writer.cpp' \
-        ! -path 'src/daemon/server.cpp' \
-        ! -path 'src/platform/io.cpp' \
-        ! -path 'src/platform/terminal_mode.cpp' \
-        ! -path 'src/protocol/single_pane.cpp' \
-        ! -path 'src/render/single_pane.cpp' -print0 | sort -z | \
-        xargs -0 cmake/check-clangd.sh"
+        \\( -name '*.hpp' -o -name '*.cpp' \\) -print0 | sort -z | \
+        xargs -0 -n 1 -P \"\${CLANGD_JOBS:-4}\" cmake/check-clangd.sh"
 
 # Start clangd for editor integrations.
 lsp:

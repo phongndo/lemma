@@ -90,10 +90,11 @@ nix develop .#benchmarks    # Enter the optional tmux/Zellij comparison shell
 just mux-bench              # Release Lemma/tmux/Zellij core-mux baselines
 just fmt                    # Apply clang-format and nixpkgs-fmt
 just fmt-check              # Verify formatting only
-just lint                   # clang-tidy; every diagnostic is an error
-just lsp-check              # clangd parse/diagnostic check
+just lint                   # Parallel fast clang-tidy; every diagnostic is an error
+just lsp-check              # Parallel clangd parse/diagnostic checks over all production C++
 just lsp                    # Start clangd for an editor
-just check                  # All format, lint, LSP, build, and test checks
+just check                  # All fast format, lint, LSP, build, and test checks
+just ci-lint                # Full clang-tidy, including the slower Static Analyzer
 just ci-check               # Reproduce every merge-blocking CI lane
 just hooks                  # Configure and install fast commit/push hooks
 just hooks-check            # Run fast and pre-push hk checks over all files
@@ -172,14 +173,17 @@ When testing personal shell configuration, leave `nix develop` and invoke
 Point the editor at `clangd` from `nix develop`. On macOS, its wrapper uses the
 Xcode resource headers alongside the generated Apple Clang compilation database.
 [`.clangd`](.clangd) uses `build/debug/compile_commands.json`, strict missing/unused
-include diagnostics, clang-tidy diagnostics, background indexing, and inlay hints.
-Run `just configure` before opening the project in an editor.
+include diagnostics, only clang-tidy checks measured fast enough for interactive use, persistent
+background indexing, and inlay hints. `just lsp-check` disables clangd check mode's unrelated
+per-token hover/code-action stress tests while retaining parsing and diagnostics. Run
+`just configure` before opening the project in an editor.
 
 [`hk.pkl`](hk.pkl) keeps pre-commit fast: it fixes staged C++/Nix/just
 formatting and runs staged-file hygiene, actionlint, ShellCheck, and CI contract
 checks only when their inputs change. Pre-push adds the slower incremental
-debug build, tests, clang-tidy, and clangd validation tier. Install both hooks
-after the debug tree is configured:
+debug build, tests, parallel responsive clang-tidy checks, and clangd validation tier. The much
+slower Clang Static Analyzer remains merge-blocking in the independent CI lint lane. Install both
+hooks after the debug tree is configured:
 
 ```sh
 just hooks
