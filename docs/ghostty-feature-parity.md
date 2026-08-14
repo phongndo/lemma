@@ -116,7 +116,7 @@ resets them to the host-configured defaults. `M2SessionThemeSurvivesReattach` an
 | --- | --- | --- | --- | --- |
 | VT parsing, primary/alternate screens, margins, tabs, erase/insert, wrap, save/restore | **REQUIRED** | **REQUIRED** | Project canonical Ghostty cells and modes; never parse a second authoritative grid. | Existing terminal/render tests; M5 differential gate |
 | UTF-8, width, grapheme clusters, combining marks, reflow | **REQUIRED** | **REQUIRED** | Preserve graphemes within the declared 256-byte projection bound; reject an invariant breach rather than truncate. | `DISABLED_M5AnsiProjectionConvergesInSecondGhostty` |
-| Scrollback and viewport state | **REQUIRED** | **REQUIRED** | Ghostty owns history; Lemma owns copy-mode viewport policy and bounded compression scheduling. | M4 selection regression plus existing resize tests |
+| Scrollback and viewport state | **REQUIRED** | **REQUIRED** | Ghostty owns history; Lemma owns copy-mode viewport policy, separate byte/line bounds, and bounded idle compression scheduling. | `M4SelectionAnchorsTrackTerminalMutation`, terminal viewport/compression tests, and existing resize tests |
 | Cursor position, visibility, shape, blink, pending wrap | **REQUIRED** | **REQUIRED** | Only focused pane presents a cursor; restore outer cursor state on detach. | M2 color/cursor regression |
 | SGR styles, underline variants/colors, inverse, conceal, strike, overline | **REQUIRED** | **REQUIRED** | ANSI projection must converge in a second Ghostty terminal. | M5 differential gate |
 | 16/256 colors and true color | **REQUIRED** | **REQUIRED** | Session-theme comparison rules above. | M2 color regression |
@@ -137,7 +137,7 @@ resets them to the host-configured defaults. `M2SessionThemeSurvivesReattach` an
 | Shell integration prompt/output markers and progress | **SUPPORTED** | **SUPPORTED** | Typed bounded state; no persistent duplicate screen. | M3 effects; M4 output selection |
 | Desktop notifications | **PERMISSION_GATED** | **PERMISSION_GATED** | Default deny or explicit policy; 4 KiB sanitized text and rate limit. | M3 effects regression |
 | OSC 52 clipboard write | **PERMISSION_GATED** | **PERMISSION_GATED** | Default deny/prompt; 1 MiB decoded maximum. | M3 effects regression |
-| Selection: cell/word/line/output/all, tracked endpoints, formatting | **SUPPORTED** | **SUPPORTED** | Ghostty owns gesture/endpoints; Lemma owns mode, bindings, overlay, and authorization. | `DISABLED_M4SelectionAnchorsTrackTerminalMutation` |
+| Selection: cell/word/line/output/all, tracked endpoints, formatting | **SUPPORTED** | **SUPPORTED** | Ghostty owns gestures and tracked endpoints; Lemma owns copy mode, vi/arrow bindings, a visible cursor/range/status model, bounded literal search, and authorization. `Enter`/`y` is the explicit user grant for one bounded standard-clipboard OSC 52 write; application-originated writes remain governed by the separate default-deny row above. Typed mouse routing and a native clipboard provider remain incomplete. | `M4SelectionAnchorsTrackTerminalMutation`, terminal selection/search/highlight tests, and copy-mode E2E |
 | Kitty graphics direct/PNG media, images, placements, updates, deletion, animation | **INTENTIONALLY_UNSUPPORTED** and unadvertised | **BACKEND_SPECIFIC**: qualified replica | Never raw-APC pass-through; bounded data/placement channel and response routing. | `DISABLED_M7KittyGraphicsLifecycleIsBoundedAndClipped` |
 | File, temporary-file, and shared-memory graphics media | **INTENTIONALLY_UNSUPPORTED** | **PERMISSION_GATED** and backend-specific | Disabled until path/descriptor ownership and TOCTOU policy are implemented. | M7 security tests |
 | SIXEL/ReGIS | **INTENTIONALLY_UNSUPPORTED** | **INTENTIONALLY_UNSUPPORTED** | Not exposed by the pinned Ghostty rendering contract and never advertised in DA. | No-op parser behavior; not applicable |
@@ -185,6 +185,8 @@ may retain smaller limits; protocol v2 may increase only up to these reviewed ce
 | Declared attached geometry | 500 columns × 200 rows | Reject before PTY mutation. Worst-case ANSI bound is 35,204,096 bytes, below 64 MiB. |
 | Abuse-only terminal geometry | 1,000 × 1,000 | Not an attached-client promise; requires a future progressive-repair contract. |
 | Structured input payload / paste / decoded clipboard | 1 MiB each | Reject the event atomically. |
+| Formatted selection / literal search query | 1 MiB / 256 bytes | Format only into caller storage; scan at most 256 candidate cells per reactor slice and retain no duplicate grid. |
+| Scrollback compression idle delay | 1 s | Restart on compression-relevant activity; then run bounded incremental steps. |
 | Expanded structured event batch | 4,096 events | Reject before dispatch; repeat counts contribute to expansion. |
 | Pixel mouse report | 128 bytes | Reject malformed or oversized report. |
 | PTY response queue | 64 KiB | Terminal-integrity failure; terminate pane visibly. |
@@ -203,9 +205,9 @@ the 4 MiB value is only a chunk bound.
 
 M0 installed disabled, deliberately failing specifications under
 [`tests/ghostty_parity_regression_test.cpp`](../tests/ghostty_parity_regression_test.cpp). They do not
-make CI green by pretending the behavior exists. The eight M2 specifications are now enabled
-executable regressions; later milestone gaps remain disabled. A milestone removes a `DISABLED_`
-prefix only after
+make CI green by pretending the behavior exists. The eight M2 specifications and the M4 tracked
+selection specification are now enabled executable regressions; remaining milestone gaps stay
+disabled. A milestone removes a `DISABLED_` prefix only after
 replacing `FAIL()` with an executable characterization; its exit gate requires that test to pass.
 Existing terminal, renderer, protocol, allocation, and E2E tests remain active throughout.
 

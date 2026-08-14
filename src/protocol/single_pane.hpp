@@ -65,6 +65,7 @@ enum class PaneCommand : std::uint8_t {
   focus_previous = ';',
   close = 'x',
   zoom = 'z',
+  enter_copy_mode = '[',
   create_tab = 'c',
   next_tab = 'n',
   previous_tab = 'p',

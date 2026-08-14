@@ -103,8 +103,8 @@ limitations:
   tab-owned slots and attached-client generations remain session-owned rather than separate global
   dense stores;
 - only one client may attach at a time;
-- keyboard prefix commands are implemented, but first-class mouse decoding, hit testing, application
-  pass-through, selection, scrolling, and drag resizing are not;
+- keyboard prefix and daemon-owned copy/search/viewport commands are implemented, but first-class
+  mouse decoding, hit testing, application pass-through, mouse selection, and drag resizing are not;
 - the local protocol has no version or capability negotiation and still sends unframed daemon ANSI;
 - production session creation captures a bounded invoking cwd and environment snapshot, but new
   tabs/splits use the stored session cwd rather than inspecting the focused process;
@@ -117,7 +117,8 @@ limitations:
   implemented;
 - daemon output remains unframed ANSI without version negotiation or redraw epochs;
 - typed paste/focus/mouse input and signal-complete client restoration are incomplete; and
-- copy/search/selection has no daemon-owned attachment model.
+- copy/search/selection has a bounded single-attachment keyboard model and explicit OSC 52 copy,
+  but no native clipboard provider or typed mouse path.
 
 The server-rendered runtime is the production foundation rather than migration scaffolding. Build-out
 must preserve its subsystem boundaries and P0 invariants.

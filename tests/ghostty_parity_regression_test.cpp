@@ -48,6 +48,10 @@ TEST(GhosttyParityContractTest, SecurityAndProgressLimitsMatchM0Policy) {
   EXPECT_EQ(limits::pixel_mouse_report_bytes_max, 128U);
   EXPECT_EQ(limits::paste_payload_bytes_max, std::size_t{1} * 1'024U * 1'024U);
   EXPECT_EQ(limits::terminal_pty_response_bytes_max, std::size_t{64} * 1'024U);
+  EXPECT_EQ(limits::selection_format_bytes_max, std::size_t{1} * 1'024U * 1'024U);
+  EXPECT_EQ(limits::search_query_bytes_max, 256U);
+  EXPECT_EQ(limits::search_candidates_per_step, 256U);
+  EXPECT_EQ(limits::scrollback_compression_idle_delay, std::chrono::seconds{1});
 }
 
 [[nodiscard]] auto make_terminal(const vt::TerminalOptions& options = {}) -> vt::Terminal {
@@ -282,8 +286,25 @@ TEST(GhosttyParityRegressionTest, DISABLED_M3EffectsAreSanitizedBoundedAndPolicy
   FAIL() << "M3 must route title, PWD, progress, notification, clipboard, and unknown sequences";
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M4SelectionAnchorsTrackTerminalMutation) {
-  FAIL() << "M4 must use Ghostty gestures, tracked refs, endpoint adjustment, and formatting";
+TEST(GhosttyParityRegressionTest, M4SelectionAnchorsTrackTerminalMutation) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  options.scrollback_lines_max = 100;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "alpha bravo\r\ncharlie");
+
+  ASSERT_TRUE(terminal
+                  .select(vt::SelectionUnit::word,
+                          {.space = vt::PointSpace::viewport, .column = 0, .row = 0})
+                  .value_or(false));
+  write_terminal(terminal, "\r\ndelta\r\necho\r\nfoxtrot");
+  ASSERT_TRUE(terminal.selection_adjust(vt::SelectionAdjustment::right, true).value_or(false));
+
+  std::array<std::byte, 128> output{};
+  const auto formatted = terminal.format_selection(vt::ScreenFormat::plain, output);
+  ASSERT_TRUE(formatted.has_value());
+  EXPECT_THAT(output_text(std::span(output).first(*formatted)), testing::HasSubstr("alpha"));
 }
 
 TEST(GhosttyParityRegressionTest, DISABLED_M5AnsiProjectionConvergesInSecondGhostty) {

@@ -308,7 +308,10 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   }
   const auto terminal_size = pane.terminal->size();
   return terminal_size.columns == pane.rectangle.columns &&
-         terminal_size.rows == pane.rectangle.rows;
+         terminal_size.rows == pane.rectangle.rows &&
+         (!pane.cursor_override ||
+          (pane.focused && pane.cursor_override_column < terminal_size.columns &&
+           pane.cursor_override_row < terminal_size.rows));
 }
 
 [[nodiscard]] auto panes_overlap(const PaneSurface& first, const PaneSurface& second) noexcept
@@ -402,8 +405,11 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   const vt::PaneRenderOptions options{
       .column = pane.rectangle.column,
       .row = static_cast<std::uint16_t>(pane.rectangle.row + row_offset),
+      .cursor_override_column = pane.cursor_override_column,
+      .cursor_override_row = pane.cursor_override_row,
       .force_full = force_full,
       .focused = pane.focused,
+      .cursor_override = pane.cursor_override,
       .allow_terminal_scroll = allow_terminal_scroll,
   };
   const auto rendered = pane.terminal->render_pane_ansi(output.subspan(used), options);

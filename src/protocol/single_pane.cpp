@@ -77,6 +77,7 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
   case PaneCommand::focus_previous:
   case PaneCommand::close:
   case PaneCommand::zoom:
+  case PaneCommand::enter_copy_mode:
   case PaneCommand::create_tab:
   case PaneCommand::next_tab:
   case PaneCommand::previous_tab:
@@ -478,6 +479,9 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       break;
     case std::byte{'z'}:
       pane_command_value = PaneCommand::zoom;
+      break;
+    case std::byte{'['}:
+      pane_command_value = PaneCommand::enter_copy_mode;
       break;
     case std::byte{'c'}:
       pane_command_value = PaneCommand::create_tab;

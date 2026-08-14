@@ -6,7 +6,10 @@ The current engine owns up to 64 named sessions, 1,024 tabs, and 4,096 panes in 
 Each session is bounded to 16 tabs and 64 panes. Every pane owns one child process, PTY,
 canonical terminal adapter, resolved surface, and ordered bounded PTY write queue. Tabs own
 generational IDs, binary split trees, focus, and zoom. Sessions own order/selection, a bounded immutable launch cwd/environment snapshot, attached-client
-state, status, per-attachment view/prefix state, retained presentation state, and frame scheduling.
+state, status, per-attachment view/prefix/copy/search state, retained presentation state, and frame
+scheduling. Copy mode consumes vi/arrow UI input without forwarding it to the child, freezes its
+viewport while PTY parsing continues, and presents a tracked cursor/range. Explicit copy formatting,
+OSC 52 delivery, bounded search, and idle-compression slices remain part of the single-owner reactor.
 
 The current core uses a fixed-capacity generational session store, hierarchical generational tab and
 pane slots, generated attached-client IDs, and validated command targets. Pending attach
@@ -16,8 +19,8 @@ Attached-client descriptor progress is core-owned: one retained frame per client
 and EAGAIN handling, 64 KiB per-client and 256 KiB global turn budgets, a persistent round-robin
 cursor, and 5 s no-progress/30 s total-frame deadlines. Damage behind a blocked frame collapses into
 one full recovery redraw. The target core still adds a
-separate dense client store, actor/request origins, stored layout ratios, copy/search state, typed
-input, explicit render-redraw generations, immutable
+separate dense client store, actor/request origins, stored layout ratios, typed input, native
+clipboard providers and broader policy, explicit render-redraw generations, immutable
 snapshots/events, bounded output observations, and complete typed command results. A lagging
 client retains only bounded frame work; canonical terminal damage represents newer state until one
 full redraw can be sent or the client is disconnected.

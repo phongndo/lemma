@@ -31,7 +31,10 @@ struct PaneRectangle final {
 struct PaneSurface final {
   vt::Terminal* terminal{nullptr};
   PaneRectangle rectangle{};
+  std::uint16_t cursor_override_column{0};
+  std::uint16_t cursor_override_row{0};
   bool focused{false};
+  bool cursor_override{false};
   bool presentation_suppressed{false};
   bool border_right{false};
   bool border_bottom{false};

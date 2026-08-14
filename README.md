@@ -32,8 +32,12 @@ supports default entry, start, attach, detach, list, tab-list, kill, and explici
 plus dedicated help/version/errors, release-enabled invariant assertions, hierarchical generational
 IDs, bounded byte queues, and an isolated Ghostty terminal adapter. The
 adapter owns the canonical terminal and dirty render state, captures terminal effects into bounded
-queues, and enforces a quota-tracked allocator. Lua command callbacks, first-class mouse/copy UX,
-remote release validation, agent APIs, and durability across daemon restarts remain roadmap work. The
+queues, and enforces a quota-tracked allocator. The first copy-mode slice now provides tracked
+Ghostty selection, vi-style viewport movement, bounded literal search, user-initiated bounded OSC 52
+clipboard delivery, and idle scrollback compression; native clipboard providers and mouse selection
+remain unavailable. Lua command callbacks,
+first-class mouse UX, remote release validation, agent APIs, and durability across daemon restarts
+remain roadmap work. The
 daemon-rendered ANSI path is the selected production architecture through 1.0. A checkpoint
 feasibility gate proved that client terminal replication was not viable with the pinned Ghostty API;
 the completed architecture review retained one authoritative daemon and thin clients. See
@@ -158,6 +162,9 @@ The built-in key table follows tmux defaults:
 - `C-b x` closes the focused pane and `C-b z` toggles zoom;
 - `C-b c` creates a tab, `C-b n`/`C-b p` cycles tabs, `C-b 1` through `C-b 9`
   selects tabs 1-9, and `C-b 0` selects tab 10;
+- `C-b [` enters copy mode; arrows, `h`/`j`/`k`/`l`, `b`/`w`, `0`/`$`, `g`/`G`, and
+  `C-u`/`C-d` navigate, `Space`/`v` starts a visibly highlighted selection, `Enter`/`y` copies
+  through a bounded user-initiated OSC 52 write, `/`/`?` searches, and `q`/`Escape` leaves;
 - `C-b &` kills the active tab, `C-b d` detaches, and `C-b C-b` sends a literal `C-b`.
 
 A minimal dark status row sits at the top. A contrasting leading block shows the session name,

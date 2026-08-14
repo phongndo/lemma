@@ -627,6 +627,106 @@ TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, CopyModePreservesReflowedViewportAcrossPtyOutput) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "copy_resize"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+
+  const auto gate = runtime_.owned_path("copy-resize.gate");
+  const auto acknowledged = runtime_.owned_path("copy-resize.ack");
+  const auto launch =
+      "i=0; while [ $i -lt 20 ]; do printf "
+      "'__COPY_REFLOW_ROW_%02d__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
+      "\"$i\"; i=$((i + 1)); done; "
+      "printf "
+      "'__COPY_RESIZE_TRACKED__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n'; "
+      "i=20; while [ $i -lt 45 ]; do printf "
+      "'__COPY_REFLOW_ROW_%02d__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
+      "\"$i\"; i=$((i + 1)); done; printf '__COPY_RESIZE_READY__\\n'; "
+      "while [ ! -e " +
+      shell_quote(gate) + " ]; do sleep 0.01; done; printf '__COPY_RESIZE_MUTATION__\\n'; : > " +
+      shell_quote(acknowledged) + "\r";
+  ASSERT_TRUE(client.send(launch, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_RESIZE_READY__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(client.send("?__COPY_RESIZE_TRACKED__\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_RESIZE_TRACKED__", deadline_after(5s)))
+      << client.screen();
+  ASSERT_TRUE(client.resize(40, 24));
+  // Wake the attached client's poll loop after SIGWINCH; this byte is intentionally ignored by
+  // copy mode, while the queued protocol resize is sent first.
+  ASSERT_TRUE(client.send("z", deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("copy_resize", "40x24", deadline_after(5s), &client));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_RESIZE_TRACKED__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(create_gate(gate));
+  const auto acknowledgement_deadline = deadline_after(5s);
+  while (::access(acknowledged.c_str(), F_OK) != 0 &&
+         std::chrono::steady_clock::now() < acknowledgement_deadline) {
+    client.drain(std::min(acknowledgement_deadline, deadline_after(20ms)));
+  }
+  ASSERT_EQ(::access(acknowledged.c_str(), F_OK), 0);
+  std::this_thread::sleep_for(100ms);
+  client.drain(deadline_after(100ms));
+  EXPECT_NE(client.screen().find("__COPY_RESIZE_TRACKED__"), std::string::npos)
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "copy_mode"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("printf '__COPY_NEEDLE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_NEEDLE__", deadline_after(5s)));
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(client.wait_for_screen("COPY nav [Space]", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7;", deadline_after(5s))) << client.raw_tail();
+
+  // Vi keys and physical arrow sequences move only the daemon-owned copy cursor, including an
+  // escape sequence fragmented across separate client input messages.
+  ASSERT_TRUE(client.send("h\x1B", deadline_after(2s)));
+  std::this_thread::sleep_for(10ms);
+  ASSERT_TRUE(client.send("[D", deadline_after(2s)));
+  ASSERT_TRUE(client.send(" ", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("COPY sel [Enter]", deadline_after(5s)));
+  ASSERT_TRUE(client.send("hh\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B]52;c;", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  // Unsupported modifier sequences are consumed as one copy-mode key and never leak a suffix to
+  // the child or leave copy mode.
+  ASSERT_TRUE(client.send("\x1B[1;2A", deadline_after(2s)));
+  ASSERT_TRUE(client.send("/missing-copy-search", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("COPY /missing", deadline_after(5s)));
+  ASSERT_TRUE(client.send("\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("COPY no match", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
+
+  ASSERT_TRUE(client.send("printf '__COPY_INPUT_ISOLATED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_INPUT_ISOLATED__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "zoomclose"), runtime_.environment()));

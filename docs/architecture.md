@@ -304,9 +304,11 @@ Clients decode physical input but the daemon owns interpretation against mux sta
 - a configurable modifier overrides application mouse capture for Lemma interaction.
 
 Viewport, copy cursor, search, selection, and follow-output state are per attachment but daemon-owned.
-Copy mode never pauses PTY parsing. The terminal adapter exposes bounded history and cell traversal to
-core copy operations; the renderer presents that view without mutating canonical terminal content.
-Clipboard and OSC 52 remain explicit policy boundaries.
+Copy mode never pauses PTY parsing: core holds the attachment viewport at its chosen offset while
+Ghostty continues mutating canonical state. The terminal adapter exposes bounded history and cell
+traversal; the renderer presents a nonblinking tracked cursor and inverse-video range without
+mutating terminal content. `Enter`/`y` explicitly authorizes one bounded OSC 52 standard-clipboard
+write. Application-originated clipboard effects remain a separate default-deny policy boundary.
 
 ## Automation and extension boundary
 

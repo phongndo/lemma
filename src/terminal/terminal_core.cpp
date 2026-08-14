@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -121,7 +122,9 @@ namespace {
   if (!valid_size(options.size)) {
     return false;
   }
-  if (options.scrollback_bytes_max > limits::terminal_scrollback_bytes_hard_max) {
+  if (options.scrollback_bytes_max > limits::terminal_scrollback_bytes_hard_max ||
+      (options.scrollback_lines_max.has_value() &&
+       *options.scrollback_lines_max > limits::terminal_scrollback_lines_hard_max)) {
     return false;
   }
   return options.allocation_bytes_max > 0 &&
@@ -189,9 +192,15 @@ template <typename Function>
 
 [[nodiscard]] auto configure_terminal(const GhosttyTerminal terminal,
                                       const std::size_t scrollback_bytes_max,
+                                      const std::optional<std::size_t> scrollback_lines_max,
                                       const TerminalTheme& theme) noexcept -> GhosttyResult {
   auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
                                      &scrollback_bytes_max);
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
+                             scrollback_lines_max.has_value() ? &*scrollback_lines_max : nullptr);
+  }
   if (result == GHOSTTY_SUCCESS) {
     result = apply_theme(terminal, theme);
   }
@@ -387,6 +396,10 @@ Terminal::Impl::Impl(const TerminalOptions& terminal_options) noexcept
 }
 
 Terminal::Impl::~Impl() {
+  for (auto* const event : selection_events) {
+    ghostty_selection_gesture_event_free(event);
+  }
+  ghostty_selection_gesture_free(selection_gesture, terminal);
   ghostty_key_event_free(key_event);
   ghostty_key_encoder_free(key_encoder);
   ghostty_render_state_row_cells_free(row_cells);
@@ -428,7 +441,8 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
-  result = configure_terminal(impl->terminal, options.scrollback_bytes_max, impl->session_theme);
+  result = configure_terminal(impl->terminal, options.scrollback_bytes_max,
+                              options.scrollback_lines_max, impl->session_theme);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }

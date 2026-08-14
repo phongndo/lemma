@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -67,6 +68,10 @@ constexpr std::size_t panes_per_tab_max = panes_per_session_max;
 constexpr std::size_t layout_nodes_per_tab_max = (panes_per_tab_max * 2U) - 1U;
 constexpr std::size_t process_name_bytes_max = 64;
 constexpr auto process_name_refresh_interval = std::chrono::milliseconds{100};
+constexpr auto copy_escape_flush_delay = std::chrono::milliseconds{50};
+constexpr auto copy_search_slice_delay = std::chrono::milliseconds{2};
+constexpr auto scrollback_compression_slice_delay = std::chrono::milliseconds{2};
+constexpr std::size_t copy_escape_bytes_max = 16;
 constexpr std::size_t command_trace_entries_max = 256;
 static_assert(panes_per_session_max > 0);
 static_assert(tabs_per_session_max > 0);
@@ -314,12 +319,22 @@ struct Pane final {
   PanePtyWriteQueue pending_writes;
   InteractiveDamageLatch interactive_damage;
   PresentationGate presentation_gate;
+  std::uint64_t compression_activity{0};
+  std::uint64_t mutation_generation{1};
+  std::chrono::steady_clock::time_point compression_deadline;
+  bool compression_scheduled{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
   diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
 #endif
   bool active{true};
 };
+
+void record_terminal_mutation(Pane& pane) noexcept {
+  pane.mutation_generation = pane.mutation_generation == std::numeric_limits<std::uint64_t>::max()
+                                 ? std::uint64_t{1}
+                                 : pane.mutation_generation + 1U;
+}
 
 enum class SplitAxis : std::uint8_t {
   left_right,
@@ -380,6 +395,73 @@ enum class ClientCloseState : std::uint8_t {
   disconnect_queued,
 };
 
+enum class CopyModeFeedback : std::uint8_t {
+  none,
+  no_match,
+  empty_selection,
+  clipboard_busy,
+  too_large,
+  failed,
+};
+
+struct CopyModeState final {
+  TabId tab;
+  PaneId pane;
+  std::array<char, limits::search_query_bytes_max> query{};
+  std::array<char, 64> status{};
+  std::array<std::byte, copy_escape_bytes_max> pending_escape{};
+  std::size_t query_size{0};
+  std::size_t status_size{0};
+  std::size_t pending_escape_size{0};
+  std::optional<vt::SearchCursor> search_cursor;
+  std::optional<vt::SearchMatch> last_search_match;
+  std::chrono::steady_clock::time_point pending_escape_deadline;
+  std::chrono::steady_clock::time_point search_deadline;
+  vt::SearchDirection search_direction{vt::SearchDirection::forward};
+  vt::SearchDirection active_search_direction{vt::SearchDirection::forward};
+  std::uint64_t search_generation{0};
+  std::uint64_t viewport_offset{0};
+  CopyModeFeedback feedback{CopyModeFeedback::none};
+  bool active{false};
+  bool extending{false};
+  bool search_entry{false};
+  bool search_pending{false};
+
+  [[nodiscard]] auto query_view() const noexcept -> std::string_view {
+    return {query.data(), query_size};
+  }
+
+  [[nodiscard]] auto status_view() const noexcept -> std::string_view {
+    return {status.data(), status_size};
+  }
+};
+
+// Runtime-sized bounded clipboard staging cannot use std::array.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+using ClipboardStorage = std::unique_ptr<std::byte[]>;
+
+[[nodiscard]] auto allocate_clipboard_storage(const std::size_t bytes) noexcept
+    -> ClipboardStorage {
+  try {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    return std::make_unique_for_overwrite<std::byte[]>(bytes);
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+}
+
+struct PendingClipboardWrite final {
+  ClipboardStorage bytes;
+  std::size_t size{0};
+  bool redraw_after_write{false};
+
+  void reset() noexcept {
+    bytes.reset();
+    size = 0;
+    redraw_after_write = false;
+  }
+};
+
 struct Session final {
   Session(const std::string_view session_name, const std::string_view initial_working_directory,
           const std::span<const std::byte> initial_environment,
@@ -414,7 +496,23 @@ struct Session final {
     return std::span(environment).first(environment_size);
   }
 
+  // Attachment teardown exhaustively restores every pane-owned view before releasing protocol
+  // state. NOLINTNEXTLINE(readability-function-cognitive-complexity)
   void detach_client() noexcept {
+    for (auto& tab_slot : tabs) {
+      if (tab_slot.tab == nullptr) {
+        continue;
+      }
+      for (auto& pane_slot : tab_slot.tab->panes) {
+        if (pane_slot.pane != nullptr) {
+          pane_slot.pane->terminal.reset_selection_gesture();
+          pane_slot.pane->terminal.clear_selection();
+          pane_slot.pane->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+        }
+      }
+    }
+    copy_mode = {};
+    clipboard_write.reset();
     close_descriptor(client);
     client_id = {};
     decoder.reset();
@@ -425,6 +523,7 @@ struct Session final {
     client_close_state = ClientCloseState::none;
     frame_scheduler.cancel();
     input_backpressured = false;
+    retained_input_offset.reset();
     for (auto& tab_slot : tabs) {
       if (tab_slot.tab != nullptr) {
         for (auto& pane_slot : tab_slot.tab->panes) {
@@ -468,6 +567,9 @@ struct Session final {
   bool status_valid{false};
   bool input_backpressured{false};
   ClientCloseState client_close_state{ClientCloseState::none};
+  std::optional<std::size_t> retained_input_offset;
+  CopyModeState copy_mode;
+  PendingClipboardWrite clipboard_write;
   std::uint64_t status_signature{0};
   std::array<CommandTraceEntry, command_trace_entries_max> command_trace{};
   std::uint64_t command_sequence{0};
@@ -508,6 +610,11 @@ struct Session final {
     return nullptr;
   }
   pane->rectangle = {.columns = columns, .rows = rows};
+  const auto compression_activity = pane->terminal.compression_activity();
+  if (!compression_activity.has_value()) {
+    return nullptr;
+  }
+  pane->compression_activity = *compression_activity;
   return pane;
 }
 
@@ -707,6 +814,10 @@ refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_po
   return tab.focused_pane;
 }
 
+void note_compression_activity(Pane& pane) noexcept;
+[[nodiscard]] auto update_copy_viewport_offset(Session& session, Pane& pane) noexcept -> bool;
+void leave_copy_mode(Session& session) noexcept;
+
 [[nodiscard]] auto resize_pane(Pane& pane, const render::PaneRectangle rectangle) noexcept -> bool {
   if (pane.rectangle == rectangle) {
     return true;
@@ -721,6 +832,8 @@ refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_po
   static_cast<void>(
       pane.presentation_gate.observe(*synchronized, true, std::chrono::steady_clock::now()));
   pane.rectangle = rectangle;
+  record_terminal_mutation(pane);
+  note_compression_activity(pane);
   return true;
 }
 
@@ -866,6 +979,25 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_tab_max>;
   // layout when any later pane rejects its target.
   const bool resolved = resolve_layout(tab);
   session.active = session.active && resolved;
+  if (resolved && session.copy_mode.active && session.copy_mode.tab == tab.id) {
+    auto* const pane = find_pane(tab, session.copy_mode.pane);
+    if (pane == nullptr) {
+      leave_copy_mode(session);
+    } else {
+      const auto refreshed = pane->terminal.refresh_selection();
+      // Reflow updates Ghostty's tracked endpoints, but the renderer requires a freshly installed
+      // selection snapshot. Re-anchor the viewport to that endpoint before saving its new offset.
+      // If the refresh cannot be established, leave copy mode rather than allowing the subsequent
+      // frame composition to tear down an otherwise healthy attachment.
+      const auto scrolled =
+          refreshed.has_value() && *refreshed
+              ? pane->terminal.scroll_selection_into_view()
+              : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
+      if (!scrolled.has_value() || !update_copy_viewport_offset(session, *pane)) {
+        leave_copy_mode(session);
+      }
+    }
+  }
   return resolved;
 }
 
@@ -879,6 +1011,525 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_tab_max>;
 void schedule_frame(Session& session, const FrameUrgency urgency, const bool force_full) noexcept {
   session.frame_scheduler.request(urgency, force_full, std::chrono::steady_clock::now(),
                                   frame_sink_state(session));
+}
+
+[[nodiscard]] auto copy_mode_pane(Session& session) noexcept -> Pane* {
+  if (!session.copy_mode.active) {
+    return nullptr;
+  }
+  auto* const tab = find_tab(session, session.copy_mode.tab);
+  return tab == nullptr ? nullptr : find_pane(*tab, session.copy_mode.pane);
+}
+
+void note_compression_activity(Pane& pane) noexcept {
+  const auto activity = pane.terminal.compression_activity();
+  if (!activity.has_value()) {
+    pane.active = false;
+    return;
+  }
+  if (*activity == pane.compression_activity && pane.compression_scheduled) {
+    return;
+  }
+  if (*activity != pane.compression_activity) {
+    pane.compression_activity = *activity;
+  }
+  pane.compression_scheduled = true;
+  pane.compression_deadline =
+      std::chrono::steady_clock::now() + limits::scrollback_compression_idle_delay;
+}
+
+void refresh_copy_mode_status(CopyModeState& state) noexcept {
+  state.status_size = 0;
+  const auto append = [&state](const std::string_view text) noexcept {
+    const auto count = std::min(text.size(), state.status.size() - state.status_size);
+    std::ranges::copy(std::span(text).first(count),
+                      std::span(state.status).subspan(state.status_size, count).begin());
+    state.status_size += count;
+  };
+  switch (state.feedback) {
+  case CopyModeFeedback::no_match:
+    append("COPY no match");
+    return;
+  case CopyModeFeedback::empty_selection:
+    append("COPY empty");
+    return;
+  case CopyModeFeedback::clipboard_busy:
+    append("COPY clipboard busy");
+    return;
+  case CopyModeFeedback::too_large:
+    append("COPY too large");
+    return;
+  case CopyModeFeedback::failed:
+    append("COPY failed");
+    return;
+  case CopyModeFeedback::none:
+    break;
+  }
+  if (state.search_entry) {
+    append(state.search_direction == vt::SearchDirection::forward ? "COPY /" : "COPY ?");
+    append(state.query_view());
+  } else if (state.search_pending) {
+    append("COPY searching");
+  } else if (state.extending) {
+    append("COPY sel [Enter]");
+  } else {
+    append("COPY nav [Space]");
+  }
+}
+
+[[nodiscard]] auto update_copy_viewport_offset(Session& session, Pane& pane) noexcept -> bool {
+  const auto viewport = pane.terminal.viewport_state();
+  if (!viewport.has_value()) {
+    return false;
+  }
+  session.copy_mode.viewport_offset = viewport->offset;
+  return true;
+}
+
+void leave_copy_mode(Session& session) noexcept {
+  auto* const pane = copy_mode_pane(session);
+  if (pane != nullptr) {
+    pane->terminal.reset_selection_gesture();
+    pane->terminal.clear_selection();
+    pane->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+    note_compression_activity(*pane);
+  }
+  const bool changed = session.copy_mode.active;
+  session.copy_mode = {};
+  if (changed) {
+    session.status_valid = false;
+    schedule_frame(session, FrameUrgency::state_change, true);
+  }
+}
+
+void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcept {
+  if (copy_mode_pane(session) != &pane) {
+    return;
+  }
+  pane.terminal.scroll_viewport(vt::ViewportScroll::row,
+                                static_cast<std::int64_t>(session.copy_mode.viewport_offset));
+  if (!update_copy_viewport_offset(session, pane)) {
+    leave_copy_mode(session);
+  }
+}
+
+[[nodiscard]] auto enter_copy_mode(Session& session, Tab& tab, Pane& pane) noexcept -> bool {
+  leave_copy_mode(session);
+  const auto update = pane.terminal.update_render_state();
+  if (!update.has_value()) {
+    return false;
+  }
+  const vt::TerminalPoint cursor{
+      .space = vt::PointSpace::viewport,
+      .column = update->cursor_in_viewport ? update->cursor_column : std::uint16_t{0},
+      .row = update->cursor_in_viewport ? update->cursor_row
+                                        : static_cast<std::uint32_t>(pane.rectangle.rows - 1U),
+  };
+  const auto selected = pane.terminal.select(vt::SelectionUnit::cell, cursor);
+  if (!selected.has_value() || !*selected) {
+    return false;
+  }
+  session.copy_mode = {};
+  session.copy_mode.tab = tab.id;
+  session.copy_mode.pane = pane.id;
+  session.copy_mode.active = true;
+  if (!update_copy_viewport_offset(session, pane)) {
+    pane.terminal.clear_selection();
+    session.copy_mode = {};
+    return false;
+  }
+  refresh_copy_mode_status(session.copy_mode);
+  session.status_valid = false;
+  schedule_frame(session, FrameUrgency::state_change, true);
+  return true;
+}
+
+[[nodiscard]] auto adjust_copy_selection(Session& session, Pane& pane,
+                                         const vt::SelectionAdjustment adjustment) noexcept
+    -> bool {
+  const auto adjusted = pane.terminal.selection_adjust(adjustment, session.copy_mode.extending);
+  if (!adjusted.has_value()) {
+    leave_copy_mode(session);
+    return false;
+  }
+  if (*adjusted) {
+    const auto scrolled = pane.terminal.scroll_selection_into_view();
+    if (!scrolled.has_value() || !update_copy_viewport_offset(session, pane)) {
+      leave_copy_mode(session);
+      return false;
+    }
+    session.copy_mode.feedback = CopyModeFeedback::none;
+    refresh_copy_mode_status(session.copy_mode);
+    session.status_valid = false;
+    note_compression_activity(pane);
+    schedule_frame(session, FrameUrgency::state_change, false);
+  }
+  return true;
+}
+
+[[nodiscard]] auto advance_copy_search_cursor(Pane& pane, vt::TerminalPoint& point,
+                                              vt::SearchDirection direction) noexcept -> bool;
+
+void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection direction,
+                       const bool continue_from_match = false) noexcept {
+  if (session.copy_mode.query_size == 0) {
+    refresh_copy_mode_status(session.copy_mode);
+    session.status_valid = false;
+    schedule_frame(session, FrameUrgency::state_change, false);
+    return;
+  }
+  session.copy_mode.search_cursor.reset();
+  const bool stale_match = session.copy_mode.search_generation != pane.mutation_generation;
+  if (!continue_from_match || stale_match) {
+    session.copy_mode.last_search_match.reset();
+  } else if (session.copy_mode.last_search_match.has_value()) {
+    auto point = session.copy_mode.last_search_match->start;
+    if (!advance_copy_search_cursor(pane, point, direction)) {
+      session.copy_mode.search_pending = false;
+      session.copy_mode.feedback = CopyModeFeedback::no_match;
+      refresh_copy_mode_status(session.copy_mode);
+      session.status_valid = false;
+      schedule_frame(session, FrameUrgency::state_change, false);
+      return;
+    }
+    session.copy_mode.search_cursor = vt::SearchCursor{.candidate = point};
+  }
+  session.copy_mode.active_search_direction = direction;
+  session.copy_mode.search_pending = true;
+  session.copy_mode.search_deadline = std::chrono::steady_clock::now();
+  session.copy_mode.feedback = CopyModeFeedback::none;
+  session.copy_mode.search_generation = pane.mutation_generation;
+  refresh_copy_mode_status(session.copy_mode);
+  session.status_valid = false;
+  schedule_frame(session, FrameUrgency::state_change, false);
+}
+
+[[nodiscard]] constexpr auto clipboard_base64_bytes(const std::size_t bytes) noexcept
+    -> std::size_t {
+  return 4U * ((bytes + 2U) / 3U);
+}
+
+[[nodiscard]] auto copy_selection_to_outer_clipboard(Session& session, Pane& pane) noexcept
+    -> bool {
+  constexpr std::size_t osc_overhead = 9;
+  if (session.clipboard_write.bytes != nullptr) {
+    session.copy_mode.feedback = CopyModeFeedback::clipboard_busy;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  if (session.frame.capacity() <= osc_overhead) {
+    session.copy_mode.feedback = CopyModeFeedback::failed;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  const auto payload_groups = (session.frame.capacity() - osc_overhead) / 4U;
+  const auto delivery_capacity = std::min(payload_groups * 3U, limits::selection_format_bytes_max);
+  auto storage = allocate_clipboard_storage(delivery_capacity);
+  if (storage == nullptr) {
+    session.copy_mode.feedback = CopyModeFeedback::failed;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  const auto formatted = pane.terminal.format_selection(
+      vt::ScreenFormat::plain, std::span(storage.get(), delivery_capacity));
+  if (!formatted.has_value()) {
+    session.copy_mode.feedback = formatted.error() == vt::Error::out_of_space
+                                     ? CopyModeFeedback::too_large
+                                     : CopyModeFeedback::failed;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  if (*formatted == 0) {
+    session.copy_mode.feedback = CopyModeFeedback::empty_selection;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  if (clipboard_base64_bytes(*formatted) + osc_overhead > session.frame.capacity()) {
+    session.copy_mode.feedback = CopyModeFeedback::too_large;
+    refresh_copy_mode_status(session.copy_mode);
+    return false;
+  }
+  session.clipboard_write.bytes = std::move(storage);
+  session.clipboard_write.size = *formatted;
+  leave_copy_mode(session);
+  return true;
+}
+
+struct CopyInputKey final {
+  std::uint8_t value{0};
+};
+
+enum class CopyEscapeStatus : std::uint8_t {
+  pending,
+  complete,
+  unsupported,
+  invalid,
+};
+
+struct CopyEscapeDecode final {
+  CopyEscapeStatus status{CopyEscapeStatus::invalid};
+  CopyInputKey key;
+};
+
+// Escape-sequence grammar deliberately keeps validation and mapping in one bounded pass.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto decode_copy_escape(const std::span<const std::byte> sequence) noexcept
+    -> CopyEscapeDecode {
+  LEMMA_ASSERT(!sequence.empty() && sequence.front() == std::byte{0x1B});
+  if (sequence.size() == 1U) {
+    return {.status = CopyEscapeStatus::pending, .key = {}};
+  }
+  const auto second = sequence.subspan(1, 1).front();
+  if (second != std::byte{'['} && second != std::byte{'O'}) {
+    return {.status = CopyEscapeStatus::invalid, .key = {}};
+  }
+  if (sequence.size() == 2U) {
+    return {.status = CopyEscapeStatus::pending, .key = {}};
+  }
+
+  const auto final_byte = std::to_integer<std::uint8_t>(sequence.back());
+  if (final_byte < 0x40U || final_byte > 0x7EU) {
+    const bool continuation = (final_byte >= 0x20U && final_byte <= 0x3FU);
+    return {.status = continuation && sequence.size() < copy_escape_bytes_max
+                          ? CopyEscapeStatus::pending
+                          : CopyEscapeStatus::unsupported,
+            .key = {}};
+  }
+
+  if (sequence.size() == 3U) {
+    switch (final_byte) {
+    case static_cast<std::uint8_t>('A'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('k')}};
+    case static_cast<std::uint8_t>('B'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('j')}};
+    case static_cast<std::uint8_t>('C'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('l')}};
+    case static_cast<std::uint8_t>('D'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('h')}};
+    case static_cast<std::uint8_t>('H'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('0')}};
+    case static_cast<std::uint8_t>('F'):
+      return {.status = CopyEscapeStatus::complete,
+              .key = {.value = static_cast<std::uint8_t>('$')}};
+    default:
+      return {.status = CopyEscapeStatus::unsupported, .key = {}};
+    }
+  }
+
+  if (second != std::byte{'['} || sequence.size() != 4U || final_byte != 0x7EU) {
+    return {.status = CopyEscapeStatus::unsupported, .key = {}};
+  }
+  const auto parameter = std::to_integer<std::uint8_t>(sequence.subspan(2, 1).front());
+  switch (parameter) {
+  case static_cast<std::uint8_t>('1'):
+  case static_cast<std::uint8_t>('7'):
+    return {.status = CopyEscapeStatus::complete, .key = {.value = static_cast<std::uint8_t>('0')}};
+  case static_cast<std::uint8_t>('4'):
+  case static_cast<std::uint8_t>('8'):
+    return {.status = CopyEscapeStatus::complete, .key = {.value = static_cast<std::uint8_t>('$')}};
+  case static_cast<std::uint8_t>('5'):
+    return {.status = CopyEscapeStatus::complete, .key = {.value = 0x15}};
+  case static_cast<std::uint8_t>('6'):
+    return {.status = CopyEscapeStatus::complete, .key = {.value = 0x04}};
+  default:
+    return {.status = CopyEscapeStatus::unsupported, .key = {}};
+  }
+}
+
+// Copy-mode bytes are attachment UI input and never reach the child PTY. The current v1 client is
+// legacy-byte based, so the default table intentionally uses single-byte vi bindings.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto process_copy_mode_input(Session& session,
+                                           const std::span<const std::byte> input) noexcept
+    -> std::size_t {
+  auto* pane = copy_mode_pane(session);
+  if (pane == nullptr) {
+    leave_copy_mode(session);
+    return input.size();
+  }
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    const auto byte = input.subspan(index, 1).front();
+    const auto raw_value = std::to_integer<std::uint8_t>(byte);
+    if (session.copy_mode.search_entry) {
+      if (byte == std::byte{0x1B}) {
+        session.copy_mode.search_entry = false;
+        session.copy_mode.feedback = CopyModeFeedback::none;
+        refresh_copy_mode_status(session.copy_mode);
+        session.status_valid = false;
+        schedule_frame(session, FrameUrgency::state_change, false);
+      } else if (byte == std::byte{0x7F} || byte == std::byte{0x08}) {
+        if (session.copy_mode.query_size > 0) {
+          --session.copy_mode.query_size;
+          refresh_copy_mode_status(session.copy_mode);
+          session.status_valid = false;
+          schedule_frame(session, FrameUrgency::state_change, false);
+        }
+      } else if (byte == std::byte{'\r'} || byte == std::byte{'\n'}) {
+        session.copy_mode.search_entry = false;
+        begin_copy_search(session, *pane, session.copy_mode.search_direction);
+      } else if (raw_value >= 0x20 &&
+                 session.copy_mode.query_size < session.copy_mode.query.size()) {
+        std::span(session.copy_mode.query).subspan(session.copy_mode.query_size, 1).front() =
+            static_cast<char>(raw_value);
+        ++session.copy_mode.query_size;
+        refresh_copy_mode_status(session.copy_mode);
+        session.status_valid = false;
+        schedule_frame(session, FrameUrgency::state_change, false);
+      }
+      continue;
+    }
+
+    auto value = raw_value;
+    if (session.copy_mode.pending_escape_size > 0) {
+      LEMMA_ASSERT(session.copy_mode.pending_escape_size < session.copy_mode.pending_escape.size());
+      std::span(session.copy_mode.pending_escape)
+          .subspan(session.copy_mode.pending_escape_size, 1)
+          .front() = byte;
+      ++session.copy_mode.pending_escape_size;
+      const auto decoded = decode_copy_escape(
+          std::span(session.copy_mode.pending_escape).first(session.copy_mode.pending_escape_size));
+      if (decoded.status == CopyEscapeStatus::pending) {
+        session.copy_mode.pending_escape_deadline =
+            std::chrono::steady_clock::now() + copy_escape_flush_delay;
+        continue;
+      }
+      session.copy_mode.pending_escape_size = 0;
+      if (decoded.status == CopyEscapeStatus::complete) {
+        value = decoded.key.value;
+      } else if (decoded.status == CopyEscapeStatus::unsupported) {
+        // Once a CSI/SS3 introducer has been consumed, its bounded sequence remains attachment UI
+        // input even when this copy-mode key table does not support it.
+        continue;
+      } else {
+        // A lone Escape is a complete copy-mode command when the next byte is not a
+        // control-sequence introducer. Leave that byte unconsumed so ordinary routing can handle it
+        // after copy mode.
+        leave_copy_mode(session);
+        return index;
+      }
+    } else if (byte == std::byte{0x1B}) {
+      session.copy_mode.pending_escape.front() = byte;
+      session.copy_mode.pending_escape_size = 1;
+      session.copy_mode.pending_escape_deadline =
+          std::chrono::steady_clock::now() + copy_escape_flush_delay;
+      continue;
+    }
+    switch (value) {
+    case 0x1B:
+    case static_cast<std::uint8_t>('q'):
+      leave_copy_mode(session);
+      return index + 1U;
+    case static_cast<std::uint8_t>('h'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::left));
+      break;
+    case static_cast<std::uint8_t>('j'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::down));
+      break;
+    case static_cast<std::uint8_t>('k'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::up));
+      break;
+    case static_cast<std::uint8_t>('l'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::right));
+      break;
+    case static_cast<std::uint8_t>('b'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::word_left));
+      break;
+    case static_cast<std::uint8_t>('w'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::word_right));
+      break;
+    case static_cast<std::uint8_t>('0'):
+      static_cast<void>(
+          adjust_copy_selection(session, *pane, vt::SelectionAdjustment::beginning_of_line));
+      break;
+    case static_cast<std::uint8_t>('$'):
+      static_cast<void>(
+          adjust_copy_selection(session, *pane, vt::SelectionAdjustment::end_of_line));
+      break;
+    case static_cast<std::uint8_t>('g'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::home));
+      break;
+    case static_cast<std::uint8_t>('G'):
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::end));
+      break;
+    case 0x15: // Ctrl-U
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::page_up));
+      break;
+    case 0x04: // Ctrl-D
+      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::page_down));
+      break;
+    case static_cast<std::uint8_t>(' '):
+    case static_cast<std::uint8_t>('v'): {
+      const auto collapsed = pane->terminal.collapse_selection_to_endpoint();
+      if (!collapsed.has_value() || !*collapsed) {
+        leave_copy_mode(session);
+        break;
+      }
+      session.copy_mode.extending = true;
+      session.copy_mode.feedback = CopyModeFeedback::none;
+      refresh_copy_mode_status(session.copy_mode);
+      session.status_valid = false;
+      schedule_frame(session, FrameUrgency::state_change, false);
+      break;
+    }
+    case static_cast<std::uint8_t>('y'):
+    case static_cast<std::uint8_t>('\r'):
+    case static_cast<std::uint8_t>('\n'):
+      if (copy_selection_to_outer_clipboard(session, *pane)) {
+        return index + 1U;
+      }
+      session.status_valid = false;
+      schedule_frame(session, FrameUrgency::state_change, false);
+      break;
+    case static_cast<std::uint8_t>('/'):
+    case static_cast<std::uint8_t>('?'):
+      session.copy_mode.query_size = 0;
+      session.copy_mode.search_entry = true;
+      session.copy_mode.search_pending = false;
+      session.copy_mode.search_cursor.reset();
+      session.copy_mode.last_search_match.reset();
+      session.copy_mode.feedback = CopyModeFeedback::none;
+      session.copy_mode.search_direction =
+          byte == std::byte{'/'} ? vt::SearchDirection::forward : vt::SearchDirection::backward;
+      refresh_copy_mode_status(session.copy_mode);
+      session.status_valid = false;
+      schedule_frame(session, FrameUrgency::state_change, false);
+      break;
+    case static_cast<std::uint8_t>('n'):
+      begin_copy_search(session, *pane, session.copy_mode.search_direction, true);
+      break;
+    case static_cast<std::uint8_t>('N'):
+      begin_copy_search(session, *pane,
+                        session.copy_mode.search_direction == vt::SearchDirection::forward
+                            ? vt::SearchDirection::backward
+                            : vt::SearchDirection::forward,
+                        true);
+      break;
+    default:
+      break;
+    }
+    if (!session.copy_mode.active) {
+      return index + 1U;
+    }
+    pane = copy_mode_pane(session);
+    if (pane == nullptr) {
+      leave_copy_mode(session);
+      return input.size();
+    }
+  }
+  return input.size();
+}
+
+void service_copy_input_timeout(Session& session,
+                                const std::chrono::steady_clock::time_point now) noexcept {
+  if (session.copy_mode.active && session.copy_mode.pending_escape_size > 0 &&
+      now >= session.copy_mode.pending_escape_deadline) {
+    leave_copy_mode(session);
+  }
 }
 
 [[nodiscard]] auto fit_tab_to_viewport(Session& session, Tab& tab) noexcept -> bool {
@@ -933,6 +1584,9 @@ void remove_tab(Session& session, const TabId id) noexcept {
   auto* const tab = find_tab(session, id);
   if (tab == nullptr) {
     return;
+  }
+  if (session.copy_mode.active && session.copy_mode.tab == id) {
+    leave_copy_mode(session);
   }
   const auto removed_slot = static_cast<std::size_t>(id.slot());
   std::span(session.tabs).subspan(removed_slot, 1).front().tab.reset();
@@ -1082,6 +1736,10 @@ void create_tab(Session& session) noexcept {
   auto* const pane = find_pane(tab, pane_id);
   if (pane == nullptr) {
     return false;
+  }
+  if (session.copy_mode.active && session.copy_mode.tab == tab.id &&
+      session.copy_mode.pane == pane_id) {
+    leave_copy_mode(session);
   }
   const auto pane_index = static_cast<std::size_t>(pane_id.slot());
   const bool was_focused = pane_id == tab.focused_pane;
@@ -1276,6 +1934,9 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
   case protocol::PaneCommand::zoom:
     command.kind = CommandKind::toggle_zoom;
     break;
+  case protocol::PaneCommand::enter_copy_mode:
+    command.kind = CommandKind::enter_copy_mode;
+    break;
   case protocol::PaneCommand::create_tab:
     command.kind = CommandKind::create_tab;
     break;
@@ -1351,6 +2012,9 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     return session.active ? command_status(tab->focused_pane != previous)
                           : CommandResult{.status = CommandStatus::failed};
   };
+  if (session.copy_mode.active && command.kind != CommandKind::enter_copy_mode) {
+    leave_copy_mode(session);
+  }
   switch (command.kind) {
   case CommandKind::none:
   case CommandKind::detach_client:
@@ -1418,6 +2082,14 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     }
     schedule_frame(session, FrameUrgency::state_change, true);
     return {.status = CommandStatus::applied};
+  case CommandKind::enter_copy_mode:
+    if (session.copy_mode.active) {
+      leave_copy_mode(session);
+      return {.status = CommandStatus::applied};
+    }
+    return enter_copy_mode(session, *tab, *targeted_pane)
+               ? CommandResult{.status = CommandStatus::applied}
+               : CommandResult{.status = CommandStatus::unavailable};
   case CommandKind::create_tab: {
     if (tab_count(session) >= session.tabs.size() || pane_count(session) >= panes_per_session_max) {
       return {.status = CommandStatus::capacity};
@@ -1471,6 +2143,7 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
   case CommandKind::focus_previous:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
+  case CommandKind::enter_copy_mode:
     return true;
   case CommandKind::none:
   case CommandKind::detach_client:
@@ -1547,10 +2220,23 @@ collect_surfaces(Session& session,
     if (pane == nullptr || !pane->active || (tab->zoomed && pane->id != tab->focused_pane)) {
       continue;
     }
+    const bool copy_pane = session.copy_mode.active && session.copy_mode.tab == tab->id &&
+                           session.copy_mode.pane == pane->id;
+    const auto copy_cursor = copy_pane ? pane->terminal.selection_endpoint(vt::PointSpace::viewport)
+                                       : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
+                                             std::optional<vt::TerminalPoint>{}};
+    const auto cursor = copy_cursor.value_or(std::optional<vt::TerminalPoint>{});
+    const auto cursor_point = cursor.value_or(vt::TerminalPoint{});
+    const bool cursor_override = cursor.has_value() && cursor_point.row < pane->rectangle.rows &&
+                                 cursor_point.column < pane->rectangle.columns;
     std::span(storage).subspan(count, 1).front() = {
         .terminal = &pane->terminal,
         .rectangle = pane->rectangle,
+        .cursor_override_column = cursor_override ? cursor_point.column : std::uint16_t{0},
+        .cursor_override_row =
+            cursor_override ? static_cast<std::uint16_t>(cursor_point.row) : std::uint16_t{0},
         .focused = pane->id == tab->focused_pane,
+        .cursor_override = cursor_override,
         .presentation_suppressed = pane->presentation_gate.presentation_suppressed(),
         .border_right =
             static_cast<std::uint32_t>(pane->rectangle.column) + pane->rectangle.columns <
@@ -1623,6 +2309,25 @@ enum class ParseResult : std::uint8_t {
       }
       break;
     case protocol::ClientMessageKind::input: {
+      auto ordinary_input = message.input;
+      if (session.retained_input_offset.has_value()) {
+        if (*session.retained_input_offset > message.input.size()) {
+          return ParseResult::error;
+        }
+        ordinary_input = message.input.subspan(*session.retained_input_offset);
+      } else if (session.copy_mode.active) {
+        const auto consumed = process_copy_mode_input(session, message.input);
+        if (consumed > message.input.size()) {
+          return ParseResult::error;
+        }
+        ordinary_input = message.input.subspan(consumed);
+        if (ordinary_input.empty()) {
+          break;
+        }
+        // Copy-mode mutation has already consumed this prefix. Retain that fact while the decoder
+        // holds the message so a full PTY queue cannot replay UI-only bytes on retry.
+        session.retained_input_offset = consumed;
+      }
       auto* const tab = active_tab(session);
       if (tab == nullptr) {
         return ParseResult::error;
@@ -1633,23 +2338,24 @@ enum class ParseResult : std::uint8_t {
       }
       std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
-      trace_correlation = session.decoded_input_trace_matcher.observe(message.input);
+      trace_correlation = session.decoded_input_trace_matcher.observe(ordinary_input);
 #endif
       diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
-                                       static_cast<std::uint32_t>(pane->pty), message.input.size(),
+                                       static_cast<std::uint32_t>(pane->pty), ordinary_input.size(),
                                        trace_correlation);
       const auto queued_bytes_before = pane->pending_writes.size();
       const auto queued =
-          queue_normalized_input(pane->pending_writes, pane->terminal, message.input);
+          queue_normalized_input(pane->pending_writes, pane->terminal, ordinary_input);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      if (latency_sensitive_input(message.input.size())) {
+      if (latency_sensitive_input(ordinary_input.size())) {
         pane->interactive_damage.await_write(queued_bytes_before, pane->pending_writes.size());
       }
+      session.retained_input_offset.reset();
       break;
     }
     case protocol::ClientMessageKind::pane_command: {
@@ -1693,6 +2399,105 @@ enum class ParseResult : std::uint8_t {
   return parse_client_packets(session);
 }
 
+[[nodiscard]] auto advance_copy_search_cursor(Pane& pane, vt::TerminalPoint& point,
+                                              const vt::SearchDirection direction) noexcept
+    -> bool {
+  const auto viewport = pane.terminal.viewport_state();
+  if (!viewport.has_value() || viewport->total_rows == 0) {
+    return false;
+  }
+  const auto columns = pane.terminal.size().columns;
+  if (direction == vt::SearchDirection::forward) {
+    if (point.column + 1U < columns) {
+      ++point.column;
+      return true;
+    }
+    if (static_cast<std::uint64_t>(point.row) + 1U >= viewport->total_rows) {
+      return false;
+    }
+    point.column = 0;
+    ++point.row;
+    return true;
+  }
+  if (point.column > 0) {
+    --point.column;
+    return true;
+  }
+  if (point.row == 0) {
+    return false;
+  }
+  point.column = static_cast<std::uint16_t>(columns - 1U);
+  --point.row;
+  return true;
+}
+
+[[nodiscard]] auto service_copy_search(Session& session, std::size_t& work_budget) noexcept
+    -> bool {
+  if (work_budget == 0 || !session.copy_mode.active || !session.copy_mode.search_pending ||
+      std::chrono::steady_clock::now() < session.copy_mode.search_deadline) {
+    return false;
+  }
+  const auto work_limit = std::min(work_budget, limits::search_candidates_per_step);
+  work_budget -= work_limit;
+  auto* const pane = copy_mode_pane(session);
+  if (pane == nullptr) {
+    leave_copy_mode(session);
+    return true;
+  }
+  if (pane->mutation_generation != session.copy_mode.search_generation) {
+    session.copy_mode.search_generation = pane->mutation_generation;
+    session.copy_mode.search_cursor.reset();
+    session.copy_mode.last_search_match.reset();
+  }
+  const auto searched = pane->terminal.search_literal_step(
+      session.copy_mode.query_view(), session.copy_mode.active_search_direction,
+      session.copy_mode.search_cursor, work_limit);
+  if (!searched.has_value()) {
+    leave_copy_mode(session);
+    return true;
+  }
+  switch (searched->status) {
+  case vt::SearchStepStatus::found: {
+    const auto selected = pane->terminal.select_search_match(searched->match);
+    const auto scrolled =
+        selected.has_value()
+            ? pane->terminal.scroll_selection_into_view()
+            : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
+    if (!selected.has_value() || !scrolled.has_value()) {
+      leave_copy_mode(session);
+      return true;
+    }
+    session.copy_mode.search_pending = false;
+    session.copy_mode.feedback = CopyModeFeedback::none;
+    session.copy_mode.last_search_match = searched->match;
+    session.copy_mode.search_cursor.reset();
+    if (!update_copy_viewport_offset(session, *pane)) {
+      leave_copy_mode(session);
+      return true;
+    }
+    refresh_copy_mode_status(session.copy_mode);
+    note_compression_activity(*pane);
+    session.status_valid = false;
+    schedule_frame(session, FrameUrgency::state_change, false);
+    break;
+  }
+  case vt::SearchStepStatus::pending:
+    session.copy_mode.search_cursor = searched->next;
+    session.copy_mode.search_deadline = std::chrono::steady_clock::now() + copy_search_slice_delay;
+    break;
+  case vt::SearchStepStatus::not_found:
+    session.copy_mode.search_pending = false;
+    session.copy_mode.feedback = CopyModeFeedback::no_match;
+    note_compression_activity(*pane);
+    session.copy_mode.search_cursor.reset();
+    refresh_copy_mode_status(session.copy_mode);
+    session.status_valid = false;
+    schedule_frame(session, FrameUrgency::state_change, false);
+    break;
+  }
+  return true;
+}
+
 [[nodiscard]] auto tab_title(const Tab& tab) noexcept -> std::string_view {
   const auto* const focused = find_pane(tab, tab.focused_pane);
   LEMMA_ASSERT(focused != nullptr);
@@ -1701,6 +2506,14 @@ enum class ParseResult : std::uint8_t {
   }
   const auto title = focused->terminal.title();
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
+}
+
+[[nodiscard]] auto status_tab_title(const Session& session, const Tab& tab) noexcept
+    -> std::string_view {
+  if (session.copy_mode.active && session.copy_mode.tab == tab.id) {
+    return session.copy_mode.status_view();
+  }
+  return tab_title(tab);
 }
 
 [[nodiscard]] auto current_status_signature(const Session& session) noexcept -> std::uint64_t {
@@ -1719,7 +2532,7 @@ enum class ParseResult : std::uint8_t {
     ++position;
     mix(position);
     mix(slot.tab->id == session.active_tab ? 1U : 0U);
-    const auto title = tab_title(*slot.tab);
+    const auto title = status_tab_title(session, *slot.tab);
     for (const char character : std::span(title).first(std::min(title.size(), std::size_t{16}))) {
       mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
     }
@@ -1745,7 +2558,7 @@ collect_status_line(Session& session,
     }
     std::span(storage).subspan(count, 1).front() = {
         .number = static_cast<std::uint16_t>(count + 1U),
-        .title = tab_title(*slot.tab),
+        .title = status_tab_title(session, *slot.tab),
         .active = slot.tab->id == session.active_tab,
     };
     ++count;
@@ -1761,8 +2574,77 @@ collect_status_line(Session& session,
   };
 }
 
+[[nodiscard]] auto encode_pending_clipboard_write(Session& session) noexcept
+    -> std::optional<std::size_t> {
+  if (session.clipboard_write.bytes == nullptr || session.clipboard_write.size == 0) {
+    return std::nullopt;
+  }
+  constexpr std::string_view prefix = "\x1B]52;c;";
+  constexpr std::string_view suffix = "\x1B\\";
+  constexpr auto digits =
+      std::to_array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+  auto output = session.frame.writable();
+  const auto encoded_size =
+      prefix.size() + clipboard_base64_bytes(session.clipboard_write.size) + suffix.size();
+  if (encoded_size > output.size()) {
+    return std::nullopt;
+  }
+  std::size_t used = 0;
+  std::memcpy(output.data(), prefix.data(), prefix.size());
+  used += prefix.size();
+  const auto input = std::span(session.clipboard_write.bytes.get(), session.clipboard_write.size);
+  for (std::size_t offset = 0; offset < input.size(); offset += 3U) {
+    const auto remaining = input.size() - offset;
+    const auto first = std::to_integer<std::uint32_t>(input.subspan(offset, 1).front());
+    const auto second =
+        remaining > 1U ? std::to_integer<std::uint32_t>(input.subspan(offset + 1U, 1).front()) : 0U;
+    const auto third =
+        remaining > 2U ? std::to_integer<std::uint32_t>(input.subspan(offset + 2U, 1).front()) : 0U;
+    const auto value = (first << 16U) | (second << 8U) | third;
+    const auto digit = [&digits](const std::uint32_t index) noexcept {
+      return std::span(digits).subspan(index, 1).front();
+    };
+    const std::array encoded{
+        digit((value >> 18U) & 0x3FU),
+        digit((value >> 12U) & 0x3FU),
+        remaining > 1U ? digit((value >> 6U) & 0x3FU) : '=',
+        remaining > 2U ? digit(value & 0x3FU) : '=',
+    };
+    std::memcpy(output.subspan(used, encoded.size()).data(), encoded.data(), encoded.size());
+    used += encoded.size();
+  }
+  std::memcpy(output.subspan(used, suffix.size()).data(), suffix.data(), suffix.size());
+  used += suffix.size();
+  LEMMA_ASSERT(used == encoded_size);
+  return used;
+}
+
+[[nodiscard]] auto queue_pending_clipboard_write(Session& session,
+                                                 const ClientFrameOutput::TimePoint now) noexcept
+    -> bool {
+  const auto encoded = encode_pending_clipboard_write(session);
+  if (!encoded.has_value() || session.full_redraw_generation == 0 || session.server_sequence == 0) {
+    return false;
+  }
+  const auto messages = ClientFrameOutput::frame_message_count(*encoded);
+  if (messages == 0 ||
+      messages > std::numeric_limits<std::uint32_t>::max() - session.server_sequence ||
+      !session.output.queue_frame(*encoded, session.server_sequence, session.full_redraw_generation,
+                                  false, now)) {
+    return false;
+  }
+  session.server_sequence += static_cast<std::uint32_t>(messages);
+  session.clipboard_write.bytes.reset();
+  session.clipboard_write.size = 0;
+  session.clipboard_write.redraw_after_write = true;
+  return true;
+}
+
 [[nodiscard]] auto compose_session_frame(Session& session, const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
+  if (session.clipboard_write.bytes != nullptr) {
+    return queue_pending_clipboard_write(session, now);
+  }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
   const auto surfaces = collect_surfaces(session, surface_storage);
@@ -2480,6 +3362,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   session->server_sequence = 2;
   session->full_redraw_generation = 0;
   session->input_backpressured = false;
+  session->retained_input_offset.reset();
   session->client_close_state = ClientCloseState::none;
   session->frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -2596,7 +3479,10 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     if (session == nullptr || !session->active) {
       continue;
     }
-    if (tighten(session->frame_scheduler.deadline(frame_sink_state(*session))) ||
+    if ((session->copy_mode.search_pending && tighten(session->copy_mode.search_deadline)) ||
+        (session->copy_mode.pending_escape_size > 0 &&
+         tighten(session->copy_mode.pending_escape_deadline)) ||
+        tighten(session->frame_scheduler.deadline(frame_sink_state(*session))) ||
         tighten(session->output.deadline())) {
       return 0;
     }
@@ -2605,7 +3491,12 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
         continue;
       }
       for (const auto& pane_slot : tab_slot.tab->panes) {
-        if (pane_slot.pane != nullptr && tighten(pane_slot.pane->presentation_gate.deadline())) {
+        if (pane_slot.pane == nullptr) {
+          continue;
+        }
+        if (tighten(pane_slot.pane->presentation_gate.deadline()) ||
+            (pane_slot.pane->compression_scheduled &&
+             tighten(pane_slot.pane->compression_deadline))) {
           return 0;
         }
       }
@@ -2722,6 +3613,11 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     blocked_session_budget -= bytes_drained;
   }
   pane.active = drained.alive;
+  if (drained.changed && pane.active) {
+    record_terminal_mutation(pane);
+    preserve_copy_viewport_after_mutation(session, pane);
+    note_compression_activity(pane);
+  }
   const bool process_changed = refresh_process_name_if_due(pane, std::chrono::steady_clock::now());
   if (!pane_event_changed(session, drained, process_changed)) {
     return;
@@ -2832,6 +3728,52 @@ void reclaim_dead_panes(Session& session) noexcept {
   }
 }
 
+// Collecting due panes traverses the fixed session hierarchy before the bounded fair work pass.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void run_due_scrollback_compression(Sessions& sessions, std::size_t& cursor) noexcept {
+  constexpr std::size_t steps_per_turn_max = 8;
+  const auto now = std::chrono::steady_clock::now();
+  std::array<Pane*, static_cast<std::size_t>(limits::panes_hard_max)> due{};
+  std::size_t count = 0;
+  for (auto& session : sessions) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    for (auto& tab_slot : session->tabs) {
+      if (tab_slot.tab == nullptr) {
+        continue;
+      }
+      for (auto& pane_slot : tab_slot.tab->panes) {
+        if (pane_slot.pane != nullptr && pane_slot.pane->active &&
+            pane_slot.pane->compression_scheduled && now >= pane_slot.pane->compression_deadline) {
+          std::span(due).subspan(count, 1).front() = pane_slot.pane.get();
+          ++count;
+        }
+      }
+    }
+  }
+  if (count == 0) {
+    cursor = 0;
+    return;
+  }
+  cursor %= count;
+  const auto steps = std::min(count, steps_per_turn_max);
+  for (std::size_t visited = 0; visited < steps; ++visited) {
+    auto& pane = *std::span(due).subspan((cursor + visited) % count, 1).front();
+    const auto compressed = pane.terminal.compress_scrollback();
+    if (!compressed.has_value()) {
+      pane.active = false;
+      pane.compression_scheduled = false;
+      continue;
+    }
+    pane.compression_scheduled = *compressed == vt::CompressionResult::pending;
+    if (pane.compression_scheduled) {
+      pane.compression_deadline = now + scrollback_compression_slice_delay;
+    }
+  }
+  cursor = (cursor + steps) % count;
+}
+
 // Gate expiry visits the same fixed hierarchy and schedules only visible active-tab repairs.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void release_expired_presentation_gates(Sessions& sessions) noexcept {
@@ -2923,6 +3865,10 @@ void flush_attached_client_frames(Sessions& sessions,
          session.client_close_state == ClientCloseState::disconnect_queued)) {
       session.detach_client();
     } else if (status == ClientFrameFlushStatus::drained) {
+      if (session.clipboard_write.redraw_after_write) {
+        session.clipboard_write.redraw_after_write = false;
+        schedule_frame(session, FrameUrgency::state_change, true);
+      }
       queue_client_disconnect_if_ready(session);
     }
   }
@@ -3079,6 +4025,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t pty_read_cursor = 0;
   std::size_t pty_flush_cursor = 0;
   std::size_t client_flush_cursor = 0;
+  std::size_t search_cursor = 0;
+  std::size_t compression_cursor = 0;
 
   while (true) {
     if (stop_requested != nullptr && stop_requested()) {
@@ -3197,6 +4145,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     for (auto& session : sessions) {
       if (session != nullptr && session->active) {
         reclaim_dead_panes(*session);
+        service_copy_input_timeout(*session, std::chrono::steady_clock::now());
       }
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
@@ -3209,6 +4158,23 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         process_client_events(*owner.session, events);
       }
     }
+    std::array<Session*, static_cast<std::size_t>(limits::sessions_hard_max)> search_sessions{};
+    for (auto& session : sessions) {
+      if (session != nullptr && session->active) {
+        std::span(search_sessions).subspan(session->id.slot(), 1).front() = session.get();
+      }
+    }
+    std::size_t search_work_budget = limits::search_candidates_per_step;
+    std::size_t visited = 0;
+    for (; visited < search_sessions.size() && search_work_budget > 0; ++visited) {
+      auto* const session = std::span(search_sessions)
+                                .subspan((search_cursor + visited) % search_sessions.size(), 1)
+                                .front();
+      if (session != nullptr) {
+        static_cast<void>(service_copy_search(*session, search_work_budget));
+      }
+    }
+    search_cursor = (search_cursor + visited) % search_sessions.size();
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::pending) {
@@ -3256,15 +4222,15 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     if (writable_pane_count > 0) {
       pty_flush_cursor %= writable_pane_count;
-      std::size_t visited = 0;
-      for (; visited < writable_pane_count && pty_write_budget > 0; ++visited) {
-        const auto index = (pty_flush_cursor + visited) % writable_pane_count;
+      std::size_t writable_visited = 0;
+      for (; writable_visited < writable_pane_count && pty_write_budget > 0; ++writable_visited) {
+        const auto index = (pty_flush_cursor + writable_visited) % writable_pane_count;
         auto& pane = *std::span(writable_panes).subspan(index, 1).front();
         if (!flush_pane_writes(pane, pty_write_budget)) {
           pane.active = false;
         }
       }
-      pty_flush_cursor = (pty_flush_cursor + visited) % writable_pane_count;
+      pty_flush_cursor = (pty_flush_cursor + writable_visited) % writable_pane_count;
     } else {
       pty_flush_cursor = 0;
     }
@@ -3310,6 +4276,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
 
+    run_due_scrollback_compression(sessions, compression_cursor);
     release_expired_presentation_gates(sessions);
     queue_due_frames(sessions);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly

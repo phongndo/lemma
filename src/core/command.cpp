@@ -18,6 +18,7 @@ namespace {
   case CommandKind::focus_previous:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
+  case CommandKind::enter_copy_mode:
   case CommandKind::create_tab:
   case CommandKind::next_tab:
   case CommandKind::previous_tab:

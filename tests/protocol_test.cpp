@@ -349,6 +349,20 @@ TEST(ProtocolTest, PrefixParserCapturesTmuxSplitsInInputOrder) {
             PaneCommand::split_top_bottom);
 }
 
+TEST(ProtocolTest, PrefixParserEntersCopyModeWithoutForwardingBinding) {
+  PrefixParser parser;
+  const std::array input{std::byte{'a'}, std::byte{0x02}, std::byte{'['}, std::byte{'b'}};
+  std::array<std::byte, input.size() * 2U> output{};
+
+  const auto result = parser.parse(input, output);
+
+  ASSERT_EQ(result.action_count, 1U);
+  EXPECT_EQ(result.actions.front().command, PaneCommand::enter_copy_mode);
+  EXPECT_EQ(result.bytes, 2U);
+  EXPECT_EQ(output.front(), std::byte{'a'});
+  EXPECT_EQ(std::span(output).subspan(1, 1).front(), std::byte{'b'});
+}
+
 TEST(ProtocolTest, PrefixParserCapturesFragmentedArrowKey) {
   PrefixParser parser;
   std::array<std::byte, 8> output{};

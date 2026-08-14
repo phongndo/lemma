@@ -43,6 +43,16 @@ TEST(TerminalTest, PinnedLibraryBuildInfoMatchesProductionContract) {
 #endif
 }
 
+TEST(TerminalTest, PreservesPositionalTerminalOptionMembers) {
+  // Positional construction is intentional: this is an aggregate-compatibility regression.
+  // NOLINTNEXTLINE(modernize-use-designated-initializers)
+  const TerminalOptions options{{.columns = 40, .rows = 10}, 1'024U, 2'048U, {}, {}};
+  EXPECT_EQ(options.scrollback_bytes_max, 1'024U);
+  EXPECT_EQ(options.allocation_bytes_max, 2'048U);
+  EXPECT_FALSE(options.theme.has_value());
+  EXPECT_FALSE(options.scrollback_lines_max.has_value());
+}
+
 TEST(TerminalTest, RejectsInvalidAndUnfundedConfigurations) {
   TerminalOptions invalid_dimensions;
   invalid_dimensions.size.columns = 0;
@@ -55,6 +65,12 @@ TEST(TerminalTest, RejectsInvalidAndUnfundedConfigurations) {
   const auto excessive_scrollback_result = Terminal::create(excessive_scrollback);
   ASSERT_FALSE(excessive_scrollback_result.has_value());
   EXPECT_EQ(excessive_scrollback_result.error(), Error::invalid_options);
+
+  TerminalOptions excessive_scrollback_lines;
+  excessive_scrollback_lines.scrollback_lines_max = limits::terminal_scrollback_lines_hard_max + 1U;
+  const auto excessive_scrollback_lines_result = Terminal::create(excessive_scrollback_lines);
+  ASSERT_FALSE(excessive_scrollback_lines_result.has_value());
+  EXPECT_EQ(excessive_scrollback_lines_result.error(), Error::invalid_options);
 
   TerminalOptions exhausted;
   exhausted.allocation_bytes_max = 1;
@@ -372,6 +388,339 @@ TEST(TerminalTest, GrowsAndPrunesScrollbackUnderItsOwnerQuota) {
   EXPECT_GT(*retained, 0U);
   EXPECT_LT(*retained, input_rows);
   EXPECT_LE(options.scrollback_bytes_max, limits::terminal_scrollback_bytes_hard_max);
+}
+
+TEST(TerminalTest, UsesGhosttyGesturesAndTrackedSelectionEndpoints) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  options.scrollback_lines_max = 100;
+  auto terminal = make_terminal(options);
+  write_text(terminal, "hello world\r\nsecond line");
+
+  auto gesture = terminal.selection_gesture({
+      .phase = SelectionGesturePhase::press,
+      .point = {.space = PointSpace::viewport, .column = 0, .row = 0},
+      .pointer_x = 2,
+      .pointer_y = 4,
+      .cell_width = 10,
+      .screen_height = 30,
+      .has_pointer_position = true,
+  });
+  ASSERT_TRUE(gesture.has_value());
+  EXPECT_FALSE(gesture->selection_changed);
+  gesture = terminal.selection_gesture({
+      .phase = SelectionGesturePhase::drag,
+      .point = {.space = PointSpace::viewport, .column = 5, .row = 0},
+      .pointer_x = 55,
+      .pointer_y = 4,
+      .cell_width = 10,
+      .screen_height = 30,
+      .has_pointer_position = true,
+  });
+  ASSERT_TRUE(gesture.has_value());
+  EXPECT_TRUE(gesture->selection_changed);
+  EXPECT_TRUE(gesture->dragged);
+
+  std::array<std::byte, 128> selected{};
+  auto selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size),
+            "hello");
+
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::word, {.space = PointSpace::viewport, .column = 6, .row = 0})
+          .value_or(false));
+  write_text(terminal, "\r\nthird\r\nfourth\r\nfifth");
+  selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // The terminal-owned active selection uses tracked Ghostty refs and follows "world" into history.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size),
+            "world");
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, MovesCopyCursorByGhosttyWordSemantics) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha bravo");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::word, {.space = PointSpace::viewport, .column = 0, .row = 0})
+          .value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::word_right, false).value_or(false));
+
+  std::array<std::byte, 32> selected{};
+  const auto selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size), "b");
+
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 2, .row = 0})
+          .value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::word_right, false).value_or(false));
+  selected.fill(std::byte{0});
+  const auto from_inside = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(from_inside.has_value());
+  // `w` skips the remainder of the current Ghostty word and lands on the next word's start.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *from_inside), "b");
+
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 8, .row = 0})
+          .value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::word_left, false).value_or(false));
+  selected.fill(std::byte{0});
+  const auto backward = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(backward.has_value());
+  // `b` from inside a word lands on that word's start rather than stepping one cell.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *backward), "b");
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, WordNavigationRetainsProgressAcrossLongBlankRuns) {
+  TerminalOptions options;
+  options.size = {.columns = limits::terminal_columns_hard_max, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha\r\nbravo");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::word, {.space = PointSpace::viewport, .column = 0, .row = 0})
+          .value_or(false));
+
+  for (std::size_t step = 0; step < 4; ++step) {
+    ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::word_right, false).value_or(false));
+  }
+
+  std::array<std::byte, 16> selected{};
+  const auto selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size), "b");
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, NavigatesViewportAndFormatsAdjustedSelectionWithinCallerBound) {
+  TerminalOptions options;
+  options.size = {.columns = 10, .rows = 2};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  auto terminal = make_terminal(options);
+  for (std::size_t row = 0; row < 20; ++row) {
+    write_text(terminal, "history\r\n");
+  }
+
+  auto viewport = terminal.viewport_state();
+  ASSERT_TRUE(viewport.has_value());
+  EXPECT_TRUE(viewport->follows_output);
+  terminal.scroll_viewport(ViewportScroll::top);
+  viewport = terminal.viewport_state();
+  ASSERT_TRUE(viewport.has_value());
+  EXPECT_FALSE(viewport->follows_output);
+  EXPECT_EQ(viewport->offset, 0U);
+
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 0, .row = 0})
+          .value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::end_of_line, true).value_or(false));
+  std::array<std::byte, 64> output{};
+  const auto formatted = terminal.format_selection(ScreenFormat::plain, output);
+  ASSERT_TRUE(formatted.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_THAT(std::string_view(reinterpret_cast<const char*>(output.data()), *formatted),
+              testing::HasSubstr("history"));
+
+  std::array<std::byte, 1> insufficient{};
+  const auto bounded = terminal.format_selection(ScreenFormat::plain, insufficient);
+  ASSERT_FALSE(bounded.has_value());
+  EXPECT_EQ(bounded.error(), Error::out_of_space);
+  terminal.scroll_viewport(ViewportScroll::bottom);
+  EXPECT_TRUE(terminal.viewport_state()->follows_output);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, SearchesIncrementallyWithoutRetainingDuplicateGrid) {
+  TerminalOptions options;
+  options.size = {.columns = 16, .rows = 3};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha\r\nbeta needle\r\ngamma");
+
+  std::optional<SearchCursor> cursor;
+  SearchStepResult step{};
+  for (std::size_t slice = 0; slice < 1'000; ++slice) {
+    const auto result = terminal.search_literal_step("needle", SearchDirection::forward, cursor, 2);
+    ASSERT_TRUE(result.has_value());
+    step = *result;
+    if (step.status != SearchStepStatus::pending) {
+      break;
+    }
+    cursor = step.next;
+  }
+
+  ASSERT_EQ(step.status, SearchStepStatus::found);
+  ASSERT_TRUE(terminal.select_search_match(step.match).has_value());
+  ASSERT_TRUE(terminal.scroll_selection_into_view().has_value());
+  std::array<std::byte, 32> output{};
+  const auto formatted = terminal.format_selection(ScreenFormat::plain, output);
+  ASSERT_TRUE(formatted.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *formatted), "needle");
+
+  ASSERT_TRUE(terminal.collapse_selection_to_endpoint().value_or(false));
+  output.fill(std::byte{0});
+  const auto collapsed = terminal.format_selection(ScreenFormat::plain, output);
+  ASSERT_TRUE(collapsed.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *collapsed), "e");
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, RefreshesTrackedSelectionAfterReflowBeforeRendering) {
+  TerminalOptions options;
+  options.size = {.columns = 80, .rows = 23};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  auto terminal = make_terminal(options);
+  for (std::size_t row = 0; row < 20; ++row) {
+    write_text(terminal,
+               "history abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
+  }
+  write_text(terminal,
+             "tracked abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
+  for (std::size_t row = 0; row < 25; ++row) {
+    write_text(terminal,
+               "history abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
+  }
+
+  std::optional<SearchCursor> cursor;
+  SearchStepResult step{};
+  for (std::size_t slice = 0; slice < 1'000; ++slice) {
+    const auto result =
+        terminal.search_literal_step("tracked", SearchDirection::backward, cursor, 32);
+    ASSERT_TRUE(result.has_value());
+    step = *result;
+    if (step.status != SearchStepStatus::pending) {
+      break;
+    }
+    cursor = step.next;
+  }
+  ASSERT_EQ(step.status, SearchStepStatus::found);
+  ASSERT_TRUE(terminal.select_search_match(step.match).has_value());
+  ASSERT_TRUE(terminal.scroll_selection_into_view().has_value());
+
+  ASSERT_TRUE(terminal.resize({.columns = 40, .rows = 23}).has_value());
+  ASSERT_TRUE(terminal.refresh_selection().value_or(false));
+  ASSERT_TRUE(terminal.scroll_selection_into_view().has_value());
+  const auto endpoint = terminal.selection_endpoint(PointSpace::viewport);
+  ASSERT_TRUE(endpoint.has_value());
+  const auto endpoint_point = endpoint.value_or(std::optional<TerminalPoint>{});
+  ASSERT_TRUE(endpoint_point.has_value());
+  const auto point = endpoint_point.value_or(TerminalPoint{});
+
+  std::array<std::byte, std::size_t{512} * 1'024U> output{};
+  const PaneRenderOptions render_options{
+      .cursor_override_column = point.column,
+      .cursor_override_row = static_cast<std::uint16_t>(point.row),
+      .force_full = true,
+      .focused = true,
+      .cursor_override = true,
+  };
+  const auto rendered = terminal.render_pane_ansi(output, render_options);
+  if (!rendered.has_value()) {
+    ADD_FAILURE() << "render error: " << static_cast<unsigned>(rendered.error());
+  }
+}
+
+TEST(TerminalTest, RetainsPartialSearchMatchWhenSliceWorkIsExhausted) {
+  TerminalOptions options;
+  options.size = {.columns = 16, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "a");
+
+  const auto first = terminal.search_literal_step("aZ", SearchDirection::forward, std::nullopt, 1);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_EQ(first->status, SearchStepStatus::pending);
+  EXPECT_TRUE(first->next.matching);
+  EXPECT_EQ(first->next.query_offset, 1);
+  EXPECT_EQ(first->next.candidate, (TerminalPoint{.space = PointSpace::screen}));
+  EXPECT_EQ(first->next.text, (TerminalPoint{.space = PointSpace::screen, .column = 1, .row = 0}));
+
+  const auto second = terminal.search_literal_step("aZ", SearchDirection::forward, first->next, 1);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second->status, SearchStepStatus::pending);
+  EXPECT_EQ(second->next.query_offset, 1);
+  EXPECT_EQ(second->next.text, (TerminalPoint{.space = PointSpace::screen, .column = 2, .row = 0}));
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, CompressesScrollbackIncrementallyWithoutChangingLogicalContent) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 3};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  auto terminal = make_terminal(options);
+  const auto activity_before = terminal.compression_activity();
+  ASSERT_TRUE(activity_before.has_value());
+  for (std::size_t row = 0; row < 2'000; ++row) {
+    write_text(terminal, "compressible history\r\n");
+  }
+  const auto activity_after = terminal.compression_activity();
+  ASSERT_TRUE(activity_after.has_value());
+  EXPECT_NE(*activity_before, *activity_after);
+  const auto rows_before = terminal.scrollback_rows();
+  ASSERT_TRUE(rows_before.has_value());
+
+  CompressionResult compression = CompressionResult::pending;
+  for (std::size_t step = 0; step < 10'000 && compression == CompressionResult::pending; ++step) {
+    const auto result = terminal.compress_scrollback();
+    ASSERT_TRUE(result.has_value());
+    compression = *result;
+  }
+  EXPECT_NE(compression, CompressionResult::pending);
+  EXPECT_EQ(terminal.scrollback_rows(), rows_before);
+}
+
+TEST(TerminalTest, ProjectsIncrementalSelectionAndCopyCursorHighlight) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "selected");
+
+  std::array<std::byte, 8'192> output{};
+  ASSERT_TRUE(terminal.render_ansi(output, true).has_value());
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::word, {.space = PointSpace::viewport, .column = 0, .row = 0})
+          .value_or(false));
+  const auto endpoint = terminal.selection_endpoint(PointSpace::viewport);
+  ASSERT_TRUE(endpoint.has_value());
+  const auto endpoint_point = endpoint.value_or(std::optional<TerminalPoint>{});
+  ASSERT_TRUE(endpoint_point.has_value());
+  const auto point = endpoint_point.value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 7);
+  EXPECT_EQ(point.row, 0U);
+
+  output.fill(std::byte{0});
+  const PaneRenderOptions render_options{
+      .cursor_override_column = point.column,
+      .cursor_override_row = static_cast<std::uint16_t>(point.row),
+      .focused = true,
+      .cursor_override = true,
+  };
+  const auto rendered = terminal.render_pane_ansi(output, render_options);
+  ASSERT_TRUE(rendered.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view ansi(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+  EXPECT_THAT(ansi, testing::HasSubstr(";7"));
+  EXPECT_THAT(ansi, testing::HasSubstr("mselected"));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[1;8H\x1B[?25h"));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[2 q"));
 }
 
 TEST(TerminalTest, TracksQuotaAllocatorUsage) {

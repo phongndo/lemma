@@ -100,7 +100,7 @@ The implemented hard limits derive to 64 panes per session and 64 panes in any o
 | Focus events | Partial | Focus mode is mirrored in rendered terminal state, but the client has no typed focus-event path. |
 | Application mouse input | Unsupported | Mouse modes may be mirrored from the focused app and raw bytes may happen to pass through, but coordinates are not pane-local and split-pane behavior is not correct. |
 | Lemma mouse operation | Absent | No typed mouse decoding, status/pane hit testing, selection, scrolling, or drag resizing. |
-| Copy/search/selection | Absent | No copy mode, scrollback viewport, search, selection model, or clipboard integration. |
+| Copy/search/selection | Partial | `C-b [` enters daemon-owned copy mode. Vi/arrow movement, a nonblinking copy cursor, Ghostty-tracked inverse-video selection, visible mode/search feedback, bounded incremental literal search, and explicit `Enter`/`y` OSC 52 copy work while PTY parsing continues and the viewport remains fixed. Typed mouse selection and a native clipboard provider are not implemented. |
 
 Raw mouse pass-through is not considered a working mouse feature because the core cannot distinguish
 Lemma chrome from pane content or translate outer coordinates into the focused pane.
@@ -109,7 +109,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Canonical terminal state | Working | Each pane owns a `libghostty-vt` terminal with quota-tracked C allocations and an independently capped PagePool scrollback; this is not total-memory accounting. Lemma exposes the pinned implementation's option as `scrollback_bytes_max` because it applies an internal byte limit despite documenting lines. This intentional pre-1.0 source API correction replaced `scrollback_rows_max`; retained row count varies with width. |
+| Canonical terminal state | Working | Each pane owns a `libghostty-vt` terminal with quota-tracked C allocations and independently bounded PagePool scrollback; this is not total-memory accounting. `scrollback_bytes_max` and optional `scrollback_lines_max` are separate page-granular limits, and the first one reached drives pruning. Idle reactor work performs bounded incremental compression without changing logical content. |
 | VT parsing/effects | Working | UTF-8/VT input, terminal responses, title changes, bells, modes, reflow, and dirty state are captured behind the adapter. PTY-response overflow is a sticky terminal-integrity failure that retires the pane instead of dropping replies silently. |
 | Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. Effective default, palette, background-only, and focused cursor colors use a session-owned concrete theme and conservative RGB projection. |
 | Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. Child mode 2026 holds only its pane; a 1 s presentation watchdog restores liveness without clearing canonical mode. |
@@ -119,7 +119,7 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 | Versioned server-rendered attachment | Working | Private protocol 1.0 frames both directions, validates exact versions and sequences, carries typed disconnects and redraw generations, and bounds incremental decoders and render payloads. |
 | Ordinary SSH operation | Partial | Lemma may be run on a remote host through SSH like another terminal program, but no supported compatibility/process/performance suite or remote documentation exists yet. |
 | Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=lemma`; Lemma ships no terminfo entry or explicit capability policy. |
-| Copy access to scrollback | Absent | Ghostty retains scrollback, but Lemma exposes no viewport/traversal/selection API. |
+| Copy access to scrollback | Partial | The adapter exposes viewport, gesture, selection, tracked-endpoint, bounded formatting, literal-search, and compression APIs. Keyboard traversal and bounded user-initiated OSC 52 delivery are integrated; a native clipboard provider and typed mouse gestures remain open. |
 | Graphics protocols | Intentionally disabled | The portable profile does not advertise graphics. Kitty image storage and file/temp-file/shared-memory media are disabled until the qualified replica presentation path exists. |
 
 ### Lua configuration and extensions

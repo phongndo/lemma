@@ -89,10 +89,12 @@ struct TerminalTheme final {
 
 struct TerminalOptions final {
   TerminalSize size{};
-  // Ghostty prunes scrollback at page granularity, so the retained amount may exceed this estimate.
+  // Ghostty prunes scrollback at page granularity, so retained byte and line counts may exceed
+  // their estimates. The limits are independent and the first one reached drives pruning.
   std::size_t scrollback_bytes_max{limits::terminal_scrollback_bytes_default};
   std::size_t allocation_bytes_max{limits::terminal_allocation_bytes_default};
   std::optional<TerminalTheme> theme;
+  std::optional<std::size_t> scrollback_lines_max;
 };
 
 // Covers only allocations routed through Lemma's Ghostty C allocator. Ghostty PagePool storage and
@@ -130,8 +132,11 @@ inline constexpr std::size_t pane_ansi_bytes_per_cell_max =
 struct PaneRenderOptions final {
   std::uint16_t column{0};
   std::uint16_t row{0};
+  std::uint16_t cursor_override_column{0};
+  std::uint16_t cursor_override_row{0};
   bool force_full{false};
   bool focused{false};
+  bool cursor_override{false};
   bool allow_terminal_scroll{false};
 };
 
@@ -224,6 +229,136 @@ struct RenderUpdate final {
   bool cursor_in_viewport{false};
 };
 
+enum class PointSpace : std::uint8_t {
+  active,
+  viewport,
+  screen,
+  history,
+};
+
+struct TerminalPoint final {
+  PointSpace space{PointSpace::viewport};
+  std::uint16_t column{0};
+  std::uint32_t row{0};
+
+  friend constexpr auto operator==(const TerminalPoint&, const TerminalPoint&) noexcept
+      -> bool = default;
+};
+
+enum class SelectionUnit : std::uint8_t {
+  cell,
+  word,
+  line,
+  output,
+  all,
+};
+
+enum class SelectionAdjustment : std::uint8_t {
+  left,
+  right,
+  up,
+  down,
+  home,
+  end,
+  page_up,
+  page_down,
+  beginning_of_line,
+  end_of_line,
+  word_left,
+  word_right,
+};
+
+enum class SelectionGesturePhase : std::uint8_t {
+  press,
+  drag,
+  release,
+  autoscroll_tick,
+  deep_press,
+};
+
+enum class SelectionAutoscroll : std::uint8_t {
+  none,
+  up,
+  down,
+};
+
+struct SelectionGestureEvent final {
+  SelectionGesturePhase phase{SelectionGesturePhase::press};
+  TerminalPoint point{};
+  double pointer_x{0};
+  double pointer_y{0};
+  std::uint32_t cell_width{1};
+  std::uint32_t padding_left{0};
+  std::uint32_t screen_height{1};
+  std::uint64_t time_ns{0};
+  std::uint64_t repeat_interval_ns{0};
+  double repeat_distance{0};
+  bool has_point{true};
+  bool has_pointer_position{false};
+  bool rectangle{false};
+};
+
+struct SelectionGestureResult final {
+  SelectionAutoscroll autoscroll{SelectionAutoscroll::none};
+  bool selection_changed{false};
+  bool dragged{false};
+};
+
+enum class ViewportScroll : std::uint8_t {
+  top,
+  bottom,
+  delta,
+  row,
+};
+
+struct ViewportState final {
+  std::uint64_t total_rows{0};
+  std::uint64_t offset{0};
+  std::uint64_t visible_rows{0};
+  bool follows_output{true};
+};
+
+enum class CompressionResult : std::uint8_t {
+  unsupported,
+  pending,
+  complete,
+};
+
+enum class SearchDirection : std::uint8_t {
+  forward,
+  backward,
+};
+
+struct SearchMatch final {
+  TerminalPoint start{.space = PointSpace::screen};
+  TerminalPoint end{.space = PointSpace::screen};
+
+  friend constexpr auto operator==(const SearchMatch&, const SearchMatch&) noexcept
+      -> bool = default;
+};
+
+enum class SearchStepStatus : std::uint8_t {
+  found,
+  pending,
+  not_found,
+};
+
+// Caller-owned continuation for a bounded literal-search slice. The additional fields preserve a
+// partially matched candidate while the search advances across blank cells and wrapped rows.
+struct SearchCursor final {
+  TerminalPoint candidate{.space = PointSpace::screen};
+  TerminalPoint text{.space = PointSpace::screen};
+  TerminalPoint match_end{.space = PointSpace::screen};
+  std::size_t query_offset{0};
+  bool matching{false};
+};
+
+struct SearchStepResult final {
+  SearchStepStatus status{SearchStepStatus::not_found};
+  SearchMatch match{};
+  SearchCursor next{};
+};
+
 class Terminal final {
 public:
   [[nodiscard]] static auto create(const TerminalOptions& options) noexcept
@@ -281,6 +416,43 @@ public:
   [[nodiscard]] auto format_screen(ScreenFormat format, std::span<std::byte> output) noexcept
       -> std::expected<std::size_t, Error>;
 
+  // Ghostty owns gesture interpretation and converts installed snapshots to tracked endpoints.
+  // Lemma supplies presentation-space input and bounded caller-owned formatting storage.
+  [[nodiscard]] auto selection_gesture(const SelectionGestureEvent& event) noexcept
+      -> std::expected<SelectionGestureResult, Error>;
+  void reset_selection_gesture() noexcept;
+  [[nodiscard]] auto select(SelectionUnit unit, TerminalPoint point = {}) noexcept
+      -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_adjust(SelectionAdjustment adjustment, bool extend) noexcept
+      -> std::expected<bool, Error>;
+  [[nodiscard]] auto collapse_selection_to_endpoint() noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_active() const noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_endpoint(PointSpace space) const noexcept
+      -> std::expected<std::optional<TerminalPoint>, Error>;
+  // Reinstalls the terminal-owned selection from fresh snapshots after operations such as reflow.
+  [[nodiscard]] auto refresh_selection() noexcept -> std::expected<bool, Error>;
+  void clear_selection() noexcept;
+  [[nodiscard]] auto format_selection(ScreenFormat format, std::span<std::byte> output) noexcept
+      -> std::expected<std::size_t, Error>;
+
+  void scroll_viewport(ViewportScroll behavior, std::int64_t value = 0) noexcept;
+  [[nodiscard]] auto scroll_selection_into_view() noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto viewport_state() const noexcept -> std::expected<ViewportState, Error>;
+
+  [[nodiscard]] auto compression_activity() const noexcept -> std::expected<std::uint64_t, Error>;
+  [[nodiscard]] auto compress_scrollback() noexcept -> std::expected<CompressionResult, Error>;
+
+  // Performs one bounded literal-search slice directly over Ghostty grid references. No terminal
+  // text grid or match list is retained. The work limit charges every inspected cell or row, and a
+  // pending result carries caller-owned continuation for a partially matched candidate.
+  [[nodiscard]] auto
+  search_literal_step(std::string_view query, SearchDirection direction,
+                      std::optional<SearchCursor> start = std::nullopt,
+                      std::size_t work_limit = limits::search_candidates_per_step) const noexcept
+      -> std::expected<SearchStepResult, Error>;
+  [[nodiscard]] auto select_search_match(const SearchMatch& match) noexcept
+      -> std::expected<void, Error>;
+
   [[nodiscard]] auto size() const noexcept -> TerminalSize;
   [[nodiscard]] auto theme() const noexcept -> TerminalTheme;
 
@@ -300,11 +472,11 @@ private:
 
   explicit Terminal(std::unique_ptr<Impl> impl) noexcept;
 
-  [[nodiscard]] auto render_ansi_impl(std::span<std::byte> output, bool force_full,
-                                      std::uint16_t origin_column, std::uint16_t origin_row,
-                                      bool composed, bool focused,
-                                      bool allow_terminal_scroll) noexcept
-      -> std::expected<AnsiRenderResult, Error>;
+  [[nodiscard]] auto
+  render_ansi_impl(std::span<std::byte> output, bool force_full, std::uint16_t origin_column,
+                   std::uint16_t origin_row, bool composed, bool focused, bool cursor_override,
+                   std::uint16_t cursor_override_column, std::uint16_t cursor_override_row,
+                   bool allow_terminal_scroll) noexcept -> std::expected<AnsiRenderResult, Error>;
 
   std::unique_ptr<Impl> impl_;
 };

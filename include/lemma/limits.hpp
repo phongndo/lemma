@@ -71,10 +71,17 @@ inline constexpr std::size_t terminal_allocation_bytes_hard_max =
     std::size_t{1} * 1'024U * 1'024U * 1'024U;
 inline constexpr std::uint16_t terminal_columns_hard_max = 1'000;
 inline constexpr std::uint16_t terminal_rows_hard_max = 1'000;
-// The pinned Ghostty implementation interprets max_scrollback as bytes despite its C header naming
-// lines. Its page allocator bypasses QuotaAllocator, so keep this independent exposure bounded.
+// Ghostty's PagePool allocator bypasses QuotaAllocator, so keep both page-granular scrollback
+// dimensions independently bounded at the adapter boundary.
 inline constexpr std::size_t terminal_scrollback_bytes_default = 10'000;
 inline constexpr std::size_t terminal_scrollback_bytes_hard_max = 1'000'000;
+// Byte and physical-line limits are independent Ghostty pruning dimensions. A null line limit
+// leaves byte accounting authoritative; callers may set both when they need a row-count ceiling.
+inline constexpr std::size_t terminal_scrollback_lines_hard_max = 1'000'000;
+inline constexpr std::size_t selection_format_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+inline constexpr std::size_t search_query_bytes_max = 256;
+inline constexpr std::size_t search_candidates_per_step = 256;
+inline constexpr auto scrollback_compression_idle_delay = std::chrono::seconds{1};
 static_assert(terminal_scrollback_bytes_hard_max <= terminal_allocation_bytes_default);
 
 } // namespace lemma::limits

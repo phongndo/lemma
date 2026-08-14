@@ -72,9 +72,9 @@ IDs are stable test and benchmark vocabulary; they are not public command IDs.
 | I1 | Deliver Unicode, control, Alt, function, navigation, legacy, and extended keys | Partial |
 | I2 | Preserve bounded paste boundaries and application focus events | Partial |
 | I3 | Hit-test mux chrome and forward pane-local application mouse input | Absent |
-| H1 | Browse retained history without pausing PTY progress | Absent |
-| H2 | Search and select by keyboard and mouse through one model | Absent |
-| H3 | Copy correct text with an explicit bounded clipboard policy | Absent |
+| H1 | Browse retained history without pausing PTY progress | Partial: daemon-owned keyboard copy mode and viewport work; mouse/wheel paths remain absent |
+| H2 | Search and select by keyboard and mouse through one model | Partial: bounded keyboard search and tracked selection work; typed mouse gestures are not routed yet |
+| H3 | Copy correct text with an explicit bounded clipboard policy | Partial: explicit keyboard copy formats through Ghostty and emits bounded OSC 52; native providers remain absent |
 | R1 | Parse each PTY once and compose bounded terminal damage | Working |
 | R2 | Reconstruct complete visible state on attach, resize, tab change, and lag recovery | Working |
 | R3 | Restore every outer-terminal mode on normal, failure, disconnect, and handled-signal exits | Working |

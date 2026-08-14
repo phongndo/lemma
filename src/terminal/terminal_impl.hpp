@@ -97,6 +97,8 @@ struct Terminal::Impl final {
   GhosttyRenderState render_state{nullptr};
   GhosttyRenderStateRowIterator row_iterator{nullptr};
   GhosttyRenderStateRowCells row_cells{nullptr};
+  GhosttySelectionGesture selection_gesture{nullptr};
+  std::array<GhosttySelectionGestureEvent, 5> selection_events{};
   GhosttyRenderStateColors render_colors{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> row_hashes{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> current_row_hashes{};

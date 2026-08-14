@@ -336,25 +336,42 @@ struct ResolvedCellColors final {
   const std::array keys{
       GHOSTTY_RENDER_STATE_DATA_COLS,
       GHOSTTY_RENDER_STATE_DATA_ROWS,
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
       GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE,
       GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
   };
   std::array<void*, keys.size()> values{
-      &update.columns,    &update.rows,           &update.cursor_column,
-      &update.cursor_row, &update.cursor_visible, &update.cursor_in_viewport,
+      &update.columns,
+      &update.rows,
+      &update.cursor_visible,
+      &update.cursor_in_viewport,
   };
   std::size_t values_written = 0;
-  const auto result = ghostty_render_state_get_multi(render_state, keys.size(), keys.data(),
-                                                     values.data(), &values_written);
+  auto result = ghostty_render_state_get_multi(render_state, keys.size(), keys.data(),
+                                               values.data(), &values_written);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
   if (values_written != keys.size()) {
     return std::unexpected(Error::invalid_state);
   }
-  return {};
+  if (!update.cursor_in_viewport) {
+    update.cursor_column = 0;
+    update.cursor_row = 0;
+    return {};
+  }
+  const std::array cursor_keys{
+      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
+      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
+  };
+  std::array<void*, cursor_keys.size()> cursor_values{&update.cursor_column, &update.cursor_row};
+  values_written = 0;
+  result = ghostty_render_state_get_multi(render_state, cursor_keys.size(), cursor_keys.data(),
+                                          cursor_values.data(), &values_written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return values_written == cursor_keys.size() ? std::expected<void, Error>{}
+                                              : std::unexpected(Error::invalid_state);
 }
 
 [[nodiscard]] auto Terminal::Impl::dirty_row_count() noexcept -> std::expected<std::size_t, Error> {
@@ -412,9 +429,15 @@ struct ResolvedCellColors final {
     if (!resolved_colors.has_value()) {
       return std::unexpected(resolved_colors.error());
     }
-    const auto style =
-        ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
-                   resolved_colors->background_pointer());
+    auto style = ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
+                            resolved_colors->background_pointer());
+    bool selected = false;
+    result = ghostty_render_state_row_cells_get(
+        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    style.inverse = style.inverse != selected;
     row_hash = hash_style(row_hash, style);
     ++cell_count;
   }
@@ -519,9 +542,15 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (!resolved_colors.has_value()) {
       return std::unexpected(resolved_colors.error());
     }
-    const auto style =
-        ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
-                   resolved_colors->background_pointer());
+    auto style = ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
+                            resolved_colors->background_pointer());
+    bool selected = false;
+    result = ghostty_render_state_row_cells_get(
+        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    style.inverse = style.inverse != selected;
     row_hash = hash_style(row_hash, style);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
@@ -577,9 +606,10 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       active_style = style;
       active_style_valid = true;
 
-      const bool default_blank =
-          !replacement && grapheme_buffer.len == 0 && wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
-          ghostty_style_is_default(&ghostty_style) && !resolved_colors->has_background;
+      const bool default_blank = !selected && !replacement && grapheme_buffer.len == 0 &&
+                                 wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
+                                 ghostty_style_is_default(&ghostty_style) &&
+                                 !resolved_colors->has_background;
       if (default_blank) {
         if (trailing_blank_start == std::numeric_limits<std::size_t>::max()) {
           trailing_blank_start = cell_checkpoint;
@@ -694,14 +724,15 @@ auto Terminal::mark_rendered() noexcept -> std::expected<void, Error> {
 
 auto Terminal::render_ansi(const std::span<std::byte> output, const bool force_full) noexcept
     -> std::expected<AnsiRenderResult, Error> {
-  return render_ansi_impl(output, force_full, 0, 0, false, true, true);
+  return render_ansi_impl(output, force_full, 0, 0, false, true, false, 0, 0, true);
 }
 
 auto Terminal::render_pane_ansi(const std::span<std::byte> output,
                                 const PaneRenderOptions& options) noexcept
     -> std::expected<AnsiRenderResult, Error> {
   return render_ansi_impl(output, options.force_full, options.column, options.row, true,
-                          options.focused, options.allow_terminal_scroll);
+                          options.focused, options.cursor_override, options.cursor_override_column,
+                          options.cursor_override_row, options.allow_terminal_scroll);
 }
 
 void Terminal::invalidate_ansi_render_state() noexcept {
@@ -713,7 +744,9 @@ void Terminal::invalidate_ansi_render_state() noexcept {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool force_full,
                                 const std::uint16_t origin_column, const std::uint16_t origin_row,
-                                const bool composed, const bool focused,
+                                const bool composed, const bool focused, const bool cursor_override,
+                                const std::uint16_t cursor_override_column,
+                                const std::uint16_t cursor_override_row,
                                 const bool allow_terminal_scroll) noexcept
     -> std::expected<AnsiRenderResult, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
@@ -830,19 +863,23 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     impl_->ansi_physical_valid = false;
     return std::unexpected(Error::out_of_space);
   }
-  if ((!composed || focused) && metadata.cursor_visible && metadata.cursor_in_viewport) {
+  const bool canonical_cursor_visible = metadata.cursor_visible && metadata.cursor_in_viewport;
+  const bool presented_cursor_visible = cursor_override || canonical_cursor_visible;
+  const auto presented_cursor_column =
+      cursor_override ? cursor_override_column : metadata.cursor_column;
+  const auto presented_cursor_row = cursor_override ? cursor_override_row : metadata.cursor_row;
+  if ((!composed || focused) && presented_cursor_visible) {
     if (!writer.append("\x1B[") ||
-        !writer.append_integer(static_cast<std::size_t>(origin_row) + metadata.cursor_row + 1U) ||
+        !writer.append_integer(static_cast<std::size_t>(origin_row) + presented_cursor_row + 1U) ||
         !writer.append(";") ||
-        !writer.append_integer(static_cast<std::size_t>(origin_column) + metadata.cursor_column +
+        !writer.append_integer(static_cast<std::size_t>(origin_column) + presented_cursor_column +
                                1U) ||
         !writer.append("H\x1B[?25h")) {
       impl_->ansi_physical_valid = false;
       return std::unexpected(Error::out_of_space);
     }
   }
-  if ((!composed || focused) && (!metadata.cursor_visible || !metadata.cursor_in_viewport) &&
-      !writer.append("\x1B[?25l")) {
+  if ((!composed || focused) && !presented_cursor_visible && !writer.append("\x1B[?25l")) {
     impl_->ansi_physical_valid = false;
     return std::unexpected(Error::out_of_space);
   }
@@ -850,15 +887,17 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     GhosttyRenderStateCursorVisualStyle cursor_style =
         GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
     bool cursor_blinking = false;
-    result = ghostty_render_state_get(impl_->render_state,
-                                      GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_style);
-    if (result == GHOSTTY_SUCCESS) {
+    if (!cursor_override) {
       result = ghostty_render_state_get(
-          impl_->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &cursor_blinking);
-    }
-    if (result != GHOSTTY_SUCCESS) {
-      impl_->ansi_physical_valid = false;
-      return std::unexpected(detail::map_error(result));
+          impl_->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_style);
+      if (result == GHOSTTY_SUCCESS) {
+        result = ghostty_render_state_get(
+            impl_->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &cursor_blinking);
+      }
+      if (result != GHOSTTY_SUCCESS) {
+        impl_->ansi_physical_valid = false;
+        return std::unexpected(detail::map_error(result));
+      }
     }
     const auto cursor_code = [cursor_style, cursor_blinking]() noexcept -> std::uint8_t {
       switch (cursor_style) {

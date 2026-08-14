@@ -189,6 +189,7 @@ on the smallest robust local mux foundation. Current highest-value work is:
 - prove terminal correctness, cleanup, isolation, and resource stability with reproducible stress,
   soak, and Lemma/tmux comparison evidence.
 
-Public automation, agent access, broader extension/UI work, mouse, copy mode, packaging, and release
+Public automation, agent access, broader extension/UI work, mouse and clipboard completion,
+packaging, and release
 adoption remain roadmap outcomes, not current execution work. Reconsider their order only after the
 foundational mux completion gate in `TODO.md` is met.

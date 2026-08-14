@@ -5,8 +5,8 @@
 This runbook describes the frozen F0–F4 local foundation and its in-progress F5 validation: one
 per-user daemon, named sessions, tabs, panes, one attached client per session, private attach
 protocol 1.0, and daemon-owned terminal state.
-It does not promise mouse operation, copy mode, public automation, multiple viewers, reboot
-persistence, or custom remote transport. See [`current-capabilities.md`](current-capabilities.md) for
+It does not promise mouse operation, public automation, multiple viewers, reboot persistence, or
+custom remote transport. See [`current-capabilities.md`](current-capabilities.md) for
 the complete shipped/deferred inventory.
 
 ## Start, inspect, attach, and stop
@@ -42,10 +42,19 @@ The fixed prefix is `C-b`.
 | Focus next / previous | `C-b o`, `C-b ;` |
 | Close focused pane | `C-b x` |
 | Toggle zoom | `C-b z` |
+| Enter copy mode | `C-b [` |
 | Create tab | `C-b c` |
 | Next / previous tab | `C-b n`, `C-b p` |
 | Select tab 0–9 | `C-b 0` … `C-b 9` |
 | Close active tab | `C-b &` |
+
+Copy mode uses arrows, `h`/`j`/`k`/`l`, `b`/`w`, `0`/`$`, `g`/`G`, and `C-u`/`C-d`
+for navigation. The status row distinguishes navigation, selection, search, and failure states;
+the nonblinking copy cursor and selected range remain visibly highlighted. `Space` or `v` begins
+extending the tracked selection, `/` and `?` enter a bounded literal search, `n`/`N` repeat it,
+and `q` or `Escape` leaves. `Enter` or `y` formats the selection and emits one bounded,
+user-initiated OSC 52 standard-clipboard write before leaving. The outer terminal may still deny
+OSC 52 according to its own clipboard policy.
 
 Closing a tab immediately reindexes the remaining display positions, and numeric selection follows
 the displayed positions. Closing a final pane removes its tab; closing the final tab ends its
