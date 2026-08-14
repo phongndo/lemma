@@ -13,12 +13,12 @@ namespace {
 
 TEST(GhosttyParityContractTest, DeclaredGeometryFitsBoundedFrameTransaction) {
   constexpr auto declared_frame_bound =
-      std::size_t{protocol::columns_max} * protocol::rows_max * vt::pane_ansi_bytes_per_cell_max +
+      (std::size_t{protocol::columns_max} * protocol::rows_max * vt::pane_ansi_bytes_per_cell_max) +
       render::frame_fixed_overhead_bytes;
-  constexpr auto abuse_limit_frame_bound = std::size_t{limits::terminal_columns_hard_max} *
-                                               limits::terminal_rows_hard_max *
-                                               vt::pane_ansi_bytes_per_cell_max +
-                                           render::frame_fixed_overhead_bytes;
+  constexpr auto abuse_limit_frame_bound =
+      (std::size_t{limits::terminal_columns_hard_max} * limits::terminal_rows_hard_max *
+       vt::pane_ansi_bytes_per_cell_max) +
+      render::frame_fixed_overhead_bytes;
 
   EXPECT_EQ(declared_frame_bound, 35'204'096U);
   EXPECT_LE(declared_frame_bound, limits::frame_transaction_bytes_max);
