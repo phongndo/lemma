@@ -1,32 +1,48 @@
-# Agent guidance
+# Guide
 
-Lemma's documentation defines architectural constraints and product truth. It is not an implementation plan.
+Inspect relevant code, tests, and docs before editing. Read only what the task needs.
 
-## Before substantive work
+Docs define intended contracts. Code defines current reality.
 
-- Read [`docs/architecture.md`](docs/architecture.md).
-- Read [`docs/terminal.md`](docs/terminal.md) for terminal, input, copy/search, or rendering work.
-- Read [`docs/quality.md`](docs/quality.md).
-- Read [`docs/product-contract.md`](docs/product-contract.md) when behavior or product boundaries matter.
-- Read [`docs/current-capabilities.md`](docs/current-capabilities.md) when implementation status matters.
-- Inspect the current code and tests before proposing or editing anything.
+## Development
 
-## Development rules
+* Understand ownership, callers, and data flow before changing code.
+* Make one cohesive change at a time.
+* Prefer simple ownership and direct code over abstraction.
+* Reuse existing concepts before adding new ones.
+* Do not duplicate authoritative state or dependency-owned semantics.
+* Preserve bounds, ordering, lifetimes, and failure behavior.
+* Treat per-byte, event, pane, frame, or client work as performance-sensitive.
+* Characterize broad refactors and measure performance-sensitive changes.
+* Do not create plans, roadmaps, or TODO docs unless requested.
 
-- Reason from current code, not a roadmap.
-- Architecture documents are constraints, not implementation recipes.
-- Investigate before editing; prefer one cohesive change at a time.
-- Identify the single owner of every new mutable value.
-- Keep semantic state separate from descriptors, processes, queues, and other runtime resources.
-- Route semantic mutations through typed commands.
-- Prefer deleting duplicated responsibility over adding abstraction.
-- Do not duplicate Ghostty terminal semantics or create another canonical terminal grid.
-- Keep Ghostty headers, handles, enums, allocators, and layouts behind `terminal/`.
-- Do not add terminal backend interfaces or runtime polymorphism without a demonstrated requirement.
-- Identify whether changed work lies on a multiplicative path.
-- Characterize behavior before broad refactors and benchmark performance-sensitive changes.
-- Preserve explicit bounds and failure behavior at every external boundary.
-- Avoid speculative architecture and speculative caches.
-- After implementation, ask whether ownership, dependency direction, and the system as a whole became easier to explain.
+## Conversation
 
-`plan.md`, TODO lists, old phase documents, roadmaps, and historical task descriptions are not architectural authority. They have been removed; do not recreate them unless the user explicitly asks.
+* Be concise and technical.
+* Investigate before asking for context available in the repo.
+* Surface important findings and meaningful tradeoffs.
+* Recommend a solution when multiple options exist.
+* After substantial work, summarize what changed and what was verified.
+
+## Commands
+
+Use repo commands:
+
+```sh
+just build
+just test
+just fmt
+just lint
+just check
+just ci-check
+```
+
+Run focused checks while developing and `just check` before completion.
+
+Run relevant integration/adversarial tests for runtime or boundary changes, and benchmarks before/after performance-sensitive changes.
+
+Never ignore failing verification or claim success without stating what was verified.
+
+## Completion
+
+A change should be correct, tested, measured where needed, and no harder to reason about than before.
