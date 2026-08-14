@@ -1,6 +1,8 @@
 #ifndef LEMMA_PROTOCOL_SINGLE_PANE_HPP
 #define LEMMA_PROTOCOL_SINGLE_PANE_HPP
 
+#include "lemma/limits.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -93,7 +95,7 @@ inline constexpr std::array<std::byte, 4> attach_magic{std::byte{0x89}, std::byt
                                                        std::byte{'M'}, std::byte{'A'}};
 inline constexpr std::size_t attach_header_bytes = 16;
 inline constexpr std::size_t render_generation_bytes = 4;
-inline constexpr std::size_t render_ansi_bytes_max = std::size_t{4} * 1'024U * 1'024U;
+inline constexpr std::size_t render_ansi_bytes_max = limits::frame_chunk_bytes_max;
 inline constexpr std::size_t render_payload_bytes_max =
     render_generation_bytes + render_ansi_bytes_max;
 inline constexpr std::size_t diagnostic_bytes_max = 255;

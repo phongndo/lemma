@@ -148,10 +148,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Build and run tests
         run: nix develop .#ci --command scripts/ci/build-test
@@ -164,8 +164,8 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
 
   clang-tidy:
     name: Clang-tidy
@@ -191,10 +191,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Run clang-tidy
         run: nix develop .#ci --command scripts/ci/lint
@@ -223,10 +223,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Run clangd checks
         run: nix develop .#ci --command scripts/ci/lsp
@@ -255,10 +255,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Run sanitizer suite
         run: nix develop .#ci --command scripts/ci/sanitizers
@@ -271,8 +271,8 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
 
   gate:
     name: CI gate

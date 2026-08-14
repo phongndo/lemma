@@ -46,8 +46,9 @@ state, [`docs/roadmap.md`](docs/roadmap.md) for milestone and release gates,
 measurement standard, [`docs/core-mux-phase1.md`](docs/core-mux-phase1.md) for the authoritative
 kernel closeout, [`docs/performance.md`](docs/performance.md) for measured renderer and
 multiplexer results, and [`docs/memory.md`](docs/memory.md) for the byte-level ownership census and
-memory evidence. The
-mutable execution backlog and current focus are tracked in [`TODO.md`](TODO.md).
+memory evidence, and [`docs/ghostty-feature-parity.md`](docs/ghostty-feature-parity.md) for the
+classified child, host-capture, and presentation contracts. The mutable execution backlog and
+current focus are tracked in [`TODO.md`](TODO.md).
 
 ## Toolchain
 
@@ -71,8 +72,9 @@ just test
 ```
 
 The first build lets Conan 2 download/build its pinned packages and lets Zig
-build the pinned Ghostty source under [`third_party/ghostty`](third_party/ghostty). Subsequent C++
-compilations use ccache. The optional `nix develop .#benchmarks` shell adds the pinned tmux and
+build the pinned Ghostty source into the active CMake binary tree. Generated Ghostty libraries,
+headers, and both Zig caches remain outside [`third_party/ghostty`](third_party/ghostty). Subsequent
+C++ compilations use ccache. The optional `nix develop .#benchmarks` shell adds the pinned tmux and
 Zellij binaries used for common-workload comparisons without placing them in the default shell.
 
 ## Commands
@@ -203,7 +205,9 @@ their own licenses.
 ## Third-party dependency
 
 Ghostty is a Git submodule pinned to commit
-`55a3e33ab26a23d75b274b23c7f76d837db00578`. Its CMake wrapper invokes Zig to
-produce `libghostty-vt`; Lemma links the static target. Update it deliberately
-by checking out a reviewed Ghostty commit in `third_party/ghostty` and committing the
-new submodule pointer.
+`55a3e33ab26a23d75b274b23c7f76d837db00578`. [`third_party/ghostty-metadata/PIN.json`](third_party/ghostty-metadata/PIN.json) locks that source,
+Zig, build features, and optimization mapping; CMake rejects a mismatched or dirty submodule and
+links the isolated static build. Metadata lives beside rather than inside the Git submodule so the
+superproject can version it. Update the submodule pointer and metadata together after the review in
+[`docs/ghostty-feature-parity.md`](docs/ghostty-feature-parity.md). Local patches must follow
+[`third_party/ghostty-metadata/PATCHES.md`](third_party/ghostty-metadata/PATCHES.md).

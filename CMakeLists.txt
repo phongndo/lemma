@@ -58,8 +58,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   )
 endif()
 
-# libghostty-vt remains pinned and built from the third-party Ghostty source.
-add_subdirectory(third_party/ghostty EXCLUDE_FROM_ALL SYSTEM)
+# libghostty-vt remains pinned, private, and built without generated output in the submodule.
+include(cmake/GhosttyVt.cmake)
+lemma_add_pinned_ghostty()
 
 find_package(lua CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
@@ -208,6 +209,7 @@ if(LEMMA_BUILD_TESTS)
     tests/frame_scheduler_test.cpp
     tests/lemma_test.cpp
     tests/latency_trace_test.cpp
+    tests/ghostty_parity_regression_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
     tests/pty_writer_test.cpp

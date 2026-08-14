@@ -1,0 +1,153 @@
+include_guard(GLOBAL)
+
+# Build the pinned libghostty-vt without writing generated files into the Git submodule. The output
+# and both Zig caches are scoped to the active CMake binary tree and Ghostty commit.
+function(lemma_add_pinned_ghostty)
+  set(pin_file "${CMAKE_SOURCE_DIR}/third_party/ghostty-metadata/PIN.json")
+  set(source_dir "${CMAKE_SOURCE_DIR}/third_party/ghostty")
+
+  if(NOT EXISTS "${pin_file}")
+    message(FATAL_ERROR "missing Ghostty pin metadata: ${pin_file}")
+  endif()
+
+  file(READ "${pin_file}" pin_json)
+  string(JSON pinned_commit GET "${pin_json}" commit)
+  string(JSON pinned_zig GET "${pin_json}" zig_version)
+  string(JSON expected_simd GET "${pin_json}" expected_build_features simd)
+  string(JSON expected_kitty_graphics GET "${pin_json}" expected_build_features kitty_graphics)
+  string(JSON expected_tmux_control GET "${pin_json}" expected_build_features tmux_control_mode)
+
+  find_package(Git REQUIRED)
+  set(GHOSTTY_PIN_FILE "${pin_file}")
+  set(GHOSTTY_SOURCE_DIR "${source_dir}")
+  set(GHOSTTY_GIT_EXECUTABLE "${GIT_EXECUTABLE}")
+  set(pin_validator "${CMAKE_SOURCE_DIR}/cmake/ValidateGhosttyPin.cmake")
+  include("${pin_validator}")
+
+  find_program(ZIG_EXECUTABLE zig REQUIRED)
+  execute_process(
+    COMMAND "${ZIG_EXECUTABLE}" version
+    RESULT_VARIABLE zig_result
+    OUTPUT_VARIABLE actual_zig
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(NOT zig_result EQUAL 0 OR NOT actual_zig STREQUAL pinned_zig)
+    message(FATAL_ERROR "Ghostty requires Zig ${pinned_zig}; found ${actual_zig}")
+  endif()
+
+  if(NOT CMAKE_BUILD_TYPE)
+    message(FATAL_ERROR "a single-config CMAKE_BUILD_TYPE is required for the pinned Ghostty build")
+  endif()
+  string(JSON optimize ERROR_VARIABLE optimize_error
+    GET "${pin_json}" optimization_by_cmake_build_type "${CMAKE_BUILD_TYPE}"
+  )
+  if(optimize_error)
+    message(FATAL_ERROR
+      "PIN.json has no Ghostty optimization mapping for CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+    )
+  endif()
+
+  if(expected_simd)
+    set(simd_flag true)
+    set(simd_definition 1)
+  else()
+    set(simd_flag false)
+    set(simd_definition 0)
+  endif()
+  if(expected_kitty_graphics)
+    set(kitty_graphics_definition 1)
+  else()
+    set(kitty_graphics_definition 0)
+  endif()
+  if(expected_tmux_control)
+    set(tmux_control_definition 1)
+  else()
+    set(tmux_control_definition 0)
+  endif()
+  if(optimize STREQUAL "Debug")
+    set(optimize_definition 0)
+  elseif(optimize STREQUAL "ReleaseSafe")
+    set(optimize_definition 1)
+  elseif(optimize STREQUAL "ReleaseSmall")
+    set(optimize_definition 2)
+  elseif(optimize STREQUAL "ReleaseFast")
+    set(optimize_definition 3)
+  else()
+    message(FATAL_ERROR "unsupported Ghostty optimization mode in PIN.json: ${optimize}")
+  endif()
+
+  set(root "${CMAKE_BINARY_DIR}/_deps/ghostty/${pinned_commit}")
+  set(prefix "${root}/${CMAKE_BUILD_TYPE}")
+  set(local_cache "${root}/zig-cache/local-${CMAKE_BUILD_TYPE}")
+  set(global_cache "${root}/zig-cache/global")
+  if(WIN32)
+    set(static_library "${prefix}/lib/ghostty-vt-static.lib")
+  else()
+    set(static_library "${prefix}/lib/libghostty-vt.a")
+  endif()
+  set(include_dir "${prefix}/include")
+  file(MAKE_DIRECTORY "${include_dir}")
+
+  add_custom_target(
+    lemma_ghostty_vt_validate
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DGHOSTTY_PIN_FILE=${pin_file}"
+      "-DGHOSTTY_SOURCE_DIR=${source_dir}"
+      "-DGHOSTTY_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
+      -P "${pin_validator}"
+    COMMENT "Validating pinned Ghostty source"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT "${static_library}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${local_cache}" "${global_cache}"
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DGHOSTTY_PIN_FILE=${pin_file}"
+      "-DGHOSTTY_SOURCE_DIR=${source_dir}"
+      "-DGHOSTTY_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
+      -P "${pin_validator}"
+    COMMAND
+      "${ZIG_EXECUTABLE}" build
+      --prefix "${prefix}"
+      --cache-dir "${local_cache}"
+      --global-cache-dir "${global_cache}"
+      -Demit-lib-vt=true
+      -Dsimd=${simd_flag}
+      -Doptimize=${optimize}
+    WORKING_DIRECTORY "${source_dir}"
+    DEPENDS
+      "${pin_file}"
+      "${pin_validator}"
+      "${source_dir}/build.zig"
+      "${source_dir}/build.zig.zon"
+    COMMENT "Building pinned libghostty-vt ${pinned_commit} (${optimize})"
+    VERBATIM
+    USES_TERMINAL
+  )
+  add_custom_target(lemma_ghostty_vt_build DEPENDS "${static_library}")
+  add_dependencies(lemma_ghostty_vt_build lemma_ghostty_vt_validate)
+  # Preserve the target name used by analysis scripts and existing embedders.
+  add_custom_target(zig_build_lib_vt)
+  add_dependencies(zig_build_lib_vt lemma_ghostty_vt_build)
+
+  add_library(ghostty-vt-static STATIC IMPORTED GLOBAL)
+  set_target_properties(
+    ghostty-vt-static
+    PROPERTIES
+      IMPORTED_LOCATION "${static_library}"
+      INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
+      INTERFACE_COMPILE_DEFINITIONS
+        "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition}"
+  )
+  if(WIN32)
+    set_property(
+      TARGET ghostty-vt-static PROPERTY INTERFACE_LINK_LIBRARIES "ntdll;kernel32"
+    )
+  endif()
+  add_dependencies(ghostty-vt-static lemma_ghostty_vt_build)
+
+  message(STATUS "Pinned Ghostty: ${pinned_commit}")
+  message(STATUS "Ghostty output: ${prefix}")
+endfunction()

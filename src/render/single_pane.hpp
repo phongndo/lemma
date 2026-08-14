@@ -1,6 +1,7 @@
 #ifndef LEMMA_RENDER_SINGLE_PANE_HPP
 #define LEMMA_RENDER_SINGLE_PANE_HPP
 
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "render/pane_composition.hpp"
 
@@ -11,7 +12,7 @@
 
 namespace lemma::render {
 
-inline constexpr std::size_t frame_bytes_max = std::size_t{4} * 1'024U * 1'024U;
+inline constexpr std::size_t frame_bytes_max = limits::frame_chunk_bytes_max;
 inline constexpr std::size_t frame_bytes_min = std::size_t{64} * 1'024U;
 inline constexpr std::size_t frame_bytes_per_viewport_cell = vt::pane_ansi_bytes_per_cell_max;
 // Covers outer synchronized-update framing, focused cursor/mode state, and compositor control

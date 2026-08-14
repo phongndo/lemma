@@ -51,10 +51,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Build and test platform
         run: nix develop --command scripts/ci/platform
@@ -67,8 +67,8 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
 
   benchmark-smoke:
     name: Scheduled benchmark smoke
@@ -96,10 +96,10 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
           restore-keys: |
-            lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Run release benchmark smoke
         run: nix develop --command scripts/ci/benchmarks smoke
@@ -124,8 +124,8 @@ jobs:
             ${{ env.CONAN_HOME }}
             ${{ env.CCACHE_DIR }}
             .zig-cache
-            third_party/ghostty/.zig-cache
-          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules') }}-${{ github.sha }}
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
 
   foundation-smoke:
     name: F5 foundation evidence smoke

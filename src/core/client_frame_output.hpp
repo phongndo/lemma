@@ -1,6 +1,7 @@
 #ifndef LEMMA_CORE_CLIENT_FRAME_OUTPUT_HPP
 #define LEMMA_CORE_CLIENT_FRAME_OUTPUT_HPP
 
+#include "lemma/limits.hpp"
 #include "protocol/single_pane.hpp"
 #include "render/single_pane.hpp"
 
@@ -18,8 +19,10 @@ inline constexpr std::size_t attached_client_write_bytes_per_client_turn_max =
     std::size_t{64} * 1'024U;
 inline constexpr std::size_t attached_client_write_bytes_per_turn_max = std::size_t{256} * 1'024U;
 inline constexpr std::size_t attached_client_write_attempts_per_turn_max = 32;
-inline constexpr auto attached_client_no_progress_timeout = std::chrono::seconds(5);
-inline constexpr auto attached_client_frame_total_timeout = std::chrono::seconds(30);
+inline constexpr auto attached_client_no_progress_timeout =
+    limits::frame_transaction_progress_deadline;
+inline constexpr auto attached_client_frame_total_timeout =
+    limits::frame_transaction_total_deadline;
 
 class ClientFrameOutput final {
 public:

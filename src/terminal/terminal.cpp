@@ -37,6 +37,24 @@ namespace lemma::vt {
 
 namespace {
 
+[[nodiscard]] auto ghostty_build_matches_contract() noexcept -> bool {
+  bool simd = false;
+  bool kitty_graphics = false;
+  bool tmux_control_mode = false;
+  GhosttyOptimizeMode optimize = GHOSTTY_OPTIMIZE_DEBUG;
+
+  return ghostty_build_info(GHOSTTY_BUILD_INFO_SIMD, &simd) == GHOSTTY_SUCCESS &&
+         ghostty_build_info(GHOSTTY_BUILD_INFO_KITTY_GRAPHICS, &kitty_graphics) ==
+             GHOSTTY_SUCCESS &&
+         ghostty_build_info(GHOSTTY_BUILD_INFO_TMUX_CONTROL_MODE, &tmux_control_mode) ==
+             GHOSTTY_SUCCESS &&
+         ghostty_build_info(GHOSTTY_BUILD_INFO_OPTIMIZE, &optimize) == GHOSTTY_SUCCESS &&
+         simd == (LEMMA_GHOSTTY_EXPECT_SIMD != 0) &&
+         kitty_graphics == (LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS != 0) &&
+         tmux_control_mode == (LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE != 0) &&
+         optimize == static_cast<GhosttyOptimizeMode>(LEMMA_GHOSTTY_EXPECT_OPTIMIZE);
+}
+
 class AnsiWriter final {
 public:
   explicit AnsiWriter(const std::span<std::byte> output) noexcept : output_(output) {}
@@ -901,6 +919,9 @@ auto Terminal::operator=(Terminal&& other) noexcept -> Terminal& = default;
 Terminal::~Terminal() = default;
 
 auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<Terminal, Error> {
+  if (!ghostty_build_matches_contract()) {
+    return std::unexpected(Error::invalid_state);
+  }
   if (!valid_options(options)) {
     return std::unexpected(Error::invalid_options);
   }
