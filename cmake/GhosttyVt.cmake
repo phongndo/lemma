@@ -13,6 +13,8 @@ function(lemma_add_pinned_ghostty)
   file(READ "${pin_file}" pin_json)
   string(JSON pinned_commit GET "${pin_json}" commit)
   string(JSON pinned_zig GET "${pin_json}" zig_version)
+  string(JSON expected_version GET "${pin_json}" expected_version)
+  string(JSON emit_xcframework GET "${pin_json}" build_options emit_xcframework)
   string(JSON expected_simd GET "${pin_json}" expected_build_features simd)
   string(JSON expected_kitty_graphics GET "${pin_json}" expected_build_features kitty_graphics)
   string(JSON expected_tmux_control GET "${pin_json}" expected_build_features tmux_control_mode)
@@ -47,6 +49,11 @@ function(lemma_add_pinned_ghostty)
     )
   endif()
 
+  if(emit_xcframework)
+    set(xcframework_flag true)
+  else()
+    set(xcframework_flag false)
+  endif()
   if(expected_simd)
     set(simd_flag true)
     set(simd_definition 1)
@@ -114,6 +121,7 @@ function(lemma_add_pinned_ghostty)
       --cache-dir "${local_cache}"
       --global-cache-dir "${global_cache}"
       -Demit-lib-vt=true
+      -Demit-xcframework=${xcframework_flag}
       -Dsimd=${simd_flag}
       -Doptimize=${optimize}
     WORKING_DIRECTORY "${source_dir}"
@@ -139,7 +147,7 @@ function(lemma_add_pinned_ghostty)
       IMPORTED_LOCATION "${static_library}"
       INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
       INTERFACE_COMPILE_DEFINITIONS
-        "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition}"
+        "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_VERSION=\"${expected_version}\";LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition}"
   )
   if(WIN32)
     set_property(

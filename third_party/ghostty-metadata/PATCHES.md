@@ -1,6 +1,6 @@
 # Local Ghostty patch ledger
 
-Production Ghostty commit: [`55a3e33ab26a23d75b274b23c7f76d837db00578`](PIN.json).
+Production Ghostty commit: [`226a91658da6400140a7da3f38b825ba0395bd5d`](PIN.json).
 
 There are **no local Ghostty patches**. The submodule must be clean and exactly match `PIN.json` at
 configure time and whenever the Ghostty archive is built or reused.

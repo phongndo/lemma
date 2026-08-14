@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     hk.url = "github:jdx/hk/v1.50.0";
-    # Ghostty's overlay provides a Zig 0.15.2 build compatible with current Xcode SDKs.
+    # Ghostty's overlay provides the exact Zig version required by the production pin.
     zig = {
       url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -34,8 +34,7 @@
           llvm = pkgs.llvmPackages_22;
           isDarwin = pkgs.stdenv.isDarwin;
           darwinTools = llvm.clang-tools;
-          zigPackage =
-            if isDarwin then zig.packages.${system}.brew."0.15.2" else zig.packages.${system}."0.15.2";
+          zigPackage = zig.packages.${system}."0.16.0";
           ciHk =
             if isDarwin then
               hk.packages.${system}.default

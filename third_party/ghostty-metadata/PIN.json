@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "repository": "https://github.com/ghostty-org/ghostty.git",
-  "commit": "55a3e33ab26a23d75b274b23c7f76d837db00578",
-  "qualification_target_commit": "226a91658da6400140a7da3f38b825ba0395bd5d",
-  "zig_version": "0.15.2",
+  "commit": "226a91658da6400140a7da3f38b825ba0395bd5d",
+  "zig_version": "0.16.0",
+  "expected_version": "0.1.0-dev",
   "build_options": {
     "emit_lib_vt": true,
+    "emit_xcframework": false,
     "linkage": "static",
     "simd": true,
     "target": "native"

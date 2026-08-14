@@ -83,7 +83,14 @@ lemma_internal_target(lemma_diagnostic)
 
 # This is the only target that may include Ghostty headers. The final executable receives the
 # static archive as a link-only implementation requirement; Ghostty is not part of Lemma's API.
-add_library(lemma_terminal STATIC src/terminal/terminal.cpp)
+add_library(
+  lemma_terminal STATIC
+  src/terminal/terminal_core.cpp
+  src/terminal/terminal_effects.cpp
+  src/terminal/terminal_input.cpp
+  src/terminal/terminal_render.cpp
+  src/terminal/terminal_selection.cpp
+)
 lemma_internal_target(lemma_terminal)
 target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
 

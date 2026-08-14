@@ -8,8 +8,10 @@ Lemma-owned damage/cell/mode values to the renderer, and encodes application inp
 terminal modes.
 
 Ghostty headers, private enum values, allocator identities, pointers, and memory layouts never cross
-this component or appear on the wire. The adapter does not own PTYs, child processes, topology,
-client sockets, copy-mode policy, frame scheduling, or protocol state.
+this component or appear on the wire. `terminal_impl.hpp` contains the private handles; lifecycle,
+effects, input, rendering, and selection/formatting live in their corresponding private translation
+units behind the public `lemma::vt::Terminal` facade. The adapter does not own PTYs, child processes,
+topology, client sockets, copy-mode policy, frame scheduling, or protocol state.
 
 The retained checkpoint feasibility evidence documents a temporary reconstructive-VT prototype and
 replica role. Deterministic parser, UTF-8, inactive-screen, and
@@ -19,11 +21,11 @@ source tree.
 
 ## Scrollback unit contract
 
-`TerminalOptions::scrollback_bytes_max` is intentionally measured in bytes. The pinned Ghostty C
-header names `max_scrollback` in lines, but its implementation applies that value as a byte limit in
-the page allocator. Lemma previously exposed `scrollback_rows_max`; correcting the name and unit is
-an intentional pre-1.0 source API break for embedders. Rows and bytes are not interchangeable, so no
-silent compatibility alias is provided.
+`TerminalOptions::scrollback_bytes_max` is intentionally measured in bytes and is applied through
+Ghostty's `GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES` option immediately after construction. Ghostty
+prunes at page
+granularity, so the configured byte value is an estimate rather than a strict retained-byte count.
+Rows and bytes are not interchangeable, so no silent compatibility alias is provided.
 
 Ghostty PagePool storage bypasses Lemma's C `QuotaAllocator`. Allocation statistics exposed by the
 adapter therefore cover only routed C allocations and must not be described as total terminal

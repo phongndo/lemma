@@ -20,7 +20,27 @@ enum class Error : std::uint8_t {
   out_of_memory,
   invalid_state,
   out_of_space,
+  io_error,
+  limit_exceeded,
 };
+
+enum class BuildOptimization : std::uint8_t {
+  debug,
+  release_safe,
+  release_small,
+  release_fast,
+};
+
+struct LibraryBuildInfo final {
+  std::span<const std::uint8_t> version;
+  BuildOptimization optimization{BuildOptimization::debug};
+  bool simd{false};
+  bool kitty_graphics{false};
+  bool tmux_control_mode{false};
+};
+
+// Build identity of the privately linked terminal engine. The version view has static lifetime.
+[[nodiscard]] auto library_build_info() noexcept -> std::expected<LibraryBuildInfo, Error>;
 
 enum class DirtyState : std::uint8_t {
   clean,
@@ -46,8 +66,7 @@ struct TerminalSize final {
 
 struct TerminalOptions final {
   TerminalSize size{};
-  // This is intentionally bytes: the pinned Ghostty implementation treats max_scrollback as bytes
-  // despite naming that value in lines in its public C header.
+  // Ghostty prunes scrollback at page granularity, so the retained amount may exceed this estimate.
   std::size_t scrollback_bytes_max{limits::terminal_scrollback_bytes_default};
   std::size_t allocation_bytes_max{limits::terminal_allocation_bytes_default};
 };

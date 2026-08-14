@@ -1,0 +1,526 @@
+#include "terminal/terminal_impl.hpp"
+
+#include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <expected>
+#include <limits>
+#include <memory>
+#include <new>
+#include <span>
+#include <string_view>
+#include <utility>
+
+namespace lemma::vt {
+
+[[nodiscard]] auto library_build_info() noexcept -> std::expected<LibraryBuildInfo, Error> {
+  GhosttyString version{};
+  bool simd = false;
+  bool kitty_graphics = false;
+  bool tmux_control_mode = false;
+  GhosttyOptimizeMode optimize = GHOSTTY_OPTIMIZE_DEBUG;
+
+  if (ghostty_build_info(GHOSTTY_BUILD_INFO_VERSION_STRING, &version) != GHOSTTY_SUCCESS ||
+      ghostty_build_info(GHOSTTY_BUILD_INFO_SIMD, &simd) != GHOSTTY_SUCCESS ||
+      ghostty_build_info(GHOSTTY_BUILD_INFO_KITTY_GRAPHICS, &kitty_graphics) != GHOSTTY_SUCCESS ||
+      ghostty_build_info(GHOSTTY_BUILD_INFO_TMUX_CONTROL_MODE, &tmux_control_mode) !=
+          GHOSTTY_SUCCESS ||
+      ghostty_build_info(GHOSTTY_BUILD_INFO_OPTIMIZE, &optimize) != GHOSTTY_SUCCESS) {
+    return std::unexpected(Error::invalid_state);
+  }
+
+  const auto optimization = [optimize]() noexcept -> std::expected<BuildOptimization, Error> {
+    switch (optimize) {
+    case GHOSTTY_OPTIMIZE_DEBUG:
+      return BuildOptimization::debug;
+    case GHOSTTY_OPTIMIZE_RELEASE_SAFE:
+      return BuildOptimization::release_safe;
+    case GHOSTTY_OPTIMIZE_RELEASE_SMALL:
+      return BuildOptimization::release_small;
+    case GHOSTTY_OPTIMIZE_RELEASE_FAST:
+      return BuildOptimization::release_fast;
+    case GHOSTTY_OPTIMIZE_MODE_MAX_VALUE:
+      return std::unexpected(Error::invalid_state);
+    }
+    return std::unexpected(Error::invalid_state);
+  }();
+  if (!optimization.has_value()) {
+    return std::unexpected(optimization.error());
+  }
+
+  return LibraryBuildInfo{
+      .version = std::span(version.ptr, version.len),
+      .optimization = *optimization,
+      .simd = simd,
+      .kitty_graphics = kitty_graphics,
+      .tmux_control_mode = tmux_control_mode,
+  };
+}
+
+[[nodiscard]] auto library_version() noexcept -> std::span<const std::uint8_t> {
+  const auto info = library_build_info();
+  return info.has_value() ? info->version : std::span<const std::uint8_t>{};
+}
+
+namespace {
+
+[[nodiscard]] auto ghostty_build_matches_contract() noexcept -> bool {
+  const auto info = library_build_info();
+  if (!info.has_value()) {
+    return false;
+  }
+  constexpr std::string_view expected_version = LEMMA_GHOSTTY_EXPECT_VERSION;
+  const auto version_matches =
+      info->version.size() == expected_version.size() &&
+      std::memcmp(info->version.data(), expected_version.data(), expected_version.size()) == 0;
+  return version_matches && info->simd == (LEMMA_GHOSTTY_EXPECT_SIMD != 0) &&
+         info->kitty_graphics == (LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS != 0) &&
+         info->tmux_control_mode == (LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE != 0) &&
+         info->optimization == static_cast<BuildOptimization>(LEMMA_GHOSTTY_EXPECT_OPTIMIZE);
+}
+
+[[nodiscard]] auto valid_size(const TerminalSize& size) noexcept -> bool {
+  if (size.columns == 0 || size.rows == 0 || size.columns > limits::terminal_columns_hard_max ||
+      size.rows > limits::terminal_rows_hard_max) {
+    return false;
+  }
+
+  const auto width_max = std::numeric_limits<std::uint32_t>::max() / size.columns;
+  const auto height_max = std::numeric_limits<std::uint32_t>::max() / size.rows;
+  return size.cell_width_px <= width_max && size.cell_height_px <= height_max;
+}
+
+[[nodiscard]] auto valid_options(const TerminalOptions& options) noexcept -> bool {
+  if (!valid_size(options.size)) {
+    return false;
+  }
+  if (options.scrollback_bytes_max > limits::terminal_scrollback_bytes_hard_max) {
+    return false;
+  }
+  return options.allocation_bytes_max > 0 &&
+         options.allocation_bytes_max <= limits::terminal_allocation_bytes_hard_max;
+}
+
+template <typename Function>
+[[nodiscard]] auto callback_pointer(const Function function) noexcept -> const void* {
+  static_assert(sizeof(Function) == sizeof(const void*));
+  return std::bit_cast<const void*>(function); // NOLINT(bugprone-bitwise-pointer-cast)
+}
+
+} // namespace
+
+namespace detail {
+
+QuotaAllocator::QuotaAllocator(const std::size_t bytes_max) noexcept
+    : bytes_max_(bytes_max), native_{.ctx = this, .vtable = &vtable} {
+  LEMMA_ASSERT(bytes_max_ > 0);
+  LEMMA_ASSERT(bytes_max_ <= limits::terminal_allocation_bytes_hard_max);
+}
+
+[[nodiscard]] auto QuotaAllocator::native() const noexcept -> const GhosttyAllocator* {
+  return &native_;
+}
+
+[[nodiscard]] auto QuotaAllocator::stats() const noexcept -> AllocationStats { return stats_; }
+
+// The allocator ABI necessarily uses explicit allocation and deallocation.
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
+void* QuotaAllocator::allocate(void* context, const std::size_t length,
+                               const std::uint8_t alignment,
+                               [[maybe_unused]] const std::uintptr_t return_address) noexcept {
+  auto& allocator = *static_cast<QuotaAllocator*>(context);
+  assert_valid_alignment(alignment);
+
+  if (length == 0 || length > allocator.bytes_max_ - allocator.stats_.bytes_current) {
+    allocator.record_failure();
+    return nullptr;
+  }
+
+  void* const memory = allocate_raw(length, alignment);
+  if (memory == nullptr) {
+    allocator.record_failure();
+    return nullptr;
+  }
+
+  allocator.record_allocation(length);
+  return memory;
+}
+
+auto QuotaAllocator::resize(void* context, void* memory, const std::size_t memory_length,
+                            const std::uint8_t alignment, const std::size_t new_length,
+                            [[maybe_unused]] const std::uintptr_t return_address) noexcept -> bool {
+  auto& allocator = *static_cast<QuotaAllocator*>(context);
+  allocator.assert_allocation(memory, memory_length, alignment);
+  LEMMA_ASSERT(new_length > 0);
+
+  if (new_length > memory_length) {
+    return false;
+  }
+
+  allocator.stats_.bytes_current -= memory_length - new_length;
+  return true;
+}
+
+void* QuotaAllocator::remap(void* context, void* memory, const std::size_t memory_length,
+                            const std::uint8_t alignment, const std::size_t new_length,
+                            [[maybe_unused]] const std::uintptr_t return_address) noexcept {
+  auto& allocator = *static_cast<QuotaAllocator*>(context);
+  allocator.assert_allocation(memory, memory_length, alignment);
+  LEMMA_ASSERT(new_length > 0);
+
+  if (new_length <= memory_length) {
+    allocator.stats_.bytes_current -= memory_length - new_length;
+    return memory;
+  }
+
+  // Relocation temporarily owns both allocations, so the quota must cover both.
+  if (new_length > allocator.bytes_max_ - allocator.stats_.bytes_current) {
+    allocator.record_failure();
+    return nullptr;
+  }
+
+  void* const resized_memory = allocate_raw(new_length, alignment);
+  if (resized_memory == nullptr) {
+    allocator.record_failure();
+    return nullptr;
+  }
+
+  const auto bytes_transient = allocator.stats_.bytes_current + new_length;
+  allocator.stats_.bytes_peak = std::max(allocator.stats_.bytes_peak, bytes_transient);
+  std::memcpy(resized_memory, memory, memory_length);
+  std::free(memory);
+  allocator.stats_.bytes_current += new_length - memory_length;
+  allocator.record_total_allocation();
+  return resized_memory;
+}
+
+void QuotaAllocator::deallocate(void* context, void* memory, const std::size_t memory_length,
+                                const std::uint8_t alignment,
+                                [[maybe_unused]] const std::uintptr_t return_address) noexcept {
+  auto& allocator = *static_cast<QuotaAllocator*>(context);
+  allocator.assert_allocation(memory, memory_length, alignment);
+
+  std::free(memory);
+  allocator.stats_.bytes_current -= memory_length;
+  --allocator.stats_.allocations_current;
+}
+
+void QuotaAllocator::record_allocation(const std::size_t length) noexcept {
+  LEMMA_ASSERT(length <= bytes_max_ - stats_.bytes_current);
+  LEMMA_ASSERT(stats_.allocations_current < std::numeric_limits<std::size_t>::max());
+
+  stats_.bytes_current += length;
+  stats_.bytes_peak = std::max(stats_.bytes_peak, stats_.bytes_current);
+  ++stats_.allocations_current;
+  record_total_allocation();
+}
+
+void QuotaAllocator::record_failure() noexcept {
+  if (stats_.failures_total < std::numeric_limits<std::size_t>::max()) {
+    ++stats_.failures_total;
+  }
+}
+
+void QuotaAllocator::record_total_allocation() noexcept {
+  if (stats_.allocations_total < std::numeric_limits<std::size_t>::max()) {
+    ++stats_.allocations_total;
+  }
+}
+
+void QuotaAllocator::assert_allocation(const void* memory, const std::size_t memory_length,
+                                       const std::uint8_t alignment) const noexcept {
+  LEMMA_ASSERT(memory != nullptr);
+  LEMMA_ASSERT(memory_length > 0);
+  LEMMA_ASSERT(memory_length <= stats_.bytes_current);
+  LEMMA_ASSERT(stats_.allocations_current > 0);
+  assert_valid_alignment(alignment);
+}
+
+[[nodiscard]] auto QuotaAllocator::allocate_raw(const std::size_t length,
+                                                const std::uint8_t alignment) noexcept -> void* {
+  assert_valid_alignment(alignment);
+  const auto alignment_bytes = std::size_t{1} << alignment;
+  if (alignment_bytes <= alignof(std::max_align_t)) {
+    return std::malloc(length);
+  }
+
+  void* memory = nullptr;
+  if (posix_memalign(&memory, alignment_bytes, length) != 0) {
+    return nullptr;
+  }
+  return memory;
+}
+
+void QuotaAllocator::assert_valid_alignment(const std::uint8_t alignment) noexcept {
+  // Ghostty forwards Zig's log2 alignment enum despite the C header describing bytes.
+  LEMMA_ASSERT(std::has_single_bit(alignof(std::max_align_t)));
+  LEMMA_ASSERT(alignment < std::numeric_limits<std::size_t>::digits);
+}
+
+const GhosttyAllocatorVtable QuotaAllocator::vtable{
+    .alloc = &QuotaAllocator::allocate,
+    .resize = &QuotaAllocator::resize,
+    .remap = &QuotaAllocator::remap,
+    .free = &QuotaAllocator::deallocate,
+};
+// NOLINTEND(cppcoreguidelines-no-malloc)
+
+[[nodiscard]] auto map_error(const GhosttyResult result) noexcept -> Error {
+  switch (result) {
+  case GHOSTTY_OUT_OF_MEMORY:
+    return Error::out_of_memory;
+  case GHOSTTY_OUT_OF_SPACE:
+    return Error::out_of_space;
+  case GHOSTTY_IO_ERROR:
+    return Error::io_error;
+  case GHOSTTY_LIMIT_EXCEEDED:
+    return Error::limit_exceeded;
+  case GHOSTTY_INVALID_VALUE:
+  case GHOSTTY_NO_VALUE:
+  case GHOSTTY_SUCCESS:
+  case GHOSTTY_RESULT_MAX_VALUE:
+    return Error::invalid_state;
+  }
+  return Error::invalid_state;
+}
+
+} // namespace detail
+
+Terminal::Impl::Impl(const TerminalOptions& terminal_options) noexcept
+    : options(terminal_options), allocator(terminal_options.allocation_bytes_max) {}
+
+Terminal::Impl::~Impl() {
+  ghostty_key_event_free(key_event);
+  ghostty_key_encoder_free(key_encoder);
+  ghostty_render_state_row_cells_free(row_cells);
+  ghostty_render_state_row_iterator_free(row_iterator);
+  ghostty_render_state_free(render_state);
+  ghostty_terminal_free(terminal);
+  LEMMA_ASSERT(allocator.stats().bytes_current == 0);
+  LEMMA_ASSERT(allocator.stats().allocations_current == 0);
+}
+
+Terminal::Terminal(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+}
+
+Terminal::Terminal(Terminal&& other) noexcept = default;
+
+auto Terminal::operator=(Terminal&& other) noexcept -> Terminal& = default;
+
+Terminal::~Terminal() = default;
+
+auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<Terminal, Error> {
+  if (!ghostty_build_matches_contract()) {
+    return std::unexpected(Error::invalid_state);
+  }
+  if (!valid_options(options)) {
+    return std::unexpected(Error::invalid_options);
+  }
+
+  std::unique_ptr<Impl> impl;
+  try {
+    impl = std::make_unique<Impl>(options);
+  } catch (const std::bad_alloc&) {
+    return std::unexpected(Error::out_of_memory);
+  }
+
+  auto result = ghostty_terminal_new(impl->allocator.native(), &impl->terminal,
+                                     options.size.columns, options.size.rows);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                                &options.scrollback_bytes_max);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_key_encoder_new(impl->allocator.native(), &impl->key_encoder);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_key_event_new(impl->allocator.native(), &impl->key_event);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_render_state_new(impl->allocator.native(), &impl->render_state);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_render_state_row_iterator_new(impl->allocator.native(), &impl->row_iterator);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_render_state_row_cells_new(impl->allocator.native(), &impl->row_cells);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  impl->row_hash_count = options.size.rows;
+  impl->physical_cell_count = static_cast<std::size_t>(options.size.columns) * options.size.rows;
+  try {
+    // Runtime-sized cell storage cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    impl->physical_cell_hashes = std::make_unique<std::uint64_t[]>(impl->physical_cell_count);
+  } catch (const std::bad_alloc&) {
+    return std::unexpected(Error::out_of_memory);
+  }
+
+  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, impl.get());
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_terminal_set(
+      impl->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+      callback_pointer(static_cast<GhosttyTerminalWritePtyFn>(&Impl::write_pty)));
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_BELL,
+                                callback_pointer(static_cast<GhosttyTerminalBellFn>(&Impl::bell)));
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  result = ghostty_terminal_set(
+      impl->terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
+      callback_pointer(static_cast<GhosttyTerminalTitleChangedFn>(&Impl::title_changed)));
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  return Terminal(std::move(impl));
+}
+
+void Terminal::write(const std::span<const std::byte> bytes) noexcept {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  if (!bytes.empty()) {
+    // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    ghostty_terminal_vt_write(impl_->terminal, data, bytes.size());
+  }
+}
+
+auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes) noexcept
+    -> std::expected<DirtyState, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_->render_state != nullptr);
+
+  auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
+  if (result != GHOSTTY_SUCCESS) {
+    write(bytes);
+    return std::unexpected(detail::map_error(result));
+  }
+  const auto prior_damage = impl_->dirty_state();
+  if (!prior_damage.has_value()) {
+    write(bytes);
+    return std::unexpected(prior_damage.error());
+  }
+  const auto cleared = impl_->set_dirty_state(DirtyState::clean);
+  if (!cleared.has_value()) {
+    write(bytes);
+    return std::unexpected(cleared.error());
+  }
+
+  write(bytes);
+  result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
+  if (result != GHOSTTY_SUCCESS) {
+    const auto restored = impl_->set_dirty_state(*prior_damage);
+    if (!restored.has_value()) {
+      return std::unexpected(restored.error());
+    }
+    return std::unexpected(detail::map_error(result));
+  }
+  const auto acquired_damage = impl_->dirty_state();
+  if (!acquired_damage.has_value()) {
+    const auto restored = impl_->set_dirty_state(*prior_damage);
+    if (!restored.has_value()) {
+      return std::unexpected(restored.error());
+    }
+    return std::unexpected(acquired_damage.error());
+  }
+  const auto accumulated_damage = std::max(*prior_damage, *acquired_damage);
+  const auto restored = impl_->set_dirty_state(accumulated_damage);
+  if (!restored.has_value()) {
+    return std::unexpected(restored.error());
+  }
+  return *acquired_damage;
+}
+
+auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  if (!valid_size(size)) {
+    return std::unexpected(Error::invalid_options);
+  }
+
+  const auto physical_cell_count = static_cast<std::size_t>(size.columns) * size.rows;
+  detail::CellHashStorage physical_cell_hashes;
+  try {
+    // Runtime-sized cell storage cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    physical_cell_hashes = std::make_unique<std::uint64_t[]>(physical_cell_count);
+  } catch (const std::bad_alloc&) {
+    return std::unexpected(Error::out_of_memory);
+  }
+
+  const auto result = ghostty_terminal_resize(impl_->terminal, size.columns, size.rows,
+                                              size.cell_width_px, size.cell_height_px);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  impl_->physical_cell_hashes = std::move(physical_cell_hashes);
+  impl_->physical_cell_count = physical_cell_count;
+  impl_->row_hashes.fill(0);
+  impl_->row_hash_count = size.rows;
+  impl_->mirrored_modes_valid = false;
+  impl_->ansi_physical_valid = false;
+  impl_->options.size = size;
+  return {};
+}
+
+auto Terminal::size() const noexcept -> TerminalSize {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  return impl_->options.size;
+}
+
+auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  std::size_t rows = 0;
+  const auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &rows);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return rows;
+}
+
+auto Terminal::allocation_stats() const noexcept -> AllocationStats {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  return impl_->allocator.stats();
+}
+
+} // namespace lemma::vt

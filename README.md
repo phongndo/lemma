@@ -205,7 +205,7 @@ their own licenses.
 ## Third-party dependency
 
 Ghostty is a Git submodule pinned to commit
-`55a3e33ab26a23d75b274b23c7f76d837db00578`. [`third_party/ghostty-metadata/PIN.json`](third_party/ghostty-metadata/PIN.json) locks that source,
+`226a91658da6400140a7da3f38b825ba0395bd5d`. [`third_party/ghostty-metadata/PIN.json`](third_party/ghostty-metadata/PIN.json) locks that source,
 Zig, build features, and optimization mapping; CMake rejects a mismatched or dirty submodule and
 links the isolated static build. Metadata lives beside rather than inside the Git submodule so the
 superproject can version it. Update the submodule pointer and metadata together after the review in

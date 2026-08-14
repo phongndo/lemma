@@ -2,11 +2,11 @@
 
 ## Scope and evidence
 
-This is Lemma's M0 product contract for `libghostty-vt`. It audits Ghostty commit
-[`226a91658da6400140a7da3f38b825ba0395bd5d`](https://github.com/ghostty-org/ghostty/tree/226a91658da6400140a7da3f38b825ba0395bd5d/include/ghostty/vt).
-The production dependency remains the commit in
-[`third_party/ghostty-metadata/PIN.json`](../third_party/ghostty-metadata/PIN.json) until M1
-qualifies and updates it. Metadata lives beside the Git submodule because the superproject cannot
+This is Lemma's product contract for `libghostty-vt`. It audits the production Ghostty commit
+[`226a91658da6400140a7da3f38b825ba0395bd5d`](https://github.com/ghostty-org/ghostty/tree/226a91658da6400140a7da3f38b825ba0395bd5d/include/ghostty/vt),
+which is locked by
+[`third_party/ghostty-metadata/PIN.json`](../third_party/ghostty-metadata/PIN.json). Metadata lives
+beside the Git submodule because the superproject cannot
 version files inside a gitlink.
 Ghostty defines terminal semantics; Lemma decides which semantics are product commitments.
 
