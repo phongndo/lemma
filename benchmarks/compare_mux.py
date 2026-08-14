@@ -121,7 +121,7 @@ def main() -> int:
     report = {
         "schema": 2,
         "suite": "core-mux-comparison",
-        "contract": "docs/core-mux-quality.md",
+        "contract": "docs/quality.md",
         "policy": (
             "Workloads share inputs and completion markers. A failed completion remains an "
             "explicit result and is never converted into a latency sample."

@@ -35,7 +35,7 @@ class CiChangesTests(unittest.TestCase):
         )
 
     def test_unrelated_documentation_selects_no_expensive_lane(self):
-        self.assertEqual(self.selected("README.md", "docs/ci.md"), set())
+        self.assertEqual(self.selected("README.md", "docs/quality.md"), set())
 
     def test_test_change_selects_only_cpp_correctness(self):
         self.assertEqual(self.selected("tests/core_test.cpp"), {"cpp"})
