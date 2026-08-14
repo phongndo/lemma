@@ -103,9 +103,12 @@ rules:
 - retain the host cursor color, apply the focused pane's effective cursor color, and restore the host
   color on pane switch or detach.
 
-Current ANSI output does not implement this complete comparison model. M2 regressions
-`DISABLED_M2SessionThemeSurvivesReattach` and
-`DISABLED_M2AnsiProjectionPreservesEffectiveColorsAndCursor` characterize the gap.
+The M2 ANSI path stores one concrete theme on the session and applies it to every pane. Until a
+later host-capture handshake reports physical defaults and palette entries, projection takes the
+conservative branch of this policy: effective default, palette, and background-only colors are
+resolved through Ghostty and emitted as RGB. Focused cursor color/shape are projected, and detach
+resets them to the host-configured defaults. `M2SessionThemeSurvivesReattach` and
+`M2AnsiProjectionPreservesEffectiveColorsAndCursor` cover this fallback.
 
 ## Child-visible capability matrix
 
@@ -172,7 +175,7 @@ may retain smaller limits; protocol v2 may increase only up to these reviewed ce
 
 | Item | Limit | Failure policy |
 | --- | ---: | --- |
-| Frame chunk | 4 MiB | End on a row/operation boundary; never split an operation. |
+| Frame chunk | 4 MiB | Current protocol preserves the ordered ANSI byte stream across bounded chunks; operation-boundary metadata is deferred to protocol v2. |
 | Complete frame transaction | 64 MiB | Abort, invalidate physical shadow, and schedule a later full repair. |
 | Queued frame bytes per attachment | 8 MiB | Abort if the next owned chunk cannot enter the queue. |
 | RenderState snapshot hold | 50 ms | Abort encoding and release snapshot; canonical PTY processing continues. |
@@ -198,9 +201,11 @@ the 4 MiB value is only a chunk bound.
 
 ## Regression ledger
 
-M0 checks in disabled, deliberately failing specifications under
+M0 installed disabled, deliberately failing specifications under
 [`tests/ghostty_parity_regression_test.cpp`](../tests/ghostty_parity_regression_test.cpp). They do not
-make CI green by pretending the behavior exists. A milestone removes a `DISABLED_` prefix only after
+make CI green by pretending the behavior exists. The eight M2 specifications are now enabled
+executable regressions; later milestone gaps remain disabled. A milestone removes a `DISABLED_`
+prefix only after
 replacing `FAIL()` with an executable characterization; its exit gate requires that test to pass.
 Existing terminal, renderer, protocol, allocation, and E2E tests remain active throughout.
 

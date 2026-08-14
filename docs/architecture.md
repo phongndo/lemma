@@ -225,10 +225,11 @@ A successful attachment is an explicit transaction:
 
 No terminal history replay or checkpoint is needed. The daemon can regenerate visible state at any
 time from its canonical terminals and topology. Frame storage is a single session-owned RAII buffer
-allocated only at attach/resize. Its capacity is derived from the renderer's per-cell bound and
-clamped between 64 KiB and 4 MiB. Growth preserves any in-flight prefix transactionally, and detach
-releases it. Rendering and flush
-operations receive only non-owning spans and cannot grow the buffer.
+allocated only at attach/resize. Its capacity is derived from the renderer's per-cell bound, has a
+64 KiB floor and a 64 MiB transaction ceiling, and reaches 35,204,096 bytes at the declared 500×200
+maximum. Growth preserves any in-flight prefix transactionally, and detach releases it. Rendering
+and flush operations receive only non-owning spans and cannot grow the buffer. The output owner
+splits a retained transaction into ordered protocol messages whose ANSI payloads are at most 4 MiB.
 
 ### Live output
 
@@ -240,11 +241,12 @@ urgency may advance but never postpone the one pending deadline; blocked output 
 sessions expose no rendering timer. The daemon composes from latest canonical state, queues the frame
 nonblockingly, and continues processing PTYs. Reliable stream order preserves accepted frames.
 
-Only complete bounded frames enter the attachment queue. Composition performs no descriptor I/O or
-steady-state frame allocation. The core flushes retained bytes nonblockingly after composition and
-control handoff. Once bytes from a frame have begun writing, that frame is completed or the
-connection is retired; it is never spliced with another frame. PTY queues are independently quota
-owned, grow lazily, and retain drained capacity for reuse until their pane owner is destroyed.
+Only complete bounded frame transactions enter attachment output. Composition performs no
+descriptor I/O or steady-state frame allocation. The core flushes each transaction as one or more
+ordered 4 MiB protocol chunks after composition and control handoff. Once bytes from a transaction
+have begun writing, it is completed or the connection is retired; it is never spliced with another
+transaction. PTY queues are independently quota owned, grow lazily, and retain drained capacity for
+reuse until their pane owner is destroyed.
 
 ### Lag and redraw recovery
 

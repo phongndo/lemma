@@ -34,7 +34,7 @@ constexpr std::string_view outer_terminal_enter = "\x1B[?1049h\x1B[2J\x1B[H";
 constexpr std::string_view outer_terminal_restore =
     "\x1B[0m\x1B[?2026l\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l"
     "\x1B[?1004l\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l"
-    "\x1B[?2004l\x1B[?25h\x1B[?7h\x1B[?1049l";
+    "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[?1049l";
 constexpr std::string_view interruption_diagnostic = "lemma attach interrupted by signal\n";
 constexpr auto signal_cleanup_storage = [] {
   std::array<char, outer_terminal_restore.size() + interruption_diagnostic.size()> payload{};

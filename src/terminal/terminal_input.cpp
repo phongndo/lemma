@@ -1,6 +1,7 @@
 #include "terminal/terminal_impl.hpp"
 
 #include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <array>
@@ -125,6 +126,67 @@ auto Terminal::encode_key(const KeyEvent& event, const std::span<std::byte> outp
   }
   LEMMA_ASSERT(bytes_written <= output.size());
   return bytes_written;
+}
+
+auto Terminal::encode_paste(const std::span<std::byte> input,
+                            const std::span<std::byte> output) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  if (input.size() > limits::paste_payload_bytes_max) {
+    return std::unexpected(Error::limit_exceeded);
+  }
+
+  GhosttyTerminalModeConfig bracketed{
+      .mode = GHOSTTY_MODE_BRACKETED_PASTE,
+      .value = false,
+  };
+  auto result = ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_MODE, &bracketed);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  // std::byte and char are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* const input_data = reinterpret_cast<char*>(input.data());
+  auto* const output_data = reinterpret_cast<char*>(output.data());
+  // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
+  std::size_t bytes_written = 0;
+  result = ghostty_paste_encode(input_data, input.size(), bracketed.value, output_data,
+                                output.size(), &bytes_written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  LEMMA_ASSERT(bytes_written <= output.size());
+  return bytes_written;
+}
+
+[[nodiscard]] auto Terminal::paste_is_safe(const std::span<const std::byte> input) const noexcept
+    -> bool {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  if (input.size() > limits::paste_payload_bytes_max) {
+    return false;
+  }
+  // std::byte and char are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* const data = reinterpret_cast<const char*>(input.data());
+  return ghostty_paste_is_safe(data, input.size());
+}
+
+[[nodiscard]] auto Terminal::synchronized_output() const noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  GhosttyTerminalModeConfig synchronized{
+      .mode = GHOSTTY_MODE_SYNC_OUTPUT,
+      .value = false,
+  };
+  const auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_MODE, &synchronized);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return synchronized.value;
 }
 
 } // namespace lemma::vt

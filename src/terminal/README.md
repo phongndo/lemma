@@ -3,9 +3,10 @@
 Home of Lemma's only boundary to `libghostty-vt`.
 
 Every live pane has one authoritative daemon-owned terminal. The adapter consumes PTY output, owns
-canonical screen and scrollback state, captures terminal responses/effects, exposes bounded
-Lemma-owned damage/cell/mode values to the renderer, and encodes application input from canonical
-terminal modes.
+canonical screen and scrollback state, owns the concrete session theme, captures terminal
+responses/effects, exposes bounded Lemma-owned damage/cell/mode values to the renderer, and encodes
+application input and opaque paste from canonical terminal modes. PTY-response overflow is a sticky
+integrity failure, and Kitty graphics remains disabled until its bounded presentation path exists.
 
 Ghostty headers, private enum values, allocator identities, pointers, and memory layouts never cross
 this component or appear on the wire. `terminal_impl.hpp` contains the private handles; lifecycle,

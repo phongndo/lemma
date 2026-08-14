@@ -5,6 +5,7 @@
 #include "lemma/terminal/terminal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -69,6 +70,25 @@ namespace lemma::vt {
   return info.has_value() ? info->version : std::span<const std::uint8_t>{};
 }
 
+[[nodiscard]] auto default_theme() noexcept -> TerminalTheme {
+  std::array<GhosttyColorRgb, 256> native_palette{};
+  ghostty_color_palette_default(native_palette.data());
+
+  TerminalTheme theme;
+  for (std::size_t index = 0; index < theme.palette.size(); ++index) {
+    const auto color = std::span(native_palette).subspan(index, 1).front();
+    std::span(theme.palette).subspan(index, 1).front() = {
+        .red = color.r,
+        .green = color.g,
+        .blue = color.b,
+    };
+  }
+  theme.foreground = std::span(theme.palette).subspan(GHOSTTY_COLOR_NAMED_WHITE, 1).front();
+  theme.background = std::span(theme.palette).subspan(GHOSTTY_COLOR_NAMED_BLACK, 1).front();
+  theme.cursor = theme.foreground;
+  return theme;
+}
+
 namespace {
 
 [[nodiscard]] auto ghostty_build_matches_contract() noexcept -> bool {
@@ -112,6 +132,73 @@ template <typename Function>
 [[nodiscard]] auto callback_pointer(const Function function) noexcept -> const void* {
   static_assert(sizeof(Function) == sizeof(const void*));
   return std::bit_cast<const void*>(function); // NOLINT(bugprone-bitwise-pointer-cast)
+}
+
+[[nodiscard]] constexpr auto ghostty_color(const RgbColor color) noexcept -> GhosttyColorRgb {
+  return {.r = color.red, .g = color.green, .b = color.blue};
+}
+
+[[nodiscard]] auto apply_theme(const GhosttyTerminal terminal, const TerminalTheme& theme) noexcept
+    -> GhosttyResult {
+  const auto foreground = ghostty_color(theme.foreground);
+  const auto background = ghostty_color(theme.background);
+  const auto cursor = ghostty_color(theme.cursor);
+  std::array<GhosttyColorRgb, 256> palette{};
+  for (std::size_t index = 0; index < palette.size(); ++index) {
+    std::span(palette).subspan(index, 1).front() =
+        ghostty_color(std::span(theme.palette).subspan(index, 1).front());
+  }
+  auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &foreground);
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &background);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, palette.data());
+  }
+  return result;
+}
+
+[[nodiscard]] auto disable_temporary_graphics(const GhosttyTerminal terminal) noexcept
+    -> GhosttyResult {
+  constexpr std::uint64_t storage_limit = 0;
+  constexpr bool disabled = false;
+  constexpr std::size_t kitty_apc_limit = 0;
+  auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                                     &storage_limit);
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE, &disabled);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE, nullptr);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM,
+                                  &disabled);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_APC_MAX_BYTES_KITTY, &kitty_apc_limit);
+  }
+  return result;
+}
+
+[[nodiscard]] auto configure_terminal(const GhosttyTerminal terminal,
+                                      const std::size_t scrollback_bytes_max,
+                                      const TerminalTheme& theme) noexcept -> GhosttyResult {
+  auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                                     &scrollback_bytes_max);
+  if (result == GHOSTTY_SUCCESS) {
+    result = apply_theme(terminal, theme);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = disable_temporary_graphics(terminal);
+  }
+  return result;
 }
 
 } // namespace
@@ -294,7 +381,10 @@ const GhosttyAllocatorVtable QuotaAllocator::vtable{
 } // namespace detail
 
 Terminal::Impl::Impl(const TerminalOptions& terminal_options) noexcept
-    : options(terminal_options), allocator(terminal_options.allocation_bytes_max) {}
+    : options(terminal_options), session_theme(terminal_options.theme.value_or(default_theme())),
+      allocator(terminal_options.allocation_bytes_max) {
+  render_colors.size = sizeof(render_colors);
+}
 
 Terminal::Impl::~Impl() {
   ghostty_key_event_free(key_event);
@@ -338,8 +428,7 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
-  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
-                                &options.scrollback_bytes_max);
+  result = configure_terminal(impl->terminal, options.scrollback_bytes_max, impl->session_theme);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -502,6 +591,12 @@ auto Terminal::size() const noexcept -> TerminalSize {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->options.size;
+}
+
+auto Terminal::theme() const noexcept -> TerminalTheme {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  return impl_->session_theme;
 }
 
 auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Error> {

@@ -5,7 +5,9 @@
 #include "core/extension_runtime.hpp"
 #include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
+#include "core/presentation_gate.hpp"
 #include "core/pty_writer.hpp"
+#include "core/terminal_resize.hpp"
 #include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
 #include "lemma/command.hpp"
@@ -98,19 +100,31 @@ private:
   void* context_;
 };
 
-[[nodiscard]] auto resize_terminal(const int pty, vt::Terminal& terminal,
-                                   const std::uint16_t requested_columns,
-                                   const std::uint16_t requested_rows) noexcept -> bool {
+[[nodiscard]] auto resize_pty_for_transaction(void* const context,
+                                              const vt::TerminalSize& size) noexcept -> bool {
+  const auto pty = *static_cast<const int*>(context);
+  return platform::resize_pty(pty, size.columns, size.rows);
+}
+
+[[nodiscard]] auto resize_pane_terminal(const int pty, vt::Terminal& terminal,
+                                        const std::uint16_t requested_columns,
+                                        const std::uint16_t requested_rows) noexcept -> bool {
   const auto columns = std::clamp(requested_columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(requested_rows, std::uint16_t{1}, protocol::rows_max);
-  return platform::resize_pty(pty, columns, rows) &&
-         terminal.resize({.columns = columns, .rows = rows}).has_value();
+  const vt::TerminalSize requested{.columns = columns, .rows = rows};
+  auto descriptor = pty;
+  const auto status =
+      resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor);
+  return status == TerminalResizeStatus::applied || status == TerminalResizeStatus::unchanged;
 }
 
 struct PtyDrainResult final {
   bool alive{true};
   bool changed{false};
   bool render_damage{false};
+  bool presentation_deferred{false};
+  bool presentation_released{false};
+  bool force_full{false};
   bool damage_capture_failed{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   std::uint64_t correlation{0};
@@ -134,41 +148,56 @@ trace_pty_output([[maybe_unused]] PtyDrainResult& drain,
 #endif
 }
 
-void write_pty_output(vt::Terminal& terminal, const std::span<const std::byte> bytes,
-                      bool& capture_damage, PtyDrainResult& drain) noexcept {
+void write_pty_output(vt::Terminal& terminal, PresentationGate& presentation_gate,
+                      const std::span<const std::byte> bytes, bool& capture_damage,
+                      PtyDrainResult& drain) noexcept {
+  bool damage_acquired = true;
   if (!capture_damage) {
     terminal.write(bytes);
-    return;
+  } else {
+    const auto damage = terminal.write_and_report_damage(bytes);
+    if (!damage.has_value()) {
+      drain.damage_capture_failed = true;
+      capture_damage = false;
+    } else {
+      damage_acquired = *damage != vt::DirtyState::clean;
+      if (damage_acquired) {
+        capture_damage = false;
+      }
+    }
   }
-  const auto damage = terminal.write_and_report_damage(bytes);
-  if (!damage.has_value()) {
+
+  const auto synchronized = terminal.synchronized_output();
+  if (!synchronized.has_value()) {
     drain.damage_capture_failed = true;
-    capture_damage = false;
     return;
   }
-  if (*damage != vt::DirtyState::clean) {
-    drain.render_damage = true;
-    capture_damage = false;
-  }
+  const auto gate =
+      presentation_gate.observe(*synchronized, damage_acquired, std::chrono::steady_clock::now());
+  drain.render_damage = drain.render_damage || gate.visible_damage;
+  drain.presentation_deferred = presentation_gate.presentation_suppressed();
+  drain.presentation_released = drain.presentation_released || gate.urgent_render;
+  drain.force_full = drain.force_full || gate.force_full;
 }
 
 [[nodiscard]] auto
-process_pty_output(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writes,
-                   const std::span<const std::byte> bytes, bool& capture_damage,
-                   PtyDrainResult& drain,
+process_pty_output(const int pty, vt::Terminal& terminal, PresentationGate& presentation_gate,
+                   PanePtyWriteQueue& pending_writes, const std::span<const std::byte> bytes,
+                   bool& capture_damage, PtyDrainResult& drain,
                    diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept -> bool {
   const auto trace_correlation = trace_pty_output(drain, trace_matcher, bytes);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_output_read,
                                    static_cast<std::uint32_t>(pty), bytes.size(),
                                    trace_correlation);
-  write_pty_output(terminal, bytes, capture_damage, drain);
+  write_pty_output(terminal, presentation_gate, bytes, capture_damage, drain);
   drain.changed = true;
   return queue_terminal_responses(pending_writes, terminal);
 }
 
 [[nodiscard]] auto
-drain_pty(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writes,
-          std::size_t& global_budget, const bool capture_interactive_damage,
+drain_pty(const int pty, vt::Terminal& terminal, PresentationGate& presentation_gate,
+          PanePtyWriteQueue& pending_writes, std::size_t& global_budget,
+          const bool capture_interactive_damage,
           [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept
     -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
@@ -183,8 +212,8 @@ drain_pty(const int pty, vt::Terminal& terminal, PanePtyWriteQueue& pending_writ
       const auto size = static_cast<std::size_t>(bytes_read);
       global_budget -= size;
       const auto bytes = std::span(output).first(size);
-      if (!process_pty_output(pty, terminal, pending_writes, bytes, capture_damage, drain,
-                              trace_matcher)) {
+      if (!process_pty_output(pty, terminal, presentation_gate, pending_writes, bytes,
+                              capture_damage, drain, trace_matcher)) {
         drain.alive = false;
         return drain;
       }
@@ -284,6 +313,7 @@ struct Pane final {
   std::chrono::steady_clock::time_point next_process_name_refresh;
   PanePtyWriteQueue pending_writes;
   InteractiveDamageLatch interactive_damage;
+  PresentationGate presentation_gate;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
   diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
@@ -355,7 +385,8 @@ struct Session final {
           const std::span<const std::byte> initial_environment,
           const platform::EnvironmentMode initial_environment_mode) noexcept
       : name_size(session_name.size()), working_directory_size(initial_working_directory.size()),
-        environment_size(initial_environment.size()), environment_mode(initial_environment_mode) {
+        environment_size(initial_environment.size()), environment_mode(initial_environment_mode),
+        theme(vt::default_theme()) {
     std::memcpy(name.data(), session_name.data(), session_name.size());
     if (!initial_working_directory.empty()) {
       std::memcpy(working_directory.data(), initial_working_directory.data(),
@@ -417,6 +448,7 @@ struct Session final {
   std::array<std::byte, protocol::environment_bytes_max> environment{};
   std::size_t environment_size{0};
   platform::EnvironmentMode environment_mode{platform::EnvironmentMode::inherit};
+  vt::TerminalTheme theme{};
   FrameBuffer frame;
   std::array<TabSlot, tabs_per_session_max> tabs{};
   TabId active_tab;
@@ -454,10 +486,11 @@ struct Session final {
 [[nodiscard]] auto create_pane(const std::uint16_t columns, const std::uint16_t rows,
                                const std::string_view working_directory,
                                const std::span<const std::byte> environment,
-                               const platform::EnvironmentMode environment_mode) noexcept
-    -> std::unique_ptr<Pane> {
+                               const platform::EnvironmentMode environment_mode,
+                               const vt::TerminalTheme& theme) noexcept -> std::unique_ptr<Pane> {
   vt::TerminalOptions options;
   options.size = {.columns = columns, .rows = rows};
+  options.theme = theme;
   auto terminal_result = vt::Terminal::create(options);
   if (!terminal_result.has_value()) {
     return nullptr;
@@ -591,8 +624,9 @@ refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_po
     if (slot.tab != nullptr) {
       continue;
     }
-    auto first_pane = create_pane(session.columns, pane_rows(session.rows), session.cwd(),
-                                  session.launch_environment(), session.environment_mode);
+    auto first_pane =
+        create_pane(session.columns, pane_rows(session.rows), session.cwd(),
+                    session.launch_environment(), session.environment_mode, session.theme);
     if (first_pane == nullptr) {
       return nullptr;
     }
@@ -677,9 +711,15 @@ refresh_process_name_if_due(Pane& pane, const std::chrono::steady_clock::time_po
   if (pane.rectangle == rectangle) {
     return true;
   }
-  if (!resize_terminal(pane.pty, pane.terminal, rectangle.columns, rectangle.rows)) {
+  if (!resize_pane_terminal(pane.pty, pane.terminal, rectangle.columns, rectangle.rows)) {
     return false;
   }
+  const auto synchronized = pane.terminal.synchronized_output();
+  if (!synchronized.has_value()) {
+    return false;
+  }
+  static_cast<void>(
+      pane.presentation_gate.observe(*synchronized, true, std::chrono::steady_clock::now()));
   pane.rectangle = rectangle;
   return true;
 }
@@ -821,8 +861,9 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_tab_max>;
 }
 
 [[nodiscard]] auto resolve_session_layout(Session& session, Tab& tab) noexcept -> bool {
-  // PTY resizing is not transactional: retire the session rather than continue after a partial
-  // geometry update.
+  // Each pane resize rolls canonical geometry back if its PTY update fails. A multi-pane layout can
+  // still have earlier successful pane transactions, so fail closed rather than expose a partial
+  // layout when any later pane rejects its target.
   const bool resolved = resolve_layout(tab);
   session.active = session.active && resolved;
   return resolved;
@@ -993,7 +1034,7 @@ void create_tab(Session& session) noexcept {
     new_rows = static_cast<std::uint16_t>(available - ((available + 1U) / 2U));
   }
   auto created = create_pane(new_columns, new_rows, session.cwd(), session.launch_environment(),
-                             session.environment_mode);
+                             session.environment_mode, session.theme);
   if (created == nullptr) {
     return false;
   }
@@ -1510,6 +1551,7 @@ collect_surfaces(Session& session,
         .terminal = &pane->terminal,
         .rectangle = pane->rectangle,
         .focused = pane->id == tab->focused_pane,
+        .presentation_suppressed = pane->presentation_gate.presentation_suppressed(),
         .border_right =
             static_cast<std::uint32_t>(pane->rectangle.column) + pane->rectangle.columns <
             tab->layout_columns,
@@ -1742,8 +1784,12 @@ collect_status_line(Session& session,
   diagnostic::set_latency_trace_correlation(0);
   session.frame_trace_correlation = 0;
 #endif
-  if (!rendered.has_value() || session.server_sequence == 0 ||
-      session.server_sequence == std::numeric_limits<std::uint32_t>::max()) {
+  if (!rendered.has_value() || session.server_sequence == 0) {
+    return false;
+  }
+  const auto frame_messages = ClientFrameOutput::frame_message_count(rendered->bytes);
+  if (frame_messages == 0 ||
+      frame_messages > std::numeric_limits<std::uint32_t>::max() - session.server_sequence) {
     return false;
   }
   auto generation = session.full_redraw_generation;
@@ -1758,7 +1804,7 @@ collect_status_line(Session& session,
                                   rendered->full, now, trace_correlation)) {
     return false;
   }
-  ++session.server_sequence;
+  session.server_sequence += static_cast<std::uint32_t>(frame_messages);
   session.full_redraw_generation = generation;
   return true;
 }
@@ -1820,7 +1866,35 @@ template <typename Id>
   return true;
 }
 
-using Sessions = BoundedGenerationalStore<Session, SessionId, limits::sessions_hard_max>;
+class Sessions final {
+  using Store = BoundedGenerationalStore<Session, SessionId, limits::sessions_hard_max>;
+
+public:
+  [[nodiscard]] auto insert(std::unique_ptr<Session> session) noexcept -> std::optional<SessionId> {
+    if (session != nullptr) {
+      session->frame.bind_capacity_budget(frame_capacity_budget_);
+    }
+    return sessions_.insert(std::move(session));
+  }
+
+  [[nodiscard]] auto get(const SessionId id) noexcept -> Session* { return sessions_.get(id); }
+  [[nodiscard]] auto get(const SessionId id) const noexcept -> const Session* {
+    return sessions_.get(id);
+  }
+  [[nodiscard]] auto erase(const SessionId id) noexcept -> bool { return sessions_.erase(id); }
+  [[nodiscard]] auto size() const noexcept -> std::size_t { return sessions_.size(); }
+  [[nodiscard]] static constexpr auto capacity() noexcept -> std::size_t {
+    return Store::capacity();
+  }
+  [[nodiscard]] auto begin() noexcept { return sessions_.begin(); }
+  [[nodiscard]] auto end() noexcept { return sessions_.end(); }
+  [[nodiscard]] auto begin() const noexcept { return sessions_.begin(); }
+  [[nodiscard]] auto end() const noexcept { return sessions_.end(); }
+
+private:
+  render::FrameCapacityBudget frame_capacity_budget_;
+  Store sessions_;
+};
 
 [[nodiscard]] auto find_session(Sessions& sessions, const std::string_view name) noexcept
     -> Session* {
@@ -2501,6 +2575,8 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
   }
 }
 
+// Deadline folding is bounded across the fixed session/tab/pane hierarchy.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const FrameScheduler::TimePoint now,
                                       int timeout) noexcept -> int {
   const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
@@ -2517,10 +2593,22 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     return false;
   };
   for (const auto& session : sessions) {
-    if (session != nullptr && session->active &&
-        (tighten(session->frame_scheduler.deadline(frame_sink_state(*session))) ||
-         tighten(session->output.deadline()))) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    if (tighten(session->frame_scheduler.deadline(frame_sink_state(*session))) ||
+        tighten(session->output.deadline())) {
       return 0;
+    }
+    for (const auto& tab_slot : session->tabs) {
+      if (tab_slot.tab == nullptr) {
+        continue;
+      }
+      for (const auto& pane_slot : tab_slot.tab->panes) {
+        if (pane_slot.pane != nullptr && tighten(pane_slot.pane->presentation_gate.deadline())) {
+          return 0;
+        }
+      }
     }
   }
   return timeout;
@@ -2580,7 +2668,7 @@ struct PaneDamageAssessment final {
 
 [[nodiscard]] auto frame_urgency(const PtyDrainResult& drained, const bool process_changed,
                                  const PaneDamageAssessment damage) noexcept -> FrameUrgency {
-  if (drained.damage_capture_failed) {
+  if (drained.damage_capture_failed || drained.presentation_released) {
     return FrameUrgency::state_change;
   }
   if (damage.interactive) {
@@ -2625,8 +2713,9 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     return;
   }
   const auto pane_budget_before = pane_budget;
-  const auto drained = drain_pty(pane.pty, pane.terminal, pane.pending_writes, pane_budget,
-                                 track_interactive_damage, trace_matcher);
+  const auto drained =
+      drain_pty(pane.pty, pane.terminal, pane.presentation_gate, pane.pending_writes, pane_budget,
+                track_interactive_damage, trace_matcher);
   const auto bytes_drained = pane_budget_before - pane_budget;
   global_budget -= bytes_drained;
   if (blocked_sink) {
@@ -2644,9 +2733,10 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     session.frame_trace_correlation = drained.correlation;
   }
 #endif
-  if (tab.id == session.active_tab) {
+  if (tab.id == session.active_tab &&
+      (!drained.presentation_deferred || process_changed || damage.status_changed)) {
     schedule_frame(session, frame_urgency(drained, process_changed, damage),
-                   drained.damage_capture_failed);
+                   drained.damage_capture_failed || drained.force_full);
   } else if (damage.status_changed) {
     schedule_frame(session, FrameUrgency::state_change, false);
   }
@@ -2737,6 +2827,31 @@ void reclaim_dead_panes(Session& session) noexcept {
       const auto& pane = tab->panes[index].pane;
       if (pane != nullptr && !pane->active) {
         static_cast<void>(close_pane(session, *tab, pane->id));
+      }
+    }
+  }
+}
+
+// Gate expiry visits the same fixed hierarchy and schedules only visible active-tab repairs.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void release_expired_presentation_gates(Sessions& sessions) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  for (auto& session : sessions) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    for (auto& tab_slot : session->tabs) {
+      if (tab_slot.tab == nullptr) {
+        continue;
+      }
+      for (auto& pane_slot : tab_slot.tab->panes) {
+        if (pane_slot.pane == nullptr) {
+          continue;
+        }
+        const auto released = pane_slot.pane->presentation_gate.release_if_expired(now);
+        if (released.urgent_render && tab_slot.tab->id == session->active_tab) {
+          schedule_frame(*session, FrameUrgency::state_change, released.force_full);
+        }
       }
     }
   }
@@ -3195,6 +3310,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
 
+    release_expired_presentation_gates(sessions);
     queue_due_frames(sessions);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
     // composed and newly handed-off attach frames get one immediate attempt; a blocked frame is

@@ -18,6 +18,7 @@ void Terminal::Impl::write_pty([[maybe_unused]] GhosttyTerminal terminal_handle,
   const auto bytes = std::as_bytes(std::span(data, length));
   if (!impl.pty_responses.append(bytes)) {
     impl.effects.pty_response_overflowed = true;
+    impl.pty_response_integrity_failed = true;
   }
 }
 
@@ -64,6 +65,12 @@ auto Terminal::pending_pty_response_bytes() const noexcept -> std::size_t {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->pty_responses.size();
+}
+
+auto Terminal::pty_response_overflowed() const noexcept -> bool {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  return impl_->pty_response_integrity_failed;
 }
 
 auto Terminal::read_pty_responses(const std::span<std::byte> output) noexcept -> std::size_t {

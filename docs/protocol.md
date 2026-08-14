@@ -6,7 +6,7 @@ The attached terminal path uses private protocol **1.0** on the per-user
 `lemma-private-1.0-<uid>.sock` endpoint. It is version-coupled to the Lemma binary and is not a
 public RPC, automation, capture, or extension API. The daemon remains authoritative for sessions,
 tabs, panes, PTYs, canonical terminal state, layout, and ANSI composition. The attached client only
-decodes physical input, transports validated messages, writes complete ANSI frame payloads to the
+decodes physical input, transports validated messages, writes ordered ANSI frame chunks to the
 outer terminal, and restores that terminal.
 
 The existing bounded one-request CLI control commands (create, list, list-tabs, kill, and shutdown)
@@ -83,23 +83,27 @@ connection is retired without terminating pane processes.
 
 ## Render generations, backpressure, and recovery
 
-A transport render message is one complete retained ANSI frame, never an ambiguous socket byte
-stream. It has 20 bytes of wire overhead: the 16-byte envelope plus the four-byte full-redraw
-generation. The client strips these bytes and writes only the validated ANSI payload to the outer
-terminal.
+One retained ANSI frame transaction is carried by one or more ordered `render_frame` messages. Each
+message has 20 bytes of wire overhead—the 16-byte envelope plus the four-byte full-redraw
+generation—and at most 4 MiB of ANSI. The client strips the framing and writes only the validated
+chunks, in sequence, to the outer terminal. The transaction's ANSI stream opens synchronized output
+in its first chunk and closes it in its final chunk, so arbitrary socket and message fragmentation
+does not expose an intermediate frame.
 
-The first render after every attach is full redraw generation 1. A full redraw increments generation
-by exactly one; incremental frames repeat the current generation. The client rejects a delta before
-the first full frame, a skipped/repeated full generation, or a delta carrying another generation.
-Resize, active-tab changes, reconnect, and lag repair all use the daemon's forced-full composition
-path. A reconnect starts a fresh attachment and generation 1 rather than replaying a log.
+The first transaction after every attach is full redraw generation 1. Its first chunk carries the
+full-redraw flag; continuation chunks repeat that generation without the flag. A later full redraw
+increments generation by exactly one, while incremental transactions repeat the current generation.
+The client rejects a delta before the first full frame, a skipped/repeated full generation, or a
+delta carrying another generation. Resize, active-tab changes, reconnect, and lag repair all use the
+daemon's forced-full composition path. A reconnect starts a fresh attachment and generation 1
+rather than replaying a log.
 
 F2 output policy is unchanged and counts framing bytes against its budgets:
 
 - one retained output per attached client;
 - at most 64 KiB per client and 256 KiB daemon-wide socket-write progress per reactor turn;
 - at most 32 write attempts per client per turn with a persistent round-robin cursor;
-- 5 s no-progress and 30 s total-message deadlines;
+- 5 s no-progress and 30 s total-transaction deadlines;
 - partial writes resume at the exact envelope/payload offset; and
 - damage arriving behind an in-flight frame stays in canonical terminal state and collapses into one
   later forced full redraw.

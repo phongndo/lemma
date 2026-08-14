@@ -180,7 +180,7 @@ TEST(TerminalTest, EncodesOnlyChangedCellSpan) {
   const auto changed = terminal.render_ansi(output);
   ASSERT_TRUE(changed.has_value());
   EXPECT_EQ(changed->rows, 1U);
-  EXPECT_LT(changed->bytes, 100U);
+  EXPECT_LT(changed->bytes, 128U);
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::string_view encoded(reinterpret_cast<const char*>(output.data()), changed->bytes);
@@ -283,6 +283,51 @@ TEST(TerminalTest, KeyEncoderTracksCursorApplicationMode) {
   ASSERT_TRUE(application.has_value());
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *application), "\x1BOA");
+}
+
+TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
+  auto terminal = make_terminal();
+  std::array<std::byte, 64> output{};
+  std::array input{std::byte{'a'}, std::byte{'\n'}, std::byte{0x1B}, std::byte{'b'}};
+  EXPECT_FALSE(terminal.paste_is_safe(input));
+
+  auto encoded = terminal.encode_paste(input, output);
+  ASSERT_TRUE(encoded.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *encoded), "a\r b");
+
+  write_text(terminal, "\x1B[?2004h");
+  input = {std::byte{'a'}, std::byte{'\n'}, std::byte{0x1B}, std::byte{'b'}};
+  encoded = terminal.encode_paste(input, output);
+  ASSERT_TRUE(encoded.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *encoded),
+            "\x1B[200~a\n b\x1B[201~");
+}
+
+TEST(TerminalTest, DisablesKittyGraphicsUntilBoundedPresentationExists) {
+  auto terminal = make_terminal();
+  const auto allocations = terminal.allocation_stats().bytes_current;
+  write_text(terminal, "\x1B_Gi=1,a=q,s=1,v=1,f=24;AAAA\x1B\\");
+
+  EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
+  EXPECT_FALSE(terminal.pty_response_overflowed());
+  EXPECT_EQ(terminal.allocation_stats().bytes_current, allocations);
+}
+
+TEST(TerminalTest, PtyResponseOverflowIsStickyTerminalIntegrityFailure) {
+  auto terminal = make_terminal();
+  std::string queries;
+  constexpr std::string_view query = "\x1B[6n";
+  queries.reserve(query.size() * 20'000U);
+  for (std::size_t count = 0; count < 20'000U; ++count) {
+    queries.append(query);
+  }
+  write_text(terminal, queries);
+
+  EXPECT_TRUE(terminal.pty_response_overflowed());
+  EXPECT_TRUE(terminal.take_effects().pty_response_overflowed);
+  EXPECT_TRUE(terminal.pty_response_overflowed());
 }
 
 TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {

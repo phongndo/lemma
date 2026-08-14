@@ -2,6 +2,7 @@
 
 #include "render/pane_composition.hpp"
 
+#include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
@@ -50,13 +51,37 @@ namespace {
     return std::unexpected(FrameCapacityError::arithmetic_overflow);
   }
   const auto calculated = frame_fixed_overhead_bytes + (cells * frame_bytes_per_viewport_cell);
-  return std::min(frame_bytes_max, std::max(frame_bytes_min, calculated));
+  if (calculated > frame_bytes_max) {
+    return std::unexpected(FrameCapacityError::transaction_too_large);
+  }
+  return std::max(frame_bytes_min, calculated);
+}
+
+[[nodiscard]] auto FrameCapacityBudget::reserve(const std::size_t bytes) noexcept -> bool {
+  if (bytes > bytes_max_ - used_) {
+    return false;
+  }
+  used_ += bytes;
+  return true;
+}
+
+void FrameCapacityBudget::release(const std::size_t bytes) noexcept {
+  LEMMA_ASSERT(bytes <= used_);
+  used_ -= bytes;
 }
 
 FrameBuffer::FrameBuffer(const FrameAllocationOperation allocate,
                          void* const allocation_context) noexcept
     : allocate_(allocate == nullptr ? &allocate_frame_storage : allocate),
       allocation_context_(allocation_context) {}
+
+FrameBuffer::~FrameBuffer() { release(); }
+
+void FrameBuffer::bind_capacity_budget(FrameCapacityBudget& budget) noexcept {
+  LEMMA_ASSERT(capacity_ == 0);
+  LEMMA_ASSERT(capacity_budget_ == nullptr);
+  capacity_budget_ = &budget;
+}
 
 [[nodiscard]] auto FrameBuffer::prepare(const Viewport viewport,
                                         const std::size_t preserve_bytes) noexcept -> bool {
@@ -67,20 +92,35 @@ FrameBuffer::FrameBuffer(const FrameAllocationOperation allocate,
   if (*required <= capacity_) {
     return true;
   }
+  // Reserve the complete replacement while the old backing is still live. This keeps the quota
+  // true even during allocation; the old reservation is released only after the swap commits.
+  if (capacity_budget_ != nullptr && !capacity_budget_->reserve(*required)) {
+    return false;
+  }
   auto replacement = allocate_(allocation_context_, *required);
   if (replacement == nullptr) {
+    if (capacity_budget_ != nullptr) {
+      capacity_budget_->release(*required);
+    }
     return false;
   }
   if (preserve_bytes > 0) {
     std::memcpy(replacement.get(), storage_.get(), preserve_bytes);
   }
+  const auto previous_capacity = capacity_;
   storage_ = std::move(replacement);
   capacity_ = *required;
+  if (capacity_budget_ != nullptr) {
+    capacity_budget_->release(previous_capacity);
+  }
   return true;
 }
 
 void FrameBuffer::release() noexcept {
   storage_.reset();
+  if (capacity_budget_ != nullptr) {
+    capacity_budget_->release(capacity_);
+  }
   capacity_ = 0;
 }
 

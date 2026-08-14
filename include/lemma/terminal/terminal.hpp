@@ -3,10 +3,12 @@
 
 #include "lemma/limits.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -64,11 +66,33 @@ struct TerminalSize final {
       -> bool = default;
 };
 
+struct RgbColor final {
+  std::uint8_t red{0};
+  std::uint8_t green{0};
+  std::uint8_t blue{0};
+
+  friend constexpr auto operator==(const RgbColor&, const RgbColor&) noexcept -> bool = default;
+};
+
+struct TerminalTheme final {
+  RgbColor foreground{};
+  RgbColor background{};
+  RgbColor cursor{};
+  std::array<RgbColor, 256> palette{};
+
+  friend constexpr auto operator==(const TerminalTheme&, const TerminalTheme&) noexcept
+      -> bool = default;
+};
+
+// Returns the concrete xterm-compatible theme used when TerminalOptions::theme is unset.
+[[nodiscard]] auto default_theme() noexcept -> TerminalTheme;
+
 struct TerminalOptions final {
   TerminalSize size{};
   // Ghostty prunes scrollback at page granularity, so the retained amount may exceed this estimate.
   std::size_t scrollback_bytes_max{limits::terminal_scrollback_bytes_default};
   std::size_t allocation_bytes_max{limits::terminal_allocation_bytes_default};
+  std::optional<TerminalTheme> theme;
 };
 
 // Covers only allocations routed through Lemma's Ghostty C allocator. Ghostty PagePool storage and
@@ -244,11 +268,21 @@ public:
   [[nodiscard]] auto encode_key(const KeyEvent& event, std::span<std::byte> output) noexcept
       -> std::expected<std::size_t, Error>;
 
+  // Encodes one opaque paste using Ghostty's filtering, newline, and bracketed-paste policy. The
+  // input is mutable because Ghostty replaces unsafe control bytes in place.
+  [[nodiscard]] auto encode_paste(std::span<std::byte> input, std::span<std::byte> output) noexcept
+      -> std::expected<std::size_t, Error>;
+  [[nodiscard]] auto paste_is_safe(std::span<const std::byte> input) const noexcept -> bool;
+
+  // Canonical child mode used by the pane-owned presentation gate.
+  [[nodiscard]] auto synchronized_output() const noexcept -> std::expected<bool, Error>;
+
   // Diagnostic formatter for tests, demos, and full-state fallback.
   [[nodiscard]] auto format_screen(ScreenFormat format, std::span<std::byte> output) noexcept
       -> std::expected<std::size_t, Error>;
 
   [[nodiscard]] auto size() const noexcept -> TerminalSize;
+  [[nodiscard]] auto theme() const noexcept -> TerminalTheme;
 
   // The borrowed title remains valid only until the next terminal mutation.
   [[nodiscard]] auto title() const noexcept -> std::expected<std::string_view, Error>;
@@ -256,6 +290,7 @@ public:
   [[nodiscard]] auto take_effects() noexcept -> EffectBatch;
 
   [[nodiscard]] auto pending_pty_response_bytes() const noexcept -> std::size_t;
+  [[nodiscard]] auto pty_response_overflowed() const noexcept -> bool;
   auto read_pty_responses(std::span<std::byte> output) noexcept -> std::size_t;
 
   [[nodiscard]] auto allocation_stats() const noexcept -> AllocationStats;

@@ -20,11 +20,18 @@ inline constexpr std::size_t command_bytes_hard_max = std::size_t{64} * 1'024U;
 inline constexpr std::size_t frame_chunk_bytes_max = std::size_t{4} * 1'024U * 1'024U;
 inline constexpr std::size_t frame_transaction_bytes_max = std::size_t{64} * 1'024U * 1'024U;
 inline constexpr std::size_t frame_output_queue_bytes_max = std::size_t{8} * 1'024U * 1'024U;
+// Retained frame storage is shared across all attached and pending-attached sessions. This bound
+// admits several protocol-maximum viewports while preventing the session limit from multiplying
+// the per-frame transaction ceiling into multi-gigabyte daemon retention.
+inline constexpr std::size_t frame_retained_bytes_aggregate_max =
+    std::size_t{256} * 1'024U * 1'024U;
 inline constexpr auto render_snapshot_hold_max = std::chrono::milliseconds{50};
 inline constexpr auto frame_transaction_progress_deadline = std::chrono::seconds{5};
 inline constexpr auto frame_transaction_total_deadline = std::chrono::seconds{30};
+inline constexpr auto synchronized_output_presentation_timeout = std::chrono::seconds{1};
 static_assert(frame_chunk_bytes_max <= frame_output_queue_bytes_max);
 static_assert(frame_output_queue_bytes_max < frame_transaction_bytes_max);
+static_assert(frame_transaction_bytes_max <= frame_retained_bytes_aggregate_max);
 
 inline constexpr std::size_t client_queue_bytes_hard_max = frame_output_queue_bytes_max;
 

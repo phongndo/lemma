@@ -345,6 +345,8 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   };
 }
 
+// Composition validation deliberately keeps geometry, overlap, and focus checks in one pass.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto validate_composition(const std::span<const PaneSurface> panes,
                                         const Viewport viewport, const StatusLine status) noexcept
     -> std::expected<bool, CompositionError> {
@@ -358,6 +360,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
     return std::unexpected(CompositionError::invalid_status);
   }
   bool has_focus = false;
+  bool has_presented_focus = false;
   const auto content_viewport = pane_viewport(viewport, status);
   for (auto current = panes.begin(); current != panes.end(); ++current) {
     if (!valid_pane(*current, content_viewport)) {
@@ -372,8 +375,10 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
       return std::unexpected(CompositionError::multiple_focused_panes);
     }
     has_focus = has_focus || current->focused;
+    has_presented_focus =
+        has_presented_focus || (current->focused && !current->presentation_suppressed);
   }
-  return has_focus;
+  return has_presented_focus;
 }
 
 [[nodiscard]] auto begin_frame(const std::span<std::byte> output, std::size_t& used,
@@ -420,7 +425,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
     -> std::expected<void, CompositionError> {
   const bool allow_terminal_scroll = row_offset == 0 && is_single_full_viewport(panes, viewport);
   for (const auto& pane : panes) {
-    if (!pane.focused) {
+    if (!pane.focused && !pane.presentation_suppressed) {
       const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
                                            row_offset, composition);
       if (!rendered.has_value()) {
@@ -430,7 +435,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
     }
   }
   for (const auto& pane : panes) {
-    if (pane.focused) {
+    if (pane.focused && !pane.presentation_suppressed) {
       const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
                                            row_offset, composition);
       if (!rendered.has_value()) {
@@ -602,13 +607,15 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
     return std::unexpected(validation.error());
   }
 
+  const bool complete_frame = std::ranges::none_of(panes, &PaneSurface::presentation_suppressed);
+  const bool complete_full = force_full && complete_frame;
   std::size_t used = 0;
-  if (!begin_frame(output, used, force_full)) {
+  if (!begin_frame(output, used, complete_full)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   CompositionResult composition{
       .panes = panes.size(),
-      .full = force_full,
+      .full = complete_full,
   };
   const std::uint16_t row_offset = has_visible_status(viewport, status) ? 1U : 0U;
   // Separators are outside every pane surface and can only change with a layout/full redraw.
@@ -625,6 +632,10 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
   }
+  // A pane-level repair does not make the protocol frame complete when suppression omitted a
+  // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
+  // advance.
+  composition.full = composition.full && complete_frame;
   if (!finish_frame(output, used, *validation)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);

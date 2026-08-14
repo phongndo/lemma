@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -33,22 +34,39 @@ namespace lemma::core {
   return true;
 }
 
+[[nodiscard]] auto ClientFrameOutput::frame_message_count(const std::size_t frame_bytes) noexcept
+    -> std::size_t {
+  return frame_bytes == 0 ? 0 : 1U + ((frame_bytes - 1U) / protocol::render_ansi_bytes_max);
+}
+
 [[nodiscard]] auto
 ClientFrameOutput::queue_frame(const std::size_t frame_bytes, const std::uint32_t sequence,
                                const std::uint32_t full_redraw_generation, const bool full_redraw,
                                const TimePoint now, const std::uint64_t trace_correlation) noexcept
     -> bool {
-  static_assert(protocol::render_ansi_bytes_max == render::frame_bytes_max);
+  const auto messages = frame_message_count(frame_bytes);
   if (frame_bytes == 0 || frame_bytes > render::frame_bytes_max || sequence == 0 ||
-      full_redraw_generation == 0 ||
-      !begin_queue(frame_header_.size() + frame_bytes, now, trace_correlation)) {
+      full_redraw_generation == 0 || messages == 0 ||
+      messages - 1U > std::numeric_limits<std::uint32_t>::max() - sequence ||
+      !begin_queue(frame_bytes + (messages * frame_header_.size()), now, trace_correlation)) {
     return false;
   }
-  frame_header_ = protocol::encode_render_frame_header(frame_bytes, sequence,
-                                                       full_redraw_generation, full_redraw);
   frame_bytes_ = frame_bytes;
+  frame_offset_ = 0;
+  frame_message_count_ = messages;
+  frame_sequence_ = sequence;
+  frame_generation_ = full_redraw_generation;
   source_ = Source::frame;
+  prepare_frame_chunk(full_redraw);
   return true;
+}
+
+void ClientFrameOutput::prepare_frame_chunk(const bool full_redraw) noexcept {
+  frame_chunk_bytes_ = std::min(protocol::render_ansi_bytes_max, frame_bytes_ - frame_offset_);
+  frame_chunk_offset_ = 0;
+  frame_header_offset_ = 0;
+  frame_header_ = protocol::encode_render_frame_header(frame_chunk_bytes_, frame_sequence_,
+                                                       frame_generation_, full_redraw);
 }
 
 [[nodiscard]] auto ClientFrameOutput::queue_disconnect(const protocol::DisconnectReason reason,
@@ -64,6 +82,13 @@ ClientFrameOutput::queue_frame(const std::size_t frame_bytes, const std::uint32_
   }
   std::ranges::copy(encoded.bytes(), inline_message_.begin());
   frame_bytes_ = 0;
+  frame_offset_ = 0;
+  frame_chunk_bytes_ = 0;
+  frame_chunk_offset_ = 0;
+  frame_header_offset_ = 0;
+  frame_message_count_ = 0;
+  frame_sequence_ = 0;
+  frame_generation_ = 0;
   source_ = Source::inline_message;
   return true;
 }
@@ -79,13 +104,13 @@ ClientFrameOutput::queue_frame(const std::size_t frame_bytes, const std::uint32_
   if (source_ != Source::frame) {
     return {};
   }
-  if (offset_ < frame_header_.size()) {
-    return std::span(frame_header_).subspan(offset_);
+  if (frame_header_offset_ < frame_header_.size()) {
+    return std::span(frame_header_).subspan(frame_header_offset_);
   }
   const auto bytes = frame.readable(frame_bytes_);
-  const auto frame_offset = offset_ - frame_header_.size();
-  return bytes.size() == frame_bytes_ && frame_offset <= bytes.size()
-             ? bytes.subspan(frame_offset)
+  return bytes.size() == frame_bytes_ && frame_offset_ <= bytes.size() &&
+                 frame_chunk_offset_ <= frame_chunk_bytes_
+             ? bytes.subspan(frame_offset_, frame_chunk_bytes_ - frame_chunk_offset_)
              : std::span<const std::byte>{};
 }
 
@@ -119,15 +144,44 @@ void ClientFrameOutput::mark_write_ready() noexcept {
   if (bytes == 0 || bytes > size_ - offset_) {
     return false;
   }
+  if (source_ == Source::frame) {
+    const auto segment_bytes = frame_header_offset_ < frame_header_.size()
+                                   ? frame_header_.size() - frame_header_offset_
+                                   : frame_chunk_bytes_ - frame_chunk_offset_;
+    if (bytes > segment_bytes) {
+      return false;
+    }
+  }
   offset_ += bytes;
   last_progress_at_ = now;
+  if (source_ != Source::frame) {
+    return true;
+  }
+  if (frame_header_offset_ < frame_header_.size()) {
+    frame_header_offset_ += bytes;
+    return true;
+  }
+
+  frame_offset_ += bytes;
+  frame_chunk_offset_ += bytes;
+  if (frame_chunk_offset_ == frame_chunk_bytes_ && frame_offset_ < frame_bytes_) {
+    ++frame_sequence_;
+    prepare_frame_chunk(false);
+  }
   return true;
 }
 
 void ClientFrameOutput::reset() noexcept {
   size_ = 0;
   frame_bytes_ = 0;
+  frame_offset_ = 0;
+  frame_chunk_bytes_ = 0;
+  frame_chunk_offset_ = 0;
+  frame_header_offset_ = 0;
+  frame_message_count_ = 0;
   offset_ = 0;
+  frame_sequence_ = 0;
+  frame_generation_ = 0;
   queued_at_ = {};
   last_progress_at_ = {};
   source_ = Source::none;

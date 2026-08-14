@@ -101,7 +101,9 @@ struct ScriptedFrameAllocator final {
 
 TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecycleGrowth) {
   ScriptedFrameAllocator allocator;
+  render::FrameCapacityBudget budget;
   render::FrameBuffer frame(&allocate_test_frame, &allocator);
+  frame.bind_capacity_budget(budget);
 
   const auto invalid = render::frame_capacity_for_viewport({.columns = 0, .rows = 24});
   ASSERT_FALSE(invalid.has_value());
@@ -112,12 +114,14 @@ TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecyc
 
   const auto protocol_maximum = render::frame_capacity_for_viewport({.columns = 500, .rows = 200});
   ASSERT_TRUE(protocol_maximum.has_value());
-  EXPECT_EQ(*protocol_maximum, render::frame_bytes_max);
+  EXPECT_EQ(*protocol_maximum, 35'204'096U);
+  EXPECT_LE(*protocol_maximum, render::frame_bytes_max);
 
   ASSERT_TRUE(frame.prepare({.columns = 80, .rows = 24}));
   ASSERT_FALSE(frame.writable().empty());
   frame.writable().front() = std::byte{0x5A};
   const auto previous_capacity = frame.capacity();
+  EXPECT_EQ(budget.used(), previous_capacity);
   const auto* const previous_storage = frame.writable().data();
   allocator.fail = true;
 
@@ -127,6 +131,7 @@ TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecyc
   EXPECT_EQ(frame.writable().data(), previous_storage);
   EXPECT_EQ(frame.writable().front(), std::byte{0x5A});
   EXPECT_EQ(allocator.calls, 2U);
+  EXPECT_EQ(budget.used(), previous_capacity);
 
   allocator.fail = false;
   EXPECT_FALSE(frame.prepare(larger_viewport, previous_capacity + 1U));
@@ -136,6 +141,24 @@ TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecyc
   EXPECT_NE(frame.writable().data(), previous_storage);
   EXPECT_EQ(frame.writable().front(), std::byte{0x5A});
   EXPECT_EQ(allocator.calls, 3U);
+  EXPECT_EQ(budget.used(), frame.capacity());
+}
+
+TEST(ClientFrameOutputTest, BoundsAggregateRetainedFrameCapacity) {
+  render::FrameCapacityBudget budget(render::frame_bytes_min);
+  render::FrameBuffer first;
+  render::FrameBuffer second;
+  first.bind_capacity_budget(budget);
+  second.bind_capacity_budget(budget);
+
+  ASSERT_TRUE(first.prepare({.columns = 1, .rows = 1}));
+  EXPECT_EQ(budget.used(), render::frame_bytes_min);
+  EXPECT_FALSE(second.prepare({.columns = 1, .rows = 1}));
+  EXPECT_EQ(second.capacity(), 0U);
+
+  first.release();
+  EXPECT_EQ(budget.used(), 0U);
+  EXPECT_TRUE(second.prepare({.columns = 1, .rows = 1}));
 }
 
 // GoogleTest assertions inflate the measured branch count.
@@ -168,6 +191,38 @@ TEST(ClientFrameOutputTest, SizesFrameForRendererBoundAndComposesAlternatingStyl
   const auto composition = render::compose_retained_single_pane(terminal, frame, true);
   ASSERT_TRUE(composition.has_value());
   EXPECT_LE(composition->bytes, frame.capacity());
+}
+
+TEST(ClientFrameOutputTest, ChunksDeclaredFrameTransactionAtProtocolBoundary) {
+  render::FrameBuffer frame;
+  ASSERT_TRUE(frame.prepare({.columns = 500, .rows = 200}));
+  const auto frame_bytes = limits::frame_chunk_bytes_max + 123U;
+  ASSERT_GE(frame.capacity(), frame_bytes);
+  ClientFrameOutput output;
+  ASSERT_TRUE(queue_frame(output, frame_bytes, origin));
+
+  EXPECT_EQ(output.queued_message_count(), 2U);
+  EXPECT_EQ(output.size(), frame_bytes + (2U * (protocol::attach_header_bytes +
+                                                protocol::render_generation_bytes)));
+  auto readable = output.readable(frame);
+  const auto first_header =
+      protocol::encode_render_frame_header(limits::frame_chunk_bytes_max, 2, 1, true);
+  EXPECT_TRUE(std::ranges::equal(readable, first_header));
+  ASSERT_TRUE(output.consume(readable.size(), origin));
+
+  readable = output.readable(frame);
+  EXPECT_EQ(readable.size(), limits::frame_chunk_bytes_max);
+  ASSERT_TRUE(output.consume(readable.size(), origin));
+
+  readable = output.readable(frame);
+  const auto second_header = protocol::encode_render_frame_header(123, 3, 1, false);
+  EXPECT_TRUE(std::ranges::equal(readable, second_header));
+  ASSERT_TRUE(output.consume(readable.size(), origin));
+
+  readable = output.readable(frame);
+  EXPECT_EQ(readable.size(), 123U);
+  ASSERT_TRUE(output.consume(readable.size(), origin));
+  EXPECT_FALSE(output.busy());
 }
 
 TEST(ClientFrameOutputTest, CompositionAndFlushDoNotAllocateFrameStorage) {

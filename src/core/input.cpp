@@ -177,6 +177,9 @@ void PanePtyWriteQueue::release_storage() noexcept {
 
 [[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
                                             vt::Terminal& terminal) noexcept -> bool {
+  if (terminal.pty_response_overflowed()) {
+    return false;
+  }
   const auto pending_bytes = terminal.pending_pty_response_bytes();
   if (pending_bytes > queue.remaining() || !queue.reserve(pending_bytes)) {
     return false;

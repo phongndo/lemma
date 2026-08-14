@@ -29,6 +29,7 @@ public:
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
 
+  [[nodiscard]] static auto frame_message_count(std::size_t frame_bytes) noexcept -> std::size_t;
   [[nodiscard]] auto queue_frame(std::size_t frame_bytes, std::uint32_t sequence,
                                  std::uint32_t full_redraw_generation, bool full_redraw,
                                  TimePoint now, std::uint64_t trace_correlation = 0) noexcept
@@ -41,6 +42,9 @@ public:
   [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
   [[nodiscard]] auto frame_bytes() const noexcept -> std::size_t { return frame_bytes_; }
+  [[nodiscard]] auto queued_message_count() const noexcept -> std::size_t {
+    return frame_message_count_;
+  }
   [[nodiscard]] auto offset() const noexcept -> std::size_t { return offset_; }
   [[nodiscard]] auto write_ready() const noexcept -> bool { return write_ready_; }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -63,13 +67,21 @@ private:
 
   [[nodiscard]] auto begin_queue(std::size_t bytes, TimePoint now,
                                  std::uint64_t trace_correlation) noexcept -> bool;
+  void prepare_frame_chunk(bool full_redraw) noexcept;
 
   std::array<std::byte, protocol::attach_header_bytes + protocol::render_generation_bytes>
       frame_header_{};
   std::array<std::byte, protocol::small_message_bytes_max> inline_message_{};
   std::size_t size_{0};
   std::size_t frame_bytes_{0};
+  std::size_t frame_offset_{0};
+  std::size_t frame_chunk_bytes_{0};
+  std::size_t frame_chunk_offset_{0};
+  std::size_t frame_header_offset_{0};
+  std::size_t frame_message_count_{0};
   std::size_t offset_{0};
+  std::uint32_t frame_sequence_{0};
+  std::uint32_t frame_generation_{0};
   TimePoint queued_at_;
   TimePoint last_progress_at_;
   Source source_{Source::none};

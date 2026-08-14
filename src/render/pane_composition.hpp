@@ -32,6 +32,7 @@ struct PaneSurface final {
   vt::Terminal* terminal{nullptr};
   PaneRectangle rectangle{};
   bool focused{false};
+  bool presentation_suppressed{false};
   bool border_right{false};
   bool border_bottom{false};
 };

@@ -61,9 +61,11 @@ suspended until a valid resize arrives rather than being partially applied.
   a bounded typed disconnect when output progress permits.
 - Input messages are at most 8 KiB. One pane's ordered terminal-response/input queue is at most
   1,114,112 bytes, with a 128 MiB daemon aggregate.
-- One attached render frame is viewport-derived, at least 64 KiB and at most 4 MiB. A client gets at
-  most 64 KiB/32 write attempts per reactor turn; all clients share 256 KiB per turn.
-- An attached frame that makes no progress for 5 seconds, or remains incomplete for 30 seconds, is
+- One attached render transaction is viewport-derived, at least 64 KiB, 35,204,096 bytes at the
+  declared maximum geometry, and capped at 64 MiB. It is sent as ordered ANSI chunks of at most
+  4 MiB. A client gets at most 64 KiB/32 write attempts per reactor turn; all clients share 256 KiB
+  per turn.
+- An attached transaction that makes no progress for 5 seconds, or remains incomplete for 30 seconds, is
   disconnected. Pane processes and canonical terminal state remain owned by the daemon.
 - A reconnect, resize, active-tab change, or lag repair uses a complete redraw generation. There is
   no unbounded render replay log.

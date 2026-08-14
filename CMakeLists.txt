@@ -136,6 +136,8 @@ add_library(
   src/core/lemma.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
+  src/core/presentation_gate.cpp
+  src/core/terminal_resize.cpp
 )
 lemma_internal_target(lemma_core)
 target_link_libraries(

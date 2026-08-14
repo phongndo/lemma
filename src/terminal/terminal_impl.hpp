@@ -89,6 +89,7 @@ struct Terminal::Impl final {
                                 bool erase_line_tail) noexcept -> std::expected<bool, Error>;
 
   TerminalOptions options;
+  TerminalTheme session_theme{};
   detail::QuotaAllocator allocator;
   GhosttyTerminal terminal{nullptr};
   GhosttyKeyEncoder key_encoder{nullptr};
@@ -96,6 +97,7 @@ struct Terminal::Impl final {
   GhosttyRenderState render_state{nullptr};
   GhosttyRenderStateRowIterator row_iterator{nullptr};
   GhosttyRenderStateRowCells row_cells{nullptr};
+  GhosttyRenderStateColors render_colors{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> row_hashes{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> current_row_hashes{};
   detail::CellHashStorage physical_cell_hashes;
@@ -106,6 +108,7 @@ struct Terminal::Impl final {
   bool ansi_physical_valid{false};
   BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;
   EffectBatch effects{};
+  bool pty_response_integrity_failed{false};
 };
 
 } // namespace lemma::vt

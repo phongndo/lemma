@@ -351,11 +351,13 @@ daemon RSS from 24,952,832 B to 7,716,864 B. The next owner was the eager 4-MiB/
 frame. Replacing it with attached-only viewport capacity reduced P1 daemon RSS to 3,719,168 B. No
 smaller owner was changed before those isolated reruns.
 
-The final frame owner is 32 inline bytes, zero dynamic bytes while detached, 679,936 B at 80x24,
-and at most 4 MiB. Its viewport rule is `4 KiB + 352 B/cell`, clamped to 64 KiB–4 MiB. Growth
-occurs only at attach/resize, prepares replacement storage before commit, preserves an in-flight
-frame prefix, and leaves old state valid on failure. Composition and client
-flush receive spans and make no frame allocation. PTY queues remain lazy under a 1,114,112-byte
+At the F3 evidence commit, the frame owner was 32 inline bytes, zero dynamic bytes while detached,
+679,936 B at 80x24, and at most 4 MiB. M2 retains the same ownership and 80x24 value but raises the
+complete transaction ceiling to 64 MiB so the declared 500×200 geometry can allocate its
+35,204,096-byte conservative bound; transport still exposes chunks of at most 4 MiB. The viewport
+rule remains `4 KiB + 352 B/cell` with a 64 KiB floor. Growth occurs only at attach/resize, prepares
+replacement storage before commit, preserves an in-flight frame prefix, and leaves old state valid
+on failure. Composition and client flush receive spans and make no frame allocation. PTY queues remain lazy under a 1,114,112-byte
 per-pane/128-MiB aggregate quota, but now reuse drained capacity. A no-config daemon allocates no
 extension runtime and launches no Lua process; an opted-in host has a deterministic 16-MiB Lua
 allocation quota.

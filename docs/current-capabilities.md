@@ -80,7 +80,7 @@ session name is `default`.
 | Focus | Working | Directional arrows, next (`C-b o`), and previous (`C-b ;`). |
 | Close pane | Working | `C-b x`; the split tree is compacted and remaining panes are resized. |
 | Zoom | Working | `C-b z` toggles the focused pane over the full pane viewport. |
-| Outer resize | Working | `SIGWINCH` updates the active layout and PTY sizes; too-small layouts are temporarily suspended. |
+| Outer resize | Working | `SIGWINCH` updates the active layout; each pane reserves presentation state, resizes Ghostty, then resizes the PTY and rolls Ghostty geometry back on PTY failure. Too-small layouts are temporarily suspended. |
 | Interactive ratios | Absent | Every split is recalculated as an equal half; no keyboard or mouse resizing. |
 | Pane IDs/names/overlay | Partial | Internal session/tab/pane/client references use hierarchical generational IDs, and CLI listings expose those textual IDs. The control protocol cannot target them; pane names and an identification overlay remain absent. |
 | Mouse focus/drag | Absent | No pane hit testing, click-to-focus, or separator dragging. |
@@ -96,7 +96,7 @@ The implemented hard limits derive to 64 panes per session and 64 panes in any o
 | Configurable bindings | Absent | Lua keymaps can be registered but are not installed into the client/core path. |
 | Semantic key encoding | Partial | Enter, Tab, Backspace, Ctrl-A–Z, arrows, Home, and End are normalized through Ghostty's legacy/Kitty encoder; other bytes pass through unchanged. |
 | Extended keyboard input | Partial | The adapter can encode more keys, modifiers, repeats, and Kitty modes, but the attached client does not decode them into typed events. |
-| Bracketed paste | Partial | Escape bytes pass through, but paste is not represented as a boundary and the prefix parser does not have paste-specific routing or limits. |
+| Bracketed paste | Partial | The terminal adapter now exposes bounded Ghostty paste safety/encoding, but the attach protocol still transports legacy bytes, so paste is not yet an opaque typed boundary and prefix routing remains an M3 gap. |
 | Focus events | Partial | Focus mode is mirrored in rendered terminal state, but the client has no typed focus-event path. |
 | Application mouse input | Unsupported | Mouse modes may be mirrored from the focused app and raw bytes may happen to pass through, but coordinates are not pane-local and split-pane behavior is not correct. |
 | Lemma mouse operation | Absent | No typed mouse decoding, status/pane hit testing, selection, scrolling, or drag resizing. |
@@ -110,17 +110,17 @@ Lemma chrome from pane content or translate outer coordinates into the focused p
 | Capability | Status | Current behavior |
 | --- | --- | --- |
 | Canonical terminal state | Working | Each pane owns a `libghostty-vt` terminal with quota-tracked C allocations and an independently capped PagePool scrollback; this is not total-memory accounting. Lemma exposes the pinned implementation's option as `scrollback_bytes_max` because it applies an internal byte limit despite documenting lines. This intentional pre-1.0 source API correction replaced `scrollback_rows_max`; retained row count varies with width. |
-| VT parsing/effects | Working | UTF-8/VT input, terminal responses, title changes, bells, modes, reflow, and dirty state are captured behind the adapter. |
-| Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. |
-| Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. |
+| VT parsing/effects | Working | UTF-8/VT input, terminal responses, title changes, bells, modes, reflow, and dirty state are captured behind the adapter. PTY-response overflow is a sticky terminal-integrity failure that retires the pane instead of dropping replies silently. |
+| Damage rendering | Working | Dirty rows/cell spans and detected scrolls produce bounded ANSI updates. Effective default, palette, background-only, and focused cursor colors use a session-owned concrete theme and conservative RGB projection. |
+| Multi-pane composition | Working | Active panes, separators, status, focused cursor, and outer modes compose into one synchronized frame. Child mode 2026 holds only its pane; a 1 s presentation watchdog restores liveness without clearing canonical mode. |
 | Reattach reconstruction | Working | Attach, active-tab change, and resize can force complete visible-state reconstruction through daemon-rendered ANSI. |
-| Slow-client isolation | Working | Core-owned initial/live frame writes have partial-write/EAGAIN handling, per-client/global turn budgets, round-robin fairness, one retained frame, full-redraw recovery, and progress/total deadlines. Deterministic policy tests and a pinned non-reader plus pane-flood latency workload cover isolation. |
+| Slow-client isolation | Working | Core-owned initial/live frame writes have partial-write/EAGAIN handling, per-client/global turn budgets, round-robin fairness, one retained transaction, 4 MiB transport chunks, a 64 MiB transaction ceiling, full-redraw recovery, and progress/total deadlines. Deterministic policy tests and a pinned non-reader plus pane-flood latency workload cover isolation. |
 | Portable terminal checkpoint export/import | Intentionally absent | The archived feasibility gate proved deterministic counterexamples. Checkpoints and client terminal replicas are not part of the 1.0 architecture. |
 | Versioned server-rendered attachment | Working | Private protocol 1.0 frames both directions, validates exact versions and sequences, carries typed disconnects and redraw generations, and bounds incremental decoders and render payloads. |
 | Ordinary SSH operation | Partial | Lemma may be run on a remote host through SSH like another terminal program, but no supported compatibility/process/performance suite or remote documentation exists yet. |
 | Truthful terminal identity | Partial | Panes advertise `xterm-256color`, `COLORTERM=truecolor`, and `TERM_PROGRAM=lemma`; Lemma ships no terminfo entry or explicit capability policy. |
 | Copy access to scrollback | Absent | Ghostty retains scrollback, but Lemma exposes no viewport/traversal/selection API. |
-| Graphics protocols | Unspecified | No supported passthrough/rendering contract is documented for terminal graphics. |
+| Graphics protocols | Intentionally disabled | The portable profile does not advertise graphics. Kitty image storage and file/temp-file/shared-memory media are disabled until the qualified replica presentation path exists. |
 
 ### Lua configuration and extensions
 
