@@ -36,9 +36,11 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | Owner | Current storage/lifetime | Bound or measured size | Allocation/failure behavior |
 | --- | --- | ---: | --- |
 | Session store | fixed reactor table | 1,032 B table; up to 64 sessions | live sessions are individually allocated; create failure rejects only the new session |
-| Session | one owner per live session | 93,000 B inline in the recorded layout | contains bounded launch context, tabs, one current attachment runtime, copy state, trace, and scheduling |
+| Session | one owner per live session | 94,488 B inline in the recorded layout | contains bounded launch context, tabs, one current attachment runtime, copy state, trace, and scheduling |
 | Tab | one owner per live tab | 3,600 B | allocated on create; failure preserves existing topology |
-| Pane and inline PaneRuntime | one owner pair per live pane | 224 B combined; 208 B is PaneRuntime | PTY/process/terminal creation completes before topology commit |
+| Semantic Pane | Core-owned per live pane | 16 B | contains only generational identity and committed geometry; staged creation publishes it only with a prepared runtime counterpart |
+| PaneRuntime | Runtime-owned per live pane | 208 B plus owned terminal/queue allocations | owns PTY/process/terminal and scheduling state; typed failure is consumed by Core exit policy |
+| PaneRuntime store | one daemon runtime index plus lazy live-tab tables | 8,712 B fixed; 1,040 B per tab containing runtimes | full generational pane addresses resolve directly; tab tables allocate before pair publication and disappear with their last runtime |
 | Ghostty routed state | terminal quota allocator | 10,376 B at create; 116,729 B after first render; 64 MiB default maximum | lazy; quota failure is typed; PagePool is accounted separately |
 | Physical cell hashes | terminal adapter | 8 B/cell; 15,360 B at 80x24; 8,000,000 B hard maximum | replacement prepared on create/resize |
 | Scrollback | Ghostty PagePool | 10,000-B default logical byte quota; 1,000,000-B hard byte/optional line limits | page-granular; PagePool bypasses the routed allocator |

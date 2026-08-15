@@ -87,6 +87,10 @@ void benchmark_private_attach_input_codec(benchmark::State& state) {
                                std::byte{'t'}};
   const auto header = protocol::encode_input_header(payload.size(), 2);
   protocol::ClientDecoder decoder;
+  if (!decoder.prepare().has_value()) {
+    state.SkipWithError("failed to prepare private attach decoder");
+    return;
+  }
   for ([[maybe_unused]] const auto iteration : state) {
     decoder.reset(2, false);
     auto destination = std::ranges::copy(header, decoder.writable_bytes().begin()).out;

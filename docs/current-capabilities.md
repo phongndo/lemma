@@ -14,10 +14,11 @@ Status terms:
 
 Lemma is one C++23 executable with client, daemon, extension-host, and control roles. A per-user daemon runs one `poll`-based reactor and currently owns both semantic mux state and runtime resources in `src/core/engine.cpp`.
 
-The current in-memory hierarchy is `Session -> Tab -> Pane`, but semantic and runtime state are not yet separated into Core/Runtime stores:
+The current in-memory hierarchy is `Session -> Tab -> Pane`. Pane semantic and runtime ownership are separate, while attachment state remains transitional:
 
-- `Pane` contains `PaneId`, committed layout geometry, and one inline `PaneRuntime`. `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, and their teardown.
-- `Tab` currently contains generational pane slots, a binary layout tree, geometry, focus, previous focus, zoom, and suspension state.
+- `Pane` contains only `PaneId` and committed layout geometry. A separate bounded runtime store resolves the full generational `SessionId -> TabId -> PaneId` address to one `PaneRuntime`.
+- `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, typed failure state, and teardown. Staged creation publishes the semantic pane and runtime counterpart together; runtime failure becomes a typed outcome consumed by Core pane-exit policy.
+- `Tab` currently contains generational pane slots, a binary layout tree, geometry, focus, previous focus, zoom, and suspension state. Layout resize is planned across the tab, applied transactionally to PaneRuntimes, and committed to semantic pane geometry only after Runtime succeeds.
 - `Session` currently contains generational tab slots, launch context, active/previous tab, one client descriptor and decoder, frame storage/output progress, copy/search state, command trace, and frame scheduler.
 - An Attachment/AttachmentRuntime split does not yet exist as a first-class model.
 

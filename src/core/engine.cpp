@@ -113,18 +113,26 @@ private:
 
 [[nodiscard]] auto resize_pane_terminal(const int pty, vt::Terminal& terminal,
                                         const std::uint16_t requested_columns,
-                                        const std::uint16_t requested_rows) noexcept -> bool {
+                                        const std::uint16_t requested_rows) noexcept
+    -> TerminalResizeStatus {
   const auto columns = std::clamp(requested_columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(requested_rows, std::uint16_t{1}, protocol::rows_max);
   const vt::TerminalSize requested{.columns = columns, .rows = rows};
   auto descriptor = pty;
-  const auto status =
-      resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor);
-  return status == TerminalResizeStatus::applied || status == TerminalResizeStatus::unchanged;
+  return resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor);
 }
 
+enum class PaneRuntimeFailure : std::uint8_t {
+  child_exit,
+  pty_read_error,
+  pty_write_error,
+  terminal_integrity_error,
+  scrollback_compression_error,
+  resize_consistency_lost,
+};
+
 struct PtyDrainResult final {
-  bool alive{true};
+  std::optional<PaneRuntimeFailure> failure;
   bool changed{false};
   bool render_damage{false};
   bool presentation_deferred{false};
@@ -228,20 +236,20 @@ drain_pty(const int pty, vt::Terminal& terminal, PresentationGate& presentation_
       const auto bytes = std::span(output).first(size);
       if (!process_pty_output(pty, terminal, presentation_gate, pending_writes, bytes,
                               capture_damage, drain, trace_matcher)) {
-        drain.alive = false;
+        drain.failure = PaneRuntimeFailure::terminal_integrity_error;
         return drain;
       }
       continue;
     }
     if (bytes_read == 0) {
-      drain.alive = false;
+      drain.failure = PaneRuntimeFailure::child_exit;
       return drain;
     }
     if (errno == EINTR) {
       continue;
     }
     if (errno != EAGAIN && errno != EWOULDBLOCK) {
-      drain.alive = false;
+      drain.failure = PaneRuntimeFailure::pty_read_error;
     }
     return drain;
   }
@@ -318,6 +326,16 @@ struct PaneRuntime final {
     close_descriptor(pty);
   }
 
+  [[nodiscard]] auto live() const noexcept -> bool { return !failure.has_value(); }
+  [[nodiscard]] auto publishable() const noexcept -> bool {
+    return live() && pty >= 0 && child > 0 && !terminal.integrity_failed();
+  }
+  void fail(const PaneRuntimeFailure reason) noexcept {
+    if (!failure.has_value()) {
+      failure = reason;
+    }
+  }
+
   vt::Terminal terminal;
   int pty{-1};
   decltype(::getpid()) child{-1};
@@ -335,22 +353,173 @@ struct PaneRuntime final {
   diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
   diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
 #endif
-  bool active{true};
+  std::optional<PaneRuntimeFailure> failure;
 };
 
 struct Pane final {
-  explicit Pane(vt::Terminal&& created_terminal) noexcept : runtime(std::move(created_terminal)) {}
-
-  Pane(const Pane&) = delete;
-  auto operator=(const Pane&) -> Pane& = delete;
-  Pane(Pane&&) = delete;
-  auto operator=(Pane&&) -> Pane& = delete;
-  ~Pane() = default;
-
   PaneId id;
   render::PaneRectangle rectangle{};
-  PaneRuntime runtime;
 };
+
+struct PaneAddress final {
+  SessionId session;
+  TabId tab;
+  PaneId pane;
+
+  [[nodiscard]] auto valid() const noexcept -> bool {
+    return session.is_valid() && tab.is_valid() && pane.is_valid();
+  }
+};
+
+// Core owns pane identity and hierarchy. Runtime owns a separate, directly addressed resource
+// counterpart; only complete PaneRuntimes can enter this store, and generations are checked at
+// every lookup so stale hierarchy addresses cannot resolve to replacement resources.
+class PaneRuntimeStore final {
+  struct PaneSlot final {
+    std::unique_ptr<PaneRuntime> runtime;
+    std::uint32_t generation{0};
+  };
+
+  struct TabSlots final {
+    explicit TabSlots(const std::uint32_t assigned_generation) noexcept
+        : generation(assigned_generation) {}
+
+    std::array<PaneSlot, panes_per_tab_max> panes{};
+    std::size_t size{0};
+    std::uint32_t generation{0};
+  };
+
+  struct SessionSlots final {
+    std::array<std::unique_ptr<TabSlots>, tabs_per_session_max> tabs{};
+    std::uint32_t generation{0};
+  };
+
+  [[nodiscard]] static constexpr auto address_in_bounds(const PaneAddress address) noexcept
+      -> bool {
+    return address.valid() && address.session.slot() < limits::sessions_hard_max &&
+           address.tab.slot() < tabs_per_session_max && address.pane.slot() < panes_per_tab_max;
+  }
+
+public:
+  [[nodiscard]] auto insert(const PaneAddress address,
+                            std::unique_ptr<PaneRuntime> runtime) noexcept -> bool {
+    if (!address_in_bounds(address) || runtime == nullptr || !runtime->publishable() ||
+        size_ == limits::panes_hard_max) {
+      return false;
+    }
+    auto& session = std::span(sessions_).subspan(address.session.slot(), 1).front();
+    if (session.generation != 0 && session.generation != address.session.generation()) {
+      if (std::ranges::any_of(session.tabs, [](const auto& tab) { return tab != nullptr; })) {
+        return false;
+      }
+      session.generation = 0;
+    }
+    auto& tab = std::span(session.tabs).subspan(address.tab.slot(), 1).front();
+    if (tab == nullptr) {
+      try {
+        tab = std::make_unique<TabSlots>(address.tab.generation());
+      } catch (const std::bad_alloc&) {
+        return false;
+      }
+    } else if (tab->generation != address.tab.generation()) {
+      return false;
+    }
+    auto& pane = std::span(tab->panes).subspan(address.pane.slot(), 1).front();
+    if (pane.runtime != nullptr) {
+      return false;
+    }
+    session.generation = address.session.generation();
+    pane.generation = address.pane.generation();
+    pane.runtime = std::move(runtime);
+    ++tab->size;
+    ++size_;
+    return true;
+  }
+
+  [[nodiscard]] auto get(const PaneAddress address) noexcept -> PaneRuntime* {
+    if (!address_in_bounds(address)) {
+      return nullptr;
+    }
+    auto& session = std::span(sessions_).subspan(address.session.slot(), 1).front();
+    if (session.generation != address.session.generation()) {
+      return nullptr;
+    }
+    auto& tab = std::span(session.tabs).subspan(address.tab.slot(), 1).front();
+    if (tab == nullptr || tab->generation != address.tab.generation()) {
+      return nullptr;
+    }
+    auto& pane = std::span(tab->panes).subspan(address.pane.slot(), 1).front();
+    return pane.generation == address.pane.generation() ? pane.runtime.get() : nullptr;
+  }
+
+  [[nodiscard]] auto get(const PaneAddress address) const noexcept -> const PaneRuntime* {
+    if (!address_in_bounds(address)) {
+      return nullptr;
+    }
+    const auto& session = std::span(sessions_).subspan(address.session.slot(), 1).front();
+    if (session.generation != address.session.generation()) {
+      return nullptr;
+    }
+    const auto& tab = std::span(session.tabs).subspan(address.tab.slot(), 1).front();
+    if (tab == nullptr || tab->generation != address.tab.generation()) {
+      return nullptr;
+    }
+    const auto& pane = std::span(tab->panes).subspan(address.pane.slot(), 1).front();
+    return pane.generation == address.pane.generation() ? pane.runtime.get() : nullptr;
+  }
+
+  [[nodiscard]] auto erase(const PaneAddress address) noexcept -> bool {
+    if (!address_in_bounds(address)) {
+      return false;
+    }
+    auto& session = std::span(sessions_).subspan(address.session.slot(), 1).front();
+    if (session.generation != address.session.generation()) {
+      return false;
+    }
+    auto& tab = std::span(session.tabs).subspan(address.tab.slot(), 1).front();
+    if (tab == nullptr || tab->generation != address.tab.generation()) {
+      return false;
+    }
+    auto& pane = std::span(tab->panes).subspan(address.pane.slot(), 1).front();
+    if (pane.runtime == nullptr || pane.generation != address.pane.generation()) {
+      return false;
+    }
+    pane.runtime.reset();
+    pane.generation = 0;
+    --tab->size;
+    --size_;
+    if (tab->size == 0) {
+      tab.reset();
+    }
+    return true;
+  }
+
+  void erase_session(const SessionId session_id) noexcept {
+    if (!session_id.is_valid() || session_id.slot() >= limits::sessions_hard_max) {
+      return;
+    }
+    auto& session = std::span(sessions_).subspan(session_id.slot(), 1).front();
+    if (session.generation != session_id.generation()) {
+      return;
+    }
+    for (auto& tab : session.tabs) {
+      if (tab != nullptr) {
+        LEMMA_ASSERT(size_ >= tab->size);
+        size_ -= tab->size;
+        tab.reset();
+      }
+    }
+    session.generation = 0;
+  }
+
+  [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+
+private:
+  std::array<SessionSlots, limits::sessions_hard_max> sessions_{};
+  std::size_t size_{0};
+};
+
+static_assert(sizeof(PaneRuntimeStore) <= std::size_t{16} * 1'024U);
 
 void record_terminal_mutation(PaneRuntime& runtime) noexcept {
   runtime.mutation_generation =
@@ -521,17 +690,21 @@ struct Session final {
 
   // Attachment teardown exhaustively restores every pane-owned view before releasing protocol
   // state. NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  void detach_client() noexcept {
+  void detach_client(PaneRuntimeStore& runtimes) noexcept {
     for (auto& tab_slot : tabs) {
       if (tab_slot.tab == nullptr) {
         continue;
       }
       for (auto& pane_slot : tab_slot.tab->panes) {
-        if (pane_slot.pane != nullptr) {
-          pane_slot.pane->runtime.terminal.reset_selection_gesture();
-          pane_slot.pane->runtime.terminal.clear_selection();
-          pane_slot.pane->runtime.terminal.scroll_viewport(vt::ViewportScroll::bottom);
+        if (pane_slot.pane == nullptr) {
+          continue;
         }
+        auto* const runtime =
+            runtimes.get({.session = id, .tab = tab_slot.tab->id, .pane = pane_slot.pane->id});
+        LEMMA_ASSERT(runtime != nullptr);
+        runtime->terminal.reset_selection_gesture();
+        runtime->terminal.clear_selection();
+        runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
       }
     }
     copy_mode = {};
@@ -553,7 +726,10 @@ struct Session final {
       if (tab_slot.tab != nullptr) {
         for (auto& pane_slot : tab_slot.tab->panes) {
           if (pane_slot.pane != nullptr) {
-            pane_slot.pane->runtime.interactive_damage.reset();
+            auto* const runtime =
+                runtimes.get({.session = id, .tab = tab_slot.tab->id, .pane = pane_slot.pane->id});
+            LEMMA_ASSERT(runtime != nullptr);
+            runtime->interactive_damage.reset();
           }
         }
       }
@@ -650,7 +826,23 @@ struct Session final {
   return std::nullopt;
 }
 
-[[nodiscard]] auto bind_session_theme(Session& session,
+[[nodiscard]] auto rollback_session_theme(const std::span<PaneRuntime* const> changed,
+                                          const vt::TerminalTheme& previous) noexcept -> bool {
+  bool restored = true;
+  for (std::size_t remaining = changed.size(); remaining > 0; --remaining) {
+    auto* const runtime = changed.subspan(remaining - 1U, 1).front();
+    LEMMA_ASSERT(runtime != nullptr);
+    if (!runtime->terminal.set_theme(previous).has_value()) {
+      runtime->fail(PaneRuntimeFailure::terminal_integrity_error);
+      restored = false;
+    }
+  }
+  return restored;
+}
+
+// Theme application is one fixed bounded transaction across the session hierarchy.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto bind_session_theme(Session& session, PaneRuntimeStore& runtimes,
                                       const protocol::HostTerminalTheme& host_theme) noexcept
     -> bool {
   auto theme = session.theme;
@@ -667,15 +859,27 @@ struct Session final {
           terminal_color(std::span(host_theme.palette).subspan(index, 1).front());
     }
   }
+  std::array<PaneRuntime*, panes_per_session_max> changed{};
+  std::size_t changed_count = 0;
   for (auto& tab_slot : session.tabs) {
     if (tab_slot.tab == nullptr) {
       continue;
     }
     for (auto& pane_slot : tab_slot.tab->panes) {
-      if (pane_slot.pane != nullptr &&
-          !pane_slot.pane->runtime.terminal.set_theme(theme).has_value()) {
+      if (pane_slot.pane == nullptr) {
+        continue;
+      }
+      auto* const runtime = runtimes.get(
+          {.session = session.id, .tab = tab_slot.tab->id, .pane = pane_slot.pane->id});
+      LEMMA_ASSERT(runtime != nullptr && changed_count < changed.size());
+      if (!runtime->terminal.set_theme(theme).has_value()) {
+        const bool restored =
+            rollback_session_theme(std::span(changed).first(changed_count), session.theme);
+        session.active = session.active && restored;
         return false;
       }
+      std::span(changed).subspan(changed_count, 1).front() = runtime;
+      ++changed_count;
     }
   }
   session.theme = theme;
@@ -683,11 +887,12 @@ struct Session final {
   return true;
 }
 
-[[nodiscard]] auto create_pane(const std::uint16_t columns, const std::uint16_t rows,
-                               const std::string_view working_directory,
-                               const std::span<const std::byte> environment,
-                               const platform::EnvironmentMode environment_mode,
-                               const vt::TerminalTheme& theme) noexcept -> std::unique_ptr<Pane> {
+[[nodiscard]] auto create_pane_runtime(const std::uint16_t columns, const std::uint16_t rows,
+                                       const std::string_view working_directory,
+                                       const std::span<const std::byte> environment,
+                                       const platform::EnvironmentMode environment_mode,
+                                       const vt::TerminalTheme& theme) noexcept
+    -> std::unique_ptr<PaneRuntime> {
   vt::TerminalOptions options;
   options.size = {.columns = columns, .rows = rows};
   options.theme = theme;
@@ -695,26 +900,24 @@ struct Session final {
   if (!terminal_result.has_value()) {
     return nullptr;
   }
-  std::unique_ptr<Pane> pane;
+  std::unique_ptr<PaneRuntime> runtime;
   try {
-    pane = std::make_unique<Pane>(std::move(*terminal_result));
+    runtime = std::make_unique<PaneRuntime>(std::move(*terminal_result));
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
-  auto& runtime = pane->runtime;
-  runtime.child =
-      platform::spawn_login_shell(runtime.pty, working_directory, environment, environment_mode);
-  if (runtime.child <= 0 || !set_nonblocking(runtime.pty) ||
-      !platform::resize_pty(runtime.pty, columns, rows)) {
+  runtime->child =
+      platform::spawn_login_shell(runtime->pty, working_directory, environment, environment_mode);
+  if (runtime->child <= 0 || !set_nonblocking(runtime->pty) ||
+      !platform::resize_pty(runtime->pty, columns, rows)) {
     return nullptr;
   }
-  pane->rectangle = {.columns = columns, .rows = rows};
-  const auto compression_activity = runtime.terminal.compression_activity();
+  const auto compression_activity = runtime->terminal.compression_activity();
   if (!compression_activity.has_value()) {
     return nullptr;
   }
-  runtime.compression_activity = *compression_activity;
-  return pane;
+  runtime->compression_activity = *compression_activity;
+  return runtime;
 }
 
 [[nodiscard]] auto refresh_process_name(PaneRuntime& runtime) noexcept -> bool {
@@ -786,6 +989,22 @@ refresh_process_name_if_due(PaneRuntime& runtime,
   return find_tab(session, session.active_tab);
 }
 
+[[nodiscard]] auto pane_address(const Session& session, const Tab& tab, const Pane& pane) noexcept
+    -> PaneAddress {
+  return {.session = session.id, .tab = tab.id, .pane = pane.id};
+}
+
+[[nodiscard]] auto find_pane_runtime(PaneRuntimeStore& runtimes, const Session& session,
+                                     const Tab& tab, const Pane& pane) noexcept -> PaneRuntime* {
+  return runtimes.get(pane_address(session, tab, pane));
+}
+
+[[nodiscard]] auto find_pane_runtime(const PaneRuntimeStore& runtimes, const Session& session,
+                                     const Tab& tab, const Pane& pane) noexcept
+    -> const PaneRuntime* {
+  return runtimes.get(pane_address(session, tab, pane));
+}
+
 [[nodiscard]] auto pane_count(const Tab& tab) noexcept -> std::size_t {
   return static_cast<std::size_t>(
       std::ranges::count_if(tab.panes, [](const PaneSlot& slot) { return slot.pane != nullptr; }));
@@ -821,8 +1040,9 @@ refresh_process_name_if_due(PaneRuntime& runtime,
   return nullptr;
 }
 
-[[nodiscard]] auto allocate_tab(Session& session) noexcept -> Tab* {
-  if (pane_count(session) >= panes_per_session_max) {
+[[nodiscard]] auto allocate_tab(Session& session, PaneRuntimeStore& runtimes) noexcept -> Tab* {
+  if (!session.id.is_valid() || pane_count(session) >= panes_per_session_max ||
+      runtimes.size() >= limits::panes_hard_max) {
     return nullptr;
   }
   for (std::size_t index = 0; index < session.tabs.size(); ++index) {
@@ -830,22 +1050,30 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     if (slot.tab != nullptr) {
       continue;
     }
-    auto first_pane =
-        create_pane(session.columns, pane_rows(session.rows), session.cwd(),
-                    session.launch_environment(), session.environment_mode, session.theme);
-    if (first_pane == nullptr) {
-      return nullptr;
-    }
     const auto generation = next_generation(slot.generation);
     const auto id = TabId::from_parts(static_cast<std::uint32_t>(index), generation);
+    const auto first_id = PaneId::from_parts(0, 1);
+    const PaneAddress address{.session = session.id, .tab = id, .pane = first_id};
+    auto runtime =
+        create_pane_runtime(session.columns, pane_rows(session.rows), session.cwd(),
+                            session.launch_environment(), session.environment_mode, session.theme);
+    if (runtime == nullptr) {
+      return nullptr;
+    }
+    std::unique_ptr<Pane> first_pane;
     std::unique_ptr<Tab> created;
     try {
+      first_pane = std::make_unique<Pane>();
+      first_pane->rectangle = {.columns = session.columns, .rows = pane_rows(session.rows)};
       created = std::make_unique<Tab>(id, std::move(first_pane));
     } catch (const std::bad_alloc&) {
       return nullptr;
     }
     created->layout_columns = session.columns;
     created->layout_rows = pane_rows(session.rows);
+    if (!runtimes.insert(address, std::move(runtime))) {
+      return nullptr;
+    }
     slot.generation = generation;
     slot.tab = std::move(created);
     session.previous_tab = session.active_tab;
@@ -860,17 +1088,11 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     const std::span<const std::byte> environment = {},
     const platform::EnvironmentMode environment_mode = platform::EnvironmentMode::inherit) noexcept
     -> std::unique_ptr<Session> {
-  std::unique_ptr<Session> session;
   try {
-    session = std::make_unique<Session>(name, working_directory, environment, environment_mode);
+    return std::make_unique<Session>(name, working_directory, environment, environment_mode);
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
-  if (allocate_tab(*session) == nullptr) {
-    return nullptr;
-  }
-  session->previous_tab = session->active_tab;
-  return session;
 }
 
 [[nodiscard]] auto empty_pane_slot(Tab& tab) noexcept -> std::optional<std::size_t> {
@@ -914,28 +1136,9 @@ refresh_process_name_if_due(PaneRuntime& runtime,
 }
 
 void note_compression_activity(PaneRuntime& runtime) noexcept;
-[[nodiscard]] auto update_copy_viewport_offset(Session& session, Pane& pane) noexcept -> bool;
-void leave_copy_mode(Session& session) noexcept;
-
-[[nodiscard]] auto resize_pane(Pane& pane, const render::PaneRectangle rectangle) noexcept -> bool {
-  if (pane.rectangle == rectangle) {
-    return true;
-  }
-  auto& runtime = pane.runtime;
-  if (!resize_pane_terminal(runtime.pty, runtime.terminal, rectangle.columns, rectangle.rows)) {
-    return false;
-  }
-  const auto synchronized = runtime.terminal.synchronized_output();
-  if (!synchronized.has_value()) {
-    return false;
-  }
-  static_cast<void>(
-      runtime.presentation_gate.observe(*synchronized, true, std::chrono::steady_clock::now()));
-  pane.rectangle = rectangle;
-  record_terminal_mutation(runtime);
-  note_compression_activity(runtime);
-  return true;
-}
+[[nodiscard]] auto update_copy_viewport_offset(Session& session, PaneRuntime& runtime) noexcept
+    -> bool;
+void leave_copy_mode(Session& session, PaneRuntimeStore& runtimes) noexcept;
 
 [[nodiscard]] auto layout_fits_node(const Tab& tab, const std::size_t node_index,
                                     const render::PaneRectangle rectangle,
@@ -1022,83 +1225,185 @@ using PaneRectangles = std::array<render::PaneRectangle, panes_per_tab_max>;
                                    depth + 1U, rectangles);
 }
 
-[[nodiscard]] auto resolve_node(Tab& tab, const std::size_t node_index,
-                                const render::PaneRectangle rectangle,
-                                const std::size_t depth) noexcept -> bool {
-  if (depth >= limits::layout_depth_hard_max) {
-    return false;
-  }
-  const auto node = std::span(tab.layout).subspan(node_index, 1).front();
-  if (!node.active) {
-    return false;
-  }
-  if (node.leaf) {
-    auto* const pane = find_pane(tab, node.pane);
-    return pane != nullptr && resize_pane(*pane, rectangle);
-  }
+enum class LayoutResolutionStatus : std::uint8_t {
+  applied,
+  rejected,
+  consistency_lost,
+};
 
-  auto first_rectangle = rectangle;
-  auto second_rectangle = rectangle;
-  if (node.axis == SplitAxis::left_right) {
-    if (rectangle.columns < 3) {
-      return false;
-    }
-    const auto available = static_cast<std::uint16_t>(rectangle.columns - 1U);
-    first_rectangle.columns = static_cast<std::uint16_t>((available + 1U) / 2U);
-    second_rectangle.column =
-        static_cast<std::uint16_t>(rectangle.column + first_rectangle.columns + 1U);
-    second_rectangle.columns = static_cast<std::uint16_t>(available - first_rectangle.columns);
-  } else {
-    if (rectangle.rows < 3) {
-      return false;
-    }
-    const auto available = static_cast<std::uint16_t>(rectangle.rows - 1U);
-    first_rectangle.rows = static_cast<std::uint16_t>((available + 1U) / 2U);
-    second_rectangle.row = static_cast<std::uint16_t>(rectangle.row + first_rectangle.rows + 1U);
-    second_rectangle.rows = static_cast<std::uint16_t>(available - first_rectangle.rows);
+struct PaneResizePlanEntry final {
+  Pane* pane{nullptr};
+  PaneRuntime* runtime{nullptr};
+  render::PaneRectangle previous;
+  render::PaneRectangle target;
+  bool runtime_resized{false};
+  bool runtime_touched{false};
+};
+
+using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
+
+[[nodiscard]] auto resize_runtime_for_layout(PaneRuntime& runtime,
+                                             const render::PaneRectangle target) noexcept
+    -> TerminalResizeStatus {
+  const auto status =
+      resize_pane_terminal(runtime.pty, runtime.terminal, target.columns, target.rows);
+  if (status == TerminalResizeStatus::consistency_lost) {
+    runtime.fail(PaneRuntimeFailure::resize_consistency_lost);
+    return status;
   }
-  return resolve_node(tab, static_cast<std::size_t>(node.first), first_rectangle, depth + 1U) &&
-         resolve_node(tab, static_cast<std::size_t>(node.second), second_rectangle, depth + 1U);
+  if (status != TerminalResizeStatus::applied) {
+    return status;
+  }
+  const auto synchronized = runtime.terminal.synchronized_output();
+  if (!synchronized.has_value()) {
+    runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
+    return TerminalResizeStatus::consistency_lost;
+  }
+  static_cast<void>(
+      runtime.presentation_gate.observe(*synchronized, true, std::chrono::steady_clock::now()));
+  return status;
 }
 
-[[nodiscard]] auto resolve_layout(Tab& tab) noexcept -> bool {
+void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
+  if (!entry.runtime_touched) {
+    return;
+  }
+  LEMMA_ASSERT(entry.runtime != nullptr);
+  record_terminal_mutation(*entry.runtime);
+  note_compression_activity(*entry.runtime);
+}
+
+[[nodiscard]] auto rollback_layout_resize(PaneResizePlan& plan, const std::size_t count) noexcept
+    -> LayoutResolutionStatus {
+  bool consistency_lost = false;
+  for (std::size_t remaining = count; remaining > 0; --remaining) {
+    auto& entry = std::span(plan).subspan(remaining - 1U, 1).front();
+    if (!entry.runtime_resized) {
+      finish_resize_mutation(entry);
+      continue;
+    }
+    LEMMA_ASSERT(entry.runtime != nullptr);
+    const auto status = resize_runtime_for_layout(*entry.runtime, entry.previous);
+    entry.runtime_touched = true;
+    if (status != TerminalResizeStatus::applied && status != TerminalResizeStatus::unchanged) {
+      entry.runtime->fail(PaneRuntimeFailure::resize_consistency_lost);
+      consistency_lost = true;
+    }
+    finish_resize_mutation(entry);
+  }
+  return consistency_lost ? LayoutResolutionStatus::consistency_lost
+                          : LayoutResolutionStatus::rejected;
+}
+
+// Building and applying the fixed transaction handles zoomed and tiled plans explicitly.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto resolve_layout(Session& session, Tab& tab, PaneRuntimeStore& runtimes) noexcept
+    -> LayoutResolutionStatus {
   const render::PaneRectangle viewport{
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
+  PaneRectangles targets{};
+  std::array<bool, panes_per_tab_max> included{};
   if (tab.zoomed) {
     auto* const focused = find_pane(tab, tab.focused_pane);
-    return focused != nullptr && resize_pane(*focused, viewport);
-  }
-  return resolve_node(tab, 0, viewport, 0);
-}
-
-[[nodiscard]] auto resolve_session_layout(Session& session, Tab& tab) noexcept -> bool {
-  // Each pane resize rolls canonical geometry back if its PTY update fails. A multi-pane layout can
-  // still have earlier successful pane transactions, so fail closed rather than expose a partial
-  // layout when any later pane rejects its target.
-  const bool resolved = resolve_layout(tab);
-  session.active = session.active && resolved;
-  if (resolved && session.copy_mode.active && session.copy_mode.tab == tab.id) {
-    auto* const pane = find_pane(tab, session.copy_mode.pane);
-    if (pane == nullptr) {
-      leave_copy_mode(session);
-    } else {
-      const auto refreshed = pane->runtime.terminal.refresh_selection();
-      // Reflow updates Ghostty's tracked endpoints, but the renderer requires a freshly installed
-      // selection snapshot. Re-anchor the viewport to that endpoint before saving its new offset.
-      // If the refresh cannot be established, leave copy mode rather than allowing the subsequent
-      // frame composition to tear down an otherwise healthy attachment.
-      const auto scrolled =
-          refreshed.has_value() && *refreshed
-              ? pane->runtime.terminal.scroll_selection_into_view()
-              : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
-      if (!scrolled.has_value() || !update_copy_viewport_offset(session, *pane)) {
-        leave_copy_mode(session);
+    if (focused == nullptr) {
+      return LayoutResolutionStatus::consistency_lost;
+    }
+    std::span(targets).subspan(focused->id.slot(), 1).front() = viewport;
+    std::span(included).subspan(focused->id.slot(), 1).front() = true;
+  } else {
+    if (!collect_layout_rectangles(tab, 0, viewport, 0, targets)) {
+      return LayoutResolutionStatus::consistency_lost;
+    }
+    for (const auto& pane_slot : tab.panes) {
+      if (pane_slot.pane != nullptr) {
+        std::span(included).subspan(pane_slot.pane->id.slot(), 1).front() = true;
       }
     }
   }
-  return resolved;
+
+  PaneResizePlan plan{};
+  std::size_t count = 0;
+  for (std::size_t index = 0; index < tab.panes.size(); ++index) {
+    auto& pane_slot = std::span(tab.panes).subspan(index, 1).front();
+    if (pane_slot.pane == nullptr || !std::span(included).subspan(index, 1).front()) {
+      continue;
+    }
+    auto* const runtime = find_pane_runtime(runtimes, session, tab, *pane_slot.pane);
+    LEMMA_ASSERT(runtime != nullptr);
+    std::span(plan).subspan(count, 1).front() = {
+        .pane = pane_slot.pane.get(),
+        .runtime = runtime,
+        .previous = pane_slot.pane->rectangle,
+        .target = std::span(targets).subspan(index, 1).front(),
+    };
+    ++count;
+  }
+
+  for (std::size_t index = 0; index < count; ++index) {
+    auto& entry = std::span(plan).subspan(index, 1).front();
+    LEMMA_ASSERT(entry.pane != nullptr && entry.runtime != nullptr);
+    if (entry.previous.columns == entry.target.columns &&
+        entry.previous.rows == entry.target.rows) {
+      continue;
+    }
+    const auto status = resize_runtime_for_layout(*entry.runtime, entry.target);
+    entry.runtime_touched = status == TerminalResizeStatus::applied ||
+                            status == TerminalResizeStatus::rolled_back ||
+                            status == TerminalResizeStatus::consistency_lost;
+    entry.runtime_resized = status == TerminalResizeStatus::applied;
+    if (status == TerminalResizeStatus::rejected || status == TerminalResizeStatus::rolled_back) {
+      return rollback_layout_resize(plan, index + 1U);
+    }
+    if (status == TerminalResizeStatus::consistency_lost) {
+      static_cast<void>(rollback_layout_resize(plan, index));
+      finish_resize_mutation(entry);
+      return LayoutResolutionStatus::consistency_lost;
+    }
+  }
+
+  for (auto& entry : std::span(plan).first(count)) {
+    LEMMA_ASSERT(entry.pane != nullptr);
+    entry.pane->rectangle = entry.target;
+    finish_resize_mutation(entry);
+  }
+  return LayoutResolutionStatus::applied;
+}
+
+void refresh_copy_selection_after_layout(Session& session, Tab& tab,
+                                         PaneRuntimeStore& runtimes) noexcept {
+  if (!session.copy_mode.active || session.copy_mode.tab != tab.id) {
+    return;
+  }
+  auto* const pane = find_pane(tab, session.copy_mode.pane);
+  if (pane == nullptr) {
+    leave_copy_mode(session, runtimes);
+    return;
+  }
+  auto* const runtime = find_pane_runtime(runtimes, session, tab, *pane);
+  LEMMA_ASSERT(runtime != nullptr);
+  const auto refreshed = runtime->terminal.refresh_selection();
+  // Reflow updates Ghostty's tracked endpoints, but the renderer requires a freshly installed
+  // selection snapshot. Re-anchor the viewport to that endpoint before saving its new offset.
+  const auto scrolled =
+      refreshed.has_value() && *refreshed
+          ? runtime->terminal.scroll_selection_into_view()
+          : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
+  if (!scrolled.has_value() || !update_copy_viewport_offset(session, *runtime)) {
+    leave_copy_mode(session, runtimes);
+  }
+}
+
+[[nodiscard]] auto resolve_session_layout(Session& session, Tab& tab,
+                                          PaneRuntimeStore& runtimes) noexcept -> bool {
+  const auto status = resolve_layout(session, tab, runtimes);
+  if (status == LayoutResolutionStatus::consistency_lost) {
+    session.active = false;
+    return false;
+  }
+  refresh_copy_selection_after_layout(session, tab, runtimes);
+  return status == LayoutResolutionStatus::applied;
 }
 
 [[nodiscard]] auto frame_sink_state(const Session& session) noexcept -> FrameSinkState {
@@ -1121,10 +1426,20 @@ void schedule_frame(Session& session, const FrameUrgency urgency, const bool for
   return tab == nullptr ? nullptr : find_pane(*tab, session.copy_mode.pane);
 }
 
+[[nodiscard]] auto copy_mode_runtime(Session& session, PaneRuntimeStore& runtimes) noexcept
+    -> PaneRuntime* {
+  if (!session.copy_mode.active) {
+    return nullptr;
+  }
+  auto* const tab = find_tab(session, session.copy_mode.tab);
+  auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, session.copy_mode.pane);
+  return pane == nullptr ? nullptr : find_pane_runtime(runtimes, session, *tab, *pane);
+}
+
 void note_compression_activity(PaneRuntime& runtime) noexcept {
   const auto activity = runtime.terminal.compression_activity();
   if (!activity.has_value()) {
-    runtime.active = false;
+    runtime.fail(PaneRuntimeFailure::scrollback_compression_error);
     return;
   }
   if (*activity == runtime.compression_activity && runtime.compression_scheduled) {
@@ -1177,8 +1492,9 @@ void refresh_copy_mode_status(CopyModeState& state) noexcept {
   }
 }
 
-[[nodiscard]] auto update_copy_viewport_offset(Session& session, Pane& pane) noexcept -> bool {
-  const auto viewport = pane.runtime.terminal.viewport_state();
+[[nodiscard]] auto update_copy_viewport_offset(Session& session, PaneRuntime& runtime) noexcept
+    -> bool {
+  const auto viewport = runtime.terminal.viewport_state();
   if (!viewport.has_value()) {
     return false;
   }
@@ -1186,13 +1502,13 @@ void refresh_copy_mode_status(CopyModeState& state) noexcept {
   return true;
 }
 
-void leave_copy_mode(Session& session) noexcept {
-  auto* const pane = copy_mode_pane(session);
-  if (pane != nullptr) {
-    pane->runtime.terminal.reset_selection_gesture();
-    pane->runtime.terminal.clear_selection();
-    pane->runtime.terminal.scroll_viewport(vt::ViewportScroll::bottom);
-    note_compression_activity(pane->runtime);
+void leave_copy_mode(Session& session, PaneRuntimeStore& runtimes) noexcept {
+  auto* const runtime = copy_mode_runtime(session, runtimes);
+  if (runtime != nullptr) {
+    runtime->terminal.reset_selection_gesture();
+    runtime->terminal.clear_selection();
+    runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+    note_compression_activity(*runtime);
   }
   const bool changed = session.copy_mode.active;
   session.copy_mode = {};
@@ -1202,20 +1518,22 @@ void leave_copy_mode(Session& session) noexcept {
   }
 }
 
-void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcept {
+void preserve_copy_viewport_after_mutation(Session& session, Pane& pane, PaneRuntime& runtime,
+                                           PaneRuntimeStore& runtimes) noexcept {
   if (copy_mode_pane(session) != &pane) {
     return;
   }
-  pane.runtime.terminal.scroll_viewport(
-      vt::ViewportScroll::row, static_cast<std::int64_t>(session.copy_mode.viewport_offset));
-  if (!update_copy_viewport_offset(session, pane)) {
-    leave_copy_mode(session);
+  runtime.terminal.scroll_viewport(vt::ViewportScroll::row,
+                                   static_cast<std::int64_t>(session.copy_mode.viewport_offset));
+  if (!update_copy_viewport_offset(session, runtime)) {
+    leave_copy_mode(session, runtimes);
   }
 }
 
-[[nodiscard]] auto enter_copy_mode(Session& session, Tab& tab, Pane& pane) noexcept -> bool {
-  leave_copy_mode(session);
-  const auto update = pane.runtime.terminal.update_render_state();
+[[nodiscard]] auto enter_copy_mode(Session& session, Tab& tab, Pane& pane, PaneRuntime& runtime,
+                                   PaneRuntimeStore& runtimes) noexcept -> bool {
+  leave_copy_mode(session, runtimes);
+  const auto update = runtime.terminal.update_render_state();
   if (!update.has_value()) {
     return false;
   }
@@ -1225,7 +1543,7 @@ void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcep
       .row = update->cursor_in_viewport ? update->cursor_row
                                         : static_cast<std::uint32_t>(pane.rectangle.rows - 1U),
   };
-  const auto selected = pane.runtime.terminal.select(vt::SelectionUnit::cell, cursor);
+  const auto selected = runtime.terminal.select(vt::SelectionUnit::cell, cursor);
   if (!selected.has_value() || !*selected) {
     return false;
   }
@@ -1233,8 +1551,8 @@ void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcep
   session.copy_mode.tab = tab.id;
   session.copy_mode.pane = pane.id;
   session.copy_mode.active = true;
-  if (!update_copy_viewport_offset(session, pane)) {
-    pane.runtime.terminal.clear_selection();
+  if (!update_copy_viewport_offset(session, runtime)) {
+    runtime.terminal.clear_selection();
     session.copy_mode = {};
     return false;
   }
@@ -1244,25 +1562,25 @@ void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcep
   return true;
 }
 
-[[nodiscard]] auto adjust_copy_selection(Session& session, Pane& pane,
+[[nodiscard]] auto adjust_copy_selection(Session& session, PaneRuntime& runtime,
+                                         PaneRuntimeStore& runtimes,
                                          const vt::SelectionAdjustment adjustment) noexcept
     -> bool {
-  const auto adjusted =
-      pane.runtime.terminal.selection_adjust(adjustment, session.copy_mode.extending);
+  const auto adjusted = runtime.terminal.selection_adjust(adjustment, session.copy_mode.extending);
   if (!adjusted.has_value()) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
     return false;
   }
   if (*adjusted) {
-    const auto scrolled = pane.runtime.terminal.scroll_selection_into_view();
-    if (!scrolled.has_value() || !update_copy_viewport_offset(session, pane)) {
-      leave_copy_mode(session);
+    const auto scrolled = runtime.terminal.scroll_selection_into_view();
+    if (!scrolled.has_value() || !update_copy_viewport_offset(session, runtime)) {
+      leave_copy_mode(session, runtimes);
       return false;
     }
     session.copy_mode.feedback = CopyModeFeedback::none;
     refresh_copy_mode_status(session.copy_mode);
     session.status_valid = false;
-    note_compression_activity(pane.runtime);
+    note_compression_activity(runtime);
     schedule_frame(session, FrameUrgency::state_change, false);
   }
   return true;
@@ -1271,7 +1589,7 @@ void preserve_copy_viewport_after_mutation(Session& session, Pane& pane) noexcep
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
                                               vt::SearchDirection direction) noexcept -> bool;
 
-void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection direction,
+void begin_copy_search(Session& session, PaneRuntime& runtime, const vt::SearchDirection direction,
                        const bool continue_from_match = false) noexcept {
   if (session.copy_mode.query_size == 0) {
     refresh_copy_mode_status(session.copy_mode);
@@ -1280,12 +1598,12 @@ void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection d
     return;
   }
   session.copy_mode.search_cursor.reset();
-  const bool stale_match = session.copy_mode.search_generation != pane.runtime.mutation_generation;
+  const bool stale_match = session.copy_mode.search_generation != runtime.mutation_generation;
   if (!continue_from_match || stale_match) {
     session.copy_mode.last_search_match.reset();
   } else if (session.copy_mode.last_search_match.has_value()) {
     auto point = session.copy_mode.last_search_match->start;
-    if (!advance_copy_search_cursor(pane.runtime, point, direction)) {
+    if (!advance_copy_search_cursor(runtime, point, direction)) {
       session.copy_mode.search_pending = false;
       session.copy_mode.feedback = CopyModeFeedback::no_match;
       refresh_copy_mode_status(session.copy_mode);
@@ -1299,7 +1617,7 @@ void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection d
   session.copy_mode.search_pending = true;
   session.copy_mode.search_deadline = std::chrono::steady_clock::now();
   session.copy_mode.feedback = CopyModeFeedback::none;
-  session.copy_mode.search_generation = pane.runtime.mutation_generation;
+  session.copy_mode.search_generation = runtime.mutation_generation;
   refresh_copy_mode_status(session.copy_mode);
   session.status_valid = false;
   schedule_frame(session, FrameUrgency::state_change, false);
@@ -1310,8 +1628,8 @@ void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection d
   return 4U * ((bytes + 2U) / 3U);
 }
 
-[[nodiscard]] auto copy_selection_to_outer_clipboard(Session& session, Pane& pane) noexcept
-    -> bool {
+[[nodiscard]] auto copy_selection_to_outer_clipboard(Session& session, PaneRuntime& runtime,
+                                                     PaneRuntimeStore& runtimes) noexcept -> bool {
   constexpr std::size_t osc_overhead = 9;
   if (session.clipboard_write.bytes != nullptr) {
     session.copy_mode.feedback = CopyModeFeedback::clipboard_busy;
@@ -1331,7 +1649,7 @@ void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection d
     refresh_copy_mode_status(session.copy_mode);
     return false;
   }
-  const auto formatted = pane.runtime.terminal.format_selection(
+  const auto formatted = runtime.terminal.format_selection(
       vt::ScreenFormat::plain, std::span(storage.get(), delivery_capacity));
   if (!formatted.has_value()) {
     session.copy_mode.feedback = formatted.error() == vt::Error::out_of_space
@@ -1352,7 +1670,7 @@ void begin_copy_search(Session& session, Pane& pane, const vt::SearchDirection d
   }
   session.clipboard_write.bytes = std::move(storage);
   session.clipboard_write.size = *formatted;
-  leave_copy_mode(session);
+  leave_copy_mode(session, runtimes);
   return true;
 }
 
@@ -1445,12 +1763,13 @@ struct CopyEscapeDecode final {
 // Copy-mode bytes are attachment UI input and never reach the child PTY. The current v1 client is
 // legacy-byte based, so the default table intentionally uses single-byte vi bindings.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto process_copy_mode_input(Session& session,
+[[nodiscard]] auto process_copy_mode_input(Session& session, PaneRuntimeStore& runtimes,
                                            const std::span<const std::byte> input) noexcept
     -> std::size_t {
   auto* pane = copy_mode_pane(session);
-  if (pane == nullptr) {
-    leave_copy_mode(session);
+  auto* runtime = copy_mode_runtime(session, runtimes);
+  if (pane == nullptr || runtime == nullptr) {
+    leave_copy_mode(session, runtimes);
     return input.size();
   }
   for (std::size_t index = 0; index < input.size(); ++index) {
@@ -1472,7 +1791,7 @@ struct CopyEscapeDecode final {
         }
       } else if (byte == std::byte{'\r'} || byte == std::byte{'\n'}) {
         session.copy_mode.search_entry = false;
-        begin_copy_search(session, *pane, session.copy_mode.search_direction);
+        begin_copy_search(session, *runtime, session.copy_mode.search_direction);
       } else if (raw_value >= 0x20 &&
                  session.copy_mode.query_size < session.copy_mode.query.size()) {
         std::span(session.copy_mode.query).subspan(session.copy_mode.query_size, 1).front() =
@@ -1510,7 +1829,7 @@ struct CopyEscapeDecode final {
         // A lone Escape is a complete copy-mode command when the next byte is not a
         // control-sequence introducer. Leave that byte unconsumed so ordinary routing can handle it
         // after copy mode.
-        leave_copy_mode(session);
+        leave_copy_mode(session, runtimes);
         return index;
       }
     } else if (byte == std::byte{0x1B}) {
@@ -1523,51 +1842,61 @@ struct CopyEscapeDecode final {
     switch (value) {
     case 0x1B:
     case static_cast<std::uint8_t>('q'):
-      leave_copy_mode(session);
+      leave_copy_mode(session, runtimes);
       return index + 1U;
     case static_cast<std::uint8_t>('h'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::left));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::left));
       break;
     case static_cast<std::uint8_t>('j'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::down));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::down));
       break;
     case static_cast<std::uint8_t>('k'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::up));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::up));
       break;
     case static_cast<std::uint8_t>('l'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::right));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::right));
       break;
     case static_cast<std::uint8_t>('b'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::word_left));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::word_left));
       break;
     case static_cast<std::uint8_t>('w'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::word_right));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::word_right));
       break;
     case static_cast<std::uint8_t>('0'):
-      static_cast<void>(
-          adjust_copy_selection(session, *pane, vt::SelectionAdjustment::beginning_of_line));
+      static_cast<void>(adjust_copy_selection(session, *runtime, runtimes,
+                                              vt::SelectionAdjustment::beginning_of_line));
       break;
     case static_cast<std::uint8_t>('$'):
       static_cast<void>(
-          adjust_copy_selection(session, *pane, vt::SelectionAdjustment::end_of_line));
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::end_of_line));
       break;
     case static_cast<std::uint8_t>('g'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::home));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::home));
       break;
     case static_cast<std::uint8_t>('G'):
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::end));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::end));
       break;
     case 0x15: // Ctrl-U
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::page_up));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::page_up));
       break;
     case 0x04: // Ctrl-D
-      static_cast<void>(adjust_copy_selection(session, *pane, vt::SelectionAdjustment::page_down));
+      static_cast<void>(
+          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::page_down));
       break;
     case static_cast<std::uint8_t>(' '):
     case static_cast<std::uint8_t>('v'): {
-      const auto collapsed = pane->runtime.terminal.collapse_selection_to_endpoint();
+      const auto collapsed = runtime->terminal.collapse_selection_to_endpoint();
       if (!collapsed.has_value() || !*collapsed) {
-        leave_copy_mode(session);
+        leave_copy_mode(session, runtimes);
         break;
       }
       session.copy_mode.extending = true;
@@ -1580,7 +1909,7 @@ struct CopyEscapeDecode final {
     case static_cast<std::uint8_t>('y'):
     case static_cast<std::uint8_t>('\r'):
     case static_cast<std::uint8_t>('\n'):
-      if (copy_selection_to_outer_clipboard(session, *pane)) {
+      if (copy_selection_to_outer_clipboard(session, *runtime, runtimes)) {
         return index + 1U;
       }
       session.status_valid = false;
@@ -1601,10 +1930,10 @@ struct CopyEscapeDecode final {
       schedule_frame(session, FrameUrgency::state_change, false);
       break;
     case static_cast<std::uint8_t>('n'):
-      begin_copy_search(session, *pane, session.copy_mode.search_direction, true);
+      begin_copy_search(session, *runtime, session.copy_mode.search_direction, true);
       break;
     case static_cast<std::uint8_t>('N'):
-      begin_copy_search(session, *pane,
+      begin_copy_search(session, *runtime,
                         session.copy_mode.search_direction == vt::SearchDirection::forward
                             ? vt::SearchDirection::backward
                             : vt::SearchDirection::forward,
@@ -1617,15 +1946,17 @@ struct CopyEscapeDecode final {
       return index + 1U;
     }
     pane = copy_mode_pane(session);
-    if (pane == nullptr) {
-      leave_copy_mode(session);
+    runtime = copy_mode_runtime(session, runtimes);
+    if (pane == nullptr || runtime == nullptr) {
+      leave_copy_mode(session, runtimes);
       return input.size();
     }
   }
   return input.size();
 }
 
-void process_typed_copy_mode_input(Session& session, const protocol::KeyInput& key,
+void process_typed_copy_mode_input(Session& session, PaneRuntimeStore& runtimes,
+                                   const protocol::KeyInput& key,
                                    const std::span<const std::byte> text) noexcept {
   if (key.action == protocol::KeyInputAction::release) {
     return;
@@ -1661,14 +1992,14 @@ void process_typed_copy_mode_input(Session& session, const protocol::KeyInput& k
       translated.front() = std::byte{0x04};
       break;
     }
-    static_cast<void>(process_copy_mode_input(session, text));
+    static_cast<void>(process_copy_mode_input(session, runtimes, text));
     return;
   case protocol::KeyInputKey::u:
     if ((key.modifiers & protocol::key_input_modifier_control) != 0) {
       translated.front() = std::byte{0x15};
       break;
     }
-    static_cast<void>(process_copy_mode_input(session, text));
+    static_cast<void>(process_copy_mode_input(session, runtimes, text));
     return;
   case protocol::KeyInputKey::unidentified:
   case protocol::KeyInputKey::a:
@@ -1714,21 +2045,22 @@ void process_typed_copy_mode_input(Session& session, const protocol::KeyInput& k
   case protocol::KeyInputKey::f10:
   case protocol::KeyInputKey::f11:
   case protocol::KeyInputKey::f12:
-    static_cast<void>(process_copy_mode_input(session, text));
+    static_cast<void>(process_copy_mode_input(session, runtimes, text));
     return;
   }
-  static_cast<void>(process_copy_mode_input(session, translated));
+  static_cast<void>(process_copy_mode_input(session, runtimes, translated));
 }
 
-void service_copy_input_timeout(Session& session,
+void service_copy_input_timeout(Session& session, PaneRuntimeStore& runtimes,
                                 const std::chrono::steady_clock::time_point now) noexcept {
   if (session.copy_mode.active && session.copy_mode.pending_escape_size > 0 &&
       now >= session.copy_mode.pending_escape_deadline) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
   }
 }
 
-[[nodiscard]] auto fit_tab_to_viewport(Session& session, Tab& tab) noexcept -> bool {
+[[nodiscard]] auto fit_tab_to_viewport(Session& session, Tab& tab,
+                                       PaneRuntimeStore& runtimes) noexcept -> bool {
   const render::PaneRectangle viewport{
       .columns = session.columns,
       .rows = pane_rows(session.rows),
@@ -1737,13 +2069,25 @@ void service_copy_input_timeout(Session& session,
     tab.layout_suspended = true;
     return true;
   }
+  const auto previous_suspended = tab.layout_suspended;
+  const auto previous_columns = tab.layout_columns;
+  const auto previous_rows = tab.layout_rows;
   tab.layout_suspended = false;
   tab.layout_columns = viewport.columns;
   tab.layout_rows = viewport.rows;
-  return resolve_session_layout(session, tab);
+  if (resolve_session_layout(session, tab, runtimes)) {
+    return true;
+  }
+  if (session.active) {
+    tab.layout_suspended = previous_suspended;
+    tab.layout_columns = previous_columns;
+    tab.layout_rows = previous_rows;
+  }
+  return false;
 }
 
-[[nodiscard]] auto select_tab(Session& session, const TabId id) noexcept -> bool {
+[[nodiscard]] auto select_tab(Session& session, PaneRuntimeStore& runtimes, const TabId id) noexcept
+    -> bool {
   auto* const selected = find_tab(session, id);
   if (selected == nullptr) {
     return false;
@@ -1751,17 +2095,22 @@ void service_copy_input_timeout(Session& session,
   if (session.active_tab == id) {
     return true;
   }
+  const auto previous_active = session.active_tab;
+  const auto previous_previous = session.previous_tab;
   session.previous_tab = session.active_tab;
   session.active_tab = id;
-  if (!fit_tab_to_viewport(session, *selected)) {
-    session.active = false;
+  if (!fit_tab_to_viewport(session, *selected, runtimes)) {
+    if (session.active) {
+      session.active_tab = previous_active;
+      session.previous_tab = previous_previous;
+    }
     return false;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
-void cycle_tab(Session& session, const bool forward) noexcept {
+void cycle_tab(Session& session, PaneRuntimeStore& runtimes, const bool forward) noexcept {
   const auto current = static_cast<std::size_t>(session.active_tab.slot());
   for (std::size_t offset = 1; offset <= session.tabs.size(); ++offset) {
     const auto candidate = forward
@@ -1770,20 +2119,30 @@ void cycle_tab(Session& session, const bool forward) noexcept {
                                      session.tabs.size();
     const auto& slot = std::span(session.tabs).subspan(candidate, 1).front();
     if (slot.tab != nullptr) {
-      static_cast<void>(select_tab(session, slot.tab->id));
+      static_cast<void>(select_tab(session, runtimes, slot.tab->id));
       return;
     }
   }
 }
 
-void remove_tab(Session& session, const TabId id) noexcept {
+void erase_tab_pane_runtimes(Session& session, Tab& tab, PaneRuntimeStore& runtimes) noexcept {
+  for (const auto& pane_slot : tab.panes) {
+    if (pane_slot.pane != nullptr) {
+      const bool erased = runtimes.erase(pane_address(session, tab, *pane_slot.pane));
+      LEMMA_ASSERT(erased);
+    }
+  }
+}
+
+void remove_tab(Session& session, PaneRuntimeStore& runtimes, const TabId id) noexcept {
   auto* const tab = find_tab(session, id);
   if (tab == nullptr) {
     return;
   }
   if (session.copy_mode.active && session.copy_mode.tab == id) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
   }
+  erase_tab_pane_runtimes(session, *tab, runtimes);
   const auto removed_slot = static_cast<std::size_t>(id.slot());
   std::span(session.tabs).subspan(removed_slot, 1).front().tab.reset();
   if (tab_count(session) == 0) {
@@ -1800,8 +2159,11 @@ void remove_tab(Session& session, const TabId id) noexcept {
     if (slot.tab != nullptr) {
       session.active_tab = slot.tab->id;
       session.previous_tab = session.active_tab;
-      if (!fit_tab_to_viewport(session, *slot.tab)) {
-        session.active = false;
+      if (!fit_tab_to_viewport(session, *slot.tab, runtimes)) {
+        if (session.active) {
+          slot.tab->layout_suspended = true;
+          schedule_frame(session, FrameUrgency::state_change, true);
+        }
         return;
       }
       schedule_frame(session, FrameUrgency::state_change, true);
@@ -1810,13 +2172,21 @@ void remove_tab(Session& session, const TabId id) noexcept {
   }
 }
 
-void create_tab(Session& session) noexcept {
-  auto* const created = allocate_tab(session);
+void create_tab(Session& session, PaneRuntimeStore& runtimes) noexcept {
+  const auto previous_active = session.active_tab;
+  const auto previous_previous = session.previous_tab;
+  auto* const created = allocate_tab(session, runtimes);
   if (created == nullptr) {
     return;
   }
-  if (!fit_tab_to_viewport(session, *created)) {
-    session.active = false;
+  if (!fit_tab_to_viewport(session, *created, runtimes)) {
+    if (session.active) {
+      const auto created_id = created->id;
+      erase_tab_pane_runtimes(session, *created, runtimes);
+      std::span(session.tabs).subspan(created_id.slot(), 1).front().tab.reset();
+      session.active_tab = previous_active;
+      session.previous_tab = previous_previous;
+    }
     return;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
@@ -1824,8 +2194,8 @@ void create_tab(Session& session) noexcept {
 
 // Splitting is an explicit bounded topology transaction.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto split_pane(Session& session, Tab& tab, const PaneId source_pane,
-                              const SplitAxis axis) noexcept -> bool {
+[[nodiscard]] auto split_pane(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                              const PaneId source_pane, const SplitAxis axis) noexcept -> bool {
   if (pane_count(session) >= panes_per_session_max) {
     return false;
   }
@@ -1883,15 +2253,32 @@ void create_tab(Session& session) noexcept {
     const auto available = static_cast<std::uint16_t>(new_rows - 1U);
     new_rows = static_cast<std::uint16_t>(available - ((available + 1U) / 2U));
   }
-  auto created = create_pane(new_columns, new_rows, session.cwd(), session.launch_environment(),
-                             session.environment_mode, session.theme);
-  if (created == nullptr) {
+  auto runtime =
+      create_pane_runtime(new_columns, new_rows, session.cwd(), session.launch_environment(),
+                          session.environment_mode, session.theme);
+  if (runtime == nullptr) {
     return false;
   }
   auto& pane_slot_value = std::span(tab.panes).subspan(*pane_slot, 1).front();
   const auto pane_generation = next_generation(pane_slot_value.generation);
   const auto pane_id = PaneId::from_parts(static_cast<std::uint32_t>(*pane_slot), pane_generation);
+  std::unique_ptr<Pane> created;
+  try {
+    created = std::make_unique<Pane>();
+  } catch (const std::bad_alloc&) {
+    return false;
+  }
   created->id = pane_id;
+  created->rectangle = {.columns = new_columns, .rows = new_rows};
+  const auto previous_layout = tab.layout;
+  const auto previous_zoomed = tab.zoomed;
+  const auto previous_focused = tab.focused_pane;
+  const auto previous_previous = tab.previous_pane;
+  const auto previous_generation = pane_slot_value.generation;
+  const PaneAddress address{.session = session.id, .tab = tab.id, .pane = pane_id};
+  if (!runtimes.insert(address, std::move(runtime))) {
+    return false;
+  }
 
   auto& parent = std::span(tab.layout).subspan(*parent_node, 1).front();
   const auto parent_parent = parent.parent;
@@ -1921,27 +2308,38 @@ void create_tab(Session& session) noexcept {
   tab.zoomed = false;
   tab.previous_pane = source_pane;
   tab.focused_pane = pane_id;
-  if (!resolve_session_layout(session, tab)) {
+  if (!resolve_session_layout(session, tab, runtimes)) {
+    if (session.active) {
+      const bool erased = runtimes.erase(address);
+      LEMMA_ASSERT(erased);
+      pane_slot_value.pane.reset();
+      pane_slot_value.generation = previous_generation;
+      tab.layout = previous_layout;
+      tab.zoomed = previous_zoomed;
+      tab.focused_pane = previous_focused;
+      tab.previous_pane = previous_previous;
+    }
     return false;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
-[[nodiscard]] auto close_pane(Session& session, Tab& tab, const PaneId pane_id) noexcept -> bool {
+[[nodiscard]] auto close_pane(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                              const PaneId pane_id) noexcept -> bool {
   auto* const pane = find_pane(tab, pane_id);
   if (pane == nullptr) {
     return false;
   }
   if (session.copy_mode.active && session.copy_mode.tab == tab.id &&
       session.copy_mode.pane == pane_id) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
   }
   const auto pane_index = static_cast<std::size_t>(pane_id.slot());
   const bool was_focused = pane_id == tab.focused_pane;
   if (pane_count(tab) == 1) {
     const auto id = tab.id;
-    remove_tab(session, id);
+    remove_tab(session, runtimes, id);
     return true;
   }
   const auto leaf_index = node_for_pane(tab, pane_id);
@@ -1967,6 +2365,8 @@ void create_tab(Session& session) noexcept {
   }
   std::span(tab.layout).subspan(*leaf_index, 1).front() = {};
   std::span(tab.layout).subspan(sibling_index, 1).front() = {};
+  const bool runtime_erased = runtimes.erase(pane_address(session, tab, *pane));
+  LEMMA_ASSERT(runtime_erased);
   std::span(tab.panes).subspan(pane_index, 1).front().pane.reset();
   if (was_focused) {
     tab.focused_pane = first_leaf(tab, parent_index);
@@ -1975,26 +2375,39 @@ void create_tab(Session& session) noexcept {
     tab.previous_pane = tab.focused_pane;
   }
   tab.zoomed = false;
-  if (!resolve_session_layout(session, tab)) {
+  if (!resolve_session_layout(session, tab, runtimes)) {
+    if (session.active) {
+      tab.layout_suspended = true;
+      schedule_frame(session, FrameUrgency::state_change, true);
+      return true;
+    }
     return false;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
 
-void focus_pane(Session& session, Tab& tab, const PaneId pane_id) noexcept {
+void focus_pane(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                const PaneId pane_id) noexcept {
   if (pane_id == tab.focused_pane || find_pane(tab, pane_id) == nullptr) {
     return;
   }
+  const auto previous_focused = tab.focused_pane;
+  const auto previous_previous = tab.previous_pane;
   tab.previous_pane = tab.focused_pane;
   tab.focused_pane = pane_id;
-  if (tab.zoomed && !resolve_session_layout(session, tab)) {
+  if (tab.zoomed && !resolve_session_layout(session, tab, runtimes)) {
+    if (session.active) {
+      tab.focused_pane = previous_focused;
+      tab.previous_pane = previous_previous;
+    }
     return;
   }
   schedule_frame(session, FrameUrgency::state_change, tab.zoomed);
 }
 
-void focus_next(Session& session, Tab& tab, const PaneId source_pane) noexcept {
+void focus_next(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                const PaneId source_pane) noexcept {
   const auto pane_slots = std::span(tab.panes);
   for (std::size_t offset = 1; offset <= pane_slots.size(); ++offset) {
     const auto candidate =
@@ -2003,7 +2416,7 @@ void focus_next(Session& session, Tab& tab, const PaneId source_pane) noexcept {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
     const auto& pane = tab.panes[candidate].pane;
     if (pane != nullptr) {
-      focus_pane(session, tab, pane->id);
+      focus_pane(session, tab, runtimes, pane->id);
       return;
     }
   }
@@ -2018,8 +2431,8 @@ enum class FocusDirection : std::uint8_t {
 
 // Directional scoring handles each axis explicitly and remains bounded by pane capacity.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
-                     const FocusDirection direction) noexcept {
+void focus_direction(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                     const PaneId source_pane, const FocusDirection direction) noexcept {
   // Zoom resizes focused panes to the viewport, so derive stable tiled geometry from the tree.
   PaneRectangles rectangles{};
   const render::PaneRectangle viewport{
@@ -2086,7 +2499,7 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     }
   }
   if (best.has_value()) {
-    focus_pane(session, tab, *best);
+    focus_pane(session, tab, runtimes, *best);
   }
 }
 
@@ -2166,11 +2579,19 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
   return command;
 }
 
+struct SessionCommandContext final {
+  Session* session;
+  PaneRuntimeStore* runtimes;
+};
+
 // This is the only function that translates validated commands into authoritative mux mutations.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto execute_session_command(void* const context, const Command& command) noexcept
     -> CommandResult {
-  auto& session = *static_cast<Session*>(context);
+  auto& command_context = *static_cast<SessionCommandContext*>(context);
+  LEMMA_ASSERT(command_context.session != nullptr && command_context.runtimes != nullptr);
+  auto& session = *command_context.session;
+  auto& runtimes = *command_context.runtimes;
   if (command.target.session.is_valid() && command.target.session != session.id) {
     return {.status = command.target.session.slot() == session.id.slot()
                           ? CommandStatus::stale_target
@@ -2209,7 +2630,7 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
                           : CommandResult{.status = CommandStatus::failed};
   };
   if (session.copy_mode.active && command.kind != CommandKind::enter_copy_mode) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
   }
   switch (command.kind) {
   case CommandKind::none:
@@ -2220,7 +2641,7 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     if (pane_count(session) >= panes_per_session_max) {
       return {.status = CommandStatus::capacity};
     }
-    if (split_pane(session, *tab, targeted_pane->id, SplitAxis::left_right)) {
+    if (split_pane(session, *tab, runtimes, targeted_pane->id, SplitAxis::left_right)) {
       return {.status = CommandStatus::applied};
     }
     return {.status = session.active ? CommandStatus::unavailable : CommandStatus::failed};
@@ -2228,70 +2649,82 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
     if (pane_count(session) >= panes_per_session_max) {
       return {.status = CommandStatus::capacity};
     }
-    if (split_pane(session, *tab, targeted_pane->id, SplitAxis::top_bottom)) {
+    if (split_pane(session, *tab, runtimes, targeted_pane->id, SplitAxis::top_bottom)) {
       return {.status = CommandStatus::applied};
     }
     return {.status = session.active ? CommandStatus::unavailable : CommandStatus::failed};
   case CommandKind::focus_left: {
     const auto previous = tab->focused_pane;
-    focus_direction(session, *tab, targeted_pane->id, FocusDirection::left);
+    focus_direction(session, *tab, runtimes, targeted_pane->id, FocusDirection::left);
     return focus_result(previous);
   }
   case CommandKind::focus_right: {
     const auto previous = tab->focused_pane;
-    focus_direction(session, *tab, targeted_pane->id, FocusDirection::right);
+    focus_direction(session, *tab, runtimes, targeted_pane->id, FocusDirection::right);
     return focus_result(previous);
   }
   case CommandKind::focus_up: {
     const auto previous = tab->focused_pane;
-    focus_direction(session, *tab, targeted_pane->id, FocusDirection::up);
+    focus_direction(session, *tab, runtimes, targeted_pane->id, FocusDirection::up);
     return focus_result(previous);
   }
   case CommandKind::focus_down: {
     const auto previous = tab->focused_pane;
-    focus_direction(session, *tab, targeted_pane->id, FocusDirection::down);
+    focus_direction(session, *tab, runtimes, targeted_pane->id, FocusDirection::down);
     return focus_result(previous);
   }
   case CommandKind::focus_next: {
     const auto previous = tab->focused_pane;
-    focus_next(session, *tab, targeted_pane->id);
+    focus_next(session, *tab, runtimes, targeted_pane->id);
     return focus_result(previous);
   }
   case CommandKind::focus_previous: {
     const auto previous = tab->focused_pane;
-    focus_pane(session, *tab, tab->previous_pane);
+    focus_pane(session, *tab, runtimes, tab->previous_pane);
     return focus_result(previous);
   }
   case CommandKind::close_pane:
-    if (close_pane(session, *tab, targeted_pane->id)) {
+    if (close_pane(session, *tab, runtimes, targeted_pane->id)) {
       return {.status = CommandStatus::applied};
     }
     return {.status = session.active ? CommandStatus::unavailable : CommandStatus::failed};
-  case CommandKind::toggle_zoom:
-    focus_pane(session, *tab, targeted_pane->id);
-    if (!session.active) {
-      return {.status = CommandStatus::failed};
+  case CommandKind::toggle_zoom: {
+    const auto previous_focused = tab->focused_pane;
+    const auto previous_previous = tab->previous_pane;
+    const auto previous_zoomed = tab->zoomed;
+    if (targeted_pane->id != tab->focused_pane) {
+      tab->previous_pane = tab->focused_pane;
+      tab->focused_pane = targeted_pane->id;
     }
     tab->zoomed = !tab->zoomed;
-    if (!resolve_session_layout(session, *tab)) {
+    if (!resolve_session_layout(session, *tab, runtimes)) {
+      if (session.active) {
+        tab->focused_pane = previous_focused;
+        tab->previous_pane = previous_previous;
+        tab->zoomed = previous_zoomed;
+        return {.status = CommandStatus::unavailable};
+      }
       return {.status = CommandStatus::failed};
     }
     schedule_frame(session, FrameUrgency::state_change, true);
     return {.status = CommandStatus::applied};
+  }
   case CommandKind::enter_copy_mode:
     if (session.copy_mode.active) {
-      leave_copy_mode(session);
+      leave_copy_mode(session, runtimes);
       return {.status = CommandStatus::applied};
     }
-    return enter_copy_mode(session, *tab, *targeted_pane)
-               ? CommandResult{.status = CommandStatus::applied}
-               : CommandResult{.status = CommandStatus::unavailable};
+    if (auto* const runtime = find_pane_runtime(runtimes, session, *tab, *targeted_pane);
+        runtime != nullptr && enter_copy_mode(session, *tab, *targeted_pane, *runtime, runtimes)) {
+      return {.status = CommandStatus::applied};
+    }
+    return {.status = CommandStatus::unavailable};
   case CommandKind::create_tab: {
     if (tab_count(session) >= session.tabs.size() || pane_count(session) >= panes_per_session_max) {
       return {.status = CommandStatus::capacity};
     }
     const auto previous = tab_count(session);
-    create_tab(session);
+    create_tab(session, runtimes);
     if (!session.active) {
       return {.status = CommandStatus::failed};
     }
@@ -2300,25 +2733,25 @@ void focus_direction(Session& session, Tab& tab, const PaneId source_pane,
   }
   case CommandKind::next_tab: {
     const auto previous = session.active_tab;
-    cycle_tab(session, true);
+    cycle_tab(session, runtimes, true);
     return session.active ? command_status(previous != session.active_tab)
                           : CommandResult{.status = CommandStatus::failed};
   }
   case CommandKind::previous_tab: {
     const auto previous = session.active_tab;
-    cycle_tab(session, false);
+    cycle_tab(session, runtimes, false);
     return session.active ? command_status(previous != session.active_tab)
                           : CommandResult{.status = CommandStatus::failed};
   }
   case CommandKind::close_tab:
-    remove_tab(session, tab->id);
+    remove_tab(session, runtimes, tab->id);
     return {.status = CommandStatus::applied};
   case CommandKind::select_tab: {
     if (!command.target.tab.is_valid()) {
       return {.status = CommandStatus::unavailable};
     }
     const auto previous = session.active_tab;
-    if (!select_tab(session, command.target.tab)) {
+    if (!select_tab(session, runtimes, command.target.tab)) {
       return {.status = session.active ? CommandStatus::stale_target : CommandStatus::failed};
     }
     return command_status(previous != session.active_tab);
@@ -2369,8 +2802,8 @@ void record_session_command(void* const context, const Command& command,
 
 // Target completion is the single bounded bridge from implicit client commands to stable IDs.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto dispatch_session_command(Session& session, const Command& command) noexcept
-    -> CommandResult {
+[[nodiscard]] auto dispatch_session_command(Session& session, PaneRuntimeStore& runtimes,
+                                            const Command& command) noexcept -> CommandResult {
   auto resolved = command;
   if (!resolved.target.session.is_valid()) {
     resolved.target.session = session.id;
@@ -2394,13 +2827,16 @@ void record_session_command(void* const context, const Command& command,
       resolved.target.pane = tab->focused_pane;
     }
   }
-  const CommandDispatcher dispatcher(&execute_session_command, &session, &record_session_command,
+  SessionCommandContext context{.session = &session, .runtimes = &runtimes};
+  const CommandDispatcher dispatcher(&execute_session_command, &context, &record_session_command,
                                      &session);
   return dispatcher.dispatch(resolved);
 }
 
+// Surface projection combines bounded semantic and runtime state without retaining either.
 [[nodiscard]] auto
-collect_surfaces(Session& session,
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+collect_surfaces(Session& session, PaneRuntimeStore& runtimes,
                  std::array<render::PaneSurface, panes_per_tab_max>& storage) noexcept
     -> std::span<const render::PaneSurface> {
   auto* const tab = active_tab(session);
@@ -2413,29 +2849,32 @@ collect_surfaces(Session& session,
     // The loop bounds index by pane capacity.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
     auto& pane = tab->panes[index].pane;
-    if (pane == nullptr || !pane->runtime.active ||
-        (tab->zoomed && pane->id != tab->focused_pane)) {
+    if (pane == nullptr || (tab->zoomed && pane->id != tab->focused_pane)) {
+      continue;
+    }
+    auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+    if (runtime == nullptr || !runtime->live()) {
       continue;
     }
     const bool copy_pane = session.copy_mode.active && session.copy_mode.tab == tab->id &&
                            session.copy_mode.pane == pane->id;
-    const auto copy_cursor =
-        copy_pane ? pane->runtime.terminal.selection_endpoint(vt::PointSpace::viewport)
-                  : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
-                        std::optional<vt::TerminalPoint>{}};
+    const auto copy_cursor = copy_pane
+                                 ? runtime->terminal.selection_endpoint(vt::PointSpace::viewport)
+                                 : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
+                                       std::optional<vt::TerminalPoint>{}};
     const auto cursor = copy_cursor.value_or(std::optional<vt::TerminalPoint>{});
     const auto cursor_point = cursor.value_or(vt::TerminalPoint{});
     const bool cursor_override = cursor.has_value() && cursor_point.row < pane->rectangle.rows &&
                                  cursor_point.column < pane->rectangle.columns;
     std::span(storage).subspan(count, 1).front() = {
-        .terminal = &pane->runtime.terminal,
+        .terminal = &runtime->terminal,
         .rectangle = pane->rectangle,
         .cursor_override_column = cursor_override ? cursor_point.column : std::uint16_t{0},
         .cursor_override_row =
             cursor_override ? static_cast<std::uint16_t>(cursor_point.row) : std::uint16_t{0},
         .focused = pane->id == tab->focused_pane,
         .cursor_override = cursor_override,
-        .presentation_suppressed = pane->runtime.presentation_gate.presentation_suppressed(),
+        .presentation_suppressed = runtime->presentation_gate.presentation_suppressed(),
         .border_right =
             static_cast<std::uint32_t>(pane->rectangle.column) + pane->rectangle.columns <
             tab->layout_columns,
@@ -2447,10 +2886,12 @@ collect_surfaces(Session& session,
   return std::span(storage).first(count);
 }
 
-[[nodiscard]] auto resize_session(Session& session, const protocol::Dimensions dimensions) noexcept
-    -> bool {
+[[nodiscard]] auto resize_session(Session& session, PaneRuntimeStore& runtimes,
+                                  const protocol::Dimensions dimensions) noexcept -> bool {
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
+  const auto previous_columns = session.columns;
+  const auto previous_rows = session.rows;
   // Frame capacity changes only at this lifecycle boundary. Allocation failure preserves the old
   // storage and all terminal geometry, so the caller can reject the resize without partial state.
   const auto retained_frame_bytes = session.output.busy() ? session.output.frame_bytes() : 0;
@@ -2465,7 +2906,11 @@ collect_surfaces(Session& session,
   session.columns = columns;
   session.rows = rows;
   auto* const tab = active_tab(session);
-  if (tab == nullptr || !fit_tab_to_viewport(session, *tab)) {
+  if (tab == nullptr || !fit_tab_to_viewport(session, *tab, runtimes)) {
+    if (session.active) {
+      session.columns = previous_columns;
+      session.rows = previous_rows;
+    }
     return false;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
@@ -2481,7 +2926,8 @@ enum class ParseResult : std::uint8_t {
 
 // Packet dispatch exhaustively maps validated protocol messages to session transitions.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto parse_client_packets(Session& session) noexcept -> ParseResult {
+[[nodiscard]] auto parse_client_packets(Session& session, PaneRuntimeStore& runtimes) noexcept
+    -> ParseResult {
   while (true) {
     const auto decoded = session.decoder.next();
     if (!decoded.has_value()) {
@@ -2496,13 +2942,13 @@ enum class ParseResult : std::uint8_t {
       return ParseResult::error;
     case protocol::ClientMessageKind::detach: {
       const Command command{.kind = CommandKind::detach_client, .origin = CommandOrigin::client};
-      const auto result = dispatch_session_command(session, command);
+      const auto result = dispatch_session_command(session, runtimes, command);
       session.decoder.consume();
       return result.status == CommandStatus::detach_requested ? ParseResult::detach
                                                               : ParseResult::error;
     }
     case protocol::ClientMessageKind::resize:
-      if (!resize_session(session, message.dimensions)) {
+      if (!resize_session(session, runtimes, message.dimensions)) {
         return ParseResult::error;
       }
       break;
@@ -2514,7 +2960,7 @@ enum class ParseResult : std::uint8_t {
         }
         ordinary_input = message.input.subspan(*session.retained_input_offset);
       } else if (session.copy_mode.active) {
-        const auto consumed = process_copy_mode_input(session, message.input);
+        const auto consumed = process_copy_mode_input(session, runtimes, message.input);
         if (consumed > message.input.size()) {
           return ParseResult::error;
         }
@@ -2538,13 +2984,16 @@ enum class ParseResult : std::uint8_t {
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
       trace_correlation = session.decoded_input_trace_matcher.observe(ordinary_input);
 #endif
-      auto& runtime = pane->runtime;
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
+      }
       diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
-                                       static_cast<std::uint32_t>(runtime.pty),
+                                       static_cast<std::uint32_t>(runtime->pty),
                                        ordinary_input.size(), trace_correlation);
-      const auto queued_bytes_before = runtime.pending_writes.size();
+      const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_normalized_input(runtime.pending_writes, runtime.terminal, ordinary_input);
+          queue_normalized_input(runtime->pending_writes, runtime->terminal, ordinary_input);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
@@ -2552,14 +3001,15 @@ enum class ParseResult : std::uint8_t {
         return ParseResult::error;
       }
       if (latency_sensitive_input(ordinary_input.size())) {
-        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+        runtime->interactive_damage.await_write(queued_bytes_before,
+                                                runtime->pending_writes.size());
       }
       session.retained_input_offset.reset();
       break;
     }
     case protocol::ClientMessageKind::key: {
       if (session.copy_mode.active) {
-        process_typed_copy_mode_input(session, message.key, message.input);
+        process_typed_copy_mode_input(session, runtimes, message.key, message.input);
         break;
       }
       auto* const tab = active_tab(session);
@@ -2567,18 +3017,22 @@ enum class ParseResult : std::uint8_t {
       if (pane == nullptr) {
         return ParseResult::error;
       }
-      auto& runtime = pane->runtime;
-      const auto queued_bytes_before = runtime.pending_writes.size();
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
+      }
+      const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_key_input(runtime.pending_writes, runtime.terminal, message.key, message.input);
+          queue_key_input(runtime->pending_writes, runtime->terminal, message.key, message.input);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      if (runtime.pending_writes.size() > queued_bytes_before) {
-        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtime->interactive_damage.await_write(queued_bytes_before,
+                                                runtime->pending_writes.size());
       }
       break;
     }
@@ -2591,17 +3045,20 @@ enum class ParseResult : std::uint8_t {
       if (pane == nullptr) {
         return ParseResult::error;
       }
-      auto& runtime = pane->runtime;
-      const auto queued_bytes_before = runtime.pending_writes.size();
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
+      }
+      const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_paste_input(runtime.pending_writes, runtime.terminal, message.input);
+          queue_paste_input(runtime->pending_writes, runtime->terminal, message.input);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      runtime->interactive_damage.await_write(queued_bytes_before, runtime->pending_writes.size());
       break;
     }
     case protocol::ClientMessageKind::focus: {
@@ -2610,10 +3067,13 @@ enum class ParseResult : std::uint8_t {
       if (pane == nullptr) {
         return ParseResult::error;
       }
-      auto& runtime = pane->runtime;
-      const auto queued_bytes_before = runtime.pending_writes.size();
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
+      }
+      const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_focus_input(runtime.pending_writes, runtime.terminal,
+          queue_focus_input(runtime->pending_writes, runtime->terminal,
                             message.focus == protocol::FocusInput::gained ? vt::FocusEvent::gained
                                                                           : vt::FocusEvent::lost);
       if (queued == InputQueueResult::full) {
@@ -2622,8 +3082,9 @@ enum class ParseResult : std::uint8_t {
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      if (runtime.pending_writes.size() > queued_bytes_before) {
-        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtime->interactive_damage.await_write(queued_bytes_before,
+                                                runtime->pending_writes.size());
       }
       break;
     }
@@ -2675,7 +3136,7 @@ enum class ParseResult : std::uint8_t {
       if (message.mouse.action == protocol::MouseInputAction::press &&
           message.mouse.button == protocol::MouseInputButton::left &&
           pane->id != tab->focused_pane) {
-        focus_pane(session, *tab, pane->id);
+        focus_pane(session, *tab, runtimes, pane->id);
       }
       const auto& rectangle = pane->rectangle;
       const auto action = [value = message.mouse.action]() noexcept {
@@ -2704,17 +3165,21 @@ enum class ParseResult : std::uint8_t {
           .geometry = {.screen_width = rectangle.columns, .screen_height = rectangle.rows},
           .any_button_pressed = message.mouse.any_button_pressed,
       };
-      auto& runtime = pane->runtime;
-      const auto queued_bytes_before = runtime.pending_writes.size();
-      const auto queued = queue_mouse_input(runtime.pending_writes, runtime.terminal, event);
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
+      }
+      const auto queued_bytes_before = runtime->pending_writes.size();
+      const auto queued = queue_mouse_input(runtime->pending_writes, runtime->terminal, event);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      if (runtime.pending_writes.size() > queued_bytes_before) {
-        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtime->interactive_damage.await_write(queued_bytes_before,
+                                                runtime->pending_writes.size());
       }
       if (message.mouse.action == protocol::MouseInputAction::release) {
         session.mouse_capture_pane.reset();
@@ -2726,7 +3191,7 @@ enum class ParseResult : std::uint8_t {
         return ParseResult::error;
       }
       if (!session.theme_bound) {
-        if (!bind_session_theme(session, *message.host_theme)) {
+        if (!bind_session_theme(session, runtimes, *message.host_theme)) {
           return ParseResult::error;
         }
         schedule_frame(session, FrameUrgency::state_change, true);
@@ -2734,7 +3199,8 @@ enum class ParseResult : std::uint8_t {
       break;
     case protocol::ClientMessageKind::pane_command: {
       const auto command = command_from_pane_command(message.pane_command);
-      if (!command.has_value() || !dispatch_session_command(session, *command).succeeded()) {
+      if (!command.has_value() ||
+          !dispatch_session_command(session, runtimes, *command).succeeded()) {
         if (!session.active) {
           session.decoder.consume();
           return ParseResult::detach;
@@ -2750,8 +3216,9 @@ enum class ParseResult : std::uint8_t {
   }
 }
 
-[[nodiscard]] auto receive_client(Session& session) noexcept -> ParseResult {
-  const auto buffered = parse_client_packets(session);
+[[nodiscard]] auto receive_client(Session& session, PaneRuntimeStore& runtimes) noexcept
+    -> ParseResult {
+  const auto buffered = parse_client_packets(session, runtimes);
   if (buffered != ParseResult::keep) {
     return buffered;
   }
@@ -2770,7 +3237,7 @@ enum class ParseResult : std::uint8_t {
   if (!session.decoder.commit(static_cast<std::size_t>(bytes_read)).has_value()) {
     return ParseResult::error;
   }
-  return parse_client_packets(session);
+  return parse_client_packets(session, runtimes);
 }
 
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
@@ -2805,53 +3272,52 @@ enum class ParseResult : std::uint8_t {
   return true;
 }
 
-[[nodiscard]] auto service_copy_search(Session& session, std::size_t& work_budget) noexcept
-    -> bool {
+[[nodiscard]] auto service_copy_search(Session& session, PaneRuntimeStore& runtimes,
+                                       std::size_t& work_budget) noexcept -> bool {
   if (work_budget == 0 || !session.copy_mode.active || !session.copy_mode.search_pending ||
       std::chrono::steady_clock::now() < session.copy_mode.search_deadline) {
     return false;
   }
   const auto work_limit = std::min(work_budget, limits::search_candidates_per_step);
   work_budget -= work_limit;
-  auto* const pane = copy_mode_pane(session);
-  if (pane == nullptr) {
-    leave_copy_mode(session);
+  auto* const runtime = copy_mode_runtime(session, runtimes);
+  if (runtime == nullptr) {
+    leave_copy_mode(session, runtimes);
     return true;
   }
-  auto& runtime = pane->runtime;
-  if (runtime.mutation_generation != session.copy_mode.search_generation) {
-    session.copy_mode.search_generation = runtime.mutation_generation;
+  if (runtime->mutation_generation != session.copy_mode.search_generation) {
+    session.copy_mode.search_generation = runtime->mutation_generation;
     session.copy_mode.search_cursor.reset();
     session.copy_mode.last_search_match.reset();
   }
-  const auto searched = runtime.terminal.search_literal_step(
+  const auto searched = runtime->terminal.search_literal_step(
       session.copy_mode.query_view(), session.copy_mode.active_search_direction,
       session.copy_mode.search_cursor, work_limit);
   if (!searched.has_value()) {
-    leave_copy_mode(session);
+    leave_copy_mode(session, runtimes);
     return true;
   }
   switch (searched->status) {
   case vt::SearchStepStatus::found: {
-    const auto selected = runtime.terminal.select_search_match(searched->match);
+    const auto selected = runtime->terminal.select_search_match(searched->match);
     const auto scrolled =
         selected.has_value()
-            ? runtime.terminal.scroll_selection_into_view()
+            ? runtime->terminal.scroll_selection_into_view()
             : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
     if (!selected.has_value() || !scrolled.has_value()) {
-      leave_copy_mode(session);
+      leave_copy_mode(session, runtimes);
       return true;
     }
     session.copy_mode.search_pending = false;
     session.copy_mode.feedback = CopyModeFeedback::none;
     session.copy_mode.last_search_match = searched->match;
     session.copy_mode.search_cursor.reset();
-    if (!update_copy_viewport_offset(session, *pane)) {
-      leave_copy_mode(session);
+    if (!update_copy_viewport_offset(session, *runtime)) {
+      leave_copy_mode(session, runtimes);
       return true;
     }
     refresh_copy_mode_status(session.copy_mode);
-    note_compression_activity(runtime);
+    note_compression_activity(*runtime);
     session.status_valid = false;
     schedule_frame(session, FrameUrgency::state_change, false);
     break;
@@ -2863,7 +3329,7 @@ enum class ParseResult : std::uint8_t {
   case vt::SearchStepStatus::not_found:
     session.copy_mode.search_pending = false;
     session.copy_mode.feedback = CopyModeFeedback::no_match;
-    note_compression_activity(runtime);
+    note_compression_activity(*runtime);
     session.copy_mode.search_cursor.reset();
     refresh_copy_mode_status(session.copy_mode);
     session.status_valid = false;
@@ -2873,26 +3339,30 @@ enum class ParseResult : std::uint8_t {
   return true;
 }
 
-[[nodiscard]] auto tab_title(const Tab& tab) noexcept -> std::string_view {
+[[nodiscard]] auto tab_title(const Session& session, const Tab& tab,
+                             const PaneRuntimeStore& runtimes) noexcept -> std::string_view {
   const auto* const focused = find_pane(tab, tab.focused_pane);
   LEMMA_ASSERT(focused != nullptr);
-  const auto& runtime = focused->runtime;
-  if (runtime.process_name_size > 0) {
-    return {runtime.process_name.data(), runtime.process_name_size};
+  const auto* const runtime = find_pane_runtime(runtimes, session, tab, *focused);
+  LEMMA_ASSERT(runtime != nullptr);
+  if (runtime->process_name_size > 0) {
+    return {runtime->process_name.data(), runtime->process_name_size};
   }
-  const auto title = runtime.terminal.title();
+  const auto title = runtime->terminal.title();
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
 }
 
-[[nodiscard]] auto status_tab_title(const Session& session, const Tab& tab) noexcept
-    -> std::string_view {
+[[nodiscard]] auto status_tab_title(const Session& session, const Tab& tab,
+                                    const PaneRuntimeStore& runtimes) noexcept -> std::string_view {
   if (session.copy_mode.active && session.copy_mode.tab == tab.id) {
     return session.copy_mode.status_view();
   }
-  return tab_title(tab);
+  return tab_title(session, tab, runtimes);
 }
 
-[[nodiscard]] auto current_status_signature(const Session& session) noexcept -> std::uint64_t {
+[[nodiscard]] auto current_status_signature(const Session& session,
+                                            const PaneRuntimeStore& runtimes) noexcept
+    -> std::uint64_t {
   constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
   constexpr std::uint64_t prime = 1'099'511'628'211ULL;
   std::uint64_t signature = offset_basis;
@@ -2908,7 +3378,7 @@ enum class ParseResult : std::uint8_t {
     ++position;
     mix(position);
     mix(slot.tab->id == session.active_tab ? 1U : 0U);
-    const auto title = status_tab_title(session, *slot.tab);
+    const auto title = status_tab_title(session, *slot.tab, runtimes);
     for (const char character : std::span(title).first(std::min(title.size(), std::size_t{16}))) {
       mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
     }
@@ -2918,7 +3388,7 @@ enum class ParseResult : std::uint8_t {
 }
 
 [[nodiscard]] auto
-collect_status_line(Session& session,
+collect_status_line(Session& session, PaneRuntimeStore& runtimes,
                     std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
     -> render::StatusLine {
   std::size_t count = 0;
@@ -2930,16 +3400,18 @@ collect_status_line(Session& session,
     if (!session.status_valid) {
       auto* const focused = find_pane(*slot.tab, slot.tab->focused_pane);
       LEMMA_ASSERT(focused != nullptr);
-      static_cast<void>(refresh_process_name(focused->runtime));
+      auto* const runtime = find_pane_runtime(runtimes, session, *slot.tab, *focused);
+      LEMMA_ASSERT(runtime != nullptr);
+      static_cast<void>(refresh_process_name(*runtime));
     }
     std::span(storage).subspan(count, 1).front() = {
         .number = static_cast<std::uint16_t>(count + 1U),
-        .title = status_tab_title(session, *slot.tab),
+        .title = status_tab_title(session, *slot.tab, runtimes),
         .active = slot.tab->id == session.active_tab,
     };
     ++count;
   }
-  const auto signature = current_status_signature(session);
+  const auto signature = current_status_signature(session, runtimes);
   const bool dirty = !session.status_valid || signature != session.status_signature;
   session.status_signature = signature;
   session.status_valid = true;
@@ -3016,15 +3488,16 @@ collect_status_line(Session& session,
   return true;
 }
 
-[[nodiscard]] auto compose_session_frame(Session& session, const bool force_full,
+[[nodiscard]] auto compose_session_frame(Session& session, PaneRuntimeStore& runtimes,
+                                         const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
   if (session.clipboard_write.bytes != nullptr) {
     return queue_pending_clipboard_write(session, now);
   }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-  const auto surfaces = collect_surfaces(session, surface_storage);
-  const auto status = collect_status_line(session, status_storage);
+  const auto surfaces = collect_surfaces(session, runtimes, surface_storage);
+  const auto status = collect_status_line(session, runtimes, status_storage);
   std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   trace_correlation = session.frame_trace_correlation;
@@ -3083,20 +3556,22 @@ template <typename Id>
          output.append_number(id.generation());
 }
 
-[[nodiscard]] auto append_listing(ConnectionOutput& output, const Session& session) noexcept
-    -> bool {
+[[nodiscard]] auto append_listing(ConnectionOutput& output, const Session& session,
+                                  const PaneRuntimeStore& runtimes) noexcept -> bool {
   const auto* const tab = active_tab(session);
   if (tab == nullptr) {
     return false;
   }
   const auto* const focused = find_pane(*tab, tab->focused_pane);
   LEMMA_ASSERT(focused != nullptr);
-  const auto title_value = tab_title(*tab);
+  const auto* const runtime = find_pane_runtime(runtimes, session, *tab, *focused);
+  LEMMA_ASSERT(runtime != nullptr);
+  const auto title_value = tab_title(session, *tab, runtimes);
   return output.append_text("lemma session \"") && output.append_title(session.session_name()) &&
          output.append_text("\": ") && output.append_number(tab_count(session)) &&
          output.append_text(" tab(s), ") && output.append_number(pane_count(session)) &&
          output.append_text(" pane(s), focused pid ") &&
-         output.append_number(static_cast<std::uint64_t>(focused->runtime.child)) &&
+         output.append_number(static_cast<std::uint64_t>(runtime->child)) &&
          output.append_text(session.client >= 0 ? ", attached, " : ", detached, ") &&
          output.append_number(session.columns) && output.append_text("x") &&
          output.append_number(session.rows) && output.append_text(", title \"") &&
@@ -3110,8 +3585,8 @@ template <typename Id>
          output.append_text("\n");
 }
 
-[[nodiscard]] auto append_tab_listings(ConnectionOutput& output, const Session& session) noexcept
-    -> bool {
+[[nodiscard]] auto append_tab_listings(ConnectionOutput& output, const Session& session,
+                                       const PaneRuntimeStore& runtimes) noexcept -> bool {
   std::size_t position = 0;
   for (const auto& slot : session.tabs) {
     if (slot.tab == nullptr) {
@@ -3119,7 +3594,7 @@ template <typename Id>
     }
     ++position;
     const auto& tab = *slot.tab;
-    const auto title_value = tab_title(tab);
+    const auto title_value = tab_title(session, tab, runtimes);
     if (!output.append_text("lemma tab ") || !output.append_number(position) ||
         !output.append_text(": ") || !output.append_number(pane_count(tab)) ||
         !output.append_text(" pane(s), ") ||
@@ -3174,11 +3649,12 @@ private:
   return nullptr;
 }
 
-void reclaim_inactive_sessions(Sessions& sessions) noexcept {
+void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   for (auto& session : sessions) {
     if (session != nullptr && !session->active &&
         session->pending_attach_slot == std::numeric_limits<std::uint32_t>::max()) {
       const auto id = session->id;
+      runtimes.erase_session(id);
       const bool erased = sessions.erase(id);
       LEMMA_ASSERT(erased);
     }
@@ -3192,12 +3668,12 @@ void reclaim_inactive_sessions(Sessions& sessions) noexcept {
                            output.append_text("\n"));
 }
 
-[[nodiscard]] auto append_all_listings(ConnectionOutput& output, const Sessions& sessions) noexcept
-    -> bool {
+[[nodiscard]] auto append_all_listings(ConnectionOutput& output, const Sessions& sessions,
+                                       const PaneRuntimeStore& runtimes) noexcept -> bool {
   std::size_t listed = 0;
   for (const auto& session : sessions) {
     if (session != nullptr && session->active) {
-      if (!append_listing(output, *session)) {
+      if (!append_listing(output, *session, runtimes)) {
         return false;
       }
       ++listed;
@@ -3395,16 +3871,17 @@ void finish_pending_disconnect(PendingConnection& pending, const protocol::Disco
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
+                             PaneRuntimeStore& runtimes,
                              const ExtensionRuntime* const extensions) noexcept {
   bool prepared = true;
   if (pending.command == command_list) {
     prepared = append_extension_error(pending.output, extension_error(extensions)) &&
-               append_all_listings(pending.output, sessions);
+               append_all_listings(pending.output, sessions, runtimes);
   } else if (pending.command == command_kill_all || pending.command == command_shutdown) {
     const Command stop{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
     for (auto& session : sessions) {
       if (session != nullptr) {
-        static_cast<void>(dispatch_session_command(*session, stop));
+        static_cast<void>(dispatch_session_command(*session, runtimes, stop));
       }
     }
     prepared = pending.output.append_text(pending.command == command_shutdown
@@ -3424,6 +3901,7 @@ void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_named_command(PendingConnection& pending, Sessions& sessions,
+                           PaneRuntimeStore& runtimes,
                            const ExtensionRuntime* const extensions) noexcept {
   Session* session = find_session(sessions, pending.session.view());
   if (pending.command == command_create || pending.command == command_create_with_context) {
@@ -3454,6 +3932,13 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     auto* const inserted = sessions.get(*id);
     LEMMA_ASSERT(inserted != nullptr);
     inserted->id = *id;
+    if (allocate_tab(*inserted, runtimes) == nullptr) {
+      const bool erased = sessions.erase(*id);
+      LEMMA_ASSERT(erased);
+      finish_pending_byte(pending, response_failed);
+      return;
+    }
+    inserted->previous_tab = inserted->active_tab;
     finish_pending_byte(pending, response_ready);
     return;
   }
@@ -3463,7 +3948,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
   }
   if (pending.command == command_list_session) {
     if (!append_extension_error(pending.output, extension_error(extensions)) ||
-        !append_listing(pending.output, *session)) {
+        !append_listing(pending.output, *session, runtimes)) {
       fail_pending_output(pending);
     } else {
       finish_pending_output(pending);
@@ -3472,7 +3957,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
   }
   if (pending.command == command_list_tabs) {
     if (!append_extension_error(pending.output, extension_error(extensions)) ||
-        !append_tab_listings(pending.output, *session)) {
+        !append_tab_listings(pending.output, *session, runtimes)) {
       fail_pending_output(pending);
     } else {
       finish_pending_output(pending);
@@ -3487,11 +3972,11 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     return;
   }
   const Command stop{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
-  static_cast<void>(dispatch_session_command(*session, stop));
+  static_cast<void>(dispatch_session_command(*session, runtimes, stop));
   finish_pending_output(pending);
 }
 
-void prepare_attach(PendingConnection& pending, Sessions& sessions,
+void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
                     const std::size_t slot) noexcept {
   Session* const session = find_session(sessions, pending.session.view());
   if (session == nullptr) {
@@ -3506,13 +3991,13 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
     return;
   }
   if (!session->theme_bound && pending.attach_host_theme.has_value() &&
-      !bind_session_theme(*session, *pending.attach_host_theme)) {
+      !bind_session_theme(*session, runtimes, *pending.attach_host_theme)) {
     session->frame.release();
     finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
                               "failed to apply host terminal theme");
     return;
   }
-  if (!resize_session(*session, pending.attach_dimensions)) {
+  if (!resize_session(*session, runtimes, pending.attach_dimensions)) {
     session->frame.release();
     finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
                               "failed to prepare attached viewport");
@@ -3530,6 +4015,7 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
+                            PaneRuntimeStore& runtimes,
                             const ExtensionRuntime* const extensions) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
@@ -3547,7 +4033,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     } else if (pending.command == command_list || pending.command == command_kill_all ||
                pending.command == command_shutdown) {
       pending.output.reset();
-      prepare_unnamed_command(pending, sessions, extensions);
+      prepare_unnamed_command(pending, sessions, runtimes, extensions);
     } else if (pending.command == command_create ||
                pending.command == command_create_with_context ||
                pending.command == command_list_session || pending.command == command_list_tabs ||
@@ -3579,7 +4065,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       begin_pending_field(pending, PendingState::read_working_directory_size, 2);
     } else {
       pending.output.reset();
-      prepare_named_command(pending, sessions, extensions);
+      prepare_named_command(pending, sessions, runtimes, extensions);
     }
     break;
   case PendingState::read_working_directory_size: {
@@ -3616,7 +4102,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     } else if (size == 0) {
       pending.environment_size = 0;
       pending.output.reset();
-      prepare_named_command(pending, sessions, extensions);
+      prepare_named_command(pending, sessions, runtimes, extensions);
     } else {
       pending.environment_size = size;
       begin_pending_field(pending, PendingState::read_environment, size);
@@ -3629,7 +4115,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       pending.state = PendingState::unused;
     } else {
       pending.output.reset();
-      prepare_named_command(pending, sessions, extensions);
+      prepare_named_command(pending, sessions, runtimes, extensions);
     }
     break;
   case PendingState::unused:
@@ -3642,7 +4128,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
 // The branches are the bounded outcomes of one nonblocking setup read.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
-                            const ExtensionRuntime* const extensions,
+                            PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
                             const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
@@ -3670,7 +4156,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
         pending->attach_host_theme =
             message.host_theme == nullptr ? std::nullopt : std::optional{*message.host_theme};
         pending->attach_decoder.consume();
-        prepare_attach(*pending, sessions, slot);
+        prepare_attach(*pending, sessions, runtimes, slot);
         continue;
       }
       auto available = pending->attach_decoder.writable_bytes();
@@ -3706,7 +4192,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
       pending->field_size += static_cast<std::size_t>(received);
       record_pending_progress(*pending);
       if (pending->field_size == pending->field_target) {
-        complete_pending_field(*pending, sessions, extensions);
+        complete_pending_field(*pending, sessions, runtimes, extensions);
       }
       continue;
     }
@@ -3725,7 +4211,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 }
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
-                          const ExtensionRuntime* const extensions,
+                          PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
                           const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
@@ -3733,13 +4219,14 @@ void process_pending_read(PendingConnections& connections, Sessions& sessions,
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, extensions, slot);
+  process_pending_fields(connections, sessions, runtimes, extensions, slot);
 }
 
-void handle_client_parse_result(Session& session, ParseResult result) noexcept;
+void handle_client_parse_result(Session& session, PaneRuntimeStore& runtimes,
+                                ParseResult result) noexcept;
 
 void handoff_attached_connection(PendingConnections& connections, const std::size_t slot,
-                                 Sessions& sessions) noexcept {
+                                 Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   auto& owner = std::span(connections).subspan(slot, 1).front();
   LEMMA_ASSERT(owner != nullptr);
   auto& pending = *owner;
@@ -3769,11 +4256,11 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   session->frame_trace_correlation = 0;
 #endif
-  if (!compose_session_frame(*session, true, std::chrono::steady_clock::now())) {
-    session->detach_client();
+  if (!compose_session_frame(*session, runtimes, true, std::chrono::steady_clock::now())) {
+    session->detach_client(runtimes);
     return;
   }
-  handle_client_parse_result(*session, parse_client_packets(*session));
+  handle_client_parse_result(*session, runtimes, parse_client_packets(*session, runtimes));
 }
 
 [[nodiscard]] auto write_pending_output(void* const context,
@@ -3788,8 +4275,8 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 }
 
 [[nodiscard]] auto flush_pending_output(PendingConnections& connections, const std::size_t slot,
-                                        std::size_t& global_budget, Sessions& sessions) noexcept
-    -> bool {
+                                        std::size_t& global_budget, Sessions& sessions,
+                                        PaneRuntimeStore& runtimes) noexcept -> bool {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   const auto action = pending->action;
@@ -3803,7 +4290,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
     return false;
   }
   if (action == PendingAction::attach) {
-    handoff_attached_connection(connections, slot, sessions);
+    handoff_attached_connection(connections, slot, sessions, runtimes);
   } else {
     close_pending(connections, slot, sessions);
   }
@@ -3861,8 +4348,9 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 
 // Deadline folding is bounded across the fixed session/tab/pane hierarchy.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const FrameScheduler::TimePoint now,
-                                      int timeout) noexcept -> int {
+[[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
+                                      const FrameScheduler::TimePoint now, int timeout) noexcept
+    -> int {
   const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
     if (!deadline.has_value()) {
       return false;
@@ -3895,9 +4383,11 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
         if (pane_slot.pane == nullptr) {
           continue;
         }
-        const auto& runtime = pane_slot.pane->runtime;
-        if (tighten(runtime.presentation_gate.deadline()) ||
-            (runtime.compression_scheduled && tighten(runtime.compression_deadline))) {
+        const auto* const runtime =
+            find_pane_runtime(runtimes, *session, *tab_slot.tab, *pane_slot.pane);
+        LEMMA_ASSERT(runtime != nullptr);
+        if (tighten(runtime->presentation_gate.deadline()) ||
+            (runtime->compression_scheduled && tighten(runtime->compression_deadline))) {
           return 0;
         }
       }
@@ -3906,7 +4396,8 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
   return timeout;
 }
 
-[[nodiscard]] auto poll_timeout(const Sessions& sessions, const PendingConnections& pending,
+[[nodiscard]] auto poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
+                                const PendingConnections& pending,
                                 const CapacityRejectionConnections& capacity_rejections,
                                 const ExtensionRuntime* const extensions) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
@@ -3931,7 +4422,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
       return 0;
     }
   }
-  return frame_poll_timeout(sessions, now, timeout);
+  return frame_poll_timeout(sessions, runtimes, now, timeout);
 }
 
 struct PaneDamageAssessment final {
@@ -3939,12 +4430,12 @@ struct PaneDamageAssessment final {
   bool status_changed{false};
 };
 
-[[nodiscard]] auto assess_pane_damage(Session& session, PaneRuntime& runtime,
-                                      const PtyDrainResult& drained,
+[[nodiscard]] auto assess_pane_damage(Session& session, const PaneRuntimeStore& runtimes,
+                                      PaneRuntime& runtime, const PtyDrainResult& drained,
                                       const bool track_interactive_damage,
                                       const std::uint64_t interactive_status_before) noexcept
     -> PaneDamageAssessment {
-  const auto status_after = current_status_signature(session);
+  const auto status_after = current_status_signature(session, runtimes);
   const bool interactive_status_damage =
       track_interactive_damage && status_after != interactive_status_before;
   const bool status_changed = !session.status_valid || status_after != session.status_signature;
@@ -3967,7 +4458,7 @@ struct PaneDamageAssessment final {
   if (damage.interactive) {
     return FrameUrgency::interactive;
   }
-  if (!drained.alive || process_changed || damage.status_changed) {
+  if (drained.failure.has_value() || process_changed || damage.status_changed) {
     return FrameUrgency::state_change;
   }
   return FrameUrgency::burst;
@@ -3984,12 +4475,12 @@ struct PaneDamageAssessment final {
 constexpr std::size_t blocked_sink_pty_read_bytes_per_turn_max = std::size_t{4} * 1'024U;
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& events,
+void process_pane_events(Session& session, Tab& tab, Pane& pane, PaneRuntime& runtime,
+                         PaneRuntimeStore& runtimes, const pollfd& events,
                          std::size_t& global_budget, std::size_t& blocked_session_budget) noexcept {
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
     return;
   }
-  auto& runtime = pane.runtime;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   auto* const trace_matcher = &runtime.output_trace_matcher;
 #else
@@ -3997,7 +4488,7 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
 #endif
   const bool track_interactive_damage = session.client >= 0 && runtime.interactive_damage.pending();
   const auto interactive_status_before =
-      track_interactive_damage ? current_status_signature(session) : 0;
+      track_interactive_damage ? current_status_signature(session, runtimes) : 0;
   // A client-blocked session keeps consuming canonical PTY state, but all of its ready panes share
   // one isolation slice so a many-pane session cannot spend the daemon-wide allowance by taking a
   // fresh slice for every pane.
@@ -4016,14 +4507,16 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   if (blocked_sink) {
     blocked_session_budget -= bytes_drained;
   }
-  runtime.active = drained.alive;
+  if (drained.failure.has_value()) {
+    runtime.fail(*drained.failure);
+  }
   session.bell_pending = session.bell_pending || drained.bell;
   if (drained.title_changed) {
     session.status_valid = false;
   }
-  if (drained.changed && runtime.active) {
+  if (drained.changed && runtime.live()) {
     record_terminal_mutation(runtime);
-    preserve_copy_viewport_after_mutation(session, pane);
+    preserve_copy_viewport_after_mutation(session, pane, runtime, runtimes);
     note_compression_activity(runtime);
   }
   const bool process_changed =
@@ -4031,8 +4524,8 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   if (!pane_event_changed(session, drained, process_changed)) {
     return;
   }
-  const auto damage = assess_pane_damage(session, runtime, drained, track_interactive_damage,
-                                         interactive_status_before);
+  const auto damage = assess_pane_damage(session, runtimes, runtime, drained,
+                                         track_interactive_damage, interactive_status_before);
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   if (drained.correlation != 0 && tab.id == session.active_tab && pane.id == tab.focused_pane) {
     session.frame_trace_correlation = drained.correlation;
@@ -4047,7 +4540,7 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
   }
 }
 
-void queue_client_disconnect_if_ready(Session& session) noexcept {
+void queue_client_disconnect_if_ready(Session& session, PaneRuntimeStore& runtimes) noexcept {
   if (session.client_close_state != ClientCloseState::queue_disconnect || session.output.busy()) {
     return;
   }
@@ -4056,39 +4549,41 @@ void queue_client_disconnect_if_ready(Session& session) noexcept {
       !session.output.queue_disconnect(protocol::DisconnectReason::protocol_error,
                                        "invalid client protocol message", session.server_sequence,
                                        std::chrono::steady_clock::now())) {
-    session.detach_client();
+    session.detach_client(runtimes);
     return;
   }
   ++session.server_sequence;
   session.client_close_state = ClientCloseState::disconnect_queued;
 }
 
-void handle_client_parse_result(Session& session, const ParseResult result) noexcept {
+void handle_client_parse_result(Session& session, PaneRuntimeStore& runtimes,
+                                const ParseResult result) noexcept {
   session.input_backpressured = result == ParseResult::backpressure;
   if (result == ParseResult::detach) {
-    session.detach_client();
+    session.detach_client(runtimes);
     return;
   }
   if (result == ParseResult::error) {
     session.client_close_state = ClientCloseState::queue_disconnect;
     session.input_backpressured = false;
-    queue_client_disconnect_if_ready(session);
+    queue_client_disconnect_if_ready(session, runtimes);
   }
 }
 
-void process_client_events(Session& session, const pollfd& events) noexcept {
+void process_client_events(Session& session, PaneRuntimeStore& runtimes,
+                           const pollfd& events) noexcept {
   // Consume resizes before flushing queued output so resize_session can discard bytes composed
   // for the previous physical viewport. A decoder-held input message is retried even without new
   // socket readiness after a prior turn made PTY queue capacity available. If its peer has already
   // closed, discard a backpressured message instead of letting it hide EOF indefinitely.
   if (session.client >= 0 && session.input_backpressured &&
       (events.revents & (POLLHUP | POLLERR)) != 0) {
-    session.detach_client();
+    session.detach_client(runtimes);
     return;
   }
   if (session.client >= 0 && session.client_close_state == ClientCloseState::none &&
       (session.input_backpressured || (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
-    handle_client_parse_result(session, receive_client(session));
+    handle_client_parse_result(session, runtimes, receive_client(session, runtimes));
   }
 }
 
@@ -4117,7 +4612,32 @@ void process_client_events(Session& session, const pollfd& events) noexcept {
          PtyFlushStatus::hard_error;
 }
 
-void reclaim_dead_panes(Session& session) noexcept {
+struct PaneRuntimeOutcome final {
+  PaneAddress pane;
+  PaneRuntimeFailure failure{PaneRuntimeFailure::terminal_integrity_error};
+};
+
+void apply_pane_runtime_outcome(Session& session, Tab& tab, PaneRuntimeStore& runtimes,
+                                const PaneRuntimeOutcome& outcome) noexcept {
+  LEMMA_ASSERT(outcome.pane.session == session.id && outcome.pane.tab == tab.id);
+  // Current policy closes the semantic pane for every terminal-integrity or process-lifetime loss.
+  // Keeping the reasons distinct prevents Runtime from deciding that policy and permits a later
+  // Core policy change without altering PTY, terminal, or reactor code.
+  switch (outcome.failure) {
+  case PaneRuntimeFailure::child_exit:
+  case PaneRuntimeFailure::pty_read_error:
+  case PaneRuntimeFailure::pty_write_error:
+  case PaneRuntimeFailure::terminal_integrity_error:
+  case PaneRuntimeFailure::scrollback_compression_error:
+  case PaneRuntimeFailure::resize_consistency_lost:
+    static_cast<void>(close_pane(session, tab, runtimes, outcome.pane.pane));
+    return;
+  }
+}
+
+// Removal can rewrite the current tab while traversing its fixed pane slots.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void reclaim_dead_panes(Session& session, PaneRuntimeStore& runtimes) noexcept {
   for (auto& slot : session.tabs) {
     if (slot.tab == nullptr || !session.active) {
       continue;
@@ -4131,8 +4651,16 @@ void reclaim_dead_panes(Session& session) noexcept {
       // The preceding check bounds index by pane capacity.
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
       const auto& pane = tab->panes[index].pane;
-      if (pane != nullptr && !pane->runtime.active) {
-        static_cast<void>(close_pane(session, *tab, pane->id));
+      if (pane == nullptr) {
+        continue;
+      }
+      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
+      LEMMA_ASSERT(runtime != nullptr);
+      if (!runtime->live()) {
+        LEMMA_ASSERT(runtime->failure.has_value());
+        apply_pane_runtime_outcome(
+            session, *tab, runtimes,
+            {.pane = pane_address(session, *tab, *pane), .failure = *runtime->failure});
       }
     }
   }
@@ -4140,7 +4668,8 @@ void reclaim_dead_panes(Session& session) noexcept {
 
 // Collecting due panes traverses the fixed session hierarchy before the bounded fair work pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void run_due_scrollback_compression(Sessions& sessions, std::size_t& cursor) noexcept {
+void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtimes,
+                                    std::size_t& cursor) noexcept {
   constexpr std::size_t steps_per_turn_max = 8;
   const auto now = std::chrono::steady_clock::now();
   std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> due{};
@@ -4157,10 +4686,11 @@ void run_due_scrollback_compression(Sessions& sessions, std::size_t& cursor) noe
         if (pane_slot.pane == nullptr) {
           continue;
         }
-        auto& runtime = pane_slot.pane->runtime;
-        if (runtime.active && runtime.compression_scheduled &&
-            now >= runtime.compression_deadline) {
-          std::span(due).subspan(count, 1).front() = &runtime;
+        auto* const runtime = find_pane_runtime(runtimes, *session, *tab_slot.tab, *pane_slot.pane);
+        LEMMA_ASSERT(runtime != nullptr);
+        if (runtime->live() && runtime->compression_scheduled &&
+            now >= runtime->compression_deadline) {
+          std::span(due).subspan(count, 1).front() = runtime;
           ++count;
         }
       }
@@ -4176,7 +4706,7 @@ void run_due_scrollback_compression(Sessions& sessions, std::size_t& cursor) noe
     auto& runtime = *std::span(due).subspan((cursor + visited) % count, 1).front();
     const auto compressed = runtime.terminal.compress_scrollback();
     if (!compressed.has_value()) {
-      runtime.active = false;
+      runtime.fail(PaneRuntimeFailure::scrollback_compression_error);
       runtime.compression_scheduled = false;
       continue;
     }
@@ -4190,7 +4720,7 @@ void run_due_scrollback_compression(Sessions& sessions, std::size_t& cursor) noe
 
 // Gate expiry visits the same fixed hierarchy and schedules only visible active-tab repairs.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void release_expired_presentation_gates(Sessions& sessions) noexcept {
+void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   const auto now = std::chrono::steady_clock::now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active) {
@@ -4204,7 +4734,9 @@ void release_expired_presentation_gates(Sessions& sessions) noexcept {
         if (pane_slot.pane == nullptr) {
           continue;
         }
-        const auto released = pane_slot.pane->runtime.presentation_gate.release_if_expired(now);
+        auto* const runtime = find_pane_runtime(runtimes, *session, *tab_slot.tab, *pane_slot.pane);
+        LEMMA_ASSERT(runtime != nullptr);
+        const auto released = runtime->presentation_gate.release_if_expired(now);
         if (released.urgent_render && tab_slot.tab->id == session->active_tab) {
           schedule_frame(*session, FrameUrgency::state_change, released.force_full);
         }
@@ -4213,7 +4745,7 @@ void release_expired_presentation_gates(Sessions& sessions) noexcept {
   }
 }
 
-void queue_due_frames(Sessions& sessions) noexcept {
+void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   const auto now = std::chrono::steady_clock::now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active ||
@@ -4221,8 +4753,8 @@ void queue_due_frames(Sessions& sessions) noexcept {
         !session->frame_scheduler.due(now, frame_sink_state(*session))) {
       continue;
     }
-    if (!compose_session_frame(*session, session->frame_scheduler.force_full(), now)) {
-      session->detach_client();
+    if (!compose_session_frame(*session, runtimes, session->frame_scheduler.force_full(), now)) {
+      session->detach_client(runtimes);
     }
     session->frame_scheduler.complete();
   }
@@ -4236,17 +4768,17 @@ void queue_due_frames(Sessions& sessions) noexcept {
   return {.bytes = sent, .error = sent < 0 ? errno : 0};
 }
 
-void expire_attached_client_frames(Sessions& sessions,
+void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                    const ClientFrameOutput::TimePoint now) noexcept {
   for (auto& session : sessions) {
     if (session != nullptr && session->active && session->client >= 0 &&
         session->output.expired(now)) {
-      session->detach_client();
+      session->detach_client(runtimes);
     }
   }
 }
 
-void flush_attached_client_frames(Sessions& sessions,
+void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                   const std::span<ClientFrameFlushTarget> storage,
                                   std::size_t& cursor,
                                   const ClientFrameOutput::TimePoint now) noexcept {
@@ -4277,13 +4809,13 @@ void flush_attached_client_frames(Sessions& sessions,
         status == ClientFrameFlushStatus::deadline_exceeded ||
         (status == ClientFrameFlushStatus::drained &&
          session.client_close_state == ClientCloseState::disconnect_queued)) {
-      session.detach_client();
+      session.detach_client(runtimes);
     } else if (status == ClientFrameFlushStatus::drained) {
       if (session.clipboard_write.redraw_after_write) {
         session.clipboard_write.redraw_after_write = false;
         schedule_frame(session, FrameUrgency::state_change, true);
       }
-      queue_client_disconnect_if_ready(session);
+      queue_client_disconnect_if_ready(session, runtimes);
     }
   }
 }
@@ -4394,9 +4926,9 @@ enum class DescriptorKind : std::uint8_t {
 };
 
 struct DescriptorOwner final {
-  Session* session{nullptr};
-  Tab* tab{nullptr};
-  Pane* pane{nullptr};
+  SessionId session;
+  TabId tab;
+  PaneId pane;
   std::size_t pending_slot{0};
   std::size_t capacity_rejection_slot{0};
   DescriptorKind kind{DescriptorKind::client};
@@ -4413,6 +4945,13 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
+  std::unique_ptr<PaneRuntimeStore> pane_runtimes;
+  try {
+    pane_runtimes = std::make_unique<PaneRuntimeStore>();
+  } catch (const std::bad_alloc&) {
+    return 1;
+  }
+  auto& runtimes = *pane_runtimes;
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
   CapacityRejectionConnections capacity_rejections{};
@@ -4461,17 +5000,24 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         for (const auto& pane_slot : tab_slot.tab->panes) {
           const auto& pane = pane_slot.pane;
-          if (pane == nullptr || !pane->runtime.active) {
+          if (pane == nullptr) {
             continue;
           }
-          const auto& runtime = pane->runtime;
+          const auto address = pane_address(*session, *tab_slot.tab, *pane);
+          const auto* const runtime = runtimes.get(address);
+          LEMMA_ASSERT(runtime != nullptr);
+          if (!runtime->live()) {
+            continue;
+          }
           const auto pane_events = static_cast<short>(
-              POLLIN | (!runtime.pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
+              POLLIN | (!runtime->pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
           std::span(descriptors).subspan(descriptor_count, 1).front() = {
-              .fd = runtime.pty, .events = pane_events, .revents = 0};
-          std::span(owners).subspan(descriptor_count, 1).front() = {.session = session.get(),
-                                                                    .tab = tab_slot.tab.get(),
-                                                                    .pane = pane.get(),
+              .fd = runtime->pty, .events = pane_events, .revents = 0};
+          std::span(owners).subspan(descriptor_count, 1).front() = {.session = address.session,
+                                                                    .tab = address.tab,
+                                                                    .pane = address.pane,
+                                                                    .pending_slot = 0,
+                                                                    .capacity_rejection_slot = 0,
                                                                     .kind = DescriptorKind::pane};
           ++descriptor_count;
         }
@@ -4484,7 +5030,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
             (session->output.busy() ? static_cast<short>(POLLOUT) : 0));
         std::span(descriptors).subspan(descriptor_count, 1).front() = {
             .fd = session->client, .events = client_events, .revents = 0};
-        std::span(owners).subspan(descriptor_count, 1).front() = {.session = session.get(),
+        std::span(owners).subspan(descriptor_count, 1).front() = {.session = session->id,
+                                                                  .tab = {},
+                                                                  .pane = {},
+                                                                  .pending_slot = 0,
+                                                                  .capacity_rejection_slot = 0,
                                                                   .kind = DescriptorKind::client};
         ++descriptor_count;
       }
@@ -4498,7 +5048,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           static_cast<short>(pending->state == PendingState::flush_response ? POLLOUT : POLLIN);
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = pending->descriptor, .events = events, .revents = 0};
-      std::span(owners).subspan(descriptor_count, 1).front() = {.pending_slot = slot,
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
+                                                                .tab = {},
+                                                                .pane = {},
+                                                                .pending_slot = slot,
+                                                                .capacity_rejection_slot = 0,
                                                                 .kind = DescriptorKind::pending};
       ++descriptor_count;
     }
@@ -4511,26 +5065,36 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = rejection.descriptor, .events = events, .revents = 0};
       std::span(owners).subspan(descriptor_count, 1).front() = {
-          .capacity_rejection_slot = slot, .kind = DescriptorKind::capacity_rejection};
+          .session = {},
+          .tab = {},
+          .pane = {},
+          .pending_slot = 0,
+          .capacity_rejection_slot = slot,
+          .kind = DescriptorKind::capacity_rejection};
       ++descriptor_count;
     }
     if (extensions != nullptr && extensions->descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = extensions->descriptor(), .events = POLLIN, .revents = 0};
-      std::span(owners).subspan(descriptor_count, 1).front() = {.kind = DescriptorKind::extension};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
+                                                                .tab = {},
+                                                                .pane = {},
+                                                                .pending_slot = 0,
+                                                                .capacity_rejection_slot = 0,
+                                                                .kind = DescriptorKind::extension};
       ++descriptor_count;
     }
 
-    const auto poll_result =
-        ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-               poll_timeout(sessions, pending_connections, capacity_rejections, extensions.get()));
+    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
+                                    poll_timeout(sessions, runtimes, pending_connections,
+                                                 capacity_rejections, extensions.get()));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
       }
       return 1;
     }
-    expire_attached_client_frames(sessions, std::chrono::steady_clock::now());
+    expire_attached_client_frames(sessions, runtimes, std::chrono::steady_clock::now());
 
     // Drain every ready PTY before handling client input, then remove exited panes so input is
     // always routed to a live focused pane selected by close_pane.
@@ -4546,10 +5110,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         const auto index = 1U + ((pty_read_cursor + visited) % ready_owner_count);
         const auto owner = std::span(owners).subspan(index, 1).front();
         if (owner.kind == DescriptorKind::pane) {
+          auto* const session = sessions.get(owner.session);
+          auto* const tab = session == nullptr ? nullptr : find_tab(*session, owner.tab);
+          auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, owner.pane);
+          auto* const runtime =
+              runtimes.get({.session = owner.session, .tab = owner.tab, .pane = owner.pane});
+          LEMMA_ASSERT(session != nullptr && tab != nullptr && pane != nullptr &&
+                       runtime != nullptr);
           const auto& events = std::span(descriptors).subspan(index, 1).front();
           auto& blocked_session_budget =
-              std::span(blocked_session_read_budgets).subspan(owner.session->id.slot(), 1).front();
-          process_pane_events(*owner.session, *owner.tab, *owner.pane, events, pty_read_budget,
+              std::span(blocked_session_read_budgets).subspan(owner.session.slot(), 1).front();
+          process_pane_events(*session, *tab, *pane, *runtime, runtimes, events, pty_read_budget,
                               blocked_session_budget);
         }
       }
@@ -4559,18 +5130,22 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     for (auto& session : sessions) {
       if (session != nullptr && session->active) {
-        reclaim_dead_panes(*session);
-        service_copy_input_timeout(*session, std::chrono::steady_clock::now());
+        reclaim_dead_panes(*session, runtimes);
+        service_copy_input_timeout(*session, runtimes, std::chrono::steady_clock::now());
       }
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind == DescriptorKind::client && owner.session->active) {
+      if (owner.kind == DescriptorKind::client) {
+        auto* const session = sessions.get(owner.session);
+        if (session == nullptr || !session->active) {
+          continue;
+        }
         const auto& events = std::span(descriptors).subspan(index, 1).front();
         if ((events.revents & (POLLOUT | POLLHUP | POLLERR)) != 0) {
-          owner.session->output.mark_write_ready();
+          session->output.mark_write_ready();
         }
-        process_client_events(*owner.session, events);
+        process_client_events(*session, runtimes, events);
       }
     }
     std::array<Session*, static_cast<std::size_t>(limits::sessions_hard_max)> search_sessions{};
@@ -4586,7 +5161,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                 .subspan((search_cursor + visited) % search_sessions.size(), 1)
                                 .front();
       if (session != nullptr) {
-        static_cast<void>(service_copy_search(*session, search_work_budget));
+        static_cast<void>(service_copy_search(*session, runtimes, search_work_budget));
       }
     }
     search_cursor = (search_cursor + visited) % search_sessions.size();
@@ -4600,7 +5175,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         if (pending->state != PendingState::flush_response &&
             (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-          process_pending_read(pending_connections, sessions, extensions.get(), owner.pending_slot);
+          process_pending_read(pending_connections, sessions, runtimes, extensions.get(),
+                               owner.pending_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -4630,9 +5206,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           if (pane_slot.pane == nullptr) {
             continue;
           }
-          auto& runtime = pane_slot.pane->runtime;
-          if (runtime.active && !runtime.pending_writes.empty()) {
-            std::span(writable_panes).subspan(writable_pane_count, 1).front() = &runtime;
+          auto* const runtime =
+              find_pane_runtime(runtimes, *session, *tab_slot.tab, *pane_slot.pane);
+          LEMMA_ASSERT(runtime != nullptr);
+          if (runtime->live() && !runtime->pending_writes.empty()) {
+            std::span(writable_panes).subspan(writable_pane_count, 1).front() = runtime;
             ++writable_pane_count;
           }
         }
@@ -4645,7 +5223,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         const auto index = (pty_flush_cursor + writable_visited) % writable_pane_count;
         auto& runtime = *std::span(writable_panes).subspan(index, 1).front();
         if (!flush_pane_writes(runtime, pty_write_budget)) {
-          runtime.active = false;
+          runtime.fail(PaneRuntimeFailure::pty_write_error);
         }
       }
       pty_flush_cursor = (pty_flush_cursor + writable_visited) % writable_pane_count;
@@ -4654,7 +5232,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     for (auto& session : sessions) {
       if (session != nullptr && session->active) {
-        reclaim_dead_panes(*session);
+        reclaim_dead_panes(*session, runtimes);
       }
     }
     // Capacity may have become available without new client socket readiness.
@@ -4662,7 +5240,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     for (auto& session : sessions) {
       if (session != nullptr && session->active && session->client >= 0 &&
           session->input_backpressured) {
-        process_client_events(*session, no_events);
+        process_client_events(*session, runtimes, no_events);
       }
     }
 
@@ -4679,7 +5257,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0 &&
             flush_pending_output(pending_connections, owner.pending_slot, pending_output_budget,
-                                 sessions)) {
+                                 sessions, runtimes)) {
           shutdown_after_outputs = true;
           break;
         }
@@ -4694,20 +5272,20 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
 
-    run_due_scrollback_compression(sessions, compression_cursor);
-    release_expired_presentation_gates(sessions);
-    queue_due_frames(sessions);
+    run_due_scrollback_compression(sessions, runtimes, compression_cursor);
+    release_expired_presentation_gates(sessions, runtimes);
+    queue_due_frames(sessions, runtimes);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
     // composed and newly handed-off attach frames get one immediate attempt; a blocked frame is
     // retried only after poll reports write readiness or its progress deadline expires.
-    flush_attached_client_frames(sessions, client_flush_targets, client_flush_cursor,
+    flush_attached_client_frames(sessions, runtimes, client_flush_targets, client_flush_cursor,
                                  std::chrono::steady_clock::now());
     if (shutdown_after_outputs) {
       return 0;
     }
     expire_pending_connections(pending_connections, sessions);
     expire_capacity_rejections(capacity_rejections);
-    reclaim_inactive_sessions(sessions);
+    reclaim_inactive_sessions(sessions, runtimes);
 
     // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
     // client input, queued writes, or due frame composition.
@@ -4723,7 +5301,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       accept_pending_connections(listener, pending_connections, pending_generations,
                                  capacity_rejections);
     }
-    reclaim_inactive_sessions(sessions);
+    reclaim_inactive_sessions(sessions, runtimes);
   }
 }
 

@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 
 TARGETS = {
-    "pane_inline": "struct lemma::core::(anonymous namespace)::Pane",
-    "pane_runtime_inline": "struct lemma::core::(anonymous namespace)::PaneRuntime",
+    "pane_semantic": "struct lemma::core::(anonymous namespace)::Pane",
+    "pane_runtime": "struct lemma::core::(anonymous namespace)::PaneRuntime",
+    "pane_runtime_store": "class lemma::core::(anonymous namespace)::PaneRuntimeStore",
     "tab_inline": "struct lemma::core::(anonymous namespace)::Tab",
     "session_inline": "struct lemma::core::(anonymous namespace)::Session",
     "pending_connection": "struct lemma::core::(anonymous namespace)::PendingConnection",
