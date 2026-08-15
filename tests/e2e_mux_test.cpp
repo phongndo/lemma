@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
@@ -197,6 +198,26 @@ attach_request(const std::string_view session, const protocol::Dimensions dimens
     return false;
   }
   return ::close(descriptor) == 0;
+}
+
+[[nodiscard]] auto process_exists(const pid_t process) noexcept -> bool {
+  if (process <= 0) {
+    return false;
+  }
+  if (::kill(process, 0) == 0) {
+    return true;
+  }
+  return errno != ESRCH;
+}
+
+[[nodiscard]] auto wait_for_process_exit(const pid_t process, const Deadline deadline) -> bool {
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (!process_exists(process)) {
+      return true;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+  return !process_exists(process);
 }
 
 [[nodiscard]] auto input_request(const std::string_view input, const std::uint32_t sequence = 2)
@@ -736,6 +757,7 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
       &client);
   ASSERT_TRUE(first.has_value());
   const auto surviving_pid = first.value_or(SessionListing{}).focused_pid;
+  ASSERT_GT(surviving_pid, 0);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
   const auto split = wait_for_session(
@@ -745,6 +767,10 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
       },
       deadline_after(5s), &client);
   ASSERT_TRUE(split.has_value());
+  const auto closed_pid = split.value_or(SessionListing{}).focused_pid;
+  ASSERT_GT(closed_pid, 0);
+  ASSERT_TRUE(process_exists(surviving_pid));
+  ASSERT_TRUE(process_exists(closed_pid));
 
   ASSERT_TRUE(send_prefix(client, std::byte{'z'}));
   ASSERT_TRUE(client.send("printf '__ZOOMED__ '; stty size\r", deadline_after(2s)));
@@ -766,11 +792,14 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
       },
       deadline_after(5s), &client);
   ASSERT_TRUE(closed.has_value());
+  ASSERT_TRUE(wait_for_process_exit(closed_pid, deadline_after(5s)));
+  ASSERT_TRUE(process_exists(surviving_pid));
   ASSERT_TRUE(client.send("printf '__SURVIVOR__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__SURVIVOR__", deadline_after(5s)));
 
   ASSERT_TRUE(send_prefix(client, std::byte{'x'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
+  ASSERT_TRUE(wait_for_process_exit(surviving_pid, deadline_after(5s)));
   const auto removed = command({"list", "zoomclose"});
   EXPECT_NE(removed.status, 0);
   EXPECT_TRUE(client.terminal_state_restored());

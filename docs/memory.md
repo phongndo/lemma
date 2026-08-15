@@ -38,7 +38,7 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | Session store | fixed reactor table | 1,032 B table; up to 64 sessions | live sessions are individually allocated; create failure rejects only the new session |
 | Session | one owner per live session | 93,000 B inline in the recorded layout | contains bounded launch context, tabs, one current attachment runtime, copy state, trace, and scheduling |
 | Tab | one owner per live tab | 3,600 B | allocated on create; failure preserves existing topology |
-| Pane shell owner | one owner per live pane | 160 B plus terminal/runtime state | PTY/process/terminal creation completes before topology commit |
+| Pane and inline PaneRuntime | one owner pair per live pane | 224 B combined; 208 B is PaneRuntime | PTY/process/terminal creation completes before topology commit |
 | Ghostty routed state | terminal quota allocator | 10,376 B at create; 116,729 B after first render; 64 MiB default maximum | lazy; quota failure is typed; PagePool is accounted separately |
 | Physical cell hashes | terminal adapter | 8 B/cell; 15,360 B at 80x24; 8,000,000 B hard maximum | replacement prepared on create/resize |
 | Scrollback | Ghostty PagePool | 10,000-B default logical byte quota; 1,000,000-B hard byte/optional line limits | page-granular; PagePool bypasses the routed allocator |

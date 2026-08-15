@@ -13,6 +13,7 @@ from typing import Any
 
 TARGETS = {
     "pane_inline": "struct lemma::core::(anonymous namespace)::Pane",
+    "pane_runtime_inline": "struct lemma::core::(anonymous namespace)::PaneRuntime",
     "tab_inline": "struct lemma::core::(anonymous namespace)::Tab",
     "session_inline": "struct lemma::core::(anonymous namespace)::Session",
     "pending_connection": "struct lemma::core::(anonymous namespace)::PendingConnection",

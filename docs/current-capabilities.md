@@ -16,7 +16,7 @@ Lemma is one C++23 executable with client, daemon, extension-host, and control r
 
 The current in-memory hierarchy is `Session -> Tab -> Pane`, but semantic and runtime state are not yet separated into Core/Runtime stores:
 
-- `Pane` currently contains `PaneId`, rectangle, child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, and trace state.
+- `Pane` contains `PaneId`, committed layout geometry, and one inline `PaneRuntime`. `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, and their teardown.
 - `Tab` currently contains generational pane slots, a binary layout tree, geometry, focus, previous focus, zoom, and suspension state.
 - `Session` currently contains generational tab slots, launch context, active/previous tab, one client descriptor and decoder, frame storage/output progress, copy/search state, command trace, and frame scheduler.
 - An Attachment/AttachmentRuntime split does not yet exist as a first-class model.
