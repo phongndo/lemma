@@ -578,6 +578,7 @@ struct Session final {
   std::uint16_t columns{80};
   std::uint16_t rows{24};
   bool active{true};
+  bool theme_bound{false};
   bool status_valid{false};
   bool input_backpressured{false};
   ClientCloseState client_close_state{ClientCloseState::none};
@@ -597,6 +598,44 @@ struct Session final {
 [[nodiscard]] constexpr auto pane_rows(const std::uint16_t viewport_rows) noexcept
     -> std::uint16_t {
   return viewport_rows >= 2 ? static_cast<std::uint16_t>(viewport_rows - 1U) : viewport_rows;
+}
+
+[[nodiscard]] constexpr auto terminal_color(const protocol::RgbColor color) noexcept
+    -> vt::RgbColor {
+  return {.red = color.red, .green = color.green, .blue = color.blue};
+}
+
+[[nodiscard]] auto bind_session_theme(Session& session,
+                                      const protocol::HostTerminalTheme& host_theme) noexcept
+    -> bool {
+  auto theme = session.theme;
+  if (host_theme.foreground.has_value()) {
+    theme.foreground = terminal_color(*host_theme.foreground);
+    theme.cursor = theme.foreground;
+  }
+  if (host_theme.background.has_value()) {
+    theme.background = terminal_color(*host_theme.background);
+  }
+  for (std::size_t index = 0; index < theme.palette.size(); ++index) {
+    if (host_theme.has_palette_color(index)) {
+      std::span(theme.palette).subspan(index, 1).front() =
+          terminal_color(std::span(host_theme.palette).subspan(index, 1).front());
+    }
+  }
+  for (auto& tab_slot : session.tabs) {
+    if (tab_slot.tab == nullptr) {
+      continue;
+    }
+    for (auto& pane_slot : tab_slot.tab->panes) {
+      if (pane_slot.pane != nullptr &&
+          !pane_slot.pane->runtime.terminal.set_theme(theme).has_value()) {
+        return false;
+      }
+    }
+  }
+  session.theme = theme;
+  session.theme_bound = true;
+  return true;
 }
 
 [[nodiscard]] auto create_pane(const std::uint16_t columns, const std::uint16_t rows,
@@ -2378,6 +2417,17 @@ enum class ParseResult : std::uint8_t {
       session.retained_input_offset.reset();
       break;
     }
+    case protocol::ClientMessageKind::host_theme:
+      if (message.host_theme == nullptr) {
+        return ParseResult::error;
+      }
+      if (!session.theme_bound) {
+        if (!bind_session_theme(session, *message.host_theme)) {
+          return ParseResult::error;
+        }
+        schedule_frame(session, FrameUrgency::state_change, true);
+      }
+      break;
     case protocol::ClientMessageKind::pane_command: {
       const auto command = command_from_pane_command(message.pane_command);
       if (!command.has_value() || !dispatch_session_command(session, *command).succeeded()) {
@@ -2878,6 +2928,7 @@ struct PendingConnection final {
   ConnectionOutput output;
   protocol::ClientDecoder attach_decoder;
   protocol::Dimensions attach_dimensions{};
+  std::optional<protocol::HostTerminalTheme> attach_host_theme;
   SessionId attach_session;
   std::chrono::steady_clock::time_point deadline;
   std::chrono::steady_clock::time_point setup_deadline;
@@ -2925,7 +2976,8 @@ public:
   }
 
 private:
-  std::array<std::byte, protocol::small_message_bytes_max> storage_{};
+  std::array<std::byte, protocol::attach_header_bytes + 1U + protocol::diagnostic_bytes_max>
+      storage_{};
   std::size_t size_{0};
   std::size_t offset_{0};
 };
@@ -3139,6 +3191,13 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions,
                               "lemma session is already attached");
     return;
   }
+  if (!session->theme_bound && pending.attach_host_theme.has_value() &&
+      !bind_session_theme(*session, *pending.attach_host_theme)) {
+    session->frame.release();
+    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                              "failed to apply host terminal theme");
+    return;
+  }
   if (!resize_session(*session, pending.attach_dimensions)) {
     session->frame.release();
     finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
@@ -3290,6 +3349,8 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
         pending->session.size = message.session.size();
         std::ranges::copy(message.session, pending->session.bytes.begin());
         pending->attach_dimensions = message.dimensions;
+        pending->attach_host_theme =
+            message.host_theme == nullptr ? std::nullopt : std::optional{*message.host_theme};
         pending->attach_decoder.consume();
         prepare_attach(*pending, sessions, slot);
         continue;

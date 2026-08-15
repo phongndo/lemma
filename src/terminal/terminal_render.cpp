@@ -119,32 +119,84 @@ struct AnsiStyle final {
   };
 }
 
-[[nodiscard]] auto resolved_style_color(const GhosttyStyleColor color,
-                                        const GhosttyRenderStateColors& colors,
-                                        const GhosttyColorRgb fallback) noexcept -> AnsiColor {
+[[nodiscard]] constexpr auto ansi_palette(const GhosttyColorPaletteIndex index) noexcept
+    -> AnsiColor {
+  return {
+      .tag = AnsiColorTag::palette,
+      .index = index,
+  };
+}
+
+[[nodiscard]] constexpr auto same_color(const GhosttyColorRgb native,
+                                        const RgbColor configured) noexcept -> bool {
+  return native.r == configured.red && native.g == configured.green && native.b == configured.blue;
+}
+
+[[nodiscard]] auto palette_color(const GhosttyColorPaletteIndex index,
+                                 const GhosttyRenderStateColors& colors,
+                                 const TerminalTheme& theme) noexcept -> AnsiColor {
+  const auto current = std::span(colors.palette).subspan(index, 1).front();
+  const auto configured = std::span(theme.palette).subspan(index, 1).front();
+  // An OSC 4 override is pane-local and must not mutate the outer terminal's global palette.
+  // Preserve the index only while Ghostty's effective entry still equals its configured default.
+  return same_color(current, configured) ? ansi_palette(index) : ansi_rgb(current);
+}
+
+[[nodiscard]] constexpr auto default_color(const GhosttyColorRgb current,
+                                           const RgbColor configured) noexcept -> AnsiColor {
+  // A missing color after SGR 0 means the outer terminal's default. Only a pane-local OSC 10/11
+  // override requires an explicit RGB projection.
+  return same_color(current, configured) ? AnsiColor{} : ansi_rgb(current);
+}
+
+[[nodiscard]] auto style_color(const GhosttyStyleColor color,
+                               const GhosttyRenderStateColors& colors, const TerminalTheme& theme,
+                               const AnsiColor fallback = {}) noexcept -> AnsiColor {
   switch (color.tag) {
   case GHOSTTY_STYLE_COLOR_NONE:
-    return ansi_rgb(fallback);
+    return fallback;
   case GHOSTTY_STYLE_COLOR_PALETTE:
-    return ansi_rgb(std::span(colors.palette).subspan(color.value.palette, 1).front());
+    return palette_color(color.value.palette, colors, theme);
   case GHOSTTY_STYLE_COLOR_RGB:
     return ansi_rgb(color.value.rgb);
   case GHOSTTY_STYLE_COLOR_TAG_MAX_VALUE:
-    return ansi_rgb(fallback);
+    return fallback;
   }
-  return ansi_rgb(fallback);
+  return fallback;
 }
 
-[[nodiscard]] auto ansi_style(const GhosttyStyle& style, const GhosttyRenderStateColors& colors,
-                              const GhosttyColorRgb* const foreground,
-                              const GhosttyColorRgb* const background) noexcept -> AnsiStyle {
-  const auto underline =
-      style.underline_color.tag == GHOSTTY_STYLE_COLOR_NONE
-          ? AnsiColor{}
-          : resolved_style_color(style.underline_color, colors, colors.foreground);
-  return {
-      .foreground = ansi_rgb(foreground == nullptr ? colors.foreground : *foreground),
-      .background = ansi_rgb(background == nullptr ? colors.background : *background),
+[[nodiscard]] auto ansi_style(const GhosttyCell raw_cell, const GhosttyCellContentTag content_tag,
+                              const GhosttyStyle& style, const GhosttyRenderStateColors& colors,
+                              const TerminalTheme& theme) noexcept
+    -> std::expected<AnsiStyle, Error> {
+  const auto foreground = style_color(style.fg_color, colors, theme,
+                                      default_color(colors.foreground, theme.foreground));
+  auto background = style_color(style.bg_color, colors, theme,
+                                default_color(colors.background, theme.background));
+
+  GhosttyResult result = GHOSTTY_SUCCESS;
+  if (content_tag == GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE) {
+    GhosttyColorPaletteIndex index = 0;
+    result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_COLOR_PALETTE, &index);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    background = palette_color(index, colors, theme);
+  } else if (content_tag == GHOSTTY_CELL_CONTENT_BG_COLOR_RGB) {
+    GhosttyColorRgb color{};
+    result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_COLOR_RGB, &color);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    background = ansi_rgb(color);
+  }
+
+  const auto underline = style.underline_color.tag == GHOSTTY_STYLE_COLOR_NONE
+                             ? AnsiColor{}
+                             : style_color(style.underline_color, colors, theme);
+  return AnsiStyle{
+      .foreground = foreground,
+      .background = background,
       .underline_color = underline,
       .underline = static_cast<std::uint8_t>(style.underline),
       .bold = style.bold,
@@ -174,8 +226,11 @@ struct AnsiStyle final {
          writer.append_integer(color.blue);
 }
 
-[[nodiscard]] auto append_cursor_color(AnsiWriter& writer, const GhosttyColorRgb color) noexcept
-    -> bool {
+[[nodiscard]] auto append_cursor_color(AnsiWriter& writer, const GhosttyColorRgb color,
+                                       const RgbColor configured) noexcept -> bool {
+  if (same_color(color, configured)) {
+    return writer.append("\x1B]112\x1B\\");
+  }
   return writer.append("\x1B]12;#") && writer.append_hex_byte(color.r) &&
          writer.append_hex_byte(color.g) && writer.append_hex_byte(color.b) &&
          writer.append("\x1B\\");
@@ -237,53 +292,6 @@ struct AnsiStyle final {
     hash = hash_byte(hash, static_cast<std::uint8_t>(flag));
   }
   return hash;
-}
-
-struct ResolvedCellColors final {
-  GhosttyColorRgb foreground{};
-  GhosttyColorRgb background{};
-  bool has_foreground{false};
-  bool has_background{false};
-
-  [[nodiscard]] auto foreground_pointer() const noexcept -> const GhosttyColorRgb* {
-    return has_foreground ? &foreground : nullptr;
-  }
-
-  [[nodiscard]] auto background_pointer() const noexcept -> const GhosttyColorRgb* {
-    return has_background ? &background : nullptr;
-  }
-};
-
-[[nodiscard]] auto read_resolved_cell_color(const GhosttyRenderStateRowCells cells,
-                                            const GhosttyRenderStateRowCellsData key,
-                                            GhosttyColorRgb& color, bool& has_color) noexcept
-    -> std::expected<void, Error> {
-  const auto result = ghostty_render_state_row_cells_get(cells, key, &color);
-  if (result == GHOSTTY_SUCCESS) {
-    has_color = true;
-    return {};
-  }
-  if (result == GHOSTTY_INVALID_VALUE) {
-    has_color = false;
-    return {};
-  }
-  return std::unexpected(detail::map_error(result));
-}
-
-[[nodiscard]] auto resolved_cell_colors(const GhosttyRenderStateRowCells cells) noexcept
-    -> std::expected<ResolvedCellColors, Error> {
-  ResolvedCellColors colors{};
-  auto result = read_resolved_cell_color(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
-                                         colors.foreground, colors.has_foreground);
-  if (!result.has_value()) {
-    return std::unexpected(result.error());
-  }
-  result = read_resolved_cell_color(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-                                    colors.background, colors.has_background);
-  if (!result.has_value()) {
-    return std::unexpected(result.error());
-  }
-  return colors;
 }
 
 } // namespace
@@ -425,20 +433,23 @@ struct ResolvedCellColors final {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    const auto resolved_colors = resolved_cell_colors(row_cells);
-    if (!resolved_colors.has_value()) {
-      return std::unexpected(resolved_colors.error());
+    GhosttyCellContentTag content_tag = GHOSTTY_CELL_CONTENT_CODEPOINT;
+    result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_CONTENT_TAG, &content_tag);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
     }
-    auto style = ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
-                            resolved_colors->background_pointer());
+    auto style = ansi_style(raw_cell, content_tag, ghostty_style, render_colors, session_theme);
+    if (!style.has_value()) {
+      return std::unexpected(style.error());
+    }
     bool selected = false;
     result = ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    style.inverse = style.inverse != selected;
-    row_hash = hash_style(row_hash, style);
+    style->inverse = style->inverse != selected;
+    row_hash = hash_style(row_hash, *style);
     ++cell_count;
   }
   LEMMA_ASSERT(cell_count == options.size.columns);
@@ -538,20 +549,23 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    const auto resolved_colors = resolved_cell_colors(row_cells);
-    if (!resolved_colors.has_value()) {
-      return std::unexpected(resolved_colors.error());
+    GhosttyCellContentTag content_tag = GHOSTTY_CELL_CONTENT_CODEPOINT;
+    result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_CONTENT_TAG, &content_tag);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
     }
-    auto style = ansi_style(ghostty_style, render_colors, resolved_colors->foreground_pointer(),
-                            resolved_colors->background_pointer());
+    auto style = ansi_style(raw_cell, content_tag, ghostty_style, render_colors, session_theme);
+    if (!style.has_value()) {
+      return std::unexpected(style.error());
+    }
     bool selected = false;
     result = ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    style.inverse = style.inverse != selected;
-    row_hash = hash_style(row_hash, style);
+    style->inverse = style->inverse != selected;
+    row_hash = hash_style(row_hash, *style);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
@@ -566,7 +580,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       return std::unexpected(detail::map_error(result));
     }
 
-    std::uint64_t cell_hash = hash_style(hash_initial, style);
+    std::uint64_t cell_hash = hash_style(hash_initial, *style);
     cell_hash = hash_byte(cell_hash, static_cast<std::uint8_t>(wide));
     if (replacement) {
       constexpr std::string_view replacement_text = "\xEF\xBF\xBD";
@@ -600,22 +614,23 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       }
 
       const auto cell_checkpoint = writer.size();
-      if ((!active_style_valid || style != active_style) && !append_style(writer, style)) {
+      if ((!active_style_valid || *style != active_style) && !append_style(writer, *style)) {
         return std::unexpected(Error::out_of_space);
       }
-      active_style = style;
+      active_style = *style;
       active_style_valid = true;
 
       const bool default_blank = !selected && !replacement && grapheme_buffer.len == 0 &&
                                  wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
                                  ghostty_style_is_default(&ghostty_style) &&
-                                 !resolved_colors->has_background;
+                                 content_tag != GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE &&
+                                 content_tag != GHOSTTY_CELL_CONTENT_BG_COLOR_RGB;
       if (default_blank) {
         if (trailing_blank_start == std::numeric_limits<std::size_t>::max()) {
           trailing_blank_start = cell_checkpoint;
           trailing_blank_changed = false;
         }
-        trailing_blank_style = style;
+        trailing_blank_style = *style;
         trailing_blank_changed = trailing_blank_changed || changed;
       } else {
         trailing_blank_start = std::numeric_limits<std::size_t>::max();
@@ -650,8 +665,8 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
   if (erase_line_tail && trailing_blank_start != std::numeric_limits<std::size_t>::max() &&
       trailing_blank_changed) {
     writer.rewind(trailing_blank_start);
-    // EL paints with the active background. Re-emit the projected default style so a session theme
-    // is not replaced by the attaching terminal's background across the erased tail.
+    // EL paints with the active background. Re-emit the pane's semantic default style so the
+    // attaching terminal supplies its own default unless the pane has an OSC 10/11 override.
     if (!append_style(writer, trailing_blank_style) || !writer.append("\x1B[K")) {
       return std::unexpected(Error::out_of_space);
     }
@@ -916,8 +931,8 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     const auto cursor_color = impl_->render_colors.cursor_has_value
                                   ? impl_->render_colors.cursor
                                   : impl_->render_colors.foreground;
-    if (!append_cursor_color(writer, cursor_color) || !writer.append("\x1B[") ||
-        !writer.append_integer(cursor_code) || !writer.append(" q")) {
+    if (!append_cursor_color(writer, cursor_color, impl_->session_theme.cursor) ||
+        !writer.append("\x1B[") || !writer.append_integer(cursor_code) || !writer.append(" q")) {
       impl_->ansi_physical_valid = false;
       return std::unexpected(Error::out_of_space);
     }

@@ -712,7 +712,7 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.wait_for_screen("COPY nav [Space]", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7;", deadline_after(5s))) << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.raw_tail();
 
   // Vi keys and physical arrow sequences move only the daemon-owned copy cursor, including an
   // escape sequence fragmented across separate client input messages.

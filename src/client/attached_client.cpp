@@ -1,5 +1,6 @@
 #include "client/attached_client.hpp"
 
+#include "client/host_terminal_theme.hpp"
 #include "daemon/server.hpp"
 #include "diagnostic/latency_trace.hpp"
 #include "lemma/assert.hpp"
@@ -498,6 +499,13 @@ private:
   return platform::terminal_size(STDOUT_FILENO, protocol::columns_max, protocol::rows_max);
 }
 
+[[nodiscard]] auto send_host_terminal_theme_query() noexcept -> bool {
+  std::array<char, host_theme_query_bytes_max> query{};
+  const auto query_size = encode_host_terminal_theme_query(query);
+  return query_size > 0 &&
+         write_text_interruptibly(STDOUT_FILENO, std::string_view(query.data(), query_size));
+}
+
 [[nodiscard]] auto advance_sequence(std::uint32_t& sequence) noexcept -> bool {
   if (sequence == std::numeric_limits<std::uint32_t>::max()) {
     return false;
@@ -782,15 +790,6 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         write_text_interruptibly(STDERR_FILENO, "no lemma daemon; run `lemma new`\n"));
     return 1;
   }
-  const auto size = terminal_size();
-  const protocol::Dimensions dimensions{.columns = size.columns, .rows = size.rows};
-  const auto hello = protocol::encode_client_hello(session, dimensions);
-  if (!send_interruptibly(connection, hello.bytes()) ||
-      receive_handshake(connection, decoder, dimensions) != HandshakeResult::accepted) {
-    close_descriptor(connection);
-    return 1;
-  }
-
   SignalWakeup termination_wakeup;
   if (!termination_wakeup.install()) {
     close_descriptor(connection);
@@ -818,7 +817,18 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     if (raw_terminal_entered) {
       terminal_restore_wakeup_descriptor = raw_terminal.restore_wakeup_descriptor();
     }
-    terminal_setup_succeeded = raw_terminal_entered && outer_terminal.enter();
+
+    HostTerminalThemeParser host_theme_parser;
+    bool host_theme_query_pending = raw_terminal_entered && send_host_terminal_theme_query();
+    constexpr auto host_theme_query_timeout = std::chrono::milliseconds(100);
+    const auto host_theme_deadline = std::chrono::steady_clock::now() + host_theme_query_timeout;
+    const auto size = terminal_size();
+    const protocol::Dimensions dimensions{.columns = size.columns, .rows = size.rows};
+    const auto hello = protocol::encode_client_hello(session, dimensions);
+    const bool handshake_accepted =
+        raw_terminal_entered && send_interruptibly(connection, hello.bytes()) &&
+        receive_handshake(connection, decoder, dimensions) == HandshakeResult::accepted;
+    terminal_setup_succeeded = handshake_accepted && outer_terminal.enter();
     if (terminal_setup_succeeded) {
       termination_render_descriptor = outer_terminal.render_descriptor();
     }
@@ -833,7 +843,53 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     std::uint64_t pending_trace_correlation = 0;
     auto prefix_deadline = std::chrono::steady_clock::time_point{};
     bool attached = terminal_setup_succeeded;
+    const auto forward_client_input = [&](const std::span<const std::byte> bytes) noexcept {
+      if (bytes.empty()) {
+        return true;
+      }
+      const auto parsed = prefix_parser.parse(bytes, encoded_input);
+      if (!send_prefixed_input(connection, parsed, std::span(encoded_input).first(parsed.bytes),
+                               client_sequence)) {
+        return false;
+      }
+      if (prefix_parser.has_pending_escape_sequence()) {
+        prefix_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
+      }
+      if (parsed.detach) {
+        clean_detach = send_small_message(connection, protocol::encode_detach(client_sequence),
+                                          client_sequence);
+        attached = false;
+      }
+      return true;
+    };
+    const auto finish_host_theme_query = [&]() noexcept {
+      host_theme_parser.finish();
+      host_theme_query_pending = false;
+      if (host_theme_parser.overflowed()) {
+        static_cast<void>(write_text_interruptibly(
+            STDERR_FILENO, "lemma attach host-theme query exceeded retained input capacity\n"));
+        return false;
+      }
+      const auto theme = host_theme_parser.theme();
+      return !theme.has_value() ||
+             send_small_message(connection,
+                                protocol::encode_host_theme_update(*theme, client_sequence),
+                                client_sequence);
+    };
+    const auto forward_retained_host_input = [&]() noexcept {
+      if (!forward_client_input(host_theme_parser.pending_input())) {
+        return false;
+      }
+      host_theme_parser.consume_pending_input();
+      return true;
+    };
     while (attached && termination_signal == 0) {
+      if (host_theme_query_pending && (host_theme_parser.complete() ||
+                                       std::chrono::steady_clock::now() >= host_theme_deadline)) {
+        if (!finish_host_theme_query() || !forward_retained_host_input()) {
+          break;
+        }
+      }
       const auto buffered =
           process_server_messages(decoder, outer_terminal.render_descriptor(), output_trace_matcher,
                                   pending_trace_correlation, live_diagnostic);
@@ -867,6 +923,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
               std::chrono::duration_cast<std::chrono::milliseconds>(prefix_deadline - now);
           poll_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
         }
+      }
+      if (host_theme_query_pending) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            host_theme_deadline - std::chrono::steady_clock::now());
+        const auto theme_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+        poll_timeout = poll_timeout < 0 ? theme_timeout : std::min(poll_timeout, theme_timeout);
       }
 
       std::array<pollfd, 3> descriptors{{
@@ -924,18 +986,18 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::client_physical_input_read,
                                          static_cast<std::uint32_t>(STDIN_FILENO), input_size,
                                          trace_correlation);
-        const auto parsed = prefix_parser.parse(std::span(input).first(input_size), encoded_input);
-        if (!send_prefixed_input(connection, parsed, std::span(encoded_input).first(parsed.bytes),
-                                 client_sequence)) {
+        const auto physical_input = std::span(input).first(input_size);
+        if (host_theme_query_pending) {
+          host_theme_parser.push(physical_input);
+          if ((host_theme_parser.overflowed() || host_theme_parser.complete()) &&
+              !finish_host_theme_query()) {
+            break;
+          }
+          if (!forward_retained_host_input()) {
+            break;
+          }
+        } else if (!forward_client_input(physical_input)) {
           break;
-        }
-        if (prefix_parser.has_pending_escape_sequence()) {
-          prefix_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
-        }
-        if (parsed.detach) {
-          clean_detach = send_small_message(connection, protocol::encode_detach(client_sequence),
-                                            client_sequence);
-          attached = false;
         }
       }
     }

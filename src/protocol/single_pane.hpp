@@ -3,6 +3,7 @@
 
 #include "lemma/limits.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,41 @@ struct Dimensions final {
   std::uint16_t rows{24};
 
   [[nodiscard]] constexpr auto operator==(const Dimensions&) const noexcept -> bool = default;
+};
+
+struct RgbColor final {
+  std::uint8_t red{0};
+  std::uint8_t green{0};
+  std::uint8_t blue{0};
+
+  [[nodiscard]] constexpr auto operator==(const RgbColor&) const noexcept -> bool = default;
+};
+
+// Bounded client observation of the outer terminal. Missing values remain unspecified rather than
+// being confused with black; palette presence is represented independently from RGB storage.
+struct HostTerminalTheme final {
+  [[nodiscard]] constexpr auto has_palette_color(const std::size_t index) const noexcept -> bool {
+    return index < palette.size() &&
+           (palette_mask & (std::uint16_t{1} << static_cast<unsigned>(index))) != 0;
+  }
+  constexpr void set_palette_color(const std::size_t index, const RgbColor color) noexcept {
+    if (index >= palette.size()) {
+      return;
+    }
+    std::span(palette).subspan(index, 1).front() = color;
+    palette_mask |= std::uint16_t{1} << static_cast<unsigned>(index);
+  }
+  [[nodiscard]] constexpr auto empty() const noexcept -> bool {
+    return !foreground.has_value() && !background.has_value() && palette_mask == 0;
+  }
+
+  std::optional<RgbColor> foreground;
+  std::optional<RgbColor> background;
+  std::array<RgbColor, 16> palette{};
+  std::uint16_t palette_mask{0};
+
+  [[nodiscard]] constexpr auto operator==(const HostTerminalTheme&) const noexcept
+      -> bool = default;
 };
 
 enum class ControlCommand : std::uint8_t {
@@ -100,15 +136,21 @@ inline constexpr std::size_t render_ansi_bytes_max = limits::frame_chunk_bytes_m
 inline constexpr std::size_t render_payload_bytes_max =
     render_generation_bytes + render_ansi_bytes_max;
 inline constexpr std::size_t diagnostic_bytes_max = 255;
+inline constexpr std::size_t host_theme_palette_colors = 16;
+inline constexpr std::size_t host_theme_palette_mask_bytes = 2;
+inline constexpr std::size_t host_theme_wire_bytes =
+    1U + host_theme_palette_mask_bytes + 6U + (host_theme_palette_colors * 3U);
+inline constexpr std::size_t client_hello_payload_bytes_max =
+    6U + host_theme_wire_bytes + session_name_bytes_max;
 inline constexpr std::size_t small_message_bytes_max =
-    attach_header_bytes + 1U + diagnostic_bytes_max;
+    attach_header_bytes + std::max(1U + diagnostic_bytes_max, client_hello_payload_bytes_max);
 inline constexpr std::size_t client_decoder_bytes_max =
     attach_header_bytes + input_message_bytes_max;
 inline constexpr std::size_t server_decoder_bytes_max =
     attach_header_bytes + render_payload_bytes_max;
 inline constexpr std::uint8_t render_full_redraw_flag = 0x01;
 
-static_assert(small_message_bytes_max >= attach_header_bytes + 5U + session_name_bytes_max);
+static_assert(small_message_bytes_max >= attach_header_bytes + client_hello_payload_bytes_max);
 static_assert(client_decoder_bytes_max < std::size_t{16} * 1'024U);
 static_assert(server_decoder_bytes_max <= (std::size_t{4} * 1'024U * 1'024U) + 32U);
 
@@ -120,6 +162,7 @@ enum class MessageKind : std::uint8_t {
   detach = 5,
   render_frame = 6,
   disconnect = 7,
+  host_theme = 8,
 };
 
 enum class DisconnectReason : std::uint8_t {
@@ -141,6 +184,7 @@ enum class ClientMessageKind : std::uint8_t {
   resize,
   detach,
   pane_command,
+  host_theme,
 };
 
 enum class ServerMessageKind : std::uint8_t {
@@ -169,10 +213,14 @@ struct ClientMessage final {
   ClientMessageKind kind{ClientMessageKind::detach};
   Dimensions dimensions{};
   PaneCommand pane_command{PaneCommand::none};
+  // Borrowed from ClientDecoder until consume() or reset().
+  const HostTerminalTheme* host_theme{nullptr};
   std::string_view session;
   std::span<const std::byte> input;
   std::uint32_t sequence{0};
 };
+
+static_assert(sizeof(ClientMessage) <= 64U);
 
 struct ServerMessage final {
   ServerMessageKind kind{ServerMessageKind::disconnect};
@@ -193,7 +241,8 @@ public:
 
 private:
   friend auto encode_client_hello(std::string_view session, Dimensions dimensions,
-                                  std::uint32_t sequence, ProtocolVersion version) noexcept
+                                  std::uint32_t sequence, ProtocolVersion version,
+                                  const std::optional<HostTerminalTheme>& host_theme) noexcept
       -> SmallMessage;
   friend auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence) noexcept
       -> SmallMessage;
@@ -201,6 +250,8 @@ private:
   friend auto encode_detach(std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_pane_command(PaneCommand command, std::uint32_t sequence) noexcept
       -> SmallMessage;
+  friend auto encode_host_theme_update(const HostTerminalTheme& theme,
+                                       std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_disconnect(DisconnectReason reason, std::string_view diagnostic,
                                 std::uint32_t sequence) noexcept -> SmallMessage;
 
@@ -231,9 +282,10 @@ private:
                                  std::uint32_t sequence,
                                  ProtocolVersion version = current_version) noexcept
     -> std::array<std::byte, attach_header_bytes>;
-[[nodiscard]] auto encode_client_hello(std::string_view session, Dimensions dimensions,
-                                       std::uint32_t sequence = 1,
-                                       ProtocolVersion version = current_version) noexcept
+[[nodiscard]] auto
+encode_client_hello(std::string_view session, Dimensions dimensions, std::uint32_t sequence = 1,
+                    ProtocolVersion version = current_version,
+                    const std::optional<HostTerminalTheme>& host_theme = std::nullopt) noexcept
     -> SmallMessage;
 [[nodiscard]] auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence = 1) noexcept
     -> SmallMessage;
@@ -244,6 +296,8 @@ private:
 [[nodiscard]] auto encode_detach(std::uint32_t sequence) noexcept -> SmallMessage;
 [[nodiscard]] auto encode_pane_command(PaneCommand command, std::uint32_t sequence) noexcept
     -> SmallMessage;
+[[nodiscard]] auto encode_host_theme_update(const HostTerminalTheme& theme,
+                                            std::uint32_t sequence) noexcept -> SmallMessage;
 [[nodiscard]] auto encode_render_frame_header(std::size_t ansi_bytes, std::uint32_t sequence,
                                               std::uint32_t full_redraw_generation,
                                               bool full_redraw) noexcept
@@ -296,6 +350,7 @@ public:
 
 private:
   std::array<std::byte, client_decoder_bytes_max> storage_{};
+  HostTerminalTheme host_theme_{};
   std::size_t used_{0};
   std::size_t pending_size_{0};
   std::uint32_t expected_sequence_{1};

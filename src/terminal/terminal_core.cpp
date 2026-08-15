@@ -613,6 +613,18 @@ auto Terminal::theme() const noexcept -> TerminalTheme {
   return impl_->session_theme;
 }
 
+auto Terminal::set_theme(const TerminalTheme& theme) noexcept -> std::expected<void, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  const auto result = apply_theme(impl_->terminal, theme);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  impl_->session_theme = theme;
+  impl_->ansi_physical_valid = false;
+  return {};
+}
+
 auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);

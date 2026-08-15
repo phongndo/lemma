@@ -118,8 +118,8 @@ TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1;38;5;255;48;5;239m lemma "
-                                          "\x1B[0;38;5;252;48;5;236m\x1B[1;9H"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1;7m lemma "
+                                          "\x1B[0;2m\x1B[1;9H"));
   EXPECT_THAT(encoded, testing::HasSubstr("1:zsh  [2:nvim]  3:logs"));
 }
 

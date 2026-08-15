@@ -31,13 +31,51 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x01},
       std::byte{0x00}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
-      std::byte{0x00}, std::byte{0x0C}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
-      std::byte{0x2B}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},  std::byte{'j'},
-      std::byte{'e'},  std::byte{'c'},  std::byte{'t'},
+      std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
+      std::byte{'j'},  std::byte{'e'},  std::byte{'c'},  std::byte{'t'},
   };
 
   EXPECT_TRUE(std::ranges::equal(encoded.bytes(), expected));
+}
+
+TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
+  HostTerminalTheme theme;
+  theme.foreground = RgbColor{.red = 1, .green = 2, .blue = 3};
+  theme.background = RgbColor{.red = 4, .green = 5, .blue = 6};
+  theme.set_palette_color(0, {.red = 7, .green = 8, .blue = 9});
+  theme.set_palette_color(15, {.red = 10, .green = 11, .blue = 12});
+  const auto encoded =
+      encode_client_hello("themed", {.columns = 80, .rows = 24}, 1, current_version, theme);
+  ClientDecoder decoder;
+  std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
+
+  const auto decoded = decoder.next();
+
+  ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+  ASSERT_NE((**decoded).host_theme, nullptr);
+  EXPECT_EQ(*(**decoded).host_theme, theme);
+  EXPECT_EQ((**decoded).session, "themed");
+}
+
+TEST(ProtocolTest, RoundTripsLiveHostThemeUpdate) {
+  HostTerminalTheme theme;
+  theme.foreground = RgbColor{.red = 1, .green = 2, .blue = 3};
+  theme.set_palette_color(7, {.red = 4, .green = 5, .blue = 6});
+  const auto encoded = encode_host_theme_update(theme, 2);
+  ClientDecoder decoder;
+  decoder.reset(2, false);
+  std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
+
+  const auto decoded = decoder.next();
+
+  ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+  EXPECT_EQ((**decoded).kind, ClientMessageKind::host_theme);
+  ASSERT_NE((**decoded).host_theme, nullptr);
+  EXPECT_EQ(*(**decoded).host_theme, theme);
 }
 
 TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {

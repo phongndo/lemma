@@ -82,6 +82,22 @@ A raw 500x200 non-reading client with a 4 KiB requested receive buffer was attac
 
 Current policy bounds one client to 64 KiB/32 writes per turn and all attached clients to 256 KiB per turn. A blocked session receives a 4 KiB PTY-read isolation slice while retaining canonical progress. New presentation damage stays in Ghostty and repairs with one full redraw after the old transaction drains.
 
+## Host-theme projection qualification
+
+A ten-sample release `attach-visible` run after the semantic-color and asynchronous host-theme handshake change measured 6.001 ms p50, 6.406 ms p95, and 1,031 median client bytes on the documented M4 Max host. The host-theme query runs concurrently with normal attach progress; its 100 ms collection deadline is not on the attach-to-visible critical path.
+
+Focused release renderer medians were 128.023 µs for ANSI damage frames, 3.702 µs for one changed row, and 62.745 µs for detected scroll operations. Reproduce with:
+
+```sh
+python3 benchmarks/mux_benchmark.py --mode attach-visible --multiplexer lemma \
+  --repetitions 10 --server build/release/lemma_test_server \
+  --cli build/release/lemma_test_cli --peer build/release/lemma_test_pty_peer
+
+./build/release/lemma_benchmarks \
+  --benchmark_filter='benchmark_terminal_ansi_(damage_frames|single_row|scroll_operations)' \
+  --benchmark_repetitions=5 --benchmark_report_aggregates_only=true --benchmark_min_time=0.05s
+```
+
 ## Known measured caveats
 
 - Attach-to-visible remains above the older host-scoped 4.7/5.4 ms p50/p95 limits. Replacing a one-millisecond emergency-restorer polling loop with descriptor polling improved paired attach p50/p95 by 12.7%/9.6%, but later complete runs still measured 6–9 ms tails.

@@ -1653,7 +1653,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         blocked.settimeout(5.0)
         blocked.connect(str(runtime.socket_path))
         session = b"blocked_client"
-        hello_payload = bytes((len(session),)) + struct.pack("!HH", 500, 200) + session
+        hello_payload = bytes((len(session),)) + struct.pack("!HH", 500, 200) + b"\0" + session
         blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
         receive_attach_hello(blocked)
         flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"

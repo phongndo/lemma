@@ -156,6 +156,8 @@ public:
 
 private:
   void pump(Deadline deadline) noexcept;
+  void collect_terminal_responses() noexcept;
+  void flush_terminal_responses() noexcept;
   void signal_group(int signal_number) const noexcept;
 
   pid_t process_{-1};
@@ -164,6 +166,8 @@ private:
   termios initial_terminal_state_{};
   bool initial_terminal_state_valid_{false};
   std::optional<vt::Terminal> terminal_;
+  std::array<std::byte, std::size_t{64} * 1'024U> terminal_responses_{};
+  std::size_t terminal_response_bytes_{0};
   std::string raw_tail_;
 };
 

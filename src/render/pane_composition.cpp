@@ -50,8 +50,8 @@ namespace {
 constexpr std::size_t status_title_columns_max = 16;
 constexpr std::size_t status_session_columns_max = 32;
 constexpr std::size_t status_label_bytes_max = status_session_columns_max + 2U;
-constexpr std::string_view status_style = "\x1B[0;38;5;252;48;5;236m";
-constexpr std::string_view status_session_style = "\x1B[0;1;38;5;255;48;5;239m";
+constexpr std::string_view status_style = "\x1B[0;2m";
+constexpr std::string_view status_session_style = "\x1B[0;1;7m";
 
 struct StatusLabel final {
   std::array<char, status_label_bytes_max> text{};

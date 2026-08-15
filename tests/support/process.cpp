@@ -809,21 +809,59 @@ PtyClient::~PtyClient() { terminate(); }
          terminal_->resize({.columns = columns, .rows = rows}).has_value();
 }
 
+void PtyClient::flush_terminal_responses() noexcept {
+  if (terminal_response_bytes_ == 0) {
+    return;
+  }
+  std::size_t consumed = 0;
+  if (!send_available(std::span(terminal_responses_).first(terminal_response_bytes_), consumed)) {
+    terminal_response_bytes_ = 0;
+    return;
+  }
+  auto storage = std::span(terminal_responses_);
+  std::memmove(storage.data(), storage.subspan(consumed).data(),
+               terminal_response_bytes_ - consumed);
+  terminal_response_bytes_ -= consumed;
+}
+
+void PtyClient::collect_terminal_responses() noexcept {
+  if (!terminal_.has_value()) {
+    return;
+  }
+  while (terminal_->pending_pty_response_bytes() > 0 &&
+         terminal_response_bytes_ < terminal_responses_.size()) {
+    const auto response_bytes = terminal_->read_pty_responses(
+        std::span(terminal_responses_).subspan(terminal_response_bytes_));
+    if (response_bytes == 0) {
+      return;
+    }
+    terminal_response_bytes_ += response_bytes;
+  }
+}
+
 void PtyClient::pump(const Deadline deadline) noexcept {
   if (master_ < 0 || !terminal_.has_value()) {
     return;
   }
+  flush_terminal_responses();
+
   pollfd descriptor{.fd = master_, .events = POLLIN, .revents = 0};
   if (::poll(&descriptor, 1, milliseconds_until(deadline)) <= 0) {
     return;
   }
+  if (!terminal_.has_value()) {
+    return;
+  }
+  auto* const terminal = std::addressof(*terminal_);
   std::array<std::byte, std::size_t{64} * 1'024U> buffer{};
   while (true) {
     const auto received = ::read(master_, buffer.data(), buffer.size());
     if (received > 0) {
       const auto bytes = std::span(buffer).first(static_cast<std::size_t>(received));
-      terminal_->write(bytes);
+      terminal->write(bytes);
       retain_tail(raw_tail_, byte_characters(bytes));
+      collect_terminal_responses();
+      flush_terminal_responses();
       continue;
     }
     if (received < 0 && errno == EINTR) {

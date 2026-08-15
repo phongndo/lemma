@@ -84,7 +84,7 @@ TEST(GhosttyParityRegressionTest, M2SessionThemeSurvivesReattach) {
   EXPECT_EQ(terminal.theme(), theme);
 }
 
-TEST(GhosttyParityRegressionTest, M2AnsiProjectionPreservesEffectiveColorsAndCursor) {
+TEST(GhosttyParityRegressionTest, M2AnsiProjectionPreservesSemanticColorsAndCursor) {
   auto theme = vt::default_theme();
   theme.foreground = {.red = 10, .green = 20, .blue = 30};
   theme.background = {.red = 40, .green = 50, .blue = 60};
@@ -100,11 +100,11 @@ TEST(GhosttyParityRegressionTest, M2AnsiProjectionPreservesEffectiveColorsAndCur
   const auto rendered = terminal.render_ansi(output, true);
   ASSERT_TRUE(rendered.has_value());
   const auto ansi = output_text(std::span(output).first(rendered->bytes));
-  EXPECT_THAT(ansi, testing::HasSubstr("38;2;101;102;103"));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;5;1"));
   EXPECT_THAT(ansi, testing::HasSubstr("48;2;7;8;9"));
-  EXPECT_THAT(ansi, testing::HasSubstr("38;2;10;20;30"));
-  EXPECT_THAT(ansi, testing::HasSubstr("48;2;40;50;60"));
-  EXPECT_THAT(ansi, testing::HasSubstr("\x1B]12;#46505a\x1B\\"));
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("38;2;10;20;30")));
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("48;2;40;50;60")));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B]112\x1B\\"));
 }
 
 TEST(GhosttyParityRegressionTest, M2EraseLineTailPreservesSessionBackground) {
@@ -120,13 +120,13 @@ TEST(GhosttyParityRegressionTest, M2EraseLineTailPreservesSessionBackground) {
   const auto blank = terminal.render_ansi(output, true);
   ASSERT_TRUE(blank.has_value());
   EXPECT_THAT(output_text(std::span(output).first(blank->bytes)),
-              testing::HasSubstr("48;2;40;50;60m\x1B[K"));
+              testing::HasSubstr("\x1B[0m\x1B[K"));
 
   write_terminal(terminal, "text");
   const auto tail = terminal.render_ansi(output, true);
   ASSERT_TRUE(tail.has_value());
   EXPECT_THAT(output_text(std::span(output).first(tail->bytes)),
-              testing::HasSubstr("48;2;40;50;60m\x1B[K"));
+              testing::HasSubstr("\x1B[0m\x1B[K"));
 }
 
 TEST(GhosttyParityRegressionTest, M2PaletteRedrawDoesNotImitateTerminalScroll) {
@@ -149,6 +149,60 @@ TEST(GhosttyParityRegressionTest, M2PaletteRedrawDoesNotImitateTerminalScroll) {
   EXPECT_THAT(ansi, testing::HasSubstr("38;2;10;20;30"));
   EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("\x1B[1S")));
   EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("\x1B[1T")));
+}
+
+TEST(GhosttyParityRegressionTest, M2AnsiProjectionIsolatesPaneColorOverrides) {
+  auto theme = vt::default_theme();
+  theme.foreground = {.red = 10, .green = 20, .blue = 30};
+  theme.background = {.red = 40, .green = 50, .blue = 60};
+  theme.palette.at(1) = {.red = 70, .green = 80, .blue = 90};
+  vt::TerminalOptions options;
+  options.size = {.columns = 8, .rows = 2};
+  options.theme = theme;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\x1B[31mP\x1B[38;2;70;80;90mT\x1B[0mD"
+                           "\x1B]4;1;rgb:01/02/03\x1B\\\x1B[31mO"
+                           "\x1B]10;rgb:04/05/06\x1B\\\x1B]11;rgb:07/08/09\x1B\\"
+                           "\x1B]12;rgb:0a/0b/0c\x1B\\\x1B[0mX");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto overridden = terminal.render_ansi(output, true);
+  ASSERT_TRUE(overridden.has_value());
+  const auto ansi = output_text(std::span(output).first(overridden->bytes));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;2;70;80;90"));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;2;1;2;3"));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;2;4;5;6"));
+  EXPECT_THAT(ansi, testing::HasSubstr("48;2;7;8;9"));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B]12;#0a0b0c\x1B\\"));
+
+  write_terminal(terminal, "\x1B]104;1\x1B\\\x1B]110\x1B\\\x1B]111\x1B\\\x1B]112\x1B\\\x1B[31mR");
+  const auto reset = terminal.render_ansi(output, true);
+  ASSERT_TRUE(reset.has_value());
+  const auto reset_ansi = output_text(std::span(output).first(reset->bytes));
+  EXPECT_THAT(reset_ansi, testing::HasSubstr("38;5;1"));
+  EXPECT_THAT(reset_ansi, testing::Not(testing::HasSubstr("38;2;4;5;6")));
+  EXPECT_THAT(reset_ansi, testing::Not(testing::HasSubstr("48;2;7;8;9")));
+  EXPECT_THAT(reset_ansi, testing::HasSubstr("\x1B]112\x1B\\"));
+}
+
+TEST(GhosttyParityRegressionTest, M2ThemeReplacementPreservesApplicationOverrides) {
+  auto theme = vt::default_theme();
+  vt::TerminalOptions options;
+  options.size = {.columns = 4, .rows = 2};
+  options.theme = theme;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\x1B]4;1;rgb:01/02/03\x1B\\\x1B[31mX");
+  theme.foreground = {.red = 10, .green = 20, .blue = 30};
+  theme.palette.at(1) = {.red = 40, .green = 50, .blue = 60};
+
+  ASSERT_TRUE(terminal.set_theme(theme).has_value());
+
+  EXPECT_EQ(terminal.theme(), theme);
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  EXPECT_THAT(output_text(std::span(output).first(rendered->bytes)),
+              testing::HasSubstr("38;2;1;2;3"));
 }
 
 TEST(GhosttyParityRegressionTest, M2SynchronizedOutputIsGatedPerPane) {

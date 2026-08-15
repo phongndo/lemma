@@ -80,7 +80,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | PTY parse/effects/responses | Working | Output is parsed once; bounded terminal responses are ordered before later accepted input; overflow fails pane integrity. |
 | Scrollback and reflow | Working | Ghostty owns canonical history; byte and optional line bounds are configured independently. |
 | Selection/search/formatting | Working | Adapter wraps tracked selection, viewport, bounded search, formatting, and incremental compression primitives. |
-| Damage rendering | Working | Dirty rows/cell spans, scroll detection, effective RGB projection, cursor, and mode projection emit bounded ANSI. |
+| Damage rendering | Working | Dirty rows/cell spans, scroll detection, semantic default/indexed colors, distinguishable isolated RGB overrides, cursor, and mode projection emit bounded ANSI; Ghostty does not yet expose override provenance for the equal-to-default edge. |
 | Pane composition | Working | Status, separators, panes, copy highlight/cursor, synchronized output, and focused terminal modes compose server-side. |
 | Full reconstruction | Working | Attach, resize, active-tab changes, and lag recovery can force a complete daemon-rendered frame. |
 | Slow-client isolation | Working | One retained transaction, bounded write budgets, fair cursor, progress/total deadlines, and full-redraw recovery. |
@@ -88,7 +88,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics | Disabled | Kitty storage/media/APC are disabled at the adapter boundary. |
 | Terminal identity/terminfo | Partial | Panes advertise xterm-compatible environment values; Lemma ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 1.0 and transports daemon-rendered ANSI.
+The current private attached-client protocol is version 1.0. It transports daemon-rendered ANSI and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 

@@ -64,7 +64,11 @@ Lemma canonical grid
 renderer
 ```
 
-Ghostty remains canonical. Lemma-owned presentation snapshots, deltas, hashes, or retained physical shadows are acceptable only when they are:
+Ghostty remains canonical. The first theme-bearing attachment establishes stable child-facing session defaults; later attachments do not mutate that canonical theme. ANSI projection preserves inherited default and palette-indexed colors so each attaching terminal performs the final palette lookup. Explicit RGB and distinguishable pane-local OSC color overrides remain explicit RGB; pane overrides are never forwarded as global outer-terminal palette mutations.
+
+The pinned Ghostty C API exposes effective and default colors but not override presence. An application override whose RGB value exactly equals the configured default is therefore indistinguishable and remains semantically indexed/default during projection. Exact handling of that edge requires Ghostty to expose its existing default and palette override provenance through the C API.
+
+Lemma-owned presentation snapshots, deltas, hashes, or retained physical shadows are acceptable only when they are:
 
 1. non-authoritative;
 2. bounded;

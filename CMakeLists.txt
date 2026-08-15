@@ -165,7 +165,11 @@ target_link_libraries(
   PRIVATE lemma_base lemma_core lemma_extension lemma_platform lemma_protocol
 )
 
-add_library(lemma_client STATIC src/client/attached_client.cpp)
+add_library(
+  lemma_client STATIC
+  src/client/attached_client.cpp
+  src/client/host_terminal_theme.cpp
+)
 lemma_internal_target(lemma_client)
 target_link_libraries(
   lemma_client
@@ -225,6 +229,7 @@ if(LEMMA_BUILD_TESTS)
     tests/lemma_test.cpp
     tests/latency_trace_test.cpp
     tests/ghostty_parity_regression_test.cpp
+    tests/host_terminal_theme_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
     tests/pty_writer_test.cpp
@@ -235,6 +240,7 @@ if(LEMMA_BUILD_TESTS)
     lemma_tests
     PRIVATE
       lemma::lib
+      lemma_client
       lemma_diagnostic
       lemma_platform
       lemma_protocol

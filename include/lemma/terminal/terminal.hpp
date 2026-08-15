@@ -455,6 +455,8 @@ public:
 
   [[nodiscard]] auto size() const noexcept -> TerminalSize;
   [[nodiscard]] auto theme() const noexcept -> TerminalTheme;
+  // Replaces the embedder-owned defaults while preserving application OSC color overrides.
+  [[nodiscard]] auto set_theme(const TerminalTheme& theme) noexcept -> std::expected<void, Error>;
 
   // The borrowed title remains valid only until the next terminal mutation.
   [[nodiscard]] auto title() const noexcept -> std::expected<std::string_view, Error>;

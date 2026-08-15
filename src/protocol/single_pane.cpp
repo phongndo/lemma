@@ -62,6 +62,73 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
          });
 }
 
+constexpr std::uint8_t hello_host_theme_flag = 0x01;
+constexpr std::uint8_t host_theme_foreground_flag = 0x01;
+constexpr std::uint8_t host_theme_background_flag = 0x02;
+
+void encode_rgb(const RgbColor color, const std::span<std::byte, 3> output) noexcept {
+  output[0] = static_cast<std::byte>(color.red);
+  output[1] = static_cast<std::byte>(color.green);
+  output[2] = static_cast<std::byte>(color.blue);
+}
+
+[[nodiscard]] constexpr auto decode_rgb(const std::span<const std::byte, 3> input) noexcept
+    -> RgbColor {
+  return {
+      .red = std::to_integer<std::uint8_t>(input[0]),
+      .green = std::to_integer<std::uint8_t>(input[1]),
+      .blue = std::to_integer<std::uint8_t>(input[2]),
+  };
+}
+
+void encode_host_theme(const HostTerminalTheme& theme,
+                       const std::span<std::byte, host_theme_wire_bytes> output) noexcept {
+  output.front() =
+      static_cast<std::byte>((theme.foreground.has_value() ? host_theme_foreground_flag : 0U) |
+                             (theme.background.has_value() ? host_theme_background_flag : 0U));
+  auto mask = output.subspan<1, host_theme_palette_mask_bytes>();
+  for (std::size_t index = 0; index < theme.palette.size(); ++index) {
+    if (theme.has_palette_color(index)) {
+      mask[index / 8U] |= static_cast<std::byte>(std::uint8_t{1} << (index % 8U));
+    }
+  }
+  encode_rgb(theme.foreground.value_or(RgbColor{}), output.subspan<3, 3>());
+  encode_rgb(theme.background.value_or(RgbColor{}), output.subspan<6, 3>());
+  auto palette = output.subspan<9, host_theme_palette_colors * 3U>();
+  for (std::size_t index = 0; index < theme.palette.size(); ++index) {
+    encode_rgb(std::span(theme.palette).subspan(index, 1).front(),
+               palette.subspan(index * 3U).first<3>());
+  }
+}
+
+[[nodiscard]] auto
+decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input) noexcept
+    -> std::expected<HostTerminalTheme, DecodeError> {
+  const auto flags = std::to_integer<std::uint8_t>(input.front());
+  if ((flags & ~(host_theme_foreground_flag | host_theme_background_flag)) != 0) {
+    return std::unexpected(DecodeError::invalid_flags);
+  }
+  HostTerminalTheme theme;
+  if ((flags & host_theme_foreground_flag) != 0) {
+    theme.foreground = decode_rgb(input.subspan<3, 3>());
+  }
+  if ((flags & host_theme_background_flag) != 0) {
+    theme.background = decode_rgb(input.subspan<6, 3>());
+  }
+  const auto mask = input.subspan<1, host_theme_palette_mask_bytes>();
+  const auto palette = input.subspan<9, host_theme_palette_colors * 3U>();
+  for (std::size_t index = 0; index < theme.palette.size(); ++index) {
+    if ((std::to_integer<std::uint8_t>(mask[index / 8U]) & (std::uint8_t{1} << (index % 8U))) !=
+        0) {
+      theme.set_palette_color(index, decode_rgb(palette.subspan(index * 3U).first<3>()));
+    }
+  }
+  if (theme.empty()) {
+    return std::unexpected(DecodeError::invalid_length);
+  }
+  return theme;
+}
+
 [[nodiscard]] auto pane_command(const std::byte encoded) noexcept -> std::optional<PaneCommand> {
   const auto command = static_cast<PaneCommand>(std::to_integer<std::uint8_t>(encoded));
   switch (command) {
@@ -126,6 +193,7 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
   case MessageKind::detach:
   case MessageKind::render_frame:
   case MessageKind::disconnect:
+  case MessageKind::host_theme:
     return kind;
   }
   return std::nullopt;
@@ -241,20 +309,28 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 }
 
 [[nodiscard]] auto encode_client_hello(const std::string_view session, const Dimensions dimensions,
-                                       const std::uint32_t sequence,
-                                       const ProtocolVersion version) noexcept -> SmallMessage {
+                                       const std::uint32_t sequence, const ProtocolVersion version,
+                                       const std::optional<HostTerminalTheme>& host_theme) noexcept
+    -> SmallMessage {
   LEMMA_ASSERT(!session.empty());
   LEMMA_ASSERT(session.size() <= session_name_bytes_max);
+  LEMMA_ASSERT(!host_theme.has_value() || !host_theme->empty());
   SmallMessage message;
-  const auto payload_bytes = static_cast<std::uint32_t>(5U + session.size());
+  const auto theme_bytes = host_theme.has_value() ? host_theme_wire_bytes : 0U;
+  const auto payload_bytes = static_cast<std::uint32_t>(6U + theme_bytes + session.size());
   copy_header(encode_header(MessageKind::hello, 0, payload_bytes, sequence, version),
               message.storage_, message.size_);
   auto output = std::span(message.storage_).subspan(message.size_);
   output.front() = static_cast<std::byte>(session.size());
   const auto dimensions_bytes = encode_dimensions(dimensions);
   std::ranges::copy(dimensions_bytes, output.subspan<1, 4>().begin());
+  output.subspan<5, 1>().front() =
+      host_theme.has_value() ? static_cast<std::byte>(hello_host_theme_flag) : std::byte{0};
+  if (host_theme.has_value()) {
+    encode_host_theme(*host_theme, output.subspan<6, host_theme_wire_bytes>());
+  }
   std::ranges::copy(std::as_bytes(std::span(session.data(), session.size())),
-                    output.subspan<5>().begin());
+                    output.subspan(6U + theme_bytes).begin());
   message.size_ += payload_bytes;
   return message;
 }
@@ -303,6 +379,18 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
               message.size_);
   std::span(message.storage_).subspan(message.size_, 1).front() = static_cast<std::byte>(command);
   ++message.size_;
+  return message;
+}
+
+[[nodiscard]] auto encode_host_theme_update(const HostTerminalTheme& theme,
+                                            const std::uint32_t sequence) noexcept -> SmallMessage {
+  LEMMA_ASSERT(!theme.empty());
+  SmallMessage message;
+  copy_header(encode_header(MessageKind::host_theme, 0, host_theme_wire_bytes, sequence),
+              message.storage_, message.size_);
+  encode_host_theme(
+      theme, std::span(message.storage_).subspan<attach_header_bytes, host_theme_wire_bytes>());
+  message.size_ += host_theme_wire_bytes;
   return message;
 }
 
@@ -593,8 +681,8 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
     if (envelope.kind != MessageKind::hello) {
       return std::unexpected(DecodeError::invalid_kind);
     }
-    if (envelope.payload_bytes < 6U || envelope.payload_bytes > 5U + session_name_bytes_max) {
-      return std::unexpected(envelope.payload_bytes > 5U + session_name_bytes_max
+    if (envelope.payload_bytes < 7U || envelope.payload_bytes > client_hello_payload_bytes_max) {
+      return std::unexpected(envelope.payload_bytes > client_hello_payload_bytes_max
                                  ? DecodeError::oversized
                                  : DecodeError::invalid_length);
     }
@@ -623,6 +711,11 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         return std::unexpected(DecodeError::invalid_length);
       }
       break;
+    case MessageKind::host_theme:
+      if (envelope.payload_bytes != host_theme_wire_bytes) {
+        return std::unexpected(DecodeError::invalid_length);
+      }
+      break;
     case MessageKind::hello:
     case MessageKind::render_frame:
     case MessageKind::disconnect:
@@ -642,17 +735,34 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 
   if (envelope.kind == MessageKind::hello) {
     const auto name_size = std::to_integer<std::size_t>(payload.front());
-    if (name_size == 0 || name_size > session_name_bytes_max || payload.size() != 5U + name_size) {
+    const auto hello_flags = std::to_integer<std::uint8_t>(payload.subspan<5, 1>().front());
+    if (name_size == 0 || name_size > session_name_bytes_max ||
+        (hello_flags & ~hello_host_theme_flag) != 0) {
+      return std::unexpected(DecodeError::invalid_length);
+    }
+    const bool has_host_theme = (hello_flags & hello_host_theme_flag) != 0;
+    const auto theme_bytes = has_host_theme ? host_theme_wire_bytes : 0U;
+    if (payload.size() != 6U + theme_bytes + name_size) {
       return std::unexpected(DecodeError::invalid_length);
     }
     const auto dimensions = decode_dimensions(std::span(payload).subspan<1, 4>());
     if (!valid_dimensions(dimensions)) {
       return std::unexpected(DecodeError::invalid_dimensions);
     }
+    const HostTerminalTheme* host_theme = nullptr;
+    if (has_host_theme) {
+      const auto decoded_theme =
+          decode_host_theme(std::span(payload).subspan<6, host_theme_wire_bytes>());
+      if (!decoded_theme.has_value()) {
+        return std::unexpected(decoded_theme.error());
+      }
+      host_theme_ = *decoded_theme;
+      host_theme = &host_theme_;
+    }
     // Wire bytes are borrowed as a character view only for synchronous validation/dispatch.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    const std::string_view session(reinterpret_cast<const char*>(payload.subspan(5).data()),
-                                   name_size);
+    const std::string_view session(
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        reinterpret_cast<const char*>(payload.subspan(6U + theme_bytes).data()), name_size);
     if (!valid_session_name(session)) {
       return std::unexpected(DecodeError::invalid_session);
     }
@@ -660,7 +770,24 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         .kind = ClientMessageKind::hello,
         .dimensions = dimensions,
         .pane_command = PaneCommand::none,
+        .host_theme = host_theme,
         .session = session,
+        .input = {},
+        .sequence = envelope.sequence,
+    };
+  }
+  if (envelope.kind == MessageKind::host_theme) {
+    const auto host_theme = decode_host_theme(std::span(payload).first<host_theme_wire_bytes>());
+    if (!host_theme.has_value()) {
+      return std::unexpected(host_theme.error());
+    }
+    host_theme_ = *host_theme;
+    return ClientMessage{
+        .kind = ClientMessageKind::host_theme,
+        .dimensions = {},
+        .pane_command = PaneCommand::none,
+        .host_theme = &host_theme_,
+        .session = {},
         .input = {},
         .sequence = envelope.sequence,
     };
@@ -670,6 +797,7 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         .kind = ClientMessageKind::input,
         .dimensions = {},
         .pane_command = PaneCommand::none,
+        .host_theme = nullptr,
         .session = {},
         .input = payload,
         .sequence = envelope.sequence,
@@ -684,6 +812,7 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         .kind = ClientMessageKind::resize,
         .dimensions = dimensions,
         .pane_command = PaneCommand::none,
+        .host_theme = nullptr,
         .session = {},
         .input = {},
         .sequence = envelope.sequence,
@@ -698,6 +827,7 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         .kind = ClientMessageKind::pane_command,
         .dimensions = {},
         .pane_command = *command,
+        .host_theme = nullptr,
         .session = {},
         .input = {},
         .sequence = envelope.sequence,
@@ -708,6 +838,7 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       .kind = ClientMessageKind::detach,
       .dimensions = {},
       .pane_command = PaneCommand::none,
+      .host_theme = nullptr,
       .session = {},
       .input = {},
       .sequence = envelope.sequence,
