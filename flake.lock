@@ -34,6 +34,23 @@
         "type": "github"
       }
     },
+    "ghosttySource": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786656229,
+        "narHash": "sha256-ZlsnaLZFxgvq+3qpPkBrbhw0VJ8RtTGji7Wf/hOX/k0=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "226a91658da6400140a7da3f38b825ba0395bd5d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "226a91658da6400140a7da3f38b825ba0395bd5d",
+        "type": "github"
+      }
+    },
     "hk": {
       "inputs": {
         "flake-utils": "flake-utils",
@@ -88,6 +105,7 @@
     },
     "root": {
       "inputs": {
+        "ghosttySource": "ghosttySource",
         "hk": "hk",
         "nixpkgs": "nixpkgs_2",
         "zig": "zig"

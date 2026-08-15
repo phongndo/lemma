@@ -1,5 +1,5 @@
 nix := ""
-profile := "debug"
+profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
 
@@ -36,6 +36,8 @@ deps:
 # Generate Ninja files and compile_commands.json.
 configure: deps
     {{ nix }} cmake --preset {{ profile }} \
+        -DCMAKE_BUILD_TYPE={{ build_type }} \
+        -DCMAKE_TOOLCHAIN_FILE="$PWD/build/{{ profile }}/conan/conan_toolchain.cmake" \
         -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON
 
 # Build the application, tests, and benchmarks.

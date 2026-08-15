@@ -1,6 +1,5 @@
-if(NOT DEFINED GHOSTTY_PIN_FILE OR NOT DEFINED GHOSTTY_SOURCE_DIR OR
-   NOT DEFINED GHOSTTY_GIT_EXECUTABLE)
-  message(FATAL_ERROR "Ghostty pin validation requires pin, source, and Git paths")
+if(NOT DEFINED GHOSTTY_PIN_FILE OR NOT DEFINED GHOSTTY_SOURCE_DIR)
+  message(FATAL_ERROR "Ghostty pin validation requires pin and source paths")
 endif()
 if(NOT EXISTS "${GHOSTTY_PIN_FILE}")
   message(FATAL_ERROR "missing Ghostty pin metadata: ${GHOSTTY_PIN_FILE}")
@@ -9,6 +8,23 @@ endif()
 file(READ "${GHOSTTY_PIN_FILE}" ghostty_pin_json)
 string(JSON ghostty_pinned_commit GET "${ghostty_pin_json}" commit)
 
+# Flake inputs have no .git directory. Their locked revision and NAR hash make the source immutable,
+# so accept that attestation only for a source already copied into the Nix store.
+if(DEFINED GHOSTTY_NIX_SOURCE_REV AND NOT GHOSTTY_NIX_SOURCE_REV STREQUAL "")
+  if(NOT GHOSTTY_SOURCE_DIR MATCHES "^/nix/store/")
+    message(FATAL_ERROR "an attested Ghostty source must reside in /nix/store")
+  endif()
+  if(NOT GHOSTTY_NIX_SOURCE_REV STREQUAL ghostty_pinned_commit)
+    message(FATAL_ERROR
+      "Ghostty flake input mismatch: PIN.json requires ${ghostty_pinned_commit}, found ${GHOSTTY_NIX_SOURCE_REV}"
+    )
+  endif()
+  return()
+endif()
+
+if(NOT DEFINED GHOSTTY_GIT_EXECUTABLE)
+  message(FATAL_ERROR "a non-Nix Ghostty source requires Git validation")
+endif()
 execute_process(
   COMMAND "${GHOSTTY_GIT_EXECUTABLE}" rev-parse HEAD
   WORKING_DIRECTORY "${GHOSTTY_SOURCE_DIR}"

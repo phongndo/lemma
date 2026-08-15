@@ -33,4 +33,7 @@ conan install . \
   --conf="tools.cmake.cmaketoolchain:user_presets=" \
   --build=missing
 
-cmake --preset "${profile}" "$@"
+cmake --preset "${profile}" \
+  -DCMAKE_BUILD_TYPE="${build_type}" \
+  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build/${profile}/conan/conan_toolchain.cmake" \
+  "$@"

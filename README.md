@@ -18,6 +18,21 @@ lemma attach work
 
 Use `C-b d` to detach. Run `lemma --help` for all commands and bindings.
 
+## Builds
+
+The default Nix package is the optimized release build. The debug build is exposed separately as
+`delemma` so installing both does not create a binary-name collision.
+
+```sh
+nix run .#lemma      # release (also: nix run)
+nix run .#delemma    # debug
+nix build            # release only
+```
+
+In the development shell, `just build`, `just test`, and `just run` default to release. Use
+`just profile=debug build` (or `test`/`run`) for the in-tree debug build. Both variants use the same
+per-user daemon endpoint, so shut down the running daemon before switching between them.
+
 ## Documentation
 
 See [`docs/product-contract.md`](docs/product-contract.md) for the intended product and [`docs/architecture.md`](docs/architecture.md) for its design.

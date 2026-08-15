@@ -9,12 +9,18 @@
       url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    ghosttySource = {
+      url = "github:ghostty-org/ghostty/226a91658da6400140a7da3f38b825ba0395bd5d";
+      flake = false;
+    };
   };
 
   outputs =
-    { nixpkgs
+    { self
+    , nixpkgs
     , hk
     , zig
+    , ghosttySource
     , ...
     }:
     let
@@ -27,6 +33,109 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          llvm = pkgs.llvmPackages_22;
+          zigPackage = zig.packages.${system}."0.16.0";
+          zstdStatic = pkgs.zstd.override {
+            static = true;
+            buildContrib = false;
+            doCheck = false;
+          };
+          ghosttyDeps = pkgs.callPackage "${ghosttySource}/build.zig.zon.nix" {
+            zig_0_16 = zigPackage;
+            name = "lemma-ghostty-zig-dependencies-${builtins.substring 0 12 ghosttySource.rev}";
+            # Zig's build runner requires real dependency directories rather than symlinks.
+            linkFarm = name: entries:
+              pkgs.runCommand name { } ''
+                mkdir -p "$out"
+                ${pkgs.lib.concatMapStringsSep "\n" (entry: ''
+                  cp -rL ${entry.path} "$out/${entry.name}"
+                '') entries}
+              '';
+          };
+          mkLemma =
+            { buildType
+            , binaryName
+            }:
+            llvm.stdenv.mkDerivation {
+              pname = binaryName;
+              version = "0.1.0";
+              src = self;
+
+              nativeBuildInputs = [
+                pkgs.cmake
+                pkgs.ninja
+                pkgs.pkg-config
+                zigPackage
+              ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+                pkgs.darwin.cctools
+                pkgs.xcbuild
+              ];
+              buildInputs = [
+                pkgs.lua5_5
+                zstdStatic
+              ];
+
+              cmakeFlags = [
+                "-DCMAKE_BUILD_TYPE=${buildType}"
+                "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
+                "-DLEMMA_BUILD_TESTS=OFF"
+                "-DLEMMA_BUILD_BENCHMARKS=OFF"
+                "-DLEMMA_GHOSTTY_SOURCE_DIR=${ghosttySource}"
+                "-DLEMMA_GHOSTTY_NIX_SOURCE_REV=${ghosttySource.rev}"
+                "-DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=${ghosttyDeps}"
+              ];
+
+              postInstall = pkgs.lib.optionalString (binaryName != "lemma") ''
+                mv "$out/bin/lemma" "$out/bin/${binaryName}"
+              '';
+              dontStrip = buildType == "Debug";
+
+              doInstallCheck = true;
+              installCheckPhase = ''
+                "$out/bin/${binaryName}" --version | grep -q '^lemma '
+              '';
+
+              meta = {
+                description = "Self-hosted terminal multiplexer";
+                homepage = "https://github.com/phongndo/lemma";
+                license = pkgs.lib.licenses.mit;
+                mainProgram = binaryName;
+                platforms = systems;
+              };
+            };
+        in
+        rec {
+          lemma = mkLemma {
+            buildType = "Release";
+            binaryName = "lemma";
+          };
+          delemma = mkLemma {
+            buildType = "Debug";
+            binaryName = "delemma";
+          };
+          default = lemma;
+        }
+      );
+
+      apps = forAllSystems (
+        system:
+        rec {
+          lemma = {
+            type = "app";
+            program = "${self.packages.${system}.lemma}/bin/lemma";
+          };
+          delemma = {
+            type = "app";
+            program = "${self.packages.${system}.delemma}/bin/delemma";
+          };
+          default = lemma;
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let
@@ -129,7 +238,7 @@
             shellHook =
               if isDarwin then
                 ''
-                  export PATH="$PWD/build/debug:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
+                  export PATH="$PWD/build/release:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
                   export CC=/usr/bin/clang
                   export CXX=/usr/bin/clang++
                   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -137,7 +246,7 @@
                 ''
               else
                 ''
-                  export PATH="$PWD/build/debug:$PATH"
+                  export PATH="$PWD/build/release:$PATH"
                   export CC="${llvm.clang}/bin/clang"
                   export CXX="${llvm.clang}/bin/clang++"
                 '';

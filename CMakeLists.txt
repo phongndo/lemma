@@ -62,7 +62,12 @@ endif()
 include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
-find_package(lua CONFIG REQUIRED)
+find_package(lua CONFIG QUIET)
+if(NOT TARGET lua::lua)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LUA REQUIRED IMPORTED_TARGET lua>=5.5)
+  add_library(lua::lua ALIAS PkgConfig::LUA)
+endif()
 find_package(zstd CONFIG REQUIRED)
 
 function(lemma_internal_target target)
@@ -189,6 +194,7 @@ target_include_directories(
 
 add_executable(lemma apps/lemma/main.cpp)
 target_link_libraries(lemma PRIVATE lemma_app lemma_warnings)
+install(TARGETS lemma RUNTIME DESTINATION bin)
 
 if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_test_server tests/support/server_main.cpp)

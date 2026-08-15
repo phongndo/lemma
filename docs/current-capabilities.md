@@ -36,7 +36,7 @@ The target ownership model is in [`architecture.md`](architecture.md).
 | Restart/reboot durability | Absent | Process, topology, terminal, and scrollback state are not persisted across daemon death. |
 | Multiple viewers/controllers | Absent | One attached client is allowed per session. |
 | Machine-readable semantic API | Absent | There is no public JSON command surface or persistent agent automation socket. |
-| Installable release artifacts | Absent | The repository currently builds from source. |
+| Installable release artifacts | Working | The Nix flake exposes the default release package as `lemma` and a separate debug package as `delemma`. |
 
 Session names are 1–32 ASCII letters, digits, underscores, or hyphens. The daemon admits up to 64 sessions.
 

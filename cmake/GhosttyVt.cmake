@@ -4,7 +4,19 @@ include_guard(GLOBAL)
 # and both Zig caches are scoped to the active CMake binary tree and Ghostty commit.
 function(lemma_add_pinned_ghostty)
   set(pin_file "${CMAKE_SOURCE_DIR}/third_party/ghostty-metadata/PIN.json")
-  set(source_dir "${CMAKE_SOURCE_DIR}/third_party/ghostty")
+  set(
+    LEMMA_GHOSTTY_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/ghostty"
+    CACHE PATH "Pinned Ghostty source tree"
+  )
+  set(
+    LEMMA_GHOSTTY_NIX_SOURCE_REV ""
+    CACHE STRING "Locked revision for an immutable Ghostty Nix source"
+  )
+  set(
+    LEMMA_GHOSTTY_ZIG_SYSTEM_DIR ""
+    CACHE PATH "Offline Zig dependency directory"
+  )
+  set(source_dir "${LEMMA_GHOSTTY_SOURCE_DIR}")
 
   if(NOT EXISTS "${pin_file}")
     message(FATAL_ERROR "missing Ghostty pin metadata: ${pin_file}")
@@ -19,14 +31,32 @@ function(lemma_add_pinned_ghostty)
   string(JSON expected_kitty_graphics GET "${pin_json}" expected_build_features kitty_graphics)
   string(JSON expected_tmux_control GET "${pin_json}" expected_build_features tmux_control_mode)
 
-  find_package(Git REQUIRED)
   set(GHOSTTY_PIN_FILE "${pin_file}")
   set(GHOSTTY_SOURCE_DIR "${source_dir}")
-  set(GHOSTTY_GIT_EXECUTABLE "${GIT_EXECUTABLE}")
+  set(GHOSTTY_NIX_SOURCE_REV "${LEMMA_GHOSTTY_NIX_SOURCE_REV}")
+  set(
+    pin_validation_args
+    "-DGHOSTTY_PIN_FILE=${pin_file}"
+    "-DGHOSTTY_SOURCE_DIR=${source_dir}"
+  )
+  if(LEMMA_GHOSTTY_NIX_SOURCE_REV)
+    list(
+      APPEND pin_validation_args
+      "-DGHOSTTY_NIX_SOURCE_REV=${LEMMA_GHOSTTY_NIX_SOURCE_REV}"
+    )
+  else()
+    find_package(Git REQUIRED)
+    set(GHOSTTY_GIT_EXECUTABLE "${GIT_EXECUTABLE}")
+    list(APPEND pin_validation_args "-DGHOSTTY_GIT_EXECUTABLE=${GIT_EXECUTABLE}")
+  endif()
   set(pin_validator "${CMAKE_SOURCE_DIR}/cmake/ValidateGhosttyPin.cmake")
   include("${pin_validator}")
 
   find_program(ZIG_EXECUTABLE zig REQUIRED)
+  set(zig_system_args)
+  if(LEMMA_GHOSTTY_ZIG_SYSTEM_DIR)
+    list(APPEND zig_system_args --system "${LEMMA_GHOSTTY_ZIG_SYSTEM_DIR}")
+  endif()
   execute_process(
     COMMAND "${ZIG_EXECUTABLE}" version
     RESULT_VARIABLE zig_result
@@ -97,26 +127,17 @@ function(lemma_add_pinned_ghostty)
 
   add_custom_target(
     lemma_ghostty_vt_validate
-    COMMAND
-      "${CMAKE_COMMAND}"
-      "-DGHOSTTY_PIN_FILE=${pin_file}"
-      "-DGHOSTTY_SOURCE_DIR=${source_dir}"
-      "-DGHOSTTY_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
-      -P "${pin_validator}"
+    COMMAND "${CMAKE_COMMAND}" ${pin_validation_args} -P "${pin_validator}"
     COMMENT "Validating pinned Ghostty source"
     VERBATIM
   )
   add_custom_command(
     OUTPUT "${static_library}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${local_cache}" "${global_cache}"
-    COMMAND
-      "${CMAKE_COMMAND}"
-      "-DGHOSTTY_PIN_FILE=${pin_file}"
-      "-DGHOSTTY_SOURCE_DIR=${source_dir}"
-      "-DGHOSTTY_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
-      -P "${pin_validator}"
+    COMMAND "${CMAKE_COMMAND}" ${pin_validation_args} -P "${pin_validator}"
     COMMAND
       "${ZIG_EXECUTABLE}" build
+      ${zig_system_args}
       --prefix "${prefix}"
       --cache-dir "${local_cache}"
       --global-cache-dir "${global_cache}"
