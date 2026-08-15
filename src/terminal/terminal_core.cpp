@@ -164,7 +164,7 @@ template <typename Function>
   return result;
 }
 
-[[nodiscard]] auto disable_temporary_graphics(const GhosttyTerminal terminal) noexcept
+[[nodiscard]] auto disable_unsupported_graphics(const GhosttyTerminal terminal) noexcept
     -> GhosttyResult {
   constexpr std::uint64_t storage_limit = 0;
   constexpr bool disabled = false;
@@ -187,6 +187,9 @@ template <typename Function>
     result =
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_APC_MAX_BYTES_KITTY, &kitty_apc_limit);
   }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_GLYPH_PROTOCOL, &disabled);
+  }
   return result;
 }
 
@@ -205,7 +208,18 @@ template <typename Function>
     result = apply_theme(terminal, theme);
   }
   if (result == GHOSTTY_SUCCESS) {
-    result = disable_temporary_graphics(terminal);
+    result = disable_unsupported_graphics(terminal);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    constexpr std::size_t unknown_sequence_bytes_max = limits::unknown_sequence_bytes_max;
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES,
+                                  &unknown_sequence_bytes_max);
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    static constexpr std::array<std::uint8_t, 14> terminfo_name{'x', 't', 'e', 'r', 'm', '-', '2',
+                                                                '5', '6', 'c', 'o', 'l', 'o', 'r'};
+    const GhosttyString name{.ptr = terminfo_name.data(), .len = terminfo_name.size()};
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_TERMINFO_NAME, &name);
   }
   return result;
 }
@@ -400,6 +414,8 @@ Terminal::Impl::~Impl() {
     ghostty_selection_gesture_event_free(event);
   }
   ghostty_selection_gesture_free(selection_gesture, terminal);
+  ghostty_mouse_event_free(mouse_event);
+  ghostty_mouse_encoder_free(mouse_encoder);
   ghostty_key_event_free(key_event);
   ghostty_key_encoder_free(key_encoder);
   ghostty_render_state_row_cells_free(row_cells);
@@ -421,6 +437,8 @@ auto Terminal::operator=(Terminal&& other) noexcept -> Terminal& = default;
 
 Terminal::~Terminal() = default;
 
+// Construction validates and installs each independent Ghostty option before ownership escapes.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<Terminal, Error> {
   if (!ghostty_build_matches_contract()) {
     return std::unexpected(Error::invalid_state);
@@ -452,6 +470,14 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
     return std::unexpected(detail::map_error(result));
   }
   result = ghostty_key_event_new(impl->allocator.native(), &impl->key_event);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_mouse_encoder_new(impl->allocator.native(), &impl->mouse_encoder);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_mouse_event_new(impl->allocator.native(), &impl->mouse_event);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -501,6 +527,57 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   result = ghostty_terminal_set(
       impl->terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
       callback_pointer(static_cast<GhosttyTerminalTitleChangedFn>(&Impl::title_changed)));
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_PWD_CHANGED,
+        callback_pointer(static_cast<GhosttyTerminalPwdChangedFn>(&Impl::pwd_changed)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
+                             callback_pointer(static_cast<GhosttyTerminalDesktopNotificationFn>(
+                                 &Impl::desktop_notification)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT,
+        callback_pointer(static_cast<GhosttyTerminalProgressReportFn>(&Impl::progress_report)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE,
+        callback_pointer(static_cast<GhosttyTerminalUnknownSequenceFn>(&Impl::unknown_sequence)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_ENQUIRY,
+        callback_pointer(static_cast<GhosttyTerminalEnquiryFn>(&Impl::enquiry)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+        callback_pointer(static_cast<GhosttyTerminalClipboardWriteFn>(&Impl::clipboard_write)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
+        callback_pointer(static_cast<GhosttyTerminalColorSchemeFn>(&Impl::color_scheme)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
+        callback_pointer(static_cast<GhosttyTerminalDeviceAttributesFn>(&Impl::device_attributes)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_SIZE,
+        callback_pointer(static_cast<GhosttyTerminalSizeFn>(&Impl::size_report)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION,
+        callback_pointer(static_cast<GhosttyTerminalXtversionFn>(&Impl::xtversion)));
+  }
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -597,6 +674,7 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   impl_->row_hash_count = size.rows;
   impl_->mirrored_modes_valid = false;
   impl_->ansi_physical_valid = false;
+  ghostty_mouse_encoder_reset(impl_->mouse_encoder);
   impl_->options.size = size;
   return {};
 }
@@ -636,6 +714,18 @@ auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Er
     return std::unexpected(detail::map_error(result));
   }
   return rows;
+}
+
+auto Terminal::integrity_failed() const noexcept -> bool {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  if (impl_->pty_response_integrity_failed) {
+    return true;
+  }
+  bool processing_error = true;
+  const auto result = ghostty_terminal_get(
+      impl_->terminal, GHOSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR, &processing_error);
+  return result != GHOSTTY_SUCCESS || processing_error;
 }
 
 auto Terminal::allocation_stats() const noexcept -> AllocationStats {

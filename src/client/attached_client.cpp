@@ -1,5 +1,6 @@
 #include "client/attached_client.hpp"
 
+#include "client/host_input_parser.hpp"
 #include "client/host_terminal_theme.hpp"
 #include "daemon/server.hpp"
 #include "diagnostic/latency_trace.hpp"
@@ -16,6 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -31,11 +35,16 @@ namespace lemma::client {
 namespace {
 
 constexpr auto prefix_flush_delay = std::chrono::milliseconds(50);
-constexpr std::string_view outer_terminal_enter = "\x1B[?1049h\x1B[2J\x1B[H";
+// Do not request Kitty's "report all keys" flag: several outer terminals accept that flag but
+// omit associated text, which turns ordinary printable input into semantically incomplete events.
+// Disambiguation, event types, alternate keys, and associated text preserve metadata where it is
+// available while ordinary layout/IME text remains ordinary bytes.
+constexpr std::string_view outer_terminal_enter =
+    "\x1B[?1049h\x1B[2J\x1B[H\x1B[?2004h\x1B[?1004h\x1B[?1002h\x1B[?1006h\x1B[>23u";
 constexpr std::string_view outer_terminal_restore =
     "\x1B[0m\x1B[?2026l\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l"
     "\x1B[?1004l\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l"
-    "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[?1049l";
+    "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[<u\x1B[?1049l";
 constexpr std::string_view interruption_diagnostic = "lemma attach interrupted by signal\n";
 constexpr auto signal_cleanup_storage = [] {
   std::array<char, outer_terminal_restore.size() + interruption_diagnostic.size()> payload{};
@@ -526,14 +535,26 @@ private:
       sequence);
 }
 
-[[nodiscard]] auto send_input(const int connection, const std::span<const std::byte> input,
-                              std::uint32_t& sequence) noexcept -> bool {
-  if (input.empty()) {
-    return true;
-  }
-  const auto header = protocol::encode_input_header(input.size(), sequence);
+template <typename Header>
+[[nodiscard]] auto send_payload(const int connection, const Header& header,
+                                const std::span<const std::byte> input,
+                                std::uint32_t& sequence) noexcept -> bool {
   return send_interruptibly(connection, header) && send_interruptibly(connection, input) &&
          advance_sequence(sequence);
+}
+
+[[nodiscard]] auto send_input(const int connection, const std::span<const std::byte> input,
+                              std::uint32_t& sequence) noexcept -> bool {
+  return input.empty() ||
+         send_payload(connection, protocol::encode_input_header(input.size(), sequence), input,
+                      sequence);
+}
+
+[[nodiscard]] auto send_paste(const int connection, const std::span<const std::byte> input,
+                              std::uint32_t& sequence) noexcept -> bool {
+  return input.empty() ||
+         send_payload(connection, protocol::encode_paste_header(input.size(), sequence), input,
+                      sequence);
 }
 
 [[nodiscard]] auto send_prefixed_input(const int connection, const protocol::PrefixResult& parsed,
@@ -779,11 +800,26 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
   }
 
   protocol::ServerDecoder decoder;
-  if (!decoder.prepare().has_value()) {
+  HostInputParser host_input_parser;
+  // Runtime-sized host input storage is prepared before raw terminal or presentation mutation.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> classified_input_storage;
+  try {
+    classified_input_storage =
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        std::make_unique_for_overwrite<std::byte[]>(host_input_output_bytes_max);
+  } catch (const std::bad_alloc&) {
+    static_cast<void>(
+        write_text_interruptibly(STDERR_FILENO, "lemma attach input allocation failed\n"));
+    return 1;
+  }
+  if (!decoder.prepare().has_value() || !host_input_parser.prepare().has_value()) {
     static_cast<void>(
         write_text_interruptibly(STDERR_FILENO, "lemma attach decoder allocation failed\n"));
     return 1;
   }
+  const auto classified_input =
+      std::span(classified_input_storage.get(), host_input_output_bytes_max);
   int connection = daemon::open_server_connection(endpoint);
   if (connection < 0) {
     static_cast<void>(
@@ -848,8 +884,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
     std::uint64_t pending_trace_correlation = 0;
     auto prefix_deadline = std::chrono::steady_clock::time_point{};
+    auto host_input_deadline = std::chrono::steady_clock::time_point{};
     bool attached = terminal_setup_succeeded;
-    const auto forward_client_input = [&](const std::span<const std::byte> bytes) noexcept {
+    bool swallow_prefix_release = false;
+    bool swallow_command_release = false;
+    auto swallowed_command_key = protocol::KeyInputKey::unidentified;
+    const auto forward_ordinary_input = [&](const std::span<const std::byte> bytes) noexcept {
       if (bytes.empty()) {
         return true;
       }
@@ -868,6 +908,128 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       }
       return true;
     };
+    // Typed key metadata and legacy mux-prefix compatibility intentionally converge here.
+    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+    const auto forward_key_input = [&](const HostInputEvent& event,
+                                       const std::span<const std::byte> text) noexcept {
+      const auto control_b = event.key.key == protocol::KeyInputKey::b &&
+                             (event.key.modifiers & protocol::key_input_modifier_control) != 0 &&
+                             (event.key.modifiers & (protocol::key_input_modifier_alt |
+                                                     protocol::key_input_modifier_super)) == 0;
+      if (event.key.action == protocol::KeyInputAction::release) {
+        if (control_b && swallow_prefix_release) {
+          swallow_prefix_release = false;
+          return true;
+        }
+        if (swallow_command_release && event.key.key == swallowed_command_key) {
+          swallow_command_release = false;
+          return true;
+        }
+        return send_small_message(
+            connection, protocol::encode_key(event.key, text, client_sequence), client_sequence);
+      }
+      if (control_b) {
+        // Give typed and byte-oriented prefixes one owner so a typed C-b can be followed by an
+        // ordinary text byte on terminals that intentionally leave printable keys unencoded.
+        constexpr std::array prefix{std::byte{0x02}};
+        swallow_prefix_release = event.key.action == protocol::KeyInputAction::press;
+        return forward_ordinary_input(prefix);
+      }
+      if (!prefix_parser.has_pending_input()) {
+        return send_small_message(
+            connection, protocol::encode_key(event.key, text, client_sequence), client_sequence);
+      }
+
+      const auto command_modifiers = static_cast<std::uint16_t>(
+          event.key.modifiers &
+          ~(protocol::key_input_modifier_shift | protocol::key_input_modifier_caps_lock |
+            protocol::key_input_modifier_num_lock));
+      const bool has_text_command =
+          text.size() == 1 && std::to_integer<std::uint8_t>(text.front()) <= 0x7FU;
+      const bool has_unshifted_command =
+          event.key.unshifted_codepoint > 0 && event.key.unshifted_codepoint <= 0x7FU;
+      const bool has_ascii_command =
+          (has_text_command || has_unshifted_command) && command_modifiers == 0;
+      if (has_ascii_command) {
+        const auto command =
+            has_text_command ? text.front() : static_cast<std::byte>(event.key.unshifted_codepoint);
+        const std::array command_input{command};
+        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
+        swallowed_command_key = event.key.key;
+        return forward_ordinary_input(command_input);
+      }
+
+      std::optional<std::byte> arrow_final;
+      if (event.key.key == protocol::KeyInputKey::arrow_up) {
+        arrow_final = std::byte{'A'};
+      } else if (event.key.key == protocol::KeyInputKey::arrow_down) {
+        arrow_final = std::byte{'B'};
+      } else if (event.key.key == protocol::KeyInputKey::arrow_right) {
+        arrow_final = std::byte{'C'};
+      } else if (event.key.key == protocol::KeyInputKey::arrow_left) {
+        arrow_final = std::byte{'D'};
+      }
+      if (arrow_final.has_value() && command_modifiers == 0) {
+        const std::array command_input{std::byte{0x1B}, std::byte{'['}, *arrow_final};
+        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
+        swallowed_command_key = event.key.key;
+        return forward_ordinary_input(command_input);
+      }
+
+      // An unbound non-text key preserves the literal mux prefix before forwarding the key.
+      constexpr std::array literal_prefix{std::byte{0x02}};
+      return forward_ordinary_input(literal_prefix) &&
+             send_small_message(connection, protocol::encode_key(event.key, text, client_sequence),
+                                client_sequence);
+    };
+    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+    const auto forward_host_batch = [&](const HostInputBatch& batch) noexcept {
+      for (const auto& event : std::span(batch.events).first(batch.event_count)) {
+        const auto bytes = std::span(classified_input).subspan(event.offset, event.size);
+        switch (event.kind) {
+        case HostInputKind::ordinary:
+          if (!forward_ordinary_input(bytes)) {
+            return false;
+          }
+          break;
+        case HostInputKind::paste:
+          if (!send_paste(connection, bytes, client_sequence)) {
+            return false;
+          }
+          break;
+        case HostInputKind::key:
+          if (!forward_key_input(event, bytes)) {
+            return false;
+          }
+          break;
+        case HostInputKind::focus:
+          if (!send_small_message(connection, protocol::encode_focus(event.focus, client_sequence),
+                                  client_sequence)) {
+            return false;
+          }
+          break;
+        case HostInputKind::mouse:
+          if (!send_small_message(connection, protocol::encode_mouse(event.mouse, client_sequence),
+                                  client_sequence)) {
+            return false;
+          }
+          break;
+        }
+      }
+      return true;
+    };
+    const auto forward_physical_input = [&](const std::span<const std::byte> bytes) noexcept {
+      const auto current_size = terminal_size();
+      const auto parsed = host_input_parser.parse(
+          bytes, classified_input, {.columns = current_size.columns, .rows = current_size.rows});
+      if (!parsed.has_value() || !forward_host_batch(*parsed)) {
+        return false;
+      }
+      if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
+        host_input_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
+      }
+      return true;
+    };
     const auto finish_host_theme_query = [&]() noexcept {
       host_theme_parser.finish();
       host_theme_query_pending = false;
@@ -883,7 +1045,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                 client_sequence);
     };
     const auto forward_retained_host_input = [&]() noexcept {
-      if (!forward_client_input(host_theme_parser.pending_input())) {
+      if (!forward_physical_input(host_theme_parser.pending_input())) {
         return false;
       }
       host_theme_parser.consume_pending_input();
@@ -916,6 +1078,19 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       }
 
       int poll_timeout = -1;
+      if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= host_input_deadline) {
+          const auto flushed = host_input_parser.flush_pending(classified_input);
+          if (!flushed.has_value() || !forward_host_batch(*flushed)) {
+            break;
+          }
+        } else {
+          const auto remaining =
+              std::chrono::duration_cast<std::chrono::milliseconds>(host_input_deadline - now);
+          poll_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+        }
+      }
       if (prefix_parser.has_pending_escape_sequence()) {
         const auto now = std::chrono::steady_clock::now();
         if (now >= prefix_deadline) {
@@ -927,7 +1102,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         } else {
           const auto remaining =
               std::chrono::duration_cast<std::chrono::milliseconds>(prefix_deadline - now);
-          poll_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+          const auto prefix_timeout =
+              static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+          poll_timeout = poll_timeout < 0 ? prefix_timeout : std::min(poll_timeout, prefix_timeout);
         }
       }
       if (host_theme_query_pending) {
@@ -1002,7 +1179,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
           if (!forward_retained_host_input()) {
             break;
           }
-        } else if (!forward_client_input(physical_input)) {
+        } else if (!forward_physical_input(physical_input)) {
           break;
         }
       }

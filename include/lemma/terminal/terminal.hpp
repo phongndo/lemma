@@ -110,6 +110,12 @@ struct AllocationStats final {
 struct EffectBatch final {
   std::uint64_t bells{0};
   std::uint64_t title_changes{0};
+  std::uint64_t pwd_changes{0};
+  std::uint64_t desktop_notifications{0};
+  std::uint64_t progress_reports{0};
+  std::uint64_t clipboard_writes_denied{0};
+  std::uint64_t unknown_sequences_dropped{0};
+  bool unknown_sequence_truncated{false};
   bool pty_response_overflowed{false};
 };
 
@@ -207,6 +213,12 @@ inline constexpr std::uint16_t key_modifier_shift = 1U << 0U;
 inline constexpr std::uint16_t key_modifier_control = 1U << 1U;
 inline constexpr std::uint16_t key_modifier_alt = 1U << 2U;
 inline constexpr std::uint16_t key_modifier_super = 1U << 3U;
+inline constexpr std::uint16_t key_modifier_caps_lock = 1U << 4U;
+inline constexpr std::uint16_t key_modifier_num_lock = 1U << 5U;
+inline constexpr std::uint16_t key_modifier_shift_side = 1U << 6U;
+inline constexpr std::uint16_t key_modifier_control_side = 1U << 7U;
+inline constexpr std::uint16_t key_modifier_alt_side = 1U << 8U;
+inline constexpr std::uint16_t key_modifier_super_side = 1U << 9U;
 
 struct KeyEvent final {
   KeyAction action{KeyAction::press};
@@ -216,6 +228,52 @@ struct KeyEvent final {
   std::uint32_t unshifted_codepoint{0};
   std::string_view text;
   bool composing{false};
+};
+
+enum class FocusEvent : std::uint8_t {
+  gained,
+  lost,
+};
+
+enum class MouseAction : std::uint8_t {
+  press,
+  release,
+  motion,
+};
+
+enum class MouseButton : std::uint8_t {
+  left,
+  right,
+  middle,
+  four,
+  five,
+  six,
+  seven,
+  eight,
+  nine,
+  ten,
+  eleven,
+};
+
+struct MouseGeometry final {
+  std::uint32_t screen_width{1};
+  std::uint32_t screen_height{1};
+  std::uint32_t cell_width{1};
+  std::uint32_t cell_height{1};
+  std::uint32_t padding_top{0};
+  std::uint32_t padding_bottom{0};
+  std::uint32_t padding_right{0};
+  std::uint32_t padding_left{0};
+};
+
+struct MouseEvent final {
+  MouseAction action{MouseAction::motion};
+  std::optional<MouseButton> button;
+  std::uint16_t modifiers{0};
+  float x{0};
+  float y{0};
+  MouseGeometry geometry{};
+  bool any_button_pressed{false};
 };
 
 struct RenderUpdate final {
@@ -408,6 +466,10 @@ public:
   [[nodiscard]] auto encode_paste(std::span<std::byte> input, std::span<std::byte> output) noexcept
       -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto paste_is_safe(std::span<const std::byte> input) const noexcept -> bool;
+  [[nodiscard]] auto encode_focus(FocusEvent event, std::span<std::byte> output) const noexcept
+      -> std::expected<std::size_t, Error>;
+  [[nodiscard]] auto encode_mouse(const MouseEvent& event, std::span<std::byte> output) noexcept
+      -> std::expected<std::size_t, Error>;
 
   // Canonical child mode used by the pane-owned presentation gate.
   [[nodiscard]] auto synchronized_output() const noexcept -> std::expected<bool, Error>;
@@ -467,6 +529,9 @@ public:
   [[nodiscard]] auto pty_response_overflowed() const noexcept -> bool;
   auto read_pty_responses(std::span<std::byte> output) noexcept -> std::size_t;
 
+  // Sticky terminal-integrity state. A true result means a terminal-owned semantic update or
+  // required PTY response may have been lost and the pane must fail closed.
+  [[nodiscard]] auto integrity_failed() const noexcept -> bool;
   [[nodiscard]] auto allocation_stats() const noexcept -> AllocationStats;
 
 private:

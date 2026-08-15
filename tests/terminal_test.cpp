@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <span>
@@ -224,6 +225,37 @@ TEST(TerminalTest, DetectsAndEncodesVerticalScroll) {
   EXPECT_THAT(encoded, testing::HasSubstr("five"));
 }
 
+TEST(TerminalTest, ScrollDetectionHashesCompleteGraphemes) {
+  TerminalOptions options;
+  options.size = {.columns = 2, .rows = 4};
+  auto canonical = make_terminal(options);
+  auto projected = make_terminal(options);
+  write_text(canonical, "a\xCC\x81\r\na\xCC\x82\r\na\xCC\x83\r\na\xCC\x84");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto initial = canonical.render_ansi(output, true);
+  ASSERT_TRUE(initial.has_value());
+  projected.write(std::span(output).first(initial->bytes));
+
+  write_text(canonical, "\r\na\xCC\x85\r\na\xCC\x86");
+  const auto changed = canonical.render_ansi(output);
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_EQ(changed->scrolled_rows, 2);
+  EXPECT_EQ(changed->rows, 2U);
+  projected.write(std::span(output).first(changed->bytes));
+
+  canonical.invalidate_ansi_render_state();
+  projected.invalidate_ansi_render_state();
+  std::array<std::byte, std::size_t{16} * 1'024U> canonical_output{};
+  std::array<std::byte, std::size_t{16} * 1'024U> projected_output{};
+  const auto canonical_full = canonical.render_ansi(canonical_output, true);
+  const auto projected_full = projected.render_ansi(projected_output, true);
+  ASSERT_TRUE(canonical_full.has_value());
+  ASSERT_TRUE(projected_full.has_value());
+  EXPECT_TRUE(std::ranges::equal(std::span(canonical_output).first(canonical_full->bytes),
+                                 std::span(projected_output).first(projected_full->bytes)));
+}
+
 TEST(TerminalTest, ResizesWithCheckedPixelDimensions) {
   auto terminal = make_terminal();
   const TerminalSize resized{
@@ -301,6 +333,33 @@ TEST(TerminalTest, KeyEncoderTracksCursorApplicationMode) {
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *application), "\x1BOA");
 }
 
+TEST(TerminalTest, EncodesFocusAndMouseFromCanonicalModes) {
+  auto terminal = make_terminal();
+  std::array<std::byte, 128> output{};
+
+  EXPECT_EQ(terminal.encode_focus(FocusEvent::gained, output), 0U);
+  write_text(terminal, "\x1B[?1004h");
+  const auto focus = terminal.encode_focus(FocusEvent::gained, output);
+  ASSERT_TRUE(focus.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *focus), "\x1B[I");
+
+  write_text(terminal, "\x1B[?1000h\x1B[?1006h");
+  const MouseEvent mouse{
+      .action = MouseAction::press,
+      .button = MouseButton::left,
+      .x = 4,
+      .y = 2,
+      .geometry = {.screen_width = 80, .screen_height = 24},
+      .any_button_pressed = true,
+  };
+  const auto encoded = terminal.encode_mouse(mouse, output);
+  ASSERT_TRUE(encoded.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *encoded),
+            "\x1B[<0;5;3M");
+}
+
 TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
   auto terminal = make_terminal();
   std::array<std::byte, 64> output{};
@@ -321,16 +380,19 @@ TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
             "\x1B[200~a\n b\x1B[201~");
 }
 
-TEST(TerminalTest, DisablesKittyGraphicsUntilBoundedPresentationExists) {
+TEST(TerminalTest, DisablesUnsupportedGraphicsUntilBoundedPresentationExists) {
   auto terminal = make_terminal();
   const auto allocations = terminal.allocation_stats().bytes_current;
   write_text(terminal, "\x1B_Gi=1,a=q,s=1,v=1,f=24;AAAA\x1B\\");
+  write_text(terminal, "\x1B_25a1;s\x1B\\");
+  write_text(terminal, "\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\");
 
   EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
-  EXPECT_FALSE(terminal.pty_response_overflowed());
+  EXPECT_FALSE(terminal.integrity_failed());
   EXPECT_EQ(terminal.allocation_stats().bytes_current, allocations);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(TerminalTest, PtyResponseOverflowIsStickyTerminalIntegrityFailure) {
   auto terminal = make_terminal();
   std::string queries;
@@ -342,17 +404,43 @@ TEST(TerminalTest, PtyResponseOverflowIsStickyTerminalIntegrityFailure) {
   write_text(terminal, queries);
 
   EXPECT_TRUE(terminal.pty_response_overflowed());
+  EXPECT_TRUE(terminal.integrity_failed());
   EXPECT_TRUE(terminal.take_effects().pty_response_overflowed);
   EXPECT_TRUE(terminal.pty_response_overflowed());
+  EXPECT_TRUE(terminal.integrity_failed());
+}
+
+TEST(TerminalTest, ReportsTruthfulChildVisibleIdentityAndGeometry) {
+  auto terminal = make_terminal();
+  write_text(terminal, "\x1B[c\x1B[>q\x1B[18t\x1B[?996n\x1BP+q544e\x1B\\");
+
+  std::array<std::byte, 512> response{};
+  const auto response_size = terminal.read_pty_responses(response);
+  ASSERT_GT(response_size, 0U);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?62;22c"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1BP>|lemma\x1B\\"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[8;24;80t"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?997;1n"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1BP1+r544E=787465726D2D323536636F6C6F72\x1B\\"));
 }
 
 TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   auto terminal = make_terminal();
-  write_text(terminal, "\a\x1B]2;lemma title\x1B\\\x1B[?7$p");
+  write_text(terminal, "\a\x1B]2;lemma title\x1B\\\x1B]7;file:///tmp\x1B\\"
+                       "\x1B]777;notify;Codex;Needs attention\a\x1B]9;4;1;42\x1B\\"
+                       "\x1B]52;c;YQ==\x1B\\\x1B_unsupported\x1B\\\x05\x1B[?7$p");
 
   const auto effects = terminal.take_effects();
   EXPECT_EQ(effects.bells, 1U);
   EXPECT_EQ(effects.title_changes, 1U);
+  EXPECT_EQ(effects.pwd_changes, 1U);
+  EXPECT_EQ(effects.desktop_notifications, 1U);
+  EXPECT_EQ(effects.progress_reports, 1U);
+  EXPECT_EQ(effects.clipboard_writes_denied, 1U);
+  EXPECT_EQ(effects.unknown_sequences_dropped, 1U);
+  EXPECT_FALSE(effects.unknown_sequence_truncated);
   EXPECT_FALSE(effects.pty_response_overflowed);
 
   const auto title = terminal.title();
@@ -363,6 +451,9 @@ TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   std::array<std::byte, 64> response{};
   const auto response_size = terminal.read_pty_responses(response);
   EXPECT_GT(response_size, 0U);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+  EXPECT_THAT(encoded, testing::HasSubstr("lemma"));
   EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
 }
 

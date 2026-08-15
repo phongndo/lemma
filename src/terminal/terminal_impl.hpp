@@ -75,6 +75,24 @@ struct Terminal::Impl final {
                         std::size_t length) noexcept;
   static void bell(GhosttyTerminal terminal_handle, void* userdata) noexcept;
   static void title_changed(GhosttyTerminal terminal_handle, void* userdata) noexcept;
+  static void pwd_changed(GhosttyTerminal terminal_handle, void* userdata) noexcept;
+  static void desktop_notification(GhosttyTerminal terminal_handle, void* userdata,
+                                   const GhosttyTerminalDesktopNotification* notification) noexcept;
+  static void progress_report(GhosttyTerminal terminal_handle, void* userdata,
+                              const GhosttyTerminalProgressReport* report) noexcept;
+  static void unknown_sequence(GhosttyTerminal terminal_handle, void* userdata,
+                               const GhosttyTerminalUnknownSequence* sequence) noexcept;
+  static auto enquiry(GhosttyTerminal terminal_handle, void* userdata) noexcept -> GhosttyString;
+  static auto clipboard_write(GhosttyTerminal terminal_handle, void* userdata,
+                              const GhosttyClipboardWrite* write) noexcept
+      -> GhosttyClipboardWriteResult;
+  static auto color_scheme(GhosttyTerminal terminal_handle, void* userdata,
+                           GhosttyColorScheme* output) noexcept -> bool;
+  static auto device_attributes(GhosttyTerminal terminal_handle, void* userdata,
+                                GhosttyDeviceAttributes* output) noexcept -> bool;
+  static auto size_report(GhosttyTerminal terminal_handle, void* userdata,
+                          GhosttySizeReportSize* output) noexcept -> bool;
+  static auto xtversion(GhosttyTerminal terminal_handle, void* userdata) noexcept -> GhosttyString;
 
   [[nodiscard]] auto dirty_state() const noexcept -> std::expected<DirtyState, Error>;
   [[nodiscard]] auto set_dirty_state(DirtyState dirty) const noexcept -> std::expected<void, Error>;
@@ -94,6 +112,8 @@ struct Terminal::Impl final {
   GhosttyTerminal terminal{nullptr};
   GhosttyKeyEncoder key_encoder{nullptr};
   GhosttyKeyEvent key_event{nullptr};
+  GhosttyMouseEncoder mouse_encoder{nullptr};
+  GhosttyMouseEvent mouse_event{nullptr};
   GhosttyRenderState render_state{nullptr};
   GhosttyRenderStateRowIterator row_iterator{nullptr};
   GhosttyRenderStateRowCells row_cells{nullptr};

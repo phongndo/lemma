@@ -1,5 +1,7 @@
 #include "platform/pty.hpp"
 
+#include "lemma/version.hpp"
+
 #include <algorithm>
 #include <array>
 #include <csignal>
@@ -131,7 +133,10 @@ namespace {
       !install_environment(std::span(environment_copy).first(environment.size()),
                            environment_mode) ||
       ::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
-      ::setenv("TERM_PROGRAM", "lemma", 1) != 0) {
+      ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
+      // version is backed by a null-terminated string literal.
+      // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
+      ::setenv("TERM_PROGRAM_VERSION", lemma::version.data(), 1) != 0) {
     ::_exit(127);
   }
 

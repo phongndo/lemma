@@ -2,7 +2,7 @@
 
 ## Audit basis
 
-Audited at repository HEAD `60acc8a` from current source, public headers, CMake targets, tests, and checked-in benchmark tooling. Only implemented facts are included.
+Audited from the current source, public headers, CMake targets, tests, and checked-in benchmark tooling. Only implemented facts are included.
 
 Status terms:
 
@@ -61,13 +61,12 @@ Session, tab, pane, and attached-client references use hierarchical generational
 | Capability | Status | Current behavior |
 | --- | --- | --- |
 | Prefix keymap | Working | `C-b` dispatches built-in pane/tab/copy commands; `C-b C-b` sends a literal prefix. |
-| Basic key encoding | Partial | Enter, Tab, Backspace, Ctrl-A–Z, arrows, Home, and End use Ghostty encoding; other legacy bytes pass through. |
-| Typed rich keyboard input | Absent | The attached protocol does not carry complete semantic key/repeat/release/text metadata. |
-| Typed paste/focus | Partial | The terminal adapter exposes Ghostty paste support, but attached input remains a legacy byte message. |
+| Key encoding | Working | The client requests Kitty disambiguation, event, alternate-key, and associated-text metadata without requesting `report all keys`; layout and IME text therefore remains ordinary text on hosts that omit associated text. Typed metadata is preserved and Ghostty encodes it against each pane's active modes. |
+| Typed paste/focus | Working | Outer bracketed-paste and focus reporting are enabled while attached. Reports are decoded across arbitrary read fragmentation, transported as bounded typed messages, and encoded from canonical Ghostty modes. Paste remains one opaque event up to 1 MiB and bypasses mux-prefix interpretation. |
 | Copy mode | Working for keyboard path | Vi/arrow navigation, tracked selection, visible cursor/range, bounded literal search, viewport hold, and OSC 52 user copy are integrated. |
 | Native clipboard | Absent | Copy output relies on bounded user-initiated OSC 52. |
-| Mouse mux operation | Absent | No typed mouse decode, layout hit testing, focus, drag resize, status interaction, or mouse selection. |
-| Application mouse forwarding | Absent | Outer coordinates are not translated and encoded as pane-local semantic mouse events. |
+| Mouse mux operation | Partial | SGR mouse input is validated against read-time geometry, hit-tested across pane rectangles, focuses a pressed pane, and retains pane ownership through drag/release. Drag resize, status interaction, and mux mouse selection remain absent. |
+| Application mouse forwarding | Working | Outer button/drag SGR capture is enabled while attached. Valid events are translated to bounded pane-local coordinates and encoded by Ghostty from the target pane's canonical mouse modes. |
 
 Copy/search work is daemon-owned for the one attachment. PTY parsing continues while the viewport is held. Search inspects at most a bounded slice and does not retain a duplicate grid or match list.
 
@@ -77,18 +76,18 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | --- | --- | --- |
 | Canonical terminal | Working | Every pane has one `vt::Terminal` backed by pinned `libghostty-vt`. |
 | Adapter isolation | Working | Ghostty headers and handles remain private to `lemma_terminal`; public consumers use Lemma types. |
-| PTY parse/effects/responses | Working | Output is parsed once; bounded terminal responses are ordered before later accepted input; overflow fails pane integrity. |
+| PTY parse/effects/responses | Working | Output is parsed once; bounded terminal responses are ordered before later accepted input; response overflow or Ghostty VT-processing failure is sticky and fails closed. Bell, title, PWD, progress, notification, clipboard, enquiry, and bounded unknown-sequence effects are explicitly drained and policy-routed; application clipboard writes are denied and unknown sequences dropped by default. |
 | Scrollback and reflow | Working | Ghostty owns canonical history; byte and optional line bounds are configured independently. |
 | Selection/search/formatting | Working | Adapter wraps tracked selection, viewport, bounded search, formatting, and incremental compression primitives. |
-| Damage rendering | Working | Dirty rows/cell spans, scroll detection, semantic default/indexed colors, distinguishable isolated RGB overrides, cursor, and mode projection emit bounded ANSI; Ghostty does not yet expose override provenance for the equal-to-default edge. |
+| Damage rendering | Working | Dirty rows/cell spans, grapheme-safe scroll detection, semantic default/indexed colors, distinguishable isolated RGB overrides, cursor, and mode projection emit bounded ANSI. Exact equal-to-default override provenance and transactional OSC 8 hyperlink projection still require narrower Ghostty render APIs. |
 | Pane composition | Working | Status, separators, panes, copy highlight/cursor, synchronized output, and focused terminal modes compose server-side. |
 | Full reconstruction | Working | Attach, resize, active-tab changes, and lag recovery can force a complete daemon-rendered frame. |
 | Slow-client isolation | Working | One retained transaction, bounded write budgets, fair cursor, progress/total deadlines, and full-redraw recovery. |
 | Portable terminal replicas/checkpoints | Intentionally absent | The rejected design and evidence are summarized in [`terminal.md`](terminal.md). |
-| Graphics | Disabled | Kitty storage/media/APC are disabled at the adapter boundary. |
-| Terminal identity/terminfo | Partial | Panes advertise xterm-compatible environment values; Lemma ships no dedicated terminfo entry. |
+| Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
+| Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.0. It transports daemon-rendered ANSI and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
+The current private attached-client protocol is version 2.1. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 

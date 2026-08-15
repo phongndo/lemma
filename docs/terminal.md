@@ -68,6 +68,8 @@ Ghostty remains canonical. The first theme-bearing attachment establishes stable
 
 The pinned Ghostty C API exposes effective and default colors but not override presence. An application override whose RGB value exactly equals the configured default is therefore indistinguishable and remains semantically indexed/default during projection. Exact handling of that edge requires Ghostty to expose its existing default and palette override provenance through the C API.
 
+OSC 8 hyperlink projection has a similar narrow upstream boundary: the render row/cell API does not expose stable hyperlink identity or URI as part of the acquired render state. Point-based grid-reference lookup is not a transactional per-cell render contract and would add multiplicative lookup work. Lemma therefore does not fabricate hyperlink projection; end-to-end ANSI hyperlink preservation awaits render-state hyperlink metadata from Ghostty.
+
 Lemma-owned presentation snapshots, deltas, hashes, or retained physical shadows are acceptable only when they are:
 
 1. non-authoritative;
@@ -168,6 +170,7 @@ In particular:
 
 - application clipboard writes require explicit policy distinct from a user-initiated copy action;
 - child titles and other text effects are bounded and sanitized before presentation;
+- PWD/progress changes invalidate bounded status metadata, desktop notifications use visible-attention policy, and unsupported sequences are captured only to a fixed limit before being dropped;
 - graphics remain disabled unless canonical storage, policy, projection, transport, and resource bounds are all qualified; and
 - pane color or mode effects are never blindly forwarded as global outer-terminal state.
 
@@ -180,9 +183,9 @@ A 2026 feasibility investigation tested checkpoint-plus-tail client replicas aga
 - inactive primary-screen state while the alternate screen was active; and
 - progressive history, for which no stable bounded range hydration API existed.
 
-The C API could not transactionally export both terminal state and persistent parser/decoder continuation. The temporary prototype was removed. Therefore client PTY replay, reconstructive VT checkpoints, and smart terminal replicas are not architectural assumptions.
+At that pin, the C API could not transactionally export both terminal state and persistent parser/decoder continuation, so the temporary prototype was removed. The current pin now exposes bounded snapshot encode/decode with parser continuation and progressive history, but snapshot format version 1 is explicitly a work in progress without a binary-compatibility guarantee. Lemma does not need client terminal replicas for its daemon-rendered architecture, so PTY replay and reconstructive client checkpoints remain intentionally absent rather than assumed.
 
-Retrying that design requires a new decision backed by an upstream API that covers parser continuation, both screens, saved state, progressive history, transactional errors, and replica side-effect suppression. Private-memory snapshots, allocator identities, or implementation layouts are never acceptable wire contracts.
+Retrying that design requires a new decision, a stable upstream format, measured benefit over daemon rendering, transactional failure behavior, and explicit replica side-effect suppression. Private-memory snapshots, allocator identities, or implementation layouts are never acceptable wire contracts.
 
 ## Terminal change review
 

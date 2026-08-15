@@ -44,7 +44,7 @@ LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
-ATTACH_PROTOCOL_MINOR = 0
+ATTACH_PROTOCOL_MINOR = 1
 ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
@@ -2222,7 +2222,7 @@ def main() -> int:
         "latency_trace": latency_trace_metadata(arguments.trace_directory),
         "private_attach_framing": (
             {
-                "version": "2.0",
+                "version": "2.1",
                 "envelope_bytes_per_message": ATTACH_HEADER_BYTES,
                 "render_generation_bytes_per_frame": 4,
                 "render_wire_overhead_bytes_per_frame": ATTACH_HEADER_BYTES + 4,

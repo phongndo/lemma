@@ -10,6 +10,10 @@
 #include <memory>
 #include <span>
 
+namespace lemma::protocol {
+struct KeyInput;
+}
+
 namespace lemma::core {
 
 // Per-pane PTY output is allocated on demand and shares a process-wide memory budget. Queue
@@ -34,6 +38,8 @@ public:
   [[nodiscard]] auto readable_span() const noexcept -> std::span<const std::byte>;
   [[nodiscard]] auto consume(std::size_t bytes) noexcept -> bool;
   [[nodiscard]] auto reserve(std::size_t bytes) noexcept -> bool;
+  [[nodiscard]] auto writable_span() noexcept -> std::span<std::byte>;
+  [[nodiscard]] auto commit_write(std::size_t bytes) noexcept -> bool;
   [[nodiscard]] auto append(std::span<const std::byte> input) noexcept -> bool;
   auto read(std::span<std::byte> output) noexcept -> std::size_t;
   void clear() noexcept;
@@ -71,6 +77,15 @@ enum class InputQueueResult : std::uint8_t {
 [[nodiscard]] auto queue_normalized_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
                                           std::span<const std::byte> input) noexcept
     -> InputQueueResult;
+[[nodiscard]] auto queue_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                   const protocol::KeyInput& key,
+                                   std::span<const std::byte> text) noexcept -> InputQueueResult;
+[[nodiscard]] auto queue_paste_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                     std::span<std::byte> input) noexcept -> InputQueueResult;
+[[nodiscard]] auto queue_focus_input(PanePtyWriteQueue& queue, const vt::Terminal& terminal,
+                                     vt::FocusEvent event) noexcept -> InputQueueResult;
+[[nodiscard]] auto queue_mouse_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                     const vt::MouseEvent& event) noexcept -> InputQueueResult;
 
 } // namespace lemma::core
 

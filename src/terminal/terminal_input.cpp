@@ -5,6 +5,7 @@
 #include "lemma/terminal/terminal.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -12,6 +13,11 @@
 
 namespace lemma::vt {
 namespace {
+
+constexpr std::uint16_t modifiers_valid =
+    key_modifier_shift | key_modifier_control | key_modifier_alt | key_modifier_super |
+    key_modifier_caps_lock | key_modifier_num_lock | key_modifier_shift_side |
+    key_modifier_control_side | key_modifier_alt_side | key_modifier_super_side;
 
 [[nodiscard]] constexpr auto ghostty_key_action(const KeyAction action) noexcept
     -> GhosttyKeyAction {
@@ -89,6 +95,48 @@ namespace {
                                 : GHOSTTY_KEY_UNIDENTIFIED;
 }
 
+[[nodiscard]] constexpr auto ghostty_mouse_action(const MouseAction action) noexcept
+    -> GhosttyMouseAction {
+  switch (action) {
+  case MouseAction::press:
+    return GHOSTTY_MOUSE_ACTION_PRESS;
+  case MouseAction::release:
+    return GHOSTTY_MOUSE_ACTION_RELEASE;
+  case MouseAction::motion:
+    return GHOSTTY_MOUSE_ACTION_MOTION;
+  }
+  return GHOSTTY_MOUSE_ACTION_MOTION;
+}
+
+[[nodiscard]] constexpr auto ghostty_mouse_button(const MouseButton button) noexcept
+    -> GhosttyMouseButton {
+  switch (button) {
+  case MouseButton::left:
+    return GHOSTTY_MOUSE_BUTTON_LEFT;
+  case MouseButton::right:
+    return GHOSTTY_MOUSE_BUTTON_RIGHT;
+  case MouseButton::middle:
+    return GHOSTTY_MOUSE_BUTTON_MIDDLE;
+  case MouseButton::four:
+    return GHOSTTY_MOUSE_BUTTON_FOUR;
+  case MouseButton::five:
+    return GHOSTTY_MOUSE_BUTTON_FIVE;
+  case MouseButton::six:
+    return GHOSTTY_MOUSE_BUTTON_SIX;
+  case MouseButton::seven:
+    return GHOSTTY_MOUSE_BUTTON_SEVEN;
+  case MouseButton::eight:
+    return GHOSTTY_MOUSE_BUTTON_EIGHT;
+  case MouseButton::nine:
+    return GHOSTTY_MOUSE_BUTTON_NINE;
+  case MouseButton::ten:
+    return GHOSTTY_MOUSE_BUTTON_TEN;
+  case MouseButton::eleven:
+    return GHOSTTY_MOUSE_BUTTON_ELEVEN;
+  }
+  return GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+}
+
 } // namespace
 
 auto Terminal::encode_key(const KeyEvent& event, const std::span<std::byte> output) noexcept
@@ -98,8 +146,6 @@ auto Terminal::encode_key(const KeyEvent& event, const std::span<std::byte> outp
   LEMMA_ASSERT(impl_->key_encoder != nullptr);
   LEMMA_ASSERT(impl_->key_event != nullptr);
 
-  constexpr std::uint16_t modifiers_valid =
-      key_modifier_shift | key_modifier_control | key_modifier_alt | key_modifier_super;
   if ((event.modifiers & ~modifiers_valid) != 0 ||
       (event.consumed_modifiers & ~modifiers_valid) != 0 || event.text.size() > 256) {
     return std::unexpected(Error::invalid_options);
@@ -172,6 +218,91 @@ auto Terminal::encode_paste(const std::span<std::byte> input,
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* const data = reinterpret_cast<const char*>(input.data());
   return ghostty_paste_is_safe(data, input.size());
+}
+
+auto Terminal::encode_focus(const FocusEvent event,
+                            const std::span<std::byte> output) const noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  GhosttyTerminalModeConfig focus{.mode = GHOSTTY_MODE_FOCUS_EVENT, .value = false};
+  auto result = ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_MODE, &focus);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  if (!focus.value) {
+    return 0;
+  }
+  std::size_t written = 0;
+  // std::byte and char are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* const data = reinterpret_cast<char*>(output.data());
+  result =
+      ghostty_focus_encode(event == FocusEvent::gained ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST,
+                           data, output.size(), &written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  LEMMA_ASSERT(written <= output.size());
+  return written;
+}
+
+auto Terminal::encode_mouse(const MouseEvent& event, const std::span<std::byte> output) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  LEMMA_ASSERT(impl_->mouse_encoder != nullptr);
+  LEMMA_ASSERT(impl_->mouse_event != nullptr);
+  const auto& geometry = event.geometry;
+  if ((event.modifiers & ~modifiers_valid) != 0 || geometry.screen_width == 0 ||
+      geometry.screen_height == 0 || geometry.cell_width == 0 || geometry.cell_height == 0 ||
+      geometry.padding_left > geometry.screen_width ||
+      geometry.padding_right > geometry.screen_width - geometry.padding_left ||
+      geometry.padding_top > geometry.screen_height ||
+      geometry.padding_bottom > geometry.screen_height - geometry.padding_top ||
+      !std::isfinite(event.x) || !std::isfinite(event.y) || event.x < 0 || event.y < 0) {
+    return std::unexpected(Error::invalid_options);
+  }
+
+  ghostty_mouse_encoder_setopt_from_terminal(impl_->mouse_encoder, impl_->terminal);
+  const GhosttyMouseEncoderSize native_geometry{
+      .size = sizeof(GhosttyMouseEncoderSize),
+      .screen_width = geometry.screen_width,
+      .screen_height = geometry.screen_height,
+      .cell_width = geometry.cell_width,
+      .cell_height = geometry.cell_height,
+      .padding_top = geometry.padding_top,
+      .padding_bottom = geometry.padding_bottom,
+      .padding_right = geometry.padding_right,
+      .padding_left = geometry.padding_left,
+  };
+  constexpr bool track_last_cell = true;
+  ghostty_mouse_encoder_setopt(impl_->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
+                               &native_geometry);
+  ghostty_mouse_encoder_setopt(impl_->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+                               &event.any_button_pressed);
+  ghostty_mouse_encoder_setopt(impl_->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
+                               &track_last_cell);
+  ghostty_mouse_event_set_action(impl_->mouse_event, ghostty_mouse_action(event.action));
+  if (event.button.has_value()) {
+    ghostty_mouse_event_set_button(impl_->mouse_event, ghostty_mouse_button(*event.button));
+  } else {
+    ghostty_mouse_event_clear_button(impl_->mouse_event);
+  }
+  ghostty_mouse_event_set_mods(impl_->mouse_event, static_cast<GhosttyMods>(event.modifiers));
+  ghostty_mouse_event_set_position(impl_->mouse_event, {.x = event.x, .y = event.y});
+
+  std::size_t written = 0;
+  // std::byte and char are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* const data = reinterpret_cast<char*>(output.data());
+  const auto result = ghostty_mouse_encoder_encode(impl_->mouse_encoder, impl_->mouse_event, data,
+                                                   output.size(), &written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  LEMMA_ASSERT(written <= output.size());
+  return written;
 }
 
 [[nodiscard]] auto Terminal::synchronized_output() const noexcept -> std::expected<bool, Error> {

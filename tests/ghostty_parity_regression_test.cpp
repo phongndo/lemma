@@ -1,3 +1,5 @@
+#include "client/host_input_parser.hpp"
+#include "core/input.hpp"
 #include "core/presentation_gate.hpp"
 #include "core/terminal_resize.hpp"
 #include "lemma/limits.hpp"
@@ -9,6 +11,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -316,28 +319,106 @@ TEST(GhosttyParityRegressionTest, M2ResizeRollsBackAfterPtyFailure) {
 // Remaining disabled tests are executable M0 specifications for later milestones. Enabling any one
 // requires replacing FAIL() with the real characterization.
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3HostInputDecoderAcceptsEveryFragmentationBoundary) {
-  FAIL() << "M3 must frame legacy, Kitty, mouse, focus, paste, and host-query input statefully";
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(GhosttyParityRegressionTest, M3HostInputDecoderAcceptsEveryFragmentationBoundary) {
+  constexpr std::string_view encoded = "x\x1B[200~p\x02q\x1B[201~\x1B[I\x1B[<0;2;2M";
+  const auto input = std::as_bytes(std::span(encoded));
+  for (std::size_t split = 0; split <= input.size(); ++split) {
+    client::HostInputParser parser;
+    ASSERT_TRUE(parser.prepare().has_value());
+    std::array<std::byte, 128> storage{};
+    std::size_t events = 0;
+    for (const auto fragment : {input.first(split), input.subspan(split)}) {
+      const auto parsed = parser.parse(fragment, storage, {.columns = 80, .rows = 24});
+      ASSERT_TRUE(parsed.has_value()) << split;
+      events += parsed->event_count;
+    }
+    EXPECT_EQ(events, 4U) << split;
+    EXPECT_FALSE(parser.has_pending_sequence()) << split;
+  }
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3PasteIsOpaqueAndUsesGhosttyEncoder) {
-  FAIL() << "M3 must bypass prefix parsing and use Ghostty paste policy for opaque paste events";
+TEST(GhosttyParityRegressionTest, M3PasteIsOpaqueAndUsesGhosttyEncoder) {
+  auto terminal = make_terminal();
+  write_terminal(terminal, "\x1B[?2004h");
+  core::PanePtyWriteQueue queue;
+  std::array paste{std::byte{'p'}, std::byte{0x02}, std::byte{'q'}};
+
+  ASSERT_EQ(core::queue_paste_input(queue, terminal, paste), core::InputQueueResult::queued);
+  std::array<std::byte, 32> output{};
+  const auto size = queue.read(output);
+  EXPECT_EQ(output_text(std::span(output).first(size)), std::string_view("\x1B[200~p\x02"
+                                                                         "q\x1B[201~",
+                                                                         15));
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3KittyMetadataIsPreservedWithoutFabrication) {
-  FAIL() << "M3 must preserve available action/text metadata without inventing legacy metadata";
+TEST(GhosttyParityRegressionTest, M3KittyMetadataIsPreservedWithoutFabrication) {
+  client::HostInputParser parser;
+  ASSERT_TRUE(parser.prepare().has_value());
+  constexpr std::string_view encoded = "\x1B[98;5:2;98u";
+  const auto input = std::as_bytes(std::span(encoded));
+  std::array<std::byte, 16> storage{};
+
+  const auto parsed = parser.parse(input, storage, {.columns = 80, .rows = 24});
+
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->event_count, 1U);
+  const auto& event = parsed->events.front();
+  EXPECT_EQ(event.kind, client::HostInputKind::key);
+  EXPECT_EQ(event.key.key, protocol::KeyInputKey::b);
+  EXPECT_EQ(event.key.action, protocol::KeyInputAction::repeat);
+  EXPECT_EQ(event.key.modifiers, protocol::key_input_modifier_control);
+  EXPECT_EQ(event.key.unshifted_codepoint, static_cast<std::uint32_t>('b'));
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3HostCaptureEpochIsAckedAndRestored) {
-  FAIL() << "M3 must atomically ACK capture epochs and restore every negotiated outer mode";
+TEST(GhosttyParityRegressionTest, M3MouseUsesReadTimeGeometryAndPaneLocalCoordinates) {
+  client::HostInputParser parser;
+  ASSERT_TRUE(parser.prepare().has_value());
+  constexpr std::string_view encoded = "\x1B[<4;5;3M";
+  const auto input = std::as_bytes(std::span(encoded));
+  std::array<std::byte, 32> storage{};
+  const auto parsed = parser.parse(input, storage, {.columns = 80, .rows = 24});
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->event_count, 1U);
+  const auto& outer = parsed->events.front().mouse;
+  EXPECT_EQ(outer.geometry, (protocol::Dimensions{.columns = 80, .rows = 24}));
+  EXPECT_EQ(outer.column, 4U);
+  EXPECT_EQ(outer.row, 2U);
+
+  auto terminal = make_terminal();
+  write_terminal(terminal, "\x1B[?1000h\x1B[?1006h");
+  core::PanePtyWriteQueue queue;
+  const vt::MouseEvent local{
+      .action = vt::MouseAction::press,
+      .button = vt::MouseButton::left,
+      .modifiers = vt::key_modifier_shift,
+      .x = 1,
+      .y = 2,
+      .geometry = {.screen_width = 40, .screen_height = 23},
+      .any_button_pressed = true,
+  };
+  ASSERT_EQ(core::queue_mouse_input(queue, terminal, local), core::InputQueueResult::queued);
+  std::array<std::byte, 64> output{};
+  const auto size = queue.read(output);
+  EXPECT_THAT(output_text(std::span(output).first(size)), testing::HasSubstr("\x1B[<4;2;3M"));
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3MouseUsesReadTimeGeometryAndPaneLocalCoordinates) {
-  FAIL() << "M3 must validate geometry, hit-test chrome, and call Ghostty's mouse encoder";
-}
+TEST(GhosttyParityRegressionTest, M3EffectsAreBoundedAndPolicyRouted) {
+  auto terminal = make_terminal();
+  write_terminal(terminal, "\a\x1B]2;title\x1B\\\x1B]7;file:///tmp\x1B\\"
+                           "\x1B]777;notify;Title;Body\a\x1B]9;4;1;50\x1B\\"
+                           "\x1B]52;c;YQ==\x1B\\\x1B_dropped\x1B\\");
 
-TEST(GhosttyParityRegressionTest, DISABLED_M3EffectsAreSanitizedBoundedAndPolicyRouted) {
-  FAIL() << "M3 must route title, PWD, progress, notification, clipboard, and unknown sequences";
+  const auto effects = terminal.take_effects();
+
+  EXPECT_EQ(effects.bells, 1U);
+  EXPECT_EQ(effects.title_changes, 1U);
+  EXPECT_EQ(effects.pwd_changes, 1U);
+  EXPECT_EQ(effects.desktop_notifications, 1U);
+  EXPECT_EQ(effects.progress_reports, 1U);
+  EXPECT_EQ(effects.clipboard_writes_denied, 1U);
+  EXPECT_EQ(effects.unknown_sequences_dropped, 1U);
+  EXPECT_FALSE(effects.unknown_sequence_truncated);
 }
 
 TEST(GhosttyParityRegressionTest, M4SelectionAnchorsTrackTerminalMutation) {
@@ -361,8 +442,33 @@ TEST(GhosttyParityRegressionTest, M4SelectionAnchorsTrackTerminalMutation) {
   EXPECT_THAT(output_text(std::span(output).first(*formatted)), testing::HasSubstr("alpha"));
 }
 
-TEST(GhosttyParityRegressionTest, DISABLED_M5AnsiProjectionConvergesInSecondGhostty) {
-  FAIL() << "M5 differential projection must compare cells, colors, cursor, modes, and links";
+TEST(GhosttyParityRegressionTest, M5AnsiProjectionConvergesForCombiningCharacterScroll) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 2, .rows = 4};
+  auto canonical = make_terminal(options);
+  auto projected = make_terminal(options);
+  write_terminal(canonical, "a\xCC\x81\r\na\xCC\x82\r\na\xCC\x83\r\na\xCC\x84");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto initial = canonical.render_ansi(output, true);
+  ASSERT_TRUE(initial.has_value());
+  projected.write(std::span(output).first(initial->bytes));
+  write_terminal(canonical, "\r\na\xCC\x85\r\na\xCC\x86");
+  const auto changed = canonical.render_ansi(output);
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_EQ(changed->scrolled_rows, 2);
+  projected.write(std::span(output).first(changed->bytes));
+
+  canonical.invalidate_ansi_render_state();
+  projected.invalidate_ansi_render_state();
+  std::array<std::byte, std::size_t{16} * 1'024U> canonical_output{};
+  std::array<std::byte, std::size_t{16} * 1'024U> projected_output{};
+  const auto canonical_full = canonical.render_ansi(canonical_output, true);
+  const auto projected_full = projected.render_ansi(projected_output, true);
+  ASSERT_TRUE(canonical_full.has_value());
+  ASSERT_TRUE(projected_full.has_value());
+  EXPECT_TRUE(std::ranges::equal(std::span(canonical_output).first(canonical_full->bytes),
+                                 std::span(projected_output).first(projected_full->bytes)));
 }
 
 TEST(GhosttyParityRegressionTest, DISABLED_M7KittyGraphicsLifecycleIsBoundedAndClipped) {

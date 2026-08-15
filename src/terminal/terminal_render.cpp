@@ -273,6 +273,14 @@ struct AnsiStyle final {
   return (hash ^ value) * 1'099'511'628'211ULL;
 }
 
+[[nodiscard]] constexpr auto hash_u64(std::uint64_t hash, const std::uint64_t value) noexcept
+    -> std::uint64_t {
+  for (std::size_t shift = 0; shift < 64; shift += 8) {
+    hash = hash_byte(hash, static_cast<std::uint8_t>(value >> shift));
+  }
+  return hash;
+}
+
 [[nodiscard]] auto hash_style(std::uint64_t hash, const AnsiStyle& style) noexcept
     -> std::uint64_t {
   const auto hash_color = [](std::uint64_t value, const AnsiColor& color) noexcept {
@@ -290,6 +298,28 @@ struct AnsiStyle final {
                          style.inverse, style.invisible, style.strikethrough, style.overline};
   for (const bool flag : flags) {
     hash = hash_byte(hash, static_cast<std::uint8_t>(flag));
+  }
+  return hash;
+}
+
+[[nodiscard]] auto rendered_cell_hash(const AnsiStyle& style, const GhosttyCellWide wide,
+                                      const bool replacement,
+                                      const std::span<const std::uint8_t> grapheme) noexcept
+    -> std::uint64_t {
+  constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
+  auto hash = hash_style(hash_initial, style);
+  hash = hash_byte(hash, static_cast<std::uint8_t>(wide));
+  if (replacement) {
+    constexpr std::string_view replacement_text = "\xEF\xBF\xBD";
+    for (const char byte : replacement_text) {
+      hash = hash_byte(hash, static_cast<std::uint8_t>(byte));
+    }
+  } else if (grapheme.empty()) {
+    hash = hash_byte(hash, 0);
+  } else {
+    for (const auto byte : grapheme) {
+      hash = hash_byte(hash, byte);
+    }
   }
   return hash;
 }
@@ -404,6 +434,8 @@ struct AnsiStyle final {
   return count;
 }
 
+// Grapheme/style hashing is intentionally explicit so unsafe scroll equivalence is never inferred.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto Terminal::Impl::calculate_row_hash() noexcept
     -> std::expected<std::uint64_t, Error> {
   auto result = ghostty_render_state_row_get(row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
@@ -417,25 +449,26 @@ struct AnsiStyle final {
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
-    result = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
-                                                &raw_cell);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
-    for (std::size_t shift = 0; shift < 64; shift += 8) {
-      row_hash = hash_byte(row_hash, static_cast<std::uint8_t>(raw_cell >> shift));
-    }
-
     GhosttyStyle ghostty_style{};
     ghostty_style.size = sizeof(ghostty_style);
-    result = ghostty_render_state_row_cells_get(
-        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &ghostty_style);
+    result = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
+                                                &raw_cell);
+    if (result == GHOSTTY_SUCCESS) {
+      result = ghostty_render_state_row_cells_get(
+          row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &ghostty_style);
+    }
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
+
+    GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
     GhosttyCellContentTag content_tag = GHOSTTY_CELL_CONTENT_CODEPOINT;
-    result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_CONTENT_TAG, &content_tag);
-    if (result != GHOSTTY_SUCCESS) {
+    const std::array cell_keys{GHOSTTY_CELL_DATA_WIDE, GHOSTTY_CELL_DATA_CONTENT_TAG};
+    std::array<void*, cell_keys.size()> cell_values{&wide, &content_tag};
+    std::size_t values_written = 0;
+    result = ghostty_cell_get_multi(raw_cell, cell_keys.size(), cell_keys.data(),
+                                    cell_values.data(), &values_written);
+    if (result != GHOSTTY_SUCCESS || values_written != cell_keys.size()) {
       return std::unexpected(detail::map_error(result));
     }
     auto style = ansi_style(raw_cell, content_tag, ghostty_style, render_colors, session_theme);
@@ -449,7 +482,21 @@ struct AnsiStyle final {
       return std::unexpected(detail::map_error(result));
     }
     style->inverse = style->inverse != selected;
-    row_hash = hash_style(row_hash, *style);
+
+    std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
+    GhosttyBuffer grapheme_buffer{
+        .ptr = grapheme.data(),
+        .cap = grapheme.size(),
+        .len = 0,
+    };
+    result = ghostty_render_state_row_cells_get(
+        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &grapheme_buffer);
+    const bool replacement = result == GHOSTTY_OUT_OF_SPACE;
+    if (!replacement && result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    const auto bytes = std::span(grapheme).first(replacement ? 0 : grapheme_buffer.len);
+    row_hash = hash_u64(row_hash, rendered_cell_hash(*style, wide, replacement, bytes));
     ++cell_count;
   }
   LEMMA_ASSERT(cell_count == options.size.columns);
@@ -535,9 +582,6 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    for (std::size_t shift = 0; shift < 64; shift += 8) {
-      row_hash = hash_byte(row_hash, static_cast<std::uint8_t>(raw_cell >> shift));
-    }
     result = ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &ghostty_style);
     if (result != GHOSTTY_SUCCESS) {
@@ -565,7 +609,6 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       return std::unexpected(detail::map_error(result));
     }
     style->inverse = style->inverse != selected;
-    row_hash = hash_style(row_hash, *style);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
@@ -580,21 +623,9 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       return std::unexpected(detail::map_error(result));
     }
 
-    std::uint64_t cell_hash = hash_style(hash_initial, *style);
-    cell_hash = hash_byte(cell_hash, static_cast<std::uint8_t>(wide));
-    if (replacement) {
-      constexpr std::string_view replacement_text = "\xEF\xBF\xBD";
-      for (const char byte : replacement_text) {
-        cell_hash = hash_byte(cell_hash, static_cast<std::uint8_t>(byte));
-      }
-    } else if (grapheme_buffer.len == 0) {
-      cell_hash = hash_byte(cell_hash, 0);
-    } else {
-      const auto bytes = std::as_bytes(std::span(grapheme).first(grapheme_buffer.len));
-      for (const auto byte : bytes) {
-        cell_hash = hash_byte(cell_hash, std::to_integer<std::uint8_t>(byte));
-      }
-    }
+    const auto grapheme_bytes = std::span(grapheme).first(replacement ? 0 : grapheme_buffer.len);
+    const auto cell_hash = rendered_cell_hash(*style, wide, replacement, grapheme_bytes);
+    row_hash = hash_u64(row_hash, cell_hash);
     const auto physical_index = (row_index * options.size.columns) + cell_count;
     LEMMA_ASSERT(physical_index < physical_cell_count);
     auto physical_cells = std::span(physical_cell_hashes.get(), physical_cell_count);

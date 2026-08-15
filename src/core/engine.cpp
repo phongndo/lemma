@@ -131,6 +131,8 @@ struct PtyDrainResult final {
   bool presentation_released{false};
   bool force_full{false};
   bool damage_capture_failed{false};
+  bool bell{false};
+  bool title_changed{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   std::uint64_t correlation{0};
 #endif
@@ -195,6 +197,13 @@ process_pty_output(const int pty, vt::Terminal& terminal, PresentationGate& pres
                                    static_cast<std::uint32_t>(pty), bytes.size(),
                                    trace_correlation);
   write_pty_output(terminal, presentation_gate, bytes, capture_damage, drain);
+  const auto effects = terminal.take_effects();
+  // Desktop notifications use the same bounded visible-attention policy as BEL. Title, PWD, and
+  // progress changes invalidate status metadata; denied clipboard and unknown sequences are
+  // intentionally drained and dropped by policy at the adapter boundary.
+  drain.bell = drain.bell || effects.bells > 0 || effects.desktop_notifications > 0;
+  drain.title_changed = drain.title_changed || effects.title_changes > 0 ||
+                        effects.pwd_changes > 0 || effects.progress_reports > 0;
   drain.changed = true;
   return queue_terminal_responses(pending_writes, terminal);
 }
@@ -529,7 +538,7 @@ struct Session final {
     clipboard_write.reset();
     close_descriptor(client);
     client_id = {};
-    decoder.reset();
+    decoder.release();
     output.reset();
     frame.release();
     server_sequence = 2;
@@ -537,7 +546,9 @@ struct Session final {
     client_close_state = ClientCloseState::none;
     frame_scheduler.cancel();
     input_backpressured = false;
+    bell_pending = false;
     retained_input_offset.reset();
+    mouse_capture_pane.reset();
     for (auto& tab_slot : tabs) {
       if (tab_slot.tab != nullptr) {
         for (auto& pane_slot : tab_slot.tab->panes) {
@@ -580,9 +591,12 @@ struct Session final {
   bool active{true};
   bool theme_bound{false};
   bool status_valid{false};
+  bool bell_pending{false};
   bool input_backpressured{false};
   ClientCloseState client_close_state{ClientCloseState::none};
   std::optional<std::size_t> retained_input_offset;
+  // A pressed button keeps drag/release routing owned by its originating pane.
+  std::optional<PaneId> mouse_capture_pane;
   CopyModeState copy_mode;
   PendingClipboardWrite clipboard_write;
   std::uint64_t status_signature{0};
@@ -603,6 +617,37 @@ struct Session final {
 [[nodiscard]] constexpr auto terminal_color(const protocol::RgbColor color) noexcept
     -> vt::RgbColor {
   return {.red = color.red, .green = color.green, .blue = color.blue};
+}
+
+[[nodiscard]] constexpr auto terminal_mouse_button(const protocol::MouseInputButton button) noexcept
+    -> std::optional<vt::MouseButton> {
+  switch (button) {
+  case protocol::MouseInputButton::none:
+    return std::nullopt;
+  case protocol::MouseInputButton::left:
+    return vt::MouseButton::left;
+  case protocol::MouseInputButton::right:
+    return vt::MouseButton::right;
+  case protocol::MouseInputButton::middle:
+    return vt::MouseButton::middle;
+  case protocol::MouseInputButton::four:
+    return vt::MouseButton::four;
+  case protocol::MouseInputButton::five:
+    return vt::MouseButton::five;
+  case protocol::MouseInputButton::six:
+    return vt::MouseButton::six;
+  case protocol::MouseInputButton::seven:
+    return vt::MouseButton::seven;
+  case protocol::MouseInputButton::eight:
+    return vt::MouseButton::eight;
+  case protocol::MouseInputButton::nine:
+    return vt::MouseButton::nine;
+  case protocol::MouseInputButton::ten:
+    return vt::MouseButton::ten;
+  case protocol::MouseInputButton::eleven:
+    return vt::MouseButton::eleven;
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] auto bind_session_theme(Session& session,
@@ -1580,6 +1625,101 @@ struct CopyEscapeDecode final {
   return input.size();
 }
 
+void process_typed_copy_mode_input(Session& session, const protocol::KeyInput& key,
+                                   const std::span<const std::byte> text) noexcept {
+  if (key.action == protocol::KeyInputAction::release) {
+    return;
+  }
+  std::array<std::byte, 1> translated{};
+  switch (key.key) {
+  case protocol::KeyInputKey::arrow_up:
+    translated.front() = std::byte{'k'};
+    break;
+  case protocol::KeyInputKey::arrow_down:
+    translated.front() = std::byte{'j'};
+    break;
+  case protocol::KeyInputKey::arrow_left:
+    translated.front() = std::byte{'h'};
+    break;
+  case protocol::KeyInputKey::arrow_right:
+    translated.front() = std::byte{'l'};
+    break;
+  case protocol::KeyInputKey::home:
+    translated.front() = std::byte{'0'};
+    break;
+  case protocol::KeyInputKey::end:
+    translated.front() = std::byte{'$'};
+    break;
+  case protocol::KeyInputKey::page_up:
+    translated.front() = std::byte{0x15};
+    break;
+  case protocol::KeyInputKey::page_down:
+    translated.front() = std::byte{0x04};
+    break;
+  case protocol::KeyInputKey::d:
+    if ((key.modifiers & protocol::key_input_modifier_control) != 0) {
+      translated.front() = std::byte{0x04};
+      break;
+    }
+    static_cast<void>(process_copy_mode_input(session, text));
+    return;
+  case protocol::KeyInputKey::u:
+    if ((key.modifiers & protocol::key_input_modifier_control) != 0) {
+      translated.front() = std::byte{0x15};
+      break;
+    }
+    static_cast<void>(process_copy_mode_input(session, text));
+    return;
+  case protocol::KeyInputKey::unidentified:
+  case protocol::KeyInputKey::a:
+  case protocol::KeyInputKey::b:
+  case protocol::KeyInputKey::c:
+  case protocol::KeyInputKey::e:
+  case protocol::KeyInputKey::f:
+  case protocol::KeyInputKey::g:
+  case protocol::KeyInputKey::h:
+  case protocol::KeyInputKey::i:
+  case protocol::KeyInputKey::j:
+  case protocol::KeyInputKey::k:
+  case protocol::KeyInputKey::l:
+  case protocol::KeyInputKey::m:
+  case protocol::KeyInputKey::n:
+  case protocol::KeyInputKey::o:
+  case protocol::KeyInputKey::p:
+  case protocol::KeyInputKey::q:
+  case protocol::KeyInputKey::r:
+  case protocol::KeyInputKey::s:
+  case protocol::KeyInputKey::t:
+  case protocol::KeyInputKey::v:
+  case protocol::KeyInputKey::w:
+  case protocol::KeyInputKey::x:
+  case protocol::KeyInputKey::y:
+  case protocol::KeyInputKey::z:
+  case protocol::KeyInputKey::enter:
+  case protocol::KeyInputKey::tab:
+  case protocol::KeyInputKey::backspace:
+  case protocol::KeyInputKey::escape:
+  case protocol::KeyInputKey::space:
+  case protocol::KeyInputKey::insert:
+  case protocol::KeyInputKey::delete_key:
+  case protocol::KeyInputKey::f1:
+  case protocol::KeyInputKey::f2:
+  case protocol::KeyInputKey::f3:
+  case protocol::KeyInputKey::f4:
+  case protocol::KeyInputKey::f5:
+  case protocol::KeyInputKey::f6:
+  case protocol::KeyInputKey::f7:
+  case protocol::KeyInputKey::f8:
+  case protocol::KeyInputKey::f9:
+  case protocol::KeyInputKey::f10:
+  case protocol::KeyInputKey::f11:
+  case protocol::KeyInputKey::f12:
+    static_cast<void>(process_copy_mode_input(session, text));
+    return;
+  }
+  static_cast<void>(process_copy_mode_input(session, translated));
+}
+
 void service_copy_input_timeout(Session& session,
                                 const std::chrono::steady_clock::time_point now) noexcept {
   if (session.copy_mode.active && session.copy_mode.pending_escape_size > 0 &&
@@ -2417,6 +2557,170 @@ enum class ParseResult : std::uint8_t {
       session.retained_input_offset.reset();
       break;
     }
+    case protocol::ClientMessageKind::key: {
+      if (session.copy_mode.active) {
+        process_typed_copy_mode_input(session, message.key, message.input);
+        break;
+      }
+      auto* const tab = active_tab(session);
+      auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, tab->focused_pane);
+      if (pane == nullptr) {
+        return ParseResult::error;
+      }
+      auto& runtime = pane->runtime;
+      const auto queued_bytes_before = runtime.pending_writes.size();
+      const auto queued =
+          queue_key_input(runtime.pending_writes, runtime.terminal, message.key, message.input);
+      if (queued == InputQueueResult::full) {
+        return ParseResult::backpressure;
+      }
+      if (queued == InputQueueResult::encoding_failed) {
+        return ParseResult::error;
+      }
+      if (runtime.pending_writes.size() > queued_bytes_before) {
+        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      }
+      break;
+    }
+    case protocol::ClientMessageKind::paste: {
+      if (session.copy_mode.active) {
+        break;
+      }
+      auto* const tab = active_tab(session);
+      auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, tab->focused_pane);
+      if (pane == nullptr) {
+        return ParseResult::error;
+      }
+      auto& runtime = pane->runtime;
+      const auto queued_bytes_before = runtime.pending_writes.size();
+      const auto queued =
+          queue_paste_input(runtime.pending_writes, runtime.terminal, message.input);
+      if (queued == InputQueueResult::full) {
+        return ParseResult::backpressure;
+      }
+      if (queued == InputQueueResult::encoding_failed) {
+        return ParseResult::error;
+      }
+      runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      break;
+    }
+    case protocol::ClientMessageKind::focus: {
+      auto* const tab = active_tab(session);
+      auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, tab->focused_pane);
+      if (pane == nullptr) {
+        return ParseResult::error;
+      }
+      auto& runtime = pane->runtime;
+      const auto queued_bytes_before = runtime.pending_writes.size();
+      const auto queued =
+          queue_focus_input(runtime.pending_writes, runtime.terminal,
+                            message.focus == protocol::FocusInput::gained ? vt::FocusEvent::gained
+                                                                          : vt::FocusEvent::lost);
+      if (queued == InputQueueResult::full) {
+        return ParseResult::backpressure;
+      }
+      if (queued == InputQueueResult::encoding_failed) {
+        return ParseResult::error;
+      }
+      if (runtime.pending_writes.size() > queued_bytes_before) {
+        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      }
+      break;
+    }
+    case protocol::ClientMessageKind::mouse: {
+      if (message.mouse.geometry.columns != session.columns ||
+          message.mouse.geometry.rows != session.rows) {
+        return ParseResult::error;
+      }
+      auto* const tab = active_tab(session);
+      if (tab == nullptr) {
+        return ParseResult::error;
+      }
+      const auto status_rows = session.rows >= 2 ? std::uint16_t{1} : std::uint16_t{0};
+      if (message.mouse.row < status_rows) {
+        break;
+      }
+      const auto content_row = static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      Pane* pane = nullptr;
+      for (auto& slot : tab->panes) {
+        if (slot.pane == nullptr) {
+          continue;
+        }
+        const auto& candidate = slot.pane->rectangle;
+        if (message.mouse.column >= candidate.column && content_row >= candidate.row &&
+            message.mouse.column < candidate.column + candidate.columns &&
+            content_row < candidate.row + candidate.rows) {
+          pane = slot.pane.get();
+          break;
+        }
+      }
+      if (session.mouse_capture_pane.has_value() &&
+          (message.mouse.any_button_pressed ||
+           message.mouse.action != protocol::MouseInputAction::press)) {
+        auto* const captured = find_pane(*tab, *session.mouse_capture_pane);
+        if (captured != nullptr) {
+          pane = captured;
+        } else {
+          session.mouse_capture_pane.reset();
+        }
+      }
+      if (pane == nullptr) {
+        break;
+      }
+      const bool wheel_button = message.mouse.button == protocol::MouseInputButton::four ||
+                                message.mouse.button == protocol::MouseInputButton::five;
+      if (message.mouse.action == protocol::MouseInputAction::press && !wheel_button) {
+        session.mouse_capture_pane = pane->id;
+      }
+      if (message.mouse.action == protocol::MouseInputAction::press &&
+          message.mouse.button == protocol::MouseInputButton::left &&
+          pane->id != tab->focused_pane) {
+        focus_pane(session, *tab, pane->id);
+      }
+      const auto& rectangle = pane->rectangle;
+      const auto action = [value = message.mouse.action]() noexcept {
+        switch (value) {
+        case protocol::MouseInputAction::press:
+          return vt::MouseAction::press;
+        case protocol::MouseInputAction::release:
+          return vt::MouseAction::release;
+        case protocol::MouseInputAction::motion:
+          return vt::MouseAction::motion;
+        }
+        return vt::MouseAction::motion;
+      }();
+      const vt::MouseEvent event{
+          .action = action,
+          .button = terminal_mouse_button(message.mouse.button),
+          .modifiers = message.mouse.modifiers,
+          .x = static_cast<float>(
+              std::clamp(message.mouse.column, rectangle.column,
+                         static_cast<std::uint16_t>(rectangle.column + rectangle.columns - 1U)) -
+              rectangle.column),
+          .y = static_cast<float>(
+              std::clamp(content_row, rectangle.row,
+                         static_cast<std::uint16_t>(rectangle.row + rectangle.rows - 1U)) -
+              rectangle.row),
+          .geometry = {.screen_width = rectangle.columns, .screen_height = rectangle.rows},
+          .any_button_pressed = message.mouse.any_button_pressed,
+      };
+      auto& runtime = pane->runtime;
+      const auto queued_bytes_before = runtime.pending_writes.size();
+      const auto queued = queue_mouse_input(runtime.pending_writes, runtime.terminal, event);
+      if (queued == InputQueueResult::full) {
+        return ParseResult::backpressure;
+      }
+      if (queued == InputQueueResult::encoding_failed) {
+        return ParseResult::error;
+      }
+      if (runtime.pending_writes.size() > queued_bytes_before) {
+        runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+      }
+      if (message.mouse.action == protocol::MouseInputAction::release) {
+        session.mouse_capture_pane.reset();
+      }
+      break;
+    }
     case protocol::ClientMessageKind::host_theme:
       if (message.host_theme == nullptr) {
         return ParseResult::error;
@@ -2741,7 +3045,16 @@ collect_status_line(Session& session,
   if (!rendered.has_value() || session.server_sequence == 0) {
     return false;
   }
-  const auto frame_messages = ClientFrameOutput::frame_message_count(rendered->bytes);
+  auto frame_bytes = rendered->bytes;
+  if (session.bell_pending) {
+    auto output = session.frame.writable();
+    if (frame_bytes >= output.size()) {
+      return false;
+    }
+    output.subspan(frame_bytes, 1).front() = std::byte{0x07};
+    ++frame_bytes;
+  }
+  const auto frame_messages = ClientFrameOutput::frame_message_count(frame_bytes);
   if (frame_messages == 0 ||
       frame_messages > std::numeric_limits<std::uint32_t>::max() - session.server_sequence) {
     return false;
@@ -2754,12 +3067,13 @@ collect_status_line(Session& session,
     ++generation;
   }
   if (generation == 0 ||
-      !session.output.queue_frame(rendered->bytes, session.server_sequence, generation,
-                                  rendered->full, now, trace_correlation)) {
+      !session.output.queue_frame(frame_bytes, session.server_sequence, generation, rendered->full,
+                                  now, trace_correlation)) {
     return false;
   }
   session.server_sequence += static_cast<std::uint32_t>(frame_messages);
   session.full_redraw_generation = generation;
+  session.bell_pending = false;
   return true;
 }
 
@@ -3221,6 +3535,10 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   case PendingState::read_command:
     pending.command = pending.field.front();
     if (pending.command == protocol::attach_magic.front()) {
+      if (!pending.attach_decoder.prepare().has_value()) {
+        pending.state = PendingState::unused;
+        break;
+      }
       pending.attach_decoder.reset();
       pending.attach_decoder.writable_bytes().front() = pending.command;
       const auto committed = pending.attach_decoder.commit(1);
@@ -3435,7 +3753,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   const int connection = pending.descriptor;
   pending.descriptor = -1;
   session->client = connection;
-  session->decoder = pending.attach_decoder;
+  session->decoder = std::move(pending.attach_decoder);
   release_attach_reservation(pending, slot, sessions);
   owner.reset();
 
@@ -3665,6 +3983,7 @@ struct PaneDamageAssessment final {
 
 constexpr std::size_t blocked_sink_pty_read_bytes_per_turn_max = std::size_t{4} * 1'024U;
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& events,
                          std::size_t& global_budget, std::size_t& blocked_session_budget) noexcept {
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
@@ -3698,6 +4017,10 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     blocked_session_budget -= bytes_drained;
   }
   runtime.active = drained.alive;
+  session.bell_pending = session.bell_pending || drained.bell;
+  if (drained.title_changed) {
+    session.status_valid = false;
+  }
   if (drained.changed && runtime.active) {
     record_terminal_mutation(runtime);
     preserve_copy_viewport_after_mutation(session, pane);
@@ -3715,8 +4038,8 @@ void process_pane_events(Session& session, Tab& tab, Pane& pane, const pollfd& e
     session.frame_trace_correlation = drained.correlation;
   }
 #endif
-  if (tab.id == session.active_tab &&
-      (!drained.presentation_deferred || process_changed || damage.status_changed)) {
+  if (tab.id == session.active_tab && (!drained.presentation_deferred || drained.bell ||
+                                       process_changed || damage.status_changed)) {
     schedule_frame(session, frame_urgency(drained, process_changed, damage),
                    drained.damage_capture_failed || drained.force_full);
   } else if (damage.status_changed) {

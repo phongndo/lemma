@@ -61,6 +61,23 @@ auto PanePtyWriteQueue::reserve(const std::size_t bytes) noexcept -> bool {
   return ensure_capacity(size_ + bytes);
 }
 
+auto PanePtyWriteQueue::writable_span() noexcept -> std::span<std::byte> {
+  if (storage_ == nullptr) {
+    return {};
+  }
+  const auto write_offset = read_offset_ + size_;
+  LEMMA_ASSERT(write_offset <= storage_capacity_);
+  return std::span(storage_.get(), storage_capacity_).subspan(write_offset);
+}
+
+auto PanePtyWriteQueue::commit_write(const std::size_t bytes) noexcept -> bool {
+  if (bytes > remaining() || bytes > writable_span().size()) {
+    return false;
+  }
+  size_ += bytes;
+  return true;
+}
+
 auto PanePtyWriteQueue::append(const std::span<const std::byte> input) noexcept -> bool {
   if (!reserve(input.size())) {
     return false;
@@ -177,7 +194,7 @@ void PanePtyWriteQueue::release_storage() noexcept {
 
 [[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
                                             vt::Terminal& terminal) noexcept -> bool {
-  if (terminal.pty_response_overflowed()) {
+  if (terminal.integrity_failed()) {
     return false;
   }
   const auto pending_bytes = terminal.pending_pty_response_bytes();
@@ -225,6 +242,42 @@ static_assert(limits::pane_pty_write_queue_bytes_max >=
   default:
     return vt::Key::unidentified;
   }
+}
+
+[[nodiscard]] constexpr auto terminal_key_modifiers(const std::uint16_t modifiers) noexcept
+    -> std::uint16_t {
+  std::uint16_t result = 0;
+  result |= (modifiers & protocol::key_input_modifier_shift) != 0 ? vt::key_modifier_shift : 0U;
+  result |= (modifiers & protocol::key_input_modifier_control) != 0 ? vt::key_modifier_control : 0U;
+  result |= (modifiers & protocol::key_input_modifier_alt) != 0 ? vt::key_modifier_alt : 0U;
+  result |= (modifiers & protocol::key_input_modifier_super) != 0 ? vt::key_modifier_super : 0U;
+  result |=
+      (modifiers & protocol::key_input_modifier_caps_lock) != 0 ? vt::key_modifier_caps_lock : 0U;
+  result |=
+      (modifiers & protocol::key_input_modifier_num_lock) != 0 ? vt::key_modifier_num_lock : 0U;
+  return result;
+}
+
+[[nodiscard]] constexpr auto terminal_key_action(const protocol::KeyInputAction action) noexcept
+    -> vt::KeyAction {
+  switch (action) {
+  case protocol::KeyInputAction::release:
+    return vt::KeyAction::release;
+  case protocol::KeyInputAction::press:
+    return vt::KeyAction::press;
+  case protocol::KeyInputAction::repeat:
+    return vt::KeyAction::repeat;
+  }
+  return vt::KeyAction::press;
+}
+
+[[nodiscard]] auto queue_encoded(PanePtyWriteQueue& queue,
+                                 const std::span<const std::byte> encoded) noexcept
+    -> InputQueueResult {
+  if (encoded.size() > queue.remaining() || !queue.reserve(encoded.size())) {
+    return InputQueueResult::full;
+  }
+  return queue.append(encoded) ? InputQueueResult::queued : InputQueueResult::encoding_failed;
 }
 
 template <typename Visitor>
@@ -287,7 +340,7 @@ template <typename Visitor>
 [[nodiscard]] auto queue_normalized_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
                                           const std::span<const std::byte> input) noexcept
     -> InputQueueResult {
-  if (input.size() > protocol::input_bytes_max * 2U) {
+  if (terminal.integrity_failed() || input.size() > protocol::input_bytes_max * 2U) {
     return InputQueueResult::encoding_failed;
   }
 
@@ -313,6 +366,145 @@ template <typename Visitor>
       });
   LEMMA_ASSERT(appended);
   return appended ? InputQueueResult::queued : InputQueueResult::encoding_failed;
+}
+
+[[nodiscard]] auto queue_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                   const protocol::KeyInput& key,
+                                   const std::span<const std::byte> text) noexcept
+    -> InputQueueResult {
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  constexpr std::array key_map{
+      vt::Key::unidentified,
+      vt::Key::a,
+      vt::Key::b,
+      vt::Key::c,
+      vt::Key::d,
+      vt::Key::e,
+      vt::Key::f,
+      vt::Key::g,
+      vt::Key::h,
+      vt::Key::i,
+      vt::Key::j,
+      vt::Key::k,
+      vt::Key::l,
+      vt::Key::m,
+      vt::Key::n,
+      vt::Key::o,
+      vt::Key::p,
+      vt::Key::q,
+      vt::Key::r,
+      vt::Key::s,
+      vt::Key::t,
+      vt::Key::u,
+      vt::Key::v,
+      vt::Key::w,
+      vt::Key::x,
+      vt::Key::y,
+      vt::Key::z,
+      vt::Key::enter,
+      vt::Key::tab,
+      vt::Key::backspace,
+      vt::Key::escape,
+      vt::Key::space,
+      vt::Key::arrow_up,
+      vt::Key::arrow_down,
+      vt::Key::arrow_left,
+      vt::Key::arrow_right,
+      vt::Key::home,
+      vt::Key::end,
+      vt::Key::insert,
+      vt::Key::delete_key,
+      vt::Key::page_up,
+      vt::Key::page_down,
+      vt::Key::f1,
+      vt::Key::f2,
+      vt::Key::f3,
+      vt::Key::f4,
+      vt::Key::f5,
+      vt::Key::f6,
+      vt::Key::f7,
+      vt::Key::f8,
+      vt::Key::f9,
+      vt::Key::f10,
+      vt::Key::f11,
+      vt::Key::f12,
+  };
+  const auto key_index = static_cast<std::size_t>(key.key);
+  if (key_index >= key_map.size()) {
+    return InputQueueResult::encoding_failed;
+  }
+  const auto mapped_key = std::span(key_map).subspan(key_index, 1).front();
+  const auto modifiers = terminal_key_modifiers(key.modifiers);
+  const auto consumed_modifiers = terminal_key_modifiers(key.consumed_modifiers);
+  const auto action = terminal_key_action(key.action);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded_text(reinterpret_cast<const char*>(text.data()), text.size());
+  const vt::KeyEvent event{
+      .action = action,
+      .key = mapped_key,
+      .modifiers = modifiers,
+      .consumed_modifiers = consumed_modifiers,
+      .unshifted_codepoint = key.unshifted_codepoint,
+      .text = encoded_text,
+      .composing = key.composing,
+  };
+  std::array<std::byte, 128> encoded{};
+  const auto result = terminal.encode_key(event, encoded);
+  return result.has_value() ? queue_encoded(queue, std::span(encoded).first(*result))
+                            : InputQueueResult::encoding_failed;
+}
+
+[[nodiscard]] auto queue_paste_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                     const std::span<std::byte> input) noexcept
+    -> InputQueueResult {
+  constexpr std::size_t paste_encoding_overhead_max = 16;
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  if (input.empty() || input.size() > protocol::input_message_bytes_max) {
+    return InputQueueResult::encoding_failed;
+  }
+  if (input.size() > queue.remaining() ||
+      paste_encoding_overhead_max > queue.remaining() - input.size()) {
+    return InputQueueResult::full;
+  }
+  const auto reserved = input.size() + paste_encoding_overhead_max;
+  if (!queue.reserve(reserved)) {
+    return InputQueueResult::full;
+  }
+  const auto result = terminal.encode_paste(input, queue.writable_span());
+  if (!result.has_value() || !queue.commit_write(*result)) {
+    return InputQueueResult::encoding_failed;
+  }
+  return InputQueueResult::queued;
+}
+
+[[nodiscard]] auto queue_focus_input(PanePtyWriteQueue& queue, const vt::Terminal& terminal,
+                                     const vt::FocusEvent event) noexcept -> InputQueueResult {
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  std::array<std::byte, 8> encoded{};
+  const auto result = terminal.encode_focus(event, encoded);
+  if (!result.has_value()) {
+    return InputQueueResult::encoding_failed;
+  }
+  return queue_encoded(queue, std::span(encoded).first(*result));
+}
+
+[[nodiscard]] auto queue_mouse_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                     const vt::MouseEvent& event) noexcept -> InputQueueResult {
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  std::array<std::byte, limits::pixel_mouse_report_bytes_max> encoded{};
+  const auto result = terminal.encode_mouse(event, encoded);
+  if (!result.has_value()) {
+    return InputQueueResult::encoding_failed;
+  }
+  return queue_encoded(queue, std::span(encoded).first(*result));
 }
 
 } // namespace lemma::core

@@ -35,8 +35,8 @@ static_assert(frame_transaction_bytes_max <= frame_retained_bytes_aggregate_max)
 
 inline constexpr std::size_t client_queue_bytes_hard_max = frame_output_queue_bytes_max;
 
-// Expanded semantic input and child-controlled data limits. Serialized envelopes remain subject to
-// their own smaller protocol-version bounds until protocol v2 is implemented.
+// Expanded semantic input and child-controlled data limits. Protocol envelopes validate these
+// independently so legacy input remains small while opaque typed paste can use its larger bound.
 inline constexpr std::size_t structured_input_payload_bytes_max = std::size_t{1} * 1'024U * 1'024U;
 inline constexpr std::size_t structured_event_batch_expanded_max = 4'096;
 inline constexpr std::size_t pixel_mouse_report_bytes_max = 128;
@@ -54,10 +54,9 @@ inline constexpr std::size_t graphics_placements_per_pane_max = 4'096;
 inline constexpr std::size_t graphics_session_bytes_max = std::size_t{256} * 1'024U * 1'024U;
 
 inline constexpr std::size_t terminal_pty_response_bytes_max = std::size_t{64} * 1'024U;
-// One pane queue can retain the terminal adapter's complete response bound plus one maximally
-// expanded 8 KiB client input packet (128 encoded bytes per normalized legacy key). Queue storage
-// is allocated lazily under this daemon-wide budget, while accepted-input delivery remains an
-// all-or-nothing operation.
+// One pane queue can retain the terminal adapter's complete response bound plus either one
+// maximally expanded 8 KiB legacy packet or one bounded typed paste. Queue storage is allocated
+// lazily under this daemon-wide budget, while accepted-input delivery remains all-or-nothing.
 inline constexpr std::size_t normalized_client_input_bytes_max = std::size_t{8} * 1'024U * 128U;
 inline constexpr std::size_t pane_pty_write_queue_bytes_max =
     terminal_pty_response_bytes_max + normalized_client_input_bytes_max;

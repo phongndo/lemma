@@ -358,7 +358,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.0")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.1")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -509,6 +509,64 @@ TEST_F(MuxProcessTest, CreatesAttachesRendersAndDetaches) {
   ASSERT_TRUE(client.send(detach, deadline_after(2s)));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
   ASSERT_TRUE(wait_for_listing("basic", "detached", deadline_after(3s)));
+}
+
+TEST_F(MuxProcessTest, RoutesKittyKeyMetadataThroughMuxAndGhostty) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "typed_keys"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[>23u", deadline_after(5s)));
+
+  // A conforming outer terminal may encode the disambiguated C-b while leaving the printable
+  // command as ordinary text when "report all keys" is disabled.
+  constexpr std::string_view create_tab = "\x1B[98;5:1u\x1B[98;5:3u"
+                                          "c";
+  ASSERT_TRUE(client.send(create_tab, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_session(
+                  "typed_keys",
+                  [](const SessionListing& value) { return value.tabs == 2 && value.panes == 2; },
+                  deadline_after(5s), &client)
+                  .has_value());
+
+  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; v=$(dd bs=1 count=1 2>/dev/null | od "
+                          "-An -tu1 | tr -d ' '); "
+                          "stty sane; printf '__TYPED_KEY_%s__\\n' \"$v\"\r",
+                          deadline_after(2s)));
+  // Ghostty omits the default modifier/event field before associated text on a key press.
+  constexpr std::string_view typed_x = "\x1B[120;;120u\x1B[120;1:3u";
+  ASSERT_TRUE(client.send(typed_x, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__TYPED_KEY_120__", deadline_after(5s))) << client.screen();
+
+  constexpr std::string_view typed_detach = "\x1B[98;5:1u\x1B[98;5:3u"
+                                            "d";
+  ASSERT_TRUE(client.send(typed_detach, deadline_after(2s)));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, RoutesPasteFocusAndMouseBoundariesToGhostty) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "structured_input"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?2004h", deadline_after(5s)));
+
+  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; "
+                          "printf '\\033[?2004h\\033[?1004h\\033[?1000h\\033[?1006h"
+                          "__STRUCTURED_%s__\\r\\n' READY; "
+                          "v=$(dd bs=1 count=27 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+                          "stty sane; printf '__STRUCTURED_%s__\\n' \"$v\"\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__STRUCTURED_READY__", deadline_after(5s)))
+      << client.screen();
+
+  constexpr std::string_view host_input = "\x1B[200~P\x02"
+                                          "d\x1B[201~\x1B[I\x1B[<0;5;3M";
+  ASSERT_TRUE(client.send(host_input, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen(
+      "__STRUCTURED_1b5b3230307e5002641b5b3230317e1b5b491b5b3c303b353b324d__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
 TEST_F(MuxProcessTest, PreservesTopologyAcrossResizeAbruptExitAndReattach) {
@@ -890,16 +948,30 @@ TEST_F(MuxProcessTest, RestoresTerminalOnStartupRejectionAndHandledSignals) {
   PtyClient owner;
   ASSERT_TRUE(owner.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
   ASSERT_TRUE(owner.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B[?2004h", deadline_after(5s)));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B[?1004h", deadline_after(5s)));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B[?1002h\x1B[?1006h", deadline_after(5s)));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B[>23u", deadline_after(5s)));
   ASSERT_TRUE(owner.wait_for_raw("\x1B]10;?", deadline_after(5s)));
   PtyClient rejected;
   ASSERT_TRUE(rejected.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
   ASSERT_TRUE(rejected.wait(deadline_after(5s)));
   EXPECT_TRUE(rejected.terminal_state_restored());
   EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1049h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?2004h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1004h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1002h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1006h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B[>23u"));
   EXPECT_FALSE(rejected.raw_tail().contains("\x1B]10;?"));
   ASSERT_TRUE(send_prefix(owner, std::byte{'d'}));
   ASSERT_TRUE(owner.wait(deadline_after(5s)));
   EXPECT_TRUE(owner.terminal_state_restored());
+  EXPECT_TRUE(owner.raw_tail().contains("\x1B[?2004l"));
+  EXPECT_TRUE(owner.raw_tail().contains("\x1B[?1004l"));
+  EXPECT_TRUE(owner.raw_tail().contains("\x1B[?1002l"));
+  EXPECT_TRUE(owner.raw_tail().contains("\x1B[?1006l"));
+  EXPECT_TRUE(owner.raw_tail().contains("\x1B[<u"));
 
   const std::array signals{SIGINT, SIGTERM, SIGHUP, SIGQUIT};
   for (std::size_t index = 0; index < signals.size(); ++index) {

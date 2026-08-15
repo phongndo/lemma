@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 
 // Fixed wire offsets are checked against compile-time-sized headers and validated payload bounds.
 // NOLINTBEGIN(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
@@ -164,6 +165,49 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   return std::nullopt;
 }
 
+[[nodiscard]] auto focus_input(const std::byte encoded) noexcept -> std::optional<FocusInput> {
+  const auto focus = static_cast<FocusInput>(std::to_integer<std::uint8_t>(encoded));
+  switch (focus) {
+  case FocusInput::lost:
+  case FocusInput::gained:
+    return focus;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] auto mouse_action(const std::byte encoded) noexcept
+    -> std::optional<MouseInputAction> {
+  const auto action = static_cast<MouseInputAction>(std::to_integer<std::uint8_t>(encoded));
+  switch (action) {
+  case MouseInputAction::press:
+  case MouseInputAction::release:
+  case MouseInputAction::motion:
+    return action;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] auto mouse_button(const std::byte encoded) noexcept
+    -> std::optional<MouseInputButton> {
+  const auto button = static_cast<MouseInputButton>(std::to_integer<std::uint8_t>(encoded));
+  switch (button) {
+  case MouseInputButton::none:
+  case MouseInputButton::left:
+  case MouseInputButton::right:
+  case MouseInputButton::middle:
+  case MouseInputButton::four:
+  case MouseInputButton::five:
+  case MouseInputButton::six:
+  case MouseInputButton::seven:
+  case MouseInputButton::eight:
+  case MouseInputButton::nine:
+  case MouseInputButton::ten:
+  case MouseInputButton::eleven:
+    return button;
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] auto disconnect_reason(const std::byte encoded) noexcept
     -> std::optional<DisconnectReason> {
   const auto reason = static_cast<DisconnectReason>(std::to_integer<std::uint8_t>(encoded));
@@ -194,6 +238,10 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   case MessageKind::render_frame:
   case MessageKind::disconnect:
   case MessageKind::host_theme:
+  case MessageKind::paste:
+  case MessageKind::key:
+  case MessageKind::focus:
+  case MessageKind::mouse:
     return kind;
   }
   return std::nullopt;
@@ -350,8 +398,66 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
                                        const std::uint32_t sequence) noexcept
     -> std::array<std::byte, attach_header_bytes> {
   LEMMA_ASSERT(bytes > 0);
-  LEMMA_ASSERT(bytes <= input_message_bytes_max);
+  LEMMA_ASSERT(bytes <= legacy_input_message_bytes_max);
   return encode_header(MessageKind::input, 0, static_cast<std::uint32_t>(bytes), sequence);
+}
+
+[[nodiscard]] auto encode_paste_header(const std::size_t bytes,
+                                       const std::uint32_t sequence) noexcept
+    -> std::array<std::byte, attach_header_bytes> {
+  LEMMA_ASSERT(bytes > 0);
+  LEMMA_ASSERT(bytes <= input_message_bytes_max);
+  return encode_header(MessageKind::paste, 0, static_cast<std::uint32_t>(bytes), sequence);
+}
+
+[[nodiscard]] auto encode_key(const KeyInput& key, const std::span<const std::byte> text,
+                              const std::uint32_t sequence) noexcept -> SmallMessage {
+  LEMMA_ASSERT(text.size() <= key_input_text_bytes_max);
+  const auto payload_size = key_input_wire_fixed_bytes + text.size();
+  SmallMessage message;
+  copy_header(
+      encode_header(MessageKind::key, 0, static_cast<std::uint32_t>(payload_size), sequence),
+      message.storage_, message.size_);
+  auto output = std::span(message.storage_).subspan(message.size_, payload_size);
+  output[0] = static_cast<std::byte>(key.action);
+  output[1] = static_cast<std::byte>(key.key);
+  encode_u16(key.modifiers, output.subspan<2, 2>());
+  encode_u16(key.consumed_modifiers, output.subspan<4, 2>());
+  encode_u32(key.unshifted_codepoint, output.subspan<6, 4>());
+  output[10] = key.composing ? std::byte{1} : std::byte{0};
+  std::ranges::copy(text, output.subspan(key_input_wire_fixed_bytes).begin());
+  message.size_ += payload_size;
+  return message;
+}
+
+[[nodiscard]] auto encode_focus(const FocusInput focus, const std::uint32_t sequence) noexcept
+    -> SmallMessage {
+  SmallMessage message;
+  copy_header(encode_header(MessageKind::focus, 0, 1, sequence), message.storage_, message.size_);
+  std::span(message.storage_).subspan(message.size_, 1).front() = static_cast<std::byte>(focus);
+  ++message.size_;
+  return message;
+}
+
+[[nodiscard]] auto encode_mouse(const MouseInput& mouse, const std::uint32_t sequence) noexcept
+    -> SmallMessage {
+  LEMMA_ASSERT(valid_dimensions(mouse.geometry));
+  LEMMA_ASSERT(mouse.column < mouse.geometry.columns);
+  LEMMA_ASSERT(mouse.row < mouse.geometry.rows);
+  SmallMessage message;
+  copy_header(encode_header(MessageKind::mouse, 0, mouse_input_wire_bytes, sequence),
+              message.storage_, message.size_);
+  auto output = std::span(message.storage_).subspan(message.size_, mouse_input_wire_bytes);
+  output[0] = static_cast<std::byte>(mouse.action);
+  output[1] = static_cast<std::byte>(mouse.button);
+  encode_u16(mouse.modifiers, output.subspan<2, 2>());
+  encode_u16(mouse.column, output.subspan<4, 2>());
+  encode_u16(mouse.row, output.subspan<6, 2>());
+  encode_u16(mouse.geometry.columns, output.subspan<8, 2>());
+  encode_u16(mouse.geometry.rows, output.subspan<10, 2>());
+  output[12] = mouse.any_button_pressed ? std::byte{1} : std::byte{0};
+  message.size_ += mouse_input_wire_bytes;
+  return message;
 }
 
 [[nodiscard]] auto encode_resize(const Dimensions dimensions, const std::uint32_t sequence) noexcept
@@ -643,14 +749,38 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   return bytes;
 }
 
+auto ClientDecoder::prepare() noexcept -> std::expected<void, DecodeError> {
+  prepared_ = true;
+  return {};
+}
+
+void ClientDecoder::release() noexcept {
+  expanded_storage_.reset();
+  reset();
+  prepared_ = false;
+}
+
+[[nodiscard]] auto ClientDecoder::mutable_storage() noexcept -> std::span<std::byte> {
+  return expanded_storage_ == nullptr
+             ? std::span<std::byte>(inline_storage_)
+             : std::span<std::byte>(expanded_storage_.get(), client_decoder_bytes_max);
+}
+
+[[nodiscard]] auto ClientDecoder::storage() const noexcept -> std::span<const std::byte> {
+  return expanded_storage_ == nullptr
+             ? std::span<const std::byte>(inline_storage_)
+             : std::span<const std::byte>(expanded_storage_.get(), client_decoder_bytes_max);
+}
+
 [[nodiscard]] auto ClientDecoder::writable_bytes() noexcept -> std::span<std::byte> {
+  LEMMA_ASSERT(prepared_);
   LEMMA_ASSERT(pending_size_ == 0);
-  return std::span(storage_).subspan(used_);
+  return mutable_storage().subspan(used_);
 }
 
 [[nodiscard]] auto ClientDecoder::commit(const std::size_t bytes) noexcept
     -> std::expected<void, DecodeError> {
-  if (pending_size_ != 0 || bytes > storage_.size() - used_) {
+  if (!prepared_ || pending_size_ != 0 || bytes > mutable_storage().size() - used_) {
     return std::unexpected(DecodeError::buffer_full);
   }
   used_ += bytes;
@@ -664,7 +794,8 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   if (used_ == 0) {
     return std::optional<ClientMessage>{};
   }
-  const auto buffered = std::span<const std::byte>(storage_).first(used_);
+  LEMMA_ASSERT(prepared_);
+  const auto buffered = mutable_storage().first(used_);
   const auto decoded = decode_envelope(buffered, expected_sequence_);
   if (!decoded.has_value()) {
     return std::unexpected(decoded.error());
@@ -692,8 +823,35 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       if (envelope.payload_bytes == 0) {
         return std::unexpected(DecodeError::invalid_length);
       }
+      if (envelope.payload_bytes > legacy_input_message_bytes_max) {
+        return std::unexpected(DecodeError::oversized);
+      }
+      break;
+    case MessageKind::paste:
+      if (envelope.payload_bytes == 0) {
+        return std::unexpected(DecodeError::invalid_length);
+      }
       if (envelope.payload_bytes > input_message_bytes_max) {
         return std::unexpected(DecodeError::oversized);
+      }
+      break;
+    case MessageKind::key:
+      if (envelope.payload_bytes < key_input_wire_fixed_bytes ||
+          envelope.payload_bytes > key_input_wire_fixed_bytes + key_input_text_bytes_max) {
+        return std::unexpected(envelope.payload_bytes >
+                                       key_input_wire_fixed_bytes + key_input_text_bytes_max
+                                   ? DecodeError::oversized
+                                   : DecodeError::invalid_length);
+      }
+      break;
+    case MessageKind::focus:
+      if (envelope.payload_bytes != 1) {
+        return std::unexpected(DecodeError::invalid_length);
+      }
+      break;
+    case MessageKind::mouse:
+      if (envelope.payload_bytes != mouse_input_wire_bytes) {
+        return std::unexpected(DecodeError::invalid_length);
       }
       break;
     case MessageKind::resize:
@@ -724,8 +882,21 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   }
 
   const auto packet_size = attach_header_bytes + envelope.payload_bytes;
-  if (packet_size > storage_.size()) {
+  if (packet_size > client_decoder_bytes_max) {
     return std::unexpected(DecodeError::oversized);
+  }
+  if (packet_size > mutable_storage().size()) {
+    LEMMA_ASSERT(expanded_storage_ == nullptr);
+    try {
+      // Allocated only after a valid live paste envelope exceeds the ordinary input bound.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+      auto expanded = std::make_unique_for_overwrite<std::byte[]>(client_decoder_bytes_max);
+      std::ranges::copy(std::span(inline_storage_).first(used_), expanded.get());
+      expanded_storage_ = std::move(expanded);
+    } catch (const std::bad_alloc&) {
+      return std::unexpected(DecodeError::allocation_failed);
+    }
+    return next();
   }
   if (buffered.size() < packet_size) {
     return std::optional<ClientMessage>{};
@@ -792,14 +963,85 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
         .sequence = envelope.sequence,
     };
   }
-  if (envelope.kind == MessageKind::input) {
+  if (envelope.kind == MessageKind::input || envelope.kind == MessageKind::paste) {
     return ClientMessage{
-        .kind = ClientMessageKind::input,
+        .kind = envelope.kind == MessageKind::input ? ClientMessageKind::input
+                                                    : ClientMessageKind::paste,
         .dimensions = {},
         .pane_command = PaneCommand::none,
         .host_theme = nullptr,
         .session = {},
         .input = payload,
+        .sequence = envelope.sequence,
+    };
+  }
+  if (envelope.kind == MessageKind::key) {
+    const auto action_value = std::to_integer<std::uint8_t>(payload[0]);
+    const auto key_value = std::to_integer<std::uint8_t>(payload[1]);
+    const auto modifiers = decode_u16(payload[2], payload[3]);
+    const auto consumed_modifiers = decode_u16(payload[4], payload[5]);
+    constexpr std::uint16_t valid_modifiers =
+        key_input_modifier_shift | key_input_modifier_control | key_input_modifier_alt |
+        key_input_modifier_super | key_input_modifier_caps_lock | key_input_modifier_num_lock;
+    if (action_value > static_cast<std::uint8_t>(KeyInputAction::repeat) ||
+        key_value > static_cast<std::uint8_t>(KeyInputKey::f12) ||
+        (modifiers & ~valid_modifiers) != 0 || (consumed_modifiers & ~valid_modifiers) != 0 ||
+        payload[10] > std::byte{1}) {
+      return std::unexpected(DecodeError::invalid_enum);
+    }
+    return ClientMessage{
+        .kind = ClientMessageKind::key,
+        .key = {.action = static_cast<KeyInputAction>(action_value),
+                .key = static_cast<KeyInputKey>(key_value),
+                .modifiers = modifiers,
+                .consumed_modifiers = consumed_modifiers,
+                .unshifted_codepoint = decode_u32(std::span(payload).subspan<6, 4>()),
+                .composing = payload[10] == std::byte{1}},
+        .session = {},
+        .input = payload.subspan(key_input_wire_fixed_bytes),
+        .sequence = envelope.sequence,
+    };
+  }
+  if (envelope.kind == MessageKind::focus) {
+    const auto focus = focus_input(payload.front());
+    if (!focus.has_value()) {
+      return std::unexpected(DecodeError::invalid_enum);
+    }
+    return ClientMessage{
+        .kind = ClientMessageKind::focus,
+        .focus = *focus,
+        .session = {},
+        .input = {},
+        .sequence = envelope.sequence,
+    };
+  }
+  if (envelope.kind == MessageKind::mouse) {
+    const auto action = mouse_action(payload[0]);
+    const auto button = mouse_button(payload[1]);
+    const auto modifiers = decode_u16(payload[2], payload[3]);
+    const MouseInput mouse{
+        .action = action.value_or(MouseInputAction::motion),
+        .button = button.value_or(MouseInputButton::none),
+        .modifiers = modifiers,
+        .column = decode_u16(payload[4], payload[5]),
+        .row = decode_u16(payload[6], payload[7]),
+        .geometry = {.columns = decode_u16(payload[8], payload[9]),
+                     .rows = decode_u16(payload[10], payload[11])},
+        .any_button_pressed = payload[12] == std::byte{1},
+    };
+    constexpr std::uint16_t valid_modifiers = 0x03FFU;
+    if (!action.has_value() || !button.has_value() || (modifiers & ~valid_modifiers) != 0 ||
+        (payload[12] != std::byte{0} && payload[12] != std::byte{1}) ||
+        !valid_dimensions(mouse.geometry) || mouse.column >= mouse.geometry.columns ||
+        mouse.row >= mouse.geometry.rows) {
+      return std::unexpected(!valid_dimensions(mouse.geometry) ? DecodeError::invalid_dimensions
+                                                               : DecodeError::invalid_enum);
+    }
+    return ClientMessage{
+        .kind = ClientMessageKind::mouse,
+        .mouse = mouse,
+        .session = {},
+        .input = {},
         .sequence = envelope.sequence,
     };
   }
@@ -846,10 +1088,17 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 }
 
 void ClientDecoder::consume() noexcept {
+  LEMMA_ASSERT(prepared_);
   LEMMA_ASSERT(pending_size_ > 0 && pending_size_ <= used_);
-  std::memmove(storage_.data(), std::span(storage_).subspan(pending_size_).data(),
+  auto active_storage = mutable_storage();
+  std::memmove(active_storage.data(), active_storage.subspan(pending_size_).data(),
                used_ - pending_size_);
   used_ -= pending_size_;
+  if (expanded_storage_ != nullptr && used_ <= inline_storage_.size()) {
+    std::ranges::copy(std::span(expanded_storage_.get(), used_).first(used_),
+                      inline_storage_.begin());
+    expanded_storage_.reset();
+  }
   pending_size_ = 0;
   expected_sequence_ = next_sequence(expected_sequence_);
   if (expect_hello_) {

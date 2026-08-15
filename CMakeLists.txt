@@ -168,6 +168,7 @@ target_link_libraries(
 add_library(
   lemma_client STATIC
   src/client/attached_client.cpp
+  src/client/host_input_parser.cpp
   src/client/host_terminal_theme.cpp
 )
 lemma_internal_target(lemma_client)
@@ -229,6 +230,7 @@ if(LEMMA_BUILD_TESTS)
     tests/lemma_test.cpp
     tests/latency_trace_test.cpp
     tests/ghostty_parity_regression_test.cpp
+    tests/host_input_parser_test.cpp
     tests/host_terminal_theme_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp

@@ -3,6 +3,7 @@
 #include "lemma/assert.hpp"
 #include "lemma/terminal/terminal.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -36,6 +37,111 @@ void Terminal::Impl::title_changed([[maybe_unused]] GhosttyTerminal terminal_han
   if (impl.effects.title_changes < std::numeric_limits<std::uint64_t>::max()) {
     ++impl.effects.title_changes;
   }
+}
+
+void Terminal::Impl::pwd_changed([[maybe_unused]] GhosttyTerminal terminal_handle,
+                                 void* userdata) noexcept {
+  auto& impl = *static_cast<Impl*>(userdata);
+  if (impl.effects.pwd_changes < std::numeric_limits<std::uint64_t>::max()) {
+    ++impl.effects.pwd_changes;
+  }
+}
+
+void Terminal::Impl::desktop_notification(
+    [[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
+    [[maybe_unused]] const GhosttyTerminalDesktopNotification* notification) noexcept {
+  auto& impl = *static_cast<Impl*>(userdata);
+  if (impl.effects.desktop_notifications < std::numeric_limits<std::uint64_t>::max()) {
+    ++impl.effects.desktop_notifications;
+  }
+}
+
+void Terminal::Impl::progress_report(
+    [[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
+    [[maybe_unused]] const GhosttyTerminalProgressReport* report) noexcept {
+  auto& impl = *static_cast<Impl*>(userdata);
+  if (impl.effects.progress_reports < std::numeric_limits<std::uint64_t>::max()) {
+    ++impl.effects.progress_reports;
+  }
+}
+
+void Terminal::Impl::unknown_sequence([[maybe_unused]] GhosttyTerminal terminal_handle,
+                                      void* userdata,
+                                      const GhosttyTerminalUnknownSequence* sequence) noexcept {
+  auto& impl = *static_cast<Impl*>(userdata);
+  if (impl.effects.unknown_sequences_dropped < std::numeric_limits<std::uint64_t>::max()) {
+    ++impl.effects.unknown_sequences_dropped;
+  }
+  if (sequence != nullptr && sequence->tag == GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC) {
+    impl.effects.unknown_sequence_truncated =
+        impl.effects.unknown_sequence_truncated || sequence->value.apc.truncated;
+  }
+}
+
+auto Terminal::Impl::enquiry([[maybe_unused]] GhosttyTerminal terminal_handle,
+                             [[maybe_unused]] void* userdata) noexcept -> GhosttyString {
+  static constexpr std::array<std::uint8_t, 5> identity{'l', 'e', 'm', 'm', 'a'};
+  return {.ptr = identity.data(), .len = identity.size()};
+}
+
+auto Terminal::Impl::clipboard_write([[maybe_unused]] GhosttyTerminal terminal_handle,
+                                     void* userdata,
+                                     [[maybe_unused]] const GhosttyClipboardWrite* write) noexcept
+    -> GhosttyClipboardWriteResult {
+  // Application-originated clipboard access is a separate permission from user copy. Until a
+  // session policy explicitly grants it, deny the request at the terminal effect boundary.
+  auto& impl = *static_cast<Impl*>(userdata);
+  if (impl.effects.clipboard_writes_denied < std::numeric_limits<std::uint64_t>::max()) {
+    ++impl.effects.clipboard_writes_denied;
+  }
+  return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+}
+
+auto Terminal::Impl::color_scheme([[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
+                                  GhosttyColorScheme* const output) noexcept -> bool {
+  if (output == nullptr) {
+    return false;
+  }
+  const auto background = static_cast<Impl*>(userdata)->session_theme.background;
+  const auto luminance =
+      (299U * background.red) + (587U * background.green) + (114U * background.blue);
+  *output = luminance >= 128'000U ? GHOSTTY_COLOR_SCHEME_LIGHT : GHOSTTY_COLOR_SCHEME_DARK;
+  return true;
+}
+
+auto Terminal::Impl::device_attributes([[maybe_unused]] GhosttyTerminal terminal_handle,
+                                       [[maybe_unused]] void* userdata,
+                                       GhosttyDeviceAttributes* const output) noexcept -> bool {
+  if (output == nullptr) {
+    return false;
+  }
+  *output = {};
+  output->primary.conformance_level = GHOSTTY_DA_CONFORMANCE_LEVEL_2;
+  output->primary.features[0] = GHOSTTY_DA_FEATURE_ANSI_COLOR;
+  output->primary.num_features = 1;
+  output->secondary.device_type = GHOSTTY_DA_DEVICE_TYPE_VT220;
+  return true;
+}
+
+auto Terminal::Impl::size_report([[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
+                                 GhosttySizeReportSize* const output) noexcept -> bool {
+  if (output == nullptr) {
+    return false;
+  }
+  const auto size = static_cast<Impl*>(userdata)->options.size;
+  *output = {
+      .rows = size.rows,
+      .columns = size.columns,
+      .cell_width = size.cell_width_px,
+      .cell_height = size.cell_height_px,
+  };
+  return true;
+}
+
+auto Terminal::Impl::xtversion([[maybe_unused]] GhosttyTerminal terminal_handle,
+                               [[maybe_unused]] void* userdata) noexcept -> GhosttyString {
+  static constexpr std::array<std::uint8_t, 5> identity{'l', 'e', 'm', 'm', 'a'};
+  return {.ptr = identity.data(), .len = identity.size()};
 }
 
 auto Terminal::title() const noexcept -> std::expected<std::string_view, Error> {

@@ -30,7 +30,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x00}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x01}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -49,6 +49,7 @@ TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
   const auto encoded =
       encode_client_hello("themed", {.columns = 80, .rows = 24}, 1, current_version, theme);
   ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
   std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
   ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
 
@@ -60,12 +61,95 @@ TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
   EXPECT_EQ((**decoded).session, "themed");
 }
 
+TEST(ProtocolTest, RoundTripsTypedPasteFocusAndMouseInput) {
+  ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
+  decoder.reset(2, false);
+  const std::array paste{std::byte{'a'}, std::byte{0x02}, std::byte{'b'}};
+  const auto paste_header = encode_paste_header(paste.size(), 2);
+  std::vector<std::byte> encoded;
+  append(encoded, paste_header);
+  append(encoded, paste);
+  const auto focus = encode_focus(FocusInput::gained, 3);
+  append(encoded, focus.bytes());
+  const MouseInput mouse{
+      .action = MouseInputAction::press,
+      .button = MouseInputButton::left,
+      .modifiers = 5,
+      .column = 4,
+      .row = 2,
+      .geometry = {.columns = 80, .rows = 24},
+      .any_button_pressed = true,
+  };
+  const auto mouse_message = encode_mouse(mouse, 4);
+  append(encoded, mouse_message.bytes());
+  const KeyInput key{
+      .action = KeyInputAction::repeat,
+      .key = KeyInputKey::b,
+      .modifiers = key_input_modifier_control,
+      .consumed_modifiers = 0,
+      .unshifted_codepoint = 'b',
+      .composing = false,
+  };
+  const std::array key_text{std::byte{'b'}};
+  const auto key_message = encode_key(key, key_text, 5);
+  append(encoded, key_message.bytes());
+  std::ranges::copy(encoded, decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(encoded.size()).has_value());
+
+  const auto decoded_paste = decoder.next();
+  ASSERT_TRUE(decoded_paste.has_value() && decoded_paste->has_value());
+  EXPECT_EQ((**decoded_paste).kind, ClientMessageKind::paste);
+  EXPECT_TRUE(std::ranges::equal((**decoded_paste).input, paste));
+  decoder.consume();
+
+  const auto decoded_focus = decoder.next();
+  ASSERT_TRUE(decoded_focus.has_value() && decoded_focus->has_value());
+  EXPECT_EQ((**decoded_focus).kind, ClientMessageKind::focus);
+  EXPECT_EQ((**decoded_focus).focus, FocusInput::gained);
+  decoder.consume();
+
+  const auto decoded_mouse = decoder.next();
+  ASSERT_TRUE(decoded_mouse.has_value() && decoded_mouse->has_value());
+  EXPECT_EQ((**decoded_mouse).kind, ClientMessageKind::mouse);
+  EXPECT_EQ((**decoded_mouse).mouse, mouse);
+  decoder.consume();
+
+  const auto decoded_key = decoder.next();
+  ASSERT_TRUE(decoded_key.has_value() && decoded_key->has_value());
+  EXPECT_EQ((**decoded_key).kind, ClientMessageKind::key);
+  EXPECT_EQ((**decoded_key).key, key);
+  EXPECT_TRUE(std::ranges::equal((**decoded_key).input, key_text));
+}
+
+TEST(ProtocolTest, SupportsOpaquePasteLargerThanLegacyReadMessages) {
+  ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
+  decoder.reset(2, false);
+  std::vector<std::byte> paste(std::size_t{16} * 1'024U, std::byte{0x02});
+  const auto header = encode_paste_header(paste.size(), 2);
+  std::ranges::copy(header, decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(header.size()).has_value());
+  const auto header_only = decoder.next();
+  ASSERT_TRUE(header_only.has_value());
+  ASSERT_FALSE(header_only->has_value());
+  std::ranges::copy(paste, decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(paste.size()).has_value());
+
+  const auto decoded = decoder.next();
+
+  ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+  EXPECT_EQ((**decoded).kind, ClientMessageKind::paste);
+  EXPECT_TRUE(std::ranges::equal((**decoded).input, paste));
+}
+
 TEST(ProtocolTest, RoundTripsLiveHostThemeUpdate) {
   HostTerminalTheme theme;
   theme.foreground = RgbColor{.red = 1, .green = 2, .blue = 3};
   theme.set_palette_color(7, {.red = 4, .green = 5, .blue = 6});
   const auto encoded = encode_host_theme_update(theme, 2);
   ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
   decoder.reset(2, false);
   std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
   ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
@@ -82,7 +166,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x00}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x01}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };
@@ -96,6 +180,7 @@ TEST(ProtocolTest, DecodesClientHelloAtEveryFragmentBoundary) {
   const auto encoded = encode_client_hello("fragmented", {.columns = 100, .rows = 31});
   for (std::size_t split = 0; split < encoded.bytes().size(); ++split) {
     ClientDecoder decoder;
+    ASSERT_TRUE(decoder.prepare().has_value());
     auto writable = decoder.writable_bytes();
     std::ranges::copy(encoded.bytes().first(split), writable.begin());
     ASSERT_TRUE(decoder.commit(split).has_value());
@@ -118,6 +203,7 @@ TEST(ProtocolTest, DecodesClientHelloAtEveryFragmentBoundary) {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(ProtocolTest, DecodesCoalescedLiveClientMessagesInSequence) {
   ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
   decoder.reset(2, false);
   std::vector<std::byte> encoded;
   constexpr std::array input{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
@@ -157,6 +243,7 @@ TEST(ProtocolTest, DecodesCoalescedLiveClientMessagesInSequence) {
 
 TEST(ProtocolTest, RepeatsBorrowedClientMessageUntilConsumed) {
   ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
   decoder.reset(2, false);
   constexpr std::array payload{std::byte{'a'}, std::byte{'b'}};
   const auto header = encode_input_header(payload.size(), 2);
@@ -177,6 +264,9 @@ TEST(ProtocolTest, RepeatsBorrowedClientMessageUntilConsumed) {
 TEST(ProtocolTest, RejectsMalformedClientEnvelopesBeforePayloadMutation) {
   const auto expect_error = [](const std::span<const std::byte> bytes, const DecodeError error) {
     ClientDecoder decoder;
+    if (!decoder.prepare().has_value()) {
+      return false;
+    }
     std::ranges::copy(bytes, decoder.writable_bytes().begin());
     if (!decoder.commit(bytes.size()).has_value()) {
       return false;
@@ -203,6 +293,7 @@ TEST(ProtocolTest, RejectsMalformedClientEnvelopesBeforePayloadMutation) {
   EXPECT_TRUE(expect_error(wrong_sequence, DecodeError::invalid_sequence));
 
   ClientDecoder live;
+  ASSERT_TRUE(live.prepare().has_value());
   live.reset(2, false);
   const auto oversized = encode_header(MessageKind::input, 0, input_message_bytes_max + 1U, 2);
   std::ranges::copy(oversized, live.writable_bytes().begin());
@@ -214,6 +305,7 @@ TEST(ProtocolTest, RejectsMalformedClientEnvelopesBeforePayloadMutation) {
 
 TEST(ProtocolTest, RejectsInvalidClientPayloadValues) {
   ClientDecoder resize_decoder;
+  ASSERT_TRUE(resize_decoder.prepare().has_value());
   resize_decoder.reset(2, false);
   auto resize = encode_header(MessageKind::resize, 0, 4, 2);
   auto destination = std::ranges::copy(resize, resize_decoder.writable_bytes().begin()).out;
@@ -224,6 +316,7 @@ TEST(ProtocolTest, RejectsInvalidClientPayloadValues) {
   EXPECT_EQ(invalid_resize.error(), DecodeError::invalid_dimensions);
 
   ClientDecoder command_decoder;
+  ASSERT_TRUE(command_decoder.prepare().has_value());
   command_decoder.reset(2, false);
   auto command = encode_header(MessageKind::pane_command, 0, 1, 2);
   destination = std::ranges::copy(command, command_decoder.writable_bytes().begin()).out;
@@ -237,6 +330,7 @@ TEST(ProtocolTest, RejectsInvalidClientPayloadValues) {
   std::vector malformed(hello.bytes().begin(), hello.bytes().end());
   malformed.back() = std::byte{'.'};
   ClientDecoder hello_decoder;
+  ASSERT_TRUE(hello_decoder.prepare().has_value());
   std::ranges::copy(malformed, hello_decoder.writable_bytes().begin());
   ASSERT_TRUE(hello_decoder.commit(malformed.size()).has_value());
   const auto invalid_session = hello_decoder.next();
