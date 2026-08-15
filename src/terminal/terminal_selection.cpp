@@ -899,17 +899,16 @@ auto Terminal::scroll_selection_into_view() noexcept -> std::expected<bool, Erro
   if (!endpoint.has_value()) {
     return std::unexpected(endpoint.error());
   }
-  std::uint64_t target = viewport->offset;
   if (endpoint->row < viewport->offset) {
-    target = endpoint->row;
-  } else if (viewport->visible_rows > 0 &&
-             endpoint->row >= viewport->offset + viewport->visible_rows) {
-    target = static_cast<std::uint64_t>(endpoint->row) - viewport->visible_rows + 1U;
-  } else {
-    return false;
+    scroll_viewport(ViewportScroll::row, static_cast<std::int64_t>(endpoint->row));
+    return true;
   }
-  scroll_viewport(ViewportScroll::row, static_cast<std::int64_t>(target));
-  return true;
+  if (viewport->visible_rows > 0 && endpoint->row >= viewport->offset + viewport->visible_rows) {
+    const auto target = static_cast<std::uint64_t>(endpoint->row) - viewport->visible_rows + 1U;
+    scroll_viewport(ViewportScroll::row, static_cast<std::int64_t>(target));
+    return true;
+  }
+  return false;
 }
 
 auto Terminal::compression_activity() const noexcept -> std::expected<std::uint64_t, Error> {

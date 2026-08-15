@@ -21,6 +21,9 @@
 #include <libproc.h>
 #include <util.h>
 #elifdef __linux__
+#include <charconv>
+#include <system_error>
+
 #include <fcntl.h>
 #include <pty.h>
 #else

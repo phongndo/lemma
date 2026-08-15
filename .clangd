@@ -28,7 +28,7 @@ Diagnostics:
     # implementation headers are not portable include targets, so keep Include Cleaner focused on
     # project and standard-library ownership.
     IgnoreHeader:
-      - (bits|machine|malloc|sys)/.*
+      - (asm|asm-generic|bits|machine|malloc|sys)/.*
       - .*/_types/.*
       - ghostty/vt/.*
       - l(auxlib|ua|ualib)\.h

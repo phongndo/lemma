@@ -4,8 +4,8 @@
 #include <chrono>
 #include <cstdint>
 
-#include <sys/types.h>
 #include <termios.h>
+#include <unistd.h>
 
 namespace lemma::platform {
 
@@ -50,7 +50,7 @@ private:
   int restore_descriptor_{-1};
   int restore_wakeup_descriptor_{-1};
   int restore_result_descriptor_{-1};
-  pid_t restore_process_{-1};
+  decltype(::getpid()) restore_process_{-1};
   bool active_{false};
 };
 

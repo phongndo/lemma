@@ -51,7 +51,7 @@ constexpr int terminal_restore_action = TCSANOW;
   if (::pipe(result_pipe.data()) != 0) {
     return false;
   }
-  const pid_t child = ::fork();
+  const auto child = ::fork();
   if (child < 0) {
     static_cast<void>(::close(result_pipe.front()));
     static_cast<void>(::close(result_pipe.back()));
@@ -124,7 +124,7 @@ constexpr int terminal_restore_action = TCSANOW;
       // so repeated restore cycles cannot accumulate zombies.
       while (std::chrono::steady_clock::now() < deadline) {
         int status = 0;
-        const pid_t reaped = ::waitpid(child, &status, WNOHANG);
+        const auto reaped = ::waitpid(child, &status, WNOHANG);
         if (reaped == child) {
           return true;
         }
@@ -142,7 +142,7 @@ constexpr int terminal_restore_action = TCSANOW;
       return true;
     }
     int status = 0;
-    const pid_t result = ::waitpid(child, &status, WNOHANG);
+    const auto result = ::waitpid(child, &status, WNOHANG);
     if (result == child) {
       static_cast<void>(::close(result_pipe.front()));
       return WIFEXITED(status) && WEXITSTATUS(status) == 0;
@@ -251,7 +251,7 @@ constexpr int terminal_restore_action = TCSANOW;
     }
     return false;
   }
-  const pid_t restorer = ::fork();
+  const auto restorer = ::fork();
   if (restorer == 0) {
     static_cast<void>(::close(wakeup_pipe.back()));
     static_cast<void>(::close(result_pipe.front()));

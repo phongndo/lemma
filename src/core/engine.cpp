@@ -311,7 +311,7 @@ struct PaneRuntime final {
 
   vt::Terminal terminal;
   int pty{-1};
-  pid_t child{-1};
+  decltype(::getpid()) child{-1};
   std::array<char, process_name_bytes_max> process_name{};
   std::size_t process_name_size{0};
   std::chrono::steady_clock::time_point next_process_name_refresh;
