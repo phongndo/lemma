@@ -32,7 +32,7 @@ ALT_SCREEN = b"\x1b[?1049h"
 LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[0m\x1b[?2026l\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l"
     b"\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l\x1b[?1016l"
-    b"\x1b[?2004l\x1b[?25h\x1b[?7h\x1b[?1049l"
+    b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
 )
 FINAL_PTY_OUTPUT_BYTES = 64 * 1024
 WARM_MARKER = b"__LEMMA_WARM_SCROLL_DONE__"

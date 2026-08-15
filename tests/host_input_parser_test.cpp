@@ -106,6 +106,55 @@ TEST(HostInputParserTest, DecodesKittyKeyMetadataAcrossEveryFragmentationPoint) 
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(HostInputParserTest, DecodesKittySpecialKeyEventsAcrossEveryFragmentationPoint) {
+  constexpr std::string_view encoded = "\x1B[1;1:1D\x1B[1;1:3D\x1B[1;6:2A";
+  const auto input = std::as_bytes(std::span(encoded));
+  for (std::size_t split = 0; split <= input.size(); ++split) {
+    HostInputParser parser;
+    ASSERT_TRUE(parser.prepare().has_value());
+    std::array<std::byte, 64> storage{};
+    std::vector<HostInputEvent> events;
+    for (const auto fragment : {std::span(input).first(split), std::span(input).subspan(split)}) {
+      const auto parsed = parser.parse(fragment, storage, {.columns = 80, .rows = 24});
+      ASSERT_TRUE(parsed.has_value()) << split;
+      for (const auto& event : std::span(parsed->events).first(parsed->event_count)) {
+        events.push_back(event);
+      }
+    }
+    ASSERT_EQ(events.size(), 3U) << split;
+    EXPECT_EQ(events.at(0).kind, HostInputKind::key);
+    EXPECT_EQ(events.at(0).key.key, protocol::KeyInputKey::arrow_left);
+    EXPECT_EQ(events.at(0).key.action, protocol::KeyInputAction::press);
+    EXPECT_EQ(events.at(0).key.modifiers, 0U);
+    EXPECT_EQ(events.at(1).kind, HostInputKind::key);
+    EXPECT_EQ(events.at(1).key.key, protocol::KeyInputKey::arrow_left);
+    EXPECT_EQ(events.at(1).key.action, protocol::KeyInputAction::release);
+    EXPECT_EQ(events.at(1).key.modifiers, 0U);
+    EXPECT_EQ(events.at(2).kind, HostInputKind::key);
+    EXPECT_EQ(events.at(2).key.key, protocol::KeyInputKey::arrow_up);
+    EXPECT_EQ(events.at(2).key.action, protocol::KeyInputAction::repeat);
+    EXPECT_EQ(events.at(2).key.modifiers,
+              protocol::key_input_modifier_shift | protocol::key_input_modifier_control);
+  }
+}
+
+TEST(HostInputParserTest, LeavesMalformedKittySpecialKeyAsOrdinaryInput) {
+  HostInputParser parser;
+  ASSERT_TRUE(parser.prepare().has_value());
+  std::array<std::byte, 64> storage{};
+  constexpr std::string_view encoded = "\x1B[1;0:1D";
+
+  const auto parsed =
+      parser.parse(std::as_bytes(std::span(encoded)), storage, {.columns = 80, .rows = 24});
+
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->event_count, 1U);
+  EXPECT_EQ(parsed->events.front().kind, HostInputKind::ordinary);
+  EXPECT_EQ(parsed->events.front().size, encoded.size());
+  EXPECT_FALSE(parser.has_pending_sequence());
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HostInputParserTest, DecodesGhosttyAssociatedTextWithDefaultModifierField) {
   constexpr std::string_view encoded = "\x1B[108;;108u";
   const auto input = std::as_bytes(std::span(encoded));

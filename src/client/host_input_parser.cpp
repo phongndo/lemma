@@ -201,6 +201,32 @@ struct DecodedKittyKey final {
   }
 }
 
+[[nodiscard]] auto kitty_special_key(const std::byte final) noexcept
+    -> std::optional<protocol::KeyInputKey> {
+  switch (final) {
+  case std::byte{'A'}:
+    return protocol::KeyInputKey::arrow_up;
+  case std::byte{'B'}:
+    return protocol::KeyInputKey::arrow_down;
+  case std::byte{'C'}:
+    return protocol::KeyInputKey::arrow_right;
+  case std::byte{'D'}:
+    return protocol::KeyInputKey::arrow_left;
+  case std::byte{'H'}:
+    return protocol::KeyInputKey::home;
+  case std::byte{'F'}:
+    return protocol::KeyInputKey::end;
+  case std::byte{'P'}:
+    return protocol::KeyInputKey::f1;
+  case std::byte{'Q'}:
+    return protocol::KeyInputKey::f2;
+  case std::byte{'S'}:
+    return protocol::KeyInputKey::f4;
+  default:
+    return std::nullopt;
+  }
+}
+
 [[nodiscard]] auto kitty_key_modifiers(const std::uint32_t modifiers) noexcept
     -> std::optional<std::uint16_t> {
   if ((modifiers & ~(1U | 2U | 4U | 8U | 64U | 128U)) != 0) {
@@ -310,6 +336,58 @@ struct DecodedKittyKey final {
       start = index + 1U;
     }
   }
+  return decoded;
+}
+
+// Kitty retains traditional CSI finals for arrows and several navigation/function keys. With
+// event reporting enabled, Ghostty emits forms such as CSI 1;1:1D and CSI 1;1:3D rather than CSI-u.
+[[nodiscard]] auto parse_kitty_special_key(const std::span<const std::byte> sequence) noexcept
+    -> std::optional<DecodedKittyKey> {
+  if (sequence.size() < 6 || sequence.front() != std::byte{0x1B} ||
+      byte_at(sequence, 1) != std::byte{'['}) {
+    return std::nullopt;
+  }
+  const auto key = kitty_special_key(sequence.back());
+  if (!key.has_value()) {
+    return std::nullopt;
+  }
+  const auto parameters =
+      split_parameter(sequence.subspan(2, sequence.size() - 3U), std::byte{';'});
+  if (parameters.count != 2 || parse_decimal(parameter_at(parameters, 0)) != 1U) {
+    return std::nullopt;
+  }
+  const auto modifier_parameters = split_parameter(parameter_at(parameters, 1), std::byte{':'});
+  if (modifier_parameters.count == 0 || modifier_parameters.count > 2) {
+    return std::nullopt;
+  }
+  const auto encoded_modifiers = parse_decimal(parameter_at(modifier_parameters, 0));
+  if (!encoded_modifiers.has_value() || *encoded_modifiers == 0) {
+    return std::nullopt;
+  }
+  std::uint32_t event_type = 1;
+  if (modifier_parameters.count == 2) {
+    const auto decoded_event = parse_decimal(parameter_at(modifier_parameters, 1));
+    if (!decoded_event.has_value()) {
+      return std::nullopt;
+    }
+    event_type = *decoded_event;
+  }
+  if (event_type == 0 || event_type > 3) {
+    return std::nullopt;
+  }
+  const auto modifiers = kitty_key_modifiers(*encoded_modifiers - 1U);
+  if (!modifiers.has_value()) {
+    return std::nullopt;
+  }
+  DecodedKittyKey decoded;
+  decoded.key = {
+      .action = kitty_key_action(event_type),
+      .key = *key,
+      .modifiers = *modifiers,
+      .consumed_modifiers = 0,
+      .unshifted_codepoint = 0,
+      .composing = false,
+  };
   return decoded;
 }
 
@@ -610,6 +688,14 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
         pending_size_ = 0;
         continue;
       }
+    }
+    if (const auto key = parse_kitty_special_key(pending); key.has_value()) {
+      const auto appended = append_key(*key);
+      if (!appended.has_value()) {
+        return std::unexpected(appended.error());
+      }
+      pending_size_ = 0;
+      continue;
     }
     const bool mouse_candidate =
         pending.size() >= mouse_prefix.size() &&

@@ -146,6 +146,12 @@ protected:
     return client.send(bytes, deadline_after(2s));
   }
 
+  [[nodiscard]] static auto send_kitty_direction(PtyClient& client, const char final) -> bool {
+    std::string bytes = "\x1B[98;5:1u\x1B[98;5:3u\x1B[1;1:1X\x1B[1;1:3X";
+    std::ranges::replace(bytes, 'X', final);
+    return client.send(bytes, deadline_after(2s));
+  }
+
   [[nodiscard]] auto client_arguments(const std::string_view command,
                                       const std::string_view session) const
       -> std::vector<std::string> {
@@ -687,7 +693,9 @@ TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
   };
   ASSERT_TRUE(send_direction(client, 'A'));
   ASSERT_TRUE(expect_focus(pane_b));
-  ASSERT_TRUE(send_direction(client, 'D'));
+  // Ghostty reports arrows with Kitty event metadata as CSI 1;mod:event final. Exercise the real
+  // C-b + left-arrow path rather than only the legacy byte sequence.
+  ASSERT_TRUE(send_kitty_direction(client, 'D'));
   ASSERT_TRUE(expect_focus(pane_a));
   ASSERT_TRUE(send_direction(client, 'C'));
   ASSERT_TRUE(expect_focus(pane_b));
