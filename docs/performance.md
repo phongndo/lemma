@@ -84,7 +84,7 @@ Current policy bounds one client to 64 KiB/32 writes per turn and all attached c
 
 ## Host-theme projection qualification
 
-A ten-sample release `attach-visible` run after the semantic-color and asynchronous host-theme handshake change measured 6.001 ms p50, 6.406 ms p95, and 1,031 median client bytes on the documented M4 Max host. The host-theme query runs concurrently with normal attach progress; its 100 ms collection deadline is not on the attach-to-visible critical path.
+A ten-sample release `attach-visible` run after the private-protocol 2.0 epoch and accepted-attachment host-theme query ordering measured 6.361 ms p50, 6.823 ms p95, and 1,197 median client bytes on the documented M4 Max host. The client starts the query only after the daemon accepts the attachment and does not await replies before rendering, so its 100 ms collection deadline remains outside the attach-to-visible critical path.
 
 Focused release renderer medians were 128.023 µs for ANSI damage frames, 3.702 µs for one changed row, and 62.745 µs for detected scroll operations. Reproduce with:
 

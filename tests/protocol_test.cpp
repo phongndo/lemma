@@ -29,7 +29,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
   const auto encoded =
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
-      std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x01},
+      std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
       std::byte{0x00}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
@@ -81,7 +81,7 @@ TEST(ProtocolTest, RoundTripsLiveHostThemeUpdate) {
 TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
-      std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x01},
+      std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
       std::byte{0x00}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
@@ -189,7 +189,7 @@ TEST(ProtocolTest, RejectsMalformedClientEnvelopesBeforePayloadMutation) {
   invalid_magic.front() = std::byte{0};
   EXPECT_TRUE(expect_error(invalid_magic, DecodeError::invalid_magic));
 
-  const auto mismatch = encode_header(MessageKind::hello, 0, 6, 1, {.major = 2, .minor = 0});
+  const auto mismatch = encode_header(MessageKind::hello, 0, 6, 1, {.major = 1, .minor = 0});
   EXPECT_TRUE(expect_error(mismatch, DecodeError::version_mismatch));
 
   auto invalid_kind = encode_header(MessageKind::hello, 0, 6, 1);
@@ -325,7 +325,7 @@ TEST(ProtocolTest, ServerDecoderRejectsMissingFullRedrawAndOversizedFrame) {
 
 TEST(ProtocolTest, EncodesAndDecodesTypedDisconnectDiagnostic) {
   const auto encoded =
-      encode_disconnect(DisconnectReason::version_mismatch, "daemon requires private protocol 1.0");
+      encode_disconnect(DisconnectReason::version_mismatch, "attach protocol version mismatch");
   ServerDecoder decoder;
   ASSERT_TRUE(decoder.prepare().has_value());
   std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
@@ -336,7 +336,7 @@ TEST(ProtocolTest, EncodesAndDecodesTypedDisconnectDiagnostic) {
   ASSERT_TRUE(decoded.has_value() && decoded->has_value());
   EXPECT_EQ((**decoded).kind, ServerMessageKind::disconnect);
   EXPECT_EQ((**decoded).reason, DisconnectReason::version_mismatch);
-  EXPECT_EQ((**decoded).diagnostic, "daemon requires private protocol 1.0");
+  EXPECT_EQ((**decoded).diagnostic, "attach protocol version mismatch");
 }
 
 TEST(ProtocolTest, EncodesBoundedControlContextSize) {

@@ -88,7 +88,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics | Disabled | Kitty storage/media/APC are disabled at the adapter boundary. |
 | Terminal identity/terminfo | Partial | Panes advertise xterm-compatible environment values; Lemma ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 1.0. It transports daemon-rendered ANSI and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
+The current private attached-client protocol is version 2.0. It transports daemon-rendered ANSI and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 

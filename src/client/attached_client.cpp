@@ -499,11 +499,11 @@ private:
   return platform::terminal_size(STDOUT_FILENO, protocol::columns_max, protocol::rows_max);
 }
 
-[[nodiscard]] auto send_host_terminal_theme_query() noexcept -> bool {
+[[nodiscard]] auto send_host_terminal_theme_query(const int descriptor) noexcept -> bool {
   std::array<char, host_theme_query_bytes_max> query{};
   const auto query_size = encode_host_terminal_theme_query(query);
   return query_size > 0 &&
-         write_text_interruptibly(STDOUT_FILENO, std::string_view(query.data(), query_size));
+         write_terminal_text_interruptibly(descriptor, std::string_view(query.data(), query_size));
 }
 
 [[nodiscard]] auto advance_sequence(std::uint32_t& sequence) noexcept -> bool {
@@ -819,9 +819,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     }
 
     HostTerminalThemeParser host_theme_parser;
-    bool host_theme_query_pending = raw_terminal_entered && send_host_terminal_theme_query();
+    bool host_theme_query_pending = false;
     constexpr auto host_theme_query_timeout = std::chrono::milliseconds(100);
-    const auto host_theme_deadline = std::chrono::steady_clock::now() + host_theme_query_timeout;
+    auto host_theme_deadline = std::chrono::steady_clock::time_point{};
     const auto size = terminal_size();
     const protocol::Dimensions dimensions{.columns = size.columns, .rows = size.rows};
     const auto hello = protocol::encode_client_hello(session, dimensions);
@@ -831,6 +831,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     terminal_setup_succeeded = handshake_accepted && outer_terminal.enter();
     if (terminal_setup_succeeded) {
       termination_render_descriptor = outer_terminal.render_descriptor();
+      // A rejected handshake has not acquired an AttachmentRuntime and must not leave terminal
+      // query replies for the parent shell. Arm filtering before the write so a partial query write
+      // cannot produce an unowned response.
+      host_theme_query_pending = true;
+      host_theme_deadline = std::chrono::steady_clock::now() + host_theme_query_timeout;
+      static_cast<void>(send_host_terminal_theme_query(outer_terminal.render_descriptor()));
     }
 
     protocol::PrefixParser prefix_parser;

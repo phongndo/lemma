@@ -434,7 +434,7 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   case DecodeError::invalid_magic:
     return "invalid attach protocol magic";
   case DecodeError::version_mismatch:
-    return "attach protocol version mismatch; daemon requires 1.0";
+    return "attach protocol version mismatch";
   case DecodeError::invalid_kind:
     return "invalid attach message kind";
   case DecodeError::invalid_flags:

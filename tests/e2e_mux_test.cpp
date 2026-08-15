@@ -358,7 +358,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-1.0")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.0")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -890,11 +890,13 @@ TEST_F(MuxProcessTest, RestoresTerminalOnStartupRejectionAndHandledSignals) {
   PtyClient owner;
   ASSERT_TRUE(owner.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
   ASSERT_TRUE(owner.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(owner.wait_for_raw("\x1B]10;?", deadline_after(5s)));
   PtyClient rejected;
   ASSERT_TRUE(rejected.spawn(client_arguments("attach", "busy_restore"), runtime_.environment()));
   ASSERT_TRUE(rejected.wait(deadline_after(5s)));
   EXPECT_TRUE(rejected.terminal_state_restored());
   EXPECT_FALSE(rejected.raw_tail().contains("\x1B[?1049h"));
+  EXPECT_FALSE(rejected.raw_tail().contains("\x1B]10;?"));
   ASSERT_TRUE(send_prefix(owner, std::byte{'d'}));
   ASSERT_TRUE(owner.wait(deadline_after(5s)));
   EXPECT_TRUE(owner.terminal_state_restored());
@@ -1118,7 +1120,7 @@ TEST_F(MuxProcessTest, RejectsVersionMismatchAndLiveMalformedPeerWithTypedReason
   RawPeer mismatch;
   ASSERT_TRUE(mismatch.connect(runtime_.socket_path(), deadline_after(2s)));
   const auto incompatible =
-      attach_request("mismatch", {.columns = 200, .rows = 80}, {.major = 2, .minor = 0});
+      attach_request("mismatch", {.columns = 200, .rows = 80}, {.major = 1, .minor = 0});
   ASSERT_TRUE(mismatch.send(incompatible, deadline_after(2s)));
   ASSERT_TRUE(wait_for_disconnect(mismatch, protocol::DisconnectReason::version_mismatch,
                                   deadline_after(2s)));
