@@ -104,6 +104,6 @@ The current private attached-client protocol is version 2.1. It transports daemo
 
 ## Testing and measurement present today
 
-The build defines component tests, isolated real-process PTY tests, a standalone steady-state allocation audit, terminal/render/core/protocol benchmarks, memory census tooling, and Lemma/tmux/Zellij comparison drivers. CI covers formatting, build/tests, clang-tidy, clangd, Linux ASan/UBSan, workflow/script checks, and scheduled host matrices.
+The build defines component tests, isolated real-process PTY tests, a standalone steady-state allocation audit, terminal/render/core/protocol benchmarks, memory census tooling, and Lemma/tmux/Zellij/Herdr comparison drivers. The process harness also measures 1/4/16 logical workspaces and named sessions so one-daemon and one-server-per-unit models are not conflated. CI covers formatting, build/tests, clang-tidy, clangd, Linux ASan/UBSan, workflow/script checks, and scheduled host matrices.
 
 Measured evidence and caveats are in [`performance.md`](performance.md) and [`memory.md`](memory.md). Test existence does not imply every product capability in [`product-contract.md`](product-contract.md) is implemented.

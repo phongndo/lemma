@@ -23,6 +23,7 @@ from check_regression import (
 )
 from latency_trace import input_paths
 from mux_benchmark import (
+    AnsiScreenTracker,
     INTERACTION_LABEL_CODES,
     LEMMA_OUTER_TERMINAL_RESTORE,
     PtyProcess,
@@ -436,6 +437,20 @@ class F5SoakReportTest(unittest.TestCase):
         self.assertEqual(len(report["interactions"]), 1)
 
 
+class AnsiScreenTrackerTest(unittest.TestCase):
+    def test_finds_marker_across_fragmented_incremental_cell_updates(self) -> None:
+        tracker = AnsiScreenTracker(80, 24)
+        for fragment in (
+            b"\x1b[23;1H__LEMMA_DONE",
+            b"\x1b]0;ignored\x1b\\",
+            b"\x1b[23;13H__",
+        ):
+            tracker.feed(fragment)
+
+        self.assertTrue(tracker.contains(b"__LEMMA_DONE__"))
+        self.assertFalse(tracker.contains(b"ignored"))
+
+
 class PtyProcessBufferingTest(unittest.TestCase):
     def test_wait_for_exit_drains_child_output(self) -> None:
         script = (
@@ -485,6 +500,7 @@ class PtyProcessBufferingTest(unittest.TestCase):
         process = object.__new__(PtyProcess)
         process.descriptor = read_descriptor
         process.pending_read = b""
+        process.screen = AnsiScreenTracker(80, 24)
         handshake = b"\x1b[?1049h"
         marker = b"__VISIBLE__"
         suffix = marker + b"tail"

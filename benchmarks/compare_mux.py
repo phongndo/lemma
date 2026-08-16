@@ -81,6 +81,7 @@ def main() -> int:
     parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
     parser.add_argument("--tmux", default="tmux")
     parser.add_argument("--zellij", default="zellij")
+    parser.add_argument("--herdr", default="herdr")
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
@@ -93,6 +94,7 @@ def main() -> int:
         lemma = load_report(arguments.lemma_report, "lemma")
         tmux = resolve_executable(arguments.tmux)
         zellij = resolve_executable(arguments.zellij)
+        herdr = resolve_executable(arguments.herdr)
         harness = Path(__file__).with_name("mux_benchmark.py").resolve()
         with tempfile.TemporaryDirectory(prefix="mux-comparison-") as temporary:
             root = Path(temporary)
@@ -113,6 +115,14 @@ def main() -> int:
                     arguments.peer.resolve(),
                     arguments.repetitions,
                     root / "zellij.json",
+                ),
+                run_competitor(
+                    harness,
+                    "herdr",
+                    herdr,
+                    arguments.peer.resolve(),
+                    arguments.repetitions,
+                    root / "herdr.json",
                 ),
             ]
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:

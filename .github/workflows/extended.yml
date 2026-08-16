@@ -102,7 +102,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Run release benchmark smoke
-        run: nix develop --command scripts/ci/benchmarks smoke
+        run: nix develop .#benchmarks --command scripts/ci/benchmarks smoke
 
       - name: Upload benchmark reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

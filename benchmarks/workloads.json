@@ -28,6 +28,46 @@
       "purpose": "per-session supported capacity"
     }
   ],
+  "session_profiles": [
+    {
+      "id": "S1",
+      "sessions": 1,
+      "purpose": "one detached isolated workspace with one live shell"
+    },
+    {
+      "id": "S4",
+      "sessions": 4,
+      "purpose": "ordinary concurrent isolated workspaces"
+    },
+    {
+      "id": "S16",
+      "sessions": 16,
+      "purpose": "heavy concurrent isolated workspace set"
+    }
+  ],
+  "workspace_profiles": [
+    {
+      "id": "W1",
+      "workspaces": 1,
+      "purpose": "one logical isolated workspace with one live shell"
+    },
+    {
+      "id": "W4",
+      "workspaces": 4,
+      "purpose": "ordinary concurrent logical workspaces"
+    },
+    {
+      "id": "W16",
+      "workspaces": 16,
+      "purpose": "heavy concurrent logical workspace set"
+    }
+  ],
+  "session_profile_metrics": [
+    "process_tree_cpu_time_ns",
+    "process_tree_rss_bytes",
+    "wakeups_when_supported",
+    "direct_role_cpu_and_rss"
+  ],
   "profile_conditions": {
     "idle": "all panes are live shells with no injected activity during resource sampling; focused-pane interaction is measured after the idle sample",
     "active": "the focused pane emits bounded continuous output from a one-millisecond input-aware poll deadline while resource and interaction samples are collected; all remaining panes stay live and idle"
@@ -523,7 +563,8 @@
     "multiplexers": [
       "lemma",
       "tmux",
-      "zellij"
+      "zellij",
+      "herdr"
     ],
     "rule": "Use identical PTY dimensions, peer binary, inputs, markers, and completion conditions. Record a failed completion as failure, never as a latency sample."
   }

@@ -22,6 +22,7 @@ versions:
 benchmark-versions:
     {{ nix }} tmux -V
     {{ nix }} zellij --version
+    {{ nix }} herdr --version
 
 # Install Conan dependencies for the selected profile.
 deps:
@@ -64,7 +65,7 @@ test: build
 bench: build
     {{ nix }} ./build/{{ profile }}/lemma_benchmarks
 
-# Run release microbenchmarks and Lemma/tmux/Zellij process baselines.
+# Run release microbenchmarks and Lemma/tmux/Zellij/Herdr process baselines.
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
 

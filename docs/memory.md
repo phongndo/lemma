@@ -71,6 +71,22 @@ Shell descendants dominate the larger process trees and are similar between muxe
 
 One cold detached session increased daemon RSS by 1.016 MiB. Attachment added 0.156 MiB. After detach, a 0.156-MiB delta remained from canonical Ghostty/render allocator pages; the frame owner itself returned to zero capacity.
 
+## Isolated workspace and named-session scaling
+
+Twenty one-second samples measured 1, 4, and 16 detached units with one live shell each. A Lemma session, tmux session, Zellij session, and Herdr workspace are the normal logical workspace units. Herdr named sessions are also shown separately because each starts another server and provides a stronger process/fault boundary. Reports are `perf-current4-*-session-profiles-20.json` and `perf-current4-herdr-workspace-profiles-20.json`.
+
+| Subject and unit model | 1 unit tree RSS | 4 units | 16 units | Authority RSS at 16 | Authority wakeups p95 / s at 16 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lemma logical sessions, one daemon | 6.11 MiB | 16.17 MiB | 55.47 MiB | 8.70 MiB | 0 |
+| tmux sessions, one server | 6.91 MiB | 15.69 MiB | 51.06 MiB | 4.33 MiB | 0 |
+| Zellij named sessions, one server each | 80.20 MiB | 322.89 MiB | 1,299.77 MiB | 1,253.48 MiB | 69 |
+| Herdr workspaces, one server | 22.16 MiB | 31.64 MiB | 71.00 MiB | 24.50 MiB | 48 |
+| Herdr named sessions, one server each | 21.91 MiB | 87.23 MiB | 350.30 MiB | 303.83 MiB | 203 |
+
+Shell descendants contributed about 2.9 MiB per unit across subjects. From 4 to 16 logical units, authority RSS grew about 0.355 MiB per Lemma session, 0.028 MiB per tmux session, and 0.374 MiB per Herdr workspace. Herdr's normal one-server workspace model therefore has a similar marginal terminal/workspace cost to Lemma but a much larger base and more idle wakeups. Herdr's named-session mode and Zellij trade substantially higher per-unit cost for separate server processes.
+
+Lemma's logical sessions are not process-isolation boundaries: one daemon crash still affects all of them. Their measured isolation is bounded reactor progress and independent lifecycle, not OS-level fault or security containment.
+
 ## History and allocator interpretation
 
 After 25,000 rows, one-pane daemon RSS rose by 786,432 B and tree RSS by 802,816 B while retained logical history remained under the configured 10,000-byte quota. This is not contradictory: Ghostty PagePool page granularity, active pages, and allocator retention are resident costs outside Lemma's routed C-allocation counter.

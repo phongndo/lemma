@@ -6,7 +6,7 @@ These are local measurements, not universal rankings. Unless stated otherwise th
 
 ```sh
 just profile=release bench
-scripts/ci/benchmarks extended
+nix develop .#benchmarks --command scripts/ci/benchmarks extended
 scripts/ci/regression-budgets     # only valid on the host fingerprint in workloads.json
 ```
 
@@ -31,29 +31,58 @@ The warmed steady-state allocation audit performs 10,000 parse/damage/compose/fr
 
 ## Current end-to-end comparison
 
-A thirty-sample same-host comparison after sustained-output remediation used tmux 3.7b, Zellij 0.44.3, the same 80x24 peer, input, and completion markers. Reports are `perf-current-{lemma,tmux,zellij}-comparison-30.json` and `perf-current-comparison-summary.json`.
+A thirty-sample same-host comparison used tmux 3.7b, Zellij 0.44.3, Herdr 0.8.0, and Lemma at `f1e4fc3`. All subjects received the same 80x24 peer, input, and exact completion conditions. The autonomous-output peer pauses for 50 ms during untimed setup so delayed renderers can expose readiness before load begins. Herdr used its normal tab row but hid the sidebar and pane scrollbar, giving the root pane the same 80x23 area as Lemma and tmux; update checks and restart history were disabled.
+
+Reports are `perf-current4-{lemma,tmux,zellij,herdr}-comparison-30.json`, the dedicated failed-backpressure reports, and `perf-current4-summary.json`.
 
 | Mux | Workload | p50 / p95 | Median outer bytes |
 | --- | --- | ---: | ---: |
-| Lemma | Warm scroll | 2.694 / 17.276 ms | 402 B |
-| tmux | Warm scroll | 145.289 / 150.976 ms | 33,995 B |
-| Zellij | Warm scroll | 56.110 / 56.816 ms | 22,377 B |
-| Lemma | Attach to visible | 7.247 / 9.187 ms | 1,016 B |
-| tmux | Attach to visible | 6.365 / 7.003 ms | 514 B |
-| Zellij | Attach to visible | 50.847 / 52.467 ms | 7,985 B |
-| Lemma | Interaction under output | 0.449 / 0.764 ms | 620 B |
-| tmux | Interaction under output | 0.190 / 0.831 ms | 85 B |
-| Zellij | Interaction under output | 12.397 / 13.694 ms | 6,144 B |
+| Lemma | Warm scroll | 2.636 / 19.081 ms | 567 B |
+| tmux | Warm scroll | 149.423 / 151.802 ms | 33,941 B |
+| Zellij | Warm scroll | 46.389 / 47.403 ms | 20,412 B |
+| Herdr | Warm scroll | 713.281 / 2,123.898 ms | 1,918 B |
+| Lemma | Attach to visible | 6.322 / 7.070 ms | 1,235 B |
+| tmux | Attach to visible | 5.142 / 5.520 ms | 514 B |
+| Zellij | Attach to visible | 47.592 / 48.704 ms | 7,985 B |
+| Herdr | Attach to visible | 42.142 / 52.246 ms | 5,980 B |
+| Lemma | Interaction under output | 0.759 / 1.119 ms | 633 B |
+| tmux | Interaction under output | 0.200 / 0.547 ms | 32 B |
+| Zellij | Interaction under output | 15.633 / 17.913 ms | 6,144 B |
+| Herdr | Interaction under output | 2.153 / 19.314 ms | 87 B |
+
+Interaction key-to-PTY p50/p95 was 0.101/0.187 ms for Lemma, 0.119/0.289 ms for tmux, 0.137/0.331 ms for Zellij, and 0.668/0.867 ms for Herdr. Idle tree RSS medians were 9.281/10.203/110.344/32.297 MiB in the same order. Idle tree CPU p95 per second was 0/0.020/0.006/0.068 ms. Wakeup p95 was 0/1/4 for Lemma/tmux/Zellij; Herdr's complete-tree wakeup counter was unavailable because its shell could not be sampled, while its daemon and client separately measured 14 and 30 wakeups/s p95.
+
+The blocked-PTY test applies 2 MiB of client input to one session, verifies the exact count and digest, and measures another session before and during backpressure:
+
+| Mux | Bytes accepted before stall | Completion | Other-session key-to-visible p50 / p95 |
+| --- | ---: | --- | ---: |
+| Lemma | 1,125,222 | Exact 2 MiB recovered | 0.685 / 0.874 ms |
+| tmux | 2,097,152 | Exact 2 MiB recovered | 0.224 / 0.241 ms |
+| Zellij | 448,658 | Client lost its server connection | 15.468 / 15.689 ms |
+| Herdr | 471,142 | Peer received 2,061,556 B; 35,596 B missing | 2.436 / 12.208 ms |
+
+### Retained Lemma result detail
+
+The Lemma rows above come from `perf-current4-lemma-comparison-30.json`. This table records the complete retained statistics without mixing in trace-enabled diagnostics:
+
+| Workload | Samples / completion | Retained measurements |
+| --- | --- | --- |
+| Warm scroll | 30 / completed | key-to-marker p50/p95/p99 2.636/19.081/19.150 ms; 27 samples at or below 3 ms and three above 10 ms at 16.880/19.081/19.150 ms; 567 outer bytes median |
+| Attach to visible | 30 / completed | p50/p95/p99 6.322/7.070/7.145 ms; 1,235 outer bytes median |
+| Interaction under output | 30 / completed | key-to-PTY p50/p95/p99 0.101/0.187/0.200 ms; key-to-visible 0.759/1.119/1.125 ms; 633 outer bytes median |
+| Idle resources | 30 one-second intervals / completed | tree RSS 9.281 MiB: daemon 3.375 MiB, attached client 1.891 MiB, child tree 4.016 MiB; tree CPU p95 0 ms/s; wakeups p95 0/s |
+| Blocked PTY | 30 interactions before and during backpressure / completed | 1,125,222 B accepted before client backpressure; exact 2,097,152-B payload completed; other-session key-to-visible p50/p95/p99 0.685/0.874/1.234 ms |
+| Blocked client | 30 interactions before and during backpressure / completed | non-reading 4-KiB receive-buffer client detached after 5.015 s; other-session key-to-visible p50/p95/p99 0.351/0.374/0.411 ms |
 
 Interpretation is workload-specific:
 
-- Lemma had the lowest warm-scroll p50 in this run, but its known approximately 17 ms secondary mode remained visible at p95.
-- tmux had the fastest attach p50/p95 and interaction median.
-- Lemma had the lower interaction p95 in this distribution, while emitting more bytes than tmux.
-- Lemma and tmux recovered the exact 2 MiB blocked-PTY payload; Zellij lost the connection and was recorded as failed.
-- Idle tree RSS medians were 8.97/9.95/109.23 MiB for Lemma/tmux/Zellij; wakeup p95 values were 0/2/6 per second.
+- Lemma had the fastest warm-scroll distribution. Its three samples above 10 ms remain a real secondary mode, but Herdr exceeded 500 ms in 17 of 30 samples and had a 713 ms median.
+- tmux led attach and interaction p50/p95 and was the only subject whose blocked input fit without harness-observed backpressure.
+- Lemma was second to tmux for interactive latency and was the only other subject to recover the exact blocked payload.
+- Herdr emitted nearly as few controlled-interaction bytes as tmux, but its delayed high-scroll and interaction distributions show why low emitted-byte counts alone are not an efficiency result.
+- Zellij and Herdr both failed the exact blocked-input completion contract in different ways; responsiveness of the other session did not make the incomplete primary work a successful sample.
 
-These observations support only these exact workloads and versions.
+These observations support only these exact workloads, versions, host, and configuration.
 
 ## Pane scaling and sustained output
 
@@ -66,7 +95,16 @@ Two final thirty-sample reports, `perf-final-event-peer-profiles-30.json` and it
 | 16 panes | 1.086 ms | 0.708 ms | 947 | 9,765 | 0.256 / 0.465 ms |
 | 64 panes | 1.934 ms | 1.526 ms | 1,030 | 9,765 | 0.215 / 0.886 ms |
 
-The same-host tmux active tree-CPU p95 values were 1.715, 1.971, 2.213, and 3.224 ms for the same pane counts. This is a resource result, not a general latency or feature-parity claim.
+The same-host tmux active tree-CPU p95 values were 1.715, 1.971, 2.213, and 3.224 ms for the same pane counts. Herdr's `perf-current4-herdr-pane-profiles-30.json` produced:
+
+| Herdr active profile | Tree RSS p50 | Tree CPU p95 / s | Wakeups p95 / s | Key-to-visible p50 / p95 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 pane | 44.88 MiB | 24.664 ms | 905 | 22.386 / 27.634 ms |
+| 4 panes | 56.33 MiB | 20.562 ms | 909 | 21.534 / 23.010 ms |
+| 16 panes | 100.14 MiB | 20.477 ms | 940 | 16.295 / 24.251 ms |
+| 64 panes | 274.83 MiB | 20.874 ms | 1,012 | 18.008 / 25.884 ms |
+
+Herdr's active outer-byte median was zero in every profile, with sparse nonzero samples. Coupled with its visible-latency and warm-scroll results, this indicates delayed or coalesced presentation rather than free sustained-output throughput. These are resource results, not a general feature-parity claim.
 
 The measured sustained-output improvements came from three independently retained changes:
 
@@ -102,7 +140,9 @@ python3 benchmarks/mux_benchmark.py --mode attach-visible --multiplexer lemma \
 
 - Attach-to-visible remains above the older host-scoped 4.7/5.4 ms p50/p95 limits. Replacing a one-millisecond emergency-restorer polling loop with descriptor polling improved paired attach p50/p95 by 12.7%/9.6%, but later complete runs still measured 6–9 ms tails.
 - Idle key-to-visible p95 occasionally crosses the 0.5 ms host-scoped profile limit at one or 64 panes while medians and idle CPU remain low. Passing retries are not used to erase those tails.
-- The approximately 17–20 ms warm-scroll secondary mode has appeared across multiple distributions and remains visible in the current comparison.
+- The approximately 17–20 ms Lemma warm-scroll secondary mode has appeared across multiple distributions and remains visible in the current comparison.
+- Herdr's current high-scroll distribution is strongly multimodal, its active interaction p95 remains near one render cadence or worse, and attach had one 277.935 ms p99/max sample. Low wire-byte totals must not be treated as a win until exact completion and visible freshness are demonstrated.
+- Herdr and Zellij fail the current 2 MiB blocked-input completion test. This is a correctness and isolation result, not merely a slower latency sample.
 - Shared CI timing and reports from a nonmatching host identity cannot satisfy the pinned-host regression gate.
 
 No threshold should be widened merely to turn these observations green. A changed threshold requires a new retained distribution and explicit review.

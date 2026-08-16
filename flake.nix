@@ -13,6 +13,11 @@
       url = "github:ghostty-org/ghostty/226a91658da6400140a7da3f38b825ba0395bd5d";
       flake = false;
     };
+    herdrSource = {
+      url = "github:herdrdev/herdr/v0.8.0";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    benchmarkNixpkgs.url = "github:NixOS/nixpkgs/643809054d65fdd466a63e3155b8c498cb483c04";
   };
 
   outputs =
@@ -20,7 +25,9 @@
     , nixpkgs
     , hk
     , zig
+    , benchmarkNixpkgs
     , ghosttySource
+    , herdrSource
     , ...
     }:
     let
@@ -140,6 +147,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          benchmarkPkgs = import benchmarkNixpkgs { inherit system; };
           llvm = pkgs.llvmPackages_22;
           isDarwin = pkgs.stdenv.isDarwin;
           darwinTools = llvm.clang-tools;
@@ -230,8 +238,9 @@
             hk.packages.${system}.default
           ];
           benchmarkPackages = [
-            pkgs.tmux
-            pkgs.zellij
+            benchmarkPkgs.tmux
+            benchmarkPkgs.zellij
+            herdrSource.packages.${system}.default
           ];
           shellEnvironment = {
             CMAKE_GENERATOR = "Ninja";

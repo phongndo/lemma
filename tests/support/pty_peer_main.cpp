@@ -354,9 +354,18 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   const std::string_view ready = autonomous_output ? "\r\n__LEMMA_LATENCY_OUTPUT_READY__\r\n"
                                                    : "\r\n__LEMMA_LATENCY_READY__\r\n";
   if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
-      !write_all(ready) || (autonomous_output && !make_output_nonblocking())) {
+      !write_all(ready)) {
     static_cast<void>(::close(receipt));
     return 1;
+  }
+  // Readiness is setup, not a sample. Give delayed renderers one bounded opportunity to expose
+  // it before autonomous output can overwrite the row.
+  if (autonomous_output) {
+    std::this_thread::sleep_for(50ms);
+    if (!make_output_nonblocking()) {
+      static_cast<void>(::close(receipt));
+      return 1;
+    }
   }
 
   std::array<char, 128> marker{};

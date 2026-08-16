@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import termios
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -67,6 +68,28 @@ ATTACH_STARTUP_SHELLS = {
     "nu",
     "nushell",
 }
+HERDR_BENCHMARK_CONFIG = """onboarding = false
+
+[update]
+version_check = false
+manifest_check = false
+
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+pane_scrollbars = false
+mouse_capture = false
+redraw_on_focus_gained = false
+confirm_close = false
+prompt_new_tab_name = false
+prompt_new_workspace_name = false
+
+[ui.sound]
+enabled = false
+
+[experimental]
+pane_history = false
+"""
 
 
 def darwin_sysctl(name: str) -> str | None:
@@ -100,6 +123,29 @@ def host_fingerprint() -> dict[str, Any]:
         "physical_cpu_count": integer_sysctl("hw.physicalcpu"),
         "memory_bytes": integer_sysctl("hw.memsize"),
     }
+
+
+def local_socket_peer_pid(path: Path) -> int:
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        peer.connect(str(path))
+        if platform.system() == "Darwin":
+            # Darwin's LOCAL_PEERPID is option 2 at SOL_LOCAL (level 0).
+            encoded = peer.getsockopt(0, 2, struct.calcsize("i"))
+            process = struct.unpack("i", encoded)[0]
+        elif platform.system() == "Linux":
+            # Linux exposes pid, uid, and gid through SO_PEERCRED.
+            encoded = peer.getsockopt(
+                socket.SOL_SOCKET, getattr(socket, "SO_PEERCRED", 17), struct.calcsize("3i")
+            )
+            process, _, _ = struct.unpack("3i", encoded)
+        else:
+            raise RuntimeError("local socket peer PID is unsupported on this platform")
+    finally:
+        peer.close()
+    if process <= 0:
+        raise RuntimeError("local socket reported an invalid peer PID")
+    return process
 
 
 def attach_frame(kind: int, payload: bytes, sequence: int, flags: int = 0) -> bytes:
@@ -518,15 +564,17 @@ def runtime_resource_snapshot(runtime: MuxRuntime) -> dict[str, Any]:
 def summarize_resource_samples(
     before_samples: list[dict[str, Any]], after_samples: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    if len(before_samples) != len(after_samples):
+        raise RuntimeError("resource sample endpoints are unbalanced")
     cpu_samples = [
         max(0, int(after["cpu_time_ns"]) - int(before["cpu_time_ns"]))
-        for before, after in zip(before_samples, after_samples, strict=True)
+        for before, after in zip(before_samples, after_samples)
     ]
     rss_samples = [int(after["rss_bytes"]) for after in after_samples]
     wakeup_samples: list[int] = []
     wakeup_source: str | None = None
     wakeups_available = True
-    for before, after in zip(before_samples, after_samples, strict=True):
+    for before, after in zip(before_samples, after_samples):
         before_wakeups = before.get("wakeups")
         after_wakeups = after.get("wakeups")
         if (
@@ -646,6 +694,165 @@ def idle_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     return sample_resources(runtime, repetitions, client)
 
 
+class AnsiScreenTracker:
+    """Track the bounded ASCII fixture surface used for visible completion markers."""
+
+    def __init__(self, columns: int, rows: int) -> None:
+        self.columns = columns
+        self.rows = rows
+        self.cells = [bytearray(b" " * columns) for _ in range(rows)]
+        self.row = 0
+        self.column = 0
+        self.saved = (0, 0)
+        self.observed_fixture_rows: deque[bytes] = deque(maxlen=64)
+        self.state = "ground"
+        self.csi = bytearray()
+
+    def resize(self, columns: int, rows: int) -> None:
+        resized = [bytearray(b" " * columns) for _ in range(rows)]
+        for row in range(min(rows, self.rows)):
+            resized[row][: min(columns, self.columns)] = self.cells[row][
+                : min(columns, self.columns)
+            ]
+        self.columns = columns
+        self.rows = rows
+        self.cells = resized
+        self.row = min(self.row, rows - 1)
+        self.column = min(self.column, columns - 1)
+
+    def _line_feed(self) -> None:
+        if self.row + 1 < self.rows:
+            self.row += 1
+            return
+        self.cells.pop(0)
+        self.cells.append(bytearray(b" " * self.columns))
+
+    @staticmethod
+    def _parameters(encoded: bytes) -> list[int]:
+        text = encoded.decode("ascii", errors="ignore").lstrip("?<=>")
+        values = []
+        for part in text.split(";"):
+            try:
+                values.append(int(part) if part else 0)
+            except ValueError:
+                values.append(0)
+        return values or [0]
+
+    def _erase_display(self, mode: int) -> None:
+        if mode in (2, 3):
+            self.cells = [bytearray(b" " * self.columns) for _ in range(self.rows)]
+        elif mode == 0:
+            self.cells[self.row][self.column :] = b" " * (self.columns - self.column)
+            for row in range(self.row + 1, self.rows):
+                self.cells[row][:] = b" " * self.columns
+        elif mode == 1:
+            for row in range(self.row):
+                self.cells[row][:] = b" " * self.columns
+            self.cells[self.row][: self.column + 1] = b" " * (self.column + 1)
+
+    def _erase_line(self, mode: int) -> None:
+        if mode == 0:
+            self.cells[self.row][self.column :] = b" " * (self.columns - self.column)
+        elif mode == 1:
+            self.cells[self.row][: self.column + 1] = b" " * (self.column + 1)
+        elif mode == 2:
+            self.cells[self.row][:] = b" " * self.columns
+
+    def _dispatch_csi(self, final: int) -> None:
+        parameters = self._parameters(bytes(self.csi))
+        first = parameters[0] or 1
+        if final in (ord("H"), ord("f")):
+            row = parameters[0] if parameters[0] else 1
+            column = parameters[1] if len(parameters) > 1 and parameters[1] else 1
+            self.row = max(0, min(self.rows - 1, row - 1))
+            self.column = max(0, min(self.columns - 1, column - 1))
+        elif final == ord("A"):
+            self.row = max(0, self.row - first)
+        elif final in (ord("B"), ord("e")):
+            self.row = min(self.rows - 1, self.row + first)
+        elif final in (ord("C"), ord("a")):
+            self.column = min(self.columns - 1, self.column + first)
+        elif final == ord("D"):
+            self.column = max(0, self.column - first)
+        elif final in (ord("G"), ord("`")):
+            self.column = max(0, min(self.columns - 1, first - 1))
+        elif final == ord("d"):
+            self.row = max(0, min(self.rows - 1, first - 1))
+        elif final == ord("J"):
+            self._erase_display(parameters[0])
+        elif final == ord("K"):
+            self._erase_line(parameters[0])
+        elif final == ord("s"):
+            self.saved = (self.row, self.column)
+        elif final == ord("u"):
+            self.row, self.column = self.saved
+
+    def feed(self, data: bytes) -> None:
+        for value in data:
+            if self.state == "ground":
+                if value == 0x1B:
+                    self.state = "escape"
+                elif value == 0x0D:
+                    self.column = 0
+                elif value == 0x0A:
+                    self._line_feed()
+                elif value == 0x08:
+                    self.column = max(0, self.column - 1)
+                elif value == 0x09:
+                    self.column = min(self.columns - 1, ((self.column // 8) + 1) * 8)
+                elif 0x20 <= value <= 0x7E:
+                    self.cells[self.row][self.column] = value
+                    current_row = self.cells[self.row]
+                    if value == ord("_") and b"__LEMMA_" in current_row:
+                        self.observed_fixture_rows.append(bytes(current_row))
+                    if self.column + 1 < self.columns:
+                        self.column += 1
+                continue
+            if self.state == "escape":
+                if value == ord("["):
+                    self.csi.clear()
+                    self.state = "csi"
+                elif value == ord("]"):
+                    self.state = "osc"
+                elif value in (ord("P"), ord("X"), ord("^"), ord("_")):
+                    self.state = "string"
+                elif value == ord("7"):
+                    self.saved = (self.row, self.column)
+                    self.state = "ground"
+                elif value == ord("8"):
+                    self.row, self.column = self.saved
+                    self.state = "ground"
+                elif 0x20 <= value <= 0x2F:
+                    self.state = "escape_intermediate"
+                else:
+                    self.state = "ground"
+                continue
+            if self.state == "escape_intermediate":
+                if 0x30 <= value <= 0x7E:
+                    self.state = "ground"
+                continue
+            if self.state == "csi":
+                if 0x40 <= value <= 0x7E:
+                    self._dispatch_csi(value)
+                    self.state = "ground"
+                elif len(self.csi) < 128:
+                    self.csi.append(value)
+                continue
+            if self.state in ("osc", "string"):
+                if value == 0x07 and self.state == "osc":
+                    self.state = "ground"
+                elif value == 0x1B:
+                    self.state = "string_escape"
+                continue
+            if self.state == "string_escape":
+                self.state = "ground" if value == ord("\\") else "string"
+
+    def contains(self, marker: bytes) -> bool:
+        return any(marker in row for row in self.observed_fixture_rows) or any(
+            marker in row for row in self.cells
+        )
+
+
 class PtyProcess:
     def __init__(
         self,
@@ -675,6 +882,7 @@ class PtyProcess:
         self.pid = pid
         self.descriptor = descriptor
         self.pending_read = b""
+        self.screen = AnsiScreenTracker(80, 24)
         self.initial_terminal_attributes: list[Any] | None = None
         self.terminal_restore_sequence = terminal_restore_sequence
         self.final_output = b""
@@ -812,6 +1020,7 @@ class PtyProcess:
         actual_rows, actual_columns, _, _ = struct.unpack("HHHH", actual)
         if (actual_columns, actual_rows) != (columns, rows):
             raise RuntimeError("outer PTY did not retain the requested dimensions")
+        self.screen.resize(columns, rows)
         try:
             os.killpg(self.pid, signal.SIGWINCH)
         except ProcessLookupError:
@@ -843,6 +1052,7 @@ class PtyProcess:
         started_ns: int | None = None,
         failure_markers: tuple[bytes, ...] = (),
         preserve_suffix: bool = False,
+        visible_text: bool = False,
     ) -> tuple[int, int]:
         if started_ns is None:
             started_ns = time.monotonic_ns()
@@ -850,7 +1060,8 @@ class PtyProcess:
         total = 0
         retained = b""
         while time.monotonic() < deadline:
-            if self.pending_read:
+            from_pending = bool(self.pending_read)
+            if from_pending:
                 data = self.pending_read
                 self.pending_read = b""
             else:
@@ -870,9 +1081,13 @@ class PtyProcess:
                     break
             total += len(data)
             retained = (retained + data)[-(len(marker) + 64 * 1024) :]
+            if not from_pending:
+                self.screen.feed(data)
             marker_offset = retained.find(marker)
-            if marker_offset >= 0:
-                suffix = retained[marker_offset + len(marker) :]
+            if marker_offset >= 0 or (visible_text and self.screen.contains(marker)):
+                suffix = (
+                    retained[marker_offset + len(marker) :] if marker_offset >= 0 else b""
+                )
                 if preserve_suffix:
                     self.pending_read = suffix
                     total -= len(suffix)
@@ -880,7 +1095,8 @@ class PtyProcess:
             for failure_marker in failure_markers:
                 if failure_marker in retained:
                     raise RuntimeError(
-                        f"observed failure {failure_marker!r} while waiting for {marker!r}"
+                        f"observed failure {failure_marker!r} while waiting for {marker!r}; "
+                        f"tail={retained[-512:]!r}"
                     )
         raise TimeoutError(f"did not observe {marker!r}; tail={retained[-4096:]!r}")
 
@@ -909,6 +1125,7 @@ class PtyProcess:
             if not data:
                 break
             total += len(data)
+            self.screen.feed(data)
             if retain_final_output:
                 self.final_output = (self.final_output + data)[-FINAL_PTY_OUTPUT_BYTES:]
         return total
@@ -970,7 +1187,10 @@ class PtyReceiptChannel:
                 if data:
                     output_bytes += len(data)
                     retained = (retained + data)[-(len(visible_marker) + 64 * 1024) :]
-                    if visible_marker in retained and visible_latency is None:
+                    client.screen.feed(data)
+                    if (
+                        visible_marker in retained or client.screen.contains(visible_marker)
+                    ) and visible_latency is None:
                         visible_latency = time.monotonic_ns() - started_ns
             if receipt_latency is not None and visible_latency is not None:
                 return receipt_latency, visible_latency, output_bytes
@@ -1023,6 +1243,8 @@ class MuxRuntime(Protocol):
     def attach(self, session: str) -> PtyProcess: ...
 
     def start_and_attach(self, session: str) -> PtyProcess: ...
+
+    def start_detached(self, session: str) -> None: ...
 
     def start_detached_with_attach_marker(self, session: str) -> None: ...
 
@@ -1110,8 +1332,11 @@ class LemmaRuntime:
         return client
 
     def start_and_attach(self, session: str) -> PtyProcess:
-        self.command("start", session)
+        self.start_detached(session)
         return self.attach(session)
+
+    def start_detached(self, session: str) -> None:
+        self.command("start", session)
 
     def start_detached_with_attach_marker(self, session: str) -> None:
         install_attach_shell_startup(self.environment, self.peer_path)
@@ -1228,10 +1453,15 @@ class TmuxRuntime:
         return client
 
     def start_and_attach(self, session: str) -> PtyProcess:
+        self.start_detached(session)
+        return self.attach(session)
+
+    def start_detached(self, session: str) -> None:
         self._command("new-session", "-d", "-s", session, "-x", "80", "-y", "24")
         if self.server_pid < 0:
-            self.server_pid = int(self._command("display-message", "-p", "#{pid}").stdout.strip())
-        return self.attach(session)
+            self.server_pid = int(
+                self._command("display-message", "-p", "#{pid}").stdout.strip()
+            )
 
     def start_detached_with_attach_marker(self, session: str) -> None:
         install_attach_shell_startup(self.environment, self.peer_path)
@@ -1344,10 +1574,13 @@ class ZellijRuntime:
         return client
 
     def start_and_attach(self, session: str) -> PtyProcess:
+        self.start_detached(session)
+        return self.attach(session)
+
+    def start_detached(self, session: str) -> None:
         mapped_session = self.session_prefix + session.replace("_", "-")
         self._command("attach", "--create-background", mapped_session)
         self.sessions.append(mapped_session)
-        return self.attach(session)
 
     def start_detached_with_attach_marker(self, session: str) -> None:
         install_attach_shell_startup(self.environment, self.peer_path)
@@ -1437,6 +1670,169 @@ class ZellijRuntime:
         self.temporary.cleanup()
 
 
+class HerdrRuntime:
+    multiplexer = "herdr"
+
+    def __init__(
+        self, executable: Path, peer: Path, trace_directory: Path | None = None
+    ) -> None:
+        # Herdr derives per-session client sockets below the config directory. Keep the
+        # isolated root short enough for Darwin's bounded sockaddr_un path.
+        self.temporary = tempfile.TemporaryDirectory(prefix="hb-", dir="/tmp")
+        root = Path(self.temporary.name)
+        self.executable_path = executable.resolve()
+        self.peer_path = peer.resolve()
+        self.gate_path = root / "blocked.gate"
+        self.receipt_path = root / "receipt.sock"
+        self.environment = benchmark_environment(root)
+        self.environment["XDG_STATE_HOME"] = str(root / "state")
+        if trace_directory is not None:
+            self.environment["LEMMA_LATENCY_TRACE"] = str(trace_directory.resolve())
+        self.config_directory = Path(self.environment["XDG_CONFIG_HOME"]) / "herdr"
+        self.config_path = self.config_directory / "config.toml"
+        self.config_directory.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(HERDR_BENCHMARK_CONFIG, encoding="utf-8")
+        self.environment["HERDR_CONFIG_PATH"] = str(self.config_path)
+        self.sessions: set[str] = set()
+        self.server_pids: dict[str, int] = {}
+        self.owned_servers: list[subprocess.Popen[bytes]] = []
+        self.clients: list[PtyProcess] = []
+        self.version = subprocess.run(
+            [str(self.executable_path), "--version"],
+            env=self.environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        ).stdout.strip()
+
+    def _command(
+        self, *arguments: str, check: bool = True, timeout: float = 5.0
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.executable_path), *arguments],
+            env=self.environment,
+            check=check,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def session_command(
+        self, session: str, *arguments: str
+    ) -> subprocess.CompletedProcess[str]:
+        return self._command("--session", session, *arguments)
+
+    def _remember_server(self, session: str) -> None:
+        socket_path = self.config_directory / "sessions" / session / "herdr.sock"
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                self.server_pids[session] = local_socket_peer_pid(socket_path)
+                return
+            except OSError:
+                time.sleep(0.005)
+        raise TimeoutError(f"Herdr session {session!r} API socket did not become ready")
+
+    def attach(self, session: str) -> PtyProcess:
+        self.sessions.add(session)
+        client = PtyProcess(
+            [str(self.executable_path), "--session", session], self.environment
+        )
+        self.clients.append(client)
+        client.read_until(ALT_SCREEN, 10.0, preserve_suffix=True)
+        self._remember_server(session)
+        return client
+
+    def start_and_attach(self, session: str) -> PtyProcess:
+        return self.attach(session)
+
+    def start_detached(self, session: str) -> None:
+        self.sessions.add(session)
+        server = subprocess.Popen(
+            [str(self.executable_path), "--session", session, "server"],
+            env=self.environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self.owned_servers.append(server)
+        self._remember_server(session)
+        self.session_command(session, "workspace", "create", "--cwd", os.getcwd())
+        if self.pane_count(session) != 1:
+            raise RuntimeError("Herdr detached session did not create one root pane")
+
+    def start_detached_with_attach_marker(self, session: str) -> None:
+        install_attach_shell_startup(self.environment, self.peer_path)
+        validation_client = self.attach(session)
+        validation_client.read_until(ATTACH_VISIBLE_MARKER, 5.0, visible_text=True)
+        self.detach(validation_client, session)
+
+    def detach(self, client: PtyProcess, session: str) -> None:
+        del session
+        client.write_all(b"\x02q", 2.0)
+        client.wait_for_exit(10.0)
+
+    def pane_count(self, session: str) -> int:
+        response = self.session_command(session, "api", "snapshot")
+        try:
+            snapshot = json.loads(response.stdout)["result"]["snapshot"]
+            return len(snapshot["panes"])
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise RuntimeError("Herdr snapshot did not contain a pane list") from error
+
+    def resource_roots(self) -> list[int]:
+        return [
+            *self.server_pids.values(),
+            *(client.pid for client in self.clients if client.pid > 0),
+        ]
+
+    def resource_role_pids(self) -> dict[str, list[int]]:
+        return {
+            "daemon": list(self.server_pids.values()),
+            "attached_client": [client.pid for client in self.clients if client.pid > 0],
+        }
+
+    def unavailable_resource_roles(self) -> dict[str, str]:
+        return {"extension_host": "Herdr adapter has no Lemma extension host"}
+
+    def binary_provenance(self) -> dict[str, str]:
+        return {"multiplexer": str(self.executable_path), "workload": str(self.peer_path)}
+
+    def close(self) -> None:
+        # On Darwin the detached server may remain a child of its launching client. Stop
+        # servers first so forcibly closing an attached client cannot wait on that child.
+        remaining_servers = set(self.server_pids.values())
+        for session in self.sessions:
+            try:
+                stopped = self._command(
+                    "session", "stop", session, "--json", check=False, timeout=20.0
+                )
+                if stopped.returncode == 0:
+                    remaining_servers.discard(self.server_pids.get(session, -1))
+            except subprocess.SubprocessError:
+                pass
+        for process in remaining_servers:
+            try:
+                os.kill(process, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        for client in self.clients:
+            client.close()
+        for server in self.owned_servers:
+            try:
+                server.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=0.5)
+        self.clients.clear()
+        self.owned_servers.clear()
+        self.sessions.clear()
+        self.server_pids.clear()
+        self.temporary.cleanup()
+
+
 def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     client = runtime.start_and_attach("warm_scroll")
     command = f"{shlex.quote(str(runtime.peer_path))} warm-scroll\r".encode()
@@ -1473,7 +1869,10 @@ def attach_to_visible(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         started_ns = time.monotonic_ns()
         client = runtime.attach(session)
         latency, output_bytes = client.read_until(
-            ATTACH_VISIBLE_MARKER, 5.0, started_ns=started_ns
+            ATTACH_VISIBLE_MARKER,
+            5.0,
+            started_ns=started_ns,
+            visible_text=isinstance(runtime, HerdrRuntime),
         )
         latencies.append(latency)
         client_bytes.append(output_bytes)
@@ -1529,8 +1928,12 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
             f"{shlex.quote(str(runtime.receipt_path))}\r"
         ).encode()
         client.write_all(launch, 2.0)
-        client.read_until(LATENCY_OUTPUT_READY, 5.0)
-        client.drain(0.01)
+        client.read_until(
+            LATENCY_OUTPUT_READY,
+            5.0,
+            visible_text=isinstance(runtime, HerdrRuntime),
+        )
+        client.drain(0.06)
         return {
             "status": "completed",
             **latency_samples(
@@ -1539,6 +1942,12 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
         }
     finally:
         receipts.close()
+
+
+class WorkloadFailure(RuntimeError):
+    def __init__(self, message: str, result: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
@@ -1551,7 +1960,9 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             f"{shlex.quote(str(runtime.receipt_path))}\r"
         ).encode()
         responsive.write_all(receipt_launch, 2.0)
-        responsive.read_until(LATENCY_READY, 5.0)
+        responsive.read_until(
+            LATENCY_READY, 5.0, visible_text=isinstance(runtime, HerdrRuntime)
+        )
         responsive.drain(0.01)
         idle = latency_samples(responsive, receipts, "IDLE", repetitions)
 
@@ -1568,16 +1979,31 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
 
         under_backpressure = latency_samples(responsive, receipts, "BLOCKED", repetitions)
         runtime.gate_path.touch(mode=0o600, exist_ok=False)
-        blocked.write_all(payload[accepted:], 60.0)
-        blocked.read_until(
-            BLOCK_DONE,
-            60.0,
-            failure_markers=(
-                b"lost connection",
-                b"server exited unexpectedly",
-                b"Received empty unknown from server",
-            ),
-        )
+        try:
+            blocked.write_all(payload[accepted:], 60.0)
+            blocked.read_until(
+                BLOCK_DONE,
+                60.0,
+                failure_markers=(
+                    b"__LEMMA_PTY_FAILED__",
+                    b"lost connection",
+                    b"server exited unexpectedly",
+                    b"Received empty unknown from server",
+                ),
+            )
+        except (RuntimeError, TimeoutError) as error:
+            raise WorkloadFailure(
+                str(error),
+                {
+                    "status": "failed",
+                    "error": f"{type(error).__name__}: {error}",
+                    "payload_bytes": PAYLOAD_SIZE,
+                    "bytes_before_backpressure": accepted,
+                    "client_backpressure_observed": accepted < len(payload),
+                    "idle": idle,
+                    "blocked_other_session": under_backpressure,
+                },
+            ) from error
 
         return {
             "status": "completed",
@@ -1589,6 +2015,42 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         }
     finally:
         receipts.close()
+
+
+def session_profile(
+    runtime: MuxRuntime, sessions: int, repetitions: int
+) -> dict[str, Any]:
+    for index in range(sessions):
+        runtime.start_detached(f"session_profile_{index}")
+    return {
+        "status": "completed",
+        "sessions": sessions,
+        "panes_per_session": 1,
+        "resources": sample_resources(runtime, repetitions),
+    }
+
+
+def workspace_profile(
+    runtime: MuxRuntime, workspaces: int, repetitions: int
+) -> dict[str, Any]:
+    if not isinstance(runtime, HerdrRuntime):
+        result = session_profile(runtime, workspaces, repetitions)
+        result["workspaces"] = result.pop("sessions")
+        result["panes_per_workspace"] = result.pop("panes_per_session")
+        return result
+
+    session = "workspace_profile"
+    runtime.start_detached(session)
+    for _ in range(1, workspaces):
+        runtime.session_command(session, "workspace", "create", "--cwd", os.getcwd())
+    if runtime.pane_count(session) != workspaces:
+        raise RuntimeError("Herdr workspace profile did not create one pane per workspace")
+    return {
+        "status": "completed",
+        "workspaces": workspaces,
+        "panes_per_workspace": 1,
+        "resources": sample_resources(runtime, repetitions),
+    }
 
 
 def component_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
@@ -1696,7 +2158,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
 
 
 def wait_for_profile_panes(
-    runtime: LemmaRuntime | TmuxRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
     client: PtyProcess,
     session: str,
     panes: int,
@@ -1706,6 +2168,8 @@ def wait_for_profile_panes(
         client.drain(0.005)
         if isinstance(runtime, LemmaRuntime):
             reached = f", {panes} pane(s)," in runtime.command("list", session).stdout
+        elif isinstance(runtime, HerdrRuntime):
+            reached = runtime.pane_count(session) == panes
         else:
             listing = runtime._command(
                 "list-panes", "-a", "-t", session, "-F", "#{pane_id}"
@@ -1722,7 +2186,7 @@ def send_prefix(client: PtyProcess, command: bytes) -> None:
 
 
 def launch_latency_peer(
-    runtime: LemmaRuntime | TmuxRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
     client: PtyProcess,
     autonomous_output: bool,
 ) -> None:
@@ -1733,12 +2197,12 @@ def launch_latency_peer(
         f"{shlex.quote(str(runtime.receipt_path))}\r"
     ).encode()
     client.write_all(command, 2.0)
-    client.read_until(ready, 5.0)
-    client.drain(0.005)
+    client.read_until(ready, 5.0, visible_text=isinstance(runtime, HerdrRuntime))
+    client.drain(0.06 if autonomous_output else 0.005)
 
 
 def build_profile(
-    runtime: LemmaRuntime | TmuxRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
     client: PtyProcess,
     panes: int,
     session: str = "profile",
@@ -1748,6 +2212,25 @@ def build_profile(
     for tab_index in range(tab_count):
         if panes == 1:
             return
+
+        if isinstance(runtime, HerdrRuntime):
+            if tab_index > 0:
+                runtime.session_command(session, "tab", "create", "--focus")
+                pane_index += 1
+                wait_for_profile_panes(runtime, client, session, pane_index)
+            for direction in ("right", "down", "down"):
+                runtime.session_command(
+                    session,
+                    "pane",
+                    "split",
+                    "--current",
+                    "--direction",
+                    direction,
+                    "--focus",
+                )
+                pane_index += 1
+                wait_for_profile_panes(runtime, client, session, pane_index)
+            continue
 
         send_prefix(client, b"%")
         pane_index += 1
@@ -1767,9 +2250,13 @@ def build_profile(
             wait_for_profile_panes(runtime, client, session, pane_index + 1)
             pane_index += 1
 
+    if isinstance(runtime, HerdrRuntime):
+        # Pane publication precedes completion of the asynchronously spawned shell.
+        client.drain(0.25)
+
 
 def pane_profile(
-    runtime: LemmaRuntime | TmuxRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
     profile: str,
     panes: int,
     active: bool,
@@ -2018,17 +2505,22 @@ def main() -> int:
             "lifecycle-churn",
             "comparison",
             "profiles",
+            "session-profiles",
+            "workspace-profiles",
             "all",
         ),
         default="comparison",
     )
-    parser.add_argument("--multiplexer", choices=("lemma", "tmux", "zellij"), default="lemma")
+    parser.add_argument(
+        "--multiplexer", choices=("lemma", "tmux", "zellij", "herdr"), default="lemma"
+    )
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--server", type=Path, default=Path("build/release/lemma_test_server"))
     parser.add_argument("--cli", type=Path, default=Path("build/release/lemma_test_cli"))
     parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
     parser.add_argument("--tmux", type=Path, default=Path("tmux"))
     parser.add_argument("--zellij", type=Path, default=Path("zellij"))
+    parser.add_argument("--herdr", type=Path, default=Path("herdr"))
     parser.add_argument("--trace-directory", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -2048,7 +2540,7 @@ def main() -> int:
     if not arguments.peer.is_file():
         parser.error(f"missing executable: {arguments.peer}")
     if arguments.mode in ("profiles", "all") and arguments.multiplexer == "zellij":
-        parser.error("pane profiles currently require --multiplexer lemma or tmux")
+        parser.error("pane profiles currently require --multiplexer lemma, tmux, or herdr")
     if (
         arguments.mode
         in {
@@ -2068,6 +2560,7 @@ def main() -> int:
     build_profile: str | None = None
     tmux: Path | None = None
     zellij: Path | None = None
+    herdr: Path | None = None
     if arguments.multiplexer == "lemma":
         for executable in (arguments.server, arguments.cli):
             if not executable.is_file():
@@ -2077,10 +2570,14 @@ def main() -> int:
         tmux = Path(shutil.which(str(arguments.tmux)) or arguments.tmux)
         if not tmux.is_file():
             parser.error(f"missing executable: {arguments.tmux}")
-    else:
+    elif arguments.multiplexer == "zellij":
         zellij = Path(shutil.which(str(arguments.zellij)) or arguments.zellij)
         if not zellij.is_file():
             parser.error(f"missing executable: {arguments.zellij}")
+    else:
+        herdr = Path(shutil.which(str(arguments.herdr)) or arguments.herdr)
+        if not herdr.is_file():
+            parser.error(f"missing executable: {arguments.herdr}")
 
     def create_runtime() -> MuxRuntime:
         if arguments.multiplexer == "lemma":
@@ -2090,11 +2587,16 @@ def main() -> int:
         if arguments.multiplexer == "tmux":
             assert tmux is not None
             return TmuxRuntime(tmux, arguments.peer)
-        assert zellij is not None
-        return ZellijRuntime(zellij, arguments.peer)
+        if arguments.multiplexer == "zellij":
+            assert zellij is not None
+            return ZellijRuntime(zellij, arguments.peer)
+        assert herdr is not None
+        return HerdrRuntime(herdr, arguments.peer)
 
     workloads: dict[str, Any] = {}
     pane_profiles: dict[str, Any] = {}
+    session_profiles: dict[str, Any] = {}
+    workspace_profiles: dict[str, Any] = {}
     runtime_version = "unknown"
     binary_provenance: dict[str, str] = {}
 
@@ -2116,6 +2618,8 @@ def main() -> int:
         except (OSError, RuntimeError, TimeoutError, subprocess.SubprocessError) as error:
             if not arguments.allow_workload_failures:
                 raise
+            if isinstance(error, WorkloadFailure):
+                return error.result
             return {
                 "status": "failed",
                 "error": f"{type(error).__name__}: {error}",
@@ -2195,11 +2699,37 @@ def main() -> int:
                     pane_count: int = panes,
                     active: bool = activity,
                 ) -> dict[str, Any]:
-                    if not isinstance(runtime, (LemmaRuntime, TmuxRuntime)):
-                        raise TypeError("pane profile requires Lemma or tmux runtime")
+                    if not isinstance(runtime, (LemmaRuntime, TmuxRuntime, HerdrRuntime)):
+                        raise TypeError("pane profile requires Lemma, tmux, or Herdr runtime")
                     return pane_profile(runtime, profile_id, pane_count, active, repetitions)
 
                 pane_profiles[profile][key] = run_operation(profile_operation)
+
+    if arguments.mode in ("session-profiles", "all"):
+        for profile, sessions in (("S1", 1), ("S4", 4), ("S16", 16)):
+
+            def session_profile_operation(
+                runtime: MuxRuntime,
+                repetitions: int,
+                *,
+                session_count: int = sessions,
+            ) -> dict[str, Any]:
+                return session_profile(runtime, session_count, repetitions)
+
+            session_profiles[profile] = run_operation(session_profile_operation)
+
+    if arguments.mode in ("workspace-profiles", "all"):
+        for profile, workspaces in (("W1", 1), ("W4", 4), ("W16", 16)):
+
+            def workspace_profile_operation(
+                runtime: MuxRuntime,
+                repetitions: int,
+                *,
+                workspace_count: int = workspaces,
+            ) -> dict[str, Any]:
+                return workspace_profile(runtime, workspace_count, repetitions)
+
+            workspace_profiles[profile] = run_operation(workspace_profile_operation)
 
     commit, worktree_dirty = git_provenance()
     report = {
@@ -2233,6 +2763,8 @@ def main() -> int:
         ),
         "workloads": workloads,
         "pane_profiles": pane_profiles,
+        "session_profiles": session_profiles,
+        "workspace_profiles": workspace_profiles,
     }
 
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
