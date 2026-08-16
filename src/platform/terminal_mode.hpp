@@ -40,8 +40,7 @@ public:
   }
 
 private:
-  [[nodiscard]] auto start_emergency_restorer(int output_descriptor,
-                                              int cleanup_descriptor) noexcept -> bool;
+  [[nodiscard]] auto start_emergency_restorer(const char* terminal_path) noexcept -> bool;
   [[nodiscard]] auto consume_emergency_restore() noexcept -> bool;
   void stop_emergency_restorer() noexcept;
 

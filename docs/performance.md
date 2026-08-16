@@ -124,7 +124,11 @@ Current policy bounds one client to 64 KiB/32 writes per turn and all attached c
 
 A ten-sample release `attach-visible` run after the private-protocol 2.0 epoch and accepted-attachment host-theme query ordering measured 6.361 ms p50, 6.823 ms p95, and 1,197 median client bytes on the documented M4 Max host. The client starts the query only after the daemon accepts the attachment and does not await replies before rendering, so its 100 ms collection deadline remains outside the attach-to-visible critical path.
 
-Focused release renderer medians were 128.023 µs for ANSI damage frames, 3.702 µs for one changed row, and 62.745 µs for detected scroll operations. Reproduce with:
+Focused release renderer medians were 128.023 µs for ANSI damage frames, 3.702 µs for one changed row, and 62.745 µs for detected scroll operations.
+
+A later three-run, thirty-sample release qualification pre-armed the emergency terminal restorer before raw-mode mutation and removed its synchronous startup acknowledgement. The guardian inherits one validated control description and opens its redundant fallback independently while attach proceeds. Using the larger statistic from `investigate-attach-lemma-prearmed-async-open-30.json`, its repeat, and `investigate-attach-lemma-final-30.json`, attach-to-visible measured 5.214/5.549/5.905 ms p50/p95/p99 with 1,235 median outer bytes. The same-host `investigate-attach-tmux-post-30.json` measured 5.114/5.516/5.729 ms. The earlier Lemma investigation baseline was 6.944/8.263/11.289 ms, so the retained mechanism removed 24.9% of p50 and 32.9% of p95 without changing daemon rendering or the outer-byte bound.
+
+Reproduce with:
 
 ```sh
 python3 benchmarks/mux_benchmark.py --mode attach-visible --multiplexer lemma \
@@ -138,7 +142,7 @@ python3 benchmarks/mux_benchmark.py --mode attach-visible --multiplexer lemma \
 
 ## Known measured caveats
 
-- Attach-to-visible remains above the older host-scoped 4.7/5.4 ms p50/p95 limits. Replacing a one-millisecond emergency-restorer polling loop with descriptor polling improved paired attach p50/p95 by 12.7%/9.6%, but later complete runs still measured 6–9 ms tails.
+- Attach-to-visible remains slightly above the older host-scoped 4.7/5.4 ms p50/p95 limits. Pre-arming the emergency restorer removed the previous 6–9 ms distribution on the qualified runs, but the larger retained 5.214/5.549 ms p50/p95 still does not satisfy those historical limits.
 - Idle key-to-visible p95 occasionally crosses the 0.5 ms host-scoped profile limit at one or 64 panes while medians and idle CPU remain low. Passing retries are not used to erase those tails.
 - The approximately 17–20 ms Lemma warm-scroll secondary mode has appeared across multiple distributions and remains visible in the current comparison.
 - Herdr's current high-scroll distribution is strongly multimodal, its active interaction p95 remains near one render cadence or worse, and attach had one 277.935 ms p99/max sample. Low wire-byte totals must not be treated as a win until exact completion and visible freshness are demonstrated.

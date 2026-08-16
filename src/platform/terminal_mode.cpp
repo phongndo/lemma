@@ -7,10 +7,10 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <thread>
 
 #include <fcntl.h>
-#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -218,74 +218,101 @@ constexpr int terminal_restore_action = TCSANOW;
   raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
   raw.c_cc[VMIN] = 1;
   raw.c_cc[VTIME] = 0;
-  if (::tcsetattr(descriptor, TCSAFLUSH, &raw) != 0) {
+
+  // Fork the guardian while the terminal is still in its original mode. It inherits the validated
+  // control description, saved attributes, and notification channels atomically, so the attach
+  // path does not need to wait for child scheduling before entering raw mode.
+  entry_descriptor_ = descriptor;
+  if (!start_emergency_restorer(terminal_path.data())) {
     static_cast<void>(::close(restore_descriptor_));
     restore_descriptor_ = -1;
+    entry_descriptor_ = -1;
     return false;
   }
-  entry_descriptor_ = descriptor;
+  if (::tcsetattr(descriptor, TCSAFLUSH, &raw) != 0) {
+    stop_emergency_restorer();
+    static_cast<void>(::close(restore_descriptor_));
+    restore_descriptor_ = -1;
+    entry_descriptor_ = -1;
+    return false;
+  }
   active_ = true;
-  if (!start_emergency_restorer(-1, -1)) {
-    static_cast<void>(restore());
-    return false;
-  }
   return true;
 }
 
-// Restorer setup keeps child endpoint, signal, and pipe ownership visible in one transaction.
+// The validated primary control description and signal policy exist before fork. The child may
+// open one redundant control description, but restoration requests queue on the inherited pipe, so
+// successful fork establishes restoration readiness without a startup acknowledgement.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto RawTerminal::start_emergency_restorer(const int output_descriptor,
-                                                         const int cleanup_descriptor) noexcept
+[[nodiscard]] auto RawTerminal::start_emergency_restorer(const char* const terminal_path) noexcept
     -> bool {
-  if (!active_ || restore_process_ > 0) {
-    return active_ && restore_process_ > 0;
-  }
-  // Start before the presentation layer opens render descriptions. The child therefore retains
-  // only a fresh read-only control endpoint, so a saturated writer cannot gate restoration.
-  std::array<int, 2> wakeup_pipe{};
-  std::array<int, 2> result_pipe{};
-  if (::pipe(wakeup_pipe.data()) != 0 || ::pipe(result_pipe.data()) != 0) {
-    if (wakeup_pipe.front() > 0) {
-      static_cast<void>(::close(wakeup_pipe.front()));
-      static_cast<void>(::close(wakeup_pipe.back()));
-    }
+  if (active_ || restore_process_ > 0 || restore_descriptor_ < 0 || terminal_path == nullptr) {
     return false;
   }
+
+  std::array<int, 2> wakeup_pipe{-1, -1};
+  std::array<int, 2> result_pipe{-1, -1};
+  const auto close_setup_descriptors = [&]() noexcept {
+    for (int& descriptor : wakeup_pipe) {
+      if (descriptor >= 0) {
+        static_cast<void>(::close(descriptor));
+        descriptor = -1;
+      }
+    }
+    for (int& descriptor : result_pipe) {
+      if (descriptor >= 0) {
+        static_cast<void>(::close(descriptor));
+        descriptor = -1;
+      }
+    }
+  };
+  if (::pipe(wakeup_pipe.data()) != 0 || ::pipe(result_pipe.data()) != 0) {
+    close_setup_descriptors();
+    return false;
+  }
+
+  // Set only the parent-owned ends nonblocking before fork. The child retains a blocking wakeup
+  // read, while restoration completion can never block the attached client.
+  // fcntl is variadic because its third argument depends on the command.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const bool wakeup_nonblocking = ::fcntl(wakeup_pipe.back(), F_SETFL, O_NONBLOCK) == 0;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const bool result_nonblocking = ::fcntl(result_pipe.front(), F_SETFL, O_NONBLOCK) == 0;
+  if (!wakeup_nonblocking || !result_nonblocking) {
+    close_setup_descriptors();
+    return false;
+  }
+
+  // Blocking these in the forking thread gives the guardian a complete signal policy at fork. It
+  // never unblocks them: restoration is requested only through the owned wakeup pipe, and blocked
+  // SIGTTOU permits terminal-control operations after foreground state changes.
+  const std::array blocked_signals{SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTTOU};
+  sigset_t blocked{};
+  sigset_t previous{};
+  static_cast<void>(sigemptyset(&blocked));
+  for (const int signal_number : blocked_signals) {
+    static_cast<void>(sigaddset(&blocked, signal_number));
+  }
+  if (::sigprocmask(SIG_BLOCK, &blocked, &previous) != 0) {
+    close_setup_descriptors();
+    return false;
+  }
+
   const auto restorer = ::fork();
   if (restorer == 0) {
     static_cast<void>(::close(wakeup_pipe.back()));
     static_cast<void>(::close(result_pipe.front()));
-    const std::array ignored_signals{SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTTOU};
-    struct sigaction ignored{};
-    ignored.sa_handler = SIG_IGN;
-    static_cast<void>(sigemptyset(&ignored.sa_mask));
-    for (const int signal_number : ignored_signals) {
-      static_cast<void>(::sigaction(signal_number, &ignored, nullptr));
-    }
-    std::array<char, 1'024> restore_path{};
-    if (::ttyname_r(restore_descriptor_, restore_path.data(), restore_path.size()) != 0) {
-      ::_exit(1);
-    }
+    // This fresh description is redundant with the validated inherited primary. Opening it in the
+    // guardian keeps device-open latency off the attach path; a restore request written meanwhile
+    // remains queued on the blocking wakeup pipe.
     const int emergency_descriptor =
-        open_existing_terminal(restore_path.data(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
-    if (emergency_descriptor < 0) {
-      ::_exit(1);
-    }
-    // The guardian must not retain either inherited output endpoint while the parent saturates a
-    // separately opened render writer.
-    if (output_descriptor >= 0) {
-      static_cast<void>(::close(output_descriptor));
-    }
-    if (cleanup_descriptor >= 0) {
-      static_cast<void>(::close(cleanup_descriptor));
-    }
+        open_existing_terminal(terminal_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
+    // No presentation description exists yet. Retire inherited standard output before waiting so
+    // the guardian can never retain a later saturated presentation path.
     static_cast<void>(::close(STDIN_FILENO));
     static_cast<void>(::close(STDOUT_FILENO));
     static_cast<void>(::close(STDERR_FILENO));
-    const std::byte ready{0};
-    if (::write(result_pipe.back(), &ready, sizeof(ready)) != sizeof(ready)) {
-      ::_exit(1);
-    }
+
     std::byte notification{};
     ssize_t received = -1;
     while (received < 0) {
@@ -304,14 +331,17 @@ constexpr int terminal_restore_action = TCSANOW;
     static_cast<void>(::fcntl(wakeup_pipe.front(), F_SETFL, O_NONBLOCK));
     bool reported = false;
     while (true) {
-      // Both operations use the guardian's nonblocking control endpoint. Discarding stale output
-      // first gives Darwin's immediate termios update room without ever trapping the guardian in
-      // the saturated presentation queue.
+      // Both operations use guardian-owned nonblocking control endpoints. Discarding stale output
+      // first gives Darwin's immediate termios update room without trapping the guardian behind a
+      // saturated presentation writer.
       static_cast<void>(::tcflush(restore_descriptor_, TCIOFLUSH));
-      static_cast<void>(::tcflush(emergency_descriptor, TCIOFLUSH));
+      if (emergency_descriptor >= 0) {
+        static_cast<void>(::tcflush(emergency_descriptor, TCIOFLUSH));
+      }
       const bool restored =
           ::tcsetattr(restore_descriptor_, terminal_restore_action, &original_) == 0 ||
-          ::tcsetattr(emergency_descriptor, terminal_restore_action, &original_) == 0;
+          (emergency_descriptor >= 0 &&
+           ::tcsetattr(emergency_descriptor, terminal_restore_action, &original_) == 0);
       if (restored && !reported) {
         const std::byte success{1};
         static_cast<void>(::write(result_pipe.back(), &success, sizeof(success)));
@@ -324,57 +354,27 @@ constexpr int terminal_restore_action = TCSANOW;
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
+
+  // The saved set came from the successful blocking call above; failure to reinstall that exact
+  // set is an internal invariant failure because continuing would leave client signals masked.
+  if (::sigprocmask(SIG_SETMASK, &previous, nullptr) != 0) {
+    std::abort();
+  }
   static_cast<void>(::close(wakeup_pipe.front()));
+  wakeup_pipe.front() = -1;
   static_cast<void>(::close(result_pipe.back()));
+  result_pipe.back() = -1;
   if (restorer < 0) {
-    static_cast<void>(::close(wakeup_pipe.back()));
-    static_cast<void>(::close(result_pipe.front()));
+    close_setup_descriptors();
     return false;
   }
+
   restore_wakeup_descriptor_ = wakeup_pipe.back();
+  wakeup_pipe.back() = -1;
   restore_result_descriptor_ = result_pipe.front();
+  result_pipe.front() = -1;
   restore_process_ = restorer;
-  // fcntl is variadic because its third argument depends on the command.
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-  const bool wakeup_nonblocking = ::fcntl(restore_wakeup_descriptor_, F_SETFL, O_NONBLOCK) == 0;
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-  const bool result_nonblocking = ::fcntl(restore_result_descriptor_, F_SETFL, O_NONBLOCK) == 0;
-  if (!wakeup_nonblocking || !result_nonblocking) {
-    stop_emergency_restorer();
-    return false;
-  }
-  const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-  while (true) {
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= ready_deadline) {
-      break;
-    }
-    const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(ready_deadline - now);
-    pollfd ready_event{.fd = restore_result_descriptor_, .events = POLLIN, .revents = 0};
-    const auto polled =
-        ::poll(&ready_event, 1, static_cast<int>(std::max(remaining.count(), std::int64_t{1})));
-    if (polled < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      break;
-    }
-    if (polled == 0) {
-      continue;
-    }
-    std::byte ready{1};
-    const auto received = ::read(restore_result_descriptor_, &ready, sizeof(ready));
-    if (received == sizeof(ready) && ready == std::byte{0}) {
-      return true;
-    }
-    if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
-      continue;
-    }
-    break;
-  }
-  stop_emergency_restorer();
-  return false;
+  return true;
 }
 
 [[nodiscard]] auto RawTerminal::consume_emergency_restore() noexcept -> bool {
