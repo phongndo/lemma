@@ -113,4 +113,17 @@ The opt-in trace stores at most 32,768 fixed 40-byte events in a 1,310,784-byte 
 
 After the interactive scheduler change, 200 isolated idle/blocked inputs produced complete exact-token paths with zero rejections and drops. Physical input to outer-write completion changed from 2.580/2.764/3.172 ms to 0.180/0.226/0.244 ms p50/p95/p99. The removed interval was the approximately 2.3 ms wait between echoed PTY output and composition start; the trace demonstrated that the cost was removed rather than shifted.
 
+A later trace-enabled 100-interaction active-output diagnostic repaired the client receive correlation gap without timestamp matching. Each successful socket read reserves one append-only trace event at read time; the decoder assigns that event's correlation once only when the exact marker-bearing frame becomes complete. `perf-trace-correlation-fixed-100-analysis.json` retained 100/100 complete paths with zero rejected paths and zero dropped events:
+
+| Stage from physical input | p50 / p95 / p99 |
+| --- | ---: |
+| Daemon message decode | 0.036 / 0.074 / 0.080 ms |
+| PTY write progress | 0.047 / 0.096 / 0.103 ms |
+| Matching PTY output | 0.080 / 0.138 / 0.172 ms |
+| Composition start | 0.097 / 0.206 / 0.234 ms |
+| Composition finish | 0.220 / 0.380 / 0.457 ms |
+| Daemon socket progress | 0.224 / 0.388 / 0.462 ms |
+| Exact client socket read | 0.240 / 0.430 / 0.476 ms |
+| Outer write finish | 0.275 / 0.471 / 0.581 ms |
+
 Trace-enabled measurements are diagnostic and are never silently mixed with compiled-out release baselines.

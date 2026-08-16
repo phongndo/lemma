@@ -217,6 +217,19 @@ class LatencyTraceCorrelationTest(unittest.TestCase):
         self.assertEqual(len(rejected), 1)
         self.assertIn("daemon_pty_output_read", rejected[0]["reason"])
 
+    def test_rejects_an_uncorrelated_socket_read_without_timestamp_matching(self) -> None:
+        events = self.complete_path()
+        socket_read = next(
+            event for event in events if event["stage"] == "client_socket_read"
+        )
+        socket_read["correlation"] = 0
+
+        paths, rejected = input_paths(events, {29})
+
+        self.assertEqual(paths, [])
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("client_socket_read", rejected[0]["reason"])
+
     def test_rejects_a_reused_physical_input_token(self) -> None:
         events = self.complete_path()
         events.append({**events[0], "timestamp_ns": 200, "sequence": 12})

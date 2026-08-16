@@ -697,6 +697,9 @@ private:
 process_server_messages(protocol::ServerDecoder& decoder, const int terminal_descriptor,
                         diagnostic::LatencyTraceMarkerMatcher& output_trace_matcher,
                         std::uint64_t& pending_trace_correlation,
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+                        const diagnostic::LatencyTraceEventHandle socket_read_event,
+#endif
                         LiveDiagnostic& live_diagnostic) noexcept -> ServerParseResult {
   while (true) {
     const auto decoded = decoder.next();
@@ -723,6 +726,11 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     trace_correlation =
         output_trace_matcher.observe_expected_visible(message.ansi, pending_trace_correlation);
     if (trace_correlation != 0) {
+      // process_server_messages drains every complete envelope before another recv. Therefore the
+      // successful recv that reserved this append-only event is the exact read that made this
+      // marker-bearing frame complete, including fragmented and coalesced frames.
+      static_cast<void>(diagnostic::correlate_client_socket_read_latency_trace(socket_read_event,
+                                                                               trace_correlation));
       pending_trace_correlation = 0;
     }
 #else
@@ -749,7 +757,11 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                   std::uint64_t& pending_trace_correlation,
                                   LiveDiagnostic& live_diagnostic) noexcept -> ServerParseResult {
   const auto buffered = process_server_messages(decoder, terminal_descriptor, output_trace_matcher,
-                                                pending_trace_correlation, live_diagnostic);
+                                                pending_trace_correlation,
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+                                                {},
+#endif
+                                                live_diagnostic);
   if (buffered != ServerParseResult::keep) {
     return buffered;
   }
@@ -770,15 +782,23 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     return ServerParseResult::error;
   }
   const auto size = static_cast<std::size_t>(received);
-  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::client_socket_read,
-                                   static_cast<std::uint32_t>(connection), size, 0);
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  // The read timestamp is reserved before decoding can reveal the exact marker token. The decoder
+  // may later correlate this one append-only event; unrelated reads remain explicitly uncorrelated.
+  const auto socket_read_event = diagnostic::record_client_socket_read_latency_trace(
+      static_cast<std::uint32_t>(connection), size);
+#endif
   const auto committed = decoder.commit(size);
   if (!committed.has_value()) {
     live_diagnostic.record_protocol_error(committed.error());
     return ServerParseResult::error;
   }
   return process_server_messages(decoder, terminal_descriptor, output_trace_matcher,
-                                 pending_trace_correlation, live_diagnostic);
+                                 pending_trace_correlation,
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+                                 socket_read_event,
+#endif
+                                 live_diagnostic);
 }
 
 // This is the client reactor; branches correspond directly to terminal and socket readiness.
@@ -1058,9 +1078,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
           break;
         }
       }
-      const auto buffered =
-          process_server_messages(decoder, outer_terminal.render_descriptor(), output_trace_matcher,
-                                  pending_trace_correlation, live_diagnostic);
+      const auto buffered = process_server_messages(decoder, outer_terminal.render_descriptor(),
+                                                    output_trace_matcher, pending_trace_correlation,
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+                                                    {},
+#endif
+                                                    live_diagnostic);
       if (buffered == ServerParseResult::disconnect) {
         typed_disconnect = true;
         break;

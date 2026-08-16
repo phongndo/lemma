@@ -297,7 +297,10 @@ def build_report(directory: Path, input_bytes: set[int] | None = None) -> dict[s
         "input_bytes_filter": sorted(input_bytes) if input_bytes else [],
         "correlation": {
             "status": "correlated" if paths else "no_complete_paths",
-            "method": "exact bounded _XXXXXXXX__ fixture token observed at each byte boundary",
+            "method": (
+                "exact bounded _XXXXXXXX__ fixture token observed at each byte boundary; "
+                "client receive uses the exact decoder-completing socket-read event"
+            ),
             "input_processes": input_processes,
             "correlated_paths": len(paths),
             "rejected_paths": len(rejected_paths),

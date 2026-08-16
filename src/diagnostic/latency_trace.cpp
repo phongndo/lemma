@@ -247,39 +247,68 @@ public:
 
   void record(const LatencyTraceStage stage, const std::uint32_t subject, const std::uint64_t value,
               const std::uint64_t correlation) noexcept {
+    static_cast<void>(
+        append(stage, subject, value, correlation == 0 ? current_correlation_ : correlation));
+  }
+
+  [[nodiscard]] auto record_pending(const LatencyTraceStage stage, const std::uint32_t subject,
+                                    const std::uint64_t value) noexcept -> std::uint64_t {
+    return append(stage, subject, value, 0);
+  }
+
+  [[nodiscard]] auto correlate(const std::uint64_t sequence,
+                               const std::uint64_t correlation) noexcept -> bool {
+    if (header_ == nullptr || sequence == 0 || correlation == 0 || sequence > header_->count) {
+      return false;
+    }
+    const auto index = static_cast<std::size_t>(sequence - 1U);
+    auto& event = std::span(events_, trace_events_max).subspan(index, 1).front();
+    if (event.sequence != sequence || event.correlation != 0) {
+      return false;
+    }
+    event.correlation = correlation;
+    return true;
+  }
+
+private:
+  [[nodiscard]] auto append(const LatencyTraceStage stage, const std::uint32_t subject,
+                            const std::uint64_t value, const std::uint64_t correlation) noexcept
+      -> std::uint64_t {
     if (header_ == nullptr) {
-      return;
+      return {};
     }
     if (header_->count >= trace_events_max) {
       if (header_->dropped < std::numeric_limits<std::uint64_t>::max()) {
         ++header_->dropped;
       }
-      return;
+      return {};
     }
     timespec timestamp{};
     if (::clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0 || timestamp.tv_sec < 0 ||
         timestamp.tv_nsec < 0) {
-      return;
+      return {};
     }
     const auto seconds = static_cast<std::uint64_t>(timestamp.tv_sec);
     const auto nanoseconds = static_cast<std::uint64_t>(timestamp.tv_nsec);
     if (seconds > (std::numeric_limits<std::uint64_t>::max() - nanoseconds) / 1'000'000'000U) {
-      return;
+      return {};
     }
+    const auto sequence = header_->count + 1U;
     const auto index = static_cast<std::size_t>(header_->count);
     std::span(events_, trace_events_max).subspan(index, 1).front() = {
         .timestamp_ns = (seconds * 1'000'000'000U) + nanoseconds,
-        .sequence = header_->count + 1U,
-        .correlation = correlation == 0 ? current_correlation_ : correlation,
+        .sequence = sequence,
+        .correlation = correlation,
         .value = value,
         .subject = subject,
         .stage = static_cast<std::uint16_t>(stage),
     };
-    // Publish the count only after the complete fixed-size event is stored.
+    // Publish the count only after the complete fixed-size event is stored. Correlation is the one
+    // field its pending handle may set once; append-only storage never reuses the event slot.
     ++header_->count;
+    return sequence;
   }
 
-private:
   void close_failed_descriptor() noexcept {
     if (descriptor_ >= 0) {
       static_cast<void>(::close(descriptor_));
@@ -317,6 +346,19 @@ void set_latency_trace_correlation(const std::uint64_t correlation) noexcept {
 void record_latency_trace(const LatencyTraceStage stage, const std::uint32_t subject,
                           const std::uint64_t value, const std::uint64_t correlation) noexcept {
   trace_state().record(stage, subject, value, correlation);
+}
+
+[[nodiscard]] auto record_client_socket_read_latency_trace(const std::uint32_t subject,
+                                                           const std::uint64_t value) noexcept
+    -> LatencyTraceEventHandle {
+  return LatencyTraceEventHandle(
+      trace_state().record_pending(LatencyTraceStage::client_socket_read, subject, value));
+}
+
+[[nodiscard]] auto
+correlate_client_socket_read_latency_trace(const LatencyTraceEventHandle event,
+                                           const std::uint64_t correlation) noexcept -> bool {
+  return trace_state().correlate(event.sequence_, correlation);
 }
 
 } // namespace lemma::diagnostic

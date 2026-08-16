@@ -49,6 +49,25 @@ private:
 [[nodiscard]] auto latency_trace_marker_token(std::span<const std::byte> bytes) noexcept
     -> std::uint64_t;
 
+class LatencyTraceEventHandle final {
+public:
+  constexpr LatencyTraceEventHandle() noexcept = default;
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool { return sequence_ != 0; }
+
+private:
+  explicit constexpr LatencyTraceEventHandle(const std::uint64_t sequence) noexcept
+      : sequence_(sequence) {}
+
+  friend auto record_client_socket_read_latency_trace(std::uint32_t subject,
+                                                      std::uint64_t value) noexcept
+      -> LatencyTraceEventHandle;
+  friend auto correlate_client_socket_read_latency_trace(LatencyTraceEventHandle event,
+                                                         std::uint64_t correlation) noexcept
+      -> bool;
+
+  std::uint64_t sequence_{0};
+};
+
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
 
 // Diagnostic trace files are enabled only when the build-time option and the
@@ -58,6 +77,14 @@ void set_latency_trace_correlation(std::uint64_t correlation) noexcept;
 [[nodiscard]] auto latency_trace_correlation() noexcept -> std::uint64_t;
 void record_latency_trace(LatencyTraceStage stage, std::uint32_t subject = 0,
                           std::uint64_t value = 0, std::uint64_t correlation = 0) noexcept;
+// TraceState owns the append-only event. The receive call retains its exact timestamp handle until
+// the decoder either correlates that event once or lets it remain zero.
+[[nodiscard]] auto record_client_socket_read_latency_trace(std::uint32_t subject,
+                                                           std::uint64_t value) noexcept
+    -> LatencyTraceEventHandle;
+[[nodiscard]] auto correlate_client_socket_read_latency_trace(LatencyTraceEventHandle event,
+                                                              std::uint64_t correlation) noexcept
+    -> bool;
 
 #else
 
@@ -73,6 +100,17 @@ inline void record_latency_trace([[maybe_unused]] const LatencyTraceStage stage,
                                  [[maybe_unused]] const std::uint32_t subject = 0,
                                  [[maybe_unused]] const std::uint64_t value = 0,
                                  [[maybe_unused]] const std::uint64_t correlation = 0) noexcept {}
+[[nodiscard]] inline auto
+record_client_socket_read_latency_trace([[maybe_unused]] const std::uint32_t subject,
+                                        [[maybe_unused]] const std::uint64_t value) noexcept
+    -> LatencyTraceEventHandle {
+  return {};
+}
+[[nodiscard]] inline auto correlate_client_socket_read_latency_trace(
+    [[maybe_unused]] const LatencyTraceEventHandle event,
+    [[maybe_unused]] const std::uint64_t correlation) noexcept -> bool {
+  return false;
+}
 
 #endif
 

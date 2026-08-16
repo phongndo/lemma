@@ -170,7 +170,7 @@
     "event_capacity_per_process": 32768,
     "event_bytes": 40,
     "overflow_policy": "retain the first bounded events and increment a dropped counter",
-    "correlation_policy": "derive one bounded token from the exact _XXXXXXXX__ fixture suffix independently observed at client input, daemon input, PTY write, PTY output, frame, socket, and outer-terminal boundaries",
+    "correlation_policy": "derive one bounded token from the exact _XXXXXXXX__ fixture suffix observed at client input, daemon input, PTY write, PTY output, frame, and outer-terminal boundaries; correlate client receive through the exact decoder-completing socket-read event",
     "clock": "CLOCK_MONOTONIC"
   },
   "regression_budgets": {
