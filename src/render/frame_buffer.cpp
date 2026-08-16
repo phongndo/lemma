@@ -1,4 +1,4 @@
-#include "render/single_pane.hpp"
+#include "render/frame_buffer.hpp"
 
 #include "render/pane_composition.hpp"
 

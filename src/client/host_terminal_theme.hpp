@@ -1,7 +1,7 @@
 #ifndef LEMMA_CLIENT_HOST_TERMINAL_THEME_HPP
 #define LEMMA_CLIENT_HOST_TERMINAL_THEME_HPP
 
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <array>
 #include <cstddef>

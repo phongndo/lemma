@@ -13,6 +13,13 @@ inline constexpr std::uint32_t panes_hard_max = 4'096;
 inline constexpr std::uint32_t clients_hard_max = 128;
 inline constexpr std::uint32_t layout_depth_hard_max = 64;
 
+// Session launch semantics own these bounds. Protocol codecs reuse them rather than defining the
+// semantic model's storage limits.
+inline constexpr std::size_t session_name_bytes_max = 32;
+inline constexpr std::size_t working_directory_bytes_max = std::size_t{4} * 1'024U;
+inline constexpr std::size_t environment_bytes_max = 65'535;
+inline constexpr std::size_t environment_entries_max = 256;
+
 inline constexpr std::size_t command_bytes_hard_max = std::size_t{64} * 1'024U;
 
 // Presentation transaction limits. A frame can span chunks, but queued bytes never retain a

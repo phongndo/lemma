@@ -2,7 +2,7 @@
 #define LEMMA_CLIENT_HOST_INPUT_PARSER_HPP
 
 #include "lemma/limits.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <array>
 #include <cstddef>

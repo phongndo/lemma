@@ -53,12 +53,12 @@ namespace {
   const bool has_session = command.target.session.is_valid();
   const bool has_tab = command.target.tab.is_valid();
   const bool has_pane = command.target.pane.is_valid();
-  const bool has_client = command.target.client.is_valid();
+  const bool has_attachment = command.target.attachment.is_valid();
   if ((has_tab && !has_session) || (has_pane && (!has_session || !has_tab)) ||
-      (has_client && !has_session)) {
+      (has_attachment && !has_session)) {
     return false;
   }
-  if (command.kind == CommandKind::stop_session && (has_tab || has_pane || has_client)) {
+  if (command.kind == CommandKind::stop_session && (has_tab || has_pane || has_attachment)) {
     return false;
   }
   if (command.kind == CommandKind::detach_client && (has_tab || has_pane)) {

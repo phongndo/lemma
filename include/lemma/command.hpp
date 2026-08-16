@@ -46,7 +46,7 @@ struct CommandTarget final {
   SessionId session;
   TabId tab;
   PaneId pane;
-  ClientId client;
+  AttachmentId attachment;
 };
 
 struct Command final {
@@ -77,12 +77,6 @@ struct CommandResult final {
     return status == CommandStatus::applied || status == CommandStatus::no_effect ||
            status == CommandStatus::detach_requested;
   }
-};
-
-struct CommandTraceEntry final {
-  std::uint64_t sequence{0};
-  Command command;
-  CommandResult result;
 };
 
 using CommandExecutor = CommandResult (*)(void* context, const Command& command) noexcept;

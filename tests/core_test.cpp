@@ -1,3 +1,4 @@
+#include "core/session.hpp"
 #include "lemma/bounded_byte_queue.hpp"
 #include "lemma/command.hpp"
 #include "lemma/generational_store.hpp"
@@ -6,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,8 +19,16 @@
 namespace lemma {
 namespace {
 
+using core::Attachment;
+using core::LaunchEnvironmentMode;
+using core::Pane;
+using core::Session;
+using core::Tab;
+
 static_assert(std::is_trivially_copyable_v<Command>);
 static_assert(std::is_trivially_copyable_v<CommandResult>);
+static_assert(!std::is_same_v<AttachmentId, ConnectionId>);
+static_assert(std::is_trivially_destructible_v<Attachment>);
 
 struct CommandCapture final {
   Command command;
@@ -52,7 +62,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
       .target = {.session = SessionId::from_parts(2, 3),
                  .tab = TabId::from_parts(4, 5),
                  .pane = {},
-                 .client = {}},
+                 .attachment = {}},
       .argument = 7,
   };
 
@@ -87,24 +97,25 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                            .target = {.session = {},
                                       .tab = {},
                                       .pane = PaneId::from_parts(1, 1),
-                                      .client = {}}})
+                                      .attachment = {}}})
                 .status,
             CommandStatus::invalid_target);
-  EXPECT_EQ(
-      dispatcher
-          .dispatch(
-              {.kind = CommandKind::close_tab,
-               .origin = CommandOrigin::extension,
-               .target = {.session = {}, .tab = TabId::from_parts(1, 1), .pane = {}, .client = {}}})
-          .status,
-      CommandStatus::invalid_target);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::close_tab,
+                           .origin = CommandOrigin::extension,
+                           .target = {.session = {},
+                                      .tab = TabId::from_parts(1, 1),
+                                      .pane = {},
+                                      .attachment = {}}})
+                .status,
+            CommandStatus::invalid_target);
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::detach_client,
                            .origin = CommandOrigin::client,
                            .target = {.session = {},
                                       .tab = {},
                                       .pane = {},
-                                      .client = ClientId::from_parts(1, 1)}})
+                                      .attachment = AttachmentId::from_parts(1, 1)}})
                 .status,
             CommandStatus::invalid_target);
   EXPECT_EQ(
@@ -121,6 +132,34 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                 .dispatch({.kind = CommandKind::focus_next, .origin = CommandOrigin::internal})
                 .status,
             CommandStatus::failed);
+}
+
+TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
+  constexpr std::array environment{std::byte{'A'}, std::byte{'='}, std::byte{'1'}, std::byte{0}};
+  Session session("semantic", "/tmp", environment, LaunchEnvironmentMode::replace);
+  session.id = SessionId::from_parts(3, 7);
+  auto pane = std::make_unique<Pane>();
+  const auto tab_id = TabId::from_parts(2, 5);
+  Tab tab(tab_id, std::move(pane));
+  Attachment attachment{
+      .id = AttachmentId::from_parts(3, 7),
+      .session = session.id,
+      .columns = 120,
+      .rows = 40,
+      .mouse_capture = {},
+      .copy_mode = {},
+  };
+
+  EXPECT_EQ(session.session_name(), "semantic");
+  EXPECT_EQ(session.cwd(), "/tmp");
+  EXPECT_TRUE(std::ranges::equal(session.launch_environment(), environment));
+  EXPECT_EQ(session.environment_mode, LaunchEnvironmentMode::replace);
+  EXPECT_EQ(tab.id, tab_id);
+  EXPECT_EQ(tab.focused_pane, PaneId::from_parts(0, 1));
+  EXPECT_EQ(tab.previous_pane, tab.focused_pane);
+  EXPECT_EQ(attachment.session, session.id);
+  EXPECT_EQ(attachment.columns, 120U);
+  EXPECT_EQ(attachment.rows, 40U);
 }
 
 TEST(GenerationalIdTest, InvalidUntilCreatedFromValidParts) {

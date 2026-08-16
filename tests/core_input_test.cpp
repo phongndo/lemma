@@ -1,7 +1,7 @@
 #include "core/input.hpp"
 
 #include "lemma/terminal/terminal.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <array>
 #include <cstddef>

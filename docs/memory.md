@@ -36,7 +36,10 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | Owner | Current storage/lifetime | Bound or measured size | Allocation/failure behavior |
 | --- | --- | ---: | --- |
 | Session store | fixed reactor table | 1,032 B table; up to 64 sessions | live sessions are individually allocated; create failure rejects only the new session |
-| Session | one owner per live session | 94,488 B inline in the recorded layout | contains bounded launch context, tabs, one current attachment runtime, copy state, trace, and scheduling |
+| Semantic Session | Core-owned per live session | 69,992 B inline in the recorded layout | contains bounded launch context and tabs; no descriptor, decoder, terminal, render buffer, clock, or teardown I/O |
+| Attachment | Core-owned one-per-session value | 336 B | contains stable IDs, viewport, copy policy, and scoped mouse capture; no independent allocation |
+| AttachmentRuntime | Runtime-owned one-per-session value | 9,056 B | owns connection, decoder, frame/output progress, runtime copy continuation, deadlines, backpressure, and teardown; no hot-path allocation or lookup |
+| Runtime session record | one stable aggregate allocation per live session | 80,168 B including Session, Attachment, AttachmentRuntime, terminal theme, and connection generation | preserves direct addresses and replaces the former 94,488-B mixed Session; the unused 14-KiB command trace was removed |
 | Tab | one owner per live tab | 3,600 B | allocated on create; failure preserves existing topology |
 | Semantic Pane | Core-owned per live pane | 16 B | contains only generational identity and committed geometry; staged creation publishes it only with a prepared runtime counterpart |
 | PaneRuntime | Runtime-owned per live pane | 208 B plus owned terminal/queue allocations | owns PTY/process/terminal and scheduling state; typed failure is consumed by Core exit policy |
@@ -46,15 +49,15 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | Scrollback | Ghostty PagePool | 10,000-B default logical byte quota; 1,000,000-B hard byte/optional line limits | page-granular; PagePool bypasses the routed allocator |
 | Pane PTY write queue | lazy per pane | 32 B inline; commonly 4,096 B after first packet; 1,114,112-B pane max; 128 MiB aggregate | grows transactionally, reuses drained capacity, rejects/backpressures on quota exhaustion |
 | Daemon client-input decoder | one inline per session/pending attach | 8,208 B ordinary storage; at most 1,048,592 B after a valid large-paste envelope; less than 65 MiB across 64 sessions | pending handshakes cannot trigger expansion; expanded storage is released after the packet drains or the client detaches |
-| Attached frame | session-owned only while attached | 0 detached; 679,936 B at 80x24; 35,204,096 B at 500x200; 64 MiB ceiling | grows only at attach/resize; failed growth preserves prior state; composition/flush borrow spans |
+| Attached frame | AttachmentRuntime-owned only while attached | 0 detached; 679,936 B at 80x24; 35,204,096 B at 500x200; 64 MiB ceiling | grows only at attach/resize; failed growth preserves prior state; composition/flush borrow spans |
 | Client host-input capture | client-owned while attached | about 2 MiB heap for one opaque paste plus classified output; less than 128 KiB per-read event batch | prepared before terminal mutation; fragmentation state is bounded and malformed input is preserved without unbounded retention |
 | Client server decoder | client-owned while attached | 4,194,324-B virtual bound | allocated before terminal mode mutation; pages touched only by received bytes |
-| Pending connection | one lazy live setup | 143,544 B each; 128 slots | allocation failure closes only the new descriptor |
+| Pending connection | one lazy live setup | 143,672 B each; 128 slots | allocation failure closes only the new descriptor |
 | Extension daemon state | optional | 0 without config; 189,272 B with config | startup-owned; IPC storage is fixed-capacity |
 | Extension host | isolated process | 78,728-B fixed host state plus 16 MiB Lua quota | host failure cannot retain daemon work or stop panes |
 | Reactor scratch | automatic bounded arrays | about 244 KiB daemon parent frame plus 64 KiB PTY read buffer; attached-client input classification adds less than 128 KiB per read | no retained frame or terminal history on the stack |
 
-The session layout number is a compiler-layout observation, not a target architecture endorsement. The current `Session` combines semantic and attachment runtime state; [`architecture.md`](architecture.md) describes the intended ownership split.
+The layout numbers are compiler observations. The aggregate record is a locality decision rather than shared authority: each mutable subobject has one owner and distinct teardown semantics.
 
 ## Resident profile
 

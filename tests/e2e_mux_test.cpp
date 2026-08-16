@@ -1,7 +1,7 @@
 #include "support/process.hpp"
 
 #include "lemma/limits.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <algorithm>
 #include <array>
@@ -810,6 +810,33 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
       << client.raw_tail();
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, ClientLossClearsAttachmentCopyStateBeforeReconnect) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "copy_reconnect"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("printf '__COPY_RECONNECT_HISTORY__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_RECONNECT_HISTORY__", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(client.wait_for_screen("COPY nav [Space]", deadline_after(5s)));
+
+  client.terminate();
+  ASSERT_TRUE(wait_for_listing("copy_reconnect", "detached", deadline_after(5s)));
+
+  PtyClient reattached;
+  ASSERT_TRUE(
+      reattached.spawn(client_arguments("attach", "copy_reconnect"), runtime_.environment()));
+  ASSERT_TRUE(reattached.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(reattached.send("printf '__COPY_RECONNECT_LIVE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(reattached.wait_for_screen("__COPY_RECONNECT_LIVE__", deadline_after(5s)))
+      << reattached.screen() << "\nraw:\n"
+      << reattached.raw_tail();
+  EXPECT_FALSE(reattached.screen().contains("COPY nav [Space]"));
+  ASSERT_TRUE(send_prefix(reattached, std::byte{'d'}));
+  ASSERT_TRUE(reattached.wait(deadline_after(5s)));
 }
 
 // GoogleTest assertion macros inflate the measured branch count.

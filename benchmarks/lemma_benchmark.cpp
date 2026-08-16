@@ -1,8 +1,8 @@
 #include "lemma/command.hpp"
 #include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "protocol/attachment.hpp"
 #include "protocol/extension.hpp"
-#include "protocol/single_pane.hpp"
 #include "render/pane_composition.hpp"
 
 #include <benchmark/benchmark.h>

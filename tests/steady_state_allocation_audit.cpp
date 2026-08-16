@@ -1,6 +1,6 @@
 #include "core/client_frame_output.hpp"
 #include "lemma/terminal/terminal.hpp"
-#include "render/single_pane.hpp"
+#include "render/frame_buffer.hpp"
 
 #include <atomic>
 #include <cerrno>

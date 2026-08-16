@@ -110,7 +110,7 @@ lemma_internal_target(lemma_platform)
 add_library(
   lemma_protocol STATIC
   src/protocol/extension.cpp
-  src/protocol/single_pane.cpp
+  src/protocol/attachment.cpp
 )
 lemma_internal_target(lemma_protocol)
 target_link_libraries(lemma_protocol PRIVATE lemma_base)
@@ -118,7 +118,7 @@ target_link_libraries(lemma_protocol PRIVATE lemma_base)
 add_library(
   lemma_render STATIC
   src/render/pane_composition.cpp
-  src/render/single_pane.cpp
+  src/render/frame_buffer.cpp
 )
 lemma_internal_target(lemma_render)
 target_link_libraries(
@@ -133,36 +133,48 @@ target_link_libraries(
 
 add_library(
   lemma_core STATIC
-  src/core/client_frame_output.cpp
   src/core/command.cpp
+  src/core/session.cpp
+)
+lemma_internal_target(lemma_core)
+target_link_libraries(lemma_core PRIVATE lemma_base)
+
+add_library(
+  lemma_runtime STATIC
+  src/core/client_frame_output.cpp
   src/core/engine.cpp
   src/core/extension_runtime.cpp
   src/core/frame_scheduler.cpp
-  src/core/lemma.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
 )
-lemma_internal_target(lemma_core)
+lemma_internal_target(lemma_runtime)
 target_link_libraries(
-  lemma_core
+  lemma_runtime
   PRIVATE
     lemma_base
+    lemma_core
     lemma_diagnostic
     lemma_platform
     lemma_protocol
     lemma_render
     lemma_terminal
-    lua::lua
-    zstd::libzstd_static
+)
+
+# Public dependency-version helpers remain separate from semantic Core and Runtime ownership.
+add_library(lemma_metadata STATIC src/core/lemma.cpp)
+lemma_internal_target(lemma_metadata)
+target_link_libraries(
+  lemma_metadata PRIVATE lemma_terminal lua::lua zstd::libzstd_static
 )
 
 add_library(lemma_daemon STATIC src/daemon/server.cpp)
 lemma_internal_target(lemma_daemon)
 target_link_libraries(
   lemma_daemon
-  PRIVATE lemma_base lemma_core lemma_extension lemma_platform lemma_protocol
+  PRIVATE lemma_base lemma_extension lemma_platform lemma_protocol lemma_runtime
 )
 
 add_library(
@@ -187,7 +199,7 @@ add_library(lemma_lib INTERFACE)
 add_library(lemma::lib ALIAS lemma_lib)
 target_link_libraries(
   lemma_lib
-  INTERFACE lemma_core lemma_extension lemma_terminal
+  INTERFACE lemma_core lemma_extension lemma_metadata lemma_runtime lemma_terminal
 )
 target_include_directories(
   lemma_lib
@@ -284,7 +296,7 @@ if(LEMMA_BUILD_TESTS)
   endif()
   target_link_libraries(
     lemma_steady_state_allocation_audit
-    PRIVATE lemma_core lemma_render lemma_terminal
+    PRIVATE lemma_render lemma_runtime lemma_terminal
   )
   add_test(
     NAME steady_state_allocation_audit

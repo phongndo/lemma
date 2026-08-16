@@ -1,5 +1,5 @@
-#ifndef LEMMA_RENDER_SINGLE_PANE_HPP
-#define LEMMA_RENDER_SINGLE_PANE_HPP
+#ifndef LEMMA_RENDER_FRAME_BUFFER_HPP
+#define LEMMA_RENDER_FRAME_BUFFER_HPP
 
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
@@ -105,4 +105,4 @@ static_assert(sizeof(FrameBuffer) <= 5U * sizeof(void*));
 
 } // namespace lemma::render
 
-#endif // LEMMA_RENDER_SINGLE_PANE_HPP
+#endif // LEMMA_RENDER_FRAME_BUFFER_HPP

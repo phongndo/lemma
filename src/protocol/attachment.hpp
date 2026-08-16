@@ -1,5 +1,5 @@
-#ifndef LEMMA_PROTOCOL_SINGLE_PANE_HPP
-#define LEMMA_PROTOCOL_SINGLE_PANE_HPP
+#ifndef LEMMA_PROTOCOL_ATTACHMENT_HPP
+#define LEMMA_PROTOCOL_ATTACHMENT_HPP
 
 #include "lemma/limits.hpp"
 
@@ -20,13 +20,13 @@ inline constexpr std::size_t legacy_input_message_bytes_max = input_bytes_max * 
 inline constexpr std::size_t input_message_bytes_max = limits::structured_input_payload_bytes_max;
 inline constexpr std::uint16_t columns_max = 500;
 inline constexpr std::uint16_t rows_max = 200;
-inline constexpr std::size_t session_name_bytes_max = 32;
-inline constexpr std::size_t working_directory_bytes_max = std::size_t{4} * 1'024U;
+inline constexpr std::size_t session_name_bytes_max = limits::session_name_bytes_max;
+inline constexpr std::size_t working_directory_bytes_max = limits::working_directory_bytes_max;
 // create_with_context uses this sentinel to reuse an existing session without creating one when
 // the caller cannot capture a fresh launch context.
 inline constexpr std::size_t unavailable_working_directory_size = 0;
-inline constexpr std::size_t environment_bytes_max = 65'535;
-inline constexpr std::size_t environment_entries_max = 256;
+inline constexpr std::size_t environment_bytes_max = limits::environment_bytes_max;
+inline constexpr std::size_t environment_entries_max = limits::environment_entries_max;
 inline constexpr std::size_t prefix_actions_max = 64;
 inline constexpr std::string_view shutdown_response = "lemma daemon stopped\n";
 
@@ -562,4 +562,4 @@ private:
 
 } // namespace lemma::protocol
 
-#endif // LEMMA_PROTOCOL_SINGLE_PANE_HPP
+#endif // LEMMA_PROTOCOL_ATTACHMENT_HPP

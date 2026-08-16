@@ -2,7 +2,7 @@
 
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <algorithm>
 #include <array>

@@ -1,5 +1,5 @@
 #include "lemma/terminal/terminal.hpp"
-#include "render/single_pane.hpp"
+#include "render/frame_buffer.hpp"
 
 #include <cstddef>
 #include <iostream>

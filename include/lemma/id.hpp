@@ -50,12 +50,14 @@ private:
 struct SessionIdTag final {};
 struct TabIdTag final {};
 struct PaneIdTag final {};
-struct ClientIdTag final {};
+struct AttachmentIdTag final {};
+struct ConnectionIdTag final {};
 
 using SessionId = GenerationalId<SessionIdTag>;
 using TabId = GenerationalId<TabIdTag>;
 using PaneId = GenerationalId<PaneIdTag>;
-using ClientId = GenerationalId<ClientIdTag>;
+using AttachmentId = GenerationalId<AttachmentIdTag>;
+using ConnectionId = GenerationalId<ConnectionIdTag>;
 
 } // namespace lemma
 

@@ -4,7 +4,7 @@
 #include "extension/host.hpp"
 #include "lemma/version.hpp"
 #include "platform/io.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <algorithm>
 #include <array>

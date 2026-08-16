@@ -1,8 +1,8 @@
 #include "core/client_frame_output.hpp"
 
 #include "diagnostic/latency_trace.hpp"
-#include "protocol/single_pane.hpp"
-#include "render/single_pane.hpp"
+#include "protocol/attachment.hpp"
+#include "render/frame_buffer.hpp"
 
 #include <algorithm>
 #include <cerrno>

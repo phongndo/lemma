@@ -2,8 +2,8 @@
 #define LEMMA_CORE_CLIENT_FRAME_OUTPUT_HPP
 
 #include "lemma/limits.hpp"
-#include "protocol/single_pane.hpp"
-#include "render/single_pane.hpp"
+#include "protocol/attachment.hpp"
+#include "render/frame_buffer.hpp"
 
 #include <array>
 #include <chrono>

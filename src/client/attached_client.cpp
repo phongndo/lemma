@@ -7,7 +7,7 @@
 #include "lemma/assert.hpp"
 #include "platform/io.hpp"
 #include "platform/terminal_mode.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
 
 #include <algorithm>
 #include <array>

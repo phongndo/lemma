@@ -12,15 +12,17 @@ Status terms:
 
 ## Current architecture
 
-Lemma is one C++23 executable with client, daemon, extension-host, and control roles. A per-user daemon runs one `poll`-based reactor and currently owns both semantic mux state and runtime resources in `src/core/engine.cpp`.
+Lemma is one C++23 executable with client, daemon, extension-host, and control roles. A per-user daemon runs one `poll`-based reactor. The `lemma_core` target owns only semantic commands and the Session/Tab/Pane/Attachment model; `lemma_runtime` owns reactor and external-resource mechanics.
 
-The current in-memory hierarchy is `Session -> Tab -> Pane`. Pane semantic and runtime ownership are separate, while attachment state remains transitional:
+The current in-memory hierarchy is `Session -> Tab -> Pane`, with separate semantic and runtime counterparts:
 
 - `Pane` contains only `PaneId` and committed layout geometry. A separate bounded runtime store resolves the full generational `SessionId -> TabId -> PaneId` address to one `PaneRuntime`.
 - `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, typed failure state, and teardown. Staged creation publishes the semantic pane and runtime counterpart together; runtime failure becomes a typed outcome consumed by Core pane-exit policy.
 - `Tab` currently contains generational pane slots, a binary layout tree, geometry, focus, previous focus, zoom, and suspension state. Layout resize is planned across the tab, applied transactionally to PaneRuntimes, and committed to semantic pane geometry only after Runtime succeeds.
-- `Session` currently contains generational tab slots, launch context, active/previous tab, one client descriptor and decoder, frame storage/output progress, copy/search state, command trace, and frame scheduler.
-- An Attachment/AttachmentRuntime split does not yet exist as a first-class model.
+- `Session` contains only identity, bounded launch context, generational tab slots, active/previous tab, lifecycle, and theme-binding policy. Its destructor performs no I/O.
+- `Attachment` owns the stable semantic relationship to one Session, viewport geometry, copy policy, and a fully scoped `{TabId, PaneId}` mouse capture target. Current single-controller policy creates one Attachment per Session.
+- `AttachmentRuntime` owns the replaceable connection descriptor, decoder, retained frame and output progress, protocol generations, copy/search continuation, clipboard staging, deadlines, backpressure, presentation caches, trace state, and teardown.
+- Runtime stores one direct aggregate record per Session. Session, Attachment, and AttachmentRuntime retain stable addresses with no extra connection lookup, allocation, virtual dispatch, or shared ownership on hot paths.
 
 The target ownership model is in [`architecture.md`](architecture.md).
 
@@ -55,7 +57,7 @@ Session names are 1–32 ASCII letters, digits, underscores, or hyphens. The dae
 | Rename/reorder/link | Absent | User session/tab rename, stable reorder, and cross-session linking are not implemented. |
 | Pane identification UI | Absent | IDs appear in listings, but there is no pane overlay or naming UX. |
 
-Session, tab, pane, and attached-client references use hierarchical generational IDs internally. The one-shot control protocol remains mostly name-oriented.
+Session, tab, pane, semantic Attachment, and runtime connection references use distinct generational IDs internally. The one-shot control protocol remains mostly name-oriented.
 
 ## Input, copy, and mouse
 

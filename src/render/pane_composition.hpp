@@ -1,6 +1,7 @@
 #ifndef LEMMA_RENDER_PANE_COMPOSITION_HPP
 #define LEMMA_RENDER_PANE_COMPOSITION_HPP
 
+#include "lemma/geometry.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -18,15 +19,7 @@ struct Viewport final {
   std::uint16_t rows{0};
 };
 
-struct PaneRectangle final {
-  std::uint16_t column{0};
-  std::uint16_t row{0};
-  std::uint16_t columns{0};
-  std::uint16_t rows{0};
-
-  friend constexpr auto operator==(const PaneRectangle&, const PaneRectangle&) noexcept
-      -> bool = default;
-};
+using PaneRectangle = lemma::PaneRectangle;
 
 struct PaneSurface final {
   vt::Terminal* terminal{nullptr};

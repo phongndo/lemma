@@ -12,11 +12,16 @@ from pathlib import Path
 from typing import Any
 
 TARGETS = {
-    "pane_semantic": "struct lemma::core::(anonymous namespace)::Pane",
+    "pane_semantic": "struct lemma::core::Pane",
     "pane_runtime": "struct lemma::core::(anonymous namespace)::PaneRuntime",
     "pane_runtime_store": "class lemma::core::(anonymous namespace)::PaneRuntimeStore",
-    "tab_inline": "struct lemma::core::(anonymous namespace)::Tab",
-    "session_inline": "struct lemma::core::(anonymous namespace)::Session",
+    "tab_inline": "struct lemma::core::Tab",
+    "session_inline": "struct lemma::core::Session",
+    "attachment_semantic": "struct lemma::core::Attachment",
+    "attachment_runtime": "struct lemma::core::(anonymous namespace)::AttachmentRuntime",
+    "session_record": "struct lemma::core::(anonymous namespace)::SessionRecord",
+    "copy_mode_semantic": "struct lemma::core::CopyModeState",
+    "copy_mode_runtime": "struct lemma::core::(anonymous namespace)::CopyModeRuntimeState",
     "pending_connection": "struct lemma::core::(anonymous namespace)::PendingConnection",
     "descriptor_owner": "struct lemma::core::(anonymous namespace)::DescriptorOwner",
     "pty_write_queue_inline": "class lemma::core::PanePtyWriteQueue",

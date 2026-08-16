@@ -4,9 +4,9 @@
 #include "core/terminal_resize.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
-#include "protocol/single_pane.hpp"
+#include "protocol/attachment.hpp"
+#include "render/frame_buffer.hpp"
 #include "render/pane_composition.hpp"
-#include "render/single_pane.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
