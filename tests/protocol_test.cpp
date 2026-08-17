@@ -30,7 +30,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x02}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x03}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -166,7 +166,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x02}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x03}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };
@@ -239,6 +239,27 @@ TEST(ProtocolTest, DecodesCoalescedLiveClientMessagesInSequence) {
   decoder.consume();
   ASSERT_TRUE(decoder.next().has_value());
   EXPECT_FALSE(decoder.next()->has_value());
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ProtocolTest, RoundTripsEveryTypedPaneResizeCommand) {
+  constexpr std::array commands{PaneCommand::resize_left, PaneCommand::resize_right,
+                                PaneCommand::resize_up, PaneCommand::resize_down};
+  for (const auto command : commands) {
+    ClientDecoder decoder;
+    ASSERT_TRUE(decoder.prepare().has_value());
+    decoder.reset(2, false);
+    const auto encoded = encode_pane_command(command, 2);
+    std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
+    ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
+
+    const auto decoded = decoder.next();
+
+    ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+    EXPECT_EQ((**decoded).kind, ClientMessageKind::pane_command);
+    EXPECT_EQ((**decoded).pane_command, command);
+  }
 }
 
 TEST(ProtocolTest, RepeatsBorrowedClientMessageUntilConsumed) {
@@ -479,6 +500,23 @@ TEST(ProtocolTest, PrefixParserCapturesTmuxSplitsInInputOrder) {
   EXPECT_EQ(result.actions.front().command, PaneCommand::split_left_right);
   EXPECT_EQ((std::span(result.actions).subspan<1, 1>().front().command),
             PaneCommand::split_top_bottom);
+}
+
+TEST(ProtocolTest, PrefixParserCapturesOneCellResizeBindingsInInputOrder) {
+  PrefixParser parser;
+  const std::array input{std::byte{0x02}, std::byte{'H'}, std::byte{0x02}, std::byte{'J'},
+                         std::byte{0x02}, std::byte{'K'}, std::byte{0x02}, std::byte{'L'}};
+  std::array<std::byte, input.size() * 2U> output{};
+
+  const auto result = parser.parse(input, output);
+
+  ASSERT_EQ(result.action_count, 4U);
+  EXPECT_EQ(result.bytes, 0U);
+  const auto actions = std::span(result.actions);
+  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::resize_left);
+  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::resize_down);
+  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::resize_up);
+  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::resize_right);
 }
 
 TEST(ProtocolTest, PrefixParserEntersCopyModeWithoutForwardingBinding) {

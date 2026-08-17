@@ -126,7 +126,7 @@ mux command   application input
 
 The client or platform decoder preserves key, text, paste, focus, and mouse boundaries where the host exposes them. Core interprets bindings and mux policy. A mux action becomes the same typed command used by CLI, Lua, and agents. Application input is routed to a stable Pane ID, then Runtime asks that pane's Ghostty terminal to encode it from canonical terminal modes.
 
-Paste remains an opaque bounded event and cannot accidentally become prefix commands. Mouse coordinates are validated against attachment geometry, hit-tested against Lemma layout, translated to pane-local coordinates, and then encoded by Ghostty when the application owns the event. Do not fabricate key metadata unavailable from the physical host.
+Paste remains an opaque bounded event and cannot accidentally become prefix commands. Mouse coordinates are validated against attachment geometry and hit-tested against Lemma layout. Pane events are translated to pane-local coordinates and encoded by Ghostty when the application owns them. A left-dragged separator sends each distinct cell position through the typed command path against one generation-safe structural divider, immediately updating the real layout, pane geometry, and Ghostty surfaces. Child PTY notifications are separately coalesced as described below, so live rendering does not imply one `SIGWINCH` per raw motion report. Do not fabricate key metadata unavailable from the physical host.
 
 ## Resize flow
 
@@ -140,7 +140,13 @@ pane geometry
 runtime coordinates PTY + Ghostty resize
 ```
 
-Core owns the semantic layout and computes pane geometry. Runtime prepares dependent presentation storage and coordinates the external resize. PTY and Ghostty dimensions must not remain inconsistent: reject before mutation where possible, otherwise roll back or fail closed if consistency cannot be restored.
+Core owns the semantic layout and computes pane geometry. Runtime prepares dependent presentation storage and coordinates the external resize. Keyboard, outer-window, and non-gesture resize operations keep PTY and Ghostty dimensions in one rollback-capable transaction.
+
+An owned mouse-divider gesture has an explicit bounded exception so its real pane contents can reflow live without flooding children. `PaneLayout` remains the sole owner of the current divider coordinate. AttachmentRuntime retains one non-authoritative checkpoint for the last coordinate reported to every affected PTY and its 250-ms gate; the capture itself retains only generation-safe gesture identity. The first changed position reaches PTYs immediately, later motion replaces one fixed latest endpoint while the gate is armed, and release forces exact convergence. Thus a short multi-sample drag normally sends first/final child sizes, a long drag sends at most four periodic updates per second plus its final endpoint, and a drag returning to its start still reports an intermediate size before the final start size. PTY update failure rolls already-updated PTYs back, restores the last synchronized layout/terminal projection, or fails closed if either rollback cannot complete. Missing gesture/runtime counterparts and view mutations that overtake a divergent gesture are consistency failures rather than silently abandoned state. Outside the gesture no geometry divergence is retained.
+
+Daemon client decoding has a separate CPU bound from decoder storage: each session may apply at most 16 complete client messages and one geometry-bearing message per reactor turn. Retained valid work resumes on the next turn without requiring new socket readiness, so a motion flood cannot make one client monopolize PTY progress.
+
+The attached client treats repeated outer `SIGWINCH` samples as one physical gesture. It retains only the latest dimensions and sends the settled endpoint after 50 ms without another sample, or immediately before later user input so input cannot overtake geometry. The client does not forward every window-manager sample as a child PTY resize.
 
 A resize does not make attachment geometry, pane geometry, PTY dimensions, and terminal dimensions the same owned value. Each has one owner and a defined synchronization transition.
 

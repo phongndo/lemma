@@ -94,6 +94,10 @@ enum class PaneCommand : std::uint8_t {
   none = 0,
   split_left_right = '%',
   split_top_bottom = '"',
+  resize_left = 0x80,
+  resize_right = 0x81,
+  resize_up = 0x82,
+  resize_down = 0x83,
   focus_left = 'L',
   focus_right = 'R',
   focus_up = 'U',
@@ -121,11 +125,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.2. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.3. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{2};
+  std::uint8_t minor{3};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };

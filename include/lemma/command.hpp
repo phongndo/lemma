@@ -14,6 +14,12 @@ enum class CommandKind : std::uint8_t {
   detach_client,
   split_left_right,
   split_top_bottom,
+  resize_left_right_divider,
+  resize_top_bottom_divider,
+  resize_left,
+  resize_right,
+  resize_up,
+  resize_down,
   focus_left,
   focus_right,
   focus_up,
@@ -49,6 +55,8 @@ struct CommandTarget final {
   SessionId session;
   TabId tab;
   PaneId pane;
+  // Divider commands identify both structural subtrees with generation-safe pane representatives.
+  PaneId peer_pane;
   AttachmentId attachment;
 };
 
@@ -56,7 +64,8 @@ struct Command final {
   CommandKind kind{CommandKind::none};
   CommandOrigin origin{CommandOrigin::none};
   CommandTarget target{};
-  // select_tab uses a zero-based live display position. Other current commands require zero.
+  // select_tab uses a zero-based live display position. Divider resize commands use an absolute
+  // tab-content cell coordinate on their typed axis. Other commands require zero.
   std::uint16_t argument{0};
 };
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -148,6 +149,13 @@ protected:
 
   [[nodiscard]] static auto send_kitty_direction(PtyClient& client, const char final) -> bool {
     std::string bytes = "\x1B[98;5:1u\x1B[98;5:3u\x1B[1;1:1X\x1B[1;1:3X";
+    std::ranges::replace(bytes, 'X', final);
+    return client.send(bytes, deadline_after(2s));
+  }
+
+  [[nodiscard]] static auto send_kitty_control_direction(PtyClient& client, const char final)
+      -> bool {
+    std::string bytes = "\x1B[98;5:1u\x1B[98;5:3u\x1B[1;5:1X\x1B[1;5:3X";
     std::ranges::replace(bytes, 'X', final);
     return client.send(bytes, deadline_after(2s));
   }
@@ -364,7 +372,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.2")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.3")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -599,6 +607,170 @@ TEST_F(MuxProcessTest, ClickFocusesTheHitPaneThroughTheCommandPath) {
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_resize"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("mouse_resize", "2 pane(s)", deadline_after(5s), &client));
+
+  // The initial vertical separator is zero-based column 40. Every motion updates real pane and
+  // Ghostty geometry, while child PTY notifications retain only the first/latest sizes inside the
+  // 250-ms gate. A short multi-motion drag therefore produces two WINCH notifications rather than
+  // one per sample, and release converges exactly at column 45.
+  ASSERT_TRUE(client.send("wins=0; trap 'wins=$((wins + 1))' WINCH; "
+                          "printf '\\122\\060\\n'\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("R0", deadline_after(5s))) << client.screen();
+  constexpr std::string_view drag_vertical_motion = "\x1B[<0;41;2M"
+                                                    "\x1B[<32;42;2M"
+                                                    "\x1B[<32;44;2M"
+                                                    "\x1B[<32;46;2M";
+  ASSERT_TRUE(client.send(drag_vertical_motion, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[2;46H│", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(client.send("\x1B[<0;46;2m", deadline_after(2s)));
+  ASSERT_TRUE(
+      client.send("printf '__MOUSE_VERTICAL_%s__ ' \"$wins\"; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_VERTICAL_2__ 23 34", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  // Returning to the starting coordinate still reports one intermediate child size followed by
+  // the restored size. Collapsing that pair to no PTY update would leave full-screen applications
+  // unaware that their canonical surface reflowed out and back.
+  ASSERT_TRUE(client.send("wins=0; printf '\\122\\061\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("R1", deadline_after(5s))) << client.screen();
+  constexpr std::string_view drag_out_and_back = "\x1B[<0;46;2M"
+                                                 "\x1B[<32;47;2M"
+                                                 "\x1B[<32;46;2M"
+                                                 "\x1B[<0;46;2m";
+  ASSERT_TRUE(client.send(drag_out_and_back, deadline_after(2s)));
+  ASSERT_TRUE(
+      client.send("printf '__MOUSE_ROUNDTRIP_%s__ ' \"$wins\"; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_ROUNDTRIP_2__ 23 34", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  // A long gesture publishes one periodic latest endpoint while the gate is armed, then release
+  // forces the exact final endpoint. Returning to the original divider keeps geometry stable while
+  // proving the 250-ms service path does not become an unbounded timer or notification stream.
+  ASSERT_TRUE(client.send("wins=0; printf '\\122\\062\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("R2", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("\x1B[<0;46;2M\x1B[<32;47;2M\x1B[<32;48;2M", deadline_after(2s)));
+  std::this_thread::sleep_for(350ms);
+  ASSERT_TRUE(client.send("\x1B[<32;46;2M\x1B[<0;46;2m", deadline_after(2s)));
+  ASSERT_TRUE(
+      client.send("printf '__MOUSE_PERIODIC_%s__ ' \"$wins\"; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_PERIODIC_3__ 23 34", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  // An outer resize finalizes an in-progress live divider gesture before changing the viewport and
+  // consumes its eventual stale release. The live 50/29 ratio projects to 63/36 at 100 columns;
+  // release must not replace it with a 50/49 split or leak to the child.
+  ASSERT_TRUE(client.send("\x1B[<0;46;2M\x1B[<32;51;2M", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[2;51H│", deadline_after(5s))) << client.raw_tail();
+  ASSERT_TRUE(client.resize(100, 24));
+  ASSERT_TRUE(wait_for_listing("mouse_resize", "100x24", deadline_after(5s), &client));
+  ASSERT_TRUE(client.send("\x1B[<0;51;2m", deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__MOUSE_CANCELLED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_CANCELLED__ 23 36", deadline_after(5s)))
+      << client.screen();
+  ASSERT_TRUE(client.resize(80, 24));
+  ASSERT_TRUE(wait_for_listing("mouse_resize", "80x24", deadline_after(5s), &client));
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'x'}));
+  ASSERT_TRUE(wait_for_listing("mouse_resize", "1 pane(s)", deadline_after(5s), &client));
+  ASSERT_TRUE(send_prefix(client, std::byte{'"'}));
+  ASSERT_TRUE(wait_for_listing("mouse_resize", "2 pane(s)", deadline_after(5s), &client));
+
+  // The initial horizontal separator is content row 11 (outer SGR row 13 after the status row).
+  // Move it to content row 14, leaving the focused bottom pane eight rows high.
+  constexpr std::string_view drag_horizontal_motion = "\x1B[<0;1;13M"
+                                                      "\x1B[<32;1;16M";
+  ASSERT_TRUE(client.send(drag_horizontal_motion, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[16;1H─", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("\x1B[<0;1;16m", deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__MOUSE_HORIZONTAL__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_HORIZONTAL__ 8 80", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, BudgetsValidDividerFloodWithoutStarvingAnotherSession) {
+  PtyClient setup;
+  ASSERT_TRUE(setup.spawn(client_arguments("new", "divider_flood"), runtime_.environment()));
+  ASSERT_TRUE(setup.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(setup, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("divider_flood", "2 pane(s)", deadline_after(5s), &setup));
+  ASSERT_TRUE(send_prefix(setup, std::byte{'d'}));
+  ASSERT_TRUE(setup.wait(deadline_after(5s)));
+
+  RawPeer flooded;
+  ASSERT_TRUE(flooded.connect(runtime_.socket_path(), deadline_after(2s)));
+  const auto hello = attach_request("divider_flood", {.columns = 80, .rows = 24});
+  ASSERT_TRUE(flooded.send(hello, deadline_after(2s)));
+  protocol::ServerDecoder decoder;
+  ASSERT_TRUE(wait_for_server_hello(flooded, decoder, deadline_after(5s)));
+
+  PtyClient responsive;
+  ASSERT_TRUE(
+      responsive.spawn(client_arguments("new", "divider_responsive"), runtime_.environment()));
+  ASSERT_TRUE(responsive.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+
+  constexpr std::size_t motion_count = 512;
+  std::vector<std::byte> messages;
+  messages.reserve((motion_count + 2U) *
+                   (protocol::attach_header_bytes + protocol::mouse_input_wire_bytes));
+  std::uint32_t sequence = 2;
+  const auto append_mouse = [&](const protocol::MouseInputAction action, const std::uint16_t column,
+                                const bool button_pressed) {
+    const auto encoded = protocol::encode_mouse({.action = action,
+                                                 .button = protocol::MouseInputButton::left,
+                                                 .column = column,
+                                                 .row = 1,
+                                                 .geometry = {.columns = 80, .rows = 24},
+                                                 .any_button_pressed = button_pressed},
+                                                sequence);
+    ++sequence;
+    const auto bytes = encoded.bytes();
+    messages.insert(messages.end(), bytes.begin(), bytes.end());
+  };
+  append_mouse(protocol::MouseInputAction::press, 40, true);
+  for (std::size_t motion = 0; motion < motion_count; ++motion) {
+    append_mouse(protocol::MouseInputAction::motion,
+                 static_cast<std::uint16_t>(41U + (motion % 20U)), true);
+  }
+  append_mouse(protocol::MouseInputAction::release, 45, false);
+
+  std::atomic<bool> flood_sent{false};
+  {
+    std::jthread sender([&] {
+      flood_sent.store(flooded.send(messages, deadline_after(10s)), std::memory_order_release);
+    });
+    std::this_thread::sleep_for(5ms);
+    ASSERT_TRUE(responsive.send("printf '__DIVIDER_FLOOD_RESPONSIVE__\\n'\r", deadline_after(2s)));
+    ASSERT_TRUE(responsive.wait_for_screen("__DIVIDER_FLOOD_RESPONSIVE__", deadline_after(5s)))
+        << responsive.screen() << "\nserver:\n"
+        << server_.output();
+  }
+  ASSERT_TRUE(flood_sent.load(std::memory_order_acquire));
+
+  flooded.close();
+  ASSERT_TRUE(send_prefix(responsive, std::byte{'d'}));
+  ASSERT_TRUE(responsive.wait(deadline_after(5s)));
+}
+
 TEST_F(MuxProcessTest, HandlesMouseEdgesCopyTransitionsAndDeletedCaptureTargets) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_edges"), runtime_.environment()));
@@ -606,12 +778,14 @@ TEST_F(MuxProcessTest, HandlesMouseEdgesCopyTransitionsAndDeletedCaptureTargets)
   ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
   ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
 
-  // Status and the vertical separator are outside pane content and cannot change focus.
+  // Status remains outside pane content. Pressing and releasing a separator without moving starts
+  // and ends a resize gesture without changing focus or geometry.
   constexpr std::string_view outside_clicks = "\x1B[<0;1;1M\x1B[<0;1;1m"
                                               "\x1B[<0;41;2M\x1B[<0;41;2m";
   ASSERT_TRUE(client.send(outside_clicks, deadline_after(2s)));
-  ASSERT_TRUE(client.send("printf '__OUTSIDE_IGNORED__\\n'\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__OUTSIDE_IGNORED__", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("printf '__OUTSIDE_IGNORED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__OUTSIDE_IGNORED__ 23 39", deadline_after(5s)))
+      << client.screen();
   ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
 
   // Clicking another pane while copy mode owns the old pane exits copy mode instead of treating
@@ -786,6 +960,35 @@ TEST_F(MuxProcessTest, WheelUsesGhosttyAlternateScrollInAlternateScreen) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, CoalescesOuterResizeGestureIntoOneSettledPtyResize) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "resize_coalesce"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'"'}));
+  ASSERT_TRUE(wait_for_listing("resize_coalesce", "2 pane(s)", deadline_after(5s), &client));
+  ASSERT_TRUE(client.send("wins=0; trap 'wins=$((wins + 1))' WINCH; printf '__WINCH_READY__\\n'\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WINCH_READY__", deadline_after(5s))) << client.screen();
+
+  for (const auto rows :
+       {std::uint16_t{20}, std::uint16_t{12}, std::uint16_t{6}, std::uint16_t{2}, std::uint16_t{8},
+        std::uint16_t{16}, std::uint16_t{24}, std::uint16_t{30}}) {
+    ASSERT_TRUE(client.resize(80, rows));
+    std::this_thread::sleep_for(10ms);
+  }
+  ASSERT_TRUE(wait_for_listing("resize_coalesce", "80x30", deadline_after(5s), &client));
+  ASSERT_TRUE(
+      client.send("printf '__WINCH_COUNT_%s__ ' \"$wins\"; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WINCH_COUNT_1__ 14 80", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
 TEST_F(MuxProcessTest, PreservesTopologyAcrossResizeAbruptExitAndReattach) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "topology"), runtime_.environment()));
@@ -921,6 +1124,63 @@ TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
   ASSERT_TRUE(client.wait_for_screen("__FOCUSED_C__", deadline_after(5s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, PersistsTypedSplitResizeAcrossViewportAndReattach) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "split_ratio"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_session(
+                  "split_ratio", [](const SessionListing& value) { return value.panes == 2; },
+                  deadline_after(5s), &client)
+                  .has_value());
+
+  ASSERT_TRUE(client.send("printf '__RATIO_INITIAL__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_INITIAL__ 23 39", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_kitty_control_direction(client, 'D'));
+  ASSERT_TRUE(client.send("printf '__RATIO_MOVED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_MOVED__ 23 40", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(client.resize(100, 24));
+  ASSERT_TRUE(client.send("printf '__RATIO_LARGE__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("split_ratio", "100x24", deadline_after(5s), &client));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_LARGE__ 23 50", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(client.resize(80, 24));
+  ASSERT_TRUE(client.send("printf '__RATIO_RETURNED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("split_ratio", "80x24", deadline_after(5s), &client));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_RETURNED__ 23 40", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'z'}));
+  ASSERT_TRUE(client.send("printf '__RATIO_ZOOMED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_ZOOMED__ 23 80", deadline_after(5s)))
+      << client.screen();
+  ASSERT_TRUE(send_prefix(client, std::byte{'z'}));
+  ASSERT_TRUE(client.send("printf '__RATIO_UNZOOMED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_UNZOOMED__ 23 40", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+  ASSERT_TRUE(wait_for_listing("split_ratio", "detached", deadline_after(5s)));
+
+  PtyClient reattached;
+  ASSERT_TRUE(
+      reattached.spawn(client_arguments("attach", "split_ratio"), runtime_.environment(), 80, 24));
+  ASSERT_TRUE(reattached.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(reattached.send("printf '__RATIO_REATTACHED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(reattached.wait_for_screen("__RATIO_REATTACHED__ 23 40", deadline_after(5s)))
+      << reattached.screen();
+  ASSERT_TRUE(send_prefix(reattached, std::byte{'d'}));
+  ASSERT_TRUE(reattached.wait(deadline_after(5s)));
 }
 
 // GoogleTest assertion macros inflate the measured branch count.
@@ -1066,8 +1326,9 @@ TEST_F(MuxProcessTest, IncrementalSearchKeepsPreviousPreviewWhileRefiningQuery) 
       << client.screen();
   ASSERT_TRUE(client.wait_for_screen("__STABLE_PREVIEW_READY__", deadline_after(5s)))
       << client.screen();
-  EXPECT_NE(client.screen().find("?__STABLE@PREVIEW_TARGET__x"), std::string::npos)
-      << client.screen();
+  ASSERT_TRUE(client.wait_for_screen("?__STABLE@PREVIEW_TARGET__x", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
   EXPECT_EQ(client.screen().find("no match"), std::string::npos) << client.screen();
   ASSERT_TRUE(client.send("\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("no match", deadline_after(5s))) << client.screen();

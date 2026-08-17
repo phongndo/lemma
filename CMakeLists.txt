@@ -135,6 +135,7 @@ add_library(
   lemma_core STATIC
   src/core/command.cpp
   src/core/copy_mode.cpp
+  src/core/layout.cpp
   src/core/session.cpp
 )
 lemma_internal_target(lemma_core)
@@ -245,6 +246,7 @@ if(LEMMA_BUILD_TESTS)
     tests/ghostty_parity_regression_test.cpp
     tests/host_input_parser_test.cpp
     tests/host_terminal_theme_test.cpp
+    tests/layout_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
     tests/pty_writer_test.cpp

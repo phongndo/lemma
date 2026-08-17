@@ -114,14 +114,26 @@ int main() {
       !lemma::render::compose_retained_single_pane(terminal, frame, true).has_value()) {
     return 2;
   }
+  auto resize_terminal_result = lemma::vt::Terminal::create({});
+  if (!resize_terminal_result.has_value()) {
+    return 2;
+  }
+  auto resize_terminal = std::move(*resize_terminal_result);
+  if (!resize_terminal.resize({.columns = 81, .rows = 24}).has_value()) {
+    return 2;
+  }
   for (std::size_t iteration = 0; iteration < warmup_iterations; ++iteration) {
     const auto bytes = write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
-    if (bytes == 0) {
+    const lemma::vt::TerminalSize resize = iteration % 2U == 0
+                                               ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
+                                               : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
+    if (bytes == 0 || !resize_terminal.resize(resize).has_value()) {
       return 2;
     }
   }
 
   const auto terminal_before = terminal.allocation_stats();
+  const auto resize_terminal_before = resize_terminal.allocation_stats();
   audited_allocations.store(0, std::memory_order_relaxed);
   audited_bytes.store(0, std::memory_order_relaxed);
   audit_enabled.store(true, std::memory_order_release);
@@ -130,7 +142,10 @@ int main() {
   for (std::size_t iteration = 0; iteration < audited_iterations; ++iteration) {
     const auto frame_bytes =
         write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
-    if (frame_bytes == 0) {
+    const lemma::vt::TerminalSize resize = iteration % 2U == 0
+                                               ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
+                                               : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
+    if (frame_bytes == 0 || !resize_terminal.resize(resize).has_value()) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }
@@ -157,10 +172,12 @@ int main() {
   audit_enabled.store(false, std::memory_order_release);
 
   const auto terminal_after = terminal.allocation_stats();
+  const auto resize_terminal_after = resize_terminal.allocation_stats();
   const auto general_allocations = audited_allocations.load(std::memory_order_relaxed);
   const auto general_bytes = audited_bytes.load(std::memory_order_relaxed);
   const auto terminal_allocations =
-      terminal_after.allocations_total - terminal_before.allocations_total;
+      (terminal_after.allocations_total - terminal_before.allocations_total) +
+      (resize_terminal_after.allocations_total - resize_terminal_before.allocations_total);
   const bool passed = general_allocations == 0 && general_bytes == 0 && terminal_allocations == 0;
   std::println(R"({{
   "schema": 1,
@@ -168,12 +185,14 @@ int main() {
   "status": "{}",
   "warmup_iterations": {},
   "audited_iterations": {},
+  "terminal_resize_iterations": {},
   "general_allocation_calls": {},
   "general_allocation_bytes": {},
   "terminal_quota_allocation_calls": {},
   "flushed_wire_bytes": {}
 }})",
                passed ? "passed" : "failed", warmup_iterations, audited_iterations,
-               general_allocations, general_bytes, terminal_allocations, flushed_bytes);
+               audited_iterations, general_allocations, general_bytes, terminal_allocations,
+               flushed_bytes);
   return passed ? 0 : 1;
 }

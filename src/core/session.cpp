@@ -12,11 +12,11 @@
 
 namespace lemma::core {
 
-Tab::Tab(const TabId assigned_id, std::unique_ptr<Pane> first_pane) noexcept : id(assigned_id) {
+Tab::Tab(const TabId assigned_id, std::unique_ptr<Pane> first_pane) noexcept
+    : id(assigned_id), layout(PaneId::from_parts(0, 1)) {
   const auto first_id = PaneId::from_parts(0, 1);
   first_pane->id = first_id;
   panes.front() = {.pane = std::move(first_pane), .generation = first_id.generation()};
-  layout.front() = {.active = true, .leaf = true, .pane = first_id};
   focused_pane = first_id;
   previous_pane = first_id;
 }

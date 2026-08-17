@@ -1,3 +1,4 @@
+#include "core/layout.hpp"
 #include "lemma/command.hpp"
 #include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
@@ -50,6 +51,242 @@ void benchmark_command_dispatch(benchmark::State& state) {
     benchmark::DoNotOptimize(status);
   }
   benchmark::DoNotOptimize(context.calls);
+}
+
+[[nodiscard]] auto benchmark_layout(const std::size_t requested_panes) -> core::PaneLayout {
+  core::PaneLayout layout(PaneId::from_parts(0, 1));
+  std::size_t panes = 1;
+  std::size_t level = 0;
+  while (panes < requested_panes) {
+    const auto level_panes = panes;
+    for (std::size_t source = 0; source < level_panes && panes < requested_panes; ++source) {
+      const auto axis = level % 2U == 0 ? core::SplitAxis::left_right : core::SplitAxis::top_bottom;
+      const auto source_id = PaneId::from_parts(static_cast<std::uint32_t>(source), 1);
+      const auto added_id = PaneId::from_parts(static_cast<std::uint32_t>(panes), 1);
+      if (!layout.split(source_id, added_id, axis)) {
+        break;
+      }
+      ++panes;
+    }
+    ++level;
+  }
+  return layout;
+}
+
+[[nodiscard]] auto benchmark_worst_depth_layout() -> core::PaneLayout {
+  core::PaneLayout layout(PaneId::from_parts(0, 1));
+  for (std::uint32_t slot = 1; slot < core::pane_layout_panes_max; ++slot) {
+    if (!layout.split(PaneId::from_parts(0, 1), PaneId::from_parts(slot, 1),
+                      core::SplitAxis::left_right)) {
+      break;
+    }
+  }
+  return layout;
+}
+
+void benchmark_layout_projection(benchmark::State& state) {
+  const auto panes = static_cast<std::size_t>(state.range(0));
+  const auto layout = benchmark_layout(panes);
+  if (layout.pane_count() != panes) {
+    state.SkipWithError("failed to build benchmark layout");
+    return;
+  }
+  constexpr PaneRectangle viewport{.columns = 240, .rows = 80};
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto projection = layout.project(viewport);
+    if (!projection.has_value()) {
+      state.SkipWithError("failed to project benchmark layout");
+      return;
+    }
+    auto projected_panes = projection->pane_count;
+    benchmark::DoNotOptimize(projected_panes);
+  }
+}
+
+void benchmark_layout_resize_candidate(benchmark::State& state) {
+  const auto layout = benchmark_layout(64);
+  constexpr PaneRectangle viewport{.columns = 240, .rows = 80};
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto candidate = layout;
+    const auto status =
+        candidate.resize(PaneId::from_parts(0, 1), core::ResizeDirection::right, viewport);
+    benchmark::DoNotOptimize(candidate);
+    if (status != core::LayoutResizeStatus::applied) {
+      state.SkipWithError("failed to resize benchmark layout");
+      return;
+    }
+  }
+}
+
+void benchmark_layout_divider_hit(benchmark::State& state) {
+  const auto layout = benchmark_layout(64);
+  constexpr PaneRectangle viewport{.columns = 240, .rows = 80};
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto divider = layout.divider_at(viewport, 120, 0);
+    if (!divider.has_value()) {
+      state.SkipWithError("failed to hit benchmark divider");
+      return;
+    }
+    auto observed = *divider;
+    benchmark::DoNotOptimize(observed);
+  }
+}
+
+void benchmark_layout_divider_resize_candidate(benchmark::State& state) {
+  const auto layout = benchmark_layout(64);
+  constexpr PaneRectangle viewport{.columns = 240, .rows = 80};
+  const auto divider = layout.divider_at(viewport, 120, 0);
+  if (!divider.has_value()) {
+    state.SkipWithError("failed to hit benchmark divider");
+    return;
+  }
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto candidate = layout;
+    const auto status = candidate.resize_divider(*divider, 121, viewport);
+    auto rectangle = candidate.divider_rectangle(*divider, viewport);
+    benchmark::DoNotOptimize(candidate);
+    benchmark::DoNotOptimize(rectangle);
+    if (status != core::LayoutResizeStatus::applied || !rectangle.has_value()) {
+      state.SkipWithError("failed to project resized benchmark divider");
+      return;
+    }
+  }
+}
+
+// Measures the live path through semantic resize, Ghostty reflow, and full pane composition. PTY
+// ioctls, child scheduling, client transport, and outer-terminal rendering remain excluded.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void benchmark_live_divider_resize(benchmark::State& state) {
+  const auto pane_count = static_cast<std::size_t>(state.range(0));
+  auto layout = benchmark_layout(pane_count);
+  constexpr PaneRectangle layout_viewport{.columns = 240, .rows = 80};
+  constexpr render::Viewport render_viewport{.columns = 240, .rows = 80};
+  auto projection = layout.project(layout_viewport);
+  const auto divider = layout.divider_at(layout_viewport, 120, 0);
+  if (!projection.has_value() || !divider.has_value() || layout.pane_count() != pane_count) {
+    state.SkipWithError("failed to build live-resize layout");
+    return;
+  }
+
+  std::vector<vt::Terminal> terminals;
+  terminals.reserve(pane_count);
+  std::vector<render::PaneSurface> panes;
+  panes.reserve(pane_count);
+  for (std::size_t slot = 0; slot < pane_count; ++slot) {
+    const auto id = PaneId::from_parts(static_cast<std::uint32_t>(slot), 1);
+    const auto rectangle = projection->rectangle(id);
+    if (!rectangle.has_value()) {
+      state.SkipWithError("live-resize projection omitted pane");
+      return;
+    }
+    vt::TerminalOptions options;
+    options.size = {.columns = rectangle->columns, .rows = rectangle->rows};
+    auto terminal = vt::Terminal::create(options);
+    if (!terminal.has_value()) {
+      state.SkipWithError("failed to create live-resize terminal");
+      return;
+    }
+    terminals.emplace_back(std::move(*terminal));
+    panes.push_back({
+        .terminal = &terminals.back(),
+        .rectangle = *rectangle,
+        .focused = slot == 0,
+    });
+  }
+  std::vector<std::byte> frame(std::size_t{1} * 1'024U * 1'024U);
+  if (!render::compose_frame(panes, render_viewport, frame, true).has_value()) {
+    state.SkipWithError("failed to compose initial live-resize frame");
+    return;
+  }
+
+  bool expanded = false;
+  std::uint64_t output_bytes = 0;
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto candidate = layout;
+    const auto coordinate = expanded ? std::uint16_t{120} : std::uint16_t{121};
+    expanded = !expanded;
+    if (candidate.resize_divider(*divider, coordinate, layout_viewport) !=
+        core::LayoutResizeStatus::applied) {
+      state.SkipWithError("failed to resize live candidate");
+      return;
+    }
+    projection = candidate.project(layout_viewport);
+    if (!projection.has_value()) {
+      state.SkipWithError("failed to project live candidate");
+      return;
+    }
+    for (std::size_t slot = 0; slot < pane_count; ++slot) {
+      const auto id = PaneId::from_parts(static_cast<std::uint32_t>(slot), 1);
+      const auto rectangle = projection->rectangle(id);
+      if (!rectangle.has_value()) {
+        state.SkipWithError("resized projection omitted pane");
+        return;
+      }
+      auto& terminal = std::span(terminals).subspan(slot, 1).front();
+      const vt::TerminalSize size{.columns = rectangle->columns, .rows = rectangle->rows};
+      if (terminal.size() != size && !terminal.resize(size).has_value()) {
+        state.SkipWithError("failed to resize live terminal");
+        return;
+      }
+      std::span(panes).subspan(slot, 1).front().rectangle = *rectangle;
+    }
+    const auto rendered = render::compose_frame(panes, render_viewport, frame, true);
+    if (!rendered.has_value()) {
+      state.SkipWithError("failed to compose live-resize frame");
+      return;
+    }
+    output_bytes += rendered->bytes;
+    layout = candidate;
+    benchmark::DoNotOptimize(layout);
+  }
+  state.counters["frame_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
+}
+
+void benchmark_layout_projection_worst_depth(benchmark::State& state) {
+  const auto layout = benchmark_worst_depth_layout();
+  constexpr PaneRectangle viewport{.columns = 500, .rows = 200};
+  if (layout.pane_count() != core::pane_layout_panes_max) {
+    state.SkipWithError("failed to build worst-depth layout");
+    return;
+  }
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto projection = layout.project(viewport);
+    if (!projection.has_value()) {
+      state.SkipWithError("failed to project worst-depth layout");
+      return;
+    }
+    auto projected_panes = projection->pane_count;
+    benchmark::DoNotOptimize(projected_panes);
+  }
+}
+
+void benchmark_layout_divider_hit_worst_depth(benchmark::State& state) {
+  const auto layout = benchmark_worst_depth_layout();
+  constexpr PaneRectangle viewport{.columns = 500, .rows = 200};
+  constexpr auto deepest_second =
+      PaneId::from_parts(static_cast<std::uint32_t>(core::pane_layout_panes_max - 1U), 1);
+  std::optional<std::uint16_t> coordinate;
+  for (std::uint16_t column = 0; column < viewport.columns; ++column) {
+    const auto divider = layout.divider_at(viewport, column, 0);
+    if (divider.has_value() && divider->second == deepest_second) {
+      coordinate = column;
+      break;
+    }
+  }
+  if (!coordinate.has_value()) {
+    state.SkipWithError("failed to find deepest benchmark divider");
+    return;
+  }
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto divider = layout.divider_at(viewport, *coordinate, 0);
+    if (!divider.has_value() || divider->second != deepest_second) {
+      state.SkipWithError("failed to hit deepest benchmark divider");
+      return;
+    }
+    auto observed = *divider;
+    benchmark::DoNotOptimize(observed);
+  }
 }
 
 void benchmark_extension_registration_codec(benchmark::State& state) {
@@ -405,6 +642,13 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
 
 BENCHMARK(benchmark_greeting);
 BENCHMARK(benchmark_command_dispatch);
+BENCHMARK(benchmark_layout_projection)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
+BENCHMARK(benchmark_layout_resize_candidate);
+BENCHMARK(benchmark_layout_divider_hit);
+BENCHMARK(benchmark_layout_divider_resize_candidate);
+BENCHMARK(benchmark_live_divider_resize)->Arg(2)->Arg(4)->Arg(16)->Arg(64);
+BENCHMARK(benchmark_layout_projection_worst_depth);
+BENCHMARK(benchmark_layout_divider_hit_worst_depth);
 BENCHMARK(benchmark_extension_registration_codec);
 BENCHMARK(benchmark_private_attach_input_codec);
 BENCHMARK(benchmark_terminal_small_writes);

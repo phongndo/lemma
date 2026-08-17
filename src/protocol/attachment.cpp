@@ -137,6 +137,10 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
     break;
   case PaneCommand::split_left_right:
   case PaneCommand::split_top_bottom:
+  case PaneCommand::resize_left:
+  case PaneCommand::resize_right:
+  case PaneCommand::resize_up:
+  case PaneCommand::resize_down:
   case PaneCommand::focus_left:
   case PaneCommand::focus_right:
   case PaneCommand::focus_up:
@@ -663,6 +667,18 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       break;
     case std::byte{'"'}:
       pane_command_value = PaneCommand::split_top_bottom;
+      break;
+    case std::byte{'H'}:
+      pane_command_value = PaneCommand::resize_left;
+      break;
+    case std::byte{'L'}:
+      pane_command_value = PaneCommand::resize_right;
+      break;
+    case std::byte{'K'}:
+      pane_command_value = PaneCommand::resize_up;
+      break;
+    case std::byte{'J'}:
+      pane_command_value = PaneCommand::resize_down;
       break;
     case std::byte{'o'}:
       pane_command_value = PaneCommand::focus_next;

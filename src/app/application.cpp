@@ -112,8 +112,9 @@ template <typename Integer>
              "session\n"
              "  help            show this help\n  version         show build and "
              "protocol version\n  demo            VT demo\n\nWithout a command, Lemma creates or "
-             "enters `default`. C-b % and C-b \" split panes; C-b c creates a tab; C-b n/p "
-             "changes tabs; C-b d detaches.\n")
+             "enters `default`. C-b % and C-b \" split panes; C-b C-arrow, C-b H/J/K/L, "
+             "or dragging a separator resizes; C-b c creates a tab; C-b n/p changes tabs; C-b d "
+             "detaches.\n")
              ? 0
              : 1;
 }

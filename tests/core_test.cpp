@@ -67,6 +67,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
       .target = {.session = SessionId::from_parts(2, 3),
                  .tab = TabId::from_parts(4, 5),
                  .pane = {},
+                 .peer_pane = {},
                  .attachment = {}},
       .argument = 7,
   };
@@ -83,6 +84,47 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_EQ(capture.command.target.session, command.target.session);
   EXPECT_EQ(capture.command.target.tab, command.target.tab);
   EXPECT_EQ(capture.command.argument, 7U);
+}
+
+TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+
+  const auto result =
+      dispatcher.dispatch({.kind = CommandKind::resize_left, .origin = CommandOrigin::keymap});
+
+  EXPECT_EQ(result.status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 1U);
+  EXPECT_EQ(capture.command.kind, CommandKind::resize_left);
+  EXPECT_EQ(
+      dispatcher
+          .dispatch(
+              {.kind = CommandKind::resize_right, .origin = CommandOrigin::keymap, .argument = 1})
+          .status,
+      CommandStatus::invalid_command);
+}
+
+TEST(CommandDispatcherTest, DispatchesGenerationSafeDividerResizeCommand) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const Command command{
+      .kind = CommandKind::resize_left_right_divider,
+      .origin = CommandOrigin::client,
+      .target = {.session = SessionId::from_parts(1, 2),
+                 .tab = TabId::from_parts(3, 4),
+                 .pane = PaneId::from_parts(5, 6),
+                 .peer_pane = PaneId::from_parts(7, 8),
+                 .attachment = AttachmentId::from_parts(1, 2)},
+      .argument = 45,
+  };
+
+  const auto result = dispatcher.dispatch(command);
+
+  EXPECT_EQ(result.status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 1U);
+  EXPECT_EQ(capture.command.kind, CommandKind::resize_left_right_divider);
+  EXPECT_EQ(capture.command.target.peer_pane, command.target.peer_pane);
+  EXPECT_EQ(capture.command.argument, 45U);
 }
 
 TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
@@ -102,6 +144,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                            .target = {.session = {},
                                       .tab = {},
                                       .pane = PaneId::from_parts(1, 1),
+                                      .peer_pane = {},
                                       .attachment = {}}})
                 .status,
             CommandStatus::invalid_target);
@@ -111,6 +154,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                            .target = {.session = {},
                                       .tab = TabId::from_parts(1, 1),
                                       .pane = {},
+                                      .peer_pane = {},
                                       .attachment = {}}})
                 .status,
             CommandStatus::invalid_target);
@@ -120,6 +164,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                            .target = {.session = {},
                                       .tab = {},
                                       .pane = {},
+                                      .peer_pane = {},
                                       .attachment = AttachmentId::from_parts(1, 1)}})
                 .status,
             CommandStatus::invalid_target);
@@ -129,8 +174,29 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
               {.kind = CommandKind::focus_next, .origin = CommandOrigin::client, .argument = 1})
           .status,
       CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::resize_left_right_divider,
+                           .origin = CommandOrigin::client,
+                           .target = {.session = SessionId::from_parts(1, 1),
+                                      .tab = TabId::from_parts(1, 1),
+                                      .pane = PaneId::from_parts(1, 1),
+                                      .peer_pane = {},
+                                      .attachment = AttachmentId::from_parts(1, 1)},
+                           .argument = 10})
+                .status,
+            CommandStatus::invalid_target);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::focus_next,
+                           .origin = CommandOrigin::client,
+                           .target = {.session = SessionId::from_parts(1, 1),
+                                      .tab = TabId::from_parts(1, 1),
+                                      .pane = PaneId::from_parts(1, 1),
+                                      .peer_pane = PaneId::from_parts(2, 1),
+                                      .attachment = AttachmentId::from_parts(1, 1)}})
+                .status,
+            CommandStatus::invalid_target);
   EXPECT_EQ(capture.calls, 0U);
-  EXPECT_EQ(capture.observations, 6U);
+  EXPECT_EQ(capture.observations, 8U);
 
   const CommandDispatcher missing_executor(nullptr, nullptr);
   EXPECT_EQ(missing_executor

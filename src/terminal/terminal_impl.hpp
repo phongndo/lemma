@@ -126,6 +126,7 @@ struct Terminal::Impl final {
   std::array<std::uint64_t, limits::terminal_rows_hard_max> current_row_hashes{};
   detail::CellHashStorage physical_cell_hashes;
   std::size_t physical_cell_count{0};
+  std::size_t physical_cell_capacity{0};
   std::size_t row_hash_count{0};
   std::array<bool, 12> mirrored_mode_values{};
   bool mirrored_modes_valid{false};

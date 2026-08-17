@@ -118,6 +118,16 @@ namespace {
   return size.cell_width_px <= width_max && size.cell_height_px <= height_max;
 }
 
+[[nodiscard]] constexpr auto physical_cell_capacity(const std::size_t current,
+                                                    const std::size_t required) noexcept
+    -> std::size_t {
+  constexpr auto maximum =
+      static_cast<std::size_t>(limits::terminal_columns_hard_max) * limits::terminal_rows_hard_max;
+  LEMMA_ASSERT(required > current && required <= maximum);
+  const auto geometric = current + std::max(current / 2U, std::size_t{1});
+  return std::min(maximum, std::max(required, geometric));
+}
+
 [[nodiscard]] auto valid_options(const TerminalOptions& options) noexcept -> bool {
   if (!valid_size(options.size)) {
     return false;
@@ -500,10 +510,14 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
 
   impl->row_hash_count = options.size.rows;
   impl->physical_cell_count = static_cast<std::size_t>(options.size.columns) * options.size.rows;
+  impl->physical_cell_capacity = impl->physical_cell_count;
   try {
     // Runtime-sized cell storage cannot use std::array.
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-    impl->physical_cell_hashes = std::make_unique<std::uint64_t[]>(impl->physical_cell_count);
+    // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    impl->physical_cell_hashes =
+        std::make_unique_for_overwrite<std::uint64_t[]>(impl->physical_cell_capacity);
+    // NOLINTEND(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    LEMMA_ASSERT(impl->physical_cell_capacity >= impl->physical_cell_count);
   } catch (const std::bad_alloc&) {
     return std::unexpected(Error::out_of_memory);
   }
@@ -655,13 +669,19 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   }
 
   const auto physical_cell_count = static_cast<std::size_t>(size.columns) * size.rows;
+  auto target_capacity = impl_->physical_cell_capacity;
   detail::CellHashStorage physical_cell_hashes;
-  try {
-    // Runtime-sized cell storage cannot use std::array.
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-    physical_cell_hashes = std::make_unique<std::uint64_t[]>(physical_cell_count);
-  } catch (const std::bad_alloc&) {
-    return std::unexpected(Error::out_of_memory);
+  if (physical_cell_count > target_capacity) {
+    target_capacity = target_capacity == 0
+                          ? physical_cell_count
+                          : physical_cell_capacity(target_capacity, physical_cell_count);
+    try {
+      // Runtime-sized cell storage cannot use std::array.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+      physical_cell_hashes = std::make_unique_for_overwrite<std::uint64_t[]>(target_capacity);
+    } catch (const std::bad_alloc&) {
+      return std::unexpected(Error::out_of_memory);
+    }
   }
 
   const auto result = ghostty_terminal_resize(impl_->terminal, size.columns, size.rows,
@@ -670,8 +690,12 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
     return std::unexpected(detail::map_error(result));
   }
 
-  impl_->physical_cell_hashes = std::move(physical_cell_hashes);
+  if (physical_cell_hashes != nullptr) {
+    impl_->physical_cell_hashes = std::move(physical_cell_hashes);
+    impl_->physical_cell_capacity = target_capacity;
+  }
   impl_->physical_cell_count = physical_cell_count;
+  LEMMA_ASSERT(impl_->physical_cell_capacity >= impl_->physical_cell_count);
   impl_->row_hashes.fill(0);
   impl_->row_hash_count = size.rows;
   impl_->mirrored_modes_valid = false;

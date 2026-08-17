@@ -35,6 +35,9 @@ namespace lemma::client {
 namespace {
 
 constexpr auto prefix_flush_delay = std::chrono::milliseconds(50);
+// Window managers emit SIGWINCH repeatedly during one physical resize gesture. A trailing-edge
+// commit prevents those samples from becoming a stream of child PTY resizes and shell redraws.
+constexpr auto outer_resize_quiet_delay = std::chrono::milliseconds(50);
 // Do not request Kitty's "report all keys" flag: several outer terminals accept that flag but
 // omit associated text, which turns ordinary printable input into semantically incomplete events.
 // Disambiguation, event types, alternate keys, and associated text preserve metadata where it is
@@ -65,6 +68,7 @@ constexpr std::array handled_termination_signals{SIGINT, SIGTERM, SIGHUP, SIGQUI
 using platform::close_descriptor;
 
 volatile sig_atomic_t resize_pending = 0;
+volatile sig_atomic_t resize_wakeup_descriptor = -1;
 volatile sig_atomic_t termination_signal = 0;
 volatile sig_atomic_t termination_wakeup_descriptor = -1;
 volatile sig_atomic_t termination_wakeup_read_descriptor = -1;
@@ -255,7 +259,16 @@ volatile sig_atomic_t termination_render_closed = 0;
   return false;
 }
 
-void on_window_changed([[maybe_unused]] const int signal_number) noexcept { resize_pending = 1; }
+void on_window_changed([[maybe_unused]] const int signal_number) noexcept {
+  const int saved_error = errno;
+  resize_pending = 1;
+  constexpr std::byte notification{0};
+  const int wakeup = resize_wakeup_descriptor;
+  if (wakeup >= 0) {
+    static_cast<void>(::write(wakeup, &notification, sizeof(notification)));
+  }
+  errno = saved_error;
+}
 
 void on_termination(const int signal_number) noexcept {
   const int saved_error = errno;
@@ -282,16 +295,25 @@ void on_termination(const int signal_number) noexcept {
   errno = saved_error;
 }
 
+enum class SignalWakeupRole : std::uint8_t {
+  termination,
+  resize,
+};
+
 class SignalWakeup final {
 public:
-  SignalWakeup() = default;
+  explicit SignalWakeup(const SignalWakeupRole role) noexcept : role_(role) {}
   SignalWakeup(const SignalWakeup&) = delete;
   auto operator=(const SignalWakeup&) -> SignalWakeup& = delete;
   SignalWakeup(SignalWakeup&&) = delete;
   auto operator=(SignalWakeup&&) -> SignalWakeup& = delete;
   ~SignalWakeup() {
-    termination_wakeup_descriptor = -1;
-    termination_wakeup_read_descriptor = -1;
+    if (role_ == SignalWakeupRole::termination) {
+      termination_wakeup_descriptor = -1;
+      termination_wakeup_read_descriptor = -1;
+    } else {
+      resize_wakeup_descriptor = -1;
+    }
     close_descriptor(read_descriptor_);
     close_descriptor(write_descriptor_);
   }
@@ -309,8 +331,12 @@ public:
       close_descriptor(write_descriptor_);
       return false;
     }
-    termination_wakeup_read_descriptor = read_descriptor_;
-    termination_wakeup_descriptor = write_descriptor_;
+    if (role_ == SignalWakeupRole::termination) {
+      termination_wakeup_read_descriptor = read_descriptor_;
+      termination_wakeup_descriptor = write_descriptor_;
+    } else {
+      resize_wakeup_descriptor = write_descriptor_;
+    }
     return true;
   }
 
@@ -318,12 +344,10 @@ public:
 
   void drain() const noexcept {
     std::array<std::byte, 64> notifications{};
-    while (true) {
+    constexpr std::size_t attempts_max = 16;
+    for (std::size_t attempt = 0; attempt < attempts_max; ++attempt) {
       const auto received = ::read(read_descriptor_, notifications.data(), notifications.size());
-      if (received > 0) {
-        continue;
-      }
-      if (received < 0 && errno == EINTR) {
+      if (received > 0 || (received < 0 && errno == EINTR)) {
         continue;
       }
       return;
@@ -331,6 +355,7 @@ public:
   }
 
 private:
+  SignalWakeupRole role_;
   int read_descriptor_{-1};
   int write_descriptor_{-1};
 };
@@ -807,6 +832,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                  const std::string_view session) -> int {
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::attached_client);
   resize_pending = 0;
+  resize_wakeup_descriptor = -1;
   termination_signal = 0;
   termination_wakeup_descriptor = -1;
   termination_wakeup_read_descriptor = -1;
@@ -846,8 +872,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         write_text_interruptibly(STDERR_FILENO, "no lemma daemon; run `lemma new`\n"));
     return 1;
   }
-  SignalWakeup termination_wakeup;
-  if (!termination_wakeup.install()) {
+  SignalWakeup termination_wakeup(SignalWakeupRole::termination);
+  SignalWakeup resize_wakeup(SignalWakeupRole::resize);
+  if (!termination_wakeup.install() || !resize_wakeup.install()) {
     close_descriptor(connection);
     return 1;
   }
@@ -905,6 +932,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     std::uint64_t pending_trace_correlation = 0;
     auto prefix_deadline = std::chrono::steady_clock::time_point{};
     auto host_input_deadline = std::chrono::steady_clock::time_point{};
+    auto outer_resize_deadline = std::chrono::steady_clock::time_point{};
+    auto sent_size = size;
+    bool outer_resize_deferred = false;
     bool attached = terminal_setup_succeeded;
     bool swallow_prefix_release = false;
     bool swallow_command_release = false;
@@ -989,6 +1019,21 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       } else if (event.key.key == protocol::KeyInputKey::arrow_left) {
         arrow_final = std::byte{'D'};
       }
+      if (arrow_final.has_value() && command_modifiers == protocol::key_input_modifier_control) {
+        auto resize_key = std::byte{'H'};
+        if (*arrow_final == std::byte{'A'}) {
+          resize_key = std::byte{'K'};
+        } else if (*arrow_final == std::byte{'B'}) {
+          resize_key = std::byte{'J'};
+        } else if (*arrow_final == std::byte{'C'}) {
+          resize_key = std::byte{'L'};
+        }
+        LEMMA_ASSERT(resize_key != std::byte{0});
+        const std::array command_input{resize_key};
+        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
+        swallowed_command_key = event.key.key;
+        return forward_ordinary_input(command_input);
+      }
       if (arrow_final.has_value() && command_modifiers == 0) {
         const std::array command_input{std::byte{0x1B}, std::byte{'['}, *arrow_final};
         swallow_command_release = event.key.action == protocol::KeyInputAction::press;
@@ -1071,6 +1116,24 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       host_theme_parser.consume_pending_input();
       return true;
     };
+    const auto commit_outer_resize = [&]() noexcept {
+      if (!outer_resize_deferred) {
+        return true;
+      }
+      const auto settled_size = terminal_size();
+      if ((settled_size.columns != sent_size.columns || settled_size.rows != sent_size.rows) &&
+          !send_resize(connection, settled_size, client_sequence)) {
+        return false;
+      }
+      sent_size = settled_size;
+      outer_resize_deferred = false;
+      return true;
+    };
+    const auto defer_outer_resize = [&]() noexcept {
+      resize_pending = 0;
+      outer_resize_deferred = true;
+      outer_resize_deadline = std::chrono::steady_clock::now() + outer_resize_quiet_delay;
+    };
     while (attached && termination_signal == 0) {
       if (host_theme_query_pending && (host_theme_parser.complete() ||
                                        std::chrono::steady_clock::now() >= host_theme_deadline)) {
@@ -1094,10 +1157,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       }
 
       if (resize_pending != 0) {
-        resize_pending = 0;
-        if (!send_resize(connection, terminal_size(), client_sequence)) {
-          break;
-        }
+        defer_outer_resize();
+        resize_wakeup.drain();
+      } else if (outer_resize_deferred &&
+                 std::chrono::steady_clock::now() >= outer_resize_deadline &&
+                 !commit_outer_resize()) {
+        break;
       }
 
       int poll_timeout = -1;
@@ -1136,10 +1201,17 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         const auto theme_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
         poll_timeout = poll_timeout < 0 ? theme_timeout : std::min(poll_timeout, theme_timeout);
       }
+      if (outer_resize_deferred) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            outer_resize_deadline - std::chrono::steady_clock::now());
+        const auto resize_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
+        poll_timeout = poll_timeout < 0 ? resize_timeout : std::min(poll_timeout, resize_timeout);
+      }
 
-      std::array<pollfd, 3> descriptors{{
+      std::array<pollfd, 4> descriptors{{
           {.fd = STDIN_FILENO, .events = POLLIN, .revents = 0},
           {.fd = termination_wakeup.descriptor(), .events = POLLIN, .revents = 0},
+          {.fd = resize_wakeup.descriptor(), .events = POLLIN, .revents = 0},
           {.fd = connection, .events = POLLIN, .revents = 0},
       }};
       const auto poll_result = ::poll(descriptors.data(), descriptors.size(), poll_timeout);
@@ -1151,13 +1223,18 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       }
 
       const auto& input_events = descriptors.front();
-      const auto& wakeup_events = std::span(descriptors).subspan(1, 1).front();
+      const auto& termination_events = std::span(descriptors).subspan(1, 1).front();
+      const auto& resize_events = std::span(descriptors).subspan(2, 1).front();
       const auto& server_events = descriptors.back();
-      if ((wakeup_events.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+      if ((termination_events.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
         termination_wakeup.drain();
         if (termination_signal != 0) {
           break;
         }
+      }
+      if ((resize_events.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        defer_outer_resize();
+        resize_wakeup.drain();
       }
       if ((server_events.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
         const auto received =
@@ -1177,6 +1254,16 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       }
 
       if ((input_events.revents & POLLIN) != 0) {
+        // Input observed after a physical resize must not overtake the settled geometry update.
+        // It also gives an actively interacting user an immediate endpoint without waiting for the
+        // trailing-edge timer.
+        if (resize_pending != 0) {
+          defer_outer_resize();
+          resize_wakeup.drain();
+        }
+        if (!commit_outer_resize()) {
+          break;
+        }
         const auto bytes_read = ::read(STDIN_FILENO, input.data(), input.size());
         if (bytes_read <= 0) {
           break;

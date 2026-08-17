@@ -1,6 +1,7 @@
 #ifndef LEMMA_CORE_SESSION_HPP
 #define LEMMA_CORE_SESSION_HPP
 
+#include "core/layout.hpp"
 #include "lemma/geometry.hpp"
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
@@ -15,12 +16,11 @@
 
 namespace lemma::core {
 
-inline constexpr std::size_t panes_per_session_max =
-    static_cast<std::size_t>(limits::panes_hard_max / limits::sessions_hard_max);
+inline constexpr std::size_t panes_per_session_max = pane_layout_panes_max;
 inline constexpr std::size_t tabs_per_session_max =
     static_cast<std::size_t>(limits::tabs_hard_max / limits::sessions_hard_max);
-inline constexpr std::size_t panes_per_tab_max = panes_per_session_max;
-inline constexpr std::size_t layout_nodes_per_tab_max = (panes_per_tab_max * 2U) - 1U;
+inline constexpr std::size_t panes_per_tab_max = pane_layout_panes_max;
+inline constexpr std::size_t layout_nodes_per_tab_max = pane_layout_nodes_max;
 
 static_assert(panes_per_session_max > 0);
 static_assert(tabs_per_session_max > 0);
@@ -28,11 +28,6 @@ static_assert(tabs_per_session_max > 0);
 enum class LaunchEnvironmentMode : std::uint8_t {
   inherit,
   replace,
-};
-
-enum class SplitAxis : std::uint8_t {
-  left_right,
-  top_bottom,
 };
 
 struct Pane final {
@@ -43,16 +38,6 @@ struct Pane final {
 struct PaneSlot final {
   std::unique_ptr<Pane> pane;
   std::uint32_t generation{0};
-};
-
-struct LayoutNode final {
-  bool active{false};
-  bool leaf{true};
-  PaneId pane;
-  std::int16_t parent{-1};
-  std::int16_t first{-1};
-  std::int16_t second{-1};
-  SplitAxis axis{SplitAxis::left_right};
 };
 
 struct Tab final {
@@ -66,7 +51,7 @@ struct Tab final {
 
   TabId id;
   std::array<PaneSlot, panes_per_tab_max> panes{};
-  std::array<LayoutNode, layout_nodes_per_tab_max> layout{};
+  PaneLayout layout;
   // Inactive tabs retain their last usable geometry while continuing to process PTY output.
   std::uint16_t layout_columns{80};
   std::uint16_t layout_rows{24};
@@ -151,11 +136,17 @@ struct AttachmentPaneTarget final {
 enum class MouseCaptureOwner : std::uint8_t {
   application,
   selection,
+  divider,
+  discard_until_release,
 };
 
 struct MouseCapture final {
   AttachmentPaneTarget target;
+  // Divider capture uses target.pane and peer_pane as generation-safe subtree representatives.
+  // The Attachment owns this ephemeral gesture identity; PaneLayout remains the ratio authority.
+  PaneId peer_pane;
   MouseCaptureOwner owner{MouseCaptureOwner::application};
+  SplitAxis divider_axis{SplitAxis::left_right};
 };
 
 struct Attachment final {

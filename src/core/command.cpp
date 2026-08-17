@@ -10,6 +10,12 @@ namespace {
   case CommandKind::detach_client:
   case CommandKind::split_left_right:
   case CommandKind::split_top_bottom:
+  case CommandKind::resize_left_right_divider:
+  case CommandKind::resize_top_bottom_divider:
+  case CommandKind::resize_left:
+  case CommandKind::resize_right:
+  case CommandKind::resize_up:
+  case CommandKind::resize_down:
   case CommandKind::focus_left:
   case CommandKind::focus_right:
   case CommandKind::focus_up:
@@ -47,27 +53,48 @@ namespace {
   return false;
 }
 
+[[nodiscard]] constexpr auto divider_resize_command(const CommandKind kind) noexcept -> bool {
+  return kind == CommandKind::resize_left_right_divider ||
+         kind == CommandKind::resize_top_bottom_divider;
+}
+
 [[nodiscard]] constexpr auto valid_argument(const Command& command) noexcept -> bool {
-  return command.kind == CommandKind::select_tab ? command.argument < command_tab_slots_max
-                                                 : command.argument == 0;
+  if (command.kind == CommandKind::select_tab) {
+    return command.argument < command_tab_slots_max;
+  }
+  return divider_resize_command(command.kind) || command.argument == 0;
+}
+
+[[nodiscard]] constexpr auto valid_target_hierarchy(const CommandTarget& target) noexcept -> bool {
+  const bool has_session = target.session.is_valid();
+  const bool has_tab = target.tab.is_valid();
+  const bool has_pane = target.pane.is_valid();
+  const bool has_peer_pane = target.peer_pane.is_valid();
+  const bool has_attachment = target.attachment.is_valid();
+  return (!has_tab || has_session) && (!has_pane || (has_session && has_tab)) &&
+         (!has_peer_pane || (has_session && has_tab && has_pane)) &&
+         (!has_attachment || has_session);
+}
+
+[[nodiscard]] constexpr auto valid_target_shape(const Command& command) noexcept -> bool {
+  const bool has_tab = command.target.tab.is_valid();
+  const bool has_pane = command.target.pane.is_valid();
+  const bool has_peer_pane = command.target.peer_pane.is_valid();
+  const bool has_attachment = command.target.attachment.is_valid();
+  const bool divider_resize = divider_resize_command(command.kind);
+  if (divider_resize != has_peer_pane ||
+      (has_peer_pane && command.target.peer_pane == command.target.pane)) {
+    return false;
+  }
+  if (command.kind == CommandKind::stop_session &&
+      (has_tab || has_pane || has_peer_pane || has_attachment)) {
+    return false;
+  }
+  return command.kind != CommandKind::detach_client || (!has_tab && !has_pane && !has_peer_pane);
 }
 
 [[nodiscard]] constexpr auto valid_target(const Command& command) noexcept -> bool {
-  const bool has_session = command.target.session.is_valid();
-  const bool has_tab = command.target.tab.is_valid();
-  const bool has_pane = command.target.pane.is_valid();
-  const bool has_attachment = command.target.attachment.is_valid();
-  if ((has_tab && !has_session) || (has_pane && (!has_session || !has_tab)) ||
-      (has_attachment && !has_session)) {
-    return false;
-  }
-  if (command.kind == CommandKind::stop_session && (has_tab || has_pane || has_attachment)) {
-    return false;
-  }
-  if (command.kind == CommandKind::detach_client && (has_tab || has_pane)) {
-    return false;
-  }
-  return true;
+  return valid_target_hierarchy(command.target) && valid_target_shape(command);
 }
 
 } // namespace

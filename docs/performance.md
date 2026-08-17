@@ -38,7 +38,7 @@ A post-change five-repetition release microbenchmark populated 20,000 rows, held
 
 A separate thirty-sample `interactive-output` release run after adding the application-input viewport reset measured key-to-PTY p50/p95/p99 of 0.092/0.122/0.131 ms and key-to-visible of 0.343/0.481/0.517 ms. Compared with the retained 0.101/0.187 ms and 0.759/1.119 ms p50/p95 baseline below, the canonical viewport-active query did not regress this workload. The report is `scrollback-native-interactive-output-30.json`.
 
-The warmed steady-state allocation audit performs 10,000 parse/damage/compose/frame-flush iterations after 256 warmups. The retained qualification observed zero C++ general allocations, zero general-allocation bytes, and zero new terminal-quota allocations while flushing 2,150,000 framed bytes.
+The warmed steady-state allocation audit performs 10,000 parse/damage/compose/frame-flush iterations and 10,000 alternating terminal resizes after 256 warmups. The retained qualification observed zero C++ general allocations, zero general-allocation bytes, and zero new terminal-quota allocations while flushing 2,180,000 framed bytes. Physical-cell hash storage grows transactionally with bounded geometric headroom and reuses that capacity across live resize instead of allocating an exact replacement for every pane and pointer-cell movement.
 
 A same-process qualification on August 16, 2026 measured the composed-render effect of separating Lemma's outer mouse capture policy from child mouse modes. Five one-second release repetitions before and after the change retained identical average frame sizes and produced these CPU medians:
 
@@ -57,6 +57,30 @@ This shows no measured composition or output-size regression for the changed per
   --benchmark_min_time=1s --benchmark_repetitions=5 \
   --benchmark_report_aggregates_only=true
 ```
+
+## Split-layout projection
+
+A three-repetition release microbenchmark on August 17, 2026 measured the allocation-free fixed-point layout paths. Median CPU was 59.0/84.0/183/590 ns for 1/4/16/64-pane balanced projection. Copying and keyboard-resizing a 64-pane candidate layout, including before/after projection and invariant-preserving ratio update, measured 1.542 us median. Exact projected-divider hit-testing at mouse press measured 618 ns. A later five-repetition measurement of one captured-divider candidate resize plus exact divider-rectangle projection measured 2.108 us median. Each distinct mouse-cell position performs that bounded candidate calculation and commits real layout/Ghostty geometry for live rendering. Child PTY resize notifications are a separate fixed-state coalescer: the first position is immediate, later positions replace one latest endpoint behind a 250-ms gate, and release forces exact convergence. A separate five-repetition maximum-depth 64-pane layout measured 1.153 us projection and 1.226 us to hit its deepest divider, bounding the deliberately adversarial tree shape rather than only the balanced case. This is semantic layout work only; it excludes Ghostty reflow, coalesced PTY `TIOCSWINSZ`, frame composition, and client transport, so it establishes bounded Core cost rather than end-to-end live-resize latency.
+
+```sh
+./build/release/lemma_benchmarks \
+  --benchmark_filter='^benchmark_layout_(projection|resize_candidate|divider_hit|divider_resize_candidate)' \
+  --benchmark_min_time=0.05s --benchmark_repetitions=3 \
+  --benchmark_report_aggregates_only=true
+```
+
+A five-repetition live-divider microbenchmark alternated one root separator cell and included candidate layout publication, every changed Ghostty terminal resize, and complete pane composition. Median CPU was 482.899/500.827/536.456/631.575 us for 2/4/16/64 panes, with average frames of 21,196/20,941/22,216/24,586 bytes. It excludes PTY ioctls, child scheduling, socket transport, and the outer terminal, so it bounds daemon-owned live reflow/composition rather than claiming pointer-to-screen latency. Reproduce with:
+
+```sh
+./build/release/lemma_benchmarks \
+  --benchmark_filter='^benchmark_live_divider_resize/' \
+  --benchmark_min_time=0.1s --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true
+```
+
+The daemon applies at most 16 decoded client messages and one geometry-bearing message per session per reactor turn. Valid retained packets resume on the next turn; this bounds one peer's resize work without dropping or reordering reports.
+
+A real-PTY integration qualification delivered eight distinct outer sizes 10 ms apart. The attached client settled at the final size and the child shell's `WINCH` trap observed exactly one signal. A separate long divider drag observed the immediate, periodic, and exact release endpoints as three child notifications while returning to its starting geometry. These are deterministic gesture/coalescing checks rather than latency benchmarks; subsequent user input forces a pending outer endpoint immediately so input does not overtake known pending geometry.
 
 ## Current end-to-end comparison
 
