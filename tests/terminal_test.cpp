@@ -337,6 +337,9 @@ TEST(TerminalTest, EncodesFocusAndMouseFromCanonicalModes) {
   auto terminal = make_terminal();
   std::array<std::byte, 128> output{};
 
+  auto tracking = terminal.mouse_tracking();
+  ASSERT_TRUE(tracking.has_value());
+  EXPECT_EQ(*tracking, MouseTrackingState{});
   EXPECT_EQ(terminal.encode_focus(FocusEvent::gained, output), 0U);
   write_text(terminal, "\x1B[?1004h");
   const auto focus = terminal.encode_focus(FocusEvent::gained, output);
@@ -345,6 +348,9 @@ TEST(TerminalTest, EncodesFocusAndMouseFromCanonicalModes) {
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *focus), "\x1B[I");
 
   write_text(terminal, "\x1B[?1000h\x1B[?1006h");
+  tracking = terminal.mouse_tracking();
+  ASSERT_TRUE(tracking.has_value());
+  EXPECT_EQ(*tracking, (MouseTrackingState{.enabled = true}));
   const MouseEvent mouse{
       .action = MouseAction::press,
       .button = MouseButton::left,
@@ -358,6 +364,11 @@ TEST(TerminalTest, EncodesFocusAndMouseFromCanonicalModes) {
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *encoded),
             "\x1B[<0;5;3M");
+
+  write_text(terminal, "\x1B[?1003h");
+  tracking = terminal.mouse_tracking();
+  ASSERT_TRUE(tracking.has_value());
+  EXPECT_EQ(*tracking, (MouseTrackingState{.enabled = true, .unbuttoned_motion = true}));
 }
 
 TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
@@ -609,6 +620,7 @@ TEST(TerminalTest, NavigatesViewportAndFormatsAdjustedSelectionWithinCallerBound
   auto viewport = terminal.viewport_state();
   ASSERT_TRUE(viewport.has_value());
   EXPECT_TRUE(viewport->follows_output);
+  EXPECT_GT(viewport->offset, 0U);
   terminal.scroll_viewport(ViewportScroll::top);
   viewport = terminal.viewport_state();
   ASSERT_TRUE(viewport.has_value());

@@ -276,6 +276,14 @@ struct MouseEvent final {
   bool any_button_pressed{false};
 };
 
+struct MouseTrackingState final {
+  bool enabled{false};
+  bool unbuttoned_motion{false};
+
+  friend constexpr auto operator==(const MouseTrackingState&, const MouseTrackingState&) noexcept
+      -> bool = default;
+};
+
 struct RenderUpdate final {
   DirtyState dirty{DirtyState::clean};
   std::uint16_t columns{0};
@@ -470,6 +478,9 @@ public:
       -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto encode_mouse(const MouseEvent& event, std::span<std::byte> output) noexcept
       -> std::expected<std::size_t, Error>;
+  // Narrow canonical child policy used to route physical mouse input without exposing Ghostty
+  // mode values. Outer-terminal capture remains a Lemma presentation concern.
+  [[nodiscard]] auto mouse_tracking() const noexcept -> std::expected<MouseTrackingState, Error>;
 
   // Canonical child mode used by the pane-owned presentation gate.
   [[nodiscard]] auto synchronized_output() const noexcept -> std::expected<bool, Error>;

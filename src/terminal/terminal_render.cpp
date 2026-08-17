@@ -972,34 +972,45 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
   struct MirroredMode final {
     GhosttyMode mode;
     std::uint16_t number;
+    bool mouse{false};
   };
   const std::array mirrored_modes{
       MirroredMode{.mode = GHOSTTY_MODE_DECCKM, .number = 1},
-      MirroredMode{.mode = GHOSTTY_MODE_X10_MOUSE, .number = 9},
-      MirroredMode{.mode = GHOSTTY_MODE_NORMAL_MOUSE, .number = 1000},
-      MirroredMode{.mode = GHOSTTY_MODE_BUTTON_MOUSE, .number = 1002},
-      MirroredMode{.mode = GHOSTTY_MODE_ANY_MOUSE, .number = 1003},
+      MirroredMode{.mode = GHOSTTY_MODE_X10_MOUSE, .number = 9, .mouse = true},
+      MirroredMode{.mode = GHOSTTY_MODE_NORMAL_MOUSE, .number = 1000, .mouse = true},
+      MirroredMode{.mode = GHOSTTY_MODE_BUTTON_MOUSE, .number = 1002, .mouse = true},
+      MirroredMode{.mode = GHOSTTY_MODE_ANY_MOUSE, .number = 1003, .mouse = true},
       MirroredMode{.mode = GHOSTTY_MODE_FOCUS_EVENT, .number = 1004},
-      MirroredMode{.mode = GHOSTTY_MODE_UTF8_MOUSE, .number = 1005},
-      MirroredMode{.mode = GHOSTTY_MODE_SGR_MOUSE, .number = 1006},
+      MirroredMode{.mode = GHOSTTY_MODE_UTF8_MOUSE, .number = 1005, .mouse = true},
+      MirroredMode{.mode = GHOSTTY_MODE_SGR_MOUSE, .number = 1006, .mouse = true},
       MirroredMode{.mode = GHOSTTY_MODE_ALT_SCROLL, .number = 1007},
-      MirroredMode{.mode = GHOSTTY_MODE_URXVT_MOUSE, .number = 1015},
-      MirroredMode{.mode = GHOSTTY_MODE_SGR_PIXELS_MOUSE, .number = 1016},
+      MirroredMode{.mode = GHOSTTY_MODE_URXVT_MOUSE, .number = 1015, .mouse = true},
+      MirroredMode{.mode = GHOSTTY_MODE_SGR_PIXELS_MOUSE, .number = 1016, .mouse = true},
       MirroredMode{.mode = GHOSTTY_MODE_BRACKETED_PASTE, .number = 2004},
   };
   static_assert(mirrored_modes.size() == 12);
   if (!composed || focused) {
     std::size_t mode_index = 0;
     for (const auto mode : mirrored_modes) {
+      // A composed frame receives normalized physical mouse input for both Lemma and the child.
+      // The compositor owns that outer capture policy; only standalone rendering mirrors the
+      // child's mouse modes directly.
+      if (composed && mode.mouse) {
+        impl_->mirrored_mouse_modes_valid = false;
+        ++mode_index;
+        continue;
+      }
       const auto enabled = terminal_mode_enabled(impl_->terminal, mode.mode);
       if (!enabled.has_value()) {
         impl_->ansi_physical_valid = false;
         return std::unexpected(enabled.error());
       }
       auto& physical_value = std::span(impl_->mirrored_mode_values).subspan(mode_index, 1).front();
-      if ((composed || full || !impl_->mirrored_modes_valid || physical_value != *enabled) &&
-          (!writer.append("\x1B[?") || !writer.append_integer(mode.number) ||
-           !writer.append(*enabled ? "h" : "l"))) {
+      const bool must_emit = composed || full || !impl_->mirrored_modes_valid ||
+                             (mode.mouse && !impl_->mirrored_mouse_modes_valid) ||
+                             physical_value != *enabled;
+      if (must_emit && (!writer.append("\x1B[?") || !writer.append_integer(mode.number) ||
+                        !writer.append(*enabled ? "h" : "l"))) {
         impl_->ansi_physical_valid = false;
         return std::unexpected(Error::out_of_space);
       }
@@ -1007,6 +1018,9 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
       ++mode_index;
     }
     impl_->mirrored_modes_valid = true;
+    if (!composed) {
+      impl_->mirrored_mouse_modes_valid = true;
+    }
   }
 
   if (!composed && !writer.append("\x1B[?2026l")) {

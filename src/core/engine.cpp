@@ -66,6 +66,9 @@ constexpr auto process_name_refresh_interval = std::chrono::milliseconds{100};
 constexpr auto copy_escape_flush_delay = std::chrono::milliseconds{50};
 constexpr auto copy_search_slice_delay = std::chrono::milliseconds{2};
 constexpr auto scrollback_compression_slice_delay = std::chrono::milliseconds{2};
+constexpr auto mouse_repeat_click_interval = std::chrono::milliseconds{500};
+constexpr std::int64_t mouse_wheel_scroll_rows = 3;
+constexpr double mouse_repeat_click_distance = 1.0;
 constexpr std::size_t copy_escape_bytes_max = 16;
 static_assert(tabs_per_session_max <= render::status_tabs_max);
 using platform::close_descriptor;
@@ -683,6 +686,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   }
 
   session.attachment.copy_mode = {};
+  session.attachment.selection_target.reset();
   session.attachment.mouse_capture.reset();
   session.attachment_runtime.reset_connection();
 }
@@ -1279,10 +1283,11 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
 
 void refresh_copy_selection_after_layout(SessionRecord& session, Tab& tab,
                                          PaneRuntimeStore& runtimes) noexcept {
-  if (!session.attachment.copy_mode.active || session.attachment.copy_mode.tab != tab.id) {
+  const auto target = session.attachment.selection_target;
+  if (!session.attachment.copy_mode.active || !target.has_value() || target->tab != tab.id) {
     return;
   }
-  auto* const pane = find_pane(tab, session.attachment.copy_mode.pane);
+  auto* const pane = find_pane(tab, target->pane);
   if (pane == nullptr) {
     leave_copy_mode(session, runtimes);
     return;
@@ -1325,22 +1330,33 @@ void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
       urgency, force_full, std::chrono::steady_clock::now(), frame_sink_state(session));
 }
 
-[[nodiscard]] auto copy_mode_pane(SessionRecord& session) noexcept -> Pane* {
-  if (!session.attachment.copy_mode.active) {
+[[nodiscard]] auto selection_pane(SessionRecord& session) noexcept -> Pane* {
+  const auto target = session.attachment.selection_target;
+  if (!target.has_value()) {
     return nullptr;
   }
-  auto* const tab = find_tab(session, session.attachment.copy_mode.tab);
-  return tab == nullptr ? nullptr : find_pane(*tab, session.attachment.copy_mode.pane);
+  auto* const tab = find_tab(session, target->tab);
+  return tab == nullptr ? nullptr : find_pane(*tab, target->pane);
+}
+
+[[nodiscard]] auto selection_runtime(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
+    -> PaneRuntime* {
+  const auto target = session.attachment.selection_target;
+  if (!target.has_value()) {
+    return nullptr;
+  }
+  auto* const tab = find_tab(session, target->tab);
+  auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, target->pane);
+  return pane == nullptr ? nullptr : find_pane_runtime(runtimes, session, *tab, *pane);
+}
+
+[[nodiscard]] auto copy_mode_pane(SessionRecord& session) noexcept -> Pane* {
+  return session.attachment.copy_mode.active ? selection_pane(session) : nullptr;
 }
 
 [[nodiscard]] auto copy_mode_runtime(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
     -> PaneRuntime* {
-  if (!session.attachment.copy_mode.active) {
-    return nullptr;
-  }
-  auto* const tab = find_tab(session, session.attachment.copy_mode.tab);
-  auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, session.attachment.copy_mode.pane);
-  return pane == nullptr ? nullptr : find_pane_runtime(runtimes, session, *tab, *pane);
+  return session.attachment.copy_mode.active ? selection_runtime(session, runtimes) : nullptr;
 }
 
 void note_compression_activity(PaneRuntime& runtime) noexcept {
@@ -1411,20 +1427,54 @@ void refresh_copy_mode_status(SessionRecord& session) noexcept {
   return true;
 }
 
+void reset_selection_capture(Attachment& attachment,
+                             const std::optional<AttachmentPaneTarget> target) noexcept {
+  if (target.has_value() && attachment.mouse_capture.has_value() &&
+      attachment.mouse_capture->owner == MouseCaptureOwner::selection &&
+      attachment.mouse_capture->target == *target) {
+    attachment.mouse_capture.reset();
+  }
+}
+
 void leave_copy_mode(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  auto* const runtime = copy_mode_runtime(session, runtimes);
+  const bool changed = session.attachment.copy_mode.active;
+  const auto target = session.attachment.selection_target;
+  auto* const runtime = selection_runtime(session, runtimes);
   if (runtime != nullptr) {
     runtime->terminal.reset_selection_gesture();
     runtime->terminal.clear_selection();
-    runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
-    note_compression_activity(*runtime);
+    if (changed) {
+      runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+      note_compression_activity(*runtime);
+    }
   }
-  const bool changed = session.attachment.copy_mode.active;
+  reset_selection_capture(session.attachment, target);
+  session.attachment.selection_target.reset();
   session.attachment.copy_mode = {};
   session.attachment_runtime.copy_mode = {};
   if (changed) {
     session.attachment_runtime.status_valid = false;
     schedule_frame(session, FrameUrgency::state_change, true);
+  }
+}
+
+void clear_mouse_selection(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
+  if (session.attachment.copy_mode.active || !session.attachment.selection_target.has_value()) {
+    return;
+  }
+  const auto target = session.attachment.selection_target;
+  auto* const runtime = selection_runtime(session, runtimes);
+  bool changed = false;
+  if (runtime != nullptr) {
+    const auto active = runtime->terminal.selection_active();
+    changed = !active.has_value() || *active;
+    runtime->terminal.reset_selection_gesture();
+    runtime->terminal.clear_selection();
+  }
+  reset_selection_capture(session.attachment, target);
+  session.attachment.selection_target.reset();
+  if (changed) {
+    schedule_frame(session, FrameUrgency::interactive, false);
   }
 }
 
@@ -1460,17 +1510,56 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
     return false;
   }
   session.attachment.copy_mode = {};
-  session.attachment.copy_mode.tab = tab.id;
-  session.attachment.copy_mode.pane = pane.id;
+  session.attachment.selection_target = AttachmentPaneTarget{.tab = tab.id, .pane = pane.id};
   session.attachment.copy_mode.active = true;
   if (!update_copy_viewport_offset(session, runtime)) {
     runtime.terminal.clear_selection();
+    session.attachment.selection_target.reset();
     session.attachment.copy_mode = {};
     return false;
   }
   refresh_copy_mode_status(session);
   session.attachment_runtime.status_valid = false;
   schedule_frame(session, FrameUrgency::state_change, true);
+  return true;
+}
+
+[[nodiscard]] auto scroll_copy_viewport_with_mouse(SessionRecord& session, Tab& tab, Pane& pane,
+                                                   PaneRuntime& runtime, PaneRuntimeStore& runtimes,
+                                                   const protocol::MouseInputButton button) noexcept
+    -> bool {
+  const AttachmentPaneTarget target{.tab = tab.id, .pane = pane.id};
+  const bool already_copying = session.attachment.copy_mode.active &&
+                               session.attachment.selection_target == std::optional{target};
+  if (!already_copying && button == protocol::MouseInputButton::five) {
+    return true;
+  }
+  if (!already_copying && !enter_copy_mode(session, tab, pane, runtime, runtimes)) {
+    return false;
+  }
+  const auto viewport = runtime.terminal.viewport_state();
+  if (!viewport.has_value()) {
+    leave_copy_mode(session, runtimes);
+    return false;
+  }
+
+  const bool upward = button == protocol::MouseInputButton::four;
+  const auto previous_offset = viewport->offset;
+  const auto previous_follow = viewport->follows_output;
+  runtime.terminal.scroll_viewport(vt::ViewportScroll::delta,
+                                   upward ? -mouse_wheel_scroll_rows : mouse_wheel_scroll_rows);
+  const auto scrolled = runtime.terminal.viewport_state();
+  if (!scrolled.has_value()) {
+    leave_copy_mode(session, runtimes);
+    return false;
+  }
+  const bool changed =
+      scrolled->offset != previous_offset || scrolled->follows_output != previous_follow;
+  session.attachment.copy_mode.viewport_offset = scrolled->offset;
+  if (changed) {
+    note_compression_activity(runtime);
+    schedule_frame(session, FrameUrgency::interactive, false);
+  }
   return true;
 }
 
@@ -2061,7 +2150,8 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   if (tab == nullptr) {
     return;
   }
-  if (session.attachment.copy_mode.active && session.attachment.copy_mode.tab == id) {
+  if (session.attachment.selection_target.has_value() &&
+      session.attachment.selection_target->tab == id) {
     leave_copy_mode(session, runtimes);
   }
   erase_tab_pane_runtimes(session, *tab, runtimes);
@@ -2256,8 +2346,8 @@ void create_tab(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
   if (pane == nullptr) {
     return false;
   }
-  if (session.attachment.copy_mode.active && session.attachment.copy_mode.tab == tab.id &&
-      session.attachment.copy_mode.pane == pane_id) {
+  if (session.attachment.selection_target ==
+      std::optional{AttachmentPaneTarget{.tab = tab.id, .pane = pane_id}}) {
     leave_copy_mode(session, runtimes);
   }
   const auto pane_index = static_cast<std::size_t>(pane_id.slot());
@@ -2609,6 +2699,11 @@ struct SessionCommandContext final {
     focus_pane(session, *tab, runtimes, tab->previous_pane);
     return focus_result(previous);
   }
+  case CommandKind::focus_pane: {
+    const auto previous = tab->focused_pane;
+    focus_pane(session, *tab, runtimes, targeted_pane->id);
+    return focus_result(previous);
+  }
   case CommandKind::close_pane:
     if (close_pane(session, *tab, runtimes, targeted_pane->id)) {
       return {.status = CommandStatus::applied};
@@ -2696,6 +2791,7 @@ struct SessionCommandContext final {
   case CommandKind::focus_down:
   case CommandKind::focus_next:
   case CommandKind::focus_previous:
+  case CommandKind::focus_pane:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
   case CommandKind::enter_copy_mode:
@@ -2768,9 +2864,10 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
     if (runtime == nullptr || !runtime->live()) {
       continue;
     }
-    const bool copy_pane = session.attachment.copy_mode.active &&
-                           session.attachment.copy_mode.tab == tab->id &&
-                           session.attachment.copy_mode.pane == pane->id;
+    const bool copy_pane =
+        session.attachment.copy_mode.active &&
+        session.attachment.selection_target ==
+            std::optional{AttachmentPaneTarget{.tab = tab->id, .pane = pane->id}};
     const auto copy_cursor = copy_pane
                                  ? runtime->terminal.selection_endpoint(vt::PointSpace::viewport)
                                  : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
@@ -2833,6 +2930,86 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
+[[nodiscard]] constexpr auto
+selection_gesture_phase(const protocol::MouseInputAction action) noexcept
+    -> vt::SelectionGesturePhase {
+  switch (action) {
+  case protocol::MouseInputAction::press:
+    return vt::SelectionGesturePhase::press;
+  case protocol::MouseInputAction::release:
+    return vt::SelectionGesturePhase::release;
+  case protocol::MouseInputAction::motion:
+    return vt::SelectionGesturePhase::drag;
+  }
+  return vt::SelectionGesturePhase::drag;
+}
+
+[[nodiscard]] auto process_mouse_selection(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                           const Tab& tab, const Pane& pane, PaneRuntime& runtime,
+                                           const protocol::MouseInput& mouse,
+                                           const std::uint16_t content_row) noexcept -> bool {
+  const AttachmentPaneTarget target{.tab = tab.id, .pane = pane.id};
+  if (session.attachment.selection_target != std::optional{target}) {
+    if (session.attachment.copy_mode.active) {
+      leave_copy_mode(session, runtimes);
+    } else {
+      clear_mouse_selection(session, runtimes);
+    }
+    session.attachment.selection_target = target;
+  }
+
+  const auto& rectangle = pane.rectangle;
+  const auto local_column = static_cast<std::uint16_t>(
+      std::clamp(mouse.column, rectangle.column,
+                 static_cast<std::uint16_t>(rectangle.column + rectangle.columns - 1U)) -
+      rectangle.column);
+  const auto local_row = static_cast<std::uint16_t>(
+      std::clamp(content_row, rectangle.row,
+                 static_cast<std::uint16_t>(rectangle.row + rectangle.rows - 1U)) -
+      rectangle.row);
+  bool presentation_changed = false;
+  if (mouse.action == protocol::MouseInputAction::press) {
+    const auto active = runtime.terminal.selection_active();
+    if (!active.has_value()) {
+      return false;
+    }
+    presentation_changed = *active;
+    runtime.terminal.clear_selection();
+  }
+  const auto now = std::chrono::steady_clock::now().time_since_epoch();
+  const auto time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+  const vt::SelectionGestureEvent event{
+      .phase = selection_gesture_phase(mouse.action),
+      .point = {.space = vt::PointSpace::viewport, .column = local_column, .row = local_row},
+      .pointer_x = static_cast<double>(mouse.column) - static_cast<double>(rectangle.column) + 0.5,
+      .pointer_y = static_cast<double>(content_row) - static_cast<double>(rectangle.row) + 0.5,
+      .cell_width = 1,
+      .screen_height = rectangle.rows,
+      .time_ns = mouse.action == protocol::MouseInputAction::press
+                     ? static_cast<std::uint64_t>(time_ns)
+                     : std::uint64_t{0},
+      .repeat_interval_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(mouse_repeat_click_interval)
+              .count()),
+      .repeat_distance = mouse_repeat_click_distance,
+      .has_pointer_position = true,
+  };
+  const auto result = runtime.terminal.selection_gesture(event);
+  if (!result.has_value()) {
+    return false;
+  }
+  presentation_changed = presentation_changed || result->selection_changed;
+  if (session.attachment.copy_mode.active && result->selection_changed &&
+      !update_copy_viewport_offset(session, runtime)) {
+    leave_copy_mode(session, runtimes);
+    return false;
+  }
+  if (presentation_changed) {
+    schedule_frame(session, FrameUrgency::interactive, false);
+  }
+  return true;
+}
+
 enum class ParseResult : std::uint8_t {
   keep,
   backpressure,
@@ -2888,6 +3065,7 @@ enum class ParseResult : std::uint8_t {
         // holds the message so a full PTY queue cannot replay UI-only bytes on retry.
         session.attachment_runtime.retained_input_offset = consumed;
       }
+      clear_mouse_selection(session, runtimes);
       auto* const tab = active_tab(session);
       if (tab == nullptr) {
         return ParseResult::error;
@@ -2929,6 +3107,7 @@ enum class ParseResult : std::uint8_t {
         process_typed_copy_mode_input(session, runtimes, message.key, message.input);
         break;
       }
+      clear_mouse_selection(session, runtimes);
       auto* const tab = active_tab(session);
       auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, tab->focused_pane);
       if (pane == nullptr) {
@@ -2957,6 +3136,7 @@ enum class ParseResult : std::uint8_t {
       if (session.attachment.copy_mode.active) {
         break;
       }
+      clear_mouse_selection(session, runtimes);
       auto* const tab = active_tab(session);
       auto* const pane = tab == nullptr ? nullptr : find_pane(*tab, tab->focused_pane);
       if (pane == nullptr) {
@@ -3015,52 +3195,109 @@ enum class ParseResult : std::uint8_t {
         return ParseResult::error;
       }
       const auto status_rows = session.attachment.rows >= 2 ? std::uint16_t{1} : std::uint16_t{0};
-      if (message.mouse.row < status_rows) {
+      const bool captured_continuation = session.attachment.mouse_capture.has_value() &&
+                                         message.mouse.action != protocol::MouseInputAction::press;
+      if (message.mouse.row < status_rows && !captured_continuation) {
         break;
       }
-      const auto content_row = static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      const auto content_row = message.mouse.row < status_rows
+                                   ? std::uint16_t{0}
+                                   : static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      if (tab->layout_suspended) {
+        if (message.mouse.action == protocol::MouseInputAction::release) {
+          session.attachment.mouse_capture.reset();
+        }
+        break;
+      }
       Tab* target_tab = tab;
       Pane* pane = nullptr;
-      for (auto& slot : tab->panes) {
-        if (slot.pane == nullptr) {
-          continue;
+      auto owner = MouseCaptureOwner::application;
+      if (captured_continuation) {
+        const auto capture = *session.attachment.mouse_capture;
+        auto* const captured_tab = find_tab(session, capture.target.tab);
+        auto* const captured =
+            captured_tab == nullptr ? nullptr : find_pane(*captured_tab, capture.target.pane);
+        if (captured == nullptr) {
+          session.attachment.mouse_capture.reset();
+          break;
         }
-        const auto& candidate = slot.pane->rectangle;
-        if (message.mouse.column >= candidate.column && content_row >= candidate.row &&
-            message.mouse.column < candidate.column + candidate.columns &&
-            content_row < candidate.row + candidate.rows) {
-          pane = slot.pane.get();
+        target_tab = captured_tab;
+        pane = captured;
+        owner = capture.owner;
+      } else {
+        for (auto& slot : tab->panes) {
+          if (slot.pane == nullptr || (tab->zoomed && slot.pane->id != tab->focused_pane)) {
+            continue;
+          }
+          const auto& candidate = slot.pane->rectangle;
+          if (message.mouse.column >= candidate.column && content_row >= candidate.row &&
+              message.mouse.column < candidate.column + candidate.columns &&
+              content_row < candidate.row + candidate.rows) {
+            pane = slot.pane.get();
+            break;
+          }
+        }
+        if (pane == nullptr) {
           break;
         }
       }
-      if (session.attachment.mouse_capture.has_value() &&
-          (message.mouse.any_button_pressed ||
-           message.mouse.action != protocol::MouseInputAction::press)) {
-        const auto target = *session.attachment.mouse_capture;
-        auto* const captured_tab = find_tab(session, target.tab);
-        auto* const captured =
-            captured_tab == nullptr ? nullptr : find_pane(*captured_tab, target.pane);
-        if (captured != nullptr) {
-          target_tab = captured_tab;
-          pane = captured;
-        } else {
-          session.attachment.mouse_capture.reset();
-        }
-      }
-      if (pane == nullptr) {
-        break;
+      auto* const runtime = find_pane_runtime(runtimes, session, *target_tab, *pane);
+      if (runtime == nullptr) {
+        return ParseResult::error;
       }
       const bool wheel_button = message.mouse.button == protocol::MouseInputButton::four ||
                                 message.mouse.button == protocol::MouseInputButton::five;
-      if (message.mouse.action == protocol::MouseInputAction::press && !wheel_button) {
-        session.attachment.mouse_capture =
-            AttachmentPaneTarget{.tab = target_tab->id, .pane = pane->id};
+      if (message.mouse.action == protocol::MouseInputAction::press) {
+        if (message.mouse.button == protocol::MouseInputButton::left && target_tab == tab &&
+            pane->id != tab->focused_pane) {
+          const Command focus{
+              .kind = CommandKind::focus_pane,
+              .origin = CommandOrigin::client,
+              .target = {.session = session.id,
+                         .tab = target_tab->id,
+                         .pane = pane->id,
+                         .attachment = session.attachment.id},
+          };
+          if (!dispatch_session_command(session, runtimes, focus).succeeded()) {
+            return ParseResult::error;
+          }
+        }
+        const auto tracking = runtime->terminal.mouse_tracking();
+        if (!tracking.has_value()) {
+          return ParseResult::error;
+        }
+        const AttachmentPaneTarget target{.tab = target_tab->id, .pane = pane->id};
+        const bool copy_selection = session.attachment.copy_mode.active &&
+                                    session.attachment.selection_target == std::optional{target};
+        if (wheel_button && (copy_selection || !tracking->enabled)) {
+          if (!scroll_copy_viewport_with_mouse(session, *target_tab, *pane, *runtime, runtimes,
+                                               message.mouse.button)) {
+            return ParseResult::error;
+          }
+          break;
+        }
+        owner = message.mouse.button == protocol::MouseInputButton::left &&
+                        (copy_selection || !tracking->enabled)
+                    ? MouseCaptureOwner::selection
+                    : MouseCaptureOwner::application;
+        if (!wheel_button) {
+          session.attachment.mouse_capture = MouseCapture{.target = target, .owner = owner};
+        }
+        if (owner == MouseCaptureOwner::application) {
+          clear_mouse_selection(session, runtimes);
+        }
       }
-      if (message.mouse.action == protocol::MouseInputAction::press &&
-          message.mouse.button == protocol::MouseInputButton::left && target_tab == tab &&
-          pane->id != tab->focused_pane) {
-        focus_pane(session, *tab, runtimes, pane->id);
+      if (owner == MouseCaptureOwner::selection) {
+        if (!process_mouse_selection(session, runtimes, *target_tab, *pane, *runtime, message.mouse,
+                                     content_row)) {
+          return ParseResult::error;
+        }
+        if (message.mouse.action == protocol::MouseInputAction::release) {
+          session.attachment.mouse_capture.reset();
+        }
+        break;
       }
+
       const auto& rectangle = pane->rectangle;
       const auto action = [value = message.mouse.action]() noexcept {
         switch (value) {
@@ -3088,10 +3325,6 @@ enum class ParseResult : std::uint8_t {
           .geometry = {.screen_width = rectangle.columns, .screen_height = rectangle.rows},
           .any_button_pressed = message.mouse.any_button_pressed,
       };
-      auto* const runtime = find_pane_runtime(runtimes, session, *target_tab, *pane);
-      if (runtime == nullptr) {
-        return ParseResult::error;
-      }
       const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued = queue_mouse_input(runtime->pending_writes, runtime->terminal, event);
       if (queued == InputQueueResult::full) {
@@ -3282,7 +3515,8 @@ enum class ParseResult : std::uint8_t {
 
 [[nodiscard]] auto status_tab_title(const SessionRecord& session, const Tab& tab,
                                     const PaneRuntimeStore& runtimes) noexcept -> std::string_view {
-  if (session.attachment.copy_mode.active && session.attachment.copy_mode.tab == tab.id) {
+  if (session.attachment.copy_mode.active && session.attachment.selection_target.has_value() &&
+      session.attachment.selection_target->tab == tab.id) {
     return session.attachment_runtime.copy_mode.status_view();
   }
   return tab_title(session, tab, runtimes);

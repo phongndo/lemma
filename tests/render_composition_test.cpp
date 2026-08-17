@@ -328,13 +328,63 @@ TEST(PaneCompositionTest, FocusedSurfaceAlwaysOwnsOuterTerminalModes) {
   std::array<std::byte, std::size_t{64} * 1'024U> output{};
   auto result = compose_frame(panes, {.columns = 8, .rows = 1}, output, true);
   ASSERT_TRUE(result.has_value());
-  EXPECT_THAT(as_text(std::span(output).first(result->bytes)), testing::HasSubstr("\x1B[?2004h"));
+  auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?2004h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1002h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1006h"));
+
+  // Parse the actual composed frame rather than merely checking that enable sequences occur.
+  // Mouse event/format modes are mutually exclusive, so later competing resets must not silently
+  // cancel button tracking or SGR encoding.
+  auto outer_terminal = make_terminal(8, 1);
+  write_text(outer_terminal, encoded);
+  const auto tracking = outer_terminal.mouse_tracking();
+  ASSERT_TRUE(tracking.has_value());
+  EXPECT_EQ(*tracking, (vt::MouseTrackingState{.enabled = true}));
+  std::array<std::byte, 64> mouse_output{};
+  const vt::MouseEvent mouse{
+      .action = vt::MouseAction::press,
+      .button = vt::MouseButton::left,
+      .x = 1,
+      .geometry = {.screen_width = 8, .screen_height = 1},
+  };
+  const auto mouse_result = outer_terminal.encode_mouse(mouse, mouse_output);
+  ASSERT_TRUE(mouse_result.has_value());
+  EXPECT_EQ(as_text(std::span(mouse_output).first(*mouse_result)), "\x1B[<0;2;1M");
 
   panes.front().focused = false;
   panes.back().focused = true;
   result = compose_frame(panes, {.columns = 8, .rows = 1}, output, false);
   ASSERT_TRUE(result.has_value());
-  EXPECT_THAT(as_text(std::span(output).first(result->bytes)), testing::HasSubstr("\x1B[?2004l"));
+  encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?2004l"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1002h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1006h"));
+}
+
+TEST(PaneCompositionTest, PromotesOuterCaptureOnlyForUnbuttonedApplicationMotion) {
+  auto terminal = make_terminal(8, 1);
+  write_text(terminal, "\x1B[?1003h");
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 8, .rows = 1},
+      .focused = true,
+  };
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 8, .rows = 1}, output, true);
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1002l"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1003h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?1006h"));
+
+  auto outer_terminal = make_terminal(8, 1);
+  write_text(outer_terminal, encoded);
+  const auto tracking = outer_terminal.mouse_tracking();
+  ASSERT_TRUE(tracking.has_value());
+  EXPECT_EQ(*tracking, (vt::MouseTrackingState{.enabled = true, .unbuttoned_motion = true}));
 }
 
 TEST(PaneCompositionTest, ClearsViewportWithoutPaneCoordinatesForSuspendedLayout) {

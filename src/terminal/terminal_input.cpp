@@ -305,7 +305,29 @@ auto Terminal::encode_mouse(const MouseEvent& event, const std::span<std::byte> 
   return written;
 }
 
-[[nodiscard]] auto Terminal::synchronized_output() const noexcept -> std::expected<bool, Error> {
+[[nodiscard]] auto Terminal::mouse_tracking() const noexcept
+    -> std::expected<MouseTrackingState, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  bool enabled = false;
+  auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &enabled);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  GhosttyTerminalModeConfig any_motion{.mode = GHOSTTY_MODE_ANY_MOUSE, .value = false};
+  result = ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_MODE, &any_motion);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return MouseTrackingState{
+      .enabled = enabled,
+      .unbuttoned_motion = any_motion.value,
+  };
+}
+
+auto Terminal::synchronized_output() const noexcept -> std::expected<bool, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
   GhosttyTerminalModeConfig synchronized{

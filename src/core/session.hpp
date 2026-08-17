@@ -96,8 +96,6 @@ enum class CopySearchDirection : std::uint8_t {
 };
 
 struct CopyModeState final {
-  TabId tab;
-  PaneId pane;
   std::array<char, limits::search_query_bytes_max> query{};
   std::size_t query_size{0};
   std::uint64_t viewport_offset{0};
@@ -116,6 +114,19 @@ struct CopyModeState final {
 struct AttachmentPaneTarget final {
   TabId tab;
   PaneId pane;
+
+  friend constexpr auto operator==(const AttachmentPaneTarget&,
+                                   const AttachmentPaneTarget&) noexcept -> bool = default;
+};
+
+enum class MouseCaptureOwner : std::uint8_t {
+  application,
+  selection,
+};
+
+struct MouseCapture final {
+  AttachmentPaneTarget target;
+  MouseCaptureOwner owner{MouseCaptureOwner::application};
 };
 
 struct Attachment final {
@@ -123,7 +134,8 @@ struct Attachment final {
   SessionId session;
   std::uint16_t columns{80};
   std::uint16_t rows{24};
-  std::optional<AttachmentPaneTarget> mouse_capture;
+  std::optional<AttachmentPaneTarget> selection_target;
+  std::optional<MouseCapture> mouse_capture;
   CopyModeState copy_mode;
 };
 

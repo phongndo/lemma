@@ -66,10 +66,10 @@ Session, tab, pane, semantic Attachment, and runtime connection references use d
 | Prefix keymap | Working | `C-b` dispatches built-in pane/tab/copy commands; `C-b C-b` sends a literal prefix. |
 | Key encoding | Working | The client requests Kitty disambiguation, event, alternate-key, and associated-text metadata without requesting `report all keys`; layout and IME text therefore remains ordinary text on hosts that omit associated text. Typed metadata is preserved and Ghostty encodes it against each pane's active modes. |
 | Typed paste/focus | Working | Outer bracketed-paste and focus reporting are enabled while attached. Reports are decoded across arbitrary read fragmentation, transported as bounded typed messages, and encoded from canonical Ghostty modes. Paste remains one opaque event up to 1 MiB and bypasses mux-prefix interpretation. |
-| Copy mode | Working for keyboard path | Vi/arrow navigation, tracked selection, visible cursor/range, bounded literal search, viewport hold, and OSC 52 user copy are integrated. |
+| Copy mode | Working | Vi/arrow navigation, tracked keyboard and pane-local mouse selection, visible cursor/range, bounded literal search, viewport hold, and OSC 52 user copy are integrated. |
 | Native clipboard | Absent | Copy output relies on bounded user-initiated OSC 52. |
-| Mouse mux operation | Partial | SGR mouse input is validated against read-time geometry, hit-tested across pane rectangles, focuses a pressed pane, and retains pane ownership through drag/release. Drag resize, status interaction, and mux mouse selection remain absent. |
-| Application mouse forwarding | Working | Outer button/drag SGR capture is enabled while attached. Valid events are translated to bounded pane-local coordinates and encoded by Ghostty from the target pane's canonical mouse modes. |
+| Mouse mux operation | Partial | SGR mouse input is validated against read-time geometry, hit-tested across pane rectangles, focuses through the typed pane command, and retains pane-local application or selection ownership through drag/release. A wheel over shell content enters or reuses daemon copy mode and scrolls only that pane; separators and status are excluded. Drag resize and status interaction remain absent. |
+| Application mouse forwarding | Working | Lemma owns outer button/drag SGR capture independently of child modes, promotes unbuttoned motion only when requested, and uses Ghostty to encode validated pane-local button, wheel, and motion events from the target pane's canonical mouse modes. |
 
 Copy/search work is daemon-owned for the one attachment. PTY parsing continues while the viewport is held. Search inspects at most a bounded slice and does not retain a duplicate grid or match list.
 

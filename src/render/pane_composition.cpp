@@ -589,14 +589,51 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   return draw_junctions(panes, output, used, row_offset) && append(output, used, "\x1B[0m");
 }
 
+struct CompositionPolicy final {
+  bool has_presented_focus{false};
+  bool unbuttoned_mouse_motion{false};
+};
+
+[[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
+                                      const Viewport viewport, const StatusLine status) noexcept
+    -> std::expected<CompositionPolicy, CompositionError> {
+  const auto validation = validate_composition(panes, viewport, status);
+  if (!validation.has_value()) {
+    return std::unexpected(validation.error());
+  }
+  const auto focused = std::ranges::find(panes, true, &PaneSurface::focused);
+  if (focused == panes.end()) {
+    return CompositionPolicy{.has_presented_focus = *validation};
+  }
+  const auto tracking = focused->terminal->mouse_tracking();
+  if (!tracking.has_value()) {
+    return std::unexpected(CompositionError::terminal_error);
+  }
+  return CompositionPolicy{
+      .has_presented_focus = *validation,
+      .unbuttoned_mouse_motion = tracking->unbuttoned_motion,
+  };
+}
+
 [[nodiscard]] auto finish_frame(const std::span<std::byte> output, std::size_t& used,
-                                const bool has_focus) noexcept -> bool {
+                                const bool has_focus, const bool unbuttoned_mouse_motion) noexcept
+    -> bool {
   constexpr std::string_view neutral_modes =
       "\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l\x1B[?1004l"
       "\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l\x1B[?2004l";
+  // Mouse event and encoding modes are each mutually exclusive. Disable competing modes before
+  // enabling the desired one: a later reset would otherwise replace the active mode with `none`
+  // or the legacy X10 encoding in terminals such as Ghostty.
+  constexpr std::string_view button_mouse_capture =
+      "\x1B[?9l\x1B[?1000l\x1B[?1003l\x1B[?1002h\x1B[?1005l\x1B[?1015l"
+      "\x1B[?1016l\x1B[?1006h";
+  constexpr std::string_view any_mouse_capture =
+      "\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003h\x1B[?1005l\x1B[?1015l"
+      "\x1B[?1016l\x1B[?1006h";
   return append(output, used, "\x1B[0m\x1B[?7h") &&
          (has_focus ||
           (append(output, used, "\x1B[?25l") && append(output, used, neutral_modes))) &&
+         append(output, used, unbuttoned_mouse_motion ? any_mouse_capture : button_mouse_capture) &&
          append(output, used, "\x1B[?2026l");
 }
 
@@ -608,9 +645,9 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
                                  const std::span<std::byte> output, const bool force_full,
                                  const StatusLine status) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  const auto validation = validate_composition(panes, viewport, status);
-  if (!validation.has_value()) {
-    return std::unexpected(validation.error());
+  const auto policy = composition_policy(panes, viewport, status);
+  if (!policy.has_value()) {
+    return std::unexpected(policy.error());
   }
 
   const bool complete_frame = std::ranges::none_of(panes, &PaneSurface::presentation_suppressed);
@@ -642,7 +679,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
   // advance.
   composition.full = composition.full && complete_frame;
-  if (!finish_frame(output, used, *validation)) {
+  if (!finish_frame(output, used, policy->has_presented_focus, policy->unbuttoned_mouse_motion)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
   }

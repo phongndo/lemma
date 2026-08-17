@@ -556,21 +556,176 @@ TEST_F(MuxProcessTest, RoutesPasteFocusAndMouseBoundariesToGhostty) {
   ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; "
                           "printf '\\033[?2004h\\033[?1004h\\033[?1000h\\033[?1006h"
                           "__STRUCTURED_%s__\\r\\n' READY; "
-                          "v=$(dd bs=1 count=27 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
-                          "stty sane; printf '__STRUCTURED_%s__\\n' \"$v\"\r",
+                          "v=$(dd bs=1 count=46 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+                          "stty sane; expected="
+                          "1b5b3230307e5002641b5b3230317e1b5b491b5b3c303b353b324d"
+                          "1b5b3c36343b353b324d1b5b3c303b353b316d; "
+                          "if [ \"$v\" = \"$expected\" ]; then printf '__STRUCTURED_OK__\\n'; "
+                          "else printf '__STRUCTURED_BAD_%s__\\n' \"$v\"; fi\r",
                           deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__STRUCTURED_READY__", deadline_after(5s)))
       << client.screen();
 
   constexpr std::string_view host_input = "\x1B[200~P\x02"
-                                          "d\x1B[201~\x1B[I\x1B[<0;5;3M";
+                                          "d\x1B[201~\x1B[I\x1B[<0;5;3M\x1B[<64;5;3M"
+                                          "\x1B[<0;5;1m";
   ASSERT_TRUE(client.send(host_input, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen(
-      "__STRUCTURED_1b5b3230307e5002641b5b3230317e1b5b491b5b3c303b353b324d__", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_screen("__STRUCTURED_OK__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail() << "\nserver:\n"
       << server_.output();
 
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, ClickFocusesTheHitPaneThroughTheCommandPath) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_focus"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("mouse_focus", "2 pane(s)", deadline_after(5s), &client));
+  ASSERT_TRUE(wait_for_listing("mouse_focus", "pane=1:1", deadline_after(5s), &client));
+
+  constexpr std::string_view click_left = "\x1B[<0;1;2M\x1B[<0;1;2m";
+  ASSERT_TRUE(client.send(click_left, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("mouse_focus", "pane=0:1", deadline_after(5s), &client))
+      << command({"list", "mouse_focus"}).output << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, HandlesMouseEdgesCopyTransitionsAndDeletedCaptureTargets) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_edges"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
+
+  // Status and the vertical separator are outside pane content and cannot change focus.
+  constexpr std::string_view outside_clicks = "\x1B[<0;1;1M\x1B[<0;1;1m"
+                                              "\x1B[<0;41;2M\x1B[<0;41;2m";
+  ASSERT_TRUE(client.send(outside_clicks, deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__OUTSIDE_IGNORED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__OUTSIDE_IGNORED__", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
+
+  // Clicking another pane while copy mode owns the old pane exits copy mode instead of treating
+  // the target change as a protocol failure.
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(client.wait_for_screen("COPY", deadline_after(5s))) << client.screen();
+  constexpr std::string_view click_left = "\x1B[<0;1;2M\x1B[<0;1;2m";
+  ASSERT_TRUE(client.send(click_left, deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__COPY_MOUSE_SWITCH__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_MOUSE_SWITCH__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=0:1", deadline_after(5s), &client));
+
+  // A captured drag/release clamps to the owner even over status or another pane, then releases
+  // ownership so the next press can target normally.
+  constexpr std::string_view drag_through_status = "\x1B[<0;1;2M"
+                                                   "\x1B[<32;1;1M"
+                                                   "\x1B[<0;1;1m";
+  ASSERT_TRUE(client.send(drag_through_status, deadline_after(2s)));
+  constexpr std::string_view click_right = "\x1B[<0;80;2M\x1B[<0;80;2m";
+  ASSERT_TRUE(client.send(click_right, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
+
+  constexpr std::string_view drag_across_panes = "\x1B[<0;1;2M"
+                                                 "\x1B[<32;80;2M"
+                                                 "\x1B[<0;80;2m";
+  ASSERT_TRUE(client.send(drag_across_panes, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=0:1", deadline_after(5s), &client));
+  ASSERT_TRUE(client.send(click_right, deadline_after(2s)));
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
+
+  // A fresh press replaces an abandoned capture rather than inheriting its old pane target.
+  ASSERT_TRUE(client.send("\x1B[<0;1;2M\x1B[<0;80;2M\x1B[<0;80;2m", deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__FRESH_PRESS_REPLACED_CAPTURE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__FRESH_PRESS_REPLACED_CAPTURE__", deadline_after(5s)))
+      << client.screen();
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "pane=1:1", deadline_after(5s), &client));
+
+  // Deleting a pane with an active capture invalidates the generational target. Its later release
+  // is dropped rather than retargeted to the surviving pane.
+  ASSERT_TRUE(client.send("\x1B[<0;80;2M", deadline_after(2s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'x'}));
+  ASSERT_TRUE(wait_for_listing("mouse_edges", "1 pane(s)", deadline_after(5s), &client));
+  ASSERT_TRUE(client.send("\x1B[<0;80;2m", deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__STALE_CAPTURE_SURVIVED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__STALE_CAPTURE_SURVIVED__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, SelectsShellTextInsideItsPaneWithoutEnteringCopyMode) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_selection"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("printf '\\033[2J\\033[H__MOUSE_SELECTION__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_SELECTION__", deadline_after(5s))) << client.screen();
+
+  constexpr std::string_view drag = "\x1B[<0;1;2M"
+                                    "\x1B[<32;9;2M"
+                                    "\x1B[<0;9;2m";
+  ASSERT_TRUE(client.send(drag, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.screen() << "\nraw:\n"
+                                                                    << client.raw_tail();
+
+  ASSERT_TRUE(client.send("printf '__MOUSE_SELECTION_INPUT__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_SELECTION_INPUT__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, WheelScrollsTheHitShellPaneThroughDaemonCopyMode) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_wheel"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(
+      client.send("printf '__WHEEL_TOP__\\n'; "
+                  "i=0; while [ $i -lt 45 ]; do printf "
+                  "'wheel-%02d-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
+                  "\"$i\"; i=$((i+1)); done; "
+                  "printf '__WHEEL_BOTTOM__\\n'; sleep 30\r",
+                  deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_BOTTOM__", deadline_after(5s))) << client.screen();
+
+  constexpr std::string_view one_wheel_up = "\x1B[<64;1;2M";
+  constexpr std::string_view one_wheel_down = "\x1B[<65;1;2M";
+  ASSERT_TRUE(client.send(one_wheel_up, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("COPY", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
+
+  std::string wheel_up;
+  std::string wheel_down;
+  for (std::size_t index = 0; index < 20; ++index) {
+    wheel_up.append(one_wheel_up);
+    wheel_down.append(one_wheel_down);
+  }
+  ASSERT_TRUE(client.send(wheel_up, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_TOP__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(client.send(wheel_down, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_BOTTOM__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }

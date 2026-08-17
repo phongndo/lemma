@@ -16,6 +16,7 @@ namespace {
   case CommandKind::focus_down:
   case CommandKind::focus_next:
   case CommandKind::focus_previous:
+  case CommandKind::focus_pane:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
   case CommandKind::enter_copy_mode:

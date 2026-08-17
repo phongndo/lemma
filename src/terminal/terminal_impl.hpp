@@ -127,6 +127,7 @@ struct Terminal::Impl final {
   std::size_t row_hash_count{0};
   std::array<bool, 12> mirrored_mode_values{};
   bool mirrored_modes_valid{false};
+  bool mirrored_mouse_modes_valid{false};
   bool ansi_physical_valid{false};
   BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;
   EffectBatch effects{};

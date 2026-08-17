@@ -146,6 +146,7 @@ TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
       .session = session.id,
       .columns = 120,
       .rows = 40,
+      .selection_target = {},
       .mouse_capture = {},
       .copy_mode = {},
   };

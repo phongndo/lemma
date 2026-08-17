@@ -29,6 +29,24 @@ Large VT parsing measured 1.22 GiB/s. The result supports incremental damage and
 
 The warmed steady-state allocation audit performs 10,000 parse/damage/compose/frame-flush iterations after 256 warmups. The retained qualification observed zero C++ general allocations, zero general-allocation bytes, and zero new terminal-quota allocations while flushing 2,150,000 framed bytes.
 
+A same-process qualification on August 16, 2026 measured the composed-render effect of separating Lemma's outer mouse capture policy from child mouse modes. Five one-second release repetitions before and after the change retained identical average frame sizes and produced these CPU medians:
+
+| Panes | Before | After | Frame bytes before/after |
+| ---: | ---: | ---: | ---: |
+| 1 | 6.435 us | 6.163 us | 165 / 165 |
+| 4 | 13.318 us | 12.943 us | 216 / 216 |
+| 16 | 28.873 us | 28.132 us | 422 / 422 |
+| 64 | 68.623 us | 67.289 us | 1,254 / 1,254 |
+
+This shows no measured composition or output-size regression for the changed per-frame mode projection; it is not an end-to-end mouse-latency result. Reproduce with:
+
+```sh
+./build/release/lemma_benchmarks \
+  --benchmark_filter='^benchmark_terminal_multiple_panes/(1|4|16|64)$' \
+  --benchmark_min_time=1s --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true
+```
+
 ## Current end-to-end comparison
 
 A thirty-sample same-host comparison used tmux 3.7b, Zellij 0.44.3, Herdr 0.8.0, and Lemma at `f1e4fc3`. All subjects received the same 80x24 peer, input, and exact completion conditions. The autonomous-output peer pauses for 50 ms during untimed setup so delayed renderers can expose readiness before load begins. Herdr used its normal tab row but hid the sidebar and pane scrollbar, giving the root pane the same 80x23 area as Lemma and tmux; update checks and restart history were disabled.

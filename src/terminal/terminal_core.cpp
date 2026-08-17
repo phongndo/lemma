@@ -673,6 +673,7 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   impl_->row_hashes.fill(0);
   impl_->row_hash_count = size.rows;
   impl_->mirrored_modes_valid = false;
+  impl_->mirrored_mouse_modes_valid = false;
   impl_->ansi_physical_valid = false;
   ghostty_mouse_encoder_reset(impl_->mouse_encoder);
   impl_->options.size = size;

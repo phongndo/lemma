@@ -20,6 +20,7 @@ enum class CommandKind : std::uint8_t {
   focus_down,
   focus_next,
   focus_previous,
+  focus_pane,
   close_pane,
   toggle_zoom,
   enter_copy_mode,
