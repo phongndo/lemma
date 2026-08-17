@@ -166,7 +166,7 @@ The boundary is deliberately split:
 
 Copy mode never pauses PTY parsing. Its explicit fixed-viewport policy retains a bounded absolute offset across output and reflow while Ghostty history remains canonical and continues to evolve. Ordinary wheel scrolling does not use this copy-mode policy. Search must traverse canonical terminal data in bounded slices and must not retain a duplicate text grid or unbounded match list.
 
-Ghostty tracked references must remain encapsulated. Core may retain Lemma-owned continuation values, but never Ghostty pointers or private structs.
+Ghostty tracked references must remain encapsulated. Core may retain Lemma-owned continuation values, but never Ghostty pointers or private structs. The terminal adapter may retain one bounded tracked selection checkpoint while copy search previews another range. Runtime controls that checkpoint's lifecycle and may request its current endpoint to seed bounded traversal, but restoration never round-trips through screen coordinates.
 
 ## Effects and unsupported semantics
 

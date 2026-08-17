@@ -95,21 +95,48 @@ enum class CopySearchDirection : std::uint8_t {
   backward,
 };
 
+enum class CopyModePhase : std::uint8_t {
+  inactive,
+  navigation,
+  visual_character,
+  visual_line,
+  visual_block,
+  search_prompt,
+  searching,
+};
+
+enum class CopyPendingChord : std::uint8_t {
+  none,
+  go,
+};
+
 struct CopyModeState final {
   std::array<char, limits::search_query_bytes_max> query{};
+  std::array<char, limits::search_query_bytes_max> draft_query{};
   std::size_t query_size{0};
+  std::size_t draft_query_size{0};
   // Explicit copy mode snapshots an absolute viewport policy across reflow/output mutations.
   // Ordinary wheel scrolling remains terminal-owned and does not populate this value.
   std::uint64_t viewport_offset{0};
   CopyModeFeedback feedback{CopyModeFeedback::none};
   CopySearchDirection search_direction{CopySearchDirection::forward};
-  bool active{false};
-  bool extending{false};
-  bool search_entry{false};
-  bool search_pending{false};
+  CopySearchDirection prompt_search_direction{CopySearchDirection::forward};
+  CopyModePhase phase{CopyModePhase::inactive};
+  CopyModePhase phase_before_search{CopyModePhase::navigation};
+  CopyPendingChord pending_chord{CopyPendingChord::none};
 
+  [[nodiscard]] constexpr auto active() const noexcept -> bool {
+    return phase != CopyModePhase::inactive;
+  }
+  [[nodiscard]] constexpr auto selecting() const noexcept -> bool {
+    return phase == CopyModePhase::visual_character || phase == CopyModePhase::visual_line ||
+           phase == CopyModePhase::visual_block;
+  }
   [[nodiscard]] auto query_view() const noexcept -> std::string_view {
     return {query.data(), query_size};
+  }
+  [[nodiscard]] auto draft_query_view() const noexcept -> std::string_view {
+    return {draft_query.data(), draft_query_size};
   }
 };
 

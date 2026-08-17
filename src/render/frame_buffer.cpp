@@ -139,9 +139,10 @@ void FrameBuffer::release() noexcept {
 
 [[nodiscard]] auto compose_retained_frame(const std::span<const PaneSurface> panes,
                                           const Viewport viewport, FrameBuffer& frame,
-                                          const bool force_full, const StatusLine status) noexcept
+                                          const bool force_full, const StatusLine status,
+                                          const PaneOverlay overlay) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  return compose_frame(panes, viewport, frame.writable(), force_full, status);
+  return compose_frame(panes, viewport, frame.writable(), force_full, status, overlay);
 }
 
 [[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,

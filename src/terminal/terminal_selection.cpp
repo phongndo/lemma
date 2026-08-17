@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 
 namespace lemma::vt {
 namespace {
@@ -82,36 +83,6 @@ namespace {
   return {};
 }
 
-[[nodiscard]] auto selection_adjustment(const SelectionAdjustment adjustment) noexcept
-    -> std::optional<GhosttySelectionAdjust> {
-  switch (adjustment) {
-  case SelectionAdjustment::left:
-    return GHOSTTY_SELECTION_ADJUST_LEFT;
-  case SelectionAdjustment::right:
-    return GHOSTTY_SELECTION_ADJUST_RIGHT;
-  case SelectionAdjustment::up:
-    return GHOSTTY_SELECTION_ADJUST_UP;
-  case SelectionAdjustment::down:
-    return GHOSTTY_SELECTION_ADJUST_DOWN;
-  case SelectionAdjustment::home:
-    return GHOSTTY_SELECTION_ADJUST_HOME;
-  case SelectionAdjustment::end:
-    return GHOSTTY_SELECTION_ADJUST_END;
-  case SelectionAdjustment::page_up:
-    return GHOSTTY_SELECTION_ADJUST_PAGE_UP;
-  case SelectionAdjustment::page_down:
-    return GHOSTTY_SELECTION_ADJUST_PAGE_DOWN;
-  case SelectionAdjustment::beginning_of_line:
-    return GHOSTTY_SELECTION_ADJUST_BEGINNING_OF_LINE;
-  case SelectionAdjustment::end_of_line:
-    return GHOSTTY_SELECTION_ADJUST_END_OF_LINE;
-  case SelectionAdjustment::word_left:
-  case SelectionAdjustment::word_right:
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
-
 [[nodiscard]] auto total_rows(const GhosttyTerminal terminal) noexcept
     -> std::expected<std::size_t, Error> {
   std::size_t rows = 0;
@@ -155,6 +126,231 @@ namespace {
                           codepoint == static_cast<std::uint32_t>('\r') ||
                           codepoint == static_cast<std::uint32_t>('\n');
   return has_text && !whitespace;
+}
+
+struct CellText final {
+  std::uint32_t codepoint{0};
+  GhosttyCellWide wide{GHOSTTY_CELL_WIDE_NARROW};
+  bool has_text{false};
+};
+
+[[nodiscard]] auto cell_text(const GhosttyGridRef& ref) noexcept -> std::expected<CellText, Error> {
+  GhosttyCell cell = 0;
+  auto result = ghostty_grid_ref_cell(&ref, &cell);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  CellText text;
+  const std::array keys{GHOSTTY_CELL_DATA_HAS_TEXT, GHOSTTY_CELL_DATA_CODEPOINT,
+                        GHOSTTY_CELL_DATA_WIDE};
+  std::array<void*, keys.size()> values{&text.has_text, &text.codepoint, &text.wide};
+  std::size_t written = 0;
+  result = ghostty_cell_get_multi(cell, keys.size(), keys.data(), values.data(), &written);
+  if (result != GHOSTTY_SUCCESS || written != keys.size()) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return text;
+}
+
+[[nodiscard]] auto row_last_text_column(const GhosttyTerminal terminal, const std::uint32_t row,
+                                        const std::uint16_t columns) noexcept
+    -> std::expected<std::uint16_t, Error> {
+  for (std::uint16_t remaining = columns; remaining > 0; --remaining) {
+    const auto column = static_cast<std::uint16_t>(remaining - 1U);
+    const auto ref =
+        grid_ref(terminal, {.space = PointSpace::screen, .column = column, .row = row});
+    if (!ref.has_value()) {
+      return std::unexpected(ref.error());
+    }
+    const auto text = cell_text(*ref);
+    if (!text.has_value()) {
+      return std::unexpected(text.error());
+    }
+    if (text->has_text) {
+      return column;
+    }
+  }
+  return std::uint16_t{0};
+}
+
+[[nodiscard]] auto row_first_nonblank_column(const GhosttyTerminal terminal,
+                                             const std::uint32_t row,
+                                             const std::uint16_t columns) noexcept
+    -> std::expected<std::uint16_t, Error> {
+  for (std::uint16_t column = 0; column < columns; ++column) {
+    const auto ref =
+        grid_ref(terminal, {.space = PointSpace::screen, .column = column, .row = row});
+    if (!ref.has_value()) {
+      return std::unexpected(ref.error());
+    }
+    const auto text = cell_text(*ref);
+    if (!text.has_value()) {
+      return std::unexpected(text.error());
+    }
+    if (text->has_text && text->codepoint != static_cast<std::uint32_t>(' ') &&
+        text->codepoint != static_cast<std::uint32_t>('\t')) {
+      return column;
+    }
+  }
+  return std::uint16_t{0};
+}
+
+[[nodiscard]] auto normalize_wide_tail(const GhosttyTerminal terminal, TerminalPoint point,
+                                       const std::uint16_t columns,
+                                       const SelectionAdjustment adjustment) noexcept
+    -> std::expected<TerminalPoint, Error> {
+  const auto ref = grid_ref(terminal, point);
+  if (!ref.has_value()) {
+    return std::unexpected(ref.error());
+  }
+  const auto text = cell_text(*ref);
+  if (!text.has_value()) {
+    return std::unexpected(text.error());
+  }
+  if (text->wide == GHOSTTY_CELL_WIDE_SPACER_TAIL) {
+    if (adjustment == SelectionAdjustment::right && point.column + 1U < columns) {
+      ++point.column;
+    } else if (point.column > 0) {
+      --point.column;
+    }
+    return point;
+  }
+  if (text->wide != GHOSTTY_CELL_WIDE_SPACER_HEAD) {
+    return point;
+  }
+  if (adjustment != SelectionAdjustment::right) {
+    if (point.column > 0) {
+      --point.column;
+    }
+    return point;
+  }
+  const auto rows = total_rows(terminal);
+  if (!rows.has_value()) {
+    return std::unexpected(rows.error());
+  }
+  if (static_cast<std::size_t>(point.row) + 1U < *rows) {
+    ++point.row;
+    point.column = 0;
+  }
+  return point;
+}
+
+[[nodiscard]] auto viewport_rows(const GhosttyTerminal terminal) noexcept
+    -> std::expected<std::pair<std::uint64_t, std::uint64_t>, Error> {
+  GhosttyTerminalScrollbar scrollbar{};
+  const auto result = ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return std::pair{static_cast<std::uint64_t>(scrollbar.offset),
+                   static_cast<std::uint64_t>(scrollbar.len)};
+}
+
+// Vim-shaped cursor motion is expressed in terminal coordinates while Ghostty remains responsible
+// for grid references, wide-cell identity, and tracked endpoint installation.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto adjusted_point(const GhosttyTerminal terminal, const TerminalPoint current,
+                                  const std::uint16_t columns,
+                                  const SelectionAdjustment adjustment) noexcept
+    -> std::expected<TerminalPoint, Error> {
+  const auto row_count = total_rows(terminal);
+  if (!row_count.has_value()) {
+    return std::unexpected(row_count.error());
+  }
+  if (*row_count == 0 || columns == 0) {
+    return current;
+  }
+  auto point = current;
+  const auto last_row = static_cast<std::uint32_t>(*row_count - 1U);
+  switch (adjustment) {
+  case SelectionAdjustment::left:
+    if (point.column > 0) {
+      --point.column;
+    }
+    break;
+  case SelectionAdjustment::right:
+    if (point.column + 1U < columns) {
+      ++point.column;
+    }
+    break;
+  case SelectionAdjustment::up:
+    if (point.row > 0) {
+      --point.row;
+    }
+    break;
+  case SelectionAdjustment::down:
+    if (point.row < last_row) {
+      ++point.row;
+    }
+    break;
+  case SelectionAdjustment::history_top:
+    point.row = 0;
+    break;
+  case SelectionAdjustment::history_bottom:
+    point.row = last_row;
+    break;
+  case SelectionAdjustment::viewport_top:
+  case SelectionAdjustment::viewport_middle:
+  case SelectionAdjustment::viewport_bottom: {
+    const auto viewport = viewport_rows(terminal);
+    if (!viewport.has_value()) {
+      return std::unexpected(viewport.error());
+    }
+    auto row = viewport->first;
+    if (adjustment == SelectionAdjustment::viewport_middle && viewport->second > 0) {
+      row += (viewport->second - 1U) / 2U;
+    } else if (adjustment == SelectionAdjustment::viewport_bottom && viewport->second > 0) {
+      row += viewport->second - 1U;
+    }
+    point.row = static_cast<std::uint32_t>(std::min<std::uint64_t>(row, last_row));
+    break;
+  }
+  case SelectionAdjustment::half_page_up:
+  case SelectionAdjustment::half_page_down:
+  case SelectionAdjustment::page_up:
+  case SelectionAdjustment::page_down: {
+    const auto viewport = viewport_rows(terminal);
+    if (!viewport.has_value()) {
+      return std::unexpected(viewport.error());
+    }
+    const bool half = adjustment == SelectionAdjustment::half_page_up ||
+                      adjustment == SelectionAdjustment::half_page_down;
+    const auto distance =
+        std::max<std::uint64_t>(1, half ? viewport->second / 2U : viewport->second);
+    const bool upward = adjustment == SelectionAdjustment::half_page_up ||
+                        adjustment == SelectionAdjustment::page_up;
+    auto row = std::min<std::uint64_t>(last_row, point.row + distance);
+    if (upward) {
+      row = distance > point.row ? 0U : point.row - distance;
+    }
+    point.row = static_cast<std::uint32_t>(row);
+    break;
+  }
+  case SelectionAdjustment::beginning_of_line:
+    point.column = 0;
+    break;
+  case SelectionAdjustment::first_nonblank: {
+    const auto column = row_first_nonblank_column(terminal, point.row, columns);
+    if (!column.has_value()) {
+      return std::unexpected(column.error());
+    }
+    point.column = *column;
+    break;
+  }
+  case SelectionAdjustment::end_of_line: {
+    const auto column = row_last_text_column(terminal, point.row, columns);
+    if (!column.has_value()) {
+      return std::unexpected(column.error());
+    }
+    point.column = *column;
+    break;
+  }
+  case SelectionAdjustment::word_left:
+  case SelectionAdjustment::word_right:
+  case SelectionAdjustment::word_end:
+    break;
+  }
+  return normalize_wide_tail(terminal, point, columns, adjustment);
 }
 
 [[nodiscard]] auto select_word_at(const GhosttyTerminal terminal,
@@ -292,6 +488,89 @@ install_selection_endpoint(const GhosttyTerminal terminal, GhosttySelection& sel
   }
   return false;
 }
+
+// Word-end traversal shares Ghostty word selection and remains bounded per key.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+[[nodiscard]] auto
+select_word_end_from_endpoint(const GhosttyTerminal terminal, GhosttySelection& selection,
+                              const std::uint16_t columns, const bool extend) noexcept
+    -> std::expected<bool, Error> {
+  const auto endpoint = point_from_ref(terminal, selection.end, PointSpace::screen);
+  if (!endpoint.has_value()) {
+    return std::unexpected(endpoint.error());
+  }
+  const auto rows = total_rows(terminal);
+  if (!rows.has_value()) {
+    return std::unexpected(rows.error());
+  }
+  if (*rows == 0) {
+    return false;
+  }
+
+  const auto current_result = select_word_at(terminal, selection.end);
+  if (!current_result.has_value()) {
+    return std::unexpected(current_result.error());
+  }
+  const auto current = current_result.value_or(std::optional<GhosttySelection>{});
+  std::optional<TerminalPoint> current_start;
+  if (current.has_value()) {
+    const auto start = point_from_ref(terminal, current->start, PointSpace::screen);
+    const auto end = point_from_ref(terminal, current->end, PointSpace::screen);
+    if (!start.has_value() || !end.has_value()) {
+      return std::unexpected(!start.has_value() ? start.error() : end.error());
+    }
+    current_start = *start;
+    if (*endpoint != *end) {
+      return install_selection_endpoint(terminal, selection, current->end, extend);
+    }
+  }
+
+  auto candidate = *endpoint;
+  const auto advance = [columns, total_row_count = *rows](TerminalPoint& point) noexcept {
+    if (point.column + 1U < columns) {
+      ++point.column;
+      return true;
+    }
+    if (static_cast<std::size_t>(point.row) + 1U >= total_row_count) {
+      return false;
+    }
+    point.column = 0;
+    ++point.row;
+    return true;
+  };
+  if (!advance(candidate)) {
+    return false;
+  }
+
+  for (std::size_t inspected = 0; inspected < limits::search_candidates_per_step; ++inspected) {
+    const auto candidate_ref = grid_ref(terminal, candidate);
+    if (!candidate_ref.has_value()) {
+      return std::unexpected(candidate_ref.error());
+    }
+    const auto word_result = select_word_at(terminal, *candidate_ref);
+    if (!word_result.has_value()) {
+      return std::unexpected(word_result.error());
+    }
+    const auto word = word_result.value_or(std::optional<GhosttySelection>{});
+    if (word.has_value()) {
+      const auto start = point_from_ref(terminal, word->start, PointSpace::screen);
+      if (!start.has_value()) {
+        return std::unexpected(start.error());
+      }
+      if (!current_start.has_value() || *start != *current_start) {
+        return install_selection_endpoint(terminal, selection, word->end, extend);
+      }
+    }
+    if (inspected + 1U == limits::search_candidates_per_step) {
+      return install_selection_endpoint(terminal, selection, *candidate_ref, extend);
+    }
+    if (!advance(candidate)) {
+      return false;
+    }
+  }
+  return false;
+}
+// NOLINTEND(readability-function-cognitive-complexity)
 
 [[nodiscard]] constexpr auto gesture_event_index(const SelectionGesturePhase phase) noexcept
     -> std::size_t {
@@ -664,6 +943,12 @@ auto Terminal::select(const SelectionUnit unit, const TerminalPoint point) noexc
       selection.end = *ref;
       result = GHOSTTY_SUCCESS;
       break;
+    case SelectionUnit::block:
+      selection.start = *ref;
+      selection.end = *ref;
+      selection.rectangle = true;
+      result = GHOSTTY_SUCCESS;
+      break;
     case SelectionUnit::word: {
       GhosttyTerminalSelectWordOptions options =
           GHOSTTY_INIT_SIZED(GhosttyTerminalSelectWordOptions);
@@ -715,15 +1000,120 @@ auto Terminal::selection_adjust(const SelectionAdjustment adjustment, const bool
     return select_word_from_endpoint(impl_->terminal, selection, impl_->options.size.columns,
                                      adjustment == SelectionAdjustment::word_right, extend);
   }
-  const auto native = selection_adjustment(adjustment);
-  LEMMA_ASSERT(native.has_value());
-  const auto result = ghostty_terminal_selection_adjust(impl_->terminal, &selection, *native);
-  if (result != GHOSTTY_SUCCESS) {
-    return std::unexpected(detail::map_error(result));
+  if (adjustment == SelectionAdjustment::word_end) {
+    return select_word_end_from_endpoint(impl_->terminal, selection, impl_->options.size.columns,
+                                         extend);
   }
+  const auto current_point = point_from_ref(impl_->terminal, selection.end, PointSpace::screen);
+  if (!current_point.has_value()) {
+    return std::unexpected(current_point.error());
+  }
+  const auto target =
+      adjusted_point(impl_->terminal, *current_point, impl_->options.size.columns, adjustment);
+  if (!target.has_value()) {
+    return std::unexpected(target.error());
+  }
+  if (*target == *current_point) {
+    return false;
+  }
+  const auto endpoint = grid_ref(impl_->terminal, *target);
+  if (!endpoint.has_value()) {
+    return std::unexpected(endpoint.error());
+  }
+  selection.end = *endpoint;
   if (!extend) {
     selection.start = selection.end;
+    selection.rectangle = false;
   }
+  const auto installed = install_selection(impl_->terminal, selection);
+  if (!installed.has_value()) {
+    return std::unexpected(installed.error());
+  }
+  return true;
+}
+
+auto Terminal::selection_set_unit(const SelectionUnit unit) noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  const auto endpoint = selection_endpoint(PointSpace::screen);
+  if (!endpoint.has_value()) {
+    return std::unexpected(endpoint.error());
+  }
+  if (!endpoint->has_value()) {
+    return false;
+  }
+  if (unit == SelectionUnit::word || unit == SelectionUnit::output || unit == SelectionUnit::all) {
+    return std::unexpected(Error::invalid_options);
+  }
+  const auto selected = select(unit, **endpoint);
+  if (!selected.has_value() || !*selected) {
+    return selected;
+  }
+  return unit == SelectionUnit::cell ? std::expected<bool, Error>{true}
+                                     : selection_normalize_unit(unit);
+}
+
+// Unit normalization validates and installs the complete tracked range in one transaction.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Terminal::selection_normalize_unit(const SelectionUnit unit) noexcept
+    -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  const auto current = active_selection(impl_->terminal);
+  if (!current.has_value()) {
+    return std::unexpected(current.error());
+  }
+  if (!current->has_value()) {
+    return false;
+  }
+  if (unit == SelectionUnit::word || unit == SelectionUnit::output || unit == SelectionUnit::all) {
+    return std::unexpected(Error::invalid_options);
+  }
+  auto selection = **current;
+  if (unit == SelectionUnit::cell) {
+    selection.rectangle = false;
+  } else if (unit == SelectionUnit::line) {
+    const auto start = point_from_ref(impl_->terminal, selection.start, PointSpace::screen);
+    const auto end = point_from_ref(impl_->terminal, selection.end, PointSpace::screen);
+    if (!start.has_value() || !end.has_value()) {
+      return std::unexpected(!start.has_value() ? start.error() : end.error());
+    }
+    auto anchor = *start;
+    auto endpoint = *end;
+    if (endpoint.row >= anchor.row) {
+      anchor.column = 0;
+      endpoint.column = static_cast<std::uint16_t>(impl_->options.size.columns - 1U);
+    } else {
+      anchor.column = static_cast<std::uint16_t>(impl_->options.size.columns - 1U);
+      endpoint.column = 0;
+    }
+    const auto anchor_ref = grid_ref(impl_->terminal, anchor);
+    const auto endpoint_ref = grid_ref(impl_->terminal, endpoint);
+    if (!anchor_ref.has_value() || !endpoint_ref.has_value()) {
+      return std::unexpected(!anchor_ref.has_value() ? anchor_ref.error() : endpoint_ref.error());
+    }
+    selection.start = *anchor_ref;
+    selection.end = *endpoint_ref;
+    selection.rectangle = false;
+  } else {
+    selection.rectangle = true;
+  }
+  const auto installed = install_selection(impl_->terminal, selection);
+  if (!installed.has_value()) {
+    return std::unexpected(installed.error());
+  }
+  return true;
+}
+
+auto Terminal::swap_selection_endpoints() noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  const auto current = active_selection(impl_->terminal);
+  if (!current.has_value()) {
+    return std::unexpected(current.error());
+  }
+  if (!current->has_value()) {
+    return false;
+  }
+  auto selection = **current;
+  std::swap(selection.start, selection.end);
   const auto installed = install_selection(impl_->terminal, selection);
   if (!installed.has_value()) {
     return std::unexpected(installed.error());
@@ -742,6 +1132,7 @@ auto Terminal::collapse_selection_to_endpoint() noexcept -> std::expected<bool, 
   }
   auto selection = **current;
   selection.start = selection.end;
+  selection.rectangle = false;
   const auto installed = install_selection(impl_->terminal, selection);
   if (!installed.has_value()) {
     return std::unexpected(installed.error());
@@ -779,6 +1170,117 @@ auto Terminal::selection_endpoint(const PointSpace space) const noexcept
   }
   return std::optional<TerminalPoint>{
       {.space = space, .column = coordinate.x, .row = coordinate.y}};
+}
+
+auto Terminal::selection_range(const PointSpace space) const noexcept
+    -> std::expected<std::optional<SelectionRange>, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  const auto selection = active_selection(impl_->terminal);
+  if (!selection.has_value()) {
+    return std::unexpected(selection.error());
+  }
+  if (!selection->has_value()) {
+    return std::optional<SelectionRange>{};
+  }
+  const auto start = point_from_ref(impl_->terminal, (**selection).start, space);
+  const auto end = point_from_ref(impl_->terminal, (**selection).end, space);
+  if (!start.has_value() || !end.has_value()) {
+    return std::unexpected(!start.has_value() ? start.error() : end.error());
+  }
+  return std::optional<SelectionRange>{
+      {.start = *start, .end = *end, .rectangular = (**selection).rectangle}};
+}
+
+auto Terminal::checkpoint_selection() noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  const auto current = active_selection(impl_->terminal);
+  if (!current.has_value()) {
+    return std::unexpected(current.error());
+  }
+  if (!current->has_value()) {
+    return false;
+  }
+  const auto start = point_from_ref(impl_->terminal, (**current).start, PointSpace::screen);
+  const auto end = point_from_ref(impl_->terminal, (**current).end, PointSpace::screen);
+  if (!start.has_value() || !end.has_value()) {
+    return std::unexpected(!start.has_value() ? start.error() : end.error());
+  }
+
+  GhosttyTrackedGridRef replacement_start = nullptr;
+  GhosttyTrackedGridRef replacement_end = nullptr;
+  auto result =
+      ghostty_terminal_grid_ref_track(impl_->terminal, ghostty_point(*start), &replacement_start);
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_grid_ref_track(impl_->terminal, ghostty_point(*end), &replacement_end);
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_tracked_grid_ref_free(replacement_start);
+    ghostty_tracked_grid_ref_free(replacement_end);
+    return std::unexpected(detail::map_error(result));
+  }
+
+  ghostty_tracked_grid_ref_free(impl_->selection_checkpoint_start);
+  ghostty_tracked_grid_ref_free(impl_->selection_checkpoint_end);
+  impl_->selection_checkpoint_start = replacement_start;
+  impl_->selection_checkpoint_end = replacement_end;
+  impl_->selection_checkpoint_rectangle = (**current).rectangle;
+  return true;
+}
+
+auto Terminal::selection_checkpoint_endpoint(const PointSpace space) const noexcept
+    -> std::expected<std::optional<TerminalPoint>, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  if (impl_->selection_checkpoint_end == nullptr) {
+    return std::optional<TerminalPoint>{};
+  }
+  GhosttyGridRef endpoint = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  const auto result = ghostty_tracked_grid_ref_snapshot(impl_->selection_checkpoint_end, &endpoint);
+  if (result == GHOSTTY_NO_VALUE) {
+    return std::optional<TerminalPoint>{};
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  const auto point = point_from_ref(impl_->terminal, endpoint, space);
+  if (!point.has_value()) {
+    return std::unexpected(point.error());
+  }
+  return std::optional<TerminalPoint>{*point};
+}
+
+auto Terminal::restore_selection_checkpoint() noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  if (impl_->selection_checkpoint_start == nullptr || impl_->selection_checkpoint_end == nullptr) {
+    return false;
+  }
+  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  auto result =
+      ghostty_tracked_grid_ref_snapshot(impl_->selection_checkpoint_start, &selection.start);
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_tracked_grid_ref_snapshot(impl_->selection_checkpoint_end, &selection.end);
+  }
+  if (result == GHOSTTY_NO_VALUE) {
+    return false;
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  selection.rectangle = impl_->selection_checkpoint_rectangle;
+  const auto installed = install_selection(impl_->terminal, selection);
+  if (!installed.has_value()) {
+    return std::unexpected(installed.error());
+  }
+  return true;
+}
+
+void Terminal::clear_selection_checkpoint() noexcept {
+  LEMMA_ASSERT(impl_ != nullptr);
+  ghostty_tracked_grid_ref_free(impl_->selection_checkpoint_start);
+  ghostty_tracked_grid_ref_free(impl_->selection_checkpoint_end);
+  impl_->selection_checkpoint_start = nullptr;
+  impl_->selection_checkpoint_end = nullptr;
+  impl_->selection_checkpoint_rectangle = false;
 }
 
 auto Terminal::refresh_selection() noexcept -> std::expected<bool, Error> {
@@ -961,7 +1463,8 @@ auto Terminal::compress_scrollback() noexcept -> std::expected<CompressionResult
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto Terminal::search_literal_step(const std::string_view query, const SearchDirection direction,
                                    const std::optional<SearchCursor> start,
-                                   const std::size_t work_limit) const noexcept
+                                   const std::size_t work_limit,
+                                   const std::optional<TerminalPoint> stop_before) const noexcept
     -> std::expected<SearchStepResult, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   if (query.empty() || query.size() > limits::search_query_bytes_max || work_limit == 0 ||
@@ -990,6 +1493,7 @@ auto Terminal::search_literal_step(const std::string_view query, const SearchDir
            static_cast<std::size_t>(point.row) < row_count;
   };
   if (!point_in_grid(cursor.candidate) ||
+      (stop_before.has_value() && !point_in_grid(*stop_before)) ||
       (cursor.matching &&
        (!point_in_grid(cursor.match_end) || cursor.text.space != PointSpace::screen ||
         cursor.text.column > columns || static_cast<std::size_t>(cursor.text.row) >= *rows ||
@@ -1003,6 +1507,9 @@ auto Terminal::search_literal_step(const std::string_view query, const SearchDir
   };
   std::size_t work = 0;
   for (;;) {
+    if (!cursor.matching && stop_before.has_value() && cursor.candidate == *stop_before) {
+      return SearchStepResult{.status = SearchStepStatus::not_found};
+    }
     if (!cursor.matching) {
       cursor.text = cursor.candidate;
       cursor.match_end = cursor.candidate;

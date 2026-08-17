@@ -37,9 +37,9 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | --- | --- | ---: | --- |
 | Session store | fixed reactor table | 1,032 B table; up to 64 sessions | live sessions are individually allocated; create failure rejects only the new session |
 | Semantic Session | Core-owned per live session | 69,992 B inline in the recorded layout | contains bounded launch context and tabs; no descriptor, decoder, terminal, render buffer, clock, or teardown I/O |
-| Attachment | Core-owned one-per-session value | 344 B | contains stable IDs, explicit copy viewport policy, and scoped mouse capture; ordinary wheel scrolling stays in Ghostty; no independent allocation |
-| AttachmentRuntime | Runtime-owned one-per-session value | 9,056 B | owns connection, decoder, frame/output progress, runtime copy continuation, deadlines, backpressure, and teardown; no hot-path allocation or lookup |
-| Runtime session record | one stable aggregate allocation per live session | 80,176 B including Session, Attachment, AttachmentRuntime, terminal theme, and connection generation | preserves direct addresses and replaces the former 94,488-B mixed Session; the unused 14-KiB command trace was removed |
+| Attachment | Core-owned one-per-session value | 608 B | contains stable IDs, bounded committed/draft copy-search queries, explicit copy viewport and phase policy, and scoped mouse capture; ordinary wheel scrolling stays in Ghostty; no independent allocation |
+| AttachmentRuntime | Runtime-owned one-per-session value | 9,032 B | owns connection, decoder, frame/output progress, runtime copy continuation, deadlines, backpressure, and teardown; no hot-path allocation or lookup |
+| Runtime session record | one stable aggregate allocation per live session | 80,416 B including Session, Attachment, AttachmentRuntime, terminal theme, and connection generation | preserves direct addresses and replaces the former 94,488-B mixed Session; the unused 14-KiB command trace was removed |
 | Tab | one owner per live tab | 3,600 B | allocated on create; failure preserves existing topology |
 | Semantic Pane | Core-owned per live pane | 16 B | contains only generational identity and committed geometry; staged creation publishes it only with a prepared runtime counterpart |
 | PaneRuntime | Runtime-owned per live pane | 216 B plus owned terminal/queue allocations | owns PTY/process/terminal, scheduling state, and its configured scrollback reservation; typed failure is consumed by Core exit policy |

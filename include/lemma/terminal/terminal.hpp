@@ -315,6 +315,7 @@ enum class SelectionUnit : std::uint8_t {
   cell,
   word,
   line,
+  block,
   output,
   all,
 };
@@ -324,14 +325,21 @@ enum class SelectionAdjustment : std::uint8_t {
   right,
   up,
   down,
-  home,
-  end,
+  history_top,
+  history_bottom,
+  viewport_top,
+  viewport_middle,
+  viewport_bottom,
+  half_page_up,
+  half_page_down,
   page_up,
   page_down,
   beginning_of_line,
+  first_nonblank,
   end_of_line,
   word_left,
   word_right,
+  word_end,
 };
 
 enum class SelectionGesturePhase : std::uint8_t {
@@ -368,6 +376,12 @@ struct SelectionGestureResult final {
   SelectionAutoscroll autoscroll{SelectionAutoscroll::none};
   bool selection_changed{false};
   bool dragged{false};
+};
+
+struct SelectionRange final {
+  TerminalPoint start{.space = PointSpace::screen};
+  TerminalPoint end{.space = PointSpace::screen};
+  bool rectangular{false};
 };
 
 enum class ViewportScroll : std::uint8_t {
@@ -501,10 +515,24 @@ public:
       -> std::expected<bool, Error>;
   [[nodiscard]] auto selection_adjust(SelectionAdjustment adjustment, bool extend) noexcept
       -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_set_unit(SelectionUnit unit) noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_normalize_unit(SelectionUnit unit) noexcept
+      -> std::expected<bool, Error>;
+  [[nodiscard]] auto swap_selection_endpoints() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto collapse_selection_to_endpoint() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto selection_active() const noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto selection_endpoint(PointSpace space) const noexcept
       -> std::expected<std::optional<TerminalPoint>, Error>;
+  [[nodiscard]] auto selection_range(PointSpace space) const noexcept
+      -> std::expected<std::optional<SelectionRange>, Error>;
+  // One adapter-owned checkpoint preserves the active tracked range while copy search temporarily
+  // presents matches. Creating a new checkpoint replaces the old one transactionally. Its endpoint
+  // can seed another search without reinstalling the checkpoint and flashing the original cursor.
+  [[nodiscard]] auto checkpoint_selection() noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto selection_checkpoint_endpoint(PointSpace space) const noexcept
+      -> std::expected<std::optional<TerminalPoint>, Error>;
+  [[nodiscard]] auto restore_selection_checkpoint() noexcept -> std::expected<bool, Error>;
+  void clear_selection_checkpoint() noexcept;
   // Reinstalls the terminal-owned selection from fresh snapshots after operations such as reflow.
   [[nodiscard]] auto refresh_selection() noexcept -> std::expected<bool, Error>;
   void clear_selection() noexcept;
@@ -526,7 +554,8 @@ public:
   [[nodiscard]] auto
   search_literal_step(std::string_view query, SearchDirection direction,
                       std::optional<SearchCursor> start = std::nullopt,
-                      std::size_t work_limit = limits::search_candidates_per_step) const noexcept
+                      std::size_t work_limit = limits::search_candidates_per_step,
+                      std::optional<TerminalPoint> stop_before = std::nullopt) const noexcept
       -> std::expected<SearchStepResult, Error>;
   [[nodiscard]] auto select_search_match(const SearchMatch& match) noexcept
       -> std::expected<void, Error>;

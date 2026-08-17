@@ -2,6 +2,7 @@
 
 #include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
+#include "core/copy_mode.hpp"
 #include "core/extension_runtime.hpp"
 #include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
@@ -39,6 +41,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <poll.h>
@@ -561,21 +564,24 @@ enum class ConnectionCloseState : std::uint8_t {
                                                    : vt::SearchDirection::backward;
 }
 
-struct CopyModeRuntimeState final {
-  std::array<char, 64> status{};
-  std::array<std::byte, copy_escape_bytes_max> pending_escape{};
-  std::size_t status_size{0};
-  std::size_t pending_escape_size{0};
-  std::optional<vt::SearchCursor> search_cursor;
-  std::optional<vt::SearchMatch> last_search_match;
-  std::chrono::steady_clock::time_point pending_escape_deadline;
-  std::chrono::steady_clock::time_point search_deadline;
-  CopySearchDirection active_search_direction{CopySearchDirection::forward};
-  std::uint64_t search_generation{0};
+struct CopySearchTask final {
+  vt::SearchCursor cursor;
+  vt::TerminalPoint stop_before;
+  std::chrono::steady_clock::time_point deadline;
+  CopySearchDirection direction{CopySearchDirection::forward};
+  std::uint64_t terminal_generation{0};
+  bool wrapped{false};
+};
 
-  [[nodiscard]] auto status_view() const noexcept -> std::string_view {
-    return {status.data(), status_size};
-  }
+struct CopyModeRuntimeState final {
+  std::array<std::byte, copy_escape_bytes_max> pending_escape{};
+  std::size_t pending_escape_size{0};
+  std::optional<CopySearchTask> search_task;
+  std::optional<vt::SearchMatch> last_search_match;
+  std::optional<std::uint64_t> search_restore_viewport_offset;
+  std::chrono::steady_clock::time_point pending_escape_deadline;
+  std::uint64_t last_search_generation{0};
+  bool preview_match{false};
 };
 
 // Runtime-sized bounded clipboard staging cannot use std::array.
@@ -704,6 +710,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
           {.session = session.id, .tab = tab_slot.tab->id, .pane = pane_slot.pane->id});
       LEMMA_ASSERT(runtime != nullptr);
       runtime->terminal.reset_selection_gesture();
+      runtime->terminal.clear_selection_checkpoint();
       runtime->terminal.clear_selection();
       runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
       runtime->interactive_damage.reset();
@@ -1311,7 +1318,7 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
 void refresh_copy_selection_after_layout(SessionRecord& session, Tab& tab,
                                          PaneRuntimeStore& runtimes) noexcept {
   const auto target = session.attachment.selection_target;
-  if (!session.attachment.copy_mode.active || !target.has_value() || target->tab != tab.id) {
+  if (!session.attachment.copy_mode.active() || !target.has_value() || target->tab != tab.id) {
     return;
   }
   auto* const pane = find_pane(tab, target->pane);
@@ -1378,12 +1385,12 @@ void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
 }
 
 [[nodiscard]] auto copy_mode_pane(SessionRecord& session) noexcept -> Pane* {
-  return session.attachment.copy_mode.active ? selection_pane(session) : nullptr;
+  return session.attachment.copy_mode.active() ? selection_pane(session) : nullptr;
 }
 
 [[nodiscard]] auto copy_mode_runtime(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
     -> PaneRuntime* {
-  return session.attachment.copy_mode.active ? selection_runtime(session, runtimes) : nullptr;
+  return session.attachment.copy_mode.active() ? selection_runtime(session, runtimes) : nullptr;
 }
 
 void note_compression_activity(PaneRuntime& runtime) noexcept {
@@ -1417,45 +1424,9 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
   return true;
 }
 
-void refresh_copy_mode_status(SessionRecord& session) noexcept {
-  const auto& state = session.attachment.copy_mode;
-  auto& runtime = session.attachment_runtime.copy_mode;
-  runtime.status_size = 0;
-  const auto append = [&runtime](const std::string_view text) noexcept {
-    const auto count = std::min(text.size(), runtime.status.size() - runtime.status_size);
-    std::ranges::copy(std::span(text).first(count),
-                      std::span(runtime.status).subspan(runtime.status_size, count).begin());
-    runtime.status_size += count;
-  };
-  switch (state.feedback) {
-  case CopyModeFeedback::no_match:
-    append("COPY no match");
-    return;
-  case CopyModeFeedback::empty_selection:
-    append("COPY empty");
-    return;
-  case CopyModeFeedback::clipboard_busy:
-    append("COPY clipboard busy");
-    return;
-  case CopyModeFeedback::too_large:
-    append("COPY too large");
-    return;
-  case CopyModeFeedback::failed:
-    append("COPY failed");
-    return;
-  case CopyModeFeedback::none:
-    break;
-  }
-  if (state.search_entry) {
-    append(state.search_direction == CopySearchDirection::forward ? "COPY /" : "COPY ?");
-    append(state.query_view());
-  } else if (state.search_pending) {
-    append("COPY searching");
-  } else if (state.extending) {
-    append("COPY sel [Enter]");
-  } else {
-    append("COPY nav [Space]");
-  }
+void invalidate_copy_presentation(SessionRecord& session, PaneRuntime& runtime) noexcept {
+  runtime.terminal.invalidate_ansi_render_state();
+  schedule_frame(session, FrameUrgency::state_change, false);
 }
 
 [[nodiscard]] auto update_copy_viewport_offset(SessionRecord& session,
@@ -1478,11 +1449,12 @@ void reset_selection_capture(Attachment& attachment,
 }
 
 void leave_copy_mode(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  const bool changed = session.attachment.copy_mode.active;
+  const bool changed = session.attachment.copy_mode.active();
   const auto target = session.attachment.selection_target;
   auto* const runtime = selection_runtime(session, runtimes);
   if (runtime != nullptr) {
     runtime->terminal.reset_selection_gesture();
+    runtime->terminal.clear_selection_checkpoint();
     runtime->terminal.clear_selection();
     if (changed) {
       runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
@@ -1494,13 +1466,12 @@ void leave_copy_mode(SessionRecord& session, PaneRuntimeStore& runtimes) noexcep
   session.attachment.copy_mode = {};
   session.attachment_runtime.copy_mode = {};
   if (changed) {
-    session.attachment_runtime.status_valid = false;
     schedule_frame(session, FrameUrgency::state_change, true);
   }
 }
 
 void clear_mouse_selection(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  if (session.attachment.copy_mode.active || !session.attachment.selection_target.has_value()) {
+  if (session.attachment.copy_mode.active() || !session.attachment.selection_target.has_value()) {
     return;
   }
   const auto target = session.attachment.selection_target;
@@ -1552,15 +1523,14 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   }
   session.attachment.copy_mode = {};
   session.attachment.selection_target = AttachmentPaneTarget{.tab = tab.id, .pane = pane.id};
-  session.attachment.copy_mode.active = true;
+  session.attachment.copy_mode.phase = CopyModePhase::navigation;
   if (!update_copy_viewport_offset(session, runtime)) {
     runtime.terminal.clear_selection();
     session.attachment.selection_target.reset();
     session.attachment.copy_mode = {};
     return false;
   }
-  refresh_copy_mode_status(session);
-  session.attachment_runtime.status_valid = false;
+  runtime.terminal.invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
@@ -1592,15 +1562,40 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   return true;
 }
 
+[[nodiscard]] constexpr auto copy_selection_unit(const CopyModePhase phase) noexcept
+    -> vt::SelectionUnit {
+  switch (phase) {
+  case CopyModePhase::visual_line:
+    return vt::SelectionUnit::line;
+  case CopyModePhase::visual_block:
+    return vt::SelectionUnit::block;
+  case CopyModePhase::inactive:
+  case CopyModePhase::navigation:
+  case CopyModePhase::visual_character:
+  case CopyModePhase::search_prompt:
+  case CopyModePhase::searching:
+    return vt::SelectionUnit::cell;
+  }
+  return vt::SelectionUnit::cell;
+}
+
 [[nodiscard]] auto adjust_copy_selection(SessionRecord& session, PaneRuntime& runtime,
                                          PaneRuntimeStore& runtimes,
                                          const vt::SelectionAdjustment adjustment) noexcept
     -> bool {
+  const auto phase = session.attachment.copy_mode.phase;
   const auto adjusted =
-      runtime.terminal.selection_adjust(adjustment, session.attachment.copy_mode.extending);
+      runtime.terminal.selection_adjust(adjustment, session.attachment.copy_mode.selecting());
   if (!adjusted.has_value()) {
     leave_copy_mode(session, runtimes);
     return false;
+  }
+  if (*adjusted && session.attachment.copy_mode.selecting()) {
+    const auto normalized = runtime.terminal.selection_normalize_unit(copy_selection_unit(phase));
+    if (!normalized.has_value()) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
   }
   if (*adjusted) {
     const auto scrolled = runtime.terminal.scroll_selection_into_view();
@@ -1609,10 +1604,8 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
       return false;
     }
     session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-    refresh_copy_mode_status(session);
-    session.attachment_runtime.status_valid = false;
     note_compression_activity(runtime);
-    schedule_frame(session, FrameUrgency::state_change, false);
+    invalidate_copy_presentation(session, runtime);
   }
   return true;
 }
@@ -1620,40 +1613,50 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
                                               CopySearchDirection direction) noexcept -> bool;
 
-void begin_copy_search(SessionRecord& session, PaneRuntime& runtime,
-                       const CopySearchDirection direction,
-                       const bool continue_from_match = false) noexcept {
-  if (session.attachment.copy_mode.query_size == 0) {
-    refresh_copy_mode_status(session);
-    session.attachment_runtime.status_valid = false;
-    schedule_frame(session, FrameUrgency::state_change, false);
-    return;
+[[nodiscard]] auto copy_search_boundary(PaneRuntime& runtime,
+                                        const CopySearchDirection direction) noexcept
+    -> std::optional<vt::TerminalPoint> {
+  const auto viewport = runtime.terminal.viewport_state();
+  const auto columns = runtime.terminal.size().columns;
+  if (!viewport.has_value() || viewport->total_rows == 0 || columns == 0) {
+    return std::nullopt;
   }
-  session.attachment_runtime.copy_mode.search_cursor.reset();
-  const bool stale_match =
-      session.attachment_runtime.copy_mode.search_generation != runtime.mutation_generation;
-  if (!continue_from_match || stale_match) {
-    session.attachment_runtime.copy_mode.last_search_match.reset();
-  } else if (session.attachment_runtime.copy_mode.last_search_match.has_value()) {
-    auto point = session.attachment_runtime.copy_mode.last_search_match->start;
-    if (!advance_copy_search_cursor(runtime, point, direction)) {
-      session.attachment.copy_mode.search_pending = false;
-      session.attachment.copy_mode.feedback = CopyModeFeedback::no_match;
-      refresh_copy_mode_status(session);
-      session.attachment_runtime.status_valid = false;
-      schedule_frame(session, FrameUrgency::state_change, false);
-      return;
+  return vt::TerminalPoint{
+      .space = vt::PointSpace::screen,
+      .column = direction == CopySearchDirection::forward
+                    ? std::uint16_t{0}
+                    : static_cast<std::uint16_t>(columns - 1U),
+      .row = direction == CopySearchDirection::forward
+                 ? std::uint32_t{0}
+                 : static_cast<std::uint32_t>(viewport->total_rows - 1U),
+  };
+}
+
+[[nodiscard]] auto begin_copy_search(SessionRecord& session, PaneRuntime& runtime,
+                                     const CopySearchDirection direction,
+                                     const vt::TerminalPoint anchor) noexcept -> bool {
+  auto& search = session.attachment_runtime.copy_mode;
+  auto first = anchor;
+  const bool has_first = advance_copy_search_cursor(runtime, first, direction);
+  if (!has_first) {
+    const auto boundary = copy_search_boundary(runtime, direction);
+    if (!boundary.has_value()) {
+      return false;
     }
-    session.attachment_runtime.copy_mode.search_cursor = vt::SearchCursor{.candidate = point};
+    first = *boundary;
   }
-  session.attachment_runtime.copy_mode.active_search_direction = direction;
-  session.attachment.copy_mode.search_pending = true;
-  session.attachment_runtime.copy_mode.search_deadline = std::chrono::steady_clock::now();
+  search.search_task = CopySearchTask{
+      .cursor = {.candidate = first},
+      .stop_before = anchor,
+      .deadline = std::chrono::steady_clock::now(),
+      .direction = direction,
+      .terminal_generation = runtime.mutation_generation,
+      .wrapped = !has_first,
+  };
+  search.preview_match = false;
   session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-  session.attachment_runtime.copy_mode.search_generation = runtime.mutation_generation;
-  refresh_copy_mode_status(session);
-  session.attachment_runtime.status_valid = false;
-  schedule_frame(session, FrameUrgency::state_change, false);
+  invalidate_copy_presentation(session, runtime);
+  return true;
 }
 
 [[nodiscard]] constexpr auto clipboard_base64_bytes(const std::size_t bytes) noexcept
@@ -1664,53 +1667,41 @@ void begin_copy_search(SessionRecord& session, PaneRuntime& runtime,
 [[nodiscard]] auto copy_selection_to_outer_clipboard(SessionRecord& session, PaneRuntime& runtime,
                                                      PaneRuntimeStore& runtimes) noexcept -> bool {
   constexpr std::size_t osc_overhead = 9;
-  if (session.attachment_runtime.clipboard_write.bytes != nullptr) {
-    session.attachment.copy_mode.feedback = CopyModeFeedback::clipboard_busy;
-    refresh_copy_mode_status(session);
+  const auto fail = [&](const CopyModeFeedback feedback) noexcept {
+    session.attachment.copy_mode.feedback = feedback;
+    invalidate_copy_presentation(session, runtime);
     return false;
+  };
+  if (session.attachment_runtime.clipboard_write.bytes != nullptr) {
+    return fail(CopyModeFeedback::clipboard_busy);
   }
   if (session.attachment_runtime.frame.capacity() <= osc_overhead) {
-    session.attachment.copy_mode.feedback = CopyModeFeedback::failed;
-    refresh_copy_mode_status(session);
-    return false;
+    return fail(CopyModeFeedback::failed);
   }
   const auto payload_groups = (session.attachment_runtime.frame.capacity() - osc_overhead) / 4U;
   const auto delivery_capacity = std::min(payload_groups * 3U, limits::selection_format_bytes_max);
   auto storage = allocate_clipboard_storage(delivery_capacity);
   if (storage == nullptr) {
-    session.attachment.copy_mode.feedback = CopyModeFeedback::failed;
-    refresh_copy_mode_status(session);
-    return false;
+    return fail(CopyModeFeedback::failed);
   }
   const auto formatted = runtime.terminal.format_selection(
       vt::ScreenFormat::plain, std::span(storage.get(), delivery_capacity));
   if (!formatted.has_value()) {
-    session.attachment.copy_mode.feedback = formatted.error() == vt::Error::out_of_space
-                                                ? CopyModeFeedback::too_large
-                                                : CopyModeFeedback::failed;
-    refresh_copy_mode_status(session);
-    return false;
+    return fail(formatted.error() == vt::Error::out_of_space ? CopyModeFeedback::too_large
+                                                             : CopyModeFeedback::failed);
   }
   if (*formatted == 0) {
-    session.attachment.copy_mode.feedback = CopyModeFeedback::empty_selection;
-    refresh_copy_mode_status(session);
-    return false;
+    return fail(CopyModeFeedback::empty_selection);
   }
   if (clipboard_base64_bytes(*formatted) + osc_overhead >
       session.attachment_runtime.frame.capacity()) {
-    session.attachment.copy_mode.feedback = CopyModeFeedback::too_large;
-    refresh_copy_mode_status(session);
-    return false;
+    return fail(CopyModeFeedback::too_large);
   }
   session.attachment_runtime.clipboard_write.bytes = std::move(storage);
   session.attachment_runtime.clipboard_write.size = *formatted;
   leave_copy_mode(session, runtimes);
   return true;
 }
-
-struct CopyInputKey final {
-  std::uint8_t value{0};
-};
 
 enum class CopyEscapeStatus : std::uint8_t {
   pending,
@@ -1721,7 +1712,7 @@ enum class CopyEscapeStatus : std::uint8_t {
 
 struct CopyEscapeDecode final {
   CopyEscapeStatus status{CopyEscapeStatus::invalid};
-  CopyInputKey key;
+  CopyKey key;
 };
 
 // Escape-sequence grammar deliberately keeps validation and mapping in one bounded pass.
@@ -1752,23 +1743,17 @@ struct CopyEscapeDecode final {
   if (sequence.size() == 3U) {
     switch (final_byte) {
     case static_cast<std::uint8_t>('A'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('k')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::arrow_up}};
     case static_cast<std::uint8_t>('B'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('j')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::arrow_down}};
     case static_cast<std::uint8_t>('C'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('l')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::arrow_right}};
     case static_cast<std::uint8_t>('D'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('h')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::arrow_left}};
     case static_cast<std::uint8_t>('H'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('0')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::home}};
     case static_cast<std::uint8_t>('F'):
-      return {.status = CopyEscapeStatus::complete,
-              .key = {.value = static_cast<std::uint8_t>('$')}};
+      return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::end}};
     default:
       return {.status = CopyEscapeStatus::unsupported, .key = {}};
     }
@@ -1781,65 +1766,430 @@ struct CopyEscapeDecode final {
   switch (parameter) {
   case static_cast<std::uint8_t>('1'):
   case static_cast<std::uint8_t>('7'):
-    return {.status = CopyEscapeStatus::complete, .key = {.value = static_cast<std::uint8_t>('0')}};
+    return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::home}};
   case static_cast<std::uint8_t>('4'):
   case static_cast<std::uint8_t>('8'):
-    return {.status = CopyEscapeStatus::complete, .key = {.value = static_cast<std::uint8_t>('$')}};
+    return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::end}};
   case static_cast<std::uint8_t>('5'):
-    return {.status = CopyEscapeStatus::complete, .key = {.value = 0x15}};
+    return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::page_up}};
   case static_cast<std::uint8_t>('6'):
-    return {.status = CopyEscapeStatus::complete, .key = {.value = 0x04}};
+    return {.status = CopyEscapeStatus::complete, .key = {.kind = CopyKeyKind::page_down}};
   default:
     return {.status = CopyEscapeStatus::unsupported, .key = {}};
   }
 }
 
-// Copy-mode bytes are attachment UI input and never reach the child PTY. The current v1 client is
-// legacy-byte based, so the default table intentionally uses single-byte vi bindings.
+[[nodiscard]] auto restore_copy_search_selection(SessionRecord& session,
+                                                 PaneRuntime& runtime) noexcept -> bool {
+  auto& search = session.attachment_runtime.copy_mode;
+  const auto restored = runtime.terminal.restore_selection_checkpoint();
+  if (!restored.has_value() || !*restored || !search.search_restore_viewport_offset.has_value()) {
+    return false;
+  }
+  runtime.terminal.scroll_viewport(
+      vt::ViewportScroll::row, static_cast<std::int64_t>(*search.search_restore_viewport_offset));
+  return update_copy_viewport_offset(session, runtime);
+}
+
+void reset_copy_search_task(CopyModeRuntimeState& search) noexcept {
+  search.search_task.reset();
+  search.preview_match = false;
+}
+
+void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& search) noexcept {
+  runtime.terminal.clear_selection_checkpoint();
+  search.search_restore_viewport_offset.reset();
+}
+
+[[nodiscard]] auto begin_copy_search_prompt(SessionRecord& session, PaneRuntime& runtime,
+                                            const CopySearchDirection direction) noexcept -> bool {
+  const auto endpoint = runtime.terminal.selection_endpoint(vt::PointSpace::screen);
+  const auto viewport = runtime.terminal.viewport_state();
+  const auto checkpointed = runtime.terminal.checkpoint_selection();
+  if (!endpoint.has_value() || !endpoint->has_value() || !viewport.has_value() ||
+      !checkpointed.has_value() || !*checkpointed) {
+    return false;
+  }
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  if (state.phase == CopyModePhase::searching) {
+    state.phase_before_search = CopyModePhase::navigation;
+  } else if (state.phase != CopyModePhase::search_prompt) {
+    state.phase_before_search = state.phase;
+  }
+  state.phase = CopyModePhase::search_prompt;
+  state.prompt_search_direction = direction;
+  state.draft_query_size = 0;
+  state.feedback = CopyModeFeedback::none;
+  state.pending_chord = CopyPendingChord::none;
+  reset_copy_search_task(search);
+  search.search_restore_viewport_offset = viewport->offset;
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+[[nodiscard]] auto restart_incremental_copy_search(SessionRecord& session,
+                                                   PaneRuntime& runtime) noexcept -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  reset_copy_search_task(search);
+  state.feedback = CopyModeFeedback::none;
+  if (state.draft_query_size == 0) {
+    if (!restore_copy_search_selection(session, runtime)) {
+      return false;
+    }
+    invalidate_copy_presentation(session, runtime);
+    return true;
+  }
+  // Keep the previous preview installed while the refined query is searched. The tracked
+  // checkpoint remains the stable search origin, so no temporary restore frame can flash the
+  // original copy cursor between previews.
+  const auto endpoint = runtime.terminal.selection_checkpoint_endpoint(vt::PointSpace::screen);
+  if (!endpoint.has_value() || !endpoint->has_value()) {
+    return false;
+  }
+  return begin_copy_search(session, runtime, state.prompt_search_direction, **endpoint);
+}
+
+[[nodiscard]] auto cancel_copy_search(SessionRecord& session, PaneRuntime& runtime) noexcept
+    -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  const bool prompt = state.phase == CopyModePhase::search_prompt;
+  reset_copy_search_task(search);
+  if (!restore_copy_search_selection(session, runtime)) {
+    return false;
+  }
+  discard_copy_search_restore(runtime, search);
+  state.phase = prompt ? state.phase_before_search : CopyModePhase::navigation;
+  if (prompt) {
+    state.draft_query_size = 0;
+  }
+  state.feedback = CopyModeFeedback::none;
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+void commit_draft_copy_query(CopyModeState& state) noexcept {
+  std::ranges::copy(std::span(state.draft_query).first(state.draft_query_size),
+                    state.query.begin());
+  state.query_size = state.draft_query_size;
+  state.search_direction = state.prompt_search_direction;
+}
+
+[[nodiscard]] auto commit_copy_search_prompt(SessionRecord& session, PaneRuntime& runtime) noexcept
+    -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  if (state.draft_query_size == 0) {
+    return cancel_copy_search(session, runtime);
+  }
+  commit_draft_copy_query(state);
+  if (search.preview_match) {
+    const auto selected = runtime.terminal.selection_range(vt::PointSpace::screen);
+    if (!selected.has_value() || !selected->has_value()) {
+      return false;
+    }
+    search.last_search_match =
+        vt::SearchMatch{.start = (**selected).start, .end = (**selected).end};
+    search.last_search_generation = runtime.mutation_generation;
+    reset_copy_search_task(search);
+    discard_copy_search_restore(runtime, search);
+    state.phase = CopyModePhase::navigation;
+    state.feedback = CopyModeFeedback::none;
+    invalidate_copy_presentation(session, runtime);
+    return true;
+  }
+  if (search.search_task.has_value()) {
+    search.last_search_match.reset();
+    search.last_search_generation = 0;
+    state.phase = CopyModePhase::searching;
+    invalidate_copy_presentation(session, runtime);
+    return true;
+  }
+  search.last_search_match.reset();
+  search.last_search_generation = 0;
+  discard_copy_search_restore(runtime, search);
+  state.phase = CopyModePhase::navigation;
+  state.feedback = CopyModeFeedback::no_match;
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+[[nodiscard]] auto begin_repeated_copy_search(SessionRecord& session, PaneRuntime& runtime,
+                                              const CopySearchDirection direction) noexcept
+    -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  if (state.query_size == 0) {
+    return true;
+  }
+  const auto endpoint = runtime.terminal.selection_endpoint(vt::PointSpace::screen);
+  const auto viewport = runtime.terminal.viewport_state();
+  const auto checkpointed = runtime.terminal.checkpoint_selection();
+  if (!endpoint.has_value() || !endpoint->has_value() || !viewport.has_value() ||
+      !checkpointed.has_value() || !*checkpointed) {
+    return false;
+  }
+  auto anchor = **endpoint;
+  if (search.last_search_generation == runtime.mutation_generation &&
+      search.last_search_match.has_value()) {
+    anchor = search.last_search_match->start;
+  }
+  reset_copy_search_task(search);
+  search.search_restore_viewport_offset = viewport->offset;
+  state.phase = CopyModePhase::searching;
+  return begin_copy_search(session, runtime, direction, anchor);
+}
+
+[[nodiscard]] auto set_copy_visual_phase(SessionRecord& session, PaneRuntime& runtime,
+                                         const CopyModePhase phase) noexcept -> bool {
+  auto& state = session.attachment.copy_mode;
+  if (state.phase == phase) {
+    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    if (!collapsed.has_value() || !*collapsed) {
+      return false;
+    }
+    state.phase = CopyModePhase::navigation;
+  } else {
+    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    const auto selected =
+        collapsed.has_value() && *collapsed
+            ? runtime.terminal.selection_set_unit(copy_selection_unit(phase))
+            : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
+    if (!selected.has_value() || !*selected) {
+      return false;
+    }
+    state.phase = phase;
+  }
+  state.feedback = CopyModeFeedback::none;
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+[[nodiscard]] constexpr auto copy_motion(const CopyActionKind kind) noexcept
+    -> std::optional<vt::SelectionAdjustment> {
+  switch (kind) {
+  case CopyActionKind::move_left:
+    return vt::SelectionAdjustment::left;
+  case CopyActionKind::move_down:
+    return vt::SelectionAdjustment::down;
+  case CopyActionKind::move_up:
+    return vt::SelectionAdjustment::up;
+  case CopyActionKind::move_right:
+    return vt::SelectionAdjustment::right;
+  case CopyActionKind::word_left:
+    return vt::SelectionAdjustment::word_left;
+  case CopyActionKind::word_right:
+    return vt::SelectionAdjustment::word_right;
+  case CopyActionKind::word_end:
+    return vt::SelectionAdjustment::word_end;
+  case CopyActionKind::line_start:
+    return vt::SelectionAdjustment::beginning_of_line;
+  case CopyActionKind::line_first_nonblank:
+    return vt::SelectionAdjustment::first_nonblank;
+  case CopyActionKind::line_end:
+    return vt::SelectionAdjustment::end_of_line;
+  case CopyActionKind::history_top:
+    return vt::SelectionAdjustment::history_top;
+  case CopyActionKind::history_bottom:
+    return vt::SelectionAdjustment::history_bottom;
+  case CopyActionKind::viewport_top:
+    return vt::SelectionAdjustment::viewport_top;
+  case CopyActionKind::viewport_middle:
+    return vt::SelectionAdjustment::viewport_middle;
+  case CopyActionKind::viewport_bottom:
+    return vt::SelectionAdjustment::viewport_bottom;
+  case CopyActionKind::half_page_up:
+    return vt::SelectionAdjustment::half_page_up;
+  case CopyActionKind::half_page_down:
+    return vt::SelectionAdjustment::half_page_down;
+  case CopyActionKind::page_up:
+    return vt::SelectionAdjustment::page_up;
+  case CopyActionKind::page_down:
+    return vt::SelectionAdjustment::page_down;
+  case CopyActionKind::none:
+  case CopyActionKind::leave:
+  case CopyActionKind::cancel_selection:
+  case CopyActionKind::visual_character:
+  case CopyActionKind::visual_line:
+  case CopyActionKind::visual_block:
+  case CopyActionKind::swap_endpoint:
+  case CopyActionKind::copy:
+  case CopyActionKind::begin_search_forward:
+  case CopyActionKind::begin_search_backward:
+  case CopyActionKind::repeat_search:
+  case CopyActionKind::reverse_search:
+  case CopyActionKind::cancel_search:
+  case CopyActionKind::commit_search:
+  case CopyActionKind::query_backspace:
+  case CopyActionKind::query_append:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+void pop_copy_query_codepoint(CopyModeState& state) noexcept {
+  if (state.draft_query_size == 0) {
+    return;
+  }
+  --state.draft_query_size;
+  while (state.draft_query_size > 0) {
+    const auto value = static_cast<std::uint8_t>(static_cast<unsigned char>(
+        std::span(state.draft_query).subspan(state.draft_query_size, 1).front()));
+    if ((value & 0xC0U) != 0x80U) {
+      break;
+    }
+    --state.draft_query_size;
+  }
+}
+
+// Returns false only when the action leaves copy mode or terminal state can no longer support it.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto apply_copy_action(SessionRecord& session, PaneRuntime& runtime,
+                                     PaneRuntimeStore& runtimes, const CopyAction action) noexcept
+    -> bool {
+  auto& state = session.attachment.copy_mode;
+  if (const auto motion = copy_motion(action.kind); motion.has_value()) {
+    return adjust_copy_selection(session, runtime, runtimes, *motion) && state.active();
+  }
+  switch (action.kind) {
+  case CopyActionKind::none:
+    return true;
+  case CopyActionKind::leave:
+    leave_copy_mode(session, runtimes);
+    return false;
+  case CopyActionKind::cancel_selection: {
+    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    if (!collapsed.has_value() || !*collapsed) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    state.phase = CopyModePhase::navigation;
+    state.feedback = CopyModeFeedback::none;
+    invalidate_copy_presentation(session, runtime);
+    return true;
+  }
+  case CopyActionKind::visual_character:
+  case CopyActionKind::visual_line:
+  case CopyActionKind::visual_block: {
+    auto phase = CopyModePhase::visual_block;
+    if (action.kind == CopyActionKind::visual_character) {
+      phase = CopyModePhase::visual_character;
+    } else if (action.kind == CopyActionKind::visual_line) {
+      phase = CopyModePhase::visual_line;
+    }
+    if (!set_copy_visual_phase(session, runtime, phase)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  }
+  case CopyActionKind::swap_endpoint: {
+    if (!state.selecting()) {
+      return true;
+    }
+    const auto swapped = runtime.terminal.swap_selection_endpoints();
+    if (!swapped.has_value() || !*swapped) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    invalidate_copy_presentation(session, runtime);
+    return true;
+  }
+  case CopyActionKind::copy:
+    return !copy_selection_to_outer_clipboard(session, runtime, runtimes);
+  case CopyActionKind::begin_search_forward:
+  case CopyActionKind::begin_search_backward:
+    if (!begin_copy_search_prompt(session, runtime,
+                                  action.kind == CopyActionKind::begin_search_forward
+                                      ? CopySearchDirection::forward
+                                      : CopySearchDirection::backward)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  case CopyActionKind::repeat_search:
+  case CopyActionKind::reverse_search: {
+    auto direction = state.search_direction;
+    if (action.kind == CopyActionKind::reverse_search) {
+      direction = state.search_direction == CopySearchDirection::forward
+                      ? CopySearchDirection::backward
+                      : CopySearchDirection::forward;
+    }
+    if (!begin_repeated_copy_search(session, runtime, direction)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  }
+  case CopyActionKind::cancel_search:
+    if (!cancel_copy_search(session, runtime)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  case CopyActionKind::commit_search:
+    if (!commit_copy_search_prompt(session, runtime)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  case CopyActionKind::query_backspace:
+    pop_copy_query_codepoint(state);
+    if (!restart_incremental_copy_search(session, runtime)) {
+      leave_copy_mode(session, runtimes);
+      return false;
+    }
+    return true;
+  case CopyActionKind::query_append:
+    if (state.draft_query_size < state.draft_query.size()) {
+      std::span(state.draft_query).subspan(state.draft_query_size, 1).front() =
+          static_cast<char>(action.byte);
+      ++state.draft_query_size;
+      if (!restart_incremental_copy_search(session, runtime)) {
+        leave_copy_mode(session, runtimes);
+        return false;
+      }
+    }
+    return true;
+  case CopyActionKind::move_left:
+  case CopyActionKind::move_down:
+  case CopyActionKind::move_up:
+  case CopyActionKind::move_right:
+  case CopyActionKind::word_left:
+  case CopyActionKind::word_right:
+  case CopyActionKind::word_end:
+  case CopyActionKind::line_start:
+  case CopyActionKind::line_first_nonblank:
+  case CopyActionKind::line_end:
+  case CopyActionKind::history_top:
+  case CopyActionKind::history_bottom:
+  case CopyActionKind::viewport_top:
+  case CopyActionKind::viewport_middle:
+  case CopyActionKind::viewport_bottom:
+  case CopyActionKind::half_page_up:
+  case CopyActionKind::half_page_down:
+  case CopyActionKind::page_up:
+  case CopyActionKind::page_down:
+    break;
+  }
+  return true;
+}
+
+// Legacy byte input and structured keys converge on the same typed copy action table.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto process_copy_mode_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                            const std::span<const std::byte> input) noexcept
     -> std::size_t {
-  auto* pane = copy_mode_pane(session);
   auto* runtime = copy_mode_runtime(session, runtimes);
-  if (pane == nullptr || runtime == nullptr) {
+  if (runtime == nullptr) {
     leave_copy_mode(session, runtimes);
     return input.size();
   }
   for (std::size_t index = 0; index < input.size(); ++index) {
     const auto byte = input.subspan(index, 1).front();
-    const auto raw_value = std::to_integer<std::uint8_t>(byte);
-    if (session.attachment.copy_mode.search_entry) {
-      if (byte == std::byte{0x1B}) {
-        session.attachment.copy_mode.search_entry = false;
-        session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-        refresh_copy_mode_status(session);
-        session.attachment_runtime.status_valid = false;
-        schedule_frame(session, FrameUrgency::state_change, false);
-      } else if (byte == std::byte{0x7F} || byte == std::byte{0x08}) {
-        if (session.attachment.copy_mode.query_size > 0) {
-          --session.attachment.copy_mode.query_size;
-          refresh_copy_mode_status(session);
-          session.attachment_runtime.status_valid = false;
-          schedule_frame(session, FrameUrgency::state_change, false);
-        }
-      } else if (byte == std::byte{'\r'} || byte == std::byte{'\n'}) {
-        session.attachment.copy_mode.search_entry = false;
-        begin_copy_search(session, *runtime, session.attachment.copy_mode.search_direction);
-      } else if (raw_value >= 0x20 && session.attachment.copy_mode.query_size <
-                                          session.attachment.copy_mode.query.size()) {
-        std::span(session.attachment.copy_mode.query)
-            .subspan(session.attachment.copy_mode.query_size, 1)
-            .front() = static_cast<char>(raw_value);
-        ++session.attachment.copy_mode.query_size;
-        refresh_copy_mode_status(session);
-        session.attachment_runtime.status_valid = false;
-        schedule_frame(session, FrameUrgency::state_change, false);
-      }
-      continue;
-    }
-
-    auto value = raw_value;
+    auto key = CopyKey{.byte = std::to_integer<std::uint8_t>(byte)};
     if (session.attachment_runtime.copy_mode.pending_escape_size > 0) {
       LEMMA_ASSERT(session.attachment_runtime.copy_mode.pending_escape_size <
                    session.attachment_runtime.copy_mode.pending_escape.size());
@@ -1857,17 +2207,16 @@ struct CopyEscapeDecode final {
       }
       session.attachment_runtime.copy_mode.pending_escape_size = 0;
       if (decoded.status == CopyEscapeStatus::complete) {
-        value = decoded.key.value;
+        key = decoded.key;
       } else if (decoded.status == CopyEscapeStatus::unsupported) {
-        // Once a CSI/SS3 introducer has been consumed, its bounded sequence remains attachment UI
-        // input even when this copy-mode key table does not support it.
         continue;
       } else {
-        // A lone Escape is a complete copy-mode command when the next byte is not a
-        // control-sequence introducer. Leave that byte unconsumed so ordinary routing can handle it
-        // after copy mode.
-        leave_copy_mode(session, runtimes);
-        return index;
+        const auto escape =
+            copy_action_for_key(session.attachment.copy_mode, CopyKey{.kind = CopyKeyKind::escape});
+        if (!apply_copy_action(session, *runtime, runtimes, escape)) {
+          return index;
+        }
+        key = CopyKey{.byte = std::to_integer<std::uint8_t>(byte)};
       }
     } else if (byte == std::byte{0x1B}) {
       session.attachment_runtime.copy_mode.pending_escape.front() = byte;
@@ -1876,116 +2225,12 @@ struct CopyEscapeDecode final {
           std::chrono::steady_clock::now() + copy_escape_flush_delay;
       continue;
     }
-    switch (value) {
-    case 0x1B:
-    case static_cast<std::uint8_t>('q'):
-      leave_copy_mode(session, runtimes);
-      return index + 1U;
-    case static_cast<std::uint8_t>('h'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::left));
-      break;
-    case static_cast<std::uint8_t>('j'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::down));
-      break;
-    case static_cast<std::uint8_t>('k'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::up));
-      break;
-    case static_cast<std::uint8_t>('l'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::right));
-      break;
-    case static_cast<std::uint8_t>('b'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::word_left));
-      break;
-    case static_cast<std::uint8_t>('w'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::word_right));
-      break;
-    case static_cast<std::uint8_t>('0'):
-      static_cast<void>(adjust_copy_selection(session, *runtime, runtimes,
-                                              vt::SelectionAdjustment::beginning_of_line));
-      break;
-    case static_cast<std::uint8_t>('$'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::end_of_line));
-      break;
-    case static_cast<std::uint8_t>('g'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::home));
-      break;
-    case static_cast<std::uint8_t>('G'):
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::end));
-      break;
-    case 0x15: // Ctrl-U
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::page_up));
-      break;
-    case 0x04: // Ctrl-D
-      static_cast<void>(
-          adjust_copy_selection(session, *runtime, runtimes, vt::SelectionAdjustment::page_down));
-      break;
-    case static_cast<std::uint8_t>(' '):
-    case static_cast<std::uint8_t>('v'): {
-      const auto collapsed = runtime->terminal.collapse_selection_to_endpoint();
-      if (!collapsed.has_value() || !*collapsed) {
-        leave_copy_mode(session, runtimes);
-        break;
-      }
-      session.attachment.copy_mode.extending = true;
-      session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-      refresh_copy_mode_status(session);
-      session.attachment_runtime.status_valid = false;
-      schedule_frame(session, FrameUrgency::state_change, false);
-      break;
-    }
-    case static_cast<std::uint8_t>('y'):
-    case static_cast<std::uint8_t>('\r'):
-    case static_cast<std::uint8_t>('\n'):
-      if (copy_selection_to_outer_clipboard(session, *runtime, runtimes)) {
-        return index + 1U;
-      }
-      session.attachment_runtime.status_valid = false;
-      schedule_frame(session, FrameUrgency::state_change, false);
-      break;
-    case static_cast<std::uint8_t>('/'):
-    case static_cast<std::uint8_t>('?'):
-      session.attachment.copy_mode.query_size = 0;
-      session.attachment.copy_mode.search_entry = true;
-      session.attachment.copy_mode.search_pending = false;
-      session.attachment_runtime.copy_mode.search_cursor.reset();
-      session.attachment_runtime.copy_mode.last_search_match.reset();
-      session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-      session.attachment.copy_mode.search_direction =
-          byte == std::byte{'/'} ? CopySearchDirection::forward : CopySearchDirection::backward;
-      refresh_copy_mode_status(session);
-      session.attachment_runtime.status_valid = false;
-      schedule_frame(session, FrameUrgency::state_change, false);
-      break;
-    case static_cast<std::uint8_t>('n'):
-      begin_copy_search(session, *runtime, session.attachment.copy_mode.search_direction, true);
-      break;
-    case static_cast<std::uint8_t>('N'):
-      begin_copy_search(session, *runtime,
-                        session.attachment.copy_mode.search_direction ==
-                                CopySearchDirection::forward
-                            ? CopySearchDirection::backward
-                            : CopySearchDirection::forward,
-                        true);
-      break;
-    default:
-      break;
-    }
-    if (!session.attachment.copy_mode.active) {
+    const auto action = copy_action_for_key(session.attachment.copy_mode, key);
+    if (!apply_copy_action(session, *runtime, runtimes, action)) {
       return index + 1U;
     }
-    pane = copy_mode_pane(session);
     runtime = copy_mode_runtime(session, runtimes);
-    if (pane == nullptr || runtime == nullptr) {
+    if (runtime == nullptr) {
       leave_copy_mode(session, runtimes);
       return input.size();
     }
@@ -1993,59 +2238,94 @@ struct CopyEscapeDecode final {
   return input.size();
 }
 
+// Structured-key normalization is an exhaustive mapping, not product policy.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_typed_copy_mode_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                    const protocol::KeyInput& key,
                                    const std::span<const std::byte> text) noexcept {
   if (key.action == protocol::KeyInputAction::release) {
     return;
   }
-  std::array<std::byte, 1> translated{};
+  std::optional<CopyKey> copy_key;
+  const bool control = (key.modifiers & protocol::key_input_modifier_control) != 0;
+  const bool shift = (key.modifiers & protocol::key_input_modifier_shift) != 0;
   switch (key.key) {
   case protocol::KeyInputKey::arrow_up:
-    translated.front() = std::byte{'k'};
+    copy_key = CopyKey{.kind = CopyKeyKind::arrow_up};
     break;
   case protocol::KeyInputKey::arrow_down:
-    translated.front() = std::byte{'j'};
+    copy_key = CopyKey{.kind = CopyKeyKind::arrow_down};
     break;
   case protocol::KeyInputKey::arrow_left:
-    translated.front() = std::byte{'h'};
+    copy_key = CopyKey{.kind = CopyKeyKind::arrow_left};
     break;
   case protocol::KeyInputKey::arrow_right:
-    translated.front() = std::byte{'l'};
+    copy_key = CopyKey{.kind = CopyKeyKind::arrow_right};
     break;
   case protocol::KeyInputKey::home:
-    translated.front() = std::byte{'0'};
+    copy_key = CopyKey{.kind = CopyKeyKind::home};
     break;
   case protocol::KeyInputKey::end:
-    translated.front() = std::byte{'$'};
+    copy_key = CopyKey{.kind = CopyKeyKind::end};
     break;
   case protocol::KeyInputKey::page_up:
-    translated.front() = std::byte{0x15};
+    copy_key = CopyKey{.kind = CopyKeyKind::page_up};
     break;
   case protocol::KeyInputKey::page_down:
-    translated.front() = std::byte{0x04};
+    copy_key = CopyKey{.kind = CopyKeyKind::page_down};
+    break;
+  case protocol::KeyInputKey::enter:
+    copy_key = CopyKey{.kind = CopyKeyKind::enter};
+    break;
+  case protocol::KeyInputKey::backspace:
+    copy_key = CopyKey{.kind = CopyKeyKind::backspace};
+    break;
+  case protocol::KeyInputKey::escape:
+    copy_key = CopyKey{.kind = CopyKeyKind::escape};
+    break;
+  case protocol::KeyInputKey::space:
+    copy_key = CopyKey{.byte = static_cast<std::uint8_t>(' ')};
+    break;
+  case protocol::KeyInputKey::b:
+    if (control) {
+      copy_key = CopyKey{.byte = 0x02};
+    }
+    break;
+  case protocol::KeyInputKey::c:
+    if (control) {
+      copy_key = CopyKey{.byte = 0x03};
+    }
     break;
   case protocol::KeyInputKey::d:
-    if ((key.modifiers & protocol::key_input_modifier_control) != 0) {
-      translated.front() = std::byte{0x04};
-      break;
+    if (control) {
+      copy_key = CopyKey{.byte = 0x04};
     }
-    static_cast<void>(process_copy_mode_input(session, runtimes, text));
-    return;
+    break;
+  case protocol::KeyInputKey::f:
+    if (control) {
+      copy_key = CopyKey{.byte = 0x06};
+    }
+    break;
+  case protocol::KeyInputKey::g:
+    if (control) {
+      copy_key = CopyKey{.byte = 0x07};
+    }
+    break;
   case protocol::KeyInputKey::u:
-    if ((key.modifiers & protocol::key_input_modifier_control) != 0) {
-      translated.front() = std::byte{0x15};
-      break;
+    if (control) {
+      copy_key = CopyKey{.byte = 0x15};
     }
-    static_cast<void>(process_copy_mode_input(session, runtimes, text));
-    return;
+    break;
+  case protocol::KeyInputKey::v:
+    if (control) {
+      copy_key = CopyKey{.byte = 0x16};
+    } else if (shift && text.empty()) {
+      copy_key = CopyKey{.byte = static_cast<std::uint8_t>('V')};
+    }
+    break;
   case protocol::KeyInputKey::unidentified:
   case protocol::KeyInputKey::a:
-  case protocol::KeyInputKey::b:
-  case protocol::KeyInputKey::c:
   case protocol::KeyInputKey::e:
-  case protocol::KeyInputKey::f:
-  case protocol::KeyInputKey::g:
   case protocol::KeyInputKey::h:
   case protocol::KeyInputKey::i:
   case protocol::KeyInputKey::j:
@@ -2059,16 +2339,11 @@ void process_typed_copy_mode_input(SessionRecord& session, PaneRuntimeStore& run
   case protocol::KeyInputKey::r:
   case protocol::KeyInputKey::s:
   case protocol::KeyInputKey::t:
-  case protocol::KeyInputKey::v:
   case protocol::KeyInputKey::w:
   case protocol::KeyInputKey::x:
   case protocol::KeyInputKey::y:
   case protocol::KeyInputKey::z:
-  case protocol::KeyInputKey::enter:
   case protocol::KeyInputKey::tab:
-  case protocol::KeyInputKey::backspace:
-  case protocol::KeyInputKey::escape:
-  case protocol::KeyInputKey::space:
   case protocol::KeyInputKey::insert:
   case protocol::KeyInputKey::delete_key:
   case protocol::KeyInputKey::f1:
@@ -2083,18 +2358,34 @@ void process_typed_copy_mode_input(SessionRecord& session, PaneRuntimeStore& run
   case protocol::KeyInputKey::f10:
   case protocol::KeyInputKey::f11:
   case protocol::KeyInputKey::f12:
-    static_cast<void>(process_copy_mode_input(session, runtimes, text));
+    break;
+  }
+  if (copy_key.has_value()) {
+    auto* const runtime = copy_mode_runtime(session, runtimes);
+    if (runtime == nullptr) {
+      leave_copy_mode(session, runtimes);
+      return;
+    }
+    static_cast<void>(apply_copy_action(
+        session, *runtime, runtimes, copy_action_for_key(session.attachment.copy_mode, *copy_key)));
     return;
   }
-  static_cast<void>(process_copy_mode_input(session, runtimes, translated));
+  static_cast<void>(process_copy_mode_input(session, runtimes, text));
 }
 
 void service_copy_input_timeout(SessionRecord& session, PaneRuntimeStore& runtimes,
                                 const std::chrono::steady_clock::time_point now) noexcept {
-  if (session.attachment.copy_mode.active &&
+  if (session.attachment.copy_mode.active() &&
       session.attachment_runtime.copy_mode.pending_escape_size > 0 &&
       now >= session.attachment_runtime.copy_mode.pending_escape_deadline) {
-    leave_copy_mode(session, runtimes);
+    session.attachment_runtime.copy_mode.pending_escape_size = 0;
+    auto* const runtime = copy_mode_runtime(session, runtimes);
+    if (runtime == nullptr ||
+        !apply_copy_action(session, *runtime, runtimes,
+                           copy_action_for_key(session.attachment.copy_mode,
+                                               CopyKey{.kind = CopyKeyKind::escape}))) {
+      return;
+    }
   }
 }
 
@@ -2591,6 +2882,12 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
   case protocol::PaneCommand::enter_copy_mode:
     command.kind = CommandKind::enter_copy_mode;
     break;
+  case protocol::PaneCommand::enter_copy_search_forward:
+    command.kind = CommandKind::enter_copy_search_forward;
+    break;
+  case protocol::PaneCommand::enter_copy_search_backward:
+    command.kind = CommandKind::enter_copy_search_backward;
+    break;
   case protocol::PaneCommand::create_tab:
     command.kind = CommandKind::create_tab;
     break;
@@ -2675,7 +2972,10 @@ struct SessionCommandContext final {
     return session.active ? command_status(tab->focused_pane != previous)
                           : CommandResult{.status = CommandStatus::failed};
   };
-  if (session.attachment.copy_mode.active && command.kind != CommandKind::enter_copy_mode) {
+  const bool copy_command = command.kind == CommandKind::enter_copy_mode ||
+                            command.kind == CommandKind::enter_copy_search_forward ||
+                            command.kind == CommandKind::enter_copy_search_backward;
+  if (session.attachment.copy_mode.active() && !copy_command) {
     leave_copy_mode(session, runtimes);
   }
   switch (command.kind) {
@@ -2761,7 +3061,7 @@ struct SessionCommandContext final {
     return {.status = CommandStatus::applied};
   }
   case CommandKind::enter_copy_mode:
-    if (session.attachment.copy_mode.active) {
+    if (session.attachment.copy_mode.active()) {
       leave_copy_mode(session, runtimes);
       return {.status = CommandStatus::applied};
     }
@@ -2770,6 +3070,26 @@ struct SessionCommandContext final {
       return {.status = CommandStatus::applied};
     }
     return {.status = CommandStatus::unavailable};
+  case CommandKind::enter_copy_search_forward:
+  case CommandKind::enter_copy_search_backward: {
+    auto* runtime = find_pane_runtime(runtimes, session, *tab, *targeted_pane);
+    if (runtime == nullptr) {
+      return {.status = CommandStatus::unavailable};
+    }
+    if (!session.attachment.copy_mode.active() &&
+        !enter_copy_mode(session, *tab, *targeted_pane, *runtime, runtimes)) {
+      return {.status = CommandStatus::unavailable};
+    }
+    runtime = copy_mode_runtime(session, runtimes);
+    const auto direction = command.kind == CommandKind::enter_copy_search_forward
+                               ? CopySearchDirection::forward
+                               : CopySearchDirection::backward;
+    if (runtime == nullptr || !begin_copy_search_prompt(session, *runtime, direction)) {
+      leave_copy_mode(session, runtimes);
+      return {.status = CommandStatus::unavailable};
+    }
+    return {.status = CommandStatus::applied};
+  }
   case CommandKind::create_tab: {
     if (tab_count(session) >= session.tabs.size() || pane_count(session) >= panes_per_session_max) {
       return {.status = CommandStatus::capacity};
@@ -2825,6 +3145,8 @@ struct SessionCommandContext final {
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
   case CommandKind::enter_copy_mode:
+  case CommandKind::enter_copy_search_forward:
+  case CommandKind::enter_copy_search_backward:
     return true;
   case CommandKind::none:
   case CommandKind::detach_client:
@@ -2871,11 +3193,116 @@ struct SessionCommandContext final {
   return dispatcher.dispatch(resolved);
 }
 
+struct CopyOverlayStorage final {
+  std::array<char, limits::search_query_bytes_max + 16U> text{};
+  std::size_t size{0};
+
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+};
+
+[[nodiscard]] auto copy_feedback_text(const CopyModeFeedback feedback) noexcept
+    -> std::string_view {
+  switch (feedback) {
+  case CopyModeFeedback::no_match:
+    return " no match ";
+  case CopyModeFeedback::empty_selection:
+    return " empty ";
+  case CopyModeFeedback::clipboard_busy:
+    return " clipboard busy ";
+  case CopyModeFeedback::too_large:
+    return " selection too large ";
+  case CopyModeFeedback::failed:
+    return " copy failed ";
+  case CopyModeFeedback::none:
+    return {};
+  }
+  return {};
+}
+
+void assign_copy_overlay(const std::string_view text, const std::size_t limit,
+                         CopyOverlayStorage& output) noexcept {
+  output.size = std::min(limit, text.size());
+  std::ranges::copy(std::span(text).first(output.size), output.text.begin());
+}
+
+void build_copy_query_overlay(const CopyModeState& state, const std::size_t limit,
+                              CopyOverlayStorage& output) noexcept {
+  output.text.front() = state.prompt_search_direction == CopySearchDirection::forward ? '/' : '?';
+  output.size = 1;
+  if (limit == 1) {
+    return;
+  }
+  const auto query = state.draft_query_view();
+  const auto count = std::min(query.size(), limit - 1U);
+  const auto begin = query.size() - count;
+  for (const char character : std::span(query).subspan(begin, count)) {
+    const auto value = static_cast<unsigned char>(character);
+    const auto sanitized = value >= 0x20U && value < 0x7FU ? character : '?';
+    std::span(output.text).subspan(output.size, 1).front() = sanitized;
+    ++output.size;
+  }
+}
+
+void build_copy_position_overlay(PaneRuntime& runtime, const std::size_t limit,
+                                 CopyOverlayStorage& output) noexcept {
+  const auto viewport = runtime.terminal.viewport_state();
+  if (!viewport.has_value()) {
+    return;
+  }
+  const auto covered = viewport->offset + viewport->visible_rows;
+  const auto below = viewport->total_rows > covered ? viewport->total_rows - covered : 0U;
+  const auto history = viewport->total_rows > viewport->visible_rows
+                           ? viewport->total_rows - viewport->visible_rows
+                           : 0U;
+  std::array<char, 64> encoded{};
+  encoded.front() = '[';
+  auto position = std::to_chars(std::next(encoded.begin()), encoded.end(), below);
+  if (position.ec != std::errc{} || position.ptr == encoded.end()) {
+    return;
+  }
+  *position.ptr = '/';
+  const auto total = std::to_chars(std::next(position.ptr), encoded.end(), history);
+  if (total.ec != std::errc{} || total.ptr == encoded.end()) {
+    return;
+  }
+  *total.ptr = ']';
+  const auto size = static_cast<std::size_t>(std::distance(encoded.begin(), std::next(total.ptr)));
+  if (size <= limit) {
+    assign_copy_overlay(std::string_view(encoded.data(), size), limit, output);
+  }
+}
+
+void build_copy_overlay(const SessionRecord& session, PaneRuntime& runtime,
+                        const std::uint16_t columns, CopyOverlayStorage& output) noexcept {
+  output.size = 0;
+  if (columns == 0) {
+    return;
+  }
+  const auto limit = std::min<std::size_t>(columns, output.text.size());
+  const auto& state = session.attachment.copy_mode;
+  // An editable prompt remains visible for its complete lifetime. Incremental no-match feedback is
+  // provisional and must not replace the query between keystrokes; Enter exposes the committed
+  // result after leaving the prompt phase.
+  if (state.phase == CopyModePhase::search_prompt) {
+    build_copy_query_overlay(state, limit, output);
+    return;
+  }
+  const auto feedback = copy_feedback_text(state.feedback);
+  if (!feedback.empty()) {
+    assign_copy_overlay(feedback, limit, output);
+  } else if (state.phase == CopyModePhase::searching) {
+    assign_copy_overlay(" searching ", limit, output);
+  } else {
+    build_copy_position_overlay(runtime, limit, output);
+  }
+}
+
 // Surface projection combines bounded semantic and runtime state without retaining either.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
-                 std::array<render::PaneSurface, panes_per_tab_max>& storage) noexcept
+                 std::array<render::PaneSurface, panes_per_tab_max>& storage,
+                 CopyOverlayStorage& copy_overlay, render::PaneOverlay& overlay) noexcept
     -> std::span<const render::PaneSurface> {
   auto* const tab = active_tab(session);
   if (tab == nullptr || tab->layout_suspended) {
@@ -2895,7 +3322,7 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
       continue;
     }
     const bool copy_pane =
-        session.attachment.copy_mode.active &&
+        session.attachment.copy_mode.active() &&
         session.attachment.selection_target ==
             std::optional{AttachmentPaneTarget{.tab = tab->id, .pane = pane->id}};
     const auto copy_cursor = copy_pane
@@ -2906,6 +3333,10 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
     const auto cursor_point = cursor.value_or(vt::TerminalPoint{});
     const bool cursor_override = cursor.has_value() && cursor_point.row < pane->rectangle.rows &&
                                  cursor_point.column < pane->rectangle.columns;
+    if (copy_pane && cursor_override) {
+      build_copy_overlay(session, *runtime, pane->rectangle.columns, copy_overlay);
+      overlay = {.terminal = &runtime->terminal, .top_right = copy_overlay.view()};
+    }
     std::span(storage).subspan(count, 1).front() = {
         .terminal = &runtime->terminal,
         .rectangle = pane->rectangle,
@@ -2980,7 +3411,7 @@ selection_gesture_phase(const protocol::MouseInputAction action) noexcept
                                            const std::uint16_t content_row) noexcept -> bool {
   const AttachmentPaneTarget target{.tab = tab.id, .pane = pane.id};
   if (session.attachment.selection_target != std::optional{target}) {
-    if (session.attachment.copy_mode.active) {
+    if (session.attachment.copy_mode.active()) {
       leave_copy_mode(session, runtimes);
     } else {
       clear_mouse_selection(session, runtimes);
@@ -3029,7 +3460,7 @@ selection_gesture_phase(const protocol::MouseInputAction action) noexcept
     return false;
   }
   presentation_changed = presentation_changed || result->selection_changed;
-  if (session.attachment.copy_mode.active && result->selection_changed &&
+  if (session.attachment.copy_mode.active() && result->selection_changed &&
       !update_copy_viewport_offset(session, runtime)) {
     leave_copy_mode(session, runtimes);
     return false;
@@ -3082,7 +3513,7 @@ enum class ParseResult : std::uint8_t {
           return ParseResult::error;
         }
         ordinary_input = message.input.subspan(*session.attachment_runtime.retained_input_offset);
-      } else if (session.attachment.copy_mode.active) {
+      } else if (session.attachment.copy_mode.active()) {
         const auto consumed = process_copy_mode_input(session, runtimes, message.input);
         if (consumed > message.input.size()) {
           return ParseResult::error;
@@ -3137,7 +3568,7 @@ enum class ParseResult : std::uint8_t {
       break;
     }
     case protocol::ClientMessageKind::key: {
-      if (session.attachment.copy_mode.active) {
+      if (session.attachment.copy_mode.active()) {
         process_typed_copy_mode_input(session, runtimes, message.key, message.input);
         break;
       }
@@ -3170,7 +3601,7 @@ enum class ParseResult : std::uint8_t {
       break;
     }
     case protocol::ClientMessageKind::paste: {
-      if (session.attachment.copy_mode.active) {
+      if (session.attachment.copy_mode.active()) {
         break;
       }
       clear_mouse_selection(session, runtimes);
@@ -3310,7 +3741,7 @@ enum class ParseResult : std::uint8_t {
           return ParseResult::error;
         }
         const AttachmentPaneTarget target{.tab = target_tab->id, .pane = pane->id};
-        const bool copy_selection = session.attachment.copy_mode.active &&
+        const bool copy_selection = session.attachment.copy_mode.active() &&
                                     session.attachment.selection_target == std::optional{target};
         if (wheel_button && (copy_selection || !tracking->enabled)) {
           if (!copy_selection) {
@@ -3497,72 +3928,144 @@ enum class ParseResult : std::uint8_t {
   return true;
 }
 
-[[nodiscard]] auto service_copy_search(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                       std::size_t& work_budget) noexcept -> bool {
-  if (work_budget == 0 || !session.attachment.copy_mode.active ||
-      !session.attachment.copy_mode.search_pending ||
-      std::chrono::steady_clock::now() < session.attachment_runtime.copy_mode.search_deadline) {
+[[nodiscard]] auto active_copy_search_query(const CopyModeState& state) noexcept
+    -> std::string_view {
+  return state.phase == CopyModePhase::search_prompt ? state.draft_query_view()
+                                                     : state.query_view();
+}
+
+[[nodiscard]] auto restart_copy_search_after_mutation(SessionRecord& session,
+                                                      PaneRuntime& runtime) noexcept -> bool {
+  auto& search = session.attachment_runtime.copy_mode;
+  if (!search.search_task.has_value()) {
     return false;
   }
-  const auto work_limit = std::min(work_budget, limits::search_candidates_per_step);
-  work_budget -= work_limit;
+  const auto direction = search.search_task->direction;
+  const auto endpoint = runtime.terminal.selection_checkpoint_endpoint(vt::PointSpace::screen);
+  return endpoint.has_value() && endpoint->has_value() &&
+         begin_copy_search(session, runtime, direction, **endpoint);
+}
+
+[[nodiscard]] auto finish_copy_search_match(SessionRecord& session, PaneRuntime& runtime,
+                                            const vt::SearchMatch match) noexcept -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  const auto selected = runtime.terminal.select_search_match(match);
+  if (!selected.has_value()) {
+    return false;
+  }
+  const auto viewport = runtime.terminal.viewport_state();
+  if (!viewport.has_value()) {
+    return false;
+  }
+  const auto target_offset = copy_search_viewport_offset(
+      match.end.row, viewport->offset, viewport->visible_rows, viewport->total_rows);
+  if (target_offset != viewport->offset) {
+    runtime.terminal.scroll_viewport(vt::ViewportScroll::row,
+                                     static_cast<std::int64_t>(target_offset));
+  }
+  if (!update_copy_viewport_offset(session, runtime)) {
+    return false;
+  }
+  search.search_task.reset();
+  state.feedback = CopyModeFeedback::none;
+  if (state.phase == CopyModePhase::search_prompt) {
+    search.preview_match = true;
+  } else {
+    search.last_search_match = match;
+    search.last_search_generation = runtime.mutation_generation;
+    search.preview_match = false;
+    discard_copy_search_restore(runtime, search);
+    state.phase = CopyModePhase::navigation;
+  }
+  note_compression_activity(runtime);
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+[[nodiscard]] auto finish_or_wrap_failed_copy_search(SessionRecord& session,
+                                                     PaneRuntime& runtime) noexcept -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  if (!search.search_task.has_value()) {
+    return false;
+  }
+  auto& task = *search.search_task;
+  if (!task.wrapped) {
+    const auto boundary = copy_search_boundary(runtime, task.direction);
+    if (!boundary.has_value()) {
+      return false;
+    }
+    task.wrapped = true;
+    task.cursor = vt::SearchCursor{.candidate = *boundary};
+    task.deadline = std::chrono::steady_clock::now();
+    return true;
+  }
+  search.search_task.reset();
+  search.preview_match = false;
+  state.feedback = CopyModeFeedback::no_match;
+  if (!restore_copy_search_selection(session, runtime)) {
+    return false;
+  }
+  if (state.phase == CopyModePhase::searching) {
+    discard_copy_search_restore(runtime, search);
+    state.phase = CopyModePhase::navigation;
+  }
+  note_compression_activity(runtime);
+  invalidate_copy_presentation(session, runtime);
+  return true;
+}
+
+[[nodiscard]] auto service_copy_search(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                       std::size_t& work_budget) noexcept -> bool {
+  auto& state = session.attachment.copy_mode;
+  auto& search = session.attachment_runtime.copy_mode;
+  auto* const task = search.search_task.has_value() ? &*search.search_task : nullptr;
+  if (work_budget == 0 || !state.active() || task == nullptr ||
+      std::chrono::steady_clock::now() < task->deadline) {
+    return false;
+  }
   auto* const runtime = copy_mode_runtime(session, runtimes);
   if (runtime == nullptr) {
     leave_copy_mode(session, runtimes);
     return true;
   }
-  if (runtime->mutation_generation != session.attachment_runtime.copy_mode.search_generation) {
-    session.attachment_runtime.copy_mode.search_generation = runtime->mutation_generation;
-    session.attachment_runtime.copy_mode.search_cursor.reset();
-    session.attachment_runtime.copy_mode.last_search_match.reset();
+  const auto query = active_copy_search_query(state);
+  if (query.empty()) {
+    leave_copy_mode(session, runtimes);
+    return true;
   }
+  if (runtime->mutation_generation != task->terminal_generation) {
+    if (!restart_copy_search_after_mutation(session, *runtime)) {
+      leave_copy_mode(session, runtimes);
+    }
+    return true;
+  }
+
+  const auto work_limit = std::min(work_budget, limits::search_candidates_per_step);
+  work_budget -= work_limit;
+  const auto stop = task->wrapped ? std::optional{task->stop_before} : std::nullopt;
   const auto searched = runtime->terminal.search_literal_step(
-      session.attachment.copy_mode.query_view(),
-      terminal_search_direction(session.attachment_runtime.copy_mode.active_search_direction),
-      session.attachment_runtime.copy_mode.search_cursor, work_limit);
+      query, terminal_search_direction(task->direction), task->cursor, work_limit, stop);
   if (!searched.has_value()) {
     leave_copy_mode(session, runtimes);
     return true;
   }
+  bool valid = true;
   switch (searched->status) {
-  case vt::SearchStepStatus::found: {
-    const auto selected = runtime->terminal.select_search_match(searched->match);
-    const auto scrolled =
-        selected.has_value()
-            ? runtime->terminal.scroll_selection_into_view()
-            : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
-    if (!selected.has_value() || !scrolled.has_value()) {
-      leave_copy_mode(session, runtimes);
-      return true;
-    }
-    session.attachment.copy_mode.search_pending = false;
-    session.attachment.copy_mode.feedback = CopyModeFeedback::none;
-    session.attachment_runtime.copy_mode.last_search_match = searched->match;
-    session.attachment_runtime.copy_mode.search_cursor.reset();
-    if (!update_copy_viewport_offset(session, *runtime)) {
-      leave_copy_mode(session, runtimes);
-      return true;
-    }
-    refresh_copy_mode_status(session);
-    note_compression_activity(*runtime);
-    session.attachment_runtime.status_valid = false;
-    schedule_frame(session, FrameUrgency::state_change, false);
+  case vt::SearchStepStatus::found:
+    valid = finish_copy_search_match(session, *runtime, searched->match);
     break;
-  }
   case vt::SearchStepStatus::pending:
-    session.attachment_runtime.copy_mode.search_cursor = searched->next;
-    session.attachment_runtime.copy_mode.search_deadline =
-        std::chrono::steady_clock::now() + copy_search_slice_delay;
+    task->cursor = searched->next;
+    task->deadline = std::chrono::steady_clock::now() + copy_search_slice_delay;
     break;
   case vt::SearchStepStatus::not_found:
-    session.attachment.copy_mode.search_pending = false;
-    session.attachment.copy_mode.feedback = CopyModeFeedback::no_match;
-    note_compression_activity(*runtime);
-    session.attachment_runtime.copy_mode.search_cursor.reset();
-    refresh_copy_mode_status(session);
-    session.attachment_runtime.status_valid = false;
-    schedule_frame(session, FrameUrgency::state_change, false);
+    valid = finish_or_wrap_failed_copy_search(session, *runtime);
     break;
+  }
+  if (!valid) {
+    leave_copy_mode(session, runtimes);
   }
   return true;
 }
@@ -3578,15 +4081,6 @@ enum class ParseResult : std::uint8_t {
   }
   const auto title = runtime->terminal.title();
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
-}
-
-[[nodiscard]] auto status_tab_title(const SessionRecord& session, const Tab& tab,
-                                    const PaneRuntimeStore& runtimes) noexcept -> std::string_view {
-  if (session.attachment.copy_mode.active && session.attachment.selection_target.has_value() &&
-      session.attachment.selection_target->tab == tab.id) {
-    return session.attachment_runtime.copy_mode.status_view();
-  }
-  return tab_title(session, tab, runtimes);
 }
 
 [[nodiscard]] auto current_status_signature(const SessionRecord& session,
@@ -3607,7 +4101,7 @@ enum class ParseResult : std::uint8_t {
     ++position;
     mix(position);
     mix(slot.tab->id == session.active_tab ? 1U : 0U);
-    const auto title = status_tab_title(session, *slot.tab, runtimes);
+    const auto title = tab_title(session, *slot.tab, runtimes);
     for (const char character : std::span(title).first(std::min(title.size(), std::size_t{16}))) {
       mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
     }
@@ -3635,7 +4129,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     std::span(storage).subspan(count, 1).front() = {
         .number = static_cast<std::uint16_t>(count + 1U),
-        .title = status_tab_title(session, *slot.tab, runtimes),
+        .title = tab_title(session, *slot.tab, runtimes),
         .active = slot.tab->id == session.active_tab,
     };
     ++count;
@@ -3732,7 +4226,9 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-  const auto surfaces = collect_surfaces(session, runtimes, surface_storage);
+  CopyOverlayStorage copy_overlay;
+  render::PaneOverlay overlay;
+  const auto surfaces = collect_surfaces(session, runtimes, surface_storage, copy_overlay, overlay);
   const auto status = collect_status_line(session, runtimes, status_storage);
   std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -3744,7 +4240,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
                                    surfaces.size());
   const auto rendered = render::compose_retained_frame(
       surfaces, {.columns = session.attachment.columns, .rows = session.attachment.rows},
-      session.attachment_runtime.frame, force_full, status);
+      session.attachment_runtime.frame, force_full, status, overlay);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
                                    rendered.has_value() ? rendered->bytes : 0);
@@ -4631,8 +5127,8 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     if (session == nullptr || !session->active) {
       continue;
     }
-    if ((session->attachment.copy_mode.search_pending &&
-         tighten(session->attachment_runtime.copy_mode.search_deadline)) ||
+    if ((session->attachment_runtime.copy_mode.search_task.has_value() &&
+         tighten(session->attachment_runtime.copy_mode.search_task->deadline)) ||
         (session->attachment_runtime.copy_mode.pending_escape_size > 0 &&
          tighten(session->attachment_runtime.copy_mode.pending_escape_deadline)) ||
         tighten(session->attachment_runtime.frame_scheduler.deadline(frame_sink_state(*session))) ||

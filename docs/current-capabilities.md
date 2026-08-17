@@ -52,7 +52,7 @@ Session names are 1–32 ASCII letters, digits, underscores, or hyphens. The dae
 | Focus/close/zoom | Working | Directional/next/previous focus, close, and zoom use generational pane IDs. |
 | Resize | Working | Outer resize resolves active layout and coordinates Ghostty/PTY resize with rollback/fail-closed behavior. |
 | Inactive output | Working | Inactive tabs continue draining and parsing PTY output. |
-| Status | Working | A top row shows session, contiguous tab positions, and bounded process-derived titles. |
+| Status | Working | A top row shows session, contiguous tab positions, and bounded process-derived titles. Copy mode preserves those titles and projects its position or search feedback as a bounded top-right pane overlay. |
 | Stored ratios and interactive resize | Absent | Splits use equal halves; keyboard/mouse ratio changes are not implemented. |
 | Rename/reorder/link | Absent | User session/tab rename, stable reorder, and cross-session linking are not implemented. |
 | Pane identification UI | Absent | IDs appear in listings, but there is no pane overlay or naming UX. |
@@ -63,10 +63,10 @@ Session, tab, pane, semantic Attachment, and runtime connection references use d
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Prefix keymap | Working | `C-b` dispatches built-in pane/tab/copy commands; `C-b C-b` sends a literal prefix. |
+| Prefix keymap | Working | `C-b` dispatches built-in pane/tab/copy commands; `C-b C-b` sends a literal prefix. `C-b /` and `C-b ?` enter copy mode directly at forward or backward search. |
 | Key encoding | Working | The client requests Kitty disambiguation, event, alternate-key, and associated-text metadata without requesting `report all keys`; layout and IME text therefore remains ordinary text on hosts that omit associated text. Typed metadata is preserved and Ghostty encodes it against each pane's active modes. |
 | Typed paste/focus | Working | Outer bracketed-paste and focus reporting are enabled while attached. Reports are decoded across arbitrary read fragmentation, transported as bounded typed messages, and encoded from canonical Ghostty modes. Paste remains one opaque event up to 1 MiB and bypasses mux-prefix interpretation. |
-| Copy mode | Working | Vi/arrow navigation, tracked keyboard and pane-local mouse selection, visible cursor/range, bounded literal search, viewport hold, and OSC 52 user copy are integrated. |
+| Copy mode | Working | Typed Vim-shaped navigation (`h/j/k/l`, words, line/history/viewport, half/full-page, arrows), character/line/block Visual selection, endpoint swapping, tracked pane-local mouse selection, incremental wrapping literal search from the copy cursor with central-context match placement, viewport hold, a pane-local position overlay, and OSC 52 user copy are integrated. |
 | Native clipboard | Absent | Copy output relies on bounded user-initiated OSC 52. |
 | Mouse mux operation | Partial | SGR mouse input is validated against read-time geometry, hit-tested across pane rectangles, focuses through the typed pane command, and retains pane-local application or selection ownership through drag/release. A normalized vertical wheel report over shell history moves Ghostty's pane-local viewport by one row without entering copy mode; horizontal trackpad reports remain distinct, output preserves the viewport, and accepted application key/paste input returns it to the live area. Separators and status are excluded. Drag resize and status interaction remain absent. |
 | Application mouse forwarding | Working | Lemma owns outer button/drag SGR capture independently of child modes, promotes unbuttoned motion only when requested, and uses Ghostty to encode validated pane-local button, wheel, and motion events from the target pane's canonical mouse modes. With no explicit mouse reporting, Ghostty's alternate-screen/alternate-scroll state routes each normalized wheel report as one canonically encoded cursor key. |
@@ -90,7 +90,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
 | Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.1. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
+The current private attached-client protocol is version 2.2. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 

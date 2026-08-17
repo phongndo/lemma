@@ -45,6 +45,11 @@ struct StatusLine final {
   bool dirty{false};
 };
 
+struct PaneOverlay final {
+  vt::Terminal* terminal{nullptr};
+  std::string_view top_right;
+};
+
 enum class CompositionError : std::uint8_t {
   invalid_viewport,
   too_many_panes,
@@ -65,11 +70,12 @@ struct CompositionResult final {
 
 // Composes already-resolved content-area pane rectangles into one synchronized outer-terminal
 // update. A visible status line occupies the top row, and pane content and separators are offset
-// below it. The focused surface is encoded last so its cursor and terminal modes remain
-// authoritative. Callers must force a full frame after changing pane geometry.
+// below it. One optional bounded overlay is projected after pane rendering, then restores the copy
+// cursor. The focused surface otherwise owns cursor and terminal modes. Callers must force a full
+// frame after changing pane geometry.
 [[nodiscard]] auto compose_frame(std::span<const PaneSurface> panes, Viewport viewport,
                                  std::span<std::byte> output, bool force_full,
-                                 StatusLine status = {}) noexcept
+                                 StatusLine status = {}, PaneOverlay overlay = {}) noexcept
     -> std::expected<CompositionResult, CompositionError>;
 
 } // namespace lemma::render

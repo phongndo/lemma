@@ -146,6 +146,8 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   case PaneCommand::close:
   case PaneCommand::zoom:
   case PaneCommand::enter_copy_mode:
+  case PaneCommand::enter_copy_search_forward:
+  case PaneCommand::enter_copy_search_backward:
   case PaneCommand::create_tab:
   case PaneCommand::next_tab:
   case PaneCommand::previous_tab:
@@ -676,6 +678,12 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       break;
     case std::byte{'['}:
       pane_command_value = PaneCommand::enter_copy_mode;
+      break;
+    case std::byte{'/'}:
+      pane_command_value = PaneCommand::enter_copy_search_forward;
+      break;
+    case std::byte{'?'}:
+      pane_command_value = PaneCommand::enter_copy_search_backward;
       break;
     case std::byte{'c'}:
       pane_command_value = PaneCommand::create_tab;

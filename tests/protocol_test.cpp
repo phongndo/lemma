@@ -30,7 +30,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x01}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x02}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -166,7 +166,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x01}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x02}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };
@@ -493,6 +493,20 @@ TEST(ProtocolTest, PrefixParserEntersCopyModeWithoutForwardingBinding) {
   EXPECT_EQ(result.bytes, 2U);
   EXPECT_EQ(output.front(), std::byte{'a'});
   EXPECT_EQ(std::span(output).subspan(1, 1).front(), std::byte{'b'});
+}
+
+TEST(ProtocolTest, PrefixParserCapturesDirectCopySearchWithoutForwardingBinding) {
+  PrefixParser parser;
+  const std::array input{std::byte{0x02}, std::byte{'/'}, std::byte{0x02}, std::byte{'?'}};
+  std::array<std::byte, input.size() * 2U> output{};
+
+  const auto result = parser.parse(input, output);
+
+  ASSERT_EQ(result.action_count, 2U);
+  EXPECT_EQ(result.bytes, 0U);
+  EXPECT_EQ(result.actions.front().command, PaneCommand::enter_copy_search_forward);
+  EXPECT_EQ((std::span(result.actions).subspan<1, 1>().front().command),
+            PaneCommand::enter_copy_search_backward);
 }
 
 TEST(ProtocolTest, PrefixParserCapturesFragmentedArrowKey) {

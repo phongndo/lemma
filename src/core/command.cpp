@@ -20,6 +20,8 @@ namespace {
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
   case CommandKind::enter_copy_mode:
+  case CommandKind::enter_copy_search_forward:
+  case CommandKind::enter_copy_search_backward:
   case CommandKind::create_tab:
   case CommandKind::next_tab:
   case CommandKind::previous_tab:

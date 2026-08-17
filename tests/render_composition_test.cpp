@@ -99,6 +99,31 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
 }
 
+TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatus) {
+  auto terminal = make_terminal(12, 2);
+  write_text(terminal, "underlay");
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 12, .rows = 2},
+      .cursor_override_column = 1,
+      .cursor_override_row = 1,
+      .focused = true,
+      .cursor_override = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 3}, output, true,
+                                    {.session_name = {}, .tabs = tabs, .dirty = true},
+                                    {.terminal = &terminal, .top_right = "[2/9]"});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("[1:zsh]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;8H\x1B[0;7m[2/9]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[3;2H\x1B[?25h"));
+}
+
 TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
   auto terminal = make_terminal(40, 2);
   const PaneSurface pane{

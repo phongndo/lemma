@@ -410,6 +410,8 @@ Terminal::Impl::Impl(const TerminalOptions& terminal_options) noexcept
 }
 
 Terminal::Impl::~Impl() {
+  ghostty_tracked_grid_ref_free(selection_checkpoint_start);
+  ghostty_tracked_grid_ref_free(selection_checkpoint_end);
   for (auto* const event : selection_events) {
     ghostty_selection_gesture_event_free(event);
   }

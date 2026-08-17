@@ -629,6 +629,112 @@ TEST(TerminalTest, MovesCopyCursorByGhosttyWordSemantics) {
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *backward), "b");
 }
 
+TEST(TerminalTest, MovesCopyCursorAcrossEmptyCellsAndBlankRows) {
+  TerminalOptions options;
+  options.size = {.columns = 8, .rows = 3};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "a     z\r\n\r\nthird");
+  ASSERT_TRUE(terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .row = 0})
+                  .value_or(false));
+
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::right, false).value_or(false));
+  auto endpoint = terminal.selection_endpoint(PointSpace::screen);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  auto point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 1U);
+  EXPECT_EQ(point.row, 0U);
+
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::down, false).value_or(false));
+  endpoint = terminal.selection_endpoint(PointSpace::screen);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 1U);
+  EXPECT_EQ(point.row, 1U);
+
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::up, false).value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::end_of_line, false).value_or(false));
+  endpoint = terminal.selection_endpoint(PointSpace::screen);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 6U);
+}
+
+TEST(TerminalTest, CopyCursorDoesNotStopOnWideSpacerCells) {
+  TerminalOptions options;
+  options.size = {.columns = 8, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "A界B");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport}).value_or(false));
+
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::right, false).value_or(false));
+  auto endpoint = terminal.selection_endpoint(PointSpace::screen);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  auto point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 1U);
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::right, false).value_or(false));
+  endpoint = terminal.selection_endpoint(PointSpace::screen);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 3U);
+}
+
+TEST(TerminalTest, SkipsWideSpacerAtSoftWrapBoundary) {
+  TerminalOptions options;
+  options.size = {.columns = 4, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "abc界");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 2, .row = 0})
+          .value_or(false));
+
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::right, false).value_or(false));
+  const auto endpoint = terminal.selection_endpoint(PointSpace::viewport);
+  ASSERT_TRUE(endpoint.has_value() && endpoint->has_value());
+  const auto point = endpoint.value_or(std::optional<TerminalPoint>{}).value_or(TerminalPoint{});
+  EXPECT_EQ(point.column, 0U);
+  EXPECT_EQ(point.row, 1U);
+
+  std::array<std::byte, 8> selected{};
+  const auto selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size), "界");
+}
+
+TEST(TerminalTest, NormalizesLineAndBlockVisualSelection) {
+  TerminalOptions options;
+  options.size = {.columns = 8, .rows = 3};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha\r\nbravo\r\ncharlie");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 2, .row = 0})
+          .value_or(false));
+
+  ASSERT_TRUE(terminal.selection_set_unit(SelectionUnit::line).value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::down, true).value_or(false));
+  ASSERT_TRUE(terminal.selection_normalize_unit(SelectionUnit::line).value_or(false));
+  auto range = terminal.selection_range(PointSpace::screen);
+  ASSERT_TRUE(range.has_value() && range->has_value());
+  auto selected = range.value_or(std::optional<SelectionRange>{}).value_or(SelectionRange{});
+  EXPECT_EQ(selected.start.column, 0U);
+  EXPECT_EQ(selected.start.row, 0U);
+  EXPECT_EQ(selected.end.column, 7U);
+  EXPECT_EQ(selected.end.row, 1U);
+  EXPECT_FALSE(selected.rectangular);
+
+  ASSERT_TRUE(terminal.collapse_selection_to_endpoint().value_or(false));
+  ASSERT_TRUE(terminal.selection_set_unit(SelectionUnit::block).value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::down, true).value_or(false));
+  ASSERT_TRUE(terminal.selection_adjust(SelectionAdjustment::left, true).value_or(false));
+  ASSERT_TRUE(terminal.selection_normalize_unit(SelectionUnit::block).value_or(false));
+  range = terminal.selection_range(PointSpace::screen);
+  ASSERT_TRUE(range.has_value() && range->has_value());
+  selected = range.value_or(std::optional<SelectionRange>{}).value_or(SelectionRange{});
+  EXPECT_TRUE(selected.rectangular);
+  EXPECT_EQ(selected.end.row, 2U);
+}
+
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(TerminalTest, WordNavigationRetainsProgressAcrossLongBlankRuns) {
@@ -730,6 +836,59 @@ TEST(TerminalTest, SearchesIncrementallyWithoutRetainingDuplicateGrid) {
   ASSERT_TRUE(collapsed.has_value());
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), *collapsed), "e");
+}
+
+TEST(TerminalTest, SelectionCheckpointTracksReflowWithoutStoringCoordinates) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha target\r\nsecond\r\nthird");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 6, .row = 0})
+          .value_or(false));
+  ASSERT_TRUE(terminal.checkpoint_selection().value_or(false));
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 1, .row = 2})
+          .value_or(false));
+
+  const auto checkpoint = terminal.selection_checkpoint_endpoint(PointSpace::screen);
+  ASSERT_TRUE(checkpoint.has_value() && checkpoint->has_value());
+  std::array<std::byte, 8> previewed{};
+  const auto previewed_size = terminal.format_selection(ScreenFormat::plain, previewed);
+  ASSERT_TRUE(previewed_size.has_value());
+  // Reading the checkpoint endpoint must not reinstall it over the active preview.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(previewed.data()), *previewed_size),
+            "h");
+
+  ASSERT_TRUE(terminal.resize({.columns = 6, .rows = 3}).has_value());
+  ASSERT_TRUE(terminal.selection_checkpoint_endpoint(PointSpace::screen)
+                  .value_or(std::nullopt)
+                  .has_value());
+  ASSERT_TRUE(terminal.restore_selection_checkpoint().value_or(false));
+  std::array<std::byte, 8> selected{};
+  const auto selected_size = terminal.format_selection(ScreenFormat::plain, selected);
+  ASSERT_TRUE(selected_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(selected.data()), *selected_size), "t");
+
+  terminal.clear_selection_checkpoint();
+  EXPECT_EQ(terminal.restore_selection_checkpoint(), false);
+}
+
+TEST(TerminalTest, StopsBoundedSearchBeforeCallerBoundary) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "alpha alpha");
+  const TerminalPoint stop{.space = PointSpace::screen, .column = 6, .row = 0};
+
+  const auto result = terminal.search_literal_step("alpha", SearchDirection::forward,
+                                                   SearchCursor{.candidate = stop}, 4, stop);
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->status, SearchStepStatus::not_found);
 }
 
 // GoogleTest assertions inflate the measured branch count.

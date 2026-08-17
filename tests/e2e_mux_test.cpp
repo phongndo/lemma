@@ -364,7 +364,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.1")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.2")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -617,7 +617,7 @@ TEST_F(MuxProcessTest, HandlesMouseEdgesCopyTransitionsAndDeletedCaptureTargets)
   // Clicking another pane while copy mode owns the old pane exits copy mode instead of treating
   // the target change as a protocol failure.
   ASSERT_TRUE(send_prefix(client, std::byte{'['}));
-  ASSERT_TRUE(client.wait_for_screen("COPY", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.wait_for_screen("[0/0]", deadline_after(5s))) << client.screen();
   constexpr std::string_view click_left = "\x1B[<0;1;2M\x1B[<0;1;2m";
   ASSERT_TRUE(client.send(click_left, deadline_after(2s)));
   ASSERT_TRUE(client.send("printf '__COPY_MOUSE_SWITCH__\\n'\r", deadline_after(2s)));
@@ -937,7 +937,8 @@ TEST_F(MuxProcessTest, CopyModePreservesReflowedViewportAcrossPtyOutput) {
       "'__COPY_REFLOW_ROW_%02d__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
       "\"$i\"; i=$((i + 1)); done; "
       "printf "
-      "'__COPY_RESIZE_TRACKED__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n'; "
+      "'__COPY_RESIZE_%s__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
+      "TRACKED; "
       "i=20; while [ $i -lt 45 ]; do printf "
       "'__COPY_REFLOW_ROW_%02d__abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
       "\"$i\"; i=$((i + 1)); done; printf '__COPY_RESIZE_READY__\\n'; "
@@ -952,6 +953,14 @@ TEST_F(MuxProcessTest, CopyModePreservesReflowedViewportAcrossPtyOutput) {
   ASSERT_TRUE(client.send("?__COPY_RESIZE_TRACKED__\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__COPY_RESIZE_TRACKED__", deadline_after(5s)))
       << client.screen();
+  const auto centered_screen = client.screen();
+  const auto tracked_position = centered_screen.find("__COPY_RESIZE_TRACKED__");
+  ASSERT_NE(tracked_position, std::string::npos);
+  const auto tracked_row = static_cast<std::size_t>(
+      std::ranges::count(std::string_view(centered_screen).substr(0, tracked_position), '\n'));
+  EXPECT_GE(tracked_row, 6U) << centered_screen;
+  EXPECT_LE(tracked_row, 17U) << centered_screen;
+
   ASSERT_TRUE(client.resize(40, 24));
   // Wake the attached client's poll loop after SIGWINCH; this byte is intentionally ignored by
   // copy mode, while the queued protocol resize is sent first.
@@ -986,9 +995,10 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.wait_for_screen("__COPY_NEEDLE__", deadline_after(5s)));
 
   ASSERT_TRUE(send_prefix(client, std::byte{'['}));
-  ASSERT_TRUE(client.wait_for_screen("COPY nav [Space]", deadline_after(5s)))
-      << client.screen() << "\nraw:\n"
-      << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_screen("[0/0]", deadline_after(5s))) << client.screen() << "\nraw:\n"
+                                                                   << client.raw_tail();
+  EXPECT_NE(client.screen().find("[1:zsh]"), std::string::npos);
+  EXPECT_EQ(client.screen().find("[1:COPY"), std::string::npos);
   ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.raw_tail();
 
   // Vi keys and physical arrow sequences move only the daemon-owned copy cursor, including an
@@ -997,20 +1007,21 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   std::this_thread::sleep_for(10ms);
   ASSERT_TRUE(client.send("[D", deadline_after(2s)));
   ASSERT_TRUE(client.send(" ", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("COPY sel [Enter]", deadline_after(5s)));
   ASSERT_TRUE(client.send("hh\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_raw("\x1B]52;c;", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
 
-  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'/'}));
   // Unsupported modifier sequences are consumed as one copy-mode key and never leak a suffix to
-  // the child or leave copy mode.
+  // the child or leave copy mode. Search previews incrementally before Enter commits the query.
   ASSERT_TRUE(client.send("\x1B[1;2A", deadline_after(2s)));
-  ASSERT_TRUE(client.send("/missing-copy-search", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("COPY /missing", deadline_after(5s)));
+  ASSERT_TRUE(client.send("missing@copy-search", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("/missing@copy-search", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
   ASSERT_TRUE(client.send("\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("COPY no match", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_screen("no match", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
   ASSERT_TRUE(client.send("q", deadline_after(2s)));
@@ -1019,6 +1030,82 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.wait_for_screen("__COPY_INPUT_ISOLATED__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, IncrementalSearchKeepsPreviousPreviewWhileRefiningQuery) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "copy_search_preview"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  constexpr std::string_view launch =
+      "printf '__STABLE_%s_CONTEXT__ __STABLE@%s_TARGET__\\n' PREVIEW PREVIEW; "
+      "i=0; while [ $i -lt 500 ]; do printf '__STABLE_FILLER_%04d__\\n' \"$i\"; "
+      "i=$((i + 1)); done; printf '__STABLE_%s_READY__\\n' PREVIEW\r";
+  ASSERT_TRUE(client.send(launch, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__STABLE_PREVIEW_READY__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'?'}));
+  ASSERT_TRUE(client.send("__STABLE@PREVIEW_TARGET__", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__STABLE_PREVIEW_CONTEXT__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(client.send("x", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("?__STABLE@PREVIEW_TARGET__x", deadline_after(2s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  EXPECT_NE(client.screen().find("__STABLE_PREVIEW_CONTEXT__"), std::string::npos)
+      << client.screen();
+  ASSERT_TRUE(client.wait_for_screen("__STABLE_PREVIEW_READY__", deadline_after(5s)))
+      << client.screen();
+  EXPECT_NE(client.screen().find("?__STABLE@PREVIEW_TARGET__x"), std::string::npos)
+      << client.screen();
+  EXPECT_EQ(client.screen().find("no match"), std::string::npos) << client.screen();
+  ASSERT_TRUE(client.send("\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("no match", deadline_after(5s))) << client.screen();
+
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, CancelledSearchPreservesCommittedDirectionForRepeat) {
+  PtyClient client;
+  ASSERT_TRUE(
+      client.spawn(client_arguments("new", "copy_search_direction"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  constexpr std::string_view launch =
+      "printf '__SEARCH_%s_CONTEXT__\\n' A; printf '__SEARCH_%s__\\n' MATCH; "
+      "i=0; while [ $i -lt 40 ]; do printf '__SEARCH_FILLER_A_%02d__\\n' \"$i\"; "
+      "i=$((i + 1)); done; "
+      "printf '__SEARCH_%s_CONTEXT__\\n' B; printf '__SEARCH_%s__\\n' MATCH; "
+      "i=0; while [ $i -lt 40 ]; do printf '__SEARCH_FILLER_B_%02d__\\n' \"$i\"; "
+      "i=$((i + 1)); done; printf '__SEARCH_DIRECTION_%s__\\n' READY\r";
+  ASSERT_TRUE(client.send(launch, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__SEARCH_DIRECTION_READY__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'?'}));
+  ASSERT_TRUE(client.send("__SEARCH_MATCH__\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__SEARCH_B_CONTEXT__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'/'}));
+  ASSERT_TRUE(client.send("definitely-missing", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("/definitely-missing", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("\x1B", deadline_after(2s)));
+  std::this_thread::sleep_for(20ms);
+  ASSERT_TRUE(client.send("n", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__SEARCH_A_CONTEXT__", deadline_after(5s)))
+      << client.screen();
+  ASSERT_TRUE(client.send("n", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__SEARCH_B_CONTEXT__", deadline_after(5s)))
+      << client.screen();
+
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
@@ -1032,7 +1119,7 @@ TEST_F(MuxProcessTest, ClientLossClearsAttachmentCopyStateBeforeReconnect) {
   ASSERT_TRUE(client.send("printf '__COPY_RECONNECT_HISTORY__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__COPY_RECONNECT_HISTORY__", deadline_after(5s)));
   ASSERT_TRUE(send_prefix(client, std::byte{'['}));
-  ASSERT_TRUE(client.wait_for_screen("COPY nav [Space]", deadline_after(5s)));
+  ASSERT_TRUE(client.wait_for_screen("[0/0]", deadline_after(5s)));
 
   client.terminate();
   ASSERT_TRUE(wait_for_listing("copy_reconnect", "detached", deadline_after(5s)));
@@ -1045,7 +1132,7 @@ TEST_F(MuxProcessTest, ClientLossClearsAttachmentCopyStateBeforeReconnect) {
   ASSERT_TRUE(reattached.wait_for_screen("__COPY_RECONNECT_LIVE__", deadline_after(5s)))
       << reattached.screen() << "\nraw:\n"
       << reattached.raw_tail();
-  EXPECT_FALSE(reattached.screen().contains("COPY nav [Space]"));
+  EXPECT_FALSE(reattached.screen().contains("[0/0]"));
   ASSERT_TRUE(send_prefix(reattached, std::byte{'d'}));
   ASSERT_TRUE(reattached.wait(deadline_after(5s)));
 }

@@ -134,6 +134,7 @@ target_link_libraries(
 add_library(
   lemma_core STATIC
   src/core/command.cpp
+  src/core/copy_mode.cpp
   src/core/session.cpp
 )
 lemma_internal_target(lemma_core)

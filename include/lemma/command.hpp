@@ -24,6 +24,8 @@ enum class CommandKind : std::uint8_t {
   close_pane,
   toggle_zoom,
   enter_copy_mode,
+  enter_copy_search_forward,
+  enter_copy_search_backward,
   create_tab,
   next_tab,
   previous_tab,

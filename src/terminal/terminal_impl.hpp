@@ -119,6 +119,8 @@ struct Terminal::Impl final {
   GhosttyRenderStateRowCells row_cells{nullptr};
   GhosttySelectionGesture selection_gesture{nullptr};
   std::array<GhosttySelectionGestureEvent, 5> selection_events{};
+  GhosttyTrackedGridRef selection_checkpoint_start{nullptr};
+  GhosttyTrackedGridRef selection_checkpoint_end{nullptr};
   GhosttyRenderStateColors render_colors{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> row_hashes{};
   std::array<std::uint64_t, limits::terminal_rows_hard_max> current_row_hashes{};
@@ -129,6 +131,7 @@ struct Terminal::Impl final {
   bool mirrored_modes_valid{false};
   bool mirrored_mouse_modes_valid{false};
   bool ansi_physical_valid{false};
+  bool selection_checkpoint_rectangle{false};
   BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;
   EffectBatch effects{};
   bool pty_response_integrity_failed{false};

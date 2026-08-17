@@ -1,5 +1,6 @@
 #include "render/pane_composition.hpp"
 
+#include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
@@ -351,7 +352,8 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 // Composition validation deliberately keeps geometry, overlap, and focus checks in one pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto validate_composition(const std::span<const PaneSurface> panes,
-                                        const Viewport viewport, const StatusLine status) noexcept
+                                        const Viewport viewport, const StatusLine status,
+                                        const PaneOverlay overlay) noexcept
     -> std::expected<bool, CompositionError> {
   if (!valid_viewport(viewport)) {
     return std::unexpected(CompositionError::invalid_viewport);
@@ -361,6 +363,13 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   }
   if (!valid_status(status)) {
     return std::unexpected(CompositionError::invalid_status);
+  }
+  if (!overlay.top_right.empty()) {
+    const auto pane = std::ranges::find(panes, overlay.terminal, &PaneSurface::terminal);
+    if (pane == panes.end() || !pane->focused || !pane->cursor_override ||
+        overlay.top_right.size() > pane->rectangle.columns) {
+      return std::unexpected(CompositionError::invalid_pane);
+    }
   }
   bool has_focus = false;
   bool has_presented_focus = false;
@@ -451,6 +460,33 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
     }
   }
   return {};
+}
+
+[[nodiscard]] auto draw_top_right_overlay(const std::span<const PaneSurface> panes,
+                                          const PaneOverlay overlay,
+                                          const std::span<std::byte> output, std::size_t& used,
+                                          const std::uint16_t row_offset) noexcept -> bool {
+  if (overlay.top_right.empty()) {
+    return true;
+  }
+  const auto pane = std::ranges::find(panes, overlay.terminal, &PaneSurface::terminal);
+  LEMMA_ASSERT(pane != panes.end());
+  if (pane->presentation_suppressed) {
+    return true;
+  }
+  constexpr std::string_view overlay_style = "\x1B[0;7m";
+  const auto overlay_column = static_cast<std::uint16_t>(
+      pane->rectangle.column + pane->rectangle.columns - overlay.top_right.size() + 1U);
+  const auto overlay_row = static_cast<std::uint16_t>(pane->rectangle.row + row_offset + 1U);
+  const auto cursor_row =
+      static_cast<std::uint16_t>(pane->rectangle.row + row_offset + pane->cursor_override_row + 1U);
+  const auto cursor_column =
+      static_cast<std::uint16_t>(pane->rectangle.column + pane->cursor_override_column + 1U);
+  return append_position(output, used, overlay_row, overlay_column) &&
+         append(output, used, overlay_style) && append(output, used, overlay.top_right) &&
+         append(output, used, "\x1B[0m") &&
+         append_position(output, used, cursor_row, cursor_column) &&
+         append(output, used, "\x1B[?25h");
 }
 
 [[nodiscard]] auto border_cell(const std::span<const PaneSurface> panes, const std::uint16_t row,
@@ -595,9 +631,10 @@ struct CompositionPolicy final {
 };
 
 [[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
-                                      const Viewport viewport, const StatusLine status) noexcept
+                                      const Viewport viewport, const StatusLine status,
+                                      const PaneOverlay overlay) noexcept
     -> std::expected<CompositionPolicy, CompositionError> {
-  const auto validation = validate_composition(panes, viewport, status);
+  const auto validation = validate_composition(panes, viewport, status, overlay);
   if (!validation.has_value()) {
     return std::unexpected(validation.error());
   }
@@ -643,9 +680,9 @@ struct CompositionPolicy final {
 // damage or alter retained pane state.
 [[nodiscard]] auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
                                  const std::span<std::byte> output, const bool force_full,
-                                 const StatusLine status) noexcept
+                                 const StatusLine status, const PaneOverlay overlay) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  const auto policy = composition_policy(panes, viewport, status);
+  const auto policy = composition_policy(panes, viewport, status, overlay);
   if (!policy.has_value()) {
     return std::unexpected(policy.error());
   }
@@ -674,6 +711,10 @@ struct CompositionPolicy final {
       render_panes(panes, viewport, output, used, force_full, row_offset, composition);
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
+  }
+  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset)) {
+    invalidate_panes(panes);
+    return std::unexpected(CompositionError::output_exhausted);
   }
   // A pane-level repair does not make the protocol frame complete when suppression omitted a
   // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
