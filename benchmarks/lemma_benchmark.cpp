@@ -265,6 +265,45 @@ void benchmark_terminal_ansi_scroll_operations(benchmark::State& state) {
       benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
+void benchmark_terminal_viewport_wheel_frames(benchmark::State& state) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 80, .rows = 23};
+  auto result = vt::Terminal::create(options);
+  if (!result.has_value()) {
+    state.SkipWithError("failed to create terminal");
+    return;
+  }
+  auto terminal = std::move(result).value();
+  constexpr std::string_view line =
+      "history-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789------\r\n";
+  const auto bytes = std::as_bytes(std::span(line.data(), line.size()));
+  for (std::size_t row = 0; row < 20'000; ++row) {
+    terminal.write(bytes);
+  }
+  std::array<std::byte, std::size_t{256} * 1'024U> frame{};
+  if (!terminal.render_ansi(frame, true).has_value()) {
+    state.SkipWithError("failed to render initial history frame");
+    return;
+  }
+  terminal.scroll_viewport(vt::ViewportScroll::delta, -100);
+  std::uint64_t output_bytes = 0;
+  bool upward = true;
+
+  for ([[maybe_unused]] const auto iteration : state) {
+    terminal.scroll_viewport(vt::ViewportScroll::delta, upward ? -1 : 1);
+    upward = !upward;
+    auto rendered = terminal.render_ansi(frame, true);
+    benchmark::DoNotOptimize(rendered);
+    if (!rendered.has_value()) {
+      state.SkipWithError("failed to render historical viewport");
+      return;
+    }
+    output_bytes += rendered->bytes;
+  }
+  state.counters["frame_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
+}
+
 void benchmark_terminal_multiple_panes(benchmark::State& state) {
   const auto pane_count = static_cast<std::size_t>(state.range(0));
   std::size_t grid_columns = 8;
@@ -374,6 +413,7 @@ BENCHMARK(benchmark_terminal_render_updates);
 BENCHMARK(benchmark_terminal_ansi_damage_frames);
 BENCHMARK(benchmark_terminal_ansi_single_row);
 BENCHMARK(benchmark_terminal_ansi_scroll_operations);
+BENCHMARK(benchmark_terminal_viewport_wheel_frames);
 BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_terminal_full_frames);
 

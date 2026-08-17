@@ -27,6 +27,17 @@ An 80x24 release microbenchmark on August 9, 2026 measured medians from three cl
 
 Large VT parsing measured 1.22 GiB/s. The result supports incremental damage and retained physical-cell state for these workloads; it does not prove that every workload is faster or that further caching is useful.
 
+A post-change five-repetition release microbenchmark populated 20,000 rows, held the Ghostty viewport 100 rows above the live area, alternated normalized one-row wheel movement, and forced the same complete pane redraw required by server-rendered viewport navigation. Median CPU was 46.991 us per event with 2,304 output bytes. This measures one 80x23 terminal projection, not split-pane composition or outer-device pixel scrolling. Reproduce with:
+
+```sh
+./build/release/lemma_benchmarks \
+  --benchmark_filter='^benchmark_terminal_viewport_wheel_frames$' \
+  --benchmark_min_time=0.2s --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true
+```
+
+A separate thirty-sample `interactive-output` release run after adding the application-input viewport reset measured key-to-PTY p50/p95/p99 of 0.092/0.122/0.131 ms and key-to-visible of 0.343/0.481/0.517 ms. Compared with the retained 0.101/0.187 ms and 0.759/1.119 ms p50/p95 baseline below, the canonical viewport-active query did not regress this workload. The report is `scrollback-native-interactive-output-30.json`.
+
 The warmed steady-state allocation audit performs 10,000 parse/damage/compose/frame-flush iterations after 256 warmups. The retained qualification observed zero C++ general allocations, zero general-allocation bytes, and zero new terminal-quota allocations while flushing 2,150,000 framed bytes.
 
 A same-process qualification on August 16, 2026 measured the composed-render effect of separating Lemma's outer mouse capture policy from child mouse modes. Five one-second release repetitions before and after the change retained identical average frame sizes and produced these CPU medians:

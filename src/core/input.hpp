@@ -86,6 +86,10 @@ enum class InputQueueResult : std::uint8_t {
                                      vt::FocusEvent event) noexcept -> InputQueueResult;
 [[nodiscard]] auto queue_mouse_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
                                      const vt::MouseEvent& event) noexcept -> InputQueueResult;
+// Ghostty-compatible alternate-screen wheel synthesis. One normalized host wheel report becomes
+// one cursor key encoded against the pane's canonical keyboard modes.
+[[nodiscard]] auto queue_alternate_scroll_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                                bool upward) noexcept -> InputQueueResult;
 
 } // namespace lemma::core
 

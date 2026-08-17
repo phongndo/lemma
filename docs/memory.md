@@ -37,16 +37,16 @@ Pending connections are now lazy slot-owned objects. Frame storage exists only w
 | --- | --- | ---: | --- |
 | Session store | fixed reactor table | 1,032 B table; up to 64 sessions | live sessions are individually allocated; create failure rejects only the new session |
 | Semantic Session | Core-owned per live session | 69,992 B inline in the recorded layout | contains bounded launch context and tabs; no descriptor, decoder, terminal, render buffer, clock, or teardown I/O |
-| Attachment | Core-owned one-per-session value | 336 B | contains stable IDs, viewport, copy policy, and scoped mouse capture; no independent allocation |
+| Attachment | Core-owned one-per-session value | 344 B | contains stable IDs, explicit copy viewport policy, and scoped mouse capture; ordinary wheel scrolling stays in Ghostty; no independent allocation |
 | AttachmentRuntime | Runtime-owned one-per-session value | 9,056 B | owns connection, decoder, frame/output progress, runtime copy continuation, deadlines, backpressure, and teardown; no hot-path allocation or lookup |
-| Runtime session record | one stable aggregate allocation per live session | 80,168 B including Session, Attachment, AttachmentRuntime, terminal theme, and connection generation | preserves direct addresses and replaces the former 94,488-B mixed Session; the unused 14-KiB command trace was removed |
+| Runtime session record | one stable aggregate allocation per live session | 80,176 B including Session, Attachment, AttachmentRuntime, terminal theme, and connection generation | preserves direct addresses and replaces the former 94,488-B mixed Session; the unused 14-KiB command trace was removed |
 | Tab | one owner per live tab | 3,600 B | allocated on create; failure preserves existing topology |
 | Semantic Pane | Core-owned per live pane | 16 B | contains only generational identity and committed geometry; staged creation publishes it only with a prepared runtime counterpart |
-| PaneRuntime | Runtime-owned per live pane | 208 B plus owned terminal/queue allocations | owns PTY/process/terminal and scheduling state; typed failure is consumed by Core exit policy |
-| PaneRuntime store | one daemon runtime index plus lazy live-tab tables | 8,712 B fixed; 1,040 B per tab containing runtimes | full generational pane addresses resolve directly; tab tables allocate before pair publication and disappear with their last runtime |
-| Ghostty routed state | terminal quota allocator | 10,376 B at create; 116,729 B after first render; 64 MiB default maximum | lazy; quota failure is typed; PagePool is accounted separately |
+| PaneRuntime | Runtime-owned per live pane | 216 B plus owned terminal/queue allocations | owns PTY/process/terminal, scheduling state, and its configured scrollback reservation; typed failure is consumed by Core exit policy |
+| PaneRuntime store | one daemon runtime index plus lazy live-tab tables | 8,720 B fixed; 1,040 B per tab containing runtimes | full generational pane addresses resolve directly; the store owns the 3.2-GB configured scrollback reservation budget; tab tables allocate before pair publication and disappear with their last runtime |
+| Ghostty routed state | terminal quota allocator | 12,228 B at create; 171,203 B after first render; 64 MiB default maximum | lazy; quota failure is typed; PagePool is accounted separately |
 | Physical cell hashes | terminal adapter | 8 B/cell; 15,360 B at 80x24; 8,000,000 B hard maximum | replacement prepared on create/resize |
-| Scrollback | Ghostty PagePool | 10,000-B default logical byte quota; 1,000,000-B hard byte/optional line limits | page-granular; PagePool bypasses the routed allocator |
+| Scrollback | Ghostty PagePool | 50,000,000-B default/per-pane hard byte limit; optional 1,000,000-line hard limit; 3.2-GB daemon configured-capacity reservation | page-granular and lazy; PagePool bypasses the routed allocator; pane publication rejects when the Runtime-owned aggregate reservation is exhausted |
 | Pane PTY write queue | lazy per pane | 32 B inline; commonly 4,096 B after first packet; 1,114,112-B pane max; 128 MiB aggregate | grows transactionally, reuses drained capacity, rejects/backpressures on quota exhaustion |
 | Daemon client-input decoder | one inline per session/pending attach | 8,208 B ordinary storage; at most 1,048,592 B after a valid large-paste envelope; less than 65 MiB across 64 sessions | pending handshakes cannot trigger expansion; expanded storage is released after the packet drains or the client detaches |
 | Attached frame | AttachmentRuntime-owned only while attached | 0 detached; 679,936 B at 80x24; 35,204,096 B at 500x200; 64 MiB ceiling | grows only at attach/resize; failed growth preserves prior state; composition/flush borrow spans |
@@ -92,13 +92,15 @@ Lemma's logical sessions are not process-isolation boundaries: one daemon crash 
 
 ## History and allocator interpretation
 
-After 25,000 rows, one-pane daemon RSS rose by 786,432 B and tree RSS by 802,816 B while retained logical history remained under the configured 10,000-byte quota. This is not contradictory: Ghostty PagePool page granularity, active pages, and allocator retention are resident costs outside Lemma's routed C-allocation counter.
+Under the former 10,000-byte default, 25,000 input rows increased one-pane daemon RSS by 786,432 B and tree RSS by 802,816 B while pruning almost all logical history. With the 50,000,000-byte default, the direct terminal owner census retains 24,977 of 25,000 rows; routed Ghostty allocations rise only from 171,203 B after initial render to 190,041 B because PagePool remains outside that allocator.
+
+The post-change five-sample release profile measured the 25,000-row retained-history workload at a daemon/tree RSS increase of 18,350,080/18,481,152 B over the empty attached session. This is the expected cost of retaining useful history rather than the previous single-page behavior.
 
 Terminal allocation statistics therefore describe only allocations routed through Lemma's Ghostty C allocator. They must never be presented as total terminal memory.
 
 ## Churn and release size
 
-A 100-cycle create/attach/split-to-four/close-to-one/detach/kill workload warmed to 4,997,120 B daemon RSS and remained exactly flat for its final 21 samples. Every cycle reclaimed sessions, children, and descriptors. This supports a stable plateau for that workload and duration, not a proof against all leaks.
+The post-change 100-cycle create/attach/split-to-four/close-to-one/detach/kill workload warmed to 5,718,016 B daemon RSS and remained exactly flat for its final 25 samples. Every cycle reclaimed sessions, children, descriptors, and configured scrollback reservations. This supports a stable plateau for that workload and duration, not a proof against all leaks.
 
 The measured release executable was 2,259,016 B unstripped and 1,972,872 B after `strip -x`. Ghostty, Lua, and zstd were statically linked; system `libc++` and `libSystem` remained dynamic dependencies.
 

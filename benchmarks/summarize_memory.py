@@ -60,7 +60,6 @@ def history_summary(report: dict[str, Any]) -> dict[str, Any]:
     workload = report["workloads"]["history_resources"]
     result: dict[str, Any] = {
         "history_input_rows": workload["history_input_rows"],
-        "terminal_history_quota_bytes": workload["terminal_history_quota_bytes"],
     }
     for condition in ("empty", "populated"):
         resources = workload[condition]

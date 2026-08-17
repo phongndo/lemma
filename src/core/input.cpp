@@ -507,4 +507,24 @@ template <typename Visitor>
   return queue_encoded(queue, std::span(encoded).first(*result));
 }
 
+[[nodiscard]] auto queue_alternate_scroll_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                                const bool upward) noexcept -> InputQueueResult {
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  const vt::KeyEvent event{
+      .action = vt::KeyAction::press,
+      .key = upward ? vt::Key::arrow_up : vt::Key::arrow_down,
+      .modifiers = 0,
+      .consumed_modifiers = 0,
+      .unshifted_codepoint = 0,
+      .text = {},
+      .composing = false,
+  };
+  std::array<std::byte, 128> encoded{};
+  const auto result = terminal.encode_key(event, encoded);
+  return result.has_value() ? queue_encoded(queue, std::span(encoded).first(*result))
+                            : InputQueueResult::encoding_failed;
+}
+
 } // namespace lemma::core

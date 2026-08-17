@@ -449,15 +449,17 @@ struct DecodedKittyKey final {
     modifiers |= 1U << 1U;
   }
   const auto basic_button = value & 3U;
+  const auto extended_button = value & (64U | 128U);
   auto button = protocol::MouseInputButton::none;
-  if ((value & 64U) != 0) {
-    button =
-        basic_button == 0 ? protocol::MouseInputButton::four : protocol::MouseInputButton::five;
-  } else if ((value & 128U) != 0) {
-    const auto encoded = static_cast<std::uint8_t>(protocol::MouseInputButton::six) +
+  if (extended_button == 64U) {
+    const auto encoded = static_cast<std::uint8_t>(protocol::MouseInputButton::four) +
                          static_cast<std::uint8_t>(basic_button);
     button = static_cast<protocol::MouseInputButton>(encoded);
-  } else {
+  } else if (extended_button == 128U) {
+    const auto encoded = static_cast<std::uint8_t>(protocol::MouseInputButton::eight) +
+                         static_cast<std::uint8_t>(basic_button);
+    button = static_cast<protocol::MouseInputButton>(encoded);
+  } else if (extended_button == 0) {
     switch (basic_button) {
     case 0:
       button = protocol::MouseInputButton::left;
@@ -474,9 +476,11 @@ struct DecodedKittyKey final {
     default:
       return std::nullopt;
     }
+  } else {
+    return std::nullopt;
   }
 
-  const bool wheel = (value & 64U) != 0;
+  const bool wheel = extended_button == 64U;
   const auto action = mouse_action(value, final);
   if (!wheel && action == protocol::MouseInputAction::press) {
     any_button_pressed = true;

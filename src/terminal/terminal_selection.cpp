@@ -865,6 +865,21 @@ void Terminal::scroll_viewport(const ViewportScroll behavior, const std::int64_t
   ghostty_terminal_scroll_viewport(impl_->terminal, scroll);
 }
 
+auto Terminal::scroll_viewport_to_bottom() noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  bool active = true;
+  const auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &active);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  if (active) {
+    return false;
+  }
+  scroll_viewport(ViewportScroll::bottom);
+  return true;
+}
+
 auto Terminal::viewport_state() const noexcept -> std::expected<ViewportState, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   GhosttyTerminalScrollbar scrollbar{};

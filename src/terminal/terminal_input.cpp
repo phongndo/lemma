@@ -327,6 +327,32 @@ auto Terminal::encode_mouse(const MouseEvent& event, const std::span<std::byte> 
   };
 }
 
+[[nodiscard]] auto Terminal::wheel_uses_alternate_scroll() const noexcept
+    -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  bool tracking = false;
+  GhosttyTerminalScreen screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+  GhosttyTerminalModeConfig alternate_scroll{
+      .mode = GHOSTTY_MODE_ALT_SCROLL,
+      .value = false,
+  };
+  const std::array keys{GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                        GHOSTTY_TERMINAL_DATA_MODE};
+  std::array<void*, keys.size()> values{&tracking, &screen, &alternate_scroll};
+  std::size_t written = 0;
+  const auto result = ghostty_terminal_get_multi(impl_->terminal, keys.size(), keys.data(),
+                                                 values.data(), &written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  if (written != keys.size()) {
+    return std::unexpected(Error::invalid_state);
+  }
+  return !tracking && screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE && alternate_scroll.value;
+}
+
 auto Terminal::synchronized_output() const noexcept -> std::expected<bool, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);

@@ -690,42 +690,98 @@ TEST_F(MuxProcessTest, SelectsShellTextInsideItsPaneWithoutEnteringCopyMode) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_F(MuxProcessTest, WheelScrollsTheHitShellPaneThroughDaemonCopyMode) {
+TEST_F(MuxProcessTest, WheelScrollsWithoutCopyModeAndApplicationInputFollowsOutput) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_wheel"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  ASSERT_TRUE(
-      client.send("printf '__WHEEL_TOP__\\n'; "
-                  "i=0; while [ $i -lt 45 ]; do printf "
-                  "'wheel-%02d-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
-                  "\"$i\"; i=$((i+1)); done; "
-                  "printf '__WHEEL_BOTTOM__\\n'; sleep 30\r",
-                  deadline_after(2s)));
+  const auto gate = runtime_.owned_path("nonmodal-scroll.gate");
+  const auto acknowledged = runtime_.owned_path("nonmodal-scroll.ack");
+  const auto launch =
+      "printf '__WHEEL_%s__\\n' TOP; "
+      "i=0; while [ $i -lt 45 ]; do printf "
+      "'wheel-%02d-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n' "
+      "\"$i\"; i=$((i+1)); done; "
+      "printf '__WHEEL_%s__\\n' BOTTOM; while [ ! -e " +
+      shell_quote(gate) + " ]; do sleep 0.01; done; printf '__WHEEL_%s__\\n' MUTATION; : > " +
+      shell_quote(acknowledged) + "; sleep 30\r";
+  ASSERT_TRUE(client.send(launch, deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__WHEEL_BOTTOM__", deadline_after(5s))) << client.screen();
 
   constexpr std::string_view one_wheel_up = "\x1B[<64;1;2M";
   constexpr std::string_view one_wheel_down = "\x1B[<65;1;2M";
-  ASSERT_TRUE(client.send(one_wheel_up, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("COPY", deadline_after(5s)))
-      << client.screen() << "\nraw:\n"
-      << client.raw_tail() << "\nserver:\n"
-      << server_.output();
-
   std::string wheel_up;
   std::string wheel_down;
-  for (std::size_t index = 0; index < 20; ++index) {
+  for (std::size_t index = 0; index < 80; ++index) {
     wheel_up.append(one_wheel_up);
     wheel_down.append(one_wheel_down);
   }
   ASSERT_TRUE(client.send(wheel_up, deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__WHEEL_TOP__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
-      << client.raw_tail();
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
+  EXPECT_FALSE(client.screen().contains("COPY")) << client.screen();
+
+  const auto settle_output = [&client]() {
+    const auto deadline = deadline_after(100ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+      client.drain(std::min(deadline, deadline_after(20ms)));
+    }
+  };
+  settle_output();
+  const auto screen_at_top = client.screen();
+  ASSERT_TRUE(client.send("\x1B[<66;1;2M\x1B[<67;1;2M", deadline_after(2s)));
+  settle_output();
+  EXPECT_EQ(client.screen(), screen_at_top)
+      << "horizontal trackpad reports must not become vertical wheel-down input";
+
+  ASSERT_TRUE(create_gate(gate));
+  const auto acknowledgement_deadline = deadline_after(5s);
+  while (::access(acknowledged.c_str(), F_OK) != 0 &&
+         std::chrono::steady_clock::now() < acknowledgement_deadline) {
+    client.drain(std::min(acknowledgement_deadline, deadline_after(20ms)));
+  }
+  ASSERT_EQ(::access(acknowledged.c_str(), F_OK), 0);
+  client.drain(deadline_after(100ms));
+  EXPECT_TRUE(client.screen().contains("__WHEEL_TOP__")) << client.screen();
+  EXPECT_FALSE(client.screen().contains("__WHEEL_MUTATION__")) << client.screen();
 
   ASSERT_TRUE(client.send(wheel_down, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__WHEEL_BOTTOM__", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_MUTATION__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
+  EXPECT_FALSE(client.screen().contains("COPY")) << client.screen();
+
+  ASSERT_TRUE(client.send(wheel_up, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_TOP__", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send(std::array{std::byte{0x03}}, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_BOTTOM__", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("printf '__WHEEL_INPUT_%s__\\n' native\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__WHEEL_INPUT_native__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  EXPECT_FALSE(client.screen().contains("COPY")) << client.screen();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, WheelUsesGhosttyAlternateScrollInAlternateScreen) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "alternate_wheel"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("stty raw -echo; printf '\\033[?1049h__ALT_SCROLL_%s__' READY; "
+                          "code=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+                          "printf '\\033[?1049l'; stty sane; "
+                          "printf '__ALT_SCROLL_%s__\\n' \"$code\"\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__ALT_SCROLL_READY__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("\x1B[<64;1;2M", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__ALT_SCROLL_1b5b41__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }

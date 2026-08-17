@@ -78,9 +78,16 @@ inline constexpr std::size_t terminal_allocation_bytes_hard_max =
 inline constexpr std::uint16_t terminal_columns_hard_max = 1'000;
 inline constexpr std::uint16_t terminal_rows_hard_max = 1'000;
 // Ghostty's PagePool allocator bypasses QuotaAllocator, so keep both page-granular scrollback
-// dimensions independently bounded at the adapter boundary.
-inline constexpr std::size_t terminal_scrollback_bytes_default = 10'000;
-inline constexpr std::size_t terminal_scrollback_bytes_hard_max = 1'000'000;
+// dimensions independently bounded at the adapter boundary. The byte default matches the pinned
+// Ghostty surface default and is lazy; Runtime separately reserves configured capacity against the
+// aggregate bound before publishing a pane.
+inline constexpr std::size_t terminal_scrollback_bytes_default = 50'000'000;
+inline constexpr std::size_t terminal_scrollback_bytes_hard_max = 50'000'000;
+// Reserve enough configured capacity for one maximally populated session without allowing the
+// daemon-wide pane maximum to multiply the per-pane limit into hundreds of gigabytes.
+inline constexpr std::size_t terminal_scrollback_bytes_aggregate_max =
+    static_cast<std::size_t>(panes_hard_max / sessions_hard_max) *
+    terminal_scrollback_bytes_default;
 // Byte and physical-line limits are independent Ghostty pruning dimensions. A null line limit
 // leaves byte accounting authoritative; callers may set both when they need a row-count ceiling.
 inline constexpr std::size_t terminal_scrollback_lines_hard_max = 1'000'000;
@@ -88,7 +95,8 @@ inline constexpr std::size_t selection_format_bytes_max = std::size_t{1} * 1'024
 inline constexpr std::size_t search_query_bytes_max = 256;
 inline constexpr std::size_t search_candidates_per_step = 256;
 inline constexpr auto scrollback_compression_idle_delay = std::chrono::seconds{1};
-static_assert(terminal_scrollback_bytes_hard_max <= terminal_allocation_bytes_default);
+static_assert(terminal_scrollback_bytes_default <= terminal_scrollback_bytes_hard_max);
+static_assert(terminal_scrollback_bytes_aggregate_max >= terminal_scrollback_bytes_hard_max);
 
 } // namespace lemma::limits
 

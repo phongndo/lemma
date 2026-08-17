@@ -98,6 +98,8 @@ enum class CopySearchDirection : std::uint8_t {
 struct CopyModeState final {
   std::array<char, limits::search_query_bytes_max> query{};
   std::size_t query_size{0};
+  // Explicit copy mode snapshots an absolute viewport policy across reflow/output mutations.
+  // Ordinary wheel scrolling remains terminal-owned and does not populate this value.
   std::uint64_t viewport_offset{0};
   CopyModeFeedback feedback{CopyModeFeedback::none};
   CopySearchDirection search_direction{CopySearchDirection::forward};

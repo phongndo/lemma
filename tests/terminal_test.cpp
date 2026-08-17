@@ -371,6 +371,22 @@ TEST(TerminalTest, EncodesFocusAndMouseFromCanonicalModes) {
   EXPECT_EQ(*tracking, (MouseTrackingState{.enabled = true, .unbuttoned_motion = true}));
 }
 
+TEST(TerminalTest, RoutesAlternateScreenWheelFromCanonicalModes) {
+  auto terminal = make_terminal();
+
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), false);
+  write_text(terminal, "\x1B[?1049h");
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), true);
+  write_text(terminal, "\x1B[?1007l");
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), false);
+  write_text(terminal, "\x1B[?1007h\x1B[?1000h");
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), false);
+  write_text(terminal, "\x1B[?1000l");
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), true);
+  write_text(terminal, "\x1B[?1049l");
+  EXPECT_EQ(terminal.wheel_uses_alternate_scroll(), false);
+}
+
 TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
   auto terminal = make_terminal();
   std::array<std::byte, 64> output{};
@@ -490,6 +506,35 @@ TEST(TerminalTest, GrowsAndPrunesScrollbackUnderItsOwnerQuota) {
   EXPECT_GT(*retained, 0U);
   EXPECT_LT(*retained, input_rows);
   EXPECT_LE(options.scrollback_bytes_max, limits::terminal_scrollback_bytes_hard_max);
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, DefaultScrollbackRetainsMultipleGhosttyPages) {
+  constexpr std::string_view line =
+      "history-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789------\r\n";
+  constexpr std::size_t input_rows = 20'000;
+
+  TerminalOptions small_options;
+  small_options.size = {.columns = 80, .rows = 23};
+  small_options.scrollback_bytes_max = 1'000'000;
+  auto small = make_terminal(small_options);
+  for (std::size_t row = 0; row < input_rows; ++row) {
+    write_text(small, line);
+  }
+  const auto small_rows = small.scrollback_rows();
+  ASSERT_TRUE(small_rows.has_value());
+
+  TerminalOptions default_options;
+  default_options.size = small_options.size;
+  auto terminal = make_terminal(default_options);
+  for (std::size_t row = 0; row < input_rows; ++row) {
+    write_text(terminal, line);
+  }
+  const auto retained = terminal.scrollback_rows();
+  ASSERT_TRUE(retained.has_value());
+  EXPECT_GT(*retained, 10'000U);
+  EXPECT_GT(*retained, *small_rows * 10U);
 }
 
 TEST(TerminalTest, UsesGhosttyGesturesAndTrackedSelectionEndpoints) {
@@ -642,8 +687,11 @@ TEST(TerminalTest, NavigatesViewportAndFormatsAdjustedSelectionWithinCallerBound
   const auto bounded = terminal.format_selection(ScreenFormat::plain, insufficient);
   ASSERT_FALSE(bounded.has_value());
   EXPECT_EQ(bounded.error(), Error::out_of_space);
-  terminal.scroll_viewport(ViewportScroll::bottom);
+  const auto followed = terminal.scroll_viewport_to_bottom();
+  ASSERT_TRUE(followed.has_value());
+  EXPECT_TRUE(*followed);
   EXPECT_TRUE(terminal.viewport_state()->follows_output);
+  EXPECT_EQ(terminal.scroll_viewport_to_bottom(), false);
 }
 
 // GoogleTest assertions inflate the measured branch count.

@@ -78,6 +78,20 @@ TEST(CoreInputTest, EncodesShiftedAssociatedTextAsTextInLegacyChildMode) {
   EXPECT_EQ(output.front(), std::byte{'A'});
 }
 
+TEST(CoreInputTest, EncodesOneAlternateScrollCursorKeyPerNormalizedWheelReport) {
+  auto terminal_result = vt::Terminal::create({});
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  PanePtyWriteQueue queue;
+
+  ASSERT_EQ(queue_alternate_scroll_input(queue, terminal, true), InputQueueResult::queued);
+  ASSERT_EQ(queue_alternate_scroll_input(queue, terminal, false), InputQueueResult::queued);
+  std::array<std::byte, 8> output{};
+  const auto size = queue.read(output);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(output.data()), size), "\x1B[A\x1B[B");
+}
+
 TEST(CoreInputTest, KeepsTypedPasteOpaqueFromMuxPrefixBytes) {
   auto terminal_result = vt::Terminal::create({});
   ASSERT_TRUE(terminal_result.has_value());

@@ -144,6 +144,12 @@ Core owns the semantic layout and computes pane geometry. Runtime prepares depen
 
 A resize does not make attachment geometry, pane geometry, PTY dimensions, and terminal dimensions the same owned value. Each has one owner and a defined synchronization transition.
 
+## Viewport input policy
+
+Ghostty owns each pane's canonical viewport. Lemma hit-tests normalized SGR wheel reports and routes them from canonical terminal modes: explicit application mouse reporting reaches Ghostty's mouse encoder, alternate-screen alternate-scroll becomes one Ghostty-encoded cursor key per vertical report, and primary-screen host scrolling moves the Ghostty viewport by one row per vertical report. Horizontal trackpad reports remain distinct and never move the vertical history viewport. Ordinary host scrolling does not enter copy mode or create a selection.
+
+New PTY output continues to parse and leaves a historical viewport held. Once application key or paste bytes have been accepted into the pane's bounded PTY queue, Lemma returns that pane to Ghostty's active viewport before presentation. Focus and mouse reports do not independently reset the viewport. The SGR transport carries normalized cell reports rather than source-device pixel deltas, so Lemma must not apply a second wheel multiplier.
+
 ## Copy, selection, and search
 
 The boundary is deliberately split:
@@ -158,7 +164,7 @@ The boundary is deliberately split:
 | Highlight, copy cursor, status, overlays | Presentation |
 | Clipboard provider and application clipboard permission | Lemma policy/runtime |
 
-Copy mode never pauses PTY parsing. A fixed viewport is attachment policy while Ghostty history continues to evolve. Search must traverse canonical terminal data in bounded slices and must not retain a duplicate text grid or unbounded match list.
+Copy mode never pauses PTY parsing. Its explicit fixed-viewport policy retains a bounded absolute offset across output and reflow while Ghostty history remains canonical and continues to evolve. Ordinary wheel scrolling does not use this copy-mode policy. Search must traverse canonical terminal data in bounded slices and must not retain a duplicate text grid or unbounded match list.
 
 Ghostty tracked references must remain encapsulated. Core may retain Lemma-owned continuation values, but never Ghostty pointers or private structs.
 

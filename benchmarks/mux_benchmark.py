@@ -2087,7 +2087,6 @@ def history_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     return {
         "status": "completed",
         "history_input_rows": 25_000,
-        "terminal_history_quota_bytes": 10_000,
         "empty": empty,
         "populated": populated,
     }
@@ -2386,7 +2385,10 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             or final_p95 > preceding_p95 + plateau["maximum_p95_growth_bytes"]
             or slope > plateau["maximum_final_slope_bytes_per_cycle"]
         ):
-            raise RuntimeError("lifecycle churn did not return to a bounded memory plateau")
+            raise RuntimeError(
+                "lifecycle churn did not return to a bounded memory plateau: "
+                f"{plateau}"
+            )
     else:
         plateau = {
             "evaluated": False,

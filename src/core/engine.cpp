@@ -67,7 +67,9 @@ constexpr auto copy_escape_flush_delay = std::chrono::milliseconds{50};
 constexpr auto copy_search_slice_delay = std::chrono::milliseconds{2};
 constexpr auto scrollback_compression_slice_delay = std::chrono::milliseconds{2};
 constexpr auto mouse_repeat_click_interval = std::chrono::milliseconds{500};
-constexpr std::int64_t mouse_wheel_scroll_rows = 3;
+// SGR wheel reports are already normalized by the outer terminal. Applying another multiplier
+// here makes Ghostty's default three-report discrete wheel step move nine rows.
+constexpr std::int64_t mouse_wheel_scroll_rows = 1;
 constexpr double mouse_repeat_click_distance = 1.0;
 constexpr std::size_t copy_escape_bytes_max = 16;
 static_assert(tabs_per_session_max <= render::status_tabs_max);
@@ -311,8 +313,8 @@ struct SessionName final {
 }
 
 struct PaneRuntime final {
-  explicit PaneRuntime(vt::Terminal&& created_terminal) noexcept
-      : terminal(std::move(created_terminal)) {}
+  PaneRuntime(vt::Terminal&& created_terminal, const std::size_t scrollback_reservation) noexcept
+      : terminal(std::move(created_terminal)), scrollback_bytes_reserved(scrollback_reservation) {}
 
   PaneRuntime(const PaneRuntime&) = delete;
   auto operator=(const PaneRuntime&) -> PaneRuntime& = delete;
@@ -348,6 +350,7 @@ struct PaneRuntime final {
   PresentationGate presentation_gate;
   std::uint64_t compression_activity{0};
   std::uint64_t mutation_generation{1};
+  std::size_t scrollback_bytes_reserved{0};
   std::chrono::steady_clock::time_point compression_deadline;
   bool compression_scheduled{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -396,11 +399,26 @@ class PaneRuntimeStore final {
            address.tab.slot() < tabs_per_session_max && address.pane.slot() < panes_per_tab_max;
   }
 
+  void release_scrollback(const std::size_t bytes) noexcept {
+    LEMMA_ASSERT(scrollback_bytes_reserved_ >= bytes);
+    scrollback_bytes_reserved_ -= bytes;
+  }
+
+  void release_scrollback(const TabSlots& tab) noexcept {
+    for (const auto& pane : tab.panes) {
+      if (pane.runtime != nullptr) {
+        release_scrollback(pane.runtime->scrollback_bytes_reserved);
+      }
+    }
+  }
+
 public:
   [[nodiscard]] auto insert(const PaneAddress address,
                             std::unique_ptr<PaneRuntime> runtime) noexcept -> bool {
     if (!address_in_bounds(address) || runtime == nullptr || !runtime->publishable() ||
-        size_ == limits::panes_hard_max) {
+        size_ == limits::panes_hard_max ||
+        runtime->scrollback_bytes_reserved >
+            limits::terminal_scrollback_bytes_aggregate_max - scrollback_bytes_reserved_) {
       return false;
     }
     auto& session = std::span(sessions_).subspan(address.session.slot(), 1).front();
@@ -426,6 +444,7 @@ public:
     }
     session.generation = address.session.generation();
     pane.generation = address.pane.generation();
+    scrollback_bytes_reserved_ += runtime->scrollback_bytes_reserved;
     pane.runtime = std::move(runtime);
     ++tab->size;
     ++size_;
@@ -480,6 +499,7 @@ public:
     if (pane.runtime == nullptr || pane.generation != address.pane.generation()) {
       return false;
     }
+    release_scrollback(pane.runtime->scrollback_bytes_reserved);
     pane.runtime.reset();
     pane.generation = 0;
     --tab->size;
@@ -501,6 +521,7 @@ public:
     for (auto& tab : session.tabs) {
       if (tab != nullptr) {
         LEMMA_ASSERT(size_ >= tab->size);
+        release_scrollback(*tab);
         size_ -= tab->size;
         tab.reset();
       }
@@ -509,10 +530,14 @@ public:
   }
 
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] auto can_reserve_scrollback(const std::size_t bytes) const noexcept -> bool {
+    return bytes <= limits::terminal_scrollback_bytes_aggregate_max - scrollback_bytes_reserved_;
+  }
 
 private:
   std::array<SessionSlots, limits::sessions_hard_max> sessions_{};
   std::size_t size_{0};
+  std::size_t scrollback_bytes_reserved_{0};
 };
 
 static_assert(sizeof(PaneRuntimeStore) <= std::size_t{16} * 1'024U);
@@ -808,7 +833,8 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   }
   std::unique_ptr<PaneRuntime> runtime;
   try {
-    runtime = std::make_unique<PaneRuntime>(std::move(*terminal_result));
+    runtime =
+        std::make_unique<PaneRuntime>(std::move(*terminal_result), options.scrollback_bytes_max);
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
@@ -950,7 +976,8 @@ refresh_process_name_if_due(PaneRuntime& runtime,
 [[nodiscard]] auto allocate_tab(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
     -> Tab* {
   if (!session.id.is_valid() || pane_count(session) >= panes_per_session_max ||
-      runtimes.size() >= limits::panes_hard_max) {
+      runtimes.size() >= limits::panes_hard_max ||
+      !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
     return nullptr;
   }
   for (std::size_t index = 0; index < session.tabs.size(); ++index) {
@@ -1296,7 +1323,7 @@ void refresh_copy_selection_after_layout(SessionRecord& session, Tab& tab,
   LEMMA_ASSERT(runtime != nullptr);
   const auto refreshed = runtime->terminal.refresh_selection();
   // Reflow updates Ghostty's tracked endpoints, but the renderer requires a freshly installed
-  // selection snapshot. Re-anchor the viewport to that endpoint before saving its new offset.
+  // selection snapshot. Re-anchor Ghostty's canonical viewport to that endpoint.
   const auto scrolled =
       refreshed.has_value() && *refreshed
           ? runtime->terminal.scroll_selection_into_view()
@@ -1374,6 +1401,20 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
   runtime.compression_scheduled = true;
   runtime.compression_deadline =
       std::chrono::steady_clock::now() + limits::scrollback_compression_idle_delay;
+}
+
+[[nodiscard]] auto scroll_viewport_for_application_input(SessionRecord& session,
+                                                         PaneRuntime& runtime) noexcept -> bool {
+  const auto scrolled = runtime.terminal.scroll_viewport_to_bottom();
+  if (!scrolled.has_value()) {
+    runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
+    return false;
+  }
+  if (*scrolled) {
+    note_compression_activity(runtime);
+    schedule_frame(session, FrameUrgency::interactive, true);
+  }
+  return true;
 }
 
 void refresh_copy_mode_status(SessionRecord& session) noexcept {
@@ -1524,41 +1565,29 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   return true;
 }
 
-[[nodiscard]] auto scroll_copy_viewport_with_mouse(SessionRecord& session, Tab& tab, Pane& pane,
-                                                   PaneRuntime& runtime, PaneRuntimeStore& runtimes,
-                                                   const protocol::MouseInputButton button) noexcept
-    -> bool {
-  const AttachmentPaneTarget target{.tab = tab.id, .pane = pane.id};
-  const bool already_copying = session.attachment.copy_mode.active &&
-                               session.attachment.selection_target == std::optional{target};
-  if (!already_copying && button == protocol::MouseInputButton::five) {
-    return true;
-  }
-  if (!already_copying && !enter_copy_mode(session, tab, pane, runtime, runtimes)) {
-    return false;
-  }
+[[nodiscard]] auto scroll_viewport_with_mouse(SessionRecord& session, PaneRuntime& runtime,
+                                              const protocol::MouseInputButton button,
+                                              const bool copy_selection) noexcept -> bool {
   const auto viewport = runtime.terminal.viewport_state();
   if (!viewport.has_value()) {
-    leave_copy_mode(session, runtimes);
     return false;
   }
 
   const bool upward = button == protocol::MouseInputButton::four;
-  const auto previous_offset = viewport->offset;
-  const auto previous_follow = viewport->follows_output;
   runtime.terminal.scroll_viewport(vt::ViewportScroll::delta,
                                    upward ? -mouse_wheel_scroll_rows : mouse_wheel_scroll_rows);
   const auto scrolled = runtime.terminal.viewport_state();
   if (!scrolled.has_value()) {
-    leave_copy_mode(session, runtimes);
     return false;
   }
   const bool changed =
-      scrolled->offset != previous_offset || scrolled->follows_output != previous_follow;
-  session.attachment.copy_mode.viewport_offset = scrolled->offset;
+      scrolled->offset != viewport->offset || scrolled->follows_output != viewport->follows_output;
+  if (copy_selection) {
+    session.attachment.copy_mode.viewport_offset = scrolled->offset;
+  }
   if (changed) {
     note_compression_activity(runtime);
-    schedule_frame(session, FrameUrgency::interactive, false);
+    schedule_frame(session, FrameUrgency::interactive, true);
   }
   return true;
 }
@@ -2208,7 +2237,8 @@ void create_tab(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto split_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
                               const PaneId source_pane, const SplitAxis axis) noexcept -> bool {
-  if (pane_count(session) >= panes_per_session_max) {
+  if (pane_count(session) >= panes_per_session_max ||
+      !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
     return false;
   }
   const auto* const source = find_pane(tab, source_pane);
@@ -3095,6 +3125,10 @@ enum class ParseResult : std::uint8_t {
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
+      if (runtime->pending_writes.size() > queued_bytes_before &&
+          !scroll_viewport_for_application_input(session, *runtime)) {
+        return ParseResult::error;
+      }
       if (latency_sensitive_input(ordinary_input.size())) {
         runtime->interactive_damage.await_write(queued_bytes_before,
                                                 runtime->pending_writes.size());
@@ -3127,6 +3161,9 @@ enum class ParseResult : std::uint8_t {
         return ParseResult::error;
       }
       if (runtime->pending_writes.size() > queued_bytes_before) {
+        if (!scroll_viewport_for_application_input(session, *runtime)) {
+          return ParseResult::error;
+        }
         runtime->interactive_damage.await_write(queued_bytes_before,
                                                 runtime->pending_writes.size());
       }
@@ -3155,7 +3192,13 @@ enum class ParseResult : std::uint8_t {
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      runtime->interactive_damage.await_write(queued_bytes_before, runtime->pending_writes.size());
+      if (runtime->pending_writes.size() > queued_bytes_before) {
+        if (!scroll_viewport_for_application_input(session, *runtime)) {
+          return ParseResult::error;
+        }
+        runtime->interactive_damage.await_write(queued_bytes_before,
+                                                runtime->pending_writes.size());
+      }
       break;
     }
     case protocol::ClientMessageKind::focus: {
@@ -3270,8 +3313,32 @@ enum class ParseResult : std::uint8_t {
         const bool copy_selection = session.attachment.copy_mode.active &&
                                     session.attachment.selection_target == std::optional{target};
         if (wheel_button && (copy_selection || !tracking->enabled)) {
-          if (!scroll_copy_viewport_with_mouse(session, *target_tab, *pane, *runtime, runtimes,
-                                               message.mouse.button)) {
+          if (!copy_selection) {
+            const auto alternate_scroll = runtime->terminal.wheel_uses_alternate_scroll();
+            if (!alternate_scroll.has_value()) {
+              return ParseResult::error;
+            }
+            if (*alternate_scroll) {
+              clear_mouse_selection(session, runtimes);
+              const auto queued_bytes_before = runtime->pending_writes.size();
+              const auto queued = queue_alternate_scroll_input(
+                  runtime->pending_writes, runtime->terminal,
+                  message.mouse.button == protocol::MouseInputButton::four);
+              if (queued == InputQueueResult::full) {
+                return ParseResult::backpressure;
+              }
+              if (queued == InputQueueResult::encoding_failed) {
+                return ParseResult::error;
+              }
+              if (runtime->pending_writes.size() > queued_bytes_before) {
+                runtime->interactive_damage.await_write(queued_bytes_before,
+                                                        runtime->pending_writes.size());
+              }
+              break;
+            }
+          }
+          if (!scroll_viewport_with_mouse(session, *runtime, message.mouse.button,
+                                          copy_selection)) {
             return ParseResult::error;
           }
           break;

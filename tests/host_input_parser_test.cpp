@@ -75,6 +75,32 @@ TEST(HostInputParserTest, PreservesTypedBoundariesAcrossEveryFragmentationPoint)
   }
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(HostInputParserTest, DistinguishesVerticalAndHorizontalSgrWheelButtons) {
+  HostInputParser parser;
+  ASSERT_TRUE(parser.prepare().has_value());
+  std::array<std::byte, 64> storage{};
+  constexpr std::string_view encoded = "\x1B[<64;5;3M\x1B[<65;5;3M\x1B[<66;5;3M\x1B[<67;5;3M"
+                                       "\x1B[<128;5;3M\x1B[<129;5;3M\x1B[<130;5;3M\x1B[<131;5;3M";
+  constexpr std::array expected{
+      protocol::MouseInputButton::four,  protocol::MouseInputButton::five,
+      protocol::MouseInputButton::six,   protocol::MouseInputButton::seven,
+      protocol::MouseInputButton::eight, protocol::MouseInputButton::nine,
+      protocol::MouseInputButton::ten,   protocol::MouseInputButton::eleven,
+  };
+
+  const auto parsed =
+      parser.parse(std::as_bytes(std::span(encoded)), storage, {.columns = 80, .rows = 24});
+
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->event_count, expected.size());
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    EXPECT_EQ(parsed->events.at(index).kind, HostInputKind::mouse);
+    EXPECT_EQ(parsed->events.at(index).mouse.button, expected.at(index));
+  }
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HostInputParserTest, DecodesKittyKeyMetadataAcrossEveryFragmentationPoint) {
   constexpr std::string_view encoded = "\x1B[98;5:1;98u\x1B[57352;1:2u";

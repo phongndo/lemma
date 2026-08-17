@@ -481,6 +481,9 @@ public:
   // Narrow canonical child policy used to route physical mouse input without exposing Ghostty
   // mode values. Outer-terminal capture remains a Lemma presentation concern.
   [[nodiscard]] auto mouse_tracking() const noexcept -> std::expected<MouseTrackingState, Error>;
+  // True only for Ghostty's alternate-screen wheel-to-cursor-key condition: alternate screen,
+  // alternate-scroll mode enabled, and no explicit mouse reporting mode.
+  [[nodiscard]] auto wheel_uses_alternate_scroll() const noexcept -> std::expected<bool, Error>;
 
   // Canonical child mode used by the pane-owned presentation gate.
   [[nodiscard]] auto synchronized_output() const noexcept -> std::expected<bool, Error>;
@@ -509,6 +512,8 @@ public:
       -> std::expected<std::size_t, Error>;
 
   void scroll_viewport(ViewportScroll behavior, std::int64_t value = 0) noexcept;
+  // Moves a historical viewport to the active area and reports whether it changed.
+  [[nodiscard]] auto scroll_viewport_to_bottom() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto scroll_selection_into_view() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto viewport_state() const noexcept -> std::expected<ViewportState, Error>;
 
