@@ -993,11 +993,18 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
   ASSERT_TRUE(client.send("printf '__COPY_NEEDLE__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__COPY_NEEDLE__", deadline_after(5s)));
+  const auto live_screen = client.screen();
+  const auto live_status_begin = live_screen.find("[1:");
+  ASSERT_NE(live_status_begin, std::string::npos) << live_screen;
+  const auto live_status_end = live_screen.find(']', live_status_begin);
+  ASSERT_NE(live_status_end, std::string::npos) << live_screen;
+  const auto live_status =
+      live_screen.substr(live_status_begin, live_status_end - live_status_begin + 1U);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'['}));
   ASSERT_TRUE(client.wait_for_screen("[0/0]", deadline_after(5s))) << client.screen() << "\nraw:\n"
                                                                    << client.raw_tail();
-  EXPECT_NE(client.screen().find("[1:zsh]"), std::string::npos);
+  EXPECT_NE(client.screen().find(live_status), std::string::npos);
   EXPECT_EQ(client.screen().find("[1:COPY"), std::string::npos);
   ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.raw_tail();
 
