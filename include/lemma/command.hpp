@@ -2,8 +2,13 @@
 #define LEMMA_COMMAND_HPP
 
 #include "lemma/id.hpp"
+#include "lemma/limits.hpp"
 
+#include <array>
 #include <cstdint>
+#include <optional>
+#include <string_view>
+#include <variant>
 
 namespace lemma {
 
@@ -37,6 +42,12 @@ enum class CommandKind : std::uint8_t {
   previous_tab,
   close_tab,
   select_tab,
+  begin_rename_session,
+  begin_rename_tab,
+  rename_session,
+  rename_tab,
+  place_tab,
+  swap_panes,
   stop_session,
 };
 
@@ -49,8 +60,8 @@ enum class CommandOrigin : std::uint8_t {
   internal,
 };
 
-// Invalid IDs mean "the current object". Explicit IDs are retained in the command value so future
-// CLI, remote, and extension transports can use the same dispatcher without exposing core pointers.
+// Invalid IDs mean "the current object". Explicit IDs are retained in the command value so CLI,
+// remote, and extension transports can use the same dispatcher without exposing core pointers.
 struct CommandTarget final {
   SessionId session;
   TabId tab;
@@ -60,13 +71,52 @@ struct CommandTarget final {
   AttachmentId attachment;
 };
 
+class SessionNameValue final {
+public:
+  [[nodiscard]] static auto create(std::string_view value) noexcept
+      -> std::optional<SessionNameValue>;
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {bytes_.data(), size_}; }
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool { return size_ > 0; }
+
+private:
+  std::array<char, limits::session_name_bytes_max> bytes_{};
+  std::uint8_t size_{0};
+};
+
+class TabTitleValue final {
+public:
+  [[nodiscard]] static auto create(std::string_view value) noexcept -> std::optional<TabTitleValue>;
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {bytes_.data(), size_}; }
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool {
+    return size_ <= limits::tab_title_bytes_max;
+  }
+
+private:
+  std::array<char, limits::tab_title_bytes_max> bytes_{};
+  std::uint8_t size_{0};
+};
+
+struct CommandCoordinate final {
+  std::uint16_t value{0};
+};
+
+struct TabPlacementCommand final {
+  // Invalid means place at the end.
+  TabId before;
+};
+
+struct PaneSwapCommand final {
+  PaneId other;
+};
+
+using CommandPayload = std::variant<std::monostate, CommandCoordinate, SessionNameValue,
+                                    TabTitleValue, TabPlacementCommand, PaneSwapCommand>;
+
 struct Command final {
   CommandKind kind{CommandKind::none};
   CommandOrigin origin{CommandOrigin::none};
   CommandTarget target{};
-  // select_tab uses a zero-based live display position. Divider resize commands use an absolute
-  // tab-content cell coordinate on their typed axis. Other commands require zero.
-  std::uint16_t argument{0};
+  CommandPayload payload{}; // NOLINT(readability-redundant-member-init)
 };
 
 enum class CommandStatus : std::uint8_t {
@@ -77,6 +127,7 @@ enum class CommandStatus : std::uint8_t {
   invalid_target,
   stale_target,
   wrong_owner,
+  conflict,
   capacity,
   unavailable,
   failed,

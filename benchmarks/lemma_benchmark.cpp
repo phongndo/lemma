@@ -118,6 +118,19 @@ void benchmark_layout_resize_candidate(benchmark::State& state) {
   }
 }
 
+void benchmark_layout_swap_candidate(benchmark::State& state) {
+  const auto layout = benchmark_layout(64);
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto candidate = layout;
+    const bool swapped = candidate.swap(PaneId::from_parts(0, 1), PaneId::from_parts(63, 1));
+    benchmark::DoNotOptimize(candidate);
+    if (!swapped) {
+      state.SkipWithError("failed to swap benchmark layout");
+      return;
+    }
+  }
+}
+
 void benchmark_layout_divider_hit(benchmark::State& state) {
   const auto layout = benchmark_layout(64);
   constexpr PaneRectangle viewport{.columns = 240, .rows = 80};
@@ -644,6 +657,7 @@ BENCHMARK(benchmark_greeting);
 BENCHMARK(benchmark_command_dispatch);
 BENCHMARK(benchmark_layout_projection)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_layout_resize_candidate);
+BENCHMARK(benchmark_layout_swap_candidate);
 BENCHMARK(benchmark_layout_divider_hit);
 BENCHMARK(benchmark_layout_divider_resize_candidate);
 BENCHMARK(benchmark_live_divider_resize)->Arg(2)->Arg(4)->Arg(16)->Arg(64);

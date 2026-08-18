@@ -21,6 +21,9 @@ inline constexpr std::size_t input_message_bytes_max = limits::structured_input_
 inline constexpr std::uint16_t columns_max = 500;
 inline constexpr std::uint16_t rows_max = 200;
 inline constexpr std::size_t session_name_bytes_max = limits::session_name_bytes_max;
+inline constexpr std::size_t tab_title_bytes_max = limits::tab_title_bytes_max;
+inline constexpr std::size_t tab_slots_max =
+    static_cast<std::size_t>(limits::tabs_hard_max / limits::sessions_hard_max);
 inline constexpr std::size_t working_directory_bytes_max = limits::working_directory_bytes_max;
 // create_with_context uses this sentinel to reuse an existing session without creating one when
 // the caller cannot capture a fresh launch context.
@@ -78,6 +81,8 @@ enum class ControlCommand : std::uint8_t {
   list = 'L',
   list_session = 'Q',
   list_tabs = 'W',
+  rename_session = 'R',
+  rename_tab = 'T',
   kill = 'K',
   kill_all = 'X',
   shutdown = 'S',
@@ -87,6 +92,7 @@ enum class ControlResponse : std::uint8_t {
   ready = 'Y',
   missing = 'M',
   capacity = 'C',
+  conflict = 'D',
   failed = 'F',
 };
 
@@ -112,6 +118,14 @@ enum class PaneCommand : std::uint8_t {
   create_tab = 'c',
   next_tab = 'n',
   previous_tab = 'p',
+  begin_rename_session = 0x88,
+  begin_rename_tab = 0x89,
+  move_tab_left = 'P',
+  move_tab_right = 'N',
+  swap_pane_left = 0x84,
+  swap_pane_right = 0x85,
+  swap_pane_up = 0x86,
+  swap_pane_down = 0x87,
   kill_tab = '&',
   select_tab_0 = '0',
   select_tab_1 = '1',
@@ -125,11 +139,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.3. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.5. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{3};
+  std::uint8_t minor{5};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };

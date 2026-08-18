@@ -1009,33 +1009,26 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         return forward_ordinary_input(command_input);
       }
 
-      std::optional<std::byte> arrow_final;
-      if (event.key.key == protocol::KeyInputKey::arrow_up) {
-        arrow_final = std::byte{'A'};
-      } else if (event.key.key == protocol::KeyInputKey::arrow_down) {
-        arrow_final = std::byte{'B'};
-      } else if (event.key.key == protocol::KeyInputKey::arrow_right) {
-        arrow_final = std::byte{'C'};
-      } else if (event.key.key == protocol::KeyInputKey::arrow_left) {
-        arrow_final = std::byte{'D'};
+      std::uint32_t command_codepoint = 0;
+      if (has_unshifted_command) {
+        command_codepoint = event.key.unshifted_codepoint;
+      } else if (has_text_command) {
+        command_codepoint = std::to_integer<std::uint8_t>(text.front());
       }
-      if (arrow_final.has_value() && command_modifiers == protocol::key_input_modifier_control) {
-        auto resize_key = std::byte{'H'};
-        if (*arrow_final == std::byte{'A'}) {
-          resize_key = std::byte{'K'};
-        } else if (*arrow_final == std::byte{'B'}) {
-          resize_key = std::byte{'J'};
-        } else if (*arrow_final == std::byte{'C'}) {
-          resize_key = std::byte{'L'};
-        }
-        LEMMA_ASSERT(resize_key != std::byte{0});
-        const std::array command_input{resize_key};
+      const bool is_hjkl = command_codepoint == 'h' || command_codepoint == 'j' ||
+                           command_codepoint == 'k' || command_codepoint == 'l';
+      if (is_hjkl && command_modifiers == protocol::key_input_modifier_control) {
+        // Legacy terminals encode Ctrl-letter as its ASCII C0 offset; normalize typed metadata to
+        // that same bounded prefix-parser representation.
+        const std::array command_input{
+            static_cast<std::byte>(command_codepoint - static_cast<std::uint32_t>('`'))};
         swallow_command_release = event.key.action == protocol::KeyInputAction::press;
         swallowed_command_key = event.key.key;
         return forward_ordinary_input(command_input);
       }
-      if (arrow_final.has_value() && command_modifiers == 0) {
-        const std::array command_input{std::byte{0x1B}, std::byte{'['}, *arrow_final};
+      if (is_hjkl && command_modifiers == protocol::key_input_modifier_alt) {
+        // Legacy terminals encode Alt-letter as Escape followed by the letter.
+        const std::array command_input{std::byte{0x1B}, static_cast<std::byte>(command_codepoint)};
         swallow_command_release = event.key.action == protocol::KeyInputAction::press;
         swallowed_command_key = event.key.key;
         return forward_ordinary_input(command_input);

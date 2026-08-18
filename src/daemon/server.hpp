@@ -1,6 +1,7 @@
 #ifndef LEMMA_DAEMON_SERVER_HPP
 #define LEMMA_DAEMON_SERVER_HPP
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -53,6 +54,10 @@ struct ServeOptions final {
 [[nodiscard]] auto list(const RuntimeEndpoint& endpoint, std::string_view session) -> int;
 [[nodiscard]] auto list_tabs(const RuntimeEndpoint& endpoint,
                              std::string_view session = default_session) -> int;
+[[nodiscard]] auto rename_session(const RuntimeEndpoint& endpoint, std::string_view session,
+                                  std::string_view new_name) -> int;
+[[nodiscard]] auto rename_tab(const RuntimeEndpoint& endpoint, std::string_view session,
+                              std::size_t one_based_position, std::string_view title) -> int;
 [[nodiscard]] auto kill(const RuntimeEndpoint& endpoint, std::string_view session = default_session)
     -> int;
 [[nodiscard]] auto kill_all(const RuntimeEndpoint& endpoint) -> int;

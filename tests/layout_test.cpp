@@ -229,6 +229,24 @@ TEST(PaneLayoutTest, RemovePromotesSiblingWithoutInvalidatingRetainedTopology) {
   EXPECT_EQ(projection.value_or(LayoutProjection{}).pane_count, 2U);
 }
 
+TEST(PaneLayoutTest, SwapExchangesOnlyLeafIdentity) {
+  PaneLayout layout(pane(0));
+  ASSERT_TRUE(layout.split(pane(0), pane(1), SplitAxis::left_right));
+  ASSERT_TRUE(layout.split(pane(1), pane(2), SplitAxis::top_bottom));
+  constexpr PaneRectangle viewport{.columns = 80, .rows = 23};
+  ASSERT_EQ(layout.resize(pane(2), ResizeDirection::up, viewport), LayoutResizeStatus::applied);
+  const auto first_before = rectangle(layout, pane(0), viewport);
+  const auto second_before = rectangle(layout, pane(2), viewport);
+
+  ASSERT_TRUE(layout.swap(pane(0), pane(2)));
+
+  EXPECT_TRUE(layout.valid());
+  EXPECT_EQ(rectangle(layout, pane(0), viewport), second_before);
+  EXPECT_EQ(rectangle(layout, pane(2), viewport), first_before);
+  EXPECT_FALSE(layout.swap(pane(0), pane(0)));
+  EXPECT_FALSE(layout.swap(pane(0), pane(9)));
+}
+
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(PaneLayoutTest, SupportsMaximumBoundedDepthAndPaneCount) {

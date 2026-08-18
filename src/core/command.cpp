@@ -1,5 +1,14 @@
 #include "lemma/command.hpp"
 
+#include "lemma/limits.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <string_view>
+#include <variant>
+
 namespace lemma {
 namespace {
 
@@ -33,6 +42,12 @@ namespace {
   case CommandKind::previous_tab:
   case CommandKind::close_tab:
   case CommandKind::select_tab:
+  case CommandKind::begin_rename_session:
+  case CommandKind::begin_rename_tab:
+  case CommandKind::rename_session:
+  case CommandKind::rename_tab:
+  case CommandKind::place_tab:
+  case CommandKind::swap_panes:
   case CommandKind::stop_session:
     return true;
   }
@@ -58,11 +73,29 @@ namespace {
          kind == CommandKind::resize_top_bottom_divider;
 }
 
-[[nodiscard]] constexpr auto valid_argument(const Command& command) noexcept -> bool {
+[[nodiscard]] auto valid_payload(const Command& command) noexcept -> bool {
   if (command.kind == CommandKind::select_tab) {
-    return command.argument < command_tab_slots_max;
+    const auto* const coordinate = std::get_if<CommandCoordinate>(&command.payload);
+    return coordinate != nullptr && coordinate->value < command_tab_slots_max;
   }
-  return divider_resize_command(command.kind) || command.argument == 0;
+  if (divider_resize_command(command.kind)) {
+    return std::holds_alternative<CommandCoordinate>(command.payload);
+  }
+  if (command.kind == CommandKind::rename_session) {
+    const auto* const name = std::get_if<SessionNameValue>(&command.payload);
+    return name != nullptr && name->valid();
+  }
+  if (command.kind == CommandKind::rename_tab) {
+    return std::holds_alternative<TabTitleValue>(command.payload);
+  }
+  if (command.kind == CommandKind::place_tab) {
+    return std::holds_alternative<TabPlacementCommand>(command.payload);
+  }
+  if (command.kind == CommandKind::swap_panes) {
+    const auto* const swap = std::get_if<PaneSwapCommand>(&command.payload);
+    return swap != nullptr && swap->other.is_valid() && swap->other != command.target.pane;
+  }
+  return std::holds_alternative<std::monostate>(command.payload);
 }
 
 [[nodiscard]] constexpr auto valid_target_hierarchy(const CommandTarget& target) noexcept -> bool {
@@ -76,6 +109,8 @@ namespace {
          (!has_attachment || has_session);
 }
 
+// Target-shape validation is deliberately exhaustive over command-specific ID requirements.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] constexpr auto valid_target_shape(const Command& command) noexcept -> bool {
   const bool has_tab = command.target.tab.is_valid();
   const bool has_pane = command.target.pane.is_valid();
@@ -90,7 +125,25 @@ namespace {
       (has_tab || has_pane || has_peer_pane || has_attachment)) {
     return false;
   }
-  return command.kind != CommandKind::detach_client || (!has_tab && !has_pane && !has_peer_pane);
+  if (command.kind == CommandKind::rename_session && (has_tab || has_pane || has_peer_pane)) {
+    return false;
+  }
+  if (command.kind == CommandKind::begin_rename_session) {
+    return !has_tab && !has_pane && !has_peer_pane && has_attachment;
+  }
+  if (command.kind == CommandKind::detach_client) {
+    return !has_tab && !has_pane && !has_peer_pane;
+  }
+  if (command.kind == CommandKind::begin_rename_tab) {
+    return has_tab && !has_pane && !has_peer_pane && has_attachment;
+  }
+  if (command.kind == CommandKind::rename_tab || command.kind == CommandKind::place_tab) {
+    return has_tab && !has_pane && !has_peer_pane;
+  }
+  if (command.kind == CommandKind::swap_panes) {
+    return has_tab && has_pane && !has_peer_pane;
+  }
+  return true;
 }
 
 [[nodiscard]] constexpr auto valid_target(const Command& command) noexcept -> bool {
@@ -99,6 +152,37 @@ namespace {
 
 } // namespace
 
+auto SessionNameValue::create(const std::string_view value) noexcept
+    -> std::optional<SessionNameValue> {
+  if (value.empty() || value.size() > limits::session_name_bytes_max ||
+      !std::ranges::all_of(value, [](const char character) {
+        return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+               (character >= '0' && character <= '9') || character == '_' || character == '-';
+      })) {
+    return std::nullopt;
+  }
+  SessionNameValue result;
+  std::memcpy(result.bytes_.data(), value.data(), value.size());
+  result.size_ = static_cast<std::uint8_t>(value.size());
+  return result;
+}
+
+auto TabTitleValue::create(const std::string_view value) noexcept -> std::optional<TabTitleValue> {
+  if (value.size() > limits::tab_title_bytes_max ||
+      !std::ranges::all_of(value, [](const char character) {
+        const auto byte = static_cast<unsigned char>(character);
+        return byte >= 0x20U && byte <= 0x7eU;
+      })) {
+    return std::nullopt;
+  }
+  TabTitleValue result;
+  if (!value.empty()) {
+    std::memcpy(result.bytes_.data(), value.data(), value.size());
+  }
+  result.size_ = static_cast<std::uint8_t>(value.size());
+  return result;
+}
+
 auto CommandDispatcher::dispatch(const Command& command) const noexcept -> CommandResult {
   const auto complete = [&](const CommandResult result) {
     if (observer_ != nullptr) {
@@ -106,7 +190,7 @@ auto CommandDispatcher::dispatch(const Command& command) const noexcept -> Comma
     }
     return result;
   };
-  if (!valid_kind(command.kind) || !valid_origin(command.origin) || !valid_argument(command)) {
+  if (!valid_kind(command.kind) || !valid_origin(command.origin) || !valid_payload(command)) {
     return complete({.status = CommandStatus::invalid_command});
   }
   if (!valid_target(command)) {

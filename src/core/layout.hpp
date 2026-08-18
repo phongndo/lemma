@@ -81,6 +81,7 @@ public:
       -> std::optional<PaneRectangle>;
 
   [[nodiscard]] auto split(PaneId source, PaneId added, SplitAxis axis) noexcept -> bool;
+  [[nodiscard]] auto swap(PaneId first, PaneId second) noexcept -> bool;
   [[nodiscard]] auto remove(PaneId pane) noexcept -> std::optional<PaneId>;
   [[nodiscard]] auto resize(PaneId pane, ResizeDirection direction, PaneRectangle viewport) noexcept
       -> LayoutResizeStatus;

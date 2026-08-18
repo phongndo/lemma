@@ -12,6 +12,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <expected>
@@ -41,6 +42,7 @@ namespace {
 
 constexpr auto response_ready = protocol::wire_byte(protocol::ControlResponse::ready);
 constexpr auto response_capacity = protocol::wire_byte(protocol::ControlResponse::capacity);
+constexpr auto response_conflict = protocol::wire_byte(protocol::ControlResponse::conflict);
 constexpr auto response_missing = protocol::wire_byte(protocol::ControlResponse::missing);
 using platform::close_descriptor;
 using platform::read_exact;
@@ -56,6 +58,14 @@ using platform::write_text;
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
+}
+
+[[nodiscard]] constexpr auto valid_tab_title(const std::string_view title) noexcept -> bool {
+  return title.size() <= protocol::tab_title_bytes_max &&
+         std::ranges::all_of(title, [](const char character) {
+           const auto byte = static_cast<unsigned char>(character);
+           return byte >= 0x20U && byte <= 0x7eU;
+         });
 }
 
 [[nodiscard]] auto socket_address(const std::string& path) noexcept
@@ -431,6 +441,37 @@ void redirect_standard_descriptors() noexcept {
   return 0;
 }
 
+[[nodiscard]] auto run_rename_request(const RuntimeEndpoint& endpoint,
+                                      const protocol::ControlCommand command,
+                                      const std::string_view session,
+                                      const std::span<const std::byte> fields) -> int {
+  int connection = open_connection(std::string(endpoint.socket_path()));
+  if (connection < 0) {
+    static_cast<void>(write_text(STDERR_FILENO, "no lemma daemon\n"));
+    return 1;
+  }
+  if (!send_session_request(connection, command, session) || !send_all(connection, fields)) {
+    close_descriptor(connection);
+    return 1;
+  }
+  std::array<std::byte, 1> response{};
+  const bool received = read_exact(connection, response);
+  close_descriptor(connection);
+  if (received && response.front() == response_ready) {
+    return 0;
+  }
+  if (received && response.front() == response_missing) {
+    static_cast<void>(write_text(STDERR_FILENO, "no matching lemma session or tab\n"));
+  } else if (received && response.front() == response_conflict) {
+    static_cast<void>(write_text(STDERR_FILENO, "lemma session name already exists\n"));
+  } else if (received && response.front() == response_capacity) {
+    static_cast<void>(write_text(STDERR_FILENO, "lemma identity capacity reached\n"));
+  } else {
+    static_cast<void>(write_text(STDERR_FILENO, "failed to rename lemma session or tab\n"));
+  }
+  return 1;
+}
+
 [[nodiscard]] auto run_shutdown_command(const RuntimeEndpoint& endpoint) -> int {
   int connection = open_connection(std::string(endpoint.socket_path()));
   if (connection < 0) {
@@ -548,6 +589,36 @@ auto list_tabs(const RuntimeEndpoint& endpoint, const std::string_view session) 
   return validate_session(session)
              ? run_control_command(endpoint, protocol::ControlCommand::list_tabs, session, true)
              : 1;
+}
+
+auto rename_session(const RuntimeEndpoint& endpoint, const std::string_view session,
+                    const std::string_view new_name) -> int {
+  if (!validate_session(session) || !validate_session(new_name)) {
+    return 1;
+  }
+  std::array<std::byte, 1U + protocol::session_name_bytes_max> fields{};
+  fields.front() = std::byte{static_cast<std::uint8_t>(new_name.size())};
+  std::ranges::copy(std::as_bytes(std::span(new_name.data(), new_name.size())),
+                    std::span(fields).subspan(1).begin());
+  return run_rename_request(endpoint, protocol::ControlCommand::rename_session, session,
+                            std::span(fields).first(1U + new_name.size()));
+}
+
+auto rename_tab(const RuntimeEndpoint& endpoint, const std::string_view session,
+                const std::size_t one_based_position, const std::string_view title) -> int {
+  if (!validate_session(session) || one_based_position == 0 ||
+      one_based_position > protocol::tab_slots_max || !valid_tab_title(title)) {
+    static_cast<void>(write_text(STDERR_FILENO, "invalid tab rename; position must be 1-16 and "
+                                                "title must be 0-64 printable ASCII bytes\n"));
+    return 1;
+  }
+  std::array<std::byte, 2U + protocol::tab_title_bytes_max> fields{};
+  fields.front() = std::byte{static_cast<std::uint8_t>(one_based_position - 1U)};
+  std::span(fields).subspan(1, 1).front() = std::byte{static_cast<std::uint8_t>(title.size())};
+  std::ranges::copy(std::as_bytes(std::span(title.data(), title.size())),
+                    std::span(fields).subspan(2).begin());
+  return run_rename_request(endpoint, protocol::ControlCommand::rename_tab, session,
+                            std::span(fields).first(2U + title.size()));
 }
 
 auto kill(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {

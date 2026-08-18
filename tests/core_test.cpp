@@ -29,6 +29,7 @@ using core::LaunchEnvironmentMode;
 using core::Pane;
 using core::Session;
 using core::Tab;
+using core::TabOrder;
 
 static_assert(std::is_trivially_copyable_v<Command>);
 static_assert(std::is_trivially_copyable_v<CommandResult>);
@@ -69,7 +70,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
                  .pane = {},
                  .peer_pane = {},
                  .attachment = {}},
-      .argument = 7,
+      .payload = CommandCoordinate{.value = 7},
   };
 
   const auto result = dispatcher.dispatch(command);
@@ -83,7 +84,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
   EXPECT_EQ(capture.command.target.session, command.target.session);
   EXPECT_EQ(capture.command.target.tab, command.target.tab);
-  EXPECT_EQ(capture.command.argument, 7U);
+  EXPECT_EQ(std::get<CommandCoordinate>(capture.command.payload).value, 7U);
 }
 
 TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
@@ -96,12 +97,12 @@ TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
   EXPECT_EQ(result.status, CommandStatus::applied);
   EXPECT_EQ(capture.calls, 1U);
   EXPECT_EQ(capture.command.kind, CommandKind::resize_left);
-  EXPECT_EQ(
-      dispatcher
-          .dispatch(
-              {.kind = CommandKind::resize_right, .origin = CommandOrigin::keymap, .argument = 1})
-          .status,
-      CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::resize_right,
+                           .origin = CommandOrigin::keymap,
+                           .payload = CommandCoordinate{.value = 1}})
+                .status,
+            CommandStatus::invalid_command);
 }
 
 TEST(CommandDispatcherTest, DispatchesGenerationSafeDividerResizeCommand) {
@@ -115,7 +116,7 @@ TEST(CommandDispatcherTest, DispatchesGenerationSafeDividerResizeCommand) {
                  .pane = PaneId::from_parts(5, 6),
                  .peer_pane = PaneId::from_parts(7, 8),
                  .attachment = AttachmentId::from_parts(1, 2)},
-      .argument = 45,
+      .payload = CommandCoordinate{.value = 45},
   };
 
   const auto result = dispatcher.dispatch(command);
@@ -124,7 +125,7 @@ TEST(CommandDispatcherTest, DispatchesGenerationSafeDividerResizeCommand) {
   EXPECT_EQ(capture.calls, 1U);
   EXPECT_EQ(capture.command.kind, CommandKind::resize_left_right_divider);
   EXPECT_EQ(capture.command.target.peer_pane, command.target.peer_pane);
-  EXPECT_EQ(capture.command.argument, 45U);
+  EXPECT_EQ(std::get<CommandCoordinate>(capture.command.payload).value, 45U);
 }
 
 TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
@@ -135,7 +136,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::select_tab,
                            .origin = CommandOrigin::client,
-                           .argument = command_tab_slots_max})
+                           .payload = CommandCoordinate{.value = command_tab_slots_max}})
                 .status,
             CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
@@ -168,12 +169,12 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                                       .attachment = AttachmentId::from_parts(1, 1)}})
                 .status,
             CommandStatus::invalid_target);
-  EXPECT_EQ(
-      dispatcher
-          .dispatch(
-              {.kind = CommandKind::focus_next, .origin = CommandOrigin::client, .argument = 1})
-          .status,
-      CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::focus_next,
+                           .origin = CommandOrigin::client,
+                           .payload = CommandCoordinate{.value = 1}})
+                .status,
+            CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::resize_left_right_divider,
                            .origin = CommandOrigin::client,
@@ -182,7 +183,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                                       .pane = PaneId::from_parts(1, 1),
                                       .peer_pane = {},
                                       .attachment = AttachmentId::from_parts(1, 1)},
-                           .argument = 10})
+                           .payload = CommandCoordinate{.value = 10}})
                 .status,
             CommandStatus::invalid_target);
   EXPECT_EQ(dispatcher
@@ -205,13 +206,100 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
             CommandStatus::failed);
 }
 
+TEST(CommandDispatcherTest, ValidatesTypedRenameReorderAndSwapPayloads) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const auto session = SessionId::from_parts(1, 1);
+  const auto tab = TabId::from_parts(2, 1);
+  const auto other_tab = TabId::from_parts(3, 1);
+  const auto pane = PaneId::from_parts(4, 1);
+  const auto other_pane = PaneId::from_parts(5, 1);
+  const auto attachment = AttachmentId::from_parts(1, 1);
+  const auto name = SessionNameValue::create("renamed");
+  const auto title = TabTitleValue::create("build logs");
+  ASSERT_TRUE(name.has_value());
+  ASSERT_TRUE(title.has_value());
+  const auto name_value = name.value_or(SessionNameValue{});
+  const auto title_value = title.value_or(TabTitleValue{});
+
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::begin_rename_session,
+                             .origin = CommandOrigin::client,
+                             .target = {.session = session,
+                                        .tab = {},
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = attachment}})
+                  .succeeded());
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::begin_rename_tab,
+                             .origin = CommandOrigin::client,
+                             .target = {.session = session,
+                                        .tab = tab,
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = attachment}})
+                  .succeeded());
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::rename_session,
+                             .origin = CommandOrigin::cli,
+                             .target = {.session = session,
+                                        .tab = {},
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = {}},
+                             .payload = name_value})
+                  .succeeded());
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::rename_tab,
+                             .origin = CommandOrigin::cli,
+                             .target = {.session = session,
+                                        .tab = tab,
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = {}},
+                             .payload = title_value})
+                  .succeeded());
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::place_tab,
+                             .origin = CommandOrigin::keymap,
+                             .target = {.session = session,
+                                        .tab = tab,
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = {}},
+                             .payload = TabPlacementCommand{.before = other_tab}})
+                  .succeeded());
+  EXPECT_TRUE(dispatcher
+                  .dispatch({.kind = CommandKind::swap_panes,
+                             .origin = CommandOrigin::keymap,
+                             .target = {.session = session,
+                                        .tab = tab,
+                                        .pane = pane,
+                                        .peer_pane = {},
+                                        .attachment = {}},
+                             .payload = PaneSwapCommand{.other = other_pane}})
+                  .succeeded());
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::swap_panes,
+                           .origin = CommandOrigin::keymap,
+                           .target = {.session = session,
+                                      .tab = tab,
+                                      .pane = pane,
+                                      .peer_pane = {},
+                                      .attachment = {}},
+                           .payload = PaneSwapCommand{.other = pane}})
+                .status,
+            CommandStatus::invalid_command);
+}
+
 TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
   constexpr std::array environment{std::byte{'A'}, std::byte{'='}, std::byte{'1'}, std::byte{0}};
   Session session("semantic", "/tmp", environment, LaunchEnvironmentMode::replace);
   session.id = SessionId::from_parts(3, 7);
-  auto pane = std::make_unique<Pane>();
+  const auto pane_id = PaneId::from_parts(0, 1);
   const auto tab_id = TabId::from_parts(2, 5);
-  Tab tab(tab_id, std::move(pane));
+  Tab tab(tab_id, pane_id);
   Attachment attachment{
       .id = AttachmentId::from_parts(3, 7),
       .session = session.id,
@@ -220,6 +308,7 @@ TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
       .selection_target = {},
       .mouse_capture = {},
       .copy_mode = {},
+      .rename_prompt = {},
   };
 
   EXPECT_EQ(session.session_name(), "semantic");
@@ -227,11 +316,63 @@ TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
   EXPECT_TRUE(std::ranges::equal(session.launch_environment(), environment));
   EXPECT_EQ(session.environment_mode, LaunchEnvironmentMode::replace);
   EXPECT_EQ(tab.id, tab_id);
-  EXPECT_EQ(tab.focused_pane, PaneId::from_parts(0, 1));
+  EXPECT_EQ(tab.focused_pane, pane_id);
   EXPECT_EQ(tab.previous_pane, tab.focused_pane);
   EXPECT_EQ(attachment.session, session.id);
   EXPECT_EQ(attachment.columns, 120U);
   EXPECT_EQ(attachment.rows, 40U);
+}
+
+TEST(SessionModelTest, TabOrderIsOneBoundedStableIdPermutation) {
+  TabOrder order;
+  const auto first = TabId::from_parts(4, 1);
+  const auto second = TabId::from_parts(1, 3);
+  const auto third = TabId::from_parts(9, 2);
+
+  ASSERT_TRUE(order.append(first));
+  ASSERT_TRUE(order.append(second));
+  ASSERT_TRUE(order.append(third));
+  EXPECT_FALSE(order.append(second));
+  EXPECT_EQ(order.at(0), first);
+  EXPECT_EQ(order.at(1), second);
+  EXPECT_EQ(order.at(2), third);
+
+  EXPECT_TRUE(order.place_before(third, first));
+  EXPECT_EQ(order.at(0), third);
+  EXPECT_EQ(order.at(1), first);
+  EXPECT_EQ(order.at(2), second);
+  EXPECT_FALSE(order.place_before(third, first));
+  EXPECT_TRUE(order.place_before(first, std::nullopt));
+  EXPECT_EQ(order.at(0), third);
+  EXPECT_EQ(order.at(1), second);
+  EXPECT_EQ(order.at(2), first);
+
+  EXPECT_TRUE(order.erase(second));
+  EXPECT_EQ(order.size(), 2U);
+  EXPECT_EQ(order.at(0), third);
+  EXPECT_EQ(order.at(1), first);
+  EXPECT_FALSE(order.position_of(second).has_value());
+}
+
+TEST(SessionModelTest, RenameAndTabTitleValuesAreBoundedAndValidated) {
+  Session session("before", {}, {}, LaunchEnvironmentMode::inherit);
+  EXPECT_TRUE(session.rename("after_2"));
+  EXPECT_EQ(session.session_name(), "after_2");
+  EXPECT_FALSE(session.rename("contains space"));
+  EXPECT_EQ(session.session_name(), "after_2");
+
+  Tab tab(TabId::from_parts(0, 1), PaneId::from_parts(0, 1));
+  EXPECT_TRUE(tab.set_title_override("build logs"));
+  EXPECT_EQ(tab.title_override(), "build logs");
+  EXPECT_FALSE(tab.set_title_override(std::string_view{"bad\x1btitle", 9}));
+  EXPECT_EQ(tab.title_override(), "build logs");
+  EXPECT_TRUE(tab.set_title_override({}));
+  EXPECT_TRUE(tab.title_override().empty());
+
+  EXPECT_TRUE(SessionNameValue::create("valid-name").has_value());
+  EXPECT_FALSE(SessionNameValue::create("invalid name").has_value());
+  EXPECT_TRUE(TabTitleValue::create("").has_value());
+  EXPECT_FALSE(TabTitleValue::create(std::string_view{"bad\n", 4}).has_value());
 }
 
 TEST(CopyModeCoreTest, ReducesVimChordsAndPhaseSpecificEscapeWithoutTerminalState) {

@@ -103,17 +103,22 @@ template <typename Integer>
 [[nodiscard]] auto print_usage(std::FILE* const stream) noexcept -> int {
   return write_fragment(
              stream,
-             "Usage: lemma [command [session]]\n\nCommands:\n  new [name]      start and "
+             "Usage: lemma [command [arguments...]]\n\nCommands:\n  new [name]      start and "
              "attach\n  start [name]    start detached\n  attach [name]   attach\n  list "
-             "[name]     list all or one\n  tabs [name]     list tabs\n  kill [name]     stop "
+             "[name]     list all or one\n  tabs [name]     list tabs\n  session rename OLD NEW\n  "
+             "                rename a session\n  tab rename SESSION NUMBER [TITLE]\n              "
+             "    set or clear a tab title override\n  kill [name]     stop "
              "one session\n  kill-all        stop every session\n  shutdown        show "
              "destructive "
              "shutdown warning\n  shutdown --confirm\n                  stop the daemon and every "
              "session\n"
              "  help            show this help\n  version         show build and "
              "protocol version\n  demo            VT demo\n\nWithout a command, Lemma creates or "
-             "enters `default`. C-b % and C-b \" split panes; C-b C-arrow, C-b H/J/K/L, "
-             "or dragging a separator resizes; C-b c creates a tab; C-b n/p changes tabs; C-b d "
+             "enters `default`. C-b % and C-b \" split panes; C-b h/j/k/l focuses panes; C-b "
+             "H/J/K/L swaps panes; C-b Ctrl-h/j/k/l or Alt-h/j/k/l, or dragging a separator "
+             "resizes; C-b c creates "
+             "a tab; C-b n/p changes tabs; C-b R renames the session; C-b r renames the tab; C-b "
+             "P/N reorders tabs; C-b d "
              "detaches.\n")
              ? 0
              : 1;
@@ -192,13 +197,32 @@ template <typename Integer>
   if (arguments.size() == 1) {
     return dispatch(endpoint, "new", daemon::default_session, false);
   }
+  const std::string_view command(arguments.subspan(1, 1).front());
+  if (command == "session" && arguments.size() == 5 &&
+      std::string_view(arguments.subspan(2, 1).front()) == "rename") {
+    return daemon::rename_session(endpoint, arguments.subspan(3, 1).front(),
+                                  arguments.subspan(4, 1).front());
+  }
+  if (command == "tab" && (arguments.size() == 5 || arguments.size() == 6) &&
+      std::string_view(arguments.subspan(2, 1).front()) == "rename") {
+    const std::string_view encoded_position(arguments.subspan(4, 1).front());
+    std::size_t position = 0;
+    const auto parsed = std::from_chars(encoded_position.begin(), encoded_position.end(), position);
+    if (parsed.ec != std::errc{} || parsed.ptr != encoded_position.end()) {
+      static_cast<void>(write_fragment(stderr, "invalid tab position\n"));
+      return 2;
+    }
+    const std::string_view title = arguments.size() == 6
+                                       ? std::string_view(arguments.subspan(5, 1).front())
+                                       : std::string_view{};
+    return daemon::rename_tab(endpoint, arguments.subspan(3, 1).front(), position, title);
+  }
   if (arguments.size() != 2 && arguments.size() != 3) {
     static_cast<void>(write_fragment(stderr, "invalid number of arguments\n"));
     static_cast<void>(print_usage(stderr));
     return 2;
   }
 
-  const std::string_view command(arguments.subspan(1, 1).front());
   std::string_view session = daemon::default_session;
   const bool named = arguments.size() == 3;
   if (named) {

@@ -50,13 +50,15 @@ namespace {
 
 constexpr std::size_t status_title_columns_max = 16;
 constexpr std::size_t status_session_columns_max = 32;
-constexpr std::size_t status_label_bytes_max = status_session_columns_max + 2U;
-constexpr std::string_view status_style = "\x1B[0;2m";
-constexpr std::string_view status_session_style = "\x1B[0;1;7m";
+constexpr std::size_t status_label_bytes_max = status_session_columns_max + 4U;
+constexpr std::string_view status_style = "\x1B[0m";
+constexpr std::string_view status_identity_style = "\x1B[0;1m";
+constexpr std::string_view status_prompt_edit_style = "\x1B[0;1;4m";
 
 struct StatusLabel final {
   std::array<char, status_label_bytes_max> text{};
   std::size_t size{0};
+  bool active{false};
 };
 
 [[nodiscard]] auto sanitized_title(const std::string_view title,
@@ -88,12 +90,21 @@ status_label(const StatusTab& tab,
              const std::size_t title_columns_max = status_title_columns_max) noexcept
     -> StatusLabel {
   StatusLabel label;
+  label.active = tab.active;
   const auto append_character = [&](const char character) {
     std::span(label.text).subspan(label.size, 1).front() = character;
     ++label.size;
   };
   if (tab.active) {
     append_character('[');
+    append_character(' ');
+    if (title_columns_max > 0) {
+      label.size += sanitized_title(
+          tab.title, std::span(label.text).subspan(label.size).first(title_columns_max));
+    }
+    append_character(' ');
+    append_character(']');
+    return label;
   }
   const auto result =
       std::to_chars(std::span(label.text).subspan(label.size).data(), label.text.end(), tab.number);
@@ -106,25 +117,25 @@ status_label(const StatusTab& tab,
     label.size += sanitized_title(
         tab.title, std::span(label.text).subspan(label.size).first(title_columns_max));
   }
-  if (tab.active) {
-    append_character(']');
-  }
   return label;
 }
 
 [[nodiscard]] auto session_label(const std::string_view session_name,
                                  const std::size_t columns_max) noexcept -> StatusLabel {
   StatusLabel label;
-  const auto bounded_columns = std::min(columns_max, status_session_columns_max + std::size_t{2});
-  if (session_name.empty() || bounded_columns < 3U) {
+  const auto bounded_columns = std::min(columns_max, status_session_columns_max + std::size_t{4});
+  if (session_name.empty() || bounded_columns < 5U) {
     return label;
   }
-  label.text.front() = ' ';
-  label.size = 1U;
+  label.text.front() = '{';
+  std::span(label.text).subspan(1, 1).front() = ' ';
+  label.size = 2U;
   label.size += sanitized_title(
       session_name,
-      std::span(label.text).subspan(label.size).first(bounded_columns - std::size_t{2}));
+      std::span(label.text).subspan(label.size).first(bounded_columns - std::size_t{4}));
   std::span(label.text).subspan(label.size, 1).front() = ' ';
+  ++label.size;
+  std::span(label.text).subspan(label.size, 1).front() = '}';
   ++label.size;
   return label;
 }
@@ -169,12 +180,351 @@ status_label(const StatusTab& tab,
   }
   for (std::size_t index = begin; index <= end; ++index) {
     const auto& label = std::span(labels).subspan(index, 1).front();
-    if (!append(output, used, std::string_view(label.text.data(), label.size)) ||
-        (index < end && !append(output, used, "  "))) {
+    if (!append(output, used, label.active ? status_identity_style : status_style) ||
+        !append(output, used, std::string_view(label.text.data(), label.size)) ||
+        !append(output, used, status_style) || (index < end && !append(output, used, "  "))) {
       return false;
     }
   }
   return end + 1U >= labels.size() || append(output, used, " …");
+}
+
+struct PromptValueProjection final {
+  std::size_t begin{0};
+  std::size_t size{0};
+  std::size_t cursor{0};
+};
+
+[[nodiscard]] constexpr auto prompt_value_projection(const StatusLine status,
+                                                     const std::size_t capacity) noexcept
+    -> PromptValueProjection {
+  if (capacity == 0) {
+    return {};
+  }
+  const auto cursor = std::min(status.prompt_cursor, status.prompt_value.size());
+  const auto begin = cursor > capacity ? cursor - capacity : 0U;
+  return {
+      .begin = begin,
+      .size = std::min(status.prompt_value.size() - begin, capacity),
+      .cursor = std::min(cursor - begin, capacity),
+  };
+}
+
+[[nodiscard]] constexpr auto bounded_status_view(std::string_view value, const std::size_t begin,
+                                                 const std::size_t size) noexcept
+    -> std::string_view {
+  value.remove_prefix(std::min(begin, value.size()));
+  value.remove_suffix(value.size() - std::min(size, value.size()));
+  return value;
+}
+
+struct PromptField final {
+  StatusLabel label;
+  std::size_t edit_offset{0};
+  std::size_t edit_size{0};
+  std::size_t cursor_offset{0};
+};
+
+void append_label_character(StatusLabel& label, const char character) noexcept {
+  LEMMA_ASSERT(label.size < label.text.size());
+  std::span(label.text).subspan(label.size, 1).front() = character;
+  ++label.size;
+}
+
+void append_label_text(StatusLabel& label, const std::string_view text) noexcept {
+  LEMMA_ASSERT(text.size() <= label.text.size() - label.size);
+  std::memcpy(std::span(label.text).subspan(label.size).data(), text.data(), text.size());
+  label.size += text.size();
+}
+
+[[nodiscard]] auto editable_session_label(const StatusLine status,
+                                          const std::size_t value_capacity) noexcept
+    -> PromptField {
+  PromptField field;
+  append_label_character(field.label, '{');
+  append_label_character(field.label, ' ');
+  field.edit_offset = field.label.size;
+  const auto value =
+      prompt_value_projection(status, std::min(value_capacity, status_session_columns_max));
+  append_label_text(field.label, bounded_status_view(status.prompt_value, value.begin, value.size));
+  field.edit_size = value.size;
+  field.cursor_offset = field.edit_offset + value.cursor;
+  append_label_character(field.label, ' ');
+  append_label_character(field.label, '}');
+  return field;
+}
+
+[[nodiscard]] auto editable_tab_label(const StatusLine status,
+                                      const std::size_t value_capacity) noexcept -> PromptField {
+  PromptField field;
+  field.label.active = true;
+  append_label_character(field.label, '[');
+  append_label_character(field.label, ' ');
+  field.edit_offset = field.label.size;
+  const auto value =
+      prompt_value_projection(status, std::min(value_capacity, status_title_columns_max));
+  append_label_text(field.label, bounded_status_view(status.prompt_value, value.begin, value.size));
+  field.edit_size = value.size;
+  field.cursor_offset = field.edit_offset + value.cursor;
+  append_label_character(field.label, ' ');
+  append_label_character(field.label, ']');
+  return field;
+}
+
+[[nodiscard]] auto editable_bare_label(const StatusLine status, const std::size_t capacity) noexcept
+    -> PromptField {
+  PromptField field;
+  if (capacity == 0) {
+    return field;
+  }
+  const auto value = prompt_value_projection(status, capacity - 1U);
+  append_label_text(field.label, bounded_status_view(status.prompt_value, value.begin, value.size));
+  field.edit_size = value.size;
+  field.cursor_offset = value.cursor;
+  append_label_character(field.label, ' ');
+  return field;
+}
+
+[[nodiscard]] constexpr auto prompt_message(const StatusLine status) noexcept -> std::string_view {
+  switch (status.prompt_feedback) {
+  case StatusPromptFeedback::none:
+    return {};
+  case StatusPromptFeedback::conflict:
+    return "Session already exists";
+  case StatusPromptFeedback::invalid:
+    return status.prompt_target == StatusPromptTarget::session ? "Invalid session name"
+                                                               : "Invalid tab title";
+  }
+  return {};
+}
+
+struct InlineStatusPromptProjection final {
+  StatusLabel session;
+  std::array<StatusLabel, status_tabs_max> labels{};
+  PromptField field;
+  std::string_view message;
+  std::size_t label_count{0};
+  std::size_t active{0};
+  std::size_t begin{0};
+  std::size_t end{0};
+  std::uint16_t tab_column{1};
+  std::uint16_t cursor_column{1};
+  bool show_tabs{false};
+  bool show_message{false};
+  bool bare_field{false};
+};
+
+// Prompt projection prioritizes the edited identity, then the active context, then neighboring
+// tabs and feedback. Narrow terminals degrade to the horizontally-scrolled field alone.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto inline_status_prompt_projection(const StatusLine status,
+                                                   const Viewport viewport) noexcept
+    -> InlineStatusPromptProjection {
+  InlineStatusPromptProjection projection;
+  projection.label_count = status.tabs.size();
+  auto labels = std::span(projection.labels).first(projection.label_count);
+  for (std::size_t index = 0; index < status.tabs.size(); ++index) {
+    const auto& tab = status.tabs.subspan(index, 1).front();
+    labels.subspan(index, 1).front() = status_label(tab);
+    if (tab.active) {
+      projection.active = index;
+    }
+  }
+
+  const auto columns = static_cast<std::size_t>(viewport.columns);
+  if (status.prompt_target == StatusPromptTarget::session) {
+    projection.field = editable_session_label(status, status_session_columns_max);
+    projection.session = projection.field.label;
+  } else {
+    projection.session = session_label(status.session_name, columns);
+    projection.field = editable_tab_label(status, status_title_columns_max);
+    labels.subspan(projection.active, 1).front() = projection.field.label;
+  }
+
+  projection.message = prompt_message(status);
+  auto active_width = labels.subspan(projection.active, 1).front().size;
+  const auto minimum_left = projection.session.size + active_width;
+  projection.show_message =
+      !projection.message.empty() && minimum_left + 2U + projection.message.size() <= columns;
+  auto left_columns = projection.show_message ? columns - projection.message.size() - 2U : columns;
+
+  if (status.prompt_target == StatusPromptTarget::active_tab && minimum_left > left_columns) {
+    const auto session_columns = left_columns > active_width ? left_columns - active_width : 0U;
+    projection.session = session_label(status.session_name, session_columns);
+  }
+
+  auto tab_columns = projection.session.size < left_columns ? left_columns - projection.session.size
+                                                            : std::size_t{0};
+  if (status.prompt_target == StatusPromptTarget::active_tab && active_width > tab_columns) {
+    auto capacity = status_title_columns_max;
+    while (capacity > 1U && projection.field.label.size > tab_columns) {
+      --capacity;
+      projection.field = editable_tab_label(status, capacity);
+    }
+    labels.subspan(projection.active, 1).front() = projection.field.label;
+    active_width = projection.field.label.size;
+  }
+
+  if (status.prompt_target == StatusPromptTarget::session &&
+      projection.session.size > left_columns) {
+    projection.field = left_columns >= 4U ? editable_session_label(status, left_columns - 4U)
+                                          : editable_bare_label(status, left_columns);
+    projection.session = projection.field.label;
+    projection.show_tabs = false;
+    projection.show_message = false;
+    left_columns = columns;
+  } else {
+    tab_columns = projection.session.size < left_columns ? left_columns - projection.session.size
+                                                         : std::size_t{0};
+    projection.show_tabs = active_width <= tab_columns &&
+                           (status.prompt_target != StatusPromptTarget::active_tab ||
+                            status.prompt_value.empty() || projection.field.edit_size > 0);
+  }
+
+  if (status.prompt_target == StatusPromptTarget::active_tab && !projection.show_tabs) {
+    projection.session = {};
+    projection.field = editable_bare_label(status, left_columns);
+    labels.subspan(projection.active, 1).front() = projection.field.label;
+    projection.show_tabs = projection.field.label.size <= left_columns;
+    projection.show_message = false;
+    projection.bare_field = true;
+    tab_columns = left_columns;
+  }
+
+  projection.begin = projection.active;
+  projection.end = projection.active;
+  if (projection.show_tabs && !projection.bare_field) {
+    bool try_left = true;
+    bool left_blocked = projection.begin == 0;
+    bool right_blocked = projection.end + 1U == labels.size();
+    while (!left_blocked || !right_blocked) {
+      const bool use_left = (try_left && !left_blocked) || right_blocked;
+      const auto candidate_begin = use_left ? projection.begin - 1U : projection.begin;
+      const auto candidate_end = use_left ? projection.end : projection.end + 1U;
+      if (status_width(labels, candidate_begin, candidate_end) <= tab_columns) {
+        projection.begin = candidate_begin;
+        projection.end = candidate_end;
+      } else if (use_left) {
+        left_blocked = true;
+      } else {
+        right_blocked = true;
+      }
+      left_blocked = left_blocked || projection.begin == 0;
+      right_blocked = right_blocked || projection.end + 1U == labels.size();
+      try_left = !try_left;
+    }
+    const auto width = status_width(labels, projection.begin, projection.end);
+    const auto centered_column = ((left_columns - width) / 2U) + 1U;
+    projection.tab_column =
+        static_cast<std::uint16_t>(std::max(centered_column, projection.session.size + 1U));
+  }
+
+  std::size_t cursor_column = 1U;
+  if (status.prompt_target == StatusPromptTarget::session) {
+    cursor_column += projection.field.cursor_offset;
+  } else {
+    cursor_column = projection.tab_column;
+    cursor_column += projection.begin > 0 && !projection.bare_field ? 2U : 0U;
+    for (std::size_t index = projection.begin; index < projection.active; ++index) {
+      cursor_column += labels.subspan(index, 1).front().size + 2U;
+    }
+    cursor_column += projection.field.cursor_offset;
+  }
+  projection.cursor_column =
+      static_cast<std::uint16_t>(std::clamp(cursor_column, std::size_t{1}, columns));
+  return projection;
+}
+
+[[nodiscard]] auto append_editable_label(const std::span<std::byte> output, std::size_t& used,
+                                         const PromptField& field) noexcept -> bool {
+  const auto text = std::string_view(field.label.text.data(), field.label.size);
+  return append(output, used, status_identity_style) &&
+         append(output, used, bounded_status_view(text, 0, field.edit_offset)) &&
+         append(output, used, status_prompt_edit_style) &&
+         append(output, used, bounded_status_view(text, field.edit_offset, field.edit_size)) &&
+         append(output, used, status_identity_style) &&
+         append(output, used,
+                bounded_status_view(text, field.edit_offset + field.edit_size, text.size())) &&
+         append(output, used, status_style);
+}
+
+[[nodiscard]] auto append_inline_prompt_tabs(const std::span<std::byte> output, std::size_t& used,
+                                             const InlineStatusPromptProjection& projection,
+                                             const StatusLine status) noexcept -> bool {
+  const auto labels = std::span(projection.labels).first(projection.label_count);
+  if (!projection.bare_field && projection.begin > 0 && !append(output, used, "… ")) {
+    return false;
+  }
+  for (std::size_t index = projection.begin; index <= projection.end; ++index) {
+    const auto& label = labels.subspan(index, 1).front();
+    const bool editable =
+        status.prompt_target == StatusPromptTarget::active_tab && index == projection.active;
+    if ((editable && !append_editable_label(output, used, projection.field)) ||
+        (!editable && (!append(output, used, label.active ? status_identity_style : status_style) ||
+                       !append(output, used, std::string_view(label.text.data(), label.size)) ||
+                       !append(output, used, status_style))) ||
+        (index < projection.end && !append(output, used, "  "))) {
+      return false;
+    }
+  }
+  return projection.bare_field || projection.end + 1U >= labels.size() ||
+         append(output, used, " …");
+}
+
+[[nodiscard]] auto append_inline_prompt_session(const std::span<std::byte> output,
+                                                std::size_t& used,
+                                                const InlineStatusPromptProjection& projection,
+                                                const StatusLine status) noexcept -> bool {
+  if (projection.session.size == 0) {
+    return true;
+  }
+  if (status.prompt_target == StatusPromptTarget::session) {
+    return append_editable_label(output, used, projection.field);
+  }
+  return append(output, used, status_identity_style) &&
+         append(output, used,
+                std::string_view(projection.session.text.data(), projection.session.size)) &&
+         append(output, used, status_style);
+}
+
+[[nodiscard]] auto append_inline_prompt_tab_group(const std::span<std::byte> output,
+                                                  std::size_t& used,
+                                                  const InlineStatusPromptProjection& projection,
+                                                  const StatusLine status) noexcept -> bool {
+  if (!projection.show_tabs) {
+    return true;
+  }
+  return append_position(output, used, 1, projection.tab_column) &&
+         append_inline_prompt_tabs(output, used, projection, status);
+}
+
+[[nodiscard]] auto append_inline_prompt_message(const std::span<std::byte> output,
+                                                std::size_t& used,
+                                                const InlineStatusPromptProjection& projection,
+                                                const Viewport viewport) noexcept -> bool {
+  if (!projection.show_message) {
+    return true;
+  }
+  constexpr std::uint16_t status_row = 1;
+  return append_position(
+             output, used, status_row,
+             static_cast<std::uint16_t>(viewport.columns - projection.message.size() + 1U)) &&
+         append(output, used, status_identity_style) && append(output, used, projection.message) &&
+         append(output, used, status_style);
+}
+
+[[nodiscard]] auto render_status_prompt(const StatusLine status, const Viewport viewport,
+                                        const std::span<std::byte> output,
+                                        std::size_t& used) noexcept -> bool {
+  const auto projection = inline_status_prompt_projection(status, viewport);
+  constexpr std::uint16_t status_row = 1;
+  return append_position(output, used, status_row, 1) && append(output, used, status_style) &&
+         append_spaces(output, used, viewport.columns) &&
+         append_position(output, used, status_row, 1) &&
+         append_inline_prompt_session(output, used, projection, status) &&
+         append_inline_prompt_tab_group(output, used, projection, status) &&
+         append_inline_prompt_message(output, used, projection, viewport) &&
+         append(output, used, "\x1B[0m");
 }
 
 // The visible status range is a pure function of the active tab, labels, and viewport width.
@@ -185,6 +535,9 @@ status_label(const StatusTab& tab,
     -> bool {
   if (status.tabs.empty() || viewport.rows < 2) {
     return true;
+  }
+  if (status.prompting()) {
+    return render_status_prompt(status, viewport, output, used);
   }
 
   std::array<StatusLabel, status_tabs_max> label_storage{};
@@ -205,21 +558,16 @@ status_label(const StatusTab& tab,
   const auto tab_columns = viewport.columns - session.size;
 
   if (labels.subspan(active, 1).front().size > tab_columns) {
-    const auto number_columns = status.tabs.subspan(active, 1).front().number < 10 ? 1U : 2U;
-    const auto title_columns =
-        tab_columns > number_columns + 3U ? tab_columns - number_columns - 3U : 0U;
+    const auto title_columns = tab_columns > 4U ? tab_columns - 4U : 0U;
     labels.subspan(active, 1).front() =
         status_label(status.tabs.subspan(active, 1).front(), title_columns);
   }
   if (labels.subspan(active, 1).front().size > tab_columns) {
     auto& label = labels.subspan(active, 1).front();
-    const auto result = std::to_chars(label.text.begin(), label.text.end(),
-                                      status.tabs.subspan(active, 1).front().number);
-    label.size =
-        result.ec == std::errc{}
-            ? std::min(tab_columns,
-                       static_cast<std::size_t>(std::distance(label.text.begin(), result.ptr)))
-            : 0;
+    constexpr std::string_view empty_active = "[  ]";
+    label.size = std::min(tab_columns, empty_active.size());
+    std::ranges::copy(std::span(empty_active.data(), empty_active.size()).first(label.size),
+                      label.text.begin());
   }
 
   std::size_t begin = active;
@@ -263,7 +611,7 @@ status_label(const StatusTab& tab,
   }
   if (session.size > 0 &&
       (!append_position(output, used, status_row, 1) ||
-       !append(output, used, status_session_style) ||
+       !append(output, used, status_identity_style) ||
        !append(output, used, std::string_view(session.text.data(), session.size)) ||
        !append(output, used, status_style))) {
     return false;
@@ -329,10 +677,57 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
          first.rectangle.row < second_bottom && second.rectangle.row < first_bottom;
 }
 
+[[nodiscard]] constexpr auto valid_prompt_target(const StatusPromptTarget target) noexcept -> bool {
+  switch (target) {
+  case StatusPromptTarget::none:
+  case StatusPromptTarget::session:
+  case StatusPromptTarget::active_tab:
+    return true;
+  }
+  return false;
+}
+
+[[nodiscard]] constexpr auto valid_prompt_feedback(const StatusPromptFeedback feedback) noexcept
+    -> bool {
+  switch (feedback) {
+  case StatusPromptFeedback::none:
+  case StatusPromptFeedback::invalid:
+  case StatusPromptFeedback::conflict:
+    return true;
+  }
+  return false;
+}
+
+[[nodiscard]] auto valid_prompt_value(const StatusLine status) noexcept -> bool {
+  if (!status.prompting()) {
+    return status.prompt_value.empty() && status.prompt_cursor == 0;
+  }
+  const auto valid_character = [target = status.prompt_target](const char character) {
+    const auto byte = static_cast<unsigned char>(character);
+    if (target == StatusPromptTarget::session) {
+      return (byte >= static_cast<unsigned char>('a') && byte <= static_cast<unsigned char>('z')) ||
+             (byte >= static_cast<unsigned char>('A') && byte <= static_cast<unsigned char>('Z')) ||
+             (byte >= static_cast<unsigned char>('0') && byte <= static_cast<unsigned char>('9')) ||
+             byte == static_cast<unsigned char>('_') || byte == static_cast<unsigned char>('-');
+    }
+    return byte >= 0x20U && byte <= 0x7eU;
+  };
+  const auto capacity = status.prompt_target == StatusPromptTarget::session
+                            ? limits::session_name_bytes_max
+                            : limits::tab_title_bytes_max;
+  return status.prompt_value.size() <= capacity &&
+         std::ranges::all_of(status.prompt_value, valid_character);
+}
+
 [[nodiscard]] auto valid_status(const StatusLine status) noexcept -> bool {
-  return status.tabs.size() <= status_tabs_max &&
+  return valid_prompt_target(status.prompt_target) &&
+         valid_prompt_feedback(status.prompt_feedback) && valid_prompt_value(status) &&
+         status.tabs.size() <= status_tabs_max &&
          (status.tabs.empty() || std::ranges::count(status.tabs, true, &StatusTab::active) == 1) &&
-         std::ranges::none_of(status.tabs, [](const StatusTab& tab) { return tab.number == 0; });
+         std::ranges::none_of(status.tabs, [](const StatusTab& tab) { return tab.number == 0; }) &&
+         status.prompt_cursor <= status.prompt_value.size() &&
+         (!status.prompting() || !status.tabs.empty()) &&
+         (status.prompting() || status.prompt_feedback == StatusPromptFeedback::none);
 }
 
 [[nodiscard]] constexpr auto has_visible_status(const Viewport viewport,
@@ -652,6 +1047,18 @@ struct CompositionPolicy final {
   };
 }
 
+[[nodiscard]] auto render_status_prompt_cursor(const StatusLine status, const Viewport viewport,
+                                               const std::span<std::byte> output,
+                                               std::size_t& used) noexcept -> bool {
+  if (!status.prompting() || viewport.rows < 2) {
+    return true;
+  }
+  const auto projection = inline_status_prompt_projection(status, viewport);
+  // A steady bar marks the insertion point without reverse-highlighting the cursor cell.
+  return append_position(output, used, 1, projection.cursor_column) &&
+         append(output, used, "\x1B[6 q\x1B[?25h");
+}
+
 [[nodiscard]] auto finish_frame(const std::span<std::byte> output, std::size_t& used,
                                 const bool has_focus, const bool unbuttoned_mouse_motion) noexcept
     -> bool {
@@ -677,7 +1084,8 @@ struct CompositionPolicy final {
 } // namespace
 
 // Validation is a separate pass so malformed composition input cannot partially consume terminal
-// damage or alter retained pane state.
+// damage or alter retained pane state. The bounded branches preserve all-or-nothing composition.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
                                  const std::span<std::byte> output, const bool force_full,
                                  const StatusLine status, const PaneOverlay overlay) noexcept
@@ -712,7 +1120,8 @@ struct CompositionPolicy final {
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
   }
-  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset)) {
+  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset) ||
+      !render_status_prompt_cursor(status, viewport, output, used)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
   }
@@ -720,7 +1129,8 @@ struct CompositionPolicy final {
   // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
   // advance.
   composition.full = composition.full && complete_frame;
-  if (!finish_frame(output, used, policy->has_presented_focus, policy->unbuttoned_mouse_motion)) {
+  if (!finish_frame(output, used, policy->has_presented_focus || status.prompting(),
+                    status.prompting() ? false : policy->unbuttoned_mouse_motion)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
   }

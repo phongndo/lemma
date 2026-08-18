@@ -39,10 +39,30 @@ struct StatusTab final {
   bool active{false};
 };
 
+enum class StatusPromptTarget : std::uint8_t {
+  none,
+  session,
+  active_tab,
+};
+
+enum class StatusPromptFeedback : std::uint8_t {
+  none,
+  invalid,
+  conflict,
+};
+
 struct StatusLine final {
   std::string_view session_name;
   std::span<const StatusTab> tabs;
+  StatusPromptTarget prompt_target{StatusPromptTarget::none};
+  StatusPromptFeedback prompt_feedback{StatusPromptFeedback::none};
+  std::string_view prompt_value;
+  std::size_t prompt_cursor{0};
   bool dirty{false};
+
+  [[nodiscard]] constexpr auto prompting() const noexcept -> bool {
+    return prompt_target != StatusPromptTarget::none;
+  }
 };
 
 struct PaneOverlay final {

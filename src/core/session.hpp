@@ -32,6 +32,7 @@ enum class LaunchEnvironmentMode : std::uint8_t {
 
 struct Pane final {
   PaneId id;
+  TabId tab;
   PaneRectangle rectangle{};
 };
 
@@ -40,8 +41,35 @@ struct PaneSlot final {
   std::uint32_t generation{0};
 };
 
+// One bounded permutation owns display order. Tab storage slots and stable TabIds never encode
+// presentation position, so reorder cannot invalidate identity or scheduler traversal.
+class TabOrder final {
+public:
+  [[nodiscard]] auto append(TabId tab) noexcept -> bool;
+  [[nodiscard]] auto erase(TabId tab) noexcept -> bool;
+  [[nodiscard]] auto place_before(TabId moving, std::optional<TabId> anchor) noexcept -> bool;
+  [[nodiscard]] auto at(std::size_t position) const noexcept -> std::optional<TabId>;
+  [[nodiscard]] auto position_of(TabId tab) const noexcept -> std::optional<std::size_t>;
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] constexpr auto empty() const noexcept -> bool { return size_ == 0; }
+
+private:
+  std::array<TabId, tabs_per_session_max> ids_{};
+  std::size_t size_{0};
+};
+
+class TabTitleOverride final {
+public:
+  [[nodiscard]] auto view() const noexcept -> std::string_view;
+  [[nodiscard]] auto set(std::string_view title) noexcept -> bool;
+
+private:
+  std::array<char, limits::tab_title_bytes_max> bytes_{};
+  std::size_t size_{0};
+};
+
 struct Tab final {
-  Tab(TabId assigned_id, std::unique_ptr<Pane> first_pane) noexcept;
+  Tab(TabId assigned_id, PaneId first_pane) noexcept;
 
   Tab(const Tab&) = delete;
   auto operator=(const Tab&) -> Tab& = delete;
@@ -49,14 +77,17 @@ struct Tab final {
   auto operator=(Tab&&) -> Tab& = delete;
   ~Tab() = default;
 
+  [[nodiscard]] auto title_override() const noexcept -> std::string_view;
+  [[nodiscard]] auto set_title_override(std::string_view title) noexcept -> bool;
+
   TabId id;
-  std::array<PaneSlot, panes_per_tab_max> panes{};
   PaneLayout layout;
   // Inactive tabs retain their last usable geometry while continuing to process PTY output.
   std::uint16_t layout_columns{80};
   std::uint16_t layout_rows{24};
   PaneId focused_pane;
   PaneId previous_pane;
+  TabTitleOverride title;
   bool zoomed{false};
   bool layout_suspended{false};
 };
@@ -125,6 +156,34 @@ struct CopyModeState final {
   }
 };
 
+enum class RenamePromptKind : std::uint8_t {
+  inactive,
+  session,
+  tab,
+};
+
+enum class RenamePromptFeedback : std::uint8_t {
+  none,
+  invalid,
+  conflict,
+};
+
+// The Attachment owns transient editing state. Stable semantic identity is captured when the
+// prompt opens; no Session or Tab mutation occurs until the completed value is dispatched.
+struct RenamePromptState final {
+  std::array<char, limits::tab_title_bytes_max> text{};
+  std::size_t size{0};
+  std::size_t cursor{0};
+  TabId tab;
+  RenamePromptKind kind{RenamePromptKind::inactive};
+  RenamePromptFeedback feedback{RenamePromptFeedback::none};
+
+  [[nodiscard]] constexpr auto active() const noexcept -> bool {
+    return kind != RenamePromptKind::inactive;
+  }
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+};
+
 struct AttachmentPaneTarget final {
   TabId tab;
   PaneId pane;
@@ -157,6 +216,7 @@ struct Attachment final {
   std::optional<AttachmentPaneTarget> selection_target;
   std::optional<MouseCapture> mouse_capture;
   CopyModeState copy_mode;
+  RenamePromptState rename_prompt;
 };
 
 struct Session {
@@ -171,6 +231,7 @@ struct Session {
   ~Session() = default;
 
   [[nodiscard]] auto session_name() const noexcept -> std::string_view;
+  [[nodiscard]] auto rename(std::string_view session_name) noexcept -> bool;
   [[nodiscard]] auto cwd() const noexcept -> std::string_view;
   [[nodiscard]] auto launch_environment() const noexcept -> std::span<const std::byte>;
 
@@ -182,7 +243,9 @@ struct Session {
   std::array<std::byte, limits::environment_bytes_max> environment{};
   std::size_t environment_size{0};
   LaunchEnvironmentMode environment_mode{LaunchEnvironmentMode::inherit};
+  std::array<PaneSlot, panes_per_session_max> panes{};
   std::array<TabSlot, tabs_per_session_max> tabs{};
+  TabOrder tab_order;
   TabId active_tab;
   TabId previous_tab;
   bool active{true};

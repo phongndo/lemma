@@ -480,6 +480,21 @@ auto PaneLayout::split(const PaneId source, const PaneId added, const SplitAxis 
   return true;
 }
 
+auto PaneLayout::swap(const PaneId first, const PaneId second) noexcept -> bool {
+  if (!first.is_valid() || !second.is_valid() || first == second) {
+    return false;
+  }
+  const auto first_node = node_for_pane(first);
+  const auto second_node = node_for_pane(second);
+  if (!first_node.has_value() || !second_node.has_value()) {
+    return false;
+  }
+  std::swap(std::span(nodes_).subspan(*first_node, 1).front().pane,
+            std::span(nodes_).subspan(*second_node, 1).front().pane);
+  LEMMA_ASSERT(valid());
+  return true;
+}
+
 auto PaneLayout::remove(const PaneId pane) noexcept -> std::optional<PaneId> {
   if (pane_count() <= 1) {
     return std::nullopt;

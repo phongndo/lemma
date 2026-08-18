@@ -141,22 +141,17 @@ protected:
     return client.send(bytes, deadline_after(2s));
   }
 
-  [[nodiscard]] static auto send_direction(PtyClient& client, const char final) -> bool {
-    const std::array bytes{std::byte{0x02}, std::byte{0x1B}, std::byte{'['},
-                           static_cast<std::byte>(final)};
+  [[nodiscard]] static auto send_kitty_control_key(PtyClient& client, const char key) -> bool {
+    const auto codepoint = std::to_string(static_cast<unsigned char>(key));
+    const auto bytes =
+        "\x1B[98;5:1u\x1B[98;5:3u\x1B[" + codepoint + ";5:1u\x1B[" + codepoint + ";5:3u";
     return client.send(bytes, deadline_after(2s));
   }
 
-  [[nodiscard]] static auto send_kitty_direction(PtyClient& client, const char final) -> bool {
-    std::string bytes = "\x1B[98;5:1u\x1B[98;5:3u\x1B[1;1:1X\x1B[1;1:3X";
-    std::ranges::replace(bytes, 'X', final);
-    return client.send(bytes, deadline_after(2s));
-  }
-
-  [[nodiscard]] static auto send_kitty_control_direction(PtyClient& client, const char final)
-      -> bool {
-    std::string bytes = "\x1B[98;5:1u\x1B[98;5:3u\x1B[1;5:1X\x1B[1;5:3X";
-    std::ranges::replace(bytes, 'X', final);
+  [[nodiscard]] static auto send_kitty_alt_key(PtyClient& client, const char key) -> bool {
+    const auto codepoint = std::to_string(static_cast<unsigned char>(key));
+    const auto bytes =
+        "\x1B[98;5:1u\x1B[98;5:3u\x1B[" + codepoint + ";3:1u\x1B[" + codepoint + ";3:3u";
     return client.send(bytes, deadline_after(2s));
   }
 
@@ -369,10 +364,12 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   EXPECT_EQ(help.status, 0) << help.output;
   EXPECT_TRUE(help.output.contains("Usage: lemma")) << help.output;
   EXPECT_TRUE(help.output.contains("shutdown --confirm")) << help.output;
+  EXPECT_TRUE(help.output.contains("C-b R renames the session; C-b r renames the tab"))
+      << help.output;
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.3")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.5")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -549,6 +546,16 @@ TEST_F(MuxProcessTest, RoutesKittyKeyMetadataThroughMuxAndGhostty) {
   constexpr std::string_view typed_x = "\x1B[120;;120u\x1B[120;1:3u";
   ASSERT_TRUE(client.send(typed_x, deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__TYPED_KEY_120__", deadline_after(5s))) << client.screen();
+
+  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; printf '__PREFIX_READY__\\n'; "
+                          "v=$(dd bs=1 count=1 2>/dev/null | od -An -tu1 | tr -d ' '); "
+                          "stty sane; printf '__TYPED_PREFIX_%s__\\n' \"$v\"\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__PREFIX_READY__", deadline_after(5s))) << client.screen();
+  constexpr std::string_view typed_literal_prefix = "\x1B[98;5:1u\x1B[98;5:3u"
+                                                    "\x1B[98;5:1u\x1B[98;5:3u";
+  ASSERT_TRUE(client.send(typed_literal_prefix, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__TYPED_PREFIX_2__", deadline_after(5s))) << client.screen();
 
   constexpr std::string_view typed_detach = "\x1B[98;5:1u\x1B[98;5:3u"
                                             "d";
@@ -1067,7 +1074,7 @@ TEST_F(MuxProcessTest, FullRedrawGenerationsRecoverTabResizeAndReconnect) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
+TEST_F(MuxProcessTest, RoutesDirectionalHjklAndNextPreviousFocus) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "focus"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
@@ -1105,16 +1112,24 @@ TEST_F(MuxProcessTest, RoutesDirectionalNextAndPreviousFocus) {
                deadline_after(5s), &client)
         .has_value();
   };
-  ASSERT_TRUE(send_direction(client, 'A'));
+  ASSERT_TRUE(send_prefix(client, std::byte{'k'}));
   ASSERT_TRUE(expect_focus(pane_b));
-  // Ghostty reports arrows with Kitty event metadata as CSI 1;mod:event final. Exercise the real
-  // C-b + left-arrow path rather than only the legacy byte sequence.
-  ASSERT_TRUE(send_kitty_direction(client, 'D'));
+  ASSERT_TRUE(send_prefix(client, std::byte{'h'}));
   ASSERT_TRUE(expect_focus(pane_a));
-  ASSERT_TRUE(send_direction(client, 'C'));
+  ASSERT_TRUE(send_prefix(client, std::byte{'l'}));
   ASSERT_TRUE(expect_focus(pane_b));
-  ASSERT_TRUE(send_direction(client, 'B'));
+  ASSERT_TRUE(send_prefix(client, std::byte{'j'}));
   ASSERT_TRUE(expect_focus(pane_c));
+
+  // Shift-h/j/k/l uses the exact same spatial target as focus and keeps focus on the swapped pane.
+  ASSERT_TRUE(send_prefix(client, std::byte{'K'}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'j'}));
+  ASSERT_TRUE(expect_focus(pane_b));
+  ASSERT_TRUE(send_prefix(client, std::byte{'K'}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'J'}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'k'}));
+  ASSERT_TRUE(expect_focus(pane_c));
+
   ASSERT_TRUE(send_prefix(client, std::byte{'o'}));
   ASSERT_TRUE(expect_focus(pane_a));
   ASSERT_TRUE(send_prefix(client, std::byte{';'}));
@@ -1142,10 +1157,15 @@ TEST_F(MuxProcessTest, PersistsTypedSplitResizeAcrossViewportAndReattach) {
   ASSERT_TRUE(client.wait_for_screen("__RATIO_INITIAL__ 23 39", deadline_after(5s)))
       << client.screen();
 
-  ASSERT_TRUE(send_kitty_control_direction(client, 'D'));
+  ASSERT_TRUE(send_kitty_control_key(client, 'h'));
   ASSERT_TRUE(client.send("printf '__RATIO_MOVED__ '; stty size\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__RATIO_MOVED__ 23 40", deadline_after(5s)))
       << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'h'}));
+  ASSERT_TRUE(send_kitty_alt_key(client, 'l'));
+  ASSERT_TRUE(client.send("printf '__RATIO_ALT__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__RATIO_ALT__ 23 40", deadline_after(5s))) << client.screen();
 
   ASSERT_TRUE(client.resize(100, 24));
   ASSERT_TRUE(client.send("printf '__RATIO_LARGE__ '; stty size\r", deadline_after(2s)));
@@ -1254,7 +1274,7 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.send("printf '__COPY_NEEDLE__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__COPY_NEEDLE__", deadline_after(5s)));
   const auto live_screen = client.screen();
-  const auto live_status_begin = live_screen.find("[1:");
+  const auto live_status_begin = live_screen.find("[ ");
   ASSERT_NE(live_status_begin, std::string::npos) << live_screen;
   const auto live_status_end = live_screen.find(']', live_status_begin);
   ASSERT_NE(live_status_end, std::string::npos) << live_screen;
@@ -1265,7 +1285,7 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
   ASSERT_TRUE(client.wait_for_screen("[0/0]", deadline_after(5s))) << client.screen() << "\nraw:\n"
                                                                    << client.raw_tail();
   EXPECT_NE(client.screen().find(live_status), std::string::npos);
-  EXPECT_EQ(client.screen().find("[1:COPY"), std::string::npos);
+  EXPECT_EQ(client.screen().find("[ COPY"), std::string::npos);
   ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.raw_tail();
 
   // Vi keys and physical arrow sequences move only the daemon-owned copy cursor, including an
@@ -1462,6 +1482,116 @@ TEST_F(MuxProcessTest, ClosesPanesAndTogglesZoom) {
   const auto removed = command({"list", "zoomclose"});
   EXPECT_NE(removed.status, 0);
   EXPECT_TRUE(client.terminal_state_restored());
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, RenamesSessionsAndTabTitleOverridesAtomically) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "rename_old"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_EQ(command({"start", "occupied"}).status, 0);
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'R'}));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m{ \x1B[0;1;4m", deadline_after(5s)))
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("occu pied!\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("Session already exists", deadline_after(5s)))
+      << client.screen();
+  EXPECT_NE(client.screen().find("occupied"), std::string::npos) << client.screen();
+  EXPECT_EQ(command({"list", "rename_old"}).status, 0);
+
+  ASSERT_TRUE(client.send("\x15rename_ new!\r", deadline_after(2s)));
+  EXPECT_NE(command({"list", "rename_old"}).status, 0);
+  const auto renamed = command({"list", "rename_new"});
+  ASSERT_EQ(renamed.status, 0) << renamed.output;
+  EXPECT_NE(renamed.output.find("rename_new"), std::string::npos) << renamed.output;
+  ASSERT_TRUE(client.wait_for_screen("rename_new", deadline_after(5s))) << client.screen();
+
+  ASSERT_EQ(command({"session", "rename", "rename_new", "rename_cli"}).status, 0);
+  EXPECT_EQ(command({"list", "rename_cli"}).status, 0);
+  ASSERT_EQ(command({"session", "rename", "rename_cli", "rename_new"}).status, 0);
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ \x1B[0;1;4mzsh\x1B[0;1m ]", deadline_after(5s)))
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("\x15"
+                          "build logs\x1B[13;1:1u\x1B[13;1:3u",
+                          deadline_after(2s)));
+  const auto titled = command({"tabs", "rename_new"});
+  ASSERT_EQ(titled.status, 0) << titled.output;
+  EXPECT_NE(titled.output.find("title \"build logs\""), std::string::npos) << titled.output;
+  ASSERT_TRUE(client.wait_for_screen("build logs", deadline_after(5s))) << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
+  ASSERT_TRUE(client.send("\x15\r", deadline_after(2s)));
+  const auto cleared = command({"tabs", "rename_new"});
+  ASSERT_EQ(cleared.status, 0) << cleared.output;
+  EXPECT_EQ(cleared.output.find("title \"build logs\""), std::string::npos) << cleared.output;
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, ReordersTabsWithoutChangingTheActiveProcess) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "structural"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_EQ(command({"tab", "rename", "structural", "1", "first"}).status, 0);
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_FALSE(wait_for_tabs(
+                   "structural", [](const auto& values) { return values.size() == 2; },
+                   deadline_after(5s), &client)
+                   .empty());
+  ASSERT_EQ(command({"tab", "rename", "structural", "2", "second"}).status, 0);
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_FALSE(wait_for_tabs(
+                   "structural", [](const auto& values) { return values.size() == 3; },
+                   deadline_after(5s), &client)
+                   .empty());
+  ASSERT_EQ(command({"tab", "rename", "structural", "3", "third"}).status, 0);
+  const auto before = command({"list", "structural"});
+  const auto before_listing = parse_session_listing(before.output);
+  ASSERT_TRUE(before_listing.has_value()) << before.output;
+  const auto focused_pid = before_listing.value_or(SessionListing{}).focused_pid;
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'P'}));
+  const auto reordered = wait_for_tabs(
+      "structural",
+      [](const std::vector<TabListing>& values) {
+        return values.size() == 3 && std::span(values).subspan(1, 1).front().active;
+      },
+      deadline_after(5s), &client);
+  ASSERT_EQ(reordered.size(), 3U);
+  const auto reordered_text = command({"tabs", "structural"});
+  ASSERT_EQ(reordered_text.status, 0) << reordered_text.output;
+  const auto second_title = reordered_text.output.find("title \"second\"");
+  const auto third_title = reordered_text.output.find("title \"third\"");
+  ASSERT_NE(second_title, std::string::npos);
+  ASSERT_NE(third_title, std::string::npos);
+  EXPECT_LT(third_title, second_title) << reordered_text.output;
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'N'}));
+  const auto restored = wait_for_tabs(
+      "structural",
+      [](const std::vector<TabListing>& values) {
+        return values.size() == 3 && std::span(values).subspan(2, 1).front().active;
+      },
+      deadline_after(5s), &client);
+  ASSERT_EQ(restored.size(), 3U);
+  const auto restored_text = command({"tabs", "structural"});
+  ASSERT_EQ(restored_text.status, 0) << restored_text.output;
+  const auto restored_second_title = restored_text.output.find("title \"second\"");
+  const auto restored_third_title = restored_text.output.find("title \"third\"");
+  ASSERT_NE(restored_second_title, std::string::npos);
+  ASSERT_NE(restored_third_title, std::string::npos);
+  EXPECT_LT(restored_second_title, restored_third_title) << restored_text.output;
+
+  const auto after = command({"list", "structural"});
+  const auto after_listing = parse_session_listing(after.output);
+  ASSERT_TRUE(after_listing.has_value()) << after.output;
+  EXPECT_EQ(after_listing.value_or(SessionListing{}).focused_pid, focused_pid);
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
 // GoogleTest assertion macros inflate the measured branch count.

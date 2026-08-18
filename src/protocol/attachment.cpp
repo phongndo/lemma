@@ -155,6 +155,14 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   case PaneCommand::create_tab:
   case PaneCommand::next_tab:
   case PaneCommand::previous_tab:
+  case PaneCommand::begin_rename_session:
+  case PaneCommand::begin_rename_tab:
+  case PaneCommand::move_tab_left:
+  case PaneCommand::move_tab_right:
+  case PaneCommand::swap_pane_left:
+  case PaneCommand::swap_pane_right:
+  case PaneCommand::swap_pane_up:
+  case PaneCommand::swap_pane_down:
   case PaneCommand::kill_tab:
   case PaneCommand::select_tab_0:
   case PaneCommand::select_tab_1:
@@ -606,7 +614,26 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       continue;
     }
     if (state_ == State::escape) {
-      if (byte == std::byte{'['} || byte == std::byte{'O'}) {
+      std::optional<PaneCommand> pane_command_value;
+      switch (byte) {
+      case std::byte{'h'}:
+        pane_command_value = PaneCommand::resize_left;
+        break;
+      case std::byte{'l'}:
+        pane_command_value = PaneCommand::resize_right;
+        break;
+      case std::byte{'k'}:
+        pane_command_value = PaneCommand::resize_up;
+        break;
+      case std::byte{'j'}:
+        pane_command_value = PaneCommand::resize_down;
+        break;
+      default:
+        break;
+      }
+      if (pane_command_value.has_value() && command(*pane_command_value)) {
+        state_ = State::normal;
+      } else if (byte == std::byte{'['} || byte == std::byte{'O'}) {
         escape_introducer_ = byte;
         state_ = State::csi;
       } else {
@@ -618,29 +645,10 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       continue;
     }
     if (state_ == State::csi) {
-      std::optional<PaneCommand> pane_command_value;
-      switch (byte) {
-      case std::byte{'A'}:
-        pane_command_value = PaneCommand::focus_up;
-        break;
-      case std::byte{'B'}:
-        pane_command_value = PaneCommand::focus_down;
-        break;
-      case std::byte{'C'}:
-        pane_command_value = PaneCommand::focus_right;
-        break;
-      case std::byte{'D'}:
-        pane_command_value = PaneCommand::focus_left;
-        break;
-      default:
-        break;
-      }
-      if (!pane_command_value.has_value() || !command(*pane_command_value)) {
-        append(std::byte{0x02});
-        append(std::byte{0x1B});
-        append(escape_introducer_);
-        append(byte);
-      }
+      append(std::byte{0x02});
+      append(std::byte{0x1B});
+      append(escape_introducer_);
+      append(byte);
       state_ = State::normal;
       continue;
     }
@@ -662,23 +670,47 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 
     std::optional<PaneCommand> pane_command_value;
     switch (byte) {
+    case std::byte{0x08}:
+      pane_command_value = PaneCommand::resize_left;
+      break;
+    case std::byte{0x0C}:
+      pane_command_value = PaneCommand::resize_right;
+      break;
+    case std::byte{0x0B}:
+      pane_command_value = PaneCommand::resize_up;
+      break;
+    case std::byte{0x0A}:
+      pane_command_value = PaneCommand::resize_down;
+      break;
     case std::byte{'%'}:
       pane_command_value = PaneCommand::split_left_right;
       break;
     case std::byte{'"'}:
       pane_command_value = PaneCommand::split_top_bottom;
       break;
+    case std::byte{'h'}:
+      pane_command_value = PaneCommand::focus_left;
+      break;
+    case std::byte{'l'}:
+      pane_command_value = PaneCommand::focus_right;
+      break;
+    case std::byte{'k'}:
+      pane_command_value = PaneCommand::focus_up;
+      break;
+    case std::byte{'j'}:
+      pane_command_value = PaneCommand::focus_down;
+      break;
     case std::byte{'H'}:
-      pane_command_value = PaneCommand::resize_left;
+      pane_command_value = PaneCommand::swap_pane_left;
       break;
     case std::byte{'L'}:
-      pane_command_value = PaneCommand::resize_right;
+      pane_command_value = PaneCommand::swap_pane_right;
       break;
     case std::byte{'K'}:
-      pane_command_value = PaneCommand::resize_up;
+      pane_command_value = PaneCommand::swap_pane_up;
       break;
     case std::byte{'J'}:
-      pane_command_value = PaneCommand::resize_down;
+      pane_command_value = PaneCommand::swap_pane_down;
       break;
     case std::byte{'o'}:
       pane_command_value = PaneCommand::focus_next;
@@ -709,6 +741,18 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
       break;
     case std::byte{'p'}:
       pane_command_value = PaneCommand::previous_tab;
+      break;
+    case std::byte{'R'}:
+      pane_command_value = PaneCommand::begin_rename_session;
+      break;
+    case std::byte{'r'}:
+      pane_command_value = PaneCommand::begin_rename_tab;
+      break;
+    case std::byte{'P'}:
+      pane_command_value = PaneCommand::move_tab_left;
+      break;
+    case std::byte{'N'}:
+      pane_command_value = PaneCommand::move_tab_right;
       break;
     case std::byte{'&'}:
       pane_command_value = PaneCommand::kill_tab;

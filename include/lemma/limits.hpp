@@ -16,6 +16,7 @@ inline constexpr std::uint32_t layout_depth_hard_max = 64;
 // Session launch semantics own these bounds. Protocol codecs reuse them rather than defining the
 // semantic model's storage limits.
 inline constexpr std::size_t session_name_bytes_max = 32;
+inline constexpr std::size_t tab_title_bytes_max = 64;
 inline constexpr std::size_t working_directory_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t environment_bytes_max = 65'535;
 inline constexpr std::size_t environment_entries_max = 256;
