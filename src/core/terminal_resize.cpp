@@ -15,14 +15,14 @@ resize_terminal_transaction(vt::Terminal& terminal, const vt::TerminalSize& requ
   if (resize_pty == nullptr) {
     return TerminalResizeStatus::rejected;
   }
-  if (!terminal.resize(requested).has_value()) {
+  if (!resize_pty(context, requested)) {
     return TerminalResizeStatus::rejected;
   }
-  if (resize_pty(context, requested)) {
+  if (terminal.resize(requested).has_value()) {
     return TerminalResizeStatus::applied;
   }
-  return terminal.resize(previous).has_value() ? TerminalResizeStatus::rolled_back
-                                               : TerminalResizeStatus::consistency_lost;
+  return resize_pty(context, previous) ? TerminalResizeStatus::rolled_back
+                                       : TerminalResizeStatus::consistency_lost;
 }
 
 } // namespace lemma::core

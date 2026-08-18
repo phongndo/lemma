@@ -2,6 +2,7 @@
 #include "lemma/command.hpp"
 #include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
 #include "protocol/extension.hpp"
 #include "render/pane_composition.hpp"
@@ -9,6 +10,8 @@
 #include <benchmark/benchmark.h>
 
 #include <array>
+#include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -19,8 +22,14 @@
 #include <utility>
 #include <vector>
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+#include <util.h>
+#else
+#include <pty.h>
 #endif
 
 namespace lemma {
@@ -164,6 +173,60 @@ void benchmark_layout_divider_resize_candidate(benchmark::State& state) {
       return;
     }
   }
+}
+
+void handle_benchmark_winch(int /*signal*/) noexcept {}
+
+// Process setup and teardown are untimed; the loop measures only foreground-child TIOCSWINSZ.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void benchmark_live_divider_pty_resize(benchmark::State& state) {
+  int descriptor = -1;
+  const auto child = ::forkpty(&descriptor, nullptr, nullptr, nullptr);
+  if (child < 0) {
+    state.SkipWithError("failed to create benchmark PTY peer");
+    return;
+  }
+  if (child == 0) {
+    struct sigaction action{};
+    action.sa_handler = &handle_benchmark_winch;
+    static_cast<void>(sigemptyset(&action.sa_mask));
+    if (::sigaction(SIGWINCH, &action, nullptr) != 0 || ::write(STDOUT_FILENO, "R", 1) != 1) {
+      ::_exit(1);
+    }
+    while (true) {
+      static_cast<void>(::pause());
+    }
+  }
+
+  char ready = 0;
+  ssize_t ready_bytes = 0;
+  while (true) {
+    ready_bytes = ::read(descriptor, &ready, 1);
+    if (ready_bytes >= 0 || errno != EINTR) {
+      break;
+    }
+  }
+  if (ready_bytes != 1 || ready != 'R') {
+    state.SkipWithError("benchmark PTY peer did not become ready");
+  } else {
+    bool expanded = false;
+    for ([[maybe_unused]] const auto iteration : state) {
+      expanded = !expanded;
+      if (!platform::resize_pty(descriptor, expanded ? std::uint16_t{40} : std::uint16_t{39},
+                                std::uint16_t{23})) {
+        state.SkipWithError("TIOCSWINSZ failed");
+        break;
+      }
+    }
+    state.SetItemsProcessed(state.iterations());
+  }
+
+  state.PauseTiming();
+  static_cast<void>(::kill(child, SIGKILL));
+  int status = 0;
+  while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+  }
+  static_cast<void>(::close(descriptor));
 }
 
 // Measures the live path through semantic resize, Ghostty reflow, and full pane composition. PTY
@@ -660,6 +723,7 @@ BENCHMARK(benchmark_layout_resize_candidate);
 BENCHMARK(benchmark_layout_swap_candidate);
 BENCHMARK(benchmark_layout_divider_hit);
 BENCHMARK(benchmark_layout_divider_resize_candidate);
+BENCHMARK(benchmark_live_divider_pty_resize);
 BENCHMARK(benchmark_live_divider_resize)->Arg(2)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_layout_projection_worst_depth);
 BENCHMARK(benchmark_layout_divider_hit_worst_depth);

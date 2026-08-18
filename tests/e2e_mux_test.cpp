@@ -621,10 +621,8 @@ TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
   ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
   ASSERT_TRUE(wait_for_listing("mouse_resize", "2 pane(s)", deadline_after(5s), &client));
 
-  // The initial vertical separator is zero-based column 40. Every motion updates real pane and
-  // Ghostty geometry, while child PTY notifications retain only the first/latest sizes inside the
-  // 250-ms gate. A short multi-motion drag therefore produces two WINCH notifications rather than
-  // one per sample, and release converges exactly at column 45.
+  // The initial vertical separator is zero-based column 40. Every distinct motion commits the real
+  // layout, child PTY geometry, and Ghostty geometry together; release is a no-op at column 45.
   ASSERT_TRUE(client.send("wins=0; trap 'wins=$((wins + 1))' WINCH; "
                           "printf '\\122\\060\\n'\r",
                           deadline_after(2s)));
@@ -641,7 +639,7 @@ TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
   ASSERT_TRUE(client.send("\x1B[<0;46;2m", deadline_after(2s)));
   ASSERT_TRUE(
       client.send("printf '__MOUSE_VERTICAL_%s__ ' \"$wins\"; stty size\r", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__MOUSE_VERTICAL_2__ 23 34", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_screen("__MOUSE_VERTICAL_3__ 23 34", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
 
@@ -661,9 +659,8 @@ TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
 
-  // A long gesture publishes one periodic latest endpoint while the gate is armed, then release
-  // forces the exact final endpoint. Returning to the original divider keeps geometry stable while
-  // proving the 250-ms service path does not become an unbounded timer or notification stream.
+  // A long gesture also commits every distinct endpoint without any timer or retained resize work.
+  // Returning to the original divider leaves every geometry owner at the exact starting size.
   ASSERT_TRUE(client.send("wins=0; printf '\\122\\062\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("R2", deadline_after(5s))) << client.screen();
   ASSERT_TRUE(client.send("\x1B[<0;46;2M\x1B[<32;47;2M\x1B[<32;48;2M", deadline_after(2s)));
@@ -710,6 +707,43 @@ TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
 
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, KeepsChildAndGhosttyGeometrySynchronizedDuringLiveDividerOutput) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "geometry_sync"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_listing("geometry_sync", "2 pane(s)", deadline_after(5s), &client));
+
+  const auto launch = "exec " + shell_quote(LEMMA_TEST_PTY_PEER_PATH) + " geometry-sync\r";
+  ASSERT_TRUE(client.send(launch, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LEMMA_GEOMETRY_SYNC_READY__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  // The peer continuously emits full-screen, cursor-addressed frames and asks Ghostty for its
+  // text-area size. It counts only reports bracketed by an unchanged TIOCGWINSZ value, avoiding
+  // races at the actual resize boundary. Keep the divider moving for longer than the former
+  // coalescing interval.
+  ASSERT_TRUE(client.send("\x1B[<0;41;2M", deadline_after(2s)));
+  std::uint16_t final_column = 0;
+  for (std::size_t motion = 0; motion < 20; ++motion) {
+    final_column = static_cast<std::uint16_t>(43U + (motion % 8U));
+    const auto report = "\x1B[<32;" + std::to_string(final_column) + ";2M";
+    ASSERT_TRUE(client.send(report, deadline_after(2s)));
+    std::this_thread::sleep_for(40ms);
+  }
+  const auto release = "\x1B[<0;" + std::to_string(final_column) + ";2m";
+  ASSERT_TRUE(client.send(release, deadline_after(2s)));
+  ASSERT_TRUE(client.send("q", deadline_after(2s)));
+
+  ASSERT_TRUE(client.wait_for_screen("__GEOMETRY_SYNC_OK__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail() << "\nserver:\n"
+      << server_.output();
 }
 
 // GoogleTest assertions inflate the measured branch count.

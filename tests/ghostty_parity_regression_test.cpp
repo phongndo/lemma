@@ -290,29 +290,75 @@ TEST(GhosttyParityRegressionTest, M2FrameTransactionAbortRepairsPhysicalShadow) 
   EXPECT_THAT(output_text(std::span(output).first(repaired->bytes)), testing::HasSubstr("repair"));
 }
 
-struct ResizeFailure final {
+struct ResizeObservation final {
   vt::Terminal* terminal{nullptr};
-  vt::TerminalSize observed{};
+  std::array<vt::TerminalSize, 2> requested{};
+  std::array<vt::TerminalSize, 2> terminal_sizes{};
+  std::size_t calls{0};
+  std::size_t accepted_calls{0};
 };
 
-[[nodiscard]] auto fail_pty_resize(void* const context, const vt::TerminalSize& size) noexcept
+[[nodiscard]] auto observe_pty_resize(void* const context, const vt::TerminalSize& size) noexcept
     -> bool {
-  auto& failure = *static_cast<ResizeFailure*>(context);
-  failure.observed = failure.terminal->size();
-  return size != failure.observed;
+  auto& observation = *static_cast<ResizeObservation*>(context);
+  if (observation.calls >= observation.requested.size()) {
+    return false;
+  }
+  std::span(observation.requested).subspan(observation.calls, 1).front() = size;
+  std::span(observation.terminal_sizes).subspan(observation.calls, 1).front() =
+      observation.terminal->size();
+  ++observation.calls;
+  return observation.calls <= observation.accepted_calls;
 }
 
-TEST(GhosttyParityRegressionTest, M2ResizeRollsBackAfterPtyFailure) {
+TEST(GhosttyParityRegressionTest, M2ResizeReportsPtyGeometryBeforeGhosttyMutation) {
   auto terminal = make_terminal();
   const auto original = terminal.size();
   const vt::TerminalSize requested{.columns = 120, .rows = 40};
-  ResizeFailure failure{.terminal = &terminal};
+  ResizeObservation observation{.terminal = &terminal};
 
   const auto status =
-      core::resize_terminal_transaction(terminal, requested, &fail_pty_resize, &failure);
+      core::resize_terminal_transaction(terminal, requested, &observe_pty_resize, &observation);
+
+  EXPECT_EQ(status, core::TerminalResizeStatus::rejected);
+  ASSERT_EQ(observation.calls, 1U);
+  EXPECT_EQ(observation.requested.front(), requested);
+  EXPECT_EQ(observation.terminal_sizes.front(), original)
+      << "the child PTY must own requested geometry before Ghostty can use it";
+  EXPECT_EQ(terminal.size(), original);
+}
+
+TEST(GhosttyParityRegressionTest, M2ResizeRestoresPtyWhenGhosttyRejectsRequest) {
+  auto terminal = make_terminal();
+  const auto original = terminal.size();
+  const vt::TerminalSize invalid{.columns = 0, .rows = 1};
+  ResizeObservation observation{.terminal = &terminal, .accepted_calls = 2};
+
+  const auto status =
+      core::resize_terminal_transaction(terminal, invalid, &observe_pty_resize, &observation);
 
   EXPECT_EQ(status, core::TerminalResizeStatus::rolled_back);
-  EXPECT_EQ(failure.observed, requested) << "Ghostty must resize before the PTY is attempted";
+  ASSERT_EQ(observation.calls, 2U);
+  EXPECT_EQ(observation.requested.front(), invalid);
+  EXPECT_EQ(observation.requested.back(), original);
+  EXPECT_EQ(observation.terminal_sizes.front(), original);
+  EXPECT_EQ(observation.terminal_sizes.back(), original);
+  EXPECT_EQ(terminal.size(), original);
+}
+
+TEST(GhosttyParityRegressionTest, M2ResizeFailsClosedWhenPtyRollbackFails) {
+  auto terminal = make_terminal();
+  const auto original = terminal.size();
+  const vt::TerminalSize invalid{.columns = 0, .rows = 1};
+  ResizeObservation observation{.terminal = &terminal, .accepted_calls = 1};
+
+  const auto status =
+      core::resize_terminal_transaction(terminal, invalid, &observe_pty_resize, &observation);
+
+  EXPECT_EQ(status, core::TerminalResizeStatus::consistency_lost);
+  ASSERT_EQ(observation.calls, 2U);
+  EXPECT_EQ(observation.requested.front(), invalid);
+  EXPECT_EQ(observation.requested.back(), original);
   EXPECT_EQ(terminal.size(), original);
 }
 

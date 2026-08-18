@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -251,6 +252,192 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   const auto flags = ::fcntl(STDOUT_FILENO, F_GETFL);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   return flags >= 0 && ::fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+struct GeometryReport final {
+  std::uint16_t rows{0};
+  std::uint16_t columns{0};
+};
+
+[[nodiscard]] auto append_text(std::span<char>& output, const std::string_view text) noexcept
+    -> bool {
+  if (output.size() < text.size()) {
+    return false;
+  }
+  std::ranges::copy(text, output.begin());
+  output = output.subspan(text.size());
+  return true;
+}
+
+[[nodiscard]] auto append_number(std::span<char>& output, const std::uint16_t value) noexcept
+    -> bool {
+  const auto encoded = std::to_chars(output.data(), std::to_address(output.end()), value);
+  if (encoded.ec != std::errc{}) {
+    return false;
+  }
+  output = output.subspan(static_cast<std::size_t>(encoded.ptr - output.data()));
+  return true;
+}
+
+[[nodiscard]] auto write_geometry_frame(const winsize size) noexcept -> bool {
+  std::array<char, 512> frame{};
+  std::span<char> remaining = frame;
+  if (!append_text(remaining, "\x1B[H\x1B[") || !append_number(remaining, size.ws_row) ||
+      !append_text(remaining, ";1H")) {
+    return false;
+  }
+  const auto line_size = std::min<std::size_t>(size.ws_col, 256U);
+  if (remaining.size() < line_size) {
+    return false;
+  }
+  std::ranges::fill(remaining.first(line_size), 'x');
+  remaining = remaining.subspan(line_size);
+  if (!append_text(remaining, "\x1B[1;1H#\x1B[") || !append_number(remaining, size.ws_row) ||
+      !append_text(remaining, ";") || !append_number(remaining, size.ws_col) ||
+      !append_text(remaining, "H#\x1B[18t")) {
+    return false;
+  }
+  return write_all({frame.data(), frame.size() - remaining.size()});
+}
+
+[[nodiscard]] auto parse_geometry_report(const std::string_view input) noexcept
+    -> std::optional<GeometryReport> {
+  constexpr std::string_view prefix = "\x1B[8;";
+  const auto start = input.find(prefix);
+  if (start == std::string_view::npos) {
+    return std::nullopt;
+  }
+  auto values = input;
+  values.remove_prefix(start + prefix.size());
+  const auto separator = values.find(';');
+  const auto terminator =
+      values.find('t', separator == std::string_view::npos ? 0 : separator + 1U);
+  if (separator == std::string_view::npos || terminator == std::string_view::npos) {
+    return std::nullopt;
+  }
+  GeometryReport report;
+  const auto value_bytes = std::span(values);
+  const auto rows = value_bytes.first(separator);
+  const auto columns = value_bytes.subspan(separator + 1U, terminator - separator - 1U);
+  const auto* const rows_begin = std::to_address(rows.begin());
+  const auto* const rows_end = std::to_address(rows.end());
+  const auto* const columns_begin = std::to_address(columns.begin());
+  const auto* const columns_end = std::to_address(columns.end());
+  const auto rows_result = std::from_chars(rows_begin, rows_end, report.rows);
+  const auto columns_result = std::from_chars(columns_begin, columns_end, report.columns);
+  if (rows_result.ec != std::errc{} || rows_result.ptr != rows_end ||
+      columns_result.ec != std::errc{} || columns_result.ptr != columns_end) {
+    return std::nullopt;
+  }
+  return report;
+}
+
+struct GeometryResponse final {
+  std::optional<GeometryReport> report;
+  bool stopped{false};
+};
+
+[[nodiscard]] auto read_geometry_response() noexcept -> GeometryResponse {
+  std::array<char, 128> input{};
+  std::size_t size = 0;
+  const auto deadline = std::chrono::steady_clock::now() + 250ms;
+  while (std::chrono::steady_clock::now() < deadline && size < input.size()) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 10);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled <= 0) {
+      continue;
+    }
+    auto available = std::span(input).subspan(size);
+    const auto count = ::read(STDIN_FILENO, available.data(), available.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      break;
+    }
+    size += static_cast<std::size_t>(count);
+    const std::string_view received(input.data(), size);
+    const auto report = parse_geometry_report(received);
+    const bool stopped = received.contains('q');
+    if (report.has_value() || stopped) {
+      return {.report = report, .stopped = stopped};
+    }
+  }
+  return {};
+}
+
+// This full-screen peer detects only stable mismatches: if TIOCGWINSZ is unchanged across a
+// Ghostty CSI 18 t response, the response must describe that same child-owned geometry.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_geometry_sync() noexcept -> int {
+  if (!enter_raw_input() || !write_all("\x1B[?1049h\x1B[2J\x1B[H__LEMMA_GEOMETRY_SYNC_READY__")) {
+    return 1;
+  }
+  std::this_thread::sleep_for(50ms);
+
+  std::size_t samples = 0;
+  std::size_t mismatches = 0;
+  std::size_t missing_responses = 0;
+  bool stopped = false;
+  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  while (!stopped && std::chrono::steady_clock::now() < deadline) {
+    winsize before{};
+    winsize after{};
+    // ioctl is variadic because its third argument depends on the request.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    if (::ioctl(STDIN_FILENO, TIOCGWINSZ, &before) != 0 || !write_geometry_frame(before)) {
+      return 1;
+    }
+    const auto response = read_geometry_response();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    if (::ioctl(STDIN_FILENO, TIOCGWINSZ, &after) != 0) {
+      return 1;
+    }
+    stopped = response.stopped;
+    if (!response.report.has_value()) {
+      if (!stopped) {
+        ++missing_responses;
+      }
+      continue;
+    }
+    ++samples;
+    if (before.ws_row == after.ws_row && before.ws_col == after.ws_col &&
+        (response.report->rows != before.ws_row || response.report->columns != before.ws_col)) {
+      ++mismatches;
+    }
+  }
+
+  std::array<char, 32> sample_text{};
+  std::array<char, 32> mismatch_text{};
+  std::array<char, 32> missing_text{};
+  const auto encoded_samples =
+      std::to_chars(sample_text.data(), std::to_address(sample_text.end()), samples);
+  const auto encoded_mismatches =
+      std::to_chars(mismatch_text.data(), std::to_address(mismatch_text.end()), mismatches);
+  const auto encoded_missing =
+      std::to_chars(missing_text.data(), std::to_address(missing_text.end()), missing_responses);
+  const bool clean = stopped && samples > 0 && mismatches == 0 && missing_responses == 0;
+  if (!stopped || samples == 0 || encoded_samples.ec != std::errc{} ||
+      encoded_mismatches.ec != std::errc{} || encoded_missing.ec != std::errc{} ||
+      !write_all(clean ? "\x1B[?1049l\r\n__GEOMETRY_SYNC_OK__\r\n"
+                       : "\x1B[?1049l\r\n__GEOMETRY_SYNC_FAILED__\r\n") ||
+      !write_all("__LEMMA_GEOMETRY_SYNC__ mismatches=") ||
+      !write_all({mismatch_text.data(),
+                  static_cast<std::size_t>(encoded_mismatches.ptr - mismatch_text.data())}) ||
+      !write_all(" missing=") ||
+      !write_all({missing_text.data(),
+                  static_cast<std::size_t>(encoded_missing.ptr - missing_text.data())}) ||
+      !write_all(" samples=") ||
+      !write_all({sample_text.data(),
+                  static_cast<std::size_t>(encoded_samples.ptr - sample_text.data())}) ||
+      !write_all("\r\n")) {
+    return 1;
+  }
+  std::this_thread::sleep_for(1s);
+  return clean ? 0 : 1;
 }
 
 // Keep resize stress independent of interactive-shell job-control and signal timing.
@@ -524,6 +711,10 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "resize-flood") {
     return run_resize_flood();
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "geometry-sync") {
+    return run_geometry_sync();
   }
   if (arguments.size() == 3 && std::string_view(arguments.subspan(1, 1).front()) == "latency") {
     return run_latency(arguments.subspan(2, 1).front());

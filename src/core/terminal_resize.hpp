@@ -17,8 +17,8 @@ enum class TerminalResizeStatus : std::uint8_t {
 
 using PtyResizeOperation = bool (*)(void* context, const vt::TerminalSize& size) noexcept;
 
-// Resizes canonical Ghostty state before the PTY and restores the old canonical geometry if the
-// PTY operation fails. consistency_lost is the fail-closed outcome when that last rollback fails.
+// Reports the requested geometry to the child PTY before resizing Ghostty. If Ghostty rejects the
+// resize, restores the PTY geometry; consistency_lost is the fail-closed rollback failure.
 [[nodiscard]] auto resize_terminal_transaction(vt::Terminal& terminal,
                                                const vt::TerminalSize& requested,
                                                PtyResizeOperation resize_pty,

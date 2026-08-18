@@ -584,14 +584,6 @@ struct PendingClipboardWrite final {
   }
 };
 
-struct LiveDividerResizeRuntime final {
-  // Runtime projection of the last geometry successfully reported to every affected child PTY.
-  // PaneLayout remains the sole owner of the current divider coordinate.
-  FrameScheduler::TimePoint deadline;
-  std::uint16_t pty_position{0};
-  bool deadline_armed{false};
-};
-
 struct AttachmentRuntime final {
   AttachmentRuntime() noexcept = default;
   AttachmentRuntime(const AttachmentRuntime&) = delete;
@@ -619,7 +611,6 @@ struct AttachmentRuntime final {
     client_work_pending = false;
     client_close_state = ConnectionCloseState::none;
     retained_input_offset.reset();
-    live_divider_resize.reset();
     frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
     decoded_input_trace_matcher.reset();
@@ -646,7 +637,6 @@ struct AttachmentRuntime final {
   bool client_work_pending{false};
   ConnectionCloseState client_close_state{ConnectionCloseState::none};
   std::optional<std::size_t> retained_input_offset;
-  std::optional<LiveDividerResizeRuntime> live_divider_resize;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher decoded_input_trace_matcher;
   std::uint64_t frame_trace_correlation{0};
@@ -679,15 +669,14 @@ struct SessionRecord final : Session {
 static_assert(sizeof(AttachmentRuntime) <= std::size_t{16} * 1'024U);
 static_assert(sizeof(SessionRecord) <= std::size_t{96} * 1'024U);
 
-[[nodiscard]] auto finish_live_divider_resize(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                              bool discard_release = false) noexcept -> bool;
+void finish_live_divider_resize(SessionRecord& session, bool discard_release = false) noexcept;
 
 // Connection teardown resets only Attachment and AttachmentRuntime state. Session and PaneRuntime
 // lifetimes remain independent, while the direct aggregate layout avoids a connection hot-path
 // allocation or lookup.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  static_cast<void>(finish_live_divider_resize(session, runtimes));
+  finish_live_divider_resize(session);
   for (auto& pane_slot : session.panes) {
     if (pane_slot.pane == nullptr) {
       continue;
@@ -1068,11 +1057,6 @@ enum class LayoutResolutionStatus : std::uint8_t {
   consistency_lost,
 };
 
-enum class LayoutRuntimeResizeMode : std::uint8_t {
-  terminal_and_pty,
-  terminal_only,
-};
-
 struct PaneResizePlanEntry final {
   Pane* pane{nullptr};
   PaneRuntime* runtime{nullptr};
@@ -1085,23 +1069,10 @@ struct PaneResizePlanEntry final {
 using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
 
 [[nodiscard]] auto resize_runtime_for_layout(PaneRuntime& runtime,
-                                             const render::PaneRectangle target,
-                                             const LayoutRuntimeResizeMode mode) noexcept
+                                             const render::PaneRectangle target) noexcept
     -> TerminalResizeStatus {
-  auto status = TerminalResizeStatus::rejected;
-  if (mode == LayoutRuntimeResizeMode::terminal_and_pty) {
-    status = resize_pane_terminal(runtime.pty, runtime.terminal, target.columns, target.rows);
-  } else {
-    const vt::TerminalSize requested{
-        .columns = std::clamp(target.columns, std::uint16_t{1}, protocol::columns_max),
-        .rows = std::clamp(target.rows, std::uint16_t{1}, protocol::rows_max),
-    };
-    if (runtime.terminal.size() == requested) {
-      return TerminalResizeStatus::unchanged;
-    }
-    status = runtime.terminal.resize(requested).has_value() ? TerminalResizeStatus::applied
-                                                            : TerminalResizeStatus::rejected;
-  }
+  const auto status =
+      resize_pane_terminal(runtime.pty, runtime.terminal, target.columns, target.rows);
   if (status == TerminalResizeStatus::consistency_lost) {
     runtime.fail(PaneRuntimeFailure::resize_consistency_lost);
     return status;
@@ -1128,8 +1099,7 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
   note_compression_activity(*entry.runtime);
 }
 
-[[nodiscard]] auto rollback_layout_resize(PaneResizePlan& plan, const std::size_t count,
-                                          const LayoutRuntimeResizeMode mode) noexcept
+[[nodiscard]] auto rollback_layout_resize(PaneResizePlan& plan, const std::size_t count) noexcept
     -> LayoutResolutionStatus {
   bool consistency_lost = false;
   for (std::size_t remaining = count; remaining > 0; --remaining) {
@@ -1139,7 +1109,7 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
       continue;
     }
     LEMMA_ASSERT(entry.runtime != nullptr);
-    const auto status = resize_runtime_for_layout(*entry.runtime, entry.previous, mode);
+    const auto status = resize_runtime_for_layout(*entry.runtime, entry.previous);
     entry.runtime_touched = true;
     if (status != TerminalResizeStatus::applied && status != TerminalResizeStatus::unchanged) {
       entry.runtime->fail(PaneRuntimeFailure::resize_consistency_lost);
@@ -1151,8 +1121,7 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
                           : LayoutResolutionStatus::rejected;
 }
 
-[[nodiscard]] auto apply_layout_resize_plan(PaneResizePlan& plan, const std::size_t count,
-                                            const LayoutRuntimeResizeMode mode) noexcept
+[[nodiscard]] auto apply_layout_resize_plan(PaneResizePlan& plan, const std::size_t count) noexcept
     -> LayoutResolutionStatus {
   for (std::size_t index = 0; index < count; ++index) {
     auto& entry = std::span(plan).subspan(index, 1).front();
@@ -1161,16 +1130,16 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
         entry.previous.rows == entry.target.rows) {
       continue;
     }
-    const auto status = resize_runtime_for_layout(*entry.runtime, entry.target, mode);
+    const auto status = resize_runtime_for_layout(*entry.runtime, entry.target);
     entry.runtime_touched = status == TerminalResizeStatus::applied ||
                             status == TerminalResizeStatus::rolled_back ||
                             status == TerminalResizeStatus::consistency_lost;
     entry.runtime_resized = status == TerminalResizeStatus::applied;
     if (status == TerminalResizeStatus::rejected || status == TerminalResizeStatus::rolled_back) {
-      return rollback_layout_resize(plan, index + 1U, mode);
+      return rollback_layout_resize(plan, index + 1U);
     }
     if (status == TerminalResizeStatus::consistency_lost) {
-      static_cast<void>(rollback_layout_resize(plan, index, mode));
+      static_cast<void>(rollback_layout_resize(plan, index));
       finish_resize_mutation(entry);
       return LayoutResolutionStatus::consistency_lost;
     }
@@ -1188,10 +1157,8 @@ void commit_layout_resize_plan(PaneResizePlan& plan, const std::size_t count) no
 
 // Building and applying the fixed transaction handles zoomed and tiled plans explicitly.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto resolve_layout(
-    SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
-    const PaneLayout* const proposed_layout = nullptr,
-    const LayoutRuntimeResizeMode mode = LayoutRuntimeResizeMode::terminal_and_pty) noexcept
+[[nodiscard]] auto resolve_layout(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
+                                  const PaneLayout* const proposed_layout = nullptr) noexcept
     -> LayoutResolutionStatus {
   LEMMA_ASSERT(proposed_layout == nullptr || !tab.zoomed);
   const render::PaneRectangle viewport{
@@ -1246,7 +1213,7 @@ void commit_layout_resize_plan(PaneResizePlan& plan, const std::size_t count) no
     ++count;
   }
 
-  const auto status = apply_layout_resize_plan(plan, count, mode);
+  const auto status = apply_layout_resize_plan(plan, count);
   if (status != LayoutResolutionStatus::applied) {
     return status;
   }
@@ -1283,12 +1250,10 @@ void refresh_copy_selection_after_layout(SessionRecord& session, Tab& tab,
   }
 }
 
-[[nodiscard]] auto resolve_session_layout(
-    SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
-    const PaneLayout* const proposed_layout = nullptr,
-    const LayoutRuntimeResizeMode mode = LayoutRuntimeResizeMode::terminal_and_pty) noexcept
-    -> bool {
-  const auto status = resolve_layout(session, tab, runtimes, proposed_layout, mode);
+[[nodiscard]] auto
+resolve_session_layout(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
+                       const PaneLayout* const proposed_layout = nullptr) noexcept -> bool {
+  const auto status = resolve_layout(session, tab, runtimes, proposed_layout);
   if (status == LayoutResolutionStatus::consistency_lost) {
     session.active = false;
     return false;
@@ -1310,185 +1275,16 @@ void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
       urgency, force_full, std::chrono::steady_clock::now(), frame_sink_state(session));
 }
 
-constexpr auto divider_pty_resize_interval = std::chrono::milliseconds{250};
-
-struct DividerPtyResizeEntry final {
-  PaneRuntime* runtime{nullptr};
-  vt::TerminalSize previous;
-  vt::TerminalSize target;
-  bool applied{false};
-};
-
-using DividerPtyResizePlan = std::array<DividerPtyResizeEntry, panes_per_tab_max>;
-
-[[nodiscard]] auto layout_at_divider_position(const Tab& tab, const MouseCapture& capture,
-                                              const std::uint16_t position) noexcept
-    -> std::optional<PaneLayout> {
-  auto layout = tab.layout;
-  const LayoutDivider divider{
-      .first = capture.target.pane,
-      .second = capture.peer_pane,
-      .axis = capture.divider_axis,
-  };
-  const render::PaneRectangle viewport{
-      .columns = tab.layout_columns,
-      .rows = tab.layout_rows,
-  };
-  const auto edit = layout.resize_divider(divider, position, viewport);
-  return edit == LayoutResizeStatus::applied || edit == LayoutResizeStatus::no_effect
-             ? std::optional{layout}
-             : std::nullopt;
-}
-
-[[nodiscard]] auto current_divider_position(const Tab& tab, const MouseCapture& capture) noexcept
-    -> std::optional<std::uint16_t> {
-  const LayoutDivider divider{
-      .first = capture.target.pane,
-      .second = capture.peer_pane,
-      .axis = capture.divider_axis,
-  };
-  const render::PaneRectangle viewport{
-      .columns = tab.layout_columns,
-      .rows = tab.layout_rows,
-  };
-  const auto rectangle = tab.layout.divider_rectangle(divider, viewport);
-  if (!rectangle.has_value()) {
-    return std::nullopt;
-  }
-  return capture.divider_axis == SplitAxis::left_right ? rectangle->column : rectangle->row;
-}
-
-[[nodiscard]] auto rollback_divider_pty_resize(DividerPtyResizePlan& plan,
-                                               const std::size_t count) noexcept -> bool {
-  bool restored = true;
-  for (std::size_t remaining = count; remaining > 0; --remaining) {
-    auto& entry = std::span(plan).subspan(remaining - 1U, 1).front();
-    if (!entry.applied) {
-      continue;
-    }
-    LEMMA_ASSERT(entry.runtime != nullptr);
-    if (!platform::resize_pty(entry.runtime->pty, entry.previous.columns, entry.previous.rows)) {
-      entry.runtime->fail(PaneRuntimeFailure::resize_consistency_lost);
-      restored = false;
-    }
-  }
-  return restored;
-}
-
-// Live drag follows tmux's split between immediate screen geometry and coalesced child geometry,
-// but retains one fixed PTY checkpoint instead of an allocated resize queue.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto synchronize_live_divider_ptys(SessionRecord& session,
-                                                 PaneRuntimeStore& runtimes) noexcept -> bool {
+void finish_live_divider_resize(SessionRecord& session, const bool discard_release) noexcept {
   if (!session.attachment.mouse_capture.has_value() ||
-      session.attachment.mouse_capture->owner != MouseCaptureOwner::divider ||
-      !session.attachment_runtime.live_divider_resize.has_value()) {
-    session.active = false;
-    return false;
-  }
-  auto& capture = *session.attachment.mouse_capture;
-  auto& resize = *session.attachment_runtime.live_divider_resize;
-  auto* const tab = find_tab(session, capture.target.tab);
-  if (tab == nullptr || tab->zoomed || tab->layout_suspended) {
-    session.active = false;
-    return false;
-  }
-  const auto current_position = current_divider_position(*tab, capture);
-  if (!current_position.has_value()) {
-    session.active = false;
-    return false;
-  }
-  if (*current_position == resize.pty_position) {
-    return true;
-  }
-  const auto synchronized_layout = layout_at_divider_position(*tab, capture, resize.pty_position);
-  const render::PaneRectangle viewport{
-      .columns = tab->layout_columns,
-      .rows = tab->layout_rows,
-  };
-  const auto synchronized_projection =
-      synchronized_layout.has_value() ? synchronized_layout->project(viewport) : std::nullopt;
-  if (!synchronized_layout.has_value() || !synchronized_projection.has_value()) {
-    session.active = false;
-    return false;
-  }
-
-  DividerPtyResizePlan plan{};
-  std::size_t count = 0;
-  for (auto& pane_slot : session.panes) {
-    if (pane_slot.pane == nullptr || pane_slot.pane->tab != tab->id) {
-      continue;
-    }
-    auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane_slot.pane);
-    LEMMA_ASSERT(runtime != nullptr);
-    if (!runtime->live()) {
-      continue;
-    }
-    const auto previous = synchronized_projection->rectangle(pane_slot.pane->id);
-    const auto target = pane_slot.pane->rectangle;
-    if (!previous.has_value() || runtime->terminal.size().columns != target.columns ||
-        runtime->terminal.size().rows != target.rows) {
-      session.active = false;
-      return false;
-    }
-    std::span(plan).subspan(count, 1).front() = {
-        .runtime = runtime,
-        .previous = {.columns = previous->columns, .rows = previous->rows},
-        .target = {.columns = target.columns, .rows = target.rows},
-    };
-    ++count;
-  }
-
-  for (std::size_t index = 0; index < count; ++index) {
-    auto& entry = std::span(plan).subspan(index, 1).front();
-    LEMMA_ASSERT(entry.runtime != nullptr);
-    if (entry.previous == entry.target) {
-      continue;
-    }
-    if (!platform::resize_pty(entry.runtime->pty, entry.target.columns, entry.target.rows)) {
-      const bool ptys_restored = rollback_divider_pty_resize(plan, index);
-      const bool terminals_restored =
-          ptys_restored && resolve_session_layout(session, *tab, runtimes, &*synchronized_layout,
-                                                  LayoutRuntimeResizeMode::terminal_only);
-      if (!ptys_restored || !terminals_restored) {
-        session.active = false;
-        return false;
-      }
-      capture.owner = MouseCaptureOwner::discard_until_release;
-      session.attachment_runtime.live_divider_resize.reset();
-      schedule_frame(session, FrameUrgency::state_change, true);
-      return false;
-    }
-    entry.applied = true;
-  }
-  resize.pty_position = *current_position;
-  return true;
-}
-
-[[nodiscard]] auto finish_live_divider_resize(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                              const bool discard_release) noexcept -> bool {
-  const bool divider_capture =
-      session.attachment.mouse_capture.has_value() &&
-      session.attachment.mouse_capture->owner == MouseCaptureOwner::divider;
-  if (!divider_capture) {
-    if (session.attachment_runtime.live_divider_resize.has_value()) {
-      session.active = false;
-    }
-    return session.active;
-  }
-
-  static_cast<void>(synchronize_live_divider_ptys(session, runtimes));
-  if (!session.active) {
-    return false;
+      session.attachment.mouse_capture->owner != MouseCaptureOwner::divider) {
+    return;
   }
   if (discard_release) {
-    LEMMA_ASSERT(session.attachment.mouse_capture.has_value());
     session.attachment.mouse_capture->owner = MouseCaptureOwner::discard_until_release;
   } else {
     session.attachment.mouse_capture.reset();
   }
-  session.attachment_runtime.live_divider_resize.reset();
-  return true;
 }
 
 [[nodiscard]] auto selection_pane(SessionRecord& session) noexcept -> Pane* {
@@ -2963,11 +2759,11 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
   }
 }
 
-[[nodiscard]] auto commit_layout_resize(
-    SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes, const PaneLayout& proposed_layout,
-    const LayoutRuntimeResizeMode mode = LayoutRuntimeResizeMode::terminal_and_pty) noexcept
+[[nodiscard]] auto commit_layout_resize(SessionRecord& session, Tab& tab,
+                                        PaneRuntimeStore& runtimes,
+                                        const PaneLayout& proposed_layout) noexcept
     -> CommandResult {
-  if (!resolve_session_layout(session, tab, runtimes, &proposed_layout, mode)) {
+  if (!resolve_session_layout(session, tab, runtimes, &proposed_layout)) {
     if (session.active) {
       // A rejected compensating transaction may still have reflowed terminals out and back.
       // Repair presentation without publishing the proposed ratio.
@@ -3027,18 +2823,7 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
   case LayoutResizeStatus::applied:
     break;
   }
-  const bool live_mouse_drag =
-      session.attachment.mouse_capture.has_value() &&
-      session.attachment.mouse_capture->owner == MouseCaptureOwner::divider &&
-      session.attachment.mouse_capture->target.tab == tab.id &&
-      session.attachment.mouse_capture->target.pane == divider.first &&
-      session.attachment.mouse_capture->peer_pane == divider.second &&
-      session.attachment.mouse_capture->divider_axis == divider.axis;
-  // Only the owned mouse gesture may temporarily let canonical screen geometry lead the PTY.
-  // Every other typed divider command retains the ordinary all-or-nothing terminal/PTY contract.
-  return commit_layout_resize(session, tab, runtimes, proposed_layout,
-                              live_mouse_drag ? LayoutRuntimeResizeMode::terminal_only
-                                              : LayoutRuntimeResizeMode::terminal_and_pty);
+  return commit_layout_resize(session, tab, runtimes, proposed_layout);
 }
 
 template <typename Value>
@@ -3508,9 +3293,7 @@ struct SessionCommandContext final {
     if (other == nullptr) {
       return {.status = CommandStatus::stale_target};
     }
-    if (!finish_live_divider_resize(session, runtimes)) {
-      return {.status = CommandStatus::failed};
-    }
+    finish_live_divider_resize(session);
     return swap_panes(session, *tab, runtimes, targeted_pane->id, other->id);
   }
   case CommandKind::create_tab: {
@@ -4132,9 +3915,7 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
 
 [[nodiscard]] auto resize_session(SessionRecord& session, PaneRuntimeStore& runtimes,
                                   const protocol::Dimensions dimensions) noexcept -> bool {
-  if (!finish_live_divider_resize(session, runtimes, true)) {
-    return false;
-  }
+  finish_live_divider_resize(session, true);
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
   const auto previous_columns = session.attachment.columns;
@@ -4487,22 +4268,12 @@ enum class ParseResult : std::uint8_t {
       if (tab == nullptr) {
         return ParseResult::error;
       }
-      const bool divider_capture =
-          session.attachment.mouse_capture.has_value() &&
-          session.attachment.mouse_capture->owner == MouseCaptureOwner::divider;
-      if (divider_capture != session.attachment_runtime.live_divider_resize.has_value()) {
-        session.active = false;
-        return ParseResult::error;
-      }
       const auto status_rows = session.attachment.rows >= 2 ? std::uint16_t{1} : std::uint16_t{0};
       if (message.mouse.action == protocol::MouseInputAction::press &&
           session.attachment.mouse_capture.has_value() &&
           session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
-        if (!finish_live_divider_resize(session, runtimes)) {
-          return ParseResult::error;
-        }
-        // A fresh press supersedes even a gesture whose PTY convergence failed and rolled back.
-        session.attachment.mouse_capture.reset();
+        // A fresh press supersedes the completed divider gesture.
+        finish_live_divider_resize(session);
       }
       const bool captured_continuation = session.attachment.mouse_capture.has_value() &&
                                          message.mouse.action != protocol::MouseInputAction::press;
@@ -4513,9 +4284,8 @@ enum class ParseResult : std::uint8_t {
                                    ? std::uint16_t{0}
                                    : static_cast<std::uint16_t>(message.mouse.row - status_rows);
       if (tab->layout_suspended) {
-        if (session.attachment_runtime.live_divider_resize.has_value() ||
-            (session.attachment.mouse_capture.has_value() &&
-             session.attachment.mouse_capture->owner == MouseCaptureOwner::divider)) {
+        if (session.attachment.mouse_capture.has_value() &&
+            session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
           session.active = false;
           return ParseResult::error;
         }
@@ -4533,29 +4303,17 @@ enum class ParseResult : std::uint8_t {
           message.mouse.button == protocol::MouseInputButton::left) {
         const auto divider = tab->layout.divider_at(viewport, message.mouse.column, content_row);
         if (divider.has_value()) {
-          const auto position =
-              divider->axis == SplitAxis::left_right ? message.mouse.column : content_row;
-          if (session.attachment_runtime.live_divider_resize.has_value()) {
-            session.active = false;
-            return ParseResult::error;
-          }
           session.attachment.mouse_capture = MouseCapture{
               .target = {.tab = tab->id, .pane = divider->first},
               .peer_pane = divider->second,
               .owner = MouseCaptureOwner::divider,
               .divider_axis = divider->axis,
           };
-          session.attachment_runtime.live_divider_resize =
-              LiveDividerResizeRuntime{.deadline = {}, .pty_position = position};
           break;
         }
       }
       if (captured_continuation &&
           session.attachment.mouse_capture->owner == MouseCaptureOwner::discard_until_release) {
-        if (session.attachment_runtime.live_divider_resize.has_value()) {
-          session.active = false;
-          return ParseResult::error;
-        }
         if (message.mouse.action == protocol::MouseInputAction::release) {
           session.attachment.mouse_capture.reset();
         }
@@ -4565,8 +4323,7 @@ enum class ParseResult : std::uint8_t {
           session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
         const auto capture = *session.attachment.mouse_capture;
         auto* const captured_tab = find_tab(session, capture.target.tab);
-        if (!session.attachment_runtime.live_divider_resize.has_value() ||
-            captured_tab == nullptr || captured_tab->id != session.active_tab ||
+        if (captured_tab == nullptr || captured_tab->id != session.active_tab ||
             captured_tab->zoomed || captured_tab->layout_suspended) {
           session.active = false;
           return ParseResult::error;
@@ -4590,7 +4347,6 @@ enum class ParseResult : std::uint8_t {
           return ParseResult::error;
         }
         if (result.status != CommandStatus::applied && result.status != CommandStatus::no_effect) {
-          session.attachment_runtime.live_divider_resize.reset();
           if (message.mouse.action == protocol::MouseInputAction::release) {
             session.attachment.mouse_capture.reset();
           } else {
@@ -4598,35 +4354,8 @@ enum class ParseResult : std::uint8_t {
           }
           break;
         }
-        const LayoutDivider divider{
-            .first = capture.target.pane,
-            .second = capture.peer_pane,
-            .axis = capture.divider_axis,
-        };
-        const auto rectangle = captured_tab->layout.divider_rectangle(divider, viewport);
-        if (!rectangle.has_value()) {
-          session.active = false;
-          return ParseResult::error;
-        }
-        const auto position =
-            capture.divider_axis == SplitAxis::left_right ? rectangle->column : rectangle->row;
-        auto& live_resize = *session.attachment_runtime.live_divider_resize;
-        if (!live_resize.deadline_armed && position != live_resize.pty_position) {
-          const auto synchronized = synchronize_live_divider_ptys(session, runtimes);
-          if (!session.active) {
-            return ParseResult::error;
-          }
-          if (synchronized && session.attachment.mouse_capture.has_value() &&
-              session.attachment.mouse_capture->owner == MouseCaptureOwner::divider &&
-              session.attachment_runtime.live_divider_resize.has_value()) {
-            session.attachment_runtime.live_divider_resize->deadline =
-                std::chrono::steady_clock::now() + divider_pty_resize_interval;
-            session.attachment_runtime.live_divider_resize->deadline_armed = true;
-          }
-        }
-        if (message.mouse.action == protocol::MouseInputAction::release &&
-            !finish_live_divider_resize(session, runtimes)) {
-          return ParseResult::error;
+        if (message.mouse.action == protocol::MouseInputAction::release) {
+          finish_live_divider_resize(session);
         }
         break;
       }
@@ -4808,9 +4537,7 @@ enum class ParseResult : std::uint8_t {
       }
       break;
     case protocol::ClientMessageKind::pane_command: {
-      if (!finish_live_divider_resize(session, runtimes, true)) {
-        return ParseResult::error;
-      }
+      finish_live_divider_resize(session, true);
       const bool begins_rename =
           message.pane_command == protocol::PaneCommand::begin_rename_session ||
           message.pane_command == protocol::PaneCommand::begin_rename_tab;
@@ -6137,7 +5864,6 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   session->attachment_runtime.input_backpressured = false;
   session->attachment_runtime.client_work_pending = false;
   session->attachment_runtime.retained_input_offset.reset();
-  session->attachment_runtime.live_divider_resize.reset();
   session->attachment_runtime.client_close_state = ConnectionCloseState::none;
   session->attachment_runtime.frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -6267,9 +5993,6 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
          tighten(session->attachment_runtime.copy_mode.search_task->deadline)) ||
         (session->attachment_runtime.copy_mode.pending_escape_size > 0 &&
          tighten(session->attachment_runtime.copy_mode.pending_escape_deadline)) ||
-        (session->attachment_runtime.live_divider_resize.has_value() &&
-         session->attachment_runtime.live_divider_resize->deadline_armed &&
-         tighten(session->attachment_runtime.live_divider_resize->deadline)) ||
         tighten(session->attachment_runtime.frame_scheduler.deadline(frame_sink_state(*session))) ||
         tighten(session->attachment_runtime.output.deadline())) {
       return 0;
@@ -6529,12 +6252,8 @@ void apply_pane_runtime_outcome(SessionRecord& session, Tab& tab, PaneRuntimeSto
   if (session.attachment.mouse_capture.has_value() &&
       session.attachment.mouse_capture->owner == MouseCaptureOwner::divider &&
       session.attachment.mouse_capture->target.tab == tab.id) {
-    // Converge every surviving PTY before the failed pane is removed; the close transaction then
-    // starts from truthful geometry and the eventual mouse release remains consumed.
-    static_cast<void>(finish_live_divider_resize(session, runtimes, true));
-    if (!session.active) {
-      return;
-    }
+    // Every committed divider position is already converged; consume the eventual stale release.
+    finish_live_divider_resize(session, true);
   }
   // Current policy closes the semantic pane for every terminal-integrity or process-lifetime loss.
   // Keeping the reasons distinct prevents Runtime from deciding that policy and permits a later
@@ -6639,46 +6358,6 @@ void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& ru
       if (released.urgent_render && pane_slot.pane->tab == session->active_tab) {
         schedule_frame(*session, FrameUrgency::state_change, released.force_full);
       }
-    }
-  }
-}
-
-// The explicit branches validate cross-owner gesture/runtime state before each bounded due pass.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void service_due_live_divider_resizes(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
-  const auto now = std::chrono::steady_clock::now();
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active ||
-        !session->attachment_runtime.live_divider_resize.has_value() ||
-        !session->attachment_runtime.live_divider_resize->deadline_armed ||
-        now < session->attachment_runtime.live_divider_resize->deadline) {
-      continue;
-    }
-    if (!session->attachment.mouse_capture.has_value() ||
-        session->attachment.mouse_capture->owner != MouseCaptureOwner::divider) {
-      session->active = false;
-      continue;
-    }
-    auto* const tab = find_tab(*session, session->attachment.mouse_capture->target.tab);
-    const auto current_position =
-        tab == nullptr ? std::nullopt
-                       : current_divider_position(*tab, *session->attachment.mouse_capture);
-    if (!current_position.has_value()) {
-      session->active = false;
-      continue;
-    }
-    if (*current_position == session->attachment_runtime.live_divider_resize->pty_position) {
-      session->attachment_runtime.live_divider_resize->deadline_armed = false;
-      continue;
-    }
-    const auto synchronized = synchronize_live_divider_ptys(*session, runtimes);
-    if (synchronized && session->active && session->attachment.mouse_capture.has_value() &&
-        session->attachment.mouse_capture->owner == MouseCaptureOwner::divider &&
-        session->attachment_runtime.live_divider_resize.has_value()) {
-      session->attachment_runtime.live_divider_resize->deadline = now + divider_pty_resize_interval;
-      session->attachment_runtime.live_divider_resize->deadline_armed = true;
-    } else if (session->attachment_runtime.live_divider_resize.has_value()) {
-      session->attachment_runtime.live_divider_resize->deadline_armed = false;
     }
   }
 }
@@ -7228,7 +6907,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
 
     run_due_scrollback_compression(sessions, runtimes, compression_cursor);
-    service_due_live_divider_resizes(sessions, runtimes);
     release_expired_presentation_gates(sessions, runtimes);
     queue_due_frames(sessions, runtimes);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
