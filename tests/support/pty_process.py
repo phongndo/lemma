@@ -110,7 +110,8 @@ class AnsiScreenTracker:
         elif final == ord("u"):
             self.row, self.column = self.saved
 
-    def feed(self, data: bytes) -> None:
+    def _feed(self, data: bytes, observe_marker: bytes | None) -> bool:
+        observed = False
         for value in data:
             if self.state == "ground":
                 if value == 0x1B:
@@ -128,6 +129,8 @@ class AnsiScreenTracker:
                     current_row = self.cells[self.row]
                     if value == ord("_") and b"__LEMMA_" in current_row:
                         self.observed_fixture_rows.append(bytes(current_row))
+                    if observe_marker is not None and observe_marker in current_row:
+                        observed = True
                     if self.column + 1 < self.columns:
                         self.column += 1
                 continue
@@ -169,6 +172,10 @@ class AnsiScreenTracker:
                 continue
             if self.state == "string_escape":
                 self.state = "ground" if value == ord("\\") else "string"
+        return observed
+
+    def feed(self, data: bytes) -> None:
+        self._feed(data, None)
 
     def contains(self, marker: bytes) -> bool:
         return any(marker in row for row in self.observed_fixture_rows) or any(
@@ -176,17 +183,7 @@ class AnsiScreenTracker:
         )
 
     def feed_observing(self, data: bytes, marker: bytes) -> bool:
-        if not marker:
-            self.feed(data)
-            return False
-        observed = False
-        offset = 0
-        while (candidate := data.find(marker[-1:], offset)) >= 0:
-            self.feed(data[offset : candidate + 1])
-            observed = observed or self.contains(marker)
-            offset = candidate + 1
-        self.feed(data[offset:])
-        return observed
+        return self._feed(data, marker if marker else None)
 
     def text(self) -> str:
         return "\n".join(

@@ -26,14 +26,14 @@ class AnsiScreenTrackerTest(unittest.TestCase):
         self.assertTrue(tracker.contains(b"__LEMMA_DONE__"))
         self.assertFalse(tracker.contains(b"ignored"))
 
-    def test_reports_a_marker_overwritten_later_in_the_same_feed(self) -> None:
+    def test_reports_a_sparse_marker_overwritten_later_in_the_same_feed(self) -> None:
         tracker = AnsiScreenTracker(80, 24)
-        observed = tracker.feed_observing(
-            b"\x1b[23;1HS0045X\x1b[23;1H      ", b"S0045X"
-        )
+        tracker.feed(b"\x1b[23;1HS0030X")
+
+        observed = tracker.feed_observing(b"\x1b[23;5H2\x1b[23;1H      ", b"S0032X")
 
         self.assertTrue(observed)
-        self.assertFalse(tracker.contains(b"S0045X"))
+        self.assertFalse(tracker.contains(b"S0032X"))
 
 
 class PtyProcessBufferingTest(unittest.TestCase):

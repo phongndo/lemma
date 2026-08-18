@@ -928,6 +928,9 @@ void PtyClient::drain(const Deadline deadline) noexcept { pump(deadline); }
     if (result == process_) {
       status_ = status;
       process_ = -1;
+      // The child can write its final diagnostic after the preceding pump and exit before waitpid.
+      // Drain bytes already queued on the PTY before reporting completion to the test.
+      pump(deadline_after(std::chrono::milliseconds(50)));
       return true;
     }
     if (result < 0 && errno != EINTR) {
