@@ -414,7 +414,7 @@ struct InlineStatusPromptProjection final {
       try_left = !try_left;
     }
     const auto width = status_width(labels, projection.begin, projection.end);
-    const auto centered_column = ((left_columns - width) / 2U) + 1U;
+    const auto centered_column = ((left_columns - std::min(left_columns, width) + 1U) / 2U) + 1U;
     projection.tab_column =
         static_cast<std::uint16_t>(std::max(centered_column, projection.session.size + 1U));
   }
@@ -601,9 +601,10 @@ struct InlineStatusPromptProjection final {
     end = active;
     width = labels.subspan(active, 1).front().size;
   }
-  const auto centered_column = ((viewport.columns - width) / 2U) + std::size_t{1};
+  const auto remaining_columns = viewport.columns - std::min<std::size_t>(viewport.columns, width);
+  const auto centered_column = ((remaining_columns + 1U) / 2U) + 1U;
   const auto start_column =
-      static_cast<std::uint16_t>(std::max(centered_column, session.size + std::size_t{1}));
+      static_cast<std::uint16_t>(std::max(centered_column, session.size + 1U));
   constexpr std::uint16_t status_row = 1;
   if (!append_position(output, used, status_row, 1) || !append(output, used, status_style) ||
       !append_spaces(output, used, viewport.columns)) {

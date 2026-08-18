@@ -100,7 +100,7 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->status);
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;9H"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;10H"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ nvim ]"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
