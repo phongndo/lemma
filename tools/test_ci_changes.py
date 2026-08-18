@@ -1,20 +1,31 @@
 import importlib.util
-from pathlib import Path
 import unittest
-
+from collections.abc import Iterable
+from pathlib import Path
+from types import ModuleType
+from typing import Protocol, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_module(name: str, relative_path: str):
+def load_module(name: str, relative_path: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, ROOT / relative_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {relative_path}")
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
 
 
-changes = load_module("ci_changes", "scripts/ci/changes.py")
+class CiChangesModule(Protocol):
+    @staticmethod
+    def classify_paths(paths: Iterable[str]) -> dict[str, bool]: ...
+
+    @staticmethod
+    def diff_revisions(base: str, head: str, event: str | None) -> list[str]: ...
+
+
+changes = cast(CiChangesModule, load_module("ci_changes", "scripts/ci/changes.py"))
 
 
 class CiChangesTests(unittest.TestCase):
@@ -52,6 +63,12 @@ class CiChangesTests(unittest.TestCase):
     def test_benchmark_change_selects_cpp_jobs(self):
         self.assertEqual(self.selected("benchmarks/lemma_benchmark.cpp"), {"cpp"})
 
+    def test_python_benchmark_change_selects_cpp_and_python_jobs(self):
+        self.assertEqual(
+            self.selected("benchmarks/compare_mux.py"),
+            {"cpp", "python"},
+        )
+
     def test_dependency_change_selects_cpp_correctness(self):
         self.assertEqual(
             self.selected("conan.lock", "third_party/ghostty"),
@@ -61,8 +78,17 @@ class CiChangesTests(unittest.TestCase):
     def test_tidy_configuration_selects_cpp_correctness(self):
         self.assertEqual(self.selected(".clang-tidy"), {"cpp"})
 
-    def test_ci_test_change_selects_automation_lane(self):
-        self.assertEqual(self.selected("tools/test_ci_changes.py"), {"automation"})
+    def test_ci_test_change_selects_python_and_automation_lanes(self):
+        self.assertEqual(
+            self.selected("tools/test_ci_changes.py"),
+            {"python", "automation"},
+        )
+
+    def test_python_project_change_selects_python_lane(self):
+        self.assertEqual(self.selected("pyproject.toml", "uv.lock"), {"python"})
+
+    def test_conan_recipe_selects_cpp_and_python_lanes(self):
+        self.assertEqual(self.selected("conanfile.py"), {"cpp", "python"})
 
     def test_workflow_change_runs_every_lane(self):
         result = changes.classify_paths([".github/workflows/quality.yml"])

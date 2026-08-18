@@ -32,7 +32,11 @@ def require_int(value: Any, label: str, *, minimum: int = 0) -> int:
 
 
 def require_number(value: Any, label: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
         raise BudgetError(f"{label} must be a finite number")
     return float(value)
 
@@ -48,7 +52,9 @@ def require_decimal_int(value: Any, label: str, *, minimum: int = 0) -> int:
         try:
             value = int(value)
         except ValueError as error:
-            raise BudgetError(f"{label} is outside the supported integer range") from error
+            raise BudgetError(
+                f"{label} is outside the supported integer range"
+            ) from error
     return require_int(value, label, minimum=minimum)
 
 
@@ -82,7 +88,9 @@ def value_at_path(root: dict[str, Any], path: list[str], label: str) -> Any:
 def checked_samples(value: Any, label: str, minimum_samples: int) -> list[float]:
     if not isinstance(value, list) or len(value) < minimum_samples:
         actual = len(value) if isinstance(value, list) else 0
-        raise BudgetError(f"{label} needs at least {minimum_samples} samples; found {actual}")
+        raise BudgetError(
+            f"{label} needs at least {minimum_samples} samples; found {actual}"
+        )
     samples = [require_number(sample, f"{label} sample") for sample in value]
     if any(sample < 0 for sample in samples):
         raise BudgetError(f"{label} samples must be non-negative")
@@ -146,7 +154,9 @@ def validate_comparative_check(check: Any, label: str) -> dict[str, Any]:
     for path_name in ("baseline_samples_path", "loaded_samples_path"):
         path = check.get(path_name)
         if not isinstance(path, list) or len(path) < 3 or path[0] != "workloads":
-            raise BudgetError(f"{label}.{path_name} must identify a process workload field")
+            raise BudgetError(
+                f"{label}.{path_name} must identify a process workload field"
+            )
         for index, component in enumerate(path):
             require_string(component, f"{label}.{path_name}[{index}]")
     return check
@@ -167,7 +177,9 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     process_requirements = scope.get("process_report_requirements")
     micro_requirements = scope.get("micro_context_requirements")
     if not isinstance(process_requirements, dict) or not process_requirements:
-        raise BudgetError("scope.process_report_requirements must be a non-empty object")
+        raise BudgetError(
+            "scope.process_report_requirements must be a non-empty object"
+        )
     if not isinstance(micro_requirements, dict) or not micro_requirements:
         raise BudgetError("scope.micro_context_requirements must be a non-empty object")
     approved_host = scope.get("approved_host")
@@ -178,8 +190,13 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         "physical_cpu_count",
         "memory_bytes",
     }
-    if not isinstance(approved_host, dict) or set(approved_host) != required_host_fields:
-        raise BudgetError(f"scope.approved_host must contain {sorted(required_host_fields)!r}")
+    if (
+        not isinstance(approved_host, dict)
+        or set(approved_host) != required_host_fields
+    ):
+        raise BudgetError(
+            f"scope.approved_host must contain {sorted(required_host_fields)!r}"
+        )
     for field in ("host_name", "model_identifier", "cpu_model"):
         require_string(approved_host.get(field), f"scope.approved_host.{field}")
     require_int(
@@ -201,7 +218,9 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     ):
         if not isinstance(value, dict):
             raise BudgetError(f"regression_budgets.{label} must be an object")
-        require_int(value.get("minimum_repetitions"), f"{label}.minimum_repetitions", minimum=2)
+        require_int(
+            value.get("minimum_repetitions"), f"{label}.minimum_repetitions", minimum=2
+        )
 
     micro_checks = micro.get("checks")
     process_checks = process.get("checks")
@@ -217,7 +236,9 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     for index, check in enumerate(process_checks):
         validate_check(check, f"process_workloads.checks[{index}]", micro=False)
     for index, check in enumerate(comparative_checks):
-        validate_comparative_check(check, f"process_workloads.comparative_checks[{index}]")
+        validate_comparative_check(
+            check, f"process_workloads.comparative_checks[{index}]"
+        )
     identifiers = [
         check["id"] for check in [*micro_checks, *process_checks, *comparative_checks]
     ]
@@ -229,7 +250,9 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(limits, dict) or set(limits) != {"P1", "P4", "P16", "PMAX"}:
         raise BudgetError("pane_profiles.maximum_p95_rss_bytes has invalid profile IDs")
     for profile, maximum in limits.items():
-        require_int(maximum, f"pane_profiles.maximum_p95_rss_bytes.{profile}", minimum=1)
+        require_int(
+            maximum, f"pane_profiles.maximum_p95_rss_bytes.{profile}", minimum=1
+        )
     if not isinstance(conditions, dict) or set(conditions) != {"idle", "active"}:
         raise BudgetError("pane_profiles.conditions must contain idle and active")
     required_limits = {
@@ -281,19 +304,28 @@ def require_scope(
 ) -> None:
     scope = budgets["scope"]
     for field, expected in scope["process_report_requirements"].items():
-        if process_report.get(field) != expected or profile_report.get(field) != expected:
-            raise BudgetError(f"reports are outside the reviewed scope: {field} must be {expected!r}")
+        if (
+            process_report.get(field) != expected
+            or profile_report.get(field) != expected
+        ):
+            raise BudgetError(
+                f"reports are outside the reviewed scope: {field} must be {expected!r}"
+            )
     context = micro_report.get("context")
     if not isinstance(context, dict):
         raise BudgetError("microbenchmark report has no context")
     for field, expected in scope["micro_context_requirements"].items():
         if context.get(field) != expected:
-            raise BudgetError(f"microbenchmark report is outside scope: {field} must be {expected!r}")
+            raise BudgetError(
+                f"microbenchmark report is outside scope: {field} must be {expected!r}"
+            )
 
     expected_host = scope["approved_host"]
     for report, label in ((process_report, "process"), (profile_report, "profile")):
         if report.get("host_fingerprint") != expected_host:
-            raise BudgetError(f"{label} report did not come from the approved pinned host")
+            raise BudgetError(
+                f"{label} report did not come from the approved pinned host"
+            )
     micro_host = {
         "host_name": context.get("host_name"),
         "model_identifier": context.get("host_model_identifier"),
@@ -310,11 +342,15 @@ def require_scope(
         ),
     }
     if micro_host != expected_host:
-        raise BudgetError("microbenchmark report did not come from the approved pinned host")
+        raise BudgetError(
+            "microbenchmark report did not come from the approved pinned host"
+        )
     if process_report.get("host") != profile_report.get("host"):
         raise BudgetError("process and profile reports came from different hosts")
     if context.get("host_name") != process_report.get("host"):
-        raise BudgetError("microbenchmark and process reports came from different hosts")
+        raise BudgetError(
+            "microbenchmark and process reports came from different hosts"
+        )
     if process_report.get("commit") != profile_report.get("commit"):
         raise BudgetError("process and profile reports came from different commits")
 
@@ -358,9 +394,16 @@ def evaluate(
 
     process_budget = budgets["process_workloads"]
     process_minimum = process_budget["minimum_repetitions"]
-    if process_report.get("schema") != 4 or process_report.get("multiplexer") != "lemma":
+    if (
+        process_report.get("schema") != 4
+        or process_report.get("multiplexer") != "lemma"
+    ):
         raise BudgetError("process workload report must be a schema-4 Lemma report")
-    require_int(process_report.get("repetitions"), "process report repetitions", minimum=process_minimum)
+    require_int(
+        process_report.get("repetitions"),
+        "process report repetitions",
+        minimum=process_minimum,
+    )
     require_completed_process_workloads(
         process_report,
         process_budget["checks"],
@@ -410,9 +453,16 @@ def evaluate(
 
     profile_budget = budgets["pane_profiles"]
     profile_minimum = profile_budget["minimum_repetitions"]
-    if profile_report.get("schema") != 4 or profile_report.get("multiplexer") != "lemma":
+    if (
+        profile_report.get("schema") != 4
+        or profile_report.get("multiplexer") != "lemma"
+    ):
         raise BudgetError("profile report must be a schema-4 Lemma report")
-    require_int(profile_report.get("repetitions"), "profile report repetitions", minimum=profile_minimum)
+    require_int(
+        profile_report.get("repetitions"),
+        "profile report repetitions",
+        minimum=profile_minimum,
+    )
     profiles = profile_report.get("pane_profiles")
     if not isinstance(profiles, dict):
         raise BudgetError("profile report has no pane profiles")
@@ -483,19 +533,27 @@ def evaluate(
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", type=Path, default=Path("benchmarks/workloads.json"))
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("benchmarks/workloads.json")
+    )
     parser.add_argument("--micro-report", type=Path)
     parser.add_argument("--process-report", type=Path)
     parser.add_argument("--profile-report", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--validate-manifest", action="store_true")
     arguments = parser.parse_args()
-    supplied = (arguments.micro_report, arguments.process_report, arguments.profile_report)
+    supplied = (
+        arguments.micro_report,
+        arguments.process_report,
+        arguments.profile_report,
+    )
     if arguments.validate_manifest:
         if any(value is not None for value in supplied) or arguments.output is not None:
             parser.error("--validate-manifest does not accept reports or --output")
     elif any(value is None for value in supplied):
-        parser.error("--micro-report, --process-report, and --profile-report are required")
+        parser.error(
+            "--micro-report, --process-report, and --profile-report are required"
+        )
     return arguments
 
 

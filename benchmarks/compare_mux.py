@@ -21,7 +21,9 @@ def load_report(path: Path, expected_mux: str) -> dict[str, Any]:
     if not isinstance(report, dict) or report.get("schema") != 4:
         raise RuntimeError(f"{expected_mux} report does not use process schema 4")
     if report.get("multiplexer") != expected_mux:
-        raise RuntimeError(f"expected {expected_mux} report, got {report.get('multiplexer')!r}")
+        raise RuntimeError(
+            f"expected {expected_mux} report, got {report.get('multiplexer')!r}"
+        )
     workloads = report.get("workloads")
     if not isinstance(workloads, dict) or not {
         "warm_scroll",
@@ -78,7 +80,9 @@ def run_competitor(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lemma-report", type=Path, required=True)
-    parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
+    parser.add_argument(
+        "--peer", type=Path, default=Path("build/release/lemma_test_pty_peer")
+    )
     parser.add_argument("--tmux", default="tmux")
     parser.add_argument("--zellij", default="zellij")
     parser.add_argument("--herdr", default="herdr")

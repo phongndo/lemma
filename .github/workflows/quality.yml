@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       cpp: ${{ steps.classify.outputs.cpp }}
+      python: ${{ steps.classify.outputs.python }}
       automation: ${{ steps.classify.outputs.automation }}
 
     steps:
@@ -42,6 +43,25 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: scripts/ci/changes.py
+
+  python:
+    name: Python quality
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Run Python checks
+        run: nix develop .#ci --command scripts/ci/python
 
   ci-contracts:
     name: CI contracts
@@ -278,6 +298,7 @@ jobs:
     name: CI gate
     needs:
       - changes
+      - python
       - ci-contracts
       - shellcheck
       - actionlint
@@ -294,6 +315,8 @@ jobs:
       - name: Require every selected lane
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
+          PYTHON_RESULT: ${{ needs.python.result }}
           AUTOMATION_SELECTED: ${{ needs.changes.outputs.automation }}
           CI_CONTRACTS_RESULT: ${{ needs.ci-contracts.result }}
           SHELLCHECK_RESULT: ${{ needs.shellcheck.result }}
@@ -314,6 +337,7 @@ jobs:
 
           failed=0
           for entry in \
+            "python:$PYTHON_SELECTED:$PYTHON_RESULT" \
             "ci-contracts:$AUTOMATION_SELECTED:$CI_CONTRACTS_RESULT" \
             "shellcheck:$AUTOMATION_SELECTED:$SHELLCHECK_RESULT" \
             "actionlint:$AUTOMATION_SELECTED:$ACTIONLINT_RESULT" \

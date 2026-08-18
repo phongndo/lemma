@@ -19,6 +19,8 @@ CMakeUserPresets.json
 hk.local.pkl
 
 # Python tooling
+/.venv/
+/.ruff_cache/
 __pycache__/
 *.py[cod]
 

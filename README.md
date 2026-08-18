@@ -33,6 +33,12 @@ In the development shell, `just build`, `just test`, and `just run` default to r
 `just profile=debug build` (or `test`/`run`) for the in-tree debug build. Both variants use the same
 per-user daemon endpoint, so shut down the running daemon before switching between them.
 
+## Python tooling
+
+Python benchmark and automation scripts use uv for dependency management, Ruff for formatting and
+linting, and ty for type checking. Run `uv sync --locked` to create the environment, or use
+`just python-check` to run all Python checks and tests.
+
 ## Documentation
 
 See [`docs/product-contract.md`](docs/product-contract.md) for the intended product and [`docs/architecture.md`](docs/architecture.md) for its design.

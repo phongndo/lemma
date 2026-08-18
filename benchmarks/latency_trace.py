@@ -80,7 +80,9 @@ def read_trace(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     encoded = path.read_bytes()
     if len(encoded) < HEADER.size:
         raise RuntimeError(f"trace header is truncated: {path}")
-    magic, version, role, event_size, capacity, process, count, dropped = HEADER.unpack_from(encoded)
+    magic, version, role, event_size, capacity, process, count, dropped = (
+        HEADER.unpack_from(encoded)
+    )
     if magic != TRACE_MAGIC or version != TRACE_VERSION:
         raise RuntimeError(f"trace magic/version mismatch: {path}")
     if role not in ROLES or process == 0:
@@ -168,7 +170,11 @@ def input_paths(
             by_correlation[correlation].append(event)
     for correlated in by_correlation.values():
         correlated.sort(
-            key=lambda event: (event["timestamp_ns"], event["process"], event["sequence"])
+            key=lambda event: (
+                event["timestamp_ns"],
+                event["process"],
+                event["sequence"],
+            )
         )
 
     selected_inputs = [
@@ -188,10 +194,14 @@ def input_paths(
     for input_event in selected_inputs:
         correlation = int(input_event.get("correlation", 0))
         if correlation == 0:
-            rejected.append(rejected_input(input_event, "physical input has no marker token"))
+            rejected.append(
+                rejected_input(input_event, "physical input has no marker token")
+            )
             continue
         if input_token_counts[correlation] != 1:
-            rejected.append(rejected_input(input_event, "physical input marker token is reused"))
+            rejected.append(
+                rejected_input(input_event, "physical input marker token is reused")
+            )
             continue
 
         stages: dict[str, dict[str, Any]] = {PATH_STAGES[0]: input_event}
@@ -208,10 +218,16 @@ def input_paths(
                     if event["stage"] == stage
                     and int(event["timestamp_ns"]) >= previous_timestamp
                     and (
-                        (stage in CLIENT_STAGES and event["process"] == input_event["process"])
+                        (
+                            stage in CLIENT_STAGES
+                            and event["process"] == input_event["process"]
+                        )
                         or (
                             stage not in CLIENT_STAGES
-                            and (daemon_process is None or event["process"] == daemon_process)
+                            and (
+                                daemon_process is None
+                                or event["process"] == daemon_process
+                            )
                         )
                     )
                     and (
@@ -233,7 +249,9 @@ def input_paths(
                 pty_subject = int(matched["subject"])
         if missing is not None:
             rejected.append(
-                rejected_input(input_event, f"marker token is missing ordered stage {missing}")
+                rejected_input(
+                    input_event, f"marker token is missing ordered stage {missing}"
+                )
             )
             continue
 
@@ -249,7 +267,9 @@ def input_paths(
     return paths, rejected
 
 
-def build_report(directory: Path, input_bytes: set[int] | None = None) -> dict[str, Any]:
+def build_report(
+    directory: Path, input_bytes: set[int] | None = None
+) -> dict[str, Any]:
     files = []
     events = []
     for path in sorted(directory.glob("*.ltrace")):
@@ -258,7 +278,9 @@ def build_report(directory: Path, input_bytes: set[int] | None = None) -> dict[s
         events.extend(decoded)
     if not files:
         raise RuntimeError(f"no .ltrace files in {directory}")
-    events.sort(key=lambda event: (event["timestamp_ns"], event["process"], event["sequence"]))
+    events.sort(
+        key=lambda event: (event["timestamp_ns"], event["process"], event["sequence"])
+    )
     paths, rejected_paths = input_paths(events, input_bytes)
 
     stage_distributions: dict[str, Any] = {}
@@ -282,10 +304,7 @@ def build_report(directory: Path, input_bytes: set[int] | None = None) -> dict[s
             stage_intervals[f"{first}_to_{second}"] = summary(samples)
 
     input_processes = sorted(
-        {
-            int(path["input_process"])
-            for path in [*paths, *rejected_paths]
-        }
+        {int(path["input_process"]) for path in [*paths, *rejected_paths]}
     )
     return {
         "schema": 3,

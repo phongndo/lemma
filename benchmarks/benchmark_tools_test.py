@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest import mock
 
 import f5_soak
-
 from check_regression import (
     BudgetError,
     checked_samples,
@@ -23,9 +22,9 @@ from check_regression import (
 )
 from latency_trace import input_paths
 from mux_benchmark import (
-    AnsiScreenTracker,
     INTERACTION_LABEL_CODES,
     LEMMA_OUTER_TERMINAL_RESTORE,
+    AnsiScreenTracker,
     PtyProcess,
     install_attach_shell_startup,
     interaction_marker,
@@ -64,9 +63,7 @@ class RegressionWorkloadTest(unittest.TestCase):
     def test_rejects_samples_from_a_failed_workload(self) -> None:
         checks = [{"samples_path": ["workloads", "interactive", "samples_ns"]}]
         report = {
-            "workloads": {
-                "interactive": {"status": "failed", "samples_ns": [1, 2, 3]}
-            }
+            "workloads": {"interactive": {"status": "failed", "samples_ns": [1, 2, 3]}}
         }
 
         with self.assertRaisesRegex(BudgetError, "interactive did not complete"):
@@ -218,7 +215,9 @@ class LatencyTraceCorrelationTest(unittest.TestCase):
         self.assertEqual(len(rejected), 1)
         self.assertIn("daemon_pty_output_read", rejected[0]["reason"])
 
-    def test_rejects_an_uncorrelated_socket_read_without_timestamp_matching(self) -> None:
+    def test_rejects_an_uncorrelated_socket_read_without_timestamp_matching(
+        self,
+    ) -> None:
         events = self.complete_path()
         socket_read = next(
             event for event in events if event["stage"] == "client_socket_read"
@@ -297,7 +296,9 @@ class MuxFixtureTest(unittest.TestCase):
             "XDG_CONFIG_HOME": "/tmp/config",
             "ZDOTDIR": "/tmp/zdot",
         }
-        with self.assertRaisesRegex(RuntimeError, "does not support account login shell"):
+        with self.assertRaisesRegex(
+            RuntimeError, "does not support account login shell"
+        ):
             install_attach_shell_startup(environment, Path("/tmp/peer"))
 
 
@@ -405,7 +406,9 @@ class F5SoakReportTest(unittest.TestCase):
             mock.patch.object(f5_soak, "LemmaRuntime", Runtime),
             mock.patch.object(f5_soak, "PtyReceiptChannel", Receipts),
             mock.patch.object(f5_soak, "latency_samples", sample_latency),
-            mock.patch.object(f5_soak, "resource_sample", return_value={"elapsed_ns": 0}),
+            mock.patch.object(
+                f5_soak, "resource_sample", return_value={"elapsed_ns": 0}
+            ),
             mock.patch.object(f5_soak, "git_provenance", return_value=("test", True)),
             mock.patch.object(f5_soak, "host_fingerprint", return_value={}),
             mock.patch.object(f5_soak.signal, "signal"),
@@ -434,7 +437,10 @@ class F5SoakReportTest(unittest.TestCase):
         self.assertEqual(report["setup_elapsed_ns"], 2_000_000_000)
         self.assertEqual(report["elapsed_ns"], 1_000_000_000)
         self.assertEqual(report["total_elapsed_ns"], 3_000_000_000)
-        self.assertEqual(len(report["interactions"]), 1)
+        interactions = report["interactions"]
+        if not isinstance(interactions, list):
+            self.fail("soak report interactions must be a list")
+        self.assertEqual(len(interactions), 1)
 
 
 class AnsiScreenTrackerTest(unittest.TestCase):

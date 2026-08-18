@@ -34,12 +34,17 @@ def utc_now() -> str:
 def resource_sample(runtime: LemmaRuntime, elapsed_ns: int) -> dict[str, Any]:
     resources = runtime_resource_snapshot(runtime)
     descriptors = open_descriptor_snapshot(runtime.server.pid)
-    if resources.get("available") is not True or descriptors.get("available") is not True:
+    if (
+        resources.get("available") is not True
+        or descriptors.get("available") is not True
+    ):
         raise RuntimeError("soak resource census became unavailable")
     daemon = resources.get("roles", {}).get("daemon", {})
     client = resources.get("roles", {}).get("attached_client", {})
     if daemon.get("available") is not True or client.get("available") is not True:
-        raise RuntimeError("soak daemon or attached-client resource role became unavailable")
+        raise RuntimeError(
+            "soak daemon or attached-client resource role became unavailable"
+        )
     return {
         "elapsed_ns": elapsed_ns,
         "tree_rss_bytes": int(resources["rss_bytes"]),
@@ -60,9 +65,15 @@ def main() -> int:
     parser.add_argument("--interaction-interval-seconds", type=float, default=1.0)
     parser.add_argument("--reattach-every", type=int, default=300)
     parser.add_argument("--resource-interval-seconds", type=float, default=60.0)
-    parser.add_argument("--server", type=Path, default=Path("build/release/lemma_test_server"))
-    parser.add_argument("--cli", type=Path, default=Path("build/release/lemma_test_cli"))
-    parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
+    parser.add_argument(
+        "--server", type=Path, default=Path("build/release/lemma_test_server")
+    )
+    parser.add_argument(
+        "--cli", type=Path, default=Path("build/release/lemma_test_cli")
+    )
+    parser.add_argument(
+        "--peer", type=Path, default=Path("build/release/lemma_test_pty_peer")
+    )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     if not 1.0 <= arguments.duration_seconds <= 172_800.0:
@@ -159,7 +170,10 @@ def main() -> int:
             )
             if remaining_interval > 0:
                 interaction["background_outer_bytes"] = client.drain(
-                    min(remaining_interval, max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9))
+                    min(
+                        remaining_interval,
+                        max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9),
+                    )
                 )
             else:
                 interaction["background_outer_bytes"] = 0
@@ -191,7 +205,9 @@ def main() -> int:
         if workload_started_ns is not None and workload_finished_ns is not None
         else 0
     )
-    completed = failure is None and elapsed_ns >= requested_duration_ns and bool(interactions)
+    completed = (
+        failure is None and elapsed_ns >= requested_duration_ns and bool(interactions)
+    )
     commit, dirty = git_provenance()
     report: dict[str, Any] = {
         "schema": 1,
@@ -220,7 +236,9 @@ def main() -> int:
         ),
         "elapsed_ns": elapsed_ns,
         "total_elapsed_ns": total_elapsed_ns,
-        "interaction_interval_ns": int(arguments.interaction_interval_seconds * 1_000_000_000),
+        "interaction_interval_ns": int(
+            arguments.interaction_interval_seconds * 1_000_000_000
+        ),
         "reattach_every": arguments.reattach_every,
         "reattachments": reattachments,
         "terminal_restoration_checks": restoration_checks,

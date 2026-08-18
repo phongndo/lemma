@@ -136,7 +136,9 @@ def local_socket_peer_pid(path: Path) -> int:
         elif platform.system() == "Linux":
             # Linux exposes pid, uid, and gid through SO_PEERCRED.
             encoded = peer.getsockopt(
-                socket.SOL_SOCKET, getattr(socket, "SO_PEERCRED", 17), struct.calcsize("3i")
+                socket.SOL_SOCKET,
+                getattr(socket, "SO_PEERCRED", 17),
+                struct.calcsize("3i"),
             )
             process, _, _ = struct.unpack("3i", encoded)
         else:
@@ -151,16 +153,19 @@ def local_socket_peer_pid(path: Path) -> int:
 def attach_frame(kind: int, payload: bytes, sequence: int, flags: int = 0) -> bytes:
     if not 0 < sequence <= 0xFFFF_FFFF or len(payload) > 0xFFFF_FFFF:
         raise ValueError("private attach frame exceeds its wire bounds")
-    return struct.pack(
-        "!4sBBBBII",
-        ATTACH_MAGIC,
-        ATTACH_PROTOCOL_MAJOR,
-        ATTACH_PROTOCOL_MINOR,
-        kind,
-        flags,
-        len(payload),
-        sequence,
-    ) + payload
+    return (
+        struct.pack(
+            "!4sBBBBII",
+            ATTACH_MAGIC,
+            ATTACH_PROTOCOL_MAJOR,
+            ATTACH_PROTOCOL_MINOR,
+            kind,
+            flags,
+            len(payload),
+            sequence,
+        )
+        + payload
+    )
 
 
 def receive_exact(peer: socket.socket, size: int) -> bytes:
@@ -434,9 +439,15 @@ def open_descriptor_snapshot(pid: int) -> dict[str, Any]:
             storage = ctypes.create_string_buffer(entry_bytes * capacity)
             received = proc_pidinfo(pid, 1, 0, storage, len(storage))
             if received <= 0 or received % entry_bytes != 0:
-                return {"available": False, "reason": "proc_pidinfo(PROC_PIDLISTFDS) failed"}
+                return {
+                    "available": False,
+                    "reason": "proc_pidinfo(PROC_PIDLISTFDS) failed",
+                }
             if received == len(storage):
-                return {"available": False, "reason": "descriptor census exceeded 4,096 entries"}
+                return {
+                    "available": False,
+                    "reason": "descriptor census exceeded 4,096 entries",
+                }
             return {
                 "available": True,
                 "source": "proc_pidinfo PROC_PIDLISTFDS",
@@ -454,7 +465,9 @@ def process_group_snapshot(
         return {"available": False, "reason": "no live processes in role"}
     darwin_resources = darwin_resource_snapshot(pids)
     linux_cpu = linux_cpu_snapshot(pids)
-    native_cpu = darwin_resources if darwin_resources.get("available") is True else linux_cpu
+    native_cpu = (
+        darwin_resources if darwin_resources.get("available") is True else linux_cpu
+    )
     wakeups = (
         {
             key: darwin_resources[key]
@@ -483,7 +496,9 @@ def process_group_snapshot(
             else sum(processes[pid][2] for pid in pids)
         ),
         "cpu_time_source": (
-            native_cpu.get("source") if native_cpu.get("available") is True else "ps time"
+            native_cpu.get("source")
+            if native_cpu.get("available") is True
+            else "ps time"
         ),
         "wakeups": wakeups,
         "pids": sorted(pids),
@@ -557,7 +572,9 @@ def resource_snapshot(
 
 def runtime_resource_snapshot(runtime: MuxRuntime) -> dict[str, Any]:
     return resource_snapshot(
-        runtime.resource_roots(), runtime.resource_role_pids(), runtime.unavailable_resource_roles()
+        runtime.resource_roots(),
+        runtime.resource_role_pids(),
+        runtime.unavailable_resource_roles(),
     )
 
 
@@ -626,16 +643,25 @@ def sample_resources(
         before_samples.append(before)
         after_samples.append(after)
 
-    role_names = set()
+    role_names: set[str] = set()
     for snapshot in (*before_samples, *after_samples):
         roles = snapshot.get("roles")
         if isinstance(roles, dict):
-            role_names.update(roles)
+            for role in roles:
+                if not isinstance(role, str):
+                    raise RuntimeError("resource snapshot has a non-string role name")
+                role_names.add(role)
     role_results: dict[str, Any] = {}
     for role in sorted(role_names):
-        role_before = [snapshot.get("roles", {}).get(role, {}) for snapshot in before_samples]
-        role_after = [snapshot.get("roles", {}).get(role, {}) for snapshot in after_samples]
-        if all(sample.get("available") is True for sample in (*role_before, *role_after)):
+        role_before = [
+            snapshot.get("roles", {}).get(role, {}) for snapshot in before_samples
+        ]
+        role_after = [
+            snapshot.get("roles", {}).get(role, {}) for snapshot in after_samples
+        ]
+        if all(
+            sample.get("available") is True for sample in (*role_before, *role_after)
+        ):
             role_results[role] = {
                 "available": True,
                 **summarize_resource_samples(role_before, role_after),
@@ -889,7 +915,9 @@ class PtyProcess:
         self.terminal_modes_restored: bool | None = None
         self.terminal_state_restored: bool | None = None
         try:
-            fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            fcntl.ioctl(
+                descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0)
+            )
             self.initial_terminal_attributes = termios.tcgetattr(descriptor)
             flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
             fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -944,7 +972,9 @@ class PtyProcess:
                 self.descriptor = -1
                 self.pid = -1
                 if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
-                    raise RuntimeError(f"PTY child exited unsuccessfully: status={status}")
+                    raise RuntimeError(
+                        f"PTY child exited unsuccessfully: status={status}"
+                    )
                 return
             time.sleep(0.005)
         raise TimeoutError("PTY child did not exit after detach")
@@ -997,17 +1027,23 @@ class PtyProcess:
         while offset < len(data):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"PTY write timed out after {offset}/{len(data)} bytes")
+                raise TimeoutError(
+                    f"PTY write timed out after {offset}/{len(data)} bytes"
+                )
             try:
                 offset += os.write(self.descriptor, data[offset:])
             except BlockingIOError:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(f"PTY write timed out after {offset}/{len(data)} bytes")
+                    raise TimeoutError(
+                        f"PTY write timed out after {offset}/{len(data)} bytes"
+                    )
                 select.select([], [self.descriptor], [], min(remaining, 0.02))
                 continue
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"PTY write timed out after {offset}/{len(data)} bytes")
+                raise TimeoutError(
+                    f"PTY write timed out after {offset}/{len(data)} bytes"
+                )
 
     def resize(self, columns: int, rows: int) -> None:
         if not 0 < columns <= 500 or not 0 < rows <= 200 or self.pid <= 0:
@@ -1066,7 +1102,9 @@ class PtyProcess:
                 self.pending_read = b""
             else:
                 remaining = deadline - time.monotonic()
-                readable, _, _ = select.select([self.descriptor], [], [], min(remaining, 0.02))
+                readable, _, _ = select.select(
+                    [self.descriptor], [], [], min(remaining, 0.02)
+                )
                 if not readable:
                     continue
                 try:
@@ -1086,7 +1124,9 @@ class PtyProcess:
             marker_offset = retained.find(marker)
             if marker_offset >= 0 or (visible_text and self.screen.contains(marker)):
                 suffix = (
-                    retained[marker_offset + len(marker) :] if marker_offset >= 0 else b""
+                    retained[marker_offset + len(marker) :]
+                    if marker_offset >= 0
+                    else b""
                 )
                 if preserve_suffix:
                     self.pending_read = suffix
@@ -1189,7 +1229,8 @@ class PtyReceiptChannel:
                     retained = (retained + data)[-(len(visible_marker) + 64 * 1024) :]
                     client.screen.feed(data)
                     if (
-                        visible_marker in retained or client.screen.contains(visible_marker)
+                        visible_marker in retained
+                        or client.screen.contains(visible_marker)
                     ) and visible_latency is None:
                         visible_latency = time.monotonic_ns() - started_ns
             if receipt_latency is not None and visible_latency is not None:
@@ -1354,12 +1395,17 @@ class LemmaRuntime:
         raise TimeoutError("Lemma validation client did not detach")
 
     def resource_roots(self) -> list[int]:
-        return [self.server.pid, *(client.pid for client in self.clients if client.pid > 0)]
+        return [
+            self.server.pid,
+            *(client.pid for client in self.clients if client.pid > 0),
+        ]
 
     def resource_role_pids(self) -> dict[str, list[int]]:
         return {
             "daemon": [self.server.pid],
-            "attached_client": [client.pid for client in self.clients if client.pid > 0],
+            "attached_client": [
+                client.pid for client in self.clients if client.pid > 0
+            ],
         }
 
     def unavailable_resource_roles(self) -> dict[str, str]:
@@ -1424,9 +1470,18 @@ class TmuxRuntime:
             timeout=2.0,
         ).stdout.strip()
 
-    def _command(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _command(
+        self, *arguments: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [str(self.executable_path), "-S", str(self.socket_path), "-f", "/dev/null", *arguments],
+            [
+                str(self.executable_path),
+                "-S",
+                str(self.socket_path),
+                "-f",
+                "/dev/null",
+                *arguments,
+            ],
             env=self.environment,
             check=check,
             capture_output=True,
@@ -1467,7 +1522,9 @@ class TmuxRuntime:
         install_attach_shell_startup(self.environment, self.peer_path)
         self._command("new-session", "-d", "-s", session, "-x", "80", "-y", "24")
         if self.server_pid < 0:
-            self.server_pid = int(self._command("display-message", "-p", "#{pid}").stdout.strip())
+            self.server_pid = int(
+                self._command("display-message", "-p", "#{pid}").stdout.strip()
+            )
         retain_attach_marker(self, session)
 
     def detach(self, client: PtyProcess, session: str) -> None:
@@ -1484,19 +1541,27 @@ class TmuxRuntime:
         raise TimeoutError("tmux validation client did not detach")
 
     def resource_roots(self) -> list[int]:
-        return [self.server_pid, *(client.pid for client in self.clients if client.pid > 0)]
+        return [
+            self.server_pid,
+            *(client.pid for client in self.clients if client.pid > 0),
+        ]
 
     def resource_role_pids(self) -> dict[str, list[int]]:
         return {
             "daemon": [self.server_pid],
-            "attached_client": [client.pid for client in self.clients if client.pid > 0],
+            "attached_client": [
+                client.pid for client in self.clients if client.pid > 0
+            ],
         }
 
     def unavailable_resource_roles(self) -> dict[str, str]:
         return {"extension_host": "tmux adapter has no Lemma extension host"}
 
     def binary_provenance(self) -> dict[str, str]:
-        return {"multiplexer": str(self.executable_path), "workload": str(self.peer_path)}
+        return {
+            "multiplexer": str(self.executable_path),
+            "workload": str(self.peer_path),
+        }
 
     def close(self) -> None:
         for client in self.clients:
@@ -1554,9 +1619,16 @@ class ZellijRuntime:
         ).stdout.strip()
 
     def _arguments(self, *arguments: str) -> list[str]:
-        return [str(self.executable_path), "--config", str(self.config_path), *arguments]
+        return [
+            str(self.executable_path),
+            "--config",
+            str(self.config_path),
+            *arguments,
+        ]
 
-    def _command(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _command(
+        self, *arguments: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             self._arguments(*arguments),
             env=self.environment,
@@ -1612,19 +1684,27 @@ class ZellijRuntime:
         ]
 
     def resource_roots(self) -> list[int]:
-        return [*self._server_pids(), *(client.pid for client in self.clients if client.pid > 0)]
+        return [
+            *self._server_pids(),
+            *(client.pid for client in self.clients if client.pid > 0),
+        ]
 
     def resource_role_pids(self) -> dict[str, list[int]]:
         return {
             "daemon": self._server_pids(),
-            "attached_client": [client.pid for client in self.clients if client.pid > 0],
+            "attached_client": [
+                client.pid for client in self.clients if client.pid > 0
+            ],
         }
 
     def unavailable_resource_roles(self) -> dict[str, str]:
         return {"extension_host": "Zellij adapter has no Lemma extension host"}
 
     def binary_provenance(self) -> dict[str, str]:
-        return {"multiplexer": str(self.executable_path), "workload": str(self.peer_path)}
+        return {
+            "multiplexer": str(self.executable_path),
+            "workload": str(self.peer_path),
+        }
 
     def close(self) -> None:
         for client in self.clients:
@@ -1791,14 +1871,19 @@ class HerdrRuntime:
     def resource_role_pids(self) -> dict[str, list[int]]:
         return {
             "daemon": list(self.server_pids.values()),
-            "attached_client": [client.pid for client in self.clients if client.pid > 0],
+            "attached_client": [
+                client.pid for client in self.clients if client.pid > 0
+            ],
         }
 
     def unavailable_resource_roles(self) -> dict[str, str]:
         return {"extension_host": "Herdr adapter has no Lemma extension host"}
 
     def binary_provenance(self) -> dict[str, str]:
-        return {"multiplexer": str(self.executable_path), "workload": str(self.peer_path)}
+        return {
+            "multiplexer": str(self.executable_path),
+            "workload": str(self.peer_path),
+        }
 
     def close(self) -> None:
         # On Darwin the detached server may remain a child of its launching client. Stop
@@ -1845,7 +1930,9 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     for _ in range(repetitions):
         started_ns = time.monotonic_ns()
         client.write_all(command, 2.0)
-        latency, output_bytes = client.read_until(WARM_MARKER, 60.0, started_ns=started_ns)
+        latency, output_bytes = client.read_until(
+            WARM_MARKER, 60.0, started_ns=started_ns
+        )
         latencies.append(latency)
         client_bytes.append(output_bytes)
         client.drain()
@@ -1977,7 +2064,9 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         if accepted <= 0:
             raise RuntimeError("blocked PTY accepted no payload")
 
-        under_backpressure = latency_samples(responsive, receipts, "BLOCKED", repetitions)
+        under_backpressure = latency_samples(
+            responsive, receipts, "BLOCKED", repetitions
+        )
         runtime.gate_path.touch(mode=0o600, exist_ok=False)
         try:
             blocked.write_all(payload[accepted:], 60.0)
@@ -2044,7 +2133,9 @@ def workspace_profile(
     for _ in range(1, workspaces):
         runtime.session_command(session, "workspace", "create", "--cwd", os.getcwd())
     if runtime.pane_count(session) != workspaces:
-        raise RuntimeError("Herdr workspace profile did not create one pane per workspace")
+        raise RuntimeError(
+            "Herdr workspace profile did not create one pane per workspace"
+        )
     return {
         "status": "completed",
         "workspaces": workspaces,
@@ -2114,7 +2205,9 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         blocked.settimeout(5.0)
         blocked.connect(str(runtime.socket_path))
         session = b"blocked_client"
-        hello_payload = bytes((len(session),)) + struct.pack("!HH", 500, 200) + b"\0" + session
+        hello_payload = (
+            bytes((len(session),)) + struct.pack("!HH", 500, 200) + b"\0" + session
+        )
         blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
         receive_attach_hello(blocked)
         flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"
@@ -2125,7 +2218,9 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         under_backpressure = latency_samples(
             responsive, receipts, "CLIENT_BLOCKED", repetitions
         )
-        disconnect_deadline_ns = blocked_since_ns + BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS
+        disconnect_deadline_ns = (
+            blocked_since_ns + BLOCKED_CLIENT_DISCONNECT_DEADLINE_NS
+        )
         while time.monotonic_ns() <= disconnect_deadline_ns:
             if ", detached," in runtime.command("list", "blocked_client").stdout:
                 break
@@ -2313,9 +2408,13 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         try:
             focused_pid = int(listing.split("focused pid ", 1)[1].split(",", 1)[0])
         except (IndexError, ValueError) as error:
-            raise RuntimeError("lifecycle churn could not identify its live pane") from error
+            raise RuntimeError(
+                "lifecycle churn could not identify its live pane"
+            ) from error
         if focused_pid <= 0:
-            raise RuntimeError("lifecycle churn observed an invalid focused pane identity")
+            raise RuntimeError(
+                "lifecycle churn observed an invalid focused pane identity"
+            )
         focused_pids.append(focused_pid)
         for expected in (3, 2, 1):
             send_prefix(client, b"x")
@@ -2365,8 +2464,7 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         denominator = sum((index - x_mean) ** 2 for index in range(plateau_cycles))
         final_mean = sum(final) / len(final)
         numerator = sum(
-            (index - x_mean) * (value - final_mean)
-            for index, value in enumerate(final)
+            (index - x_mean) * (value - final_mean) for index, value in enumerate(final)
         )
         slope = numerator / denominator
         plateau = {
@@ -2386,8 +2484,7 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             or slope > plateau["maximum_final_slope_bytes_per_cycle"]
         ):
             raise RuntimeError(
-                "lifecycle churn did not return to a bounded memory plateau: "
-                f"{plateau}"
+                f"lifecycle churn did not return to a bounded memory plateau: {plateau}"
             )
     else:
         plateau = {
@@ -2398,7 +2495,14 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     return {
         "status": "completed",
         "cycles": repetitions,
-        "operations_per_cycle": ["create", "attach", "split", "close", "detach", "kill"],
+        "operations_per_cycle": [
+            "create",
+            "attach",
+            "split",
+            "close",
+            "detach",
+            "kill",
+        ],
         "identity_check": (
             "each incarnation exposed a positive live focused pane PID and the reused session "
             "name was absent before the next create"
@@ -2451,8 +2555,8 @@ def latency_trace_metadata(directory: Path | None) -> dict[str, Any]:
     for path in sorted(directory.glob("*.ltrace")):
         try:
             encoded = path.read_bytes()
-            magic, version, role, event_size, capacity, process, count, dropped = header.unpack_from(
-                encoded
+            magic, version, role, event_size, capacity, process, count, dropped = (
+                header.unpack_from(encoded)
             )
         except (OSError, struct.error) as error:
             files.append({"path": str(path), "valid": False, "error": str(error)})
@@ -2517,9 +2621,15 @@ def main() -> int:
         "--multiplexer", choices=("lemma", "tmux", "zellij", "herdr"), default="lemma"
     )
     parser.add_argument("--repetitions", type=int, default=5)
-    parser.add_argument("--server", type=Path, default=Path("build/release/lemma_test_server"))
-    parser.add_argument("--cli", type=Path, default=Path("build/release/lemma_test_cli"))
-    parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
+    parser.add_argument(
+        "--server", type=Path, default=Path("build/release/lemma_test_server")
+    )
+    parser.add_argument(
+        "--cli", type=Path, default=Path("build/release/lemma_test_cli")
+    )
+    parser.add_argument(
+        "--peer", type=Path, default=Path("build/release/lemma_test_pty_peer")
+    )
     parser.add_argument("--tmux", type=Path, default=Path("tmux"))
     parser.add_argument("--zellij", type=Path, default=Path("zellij"))
     parser.add_argument("--herdr", type=Path, default=Path("herdr"))
@@ -2542,7 +2652,9 @@ def main() -> int:
     if not arguments.peer.is_file():
         parser.error(f"missing executable: {arguments.peer}")
     if arguments.mode in ("profiles", "all") and arguments.multiplexer == "zellij":
-        parser.error("pane profiles currently require --multiplexer lemma, tmux, or herdr")
+        parser.error(
+            "pane profiles currently require --multiplexer lemma, tmux, or herdr"
+        )
     if (
         arguments.mode
         in {
@@ -2584,7 +2696,10 @@ def main() -> int:
     def create_runtime() -> MuxRuntime:
         if arguments.multiplexer == "lemma":
             return LemmaRuntime(
-                arguments.server, arguments.cli, arguments.peer, arguments.trace_directory
+                arguments.server,
+                arguments.cli,
+                arguments.peer,
+                arguments.trace_directory,
             )
         if arguments.multiplexer == "tmux":
             assert tmux is not None
@@ -2617,7 +2732,12 @@ def main() -> int:
             )
             result["resources_after_workload"] = runtime_resource_snapshot(runtime)
             return result
-        except (OSError, RuntimeError, TimeoutError, subprocess.SubprocessError) as error:
+        except (
+            OSError,
+            RuntimeError,
+            TimeoutError,
+            subprocess.SubprocessError,
+        ) as error:
             if not arguments.allow_workload_failures:
                 raise
             if isinstance(error, WorkloadFailure):
@@ -2646,7 +2766,10 @@ def main() -> int:
         individual = {
             "warm-scroll": ("warm_scroll", warm_scroll),
             "attach-visible": ("attach_to_visible", attach_to_visible),
-            "interactive-output": ("interactive_under_output", interactive_under_output),
+            "interactive-output": (
+                "interactive_under_output",
+                interactive_under_output,
+            ),
             "idle-resources": ("idle_resources", idle_resources),
             "blocked-pty": ("blocked_pty", blocked_pty),
             "blocked-client": ("blocked_client", blocked_client),
@@ -2701,9 +2824,15 @@ def main() -> int:
                     pane_count: int = panes,
                     active: bool = activity,
                 ) -> dict[str, Any]:
-                    if not isinstance(runtime, (LemmaRuntime, TmuxRuntime, HerdrRuntime)):
-                        raise TypeError("pane profile requires Lemma, tmux, or Herdr runtime")
-                    return pane_profile(runtime, profile_id, pane_count, active, repetitions)
+                    if not isinstance(
+                        runtime, (LemmaRuntime, TmuxRuntime, HerdrRuntime)
+                    ):
+                        raise TypeError(
+                            "pane profile requires Lemma, tmux, or Herdr runtime"
+                        )
+                    return pane_profile(
+                        runtime, profile_id, pane_count, active, repetitions
+                    )
 
                 pane_profiles[profile][key] = run_operation(profile_operation)
 

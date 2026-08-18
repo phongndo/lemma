@@ -2,6 +2,7 @@ nix := ""
 profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
+python_paths := "benchmarks scripts tools conanfile.py"
 
 _default:
     @just --list
@@ -17,6 +18,9 @@ versions:
     {{ nix }} conan --version
     {{ nix }} zig version
     {{ nix }} hk --version
+    {{ nix }} uv --version
+    {{ nix }} uv run --locked ruff --version
+    {{ nix }} uv run --locked ty --version
 
 # Show versions of the optional multiplexer benchmark subjects.
 benchmark-versions:
@@ -69,11 +73,13 @@ bench: build
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
 
-# Format C++ and Nix files in place.
+# Format C++, Nix, and Python files in place.
 fmt:
     {{ nix }} bash -c "find {{ cpp_files }} -type f \
         \\( -name '*.cpp' -o -name '*.hpp' \\) -print0 | xargs -0 clang-format -i"
     {{ nix }} nixpkgs-fmt flake.nix
+    {{ nix }} uv run --locked ruff check --fix {{ python_paths }}
+    {{ nix }} uv run --locked ruff format {{ python_paths }}
 
 # Check formatting without changing files.
 fmt-check:
@@ -81,6 +87,7 @@ fmt-check:
         \\( -name '*.cpp' -o -name '*.hpp' \\) -print0 | \
         xargs -0 clang-format --dry-run --Werror"
     {{ nix }} nixpkgs-fmt --check flake.nix
+    {{ nix }} uv run --locked ruff format --check {{ python_paths }}
 
 # Run responsive clang-tidy checks in parallel; ci-lint adds the slower Static Analyzer.
 lint: configure
@@ -98,8 +105,12 @@ lsp-check: configure
 lsp:
     {{ nix }} clangd --enable-config
 
+# Run Ruff, ty, and Python unit tests.
+python-check:
+    {{ nix }} scripts/ci/python
+
 # Run formatting, lint, LSP diagnostics, build, and tests.
-check: build fmt-check lint lsp-check test
+check: build fmt-check lint lsp-check test python-check
 
 # Check the merge-blocking formatter lane.
 ci-format:
@@ -116,6 +127,10 @@ ci-lint:
 # Run the merge-blocking clangd lane.
 ci-lsp:
     {{ nix }} scripts/ci/lsp
+
+# Run the merge-blocking Python quality lane.
+ci-python:
+    {{ nix }} scripts/ci/python
 
 # Run the regular C++ lanes sequentially for local reproduction.
 ci-cpp:
@@ -149,6 +164,7 @@ ci-workflows:
 ci-check:
     {{ nix }} scripts/ci/cpp
     {{ nix }} scripts/ci/sanitizers
+    {{ nix }} scripts/ci/python
     {{ nix }} scripts/ci/workflows
 
 # Run the short F5 evidence smoke (use the default Nix shell for compatibility tools).

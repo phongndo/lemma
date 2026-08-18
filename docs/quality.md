@@ -236,10 +236,11 @@ Common local checks are:
 just fmt-check
 just lint
 just lsp-check
+just python-check
 just test
 just check
 ```
 
-`just ci-check` reproduces merge-blocking formatting, build/test, clang-tidy, clangd, sanitizer, workflow, and script checks in a safe sequence. Process tests are serialized where host-resource contention would invalidate them. Shared-runner benchmark timing is evidence for investigation, not a performance gate.
+`just ci-check` reproduces merge-blocking formatting, build/test, clang-tidy, clangd, Python, sanitizer, workflow, and script checks in a safe sequence. Process tests are serialized where host-resource contention would invalidate them. Shared-runner benchmark timing is evidence for investigation, not a performance gate.
 
 A completed change should leave the architecture easier to explain, not merely leave the test suite green.

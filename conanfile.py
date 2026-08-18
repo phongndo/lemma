@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from conan import ConanFile
 
 
@@ -12,7 +14,7 @@ class LemmaConan(ConanFile):
         "zstd/1.5.7",
     )
 
-    default_options = {
+    default_options: ClassVar[dict[str, bool]] = {
         "lua/*:shared": False,
         "lua/*:with_tools": False,
         "zstd/*:build_programs": False,

@@ -5,6 +5,8 @@ exclude = List(
   "build",
   ".cache",
   ".conan2",
+  ".ruff_cache",
+  ".venv",
   ".zig-cache",
   "vendor",
 )
@@ -30,6 +32,16 @@ local clangdFiles = List(
   "include/**/*.hpp",
   "src/**/*.hpp",
   "src/**/*.cpp",
+)
+
+local pythonImpact = List(
+  "benchmarks/**/*.py",
+  "scripts/**/*.py",
+  "tools/**/*.py",
+  "conanfile.py",
+  "pyproject.toml",
+  "uv.lock",
+  "scripts/ci/python",
 )
 
 local buildImpact = List(
@@ -85,6 +97,18 @@ local fast = new Mapping<String, Step | Group> {
     fix = "nixpkgs-fmt {{files}}"
   }
 
+  ["ruff"] {
+    glob = pythonImpact
+    check = "uv run --locked ruff check benchmarks scripts tools conanfile.py && uv run --locked ruff format --check benchmarks scripts tools conanfile.py"
+    fix = "uv run --locked ruff check --fix benchmarks scripts tools conanfile.py && uv run --locked ruff format benchmarks scripts tools conanfile.py"
+  }
+
+  ["uv-lock"] {
+    glob = List("pyproject.toml", "uv.lock")
+    check = "uv lock --check"
+    fix = "uv lock"
+  }
+
   ["actionlint"] = Builtins.actionlint
 
   ["shellcheck"] {
@@ -116,6 +140,12 @@ local fast = new Mapping<String, Step | Group> {
 // build exclusive because Ninja consumes the machine; then fan static analysis
 // out across both steps and their affected translation units.
 local full = new Mapping<String, Step | Group> {
+  ["python-check"] {
+    glob = pythonImpact
+    check = "scripts/ci/python"
+    depends = "ruff"
+  }
+
   ["build-test"] {
     glob = buildImpact
     check = "scripts/ci/configure debug -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON && cmake --build --preset debug && scripts/ci/test debug"

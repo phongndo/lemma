@@ -72,7 +72,9 @@ def run_editor(
     else:
         arguments.extend(["-Nu", "NONE", "-n", "-i", "NONE"])
     arguments.append(str(edited))
-    client.write_all((" ".join(shlex.quote(value) for value in arguments) + "\r").encode(), 2.0)
+    client.write_all(
+        (" ".join(shlex.quote(value) for value in arguments) + "\r").encode(), 2.0
+    )
     # The shell echoes the command and filename before the editor has installed its raw input
     # mode. Drain a bounded startup interval so those bytes cannot be mistaken for readiness.
     client.drain(0.5)
@@ -97,16 +99,22 @@ def run_editor(
     }
 
 
-def run_pager(client: PtyProcess, executable: Path, name: str, temporary: Path) -> dict[str, Any]:
+def run_pager(
+    client: PtyProcess, executable: Path, name: str, temporary: Path
+) -> dict[str, Any]:
     document = temporary / f"f5-pager-{name}.txt"
     marker = f"__F5_PAGER_{name.upper()}__"
-    document.write_text(marker + "\n" + "\n".join(f"bounded pager row {i}" for i in range(100)))
+    document.write_text(
+        marker + "\n" + "\n".join(f"bounded pager row {i}" for i in range(100))
+    )
     arguments = [str(executable)]
     if name == "less":
         arguments.append("-R")
     arguments.append(str(document))
     started = time.monotonic_ns()
-    client.write_all((" ".join(shlex.quote(value) for value in arguments) + "\r").encode(), 2.0)
+    client.write_all(
+        (" ".join(shlex.quote(value) for value in arguments) + "\r").encode(), 2.0
+    )
     latency, received = client.read_until(marker.encode(), 5.0, started_ns=started)
     client.write_all(b"q", 2.0)
     received += shell_done(client, name)
@@ -137,7 +145,9 @@ def run_tui(client: PtyProcess, executable: Path, name: str) -> dict[str, Any]:
     client.write_all(b"q", 2.0)
     received += shell_done(client, name)
     if received < 100:
-        raise RuntimeError("full-screen TUI produced implausibly little terminal output")
+        raise RuntimeError(
+            "full-screen TUI produced implausibly little terminal output"
+        )
     return {"first_screen_latency_ns": latency, "outer_bytes": received}
 
 
@@ -158,7 +168,9 @@ def run_case(
         result = operation(client, executable, name, Path(runtime.temporary.name))
         runtime.detach(client, f"f5_{category}_{name}")
         if client.terminal_state_restored is not True:
-            raise RuntimeError("attached client did not restore its outer terminal state")
+            raise RuntimeError(
+                "attached client did not restore its outer terminal state"
+            )
         return {
             "status": "passed",
             "category": category,
@@ -169,7 +181,13 @@ def run_case(
             "terminal_state_restored": True,
             **result,
         }
-    except (OSError, RuntimeError, TimeoutError, subprocess.SubprocessError, ValueError) as error:
+    except (
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        subprocess.SubprocessError,
+        ValueError,
+    ) as error:
         return {
             "status": "failed",
             "category": category,
@@ -207,9 +225,15 @@ def adapt_tui(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--server", type=Path, default=Path("build/release/lemma_test_server"))
-    parser.add_argument("--cli", type=Path, default=Path("build/release/lemma_test_cli"))
-    parser.add_argument("--peer", type=Path, default=Path("build/release/lemma_test_pty_peer"))
+    parser.add_argument(
+        "--server", type=Path, default=Path("build/release/lemma_test_server")
+    )
+    parser.add_argument(
+        "--cli", type=Path, default=Path("build/release/lemma_test_cli")
+    )
+    parser.add_argument(
+        "--peer", type=Path, default=Path("build/release/lemma_test_pty_peer")
+    )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     for executable in (arguments.server, arguments.cli, arguments.peer):
@@ -252,10 +276,14 @@ def main() -> int:
         str(case["category"]) for case in cases if case.get("status") == "passed"
     }
     expected_names = {name for _, name, _ in specifications}
-    passed_names = {str(case["name"]) for case in cases if case.get("status") == "passed"}
+    passed_names = {
+        str(case["name"]) for case in cases if case.get("status") == "passed"
+    }
     status = (
         "passed"
-        if passed_categories == required_categories and passed_names == expected_names and not missing
+        if passed_categories == required_categories
+        and passed_names == expected_names
+        and not missing
         else "failed"
     )
     commit, dirty = git_provenance()

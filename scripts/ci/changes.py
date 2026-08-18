@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 
-LANES = ("cpp", "automation")
+LANES = ("cpp", "python", "automation")
 ZERO_SHA = "0" * 40
 
 
@@ -31,6 +31,9 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
 
         if path.startswith("tools/test_ci"):
             result["automation"] = True
+
+        if path.endswith((".py", ".pyi")) or _is(path, "pyproject.toml", "uv.lock"):
+            result["python"] = True
 
         # Production, test, and benchmark sources select the independent C++
         # format, build/test, clang-tidy, clangd, and sanitizer jobs.
@@ -58,12 +61,13 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
 
         if _is(path, ".clang-format", ".clang-tidy", ".clangd", "hk.pkl"):
             result["cpp"] = True
+        if _is(path, "hk.pkl"):
+            result["python"] = True
 
         # These files define the environment or local entry points for all
         # merge-blocking suites, so validate their complete contract.
         if _is(path, "flake.nix", "flake.lock", "justfile"):
-            result["cpp"] = True
-            result["automation"] = True
+            result = {lane: True for lane in LANES}
 
     return result
 
@@ -132,8 +136,12 @@ def write_summary(paths: list[str] | None, result: dict[str, bool]) -> None:
     if not summary_path:
         return
 
-    selected = ", ".join(lane for lane in LANES if result[lane]) or "none (documentation-only)"
-    path_summary = "full validation fallback" if paths is None else f"{len(paths)} changed path(s)"
+    selected = (
+        ", ".join(lane for lane in LANES if result[lane]) or "none (documentation-only)"
+    )
+    path_summary = (
+        "full validation fallback" if paths is None else f"{len(paths)} changed path(s)"
+    )
     with open(summary_path, "a", encoding="utf-8") as summary:
         summary.write("## CI impact\n\n")
         summary.write(f"- Diff: {path_summary}\n")

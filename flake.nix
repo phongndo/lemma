@@ -230,6 +230,7 @@
             pkgs.nixd
             pkgs.nixpkgs-fmt
             pkgs.python3
+            pkgs.uv
             zigPackage
           ];
           qualityPackages = [
