@@ -17,6 +17,7 @@ inline constexpr std::uint16_t command_tab_slots_max = 16;
 enum class CommandKind : std::uint8_t {
   none = 0,
   detach_client,
+  cancel_attachment_interaction,
   split_left_right,
   split_top_bottom,
   resize_left_right_divider,

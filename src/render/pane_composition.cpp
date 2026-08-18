@@ -53,6 +53,7 @@ constexpr std::size_t status_session_columns_max = 32;
 constexpr std::size_t status_label_bytes_max = status_session_columns_max + 4U;
 constexpr std::string_view status_style = "\x1B[0m";
 constexpr std::string_view status_identity_style = "\x1B[0;1m";
+constexpr std::string_view status_context_style = "\x1B[0;7m";
 constexpr std::string_view status_prompt_edit_style = "\x1B[0;1;4m";
 
 struct StatusLabel final {
@@ -551,11 +552,13 @@ struct InlineStatusPromptProjection final {
     }
   }
 
+  const auto context_columns = std::min<std::size_t>(status.input_context.size(), viewport.columns);
+  const auto content_columns = viewport.columns - context_columns;
   const auto active_width = labels.subspan(active, 1).front().size;
   const auto session_columns_max =
-      active_width < viewport.columns ? viewport.columns - active_width : 0U;
+      active_width < content_columns ? content_columns - active_width : 0U;
   const auto session = session_label(status.session_name, session_columns_max);
-  const auto tab_columns = viewport.columns - session.size;
+  const auto tab_columns = content_columns - session.size;
 
   if (labels.subspan(active, 1).front().size > tab_columns) {
     const auto title_columns = tab_columns > 4U ? tab_columns - 4U : 0U;
@@ -601,7 +604,7 @@ struct InlineStatusPromptProjection final {
     end = active;
     width = labels.subspan(active, 1).front().size;
   }
-  const auto remaining_columns = viewport.columns - std::min<std::size_t>(viewport.columns, width);
+  const auto remaining_columns = content_columns - std::min(content_columns, width);
   const auto centered_column = ((remaining_columns + 1U) / 2U) + 1U;
   const auto start_column =
       static_cast<std::uint16_t>(std::max(centered_column, session.size + 1U));
@@ -629,6 +632,13 @@ struct InlineStatusPromptProjection final {
     if (!append(output, used, std::string_view(label.text.data(), label.size))) {
       return false;
     }
+  }
+  if (context_columns > 0U &&
+      (!append_position(output, used, status_row,
+                        static_cast<std::uint16_t>(viewport.columns - context_columns + 1U)) ||
+       !append(output, used, status_context_style) ||
+       !append(output, used, bounded_status_view(status.input_context, 0, context_columns)))) {
+    return false;
   }
   return append(output, used, "\x1B[0m");
 }
@@ -721,7 +731,12 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 }
 
 [[nodiscard]] auto valid_status(const StatusLine status) noexcept -> bool {
-  return valid_prompt_target(status.prompt_target) &&
+  const bool valid_context = status.input_context.size() <= 32U &&
+                             std::ranges::all_of(status.input_context, [](const char character) {
+                               const auto byte = static_cast<unsigned char>(character);
+                               return byte >= 0x20U && byte <= 0x7eU;
+                             });
+  return valid_context && valid_prompt_target(status.prompt_target) &&
          valid_prompt_feedback(status.prompt_feedback) && valid_prompt_value(status) &&
          status.tabs.size() <= status_tabs_max &&
          (status.tabs.empty() || std::ranges::count(status.tabs, true, &StatusTab::active) == 1) &&

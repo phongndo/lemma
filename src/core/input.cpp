@@ -14,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -368,13 +369,12 @@ template <typename Visitor>
   return appended ? InputQueueResult::queued : InputQueueResult::encoding_failed;
 }
 
-[[nodiscard]] auto queue_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
-                                   const protocol::KeyInput& key,
-                                   const std::span<const std::byte> text) noexcept
-    -> InputQueueResult {
-  if (terminal.integrity_failed()) {
-    return InputQueueResult::encoding_failed;
-  }
+namespace {
+
+[[nodiscard]] auto encode_protocol_key(vt::Terminal& terminal, const protocol::KeyInput& key,
+                                       const std::span<const std::byte> text,
+                                       const std::span<std::byte> output) noexcept
+    -> std::optional<std::size_t> {
   constexpr std::array key_map{
       vt::Key::unidentified,
       vt::Key::a,
@@ -433,27 +433,67 @@ template <typename Visitor>
   };
   const auto key_index = static_cast<std::size_t>(key.key);
   if (key_index >= key_map.size()) {
-    return InputQueueResult::encoding_failed;
+    return std::nullopt;
   }
-  const auto mapped_key = std::span(key_map).subspan(key_index, 1).front();
-  const auto modifiers = terminal_key_modifiers(key.modifiers);
-  const auto consumed_modifiers = terminal_key_modifiers(key.consumed_modifiers);
-  const auto action = terminal_key_action(key.action);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::string_view encoded_text(reinterpret_cast<const char*>(text.data()), text.size());
   const vt::KeyEvent event{
-      .action = action,
-      .key = mapped_key,
-      .modifiers = modifiers,
-      .consumed_modifiers = consumed_modifiers,
+      .action = terminal_key_action(key.action),
+      .key = std::span(key_map).subspan(key_index, 1).front(),
+      .modifiers = terminal_key_modifiers(key.modifiers),
+      .consumed_modifiers = terminal_key_modifiers(key.consumed_modifiers),
       .unshifted_codepoint = key.unshifted_codepoint,
       .text = encoded_text,
       .composing = key.composing,
   };
-  std::array<std::byte, 128> encoded{};
-  const auto result = terminal.encode_key(event, encoded);
+  const auto encoded = terminal.encode_key(event, output);
+  return encoded.has_value() ? std::optional<std::size_t>{*encoded} : std::nullopt;
+}
+
+} // namespace
+
+[[nodiscard]] auto queue_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                   const protocol::KeyInput& key,
+                                   const std::span<const std::byte> text) noexcept
+    -> InputQueueResult {
+  if (terminal.integrity_failed()) {
+    return InputQueueResult::encoding_failed;
+  }
+  std::array<std::byte, key_encoding_bytes_max> encoded{};
+  const auto result = encode_protocol_key(terminal, key, text, encoded);
   return result.has_value() ? queue_encoded(queue, std::span(encoded).first(*result))
                             : InputQueueResult::encoding_failed;
+}
+
+auto queue_prefixed_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                              const std::span<const std::byte> prefix,
+                              const protocol::KeyInput& key,
+                              const std::span<const std::byte> text) noexcept -> InputQueueResult {
+  constexpr std::size_t prefix_bytes_max = 4;
+  std::array<std::byte, (prefix_bytes_max + 1U) * key_encoding_bytes_max> encoded{};
+  if (terminal.integrity_failed() || prefix.empty() || prefix.size() > prefix_bytes_max) {
+    return InputQueueResult::encoding_failed;
+  }
+  std::size_t encoded_size = 0;
+  const auto prefix_encoded = visit_normalized_input(
+      terminal, prefix, [&](const std::span<const std::byte> bytes) noexcept {
+        if (bytes.size() > encoded.size() - encoded_size) {
+          return false;
+        }
+        std::ranges::copy(bytes, std::span(encoded).subspan(encoded_size, bytes.size()).begin());
+        encoded_size += bytes.size();
+        return true;
+      });
+  if (!prefix_encoded) {
+    return InputQueueResult::encoding_failed;
+  }
+  const auto key_size =
+      encode_protocol_key(terminal, key, text, std::span(encoded).subspan(encoded_size));
+  if (!key_size.has_value()) {
+    return InputQueueResult::encoding_failed;
+  }
+  encoded_size += *key_size;
+  return queue_encoded(queue, std::span(encoded).first(encoded_size));
 }
 
 [[nodiscard]] auto queue_paste_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,

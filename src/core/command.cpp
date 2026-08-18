@@ -17,6 +17,7 @@ namespace {
   case CommandKind::none:
     return false;
   case CommandKind::detach_client:
+  case CommandKind::cancel_attachment_interaction:
   case CommandKind::split_left_right:
   case CommandKind::split_top_bottom:
   case CommandKind::resize_left_right_divider:
@@ -128,7 +129,8 @@ namespace {
   if (command.kind == CommandKind::rename_session && (has_tab || has_pane || has_peer_pane)) {
     return false;
   }
-  if (command.kind == CommandKind::begin_rename_session) {
+  if (command.kind == CommandKind::begin_rename_session ||
+      command.kind == CommandKind::cancel_attachment_interaction) {
     return !has_tab && !has_pane && !has_peer_pane && has_attachment;
   }
   if (command.kind == CommandKind::detach_client) {

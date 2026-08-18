@@ -1,10 +1,11 @@
 #include "core/client_frame_output.hpp"
+#include "input/input_router.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "render/frame_buffer.hpp"
 
+#include <array>
 #include <atomic>
 #include <cerrno>
-#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <new>
@@ -104,6 +105,8 @@ int main() {
   constexpr std::string_view first = "\x1B[12;1H\x1B[1;32msteady-state alpha \xE2\x98\x83\x1B[0m";
   constexpr std::string_view second = "\x1B[12;1H\x1B[1;34msteady-state beta  \xE2\x98\x83\x1B[0m";
 
+  lemma::input::InputRouter input_router(lemma::input::default_input_map());
+  constexpr std::array routed_input{std::byte{'a'}};
   auto terminal_result = lemma::vt::Terminal::create({});
   if (!terminal_result.has_value()) {
     return 2;
@@ -123,11 +126,13 @@ int main() {
     return 2;
   }
   for (std::size_t iteration = 0; iteration < warmup_iterations; ++iteration) {
+    const auto routed = input_router.route_legacy(routed_input, routed_input.size());
     const auto bytes = write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
     const lemma::vt::TerminalSize resize = iteration % 2U == 0
                                                ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
                                                : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
-    if (bytes == 0 || !resize_terminal.resize(resize).has_value()) {
+    if (routed.consumed != routed_input.size() || bytes == 0 ||
+        !resize_terminal.resize(resize).has_value()) {
       return 2;
     }
   }
@@ -140,12 +145,14 @@ int main() {
 
   std::size_t flushed_bytes = 0;
   for (std::size_t iteration = 0; iteration < audited_iterations; ++iteration) {
+    const auto routed = input_router.route_legacy(routed_input, routed_input.size());
     const auto frame_bytes =
         write_and_compose(terminal, frame, iteration % 2U == 0 ? first : second);
     const lemma::vt::TerminalSize resize = iteration % 2U == 0
                                                ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
                                                : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
-    if (frame_bytes == 0 || !resize_terminal.resize(resize).has_value()) {
+    if (routed.consumed != routed_input.size() || frame_bytes == 0 ||
+        !resize_terminal.resize(resize).has_value()) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }

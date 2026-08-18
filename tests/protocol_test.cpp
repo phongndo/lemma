@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <ranges>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -30,7 +29,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x05}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -166,7 +165,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x05}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x06}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };
@@ -460,195 +459,6 @@ TEST(ProtocolTest, EncodesBoundedControlContextSize) {
   EXPECT_EQ(encoded.front(), std::byte{0x10});
   EXPECT_EQ(encoded.back(), std::byte{0x00});
   EXPECT_EQ(decode_bounded_size(encoded), 4'096U);
-}
-
-TEST(ProtocolTest, PrefixParserDetachesWithoutForwardingCommand) {
-  PrefixParser parser;
-  const std::array input{std::byte{'x'}, std::byte{0x02}, std::byte{'d'}, std::byte{'y'}};
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  EXPECT_TRUE(result.detach);
-  ASSERT_EQ(result.bytes, 1);
-  EXPECT_EQ(output.front(), std::byte{'x'});
-}
-
-TEST(ProtocolTest, PrefixParserKeepsBarePrefixPendingWithoutEscapeTimeout) {
-  PrefixParser parser;
-  const std::array input{std::byte{0x02}};
-  std::array<std::byte, 2> output{};
-
-  const auto result = parser.parse(input, output);
-
-  EXPECT_EQ(result.bytes, 0U);
-  EXPECT_TRUE(parser.has_pending_input());
-  EXPECT_FALSE(parser.has_pending_escape_sequence());
-}
-
-TEST(ProtocolTest, PrefixParserCapturesTmuxSplitsInInputOrder) {
-  PrefixParser parser;
-  const std::array input{std::byte{'a'},  std::byte{0x02}, std::byte{'%'}, std::byte{'b'},
-                         std::byte{0x02}, std::byte{'"'},  std::byte{'c'}};
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.bytes, 3U);
-  ASSERT_EQ(result.action_count, 2U);
-  EXPECT_EQ(result.actions.front().input_bytes, 1U);
-  EXPECT_EQ(result.actions.front().command, PaneCommand::split_left_right);
-  EXPECT_EQ((std::span(result.actions).subspan<1, 1>().front().command),
-            PaneCommand::split_top_bottom);
-}
-
-TEST(ProtocolTest, PrefixParserCapturesCtrlHjklResizeBindingsInInputOrder) {
-  PrefixParser parser;
-  const std::array input{
-      std::byte{0x02}, std::byte{0x08}, std::byte{0x02}, std::byte{0x0A},
-      std::byte{0x02}, std::byte{0x0B}, std::byte{0x02}, std::byte{0x0C},
-  };
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 4U);
-  EXPECT_EQ(result.bytes, 0U);
-  const auto actions = std::span(result.actions);
-  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::resize_left);
-  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::resize_down);
-  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::resize_up);
-  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::resize_right);
-}
-
-TEST(ProtocolTest, PrefixParserCapturesAltHjklResizeBindingsInInputOrder) {
-  PrefixParser parser;
-  const std::array input{
-      std::byte{0x02}, std::byte{0x1B}, std::byte{'h'},  std::byte{0x02},
-      std::byte{0x1B}, std::byte{'j'},  std::byte{0x02}, std::byte{0x1B},
-      std::byte{'k'},  std::byte{0x02}, std::byte{0x1B}, std::byte{'l'},
-  };
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 4U);
-  EXPECT_EQ(result.bytes, 0U);
-  const auto actions = std::span(result.actions);
-  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::resize_left);
-  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::resize_down);
-  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::resize_up);
-  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::resize_right);
-}
-
-TEST(ProtocolTest, PrefixParserCapturesHjklFocusAndShiftHjklSwapBindings) {
-  PrefixParser parser;
-  const std::array input{
-      std::byte{0x02}, std::byte{'h'}, std::byte{0x02}, std::byte{'j'},
-      std::byte{0x02}, std::byte{'k'}, std::byte{0x02}, std::byte{'l'},
-      std::byte{0x02}, std::byte{'H'}, std::byte{0x02}, std::byte{'J'},
-      std::byte{0x02}, std::byte{'K'}, std::byte{0x02}, std::byte{'L'},
-  };
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 8U);
-  EXPECT_EQ(result.bytes, 0U);
-  const auto actions = std::span(result.actions);
-  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::focus_left);
-  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::focus_down);
-  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::focus_up);
-  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::focus_right);
-  EXPECT_EQ((actions.subspan<4, 1>().front().command), PaneCommand::swap_pane_left);
-  EXPECT_EQ((actions.subspan<5, 1>().front().command), PaneCommand::swap_pane_down);
-  EXPECT_EQ((actions.subspan<6, 1>().front().command), PaneCommand::swap_pane_up);
-  EXPECT_EQ((actions.subspan<7, 1>().front().command), PaneCommand::swap_pane_right);
-}
-
-TEST(ProtocolTest, PrefixParserCapturesRenameAndReorderButPreservesUnboundLegacyKeys) {
-  PrefixParser parser;
-  const std::array input{
-      std::byte{0x02}, std::byte{'R'}, std::byte{0x02}, std::byte{'r'},
-      std::byte{0x02}, std::byte{'P'}, std::byte{0x02}, std::byte{'N'},
-      std::byte{0x02}, std::byte{'$'}, std::byte{0x02}, std::byte{','},
-      std::byte{0x02}, std::byte{'<'}, std::byte{0x02}, std::byte{'>'},
-  };
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 4U);
-  ASSERT_EQ(result.bytes, 8U);
-  const auto actions = std::span(result.actions);
-  EXPECT_EQ((actions.subspan<0, 1>().front().command), PaneCommand::begin_rename_session);
-  EXPECT_EQ((actions.subspan<1, 1>().front().command), PaneCommand::begin_rename_tab);
-  EXPECT_EQ((actions.subspan<2, 1>().front().command), PaneCommand::move_tab_left);
-  EXPECT_EQ((actions.subspan<3, 1>().front().command), PaneCommand::move_tab_right);
-  constexpr std::array expected{
-      std::byte{0x02}, std::byte{'$'}, std::byte{0x02}, std::byte{','},
-      std::byte{0x02}, std::byte{'<'}, std::byte{0x02}, std::byte{'>'},
-  };
-  EXPECT_TRUE(std::ranges::equal(std::span(output).first(result.bytes), expected));
-}
-
-TEST(ProtocolTest, PrefixParserEntersCopyModeWithoutForwardingBinding) {
-  PrefixParser parser;
-  const std::array input{std::byte{'a'}, std::byte{0x02}, std::byte{'['}, std::byte{'b'}};
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 1U);
-  EXPECT_EQ(result.actions.front().command, PaneCommand::enter_copy_mode);
-  EXPECT_EQ(result.bytes, 2U);
-  EXPECT_EQ(output.front(), std::byte{'a'});
-  EXPECT_EQ(std::span(output).subspan(1, 1).front(), std::byte{'b'});
-}
-
-TEST(ProtocolTest, PrefixParserCapturesDirectCopySearchWithoutForwardingBinding) {
-  PrefixParser parser;
-  const std::array input{std::byte{0x02}, std::byte{'/'}, std::byte{0x02}, std::byte{'?'}};
-  std::array<std::byte, input.size() * 2U> output{};
-
-  const auto result = parser.parse(input, output);
-
-  ASSERT_EQ(result.action_count, 2U);
-  EXPECT_EQ(result.bytes, 0U);
-  EXPECT_EQ(result.actions.front().command, PaneCommand::enter_copy_search_forward);
-  EXPECT_EQ((std::span(result.actions).subspan<1, 1>().front().command),
-            PaneCommand::enter_copy_search_backward);
-}
-
-TEST(ProtocolTest, PrefixParserPreservesUnboundFragmentedArrowKey) {
-  PrefixParser parser;
-  std::array<std::byte, 8> output{};
-  const std::array prefix_and_escape{std::byte{0x02}, std::byte{0x1B}};
-  const std::array csi{std::byte{'['}};
-  const std::array direction{std::byte{'D'}};
-
-  EXPECT_EQ(parser.parse(prefix_and_escape, output).action_count, 0U);
-  EXPECT_EQ(parser.parse(csi, output).action_count, 0U);
-  const auto result = parser.parse(direction, output);
-
-  EXPECT_EQ(result.action_count, 0U);
-  ASSERT_EQ(result.bytes, 4U);
-  EXPECT_EQ(output.front(), std::byte{0x02});
-  EXPECT_EQ((std::span(output).subspan<1, 1>().front()), std::byte{0x1B});
-  EXPECT_EQ((std::span(output).subspan<2, 1>().front()), std::byte{'['});
-  EXPECT_EQ((std::span(output).subspan<3, 1>().front()), std::byte{'D'});
-  EXPECT_FALSE(parser.has_pending_input());
-}
-
-TEST(ProtocolTest, PrefixParserFlushesInterruptedPrefixEscape) {
-  PrefixParser parser;
-  std::array<std::byte, 8> output{};
-  const std::array input{std::byte{0x02}, std::byte{0x1B}};
-
-  EXPECT_EQ(parser.parse(input, output).bytes, 0U);
-  ASSERT_EQ(parser.flush_pending(output), 2U);
-  EXPECT_EQ(output.front(), std::byte{0x02});
-  EXPECT_EQ(std::span(output).subspan(1, 1).front(), std::byte{0x1B});
 }
 
 // NOLINTEND(bugprone-unchecked-optional-access)

@@ -58,7 +58,7 @@ Keyboard, mouse, CLI, Lua, and agents converge on typed commands, stable targets
 - Human-readable CLI output remains the default; machine surfaces use explicit typed/machine-readable contracts.
 - Every supported human mutation has an automation equivalent or a documented exclusion.
 
-The default key vocabulary follows familiar tmux conventions, including `C-b` as prefix, while configuration may replace bindings without creating another mutation path.
+The default key vocabulary follows familiar tmux conventions, including `C-b` as prefix, while configuration may replace bindings without creating another mutation path. Prefixes and transient interaction contexts are compiled input policy rather than mux state: direct chords, one-shot prefix maps, and persistent contexts dispatch the same typed commands.
 
 ## Terminal and presentation behavior
 
@@ -86,7 +86,7 @@ Keyboard and mouse selection should share one semantic model. Wrapped lines, wid
 
 Configuration is Lua running as trusted user code in an isolated Lemma-managed process. A missing configuration selects useful built-in defaults.
 
-The extension contract consists of bounded serializable values, stable IDs, typed command requests/results, immutable snapshots/events, and declarative UI models. It does not expose pointers, descriptors, Ghostty values, or mutable daemon arenas. There is no native C++ plugin ABI.
+The extension contract consists of bounded serializable values, stable IDs, typed command requests/results, compiled declarative keymaps, immutable snapshots/events, and declarative UI models. It does not expose pointers, descriptors, Ghostty values, or mutable daemon arenas. There is no native C++ plugin ABI.
 
 Configuration generations are transactional: validate a complete candidate, commit atomically, and preserve the prior valid generation on failure. A blocked, crashed, or over-quota extension cannot block PTY parsing, input, rendering, or pane processes.
 

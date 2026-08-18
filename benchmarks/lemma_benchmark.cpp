@@ -1,4 +1,5 @@
 #include "core/layout.hpp"
+#include "input/input_router.hpp"
 #include "lemma/command.hpp"
 #include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
@@ -60,6 +61,73 @@ void benchmark_command_dispatch(benchmark::State& state) {
     benchmark::DoNotOptimize(status);
   }
   benchmark::DoNotOptimize(context.calls);
+}
+
+void benchmark_input_router_unbound_run(benchmark::State& state) {
+  input::InputRouter router(input::default_input_map());
+  constexpr std::array bytes{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}, std::byte{'d'}};
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto checkpoint = router.legacy_route_requires_checkpoint();
+    auto routed = router.route_legacy(bytes, bytes.size());
+    benchmark::DoNotOptimize(checkpoint);
+    benchmark::DoNotOptimize(routed.consumed);
+  }
+}
+
+void benchmark_input_router_context_command(benchmark::State& state) {
+  input::InputRouter router(input::default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{'m'}};
+  static_cast<void>(router.route_legacy(enter, enter.size()));
+  static_cast<void>(router.route_legacy(std::span(enter).subspan(1), 1));
+  constexpr std::array resize{std::byte{'h'}};
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto checkpoint = router.legacy_route_requires_checkpoint();
+    auto routed = router.route_legacy(resize, 1);
+    benchmark::DoNotOptimize(checkpoint);
+    benchmark::DoNotOptimize(routed.consumed);
+  }
+}
+
+void benchmark_input_router_typed_forward_cycle(benchmark::State& state) {
+  input::InputRouter router(input::default_input_map());
+  constexpr input::KeyEvent press{.action = input::KeyAction::press,
+                                  .key = input::PhysicalKey::h,
+                                  .modifiers = 0,
+                                  .unshifted_codepoint = 'h',
+                                  .text = {}};
+  constexpr input::KeyEvent release{.action = input::KeyAction::release,
+                                    .key = input::PhysicalKey::h,
+                                    .modifiers = 0,
+                                    .unshifted_codepoint = 'h',
+                                    .text = {}};
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto press_result = router.route_key(press).effect.index();
+    auto release_result = router.route_key(release).effect.index();
+    benchmark::DoNotOptimize(press_result);
+    benchmark::DoNotOptimize(release_result);
+  }
+}
+
+void benchmark_input_router_typed_context_repeat(benchmark::State& state) {
+  input::InputRouter router(input::default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{'m'}};
+  static_cast<void>(router.route_legacy(enter, enter.size()));
+  static_cast<void>(router.route_legacy(std::span(enter).subspan(1), 1));
+  constexpr input::KeyEvent press{.action = input::KeyAction::press,
+                                  .key = input::PhysicalKey::h,
+                                  .modifiers = 0,
+                                  .unshifted_codepoint = 'h',
+                                  .text = {}};
+  constexpr input::KeyEvent repeat{.action = input::KeyAction::repeat,
+                                   .key = input::PhysicalKey::h,
+                                   .modifiers = 0,
+                                   .unshifted_codepoint = 'h',
+                                   .text = {}};
+  static_cast<void>(router.route_key(press));
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto routed = router.route_key(repeat).effect.index();
+    benchmark::DoNotOptimize(routed);
+  }
 }
 
 [[nodiscard]] auto benchmark_layout(const std::size_t requested_panes) -> core::PaneLayout {
@@ -718,6 +786,10 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
 
 BENCHMARK(benchmark_greeting);
 BENCHMARK(benchmark_command_dispatch);
+BENCHMARK(benchmark_input_router_unbound_run);
+BENCHMARK(benchmark_input_router_context_command);
+BENCHMARK(benchmark_input_router_typed_forward_cycle);
+BENCHMARK(benchmark_input_router_typed_context_repeat);
 BENCHMARK(benchmark_layout_projection)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_layout_resize_candidate);
 BENCHMARK(benchmark_layout_swap_candidate);

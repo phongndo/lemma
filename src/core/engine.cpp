@@ -12,6 +12,7 @@
 #include "core/session.hpp"
 #include "core/terminal_resize.hpp"
 #include "diagnostic/latency_trace.hpp"
+#include "input/input_router.hpp"
 #include "lemma/assert.hpp"
 #include "lemma/command.hpp"
 #include "lemma/generational_store.hpp"
@@ -44,6 +45,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include <poll.h>
 #include <sys/socket.h>
@@ -84,7 +86,9 @@ constexpr std::size_t copy_escape_bytes_max = 16;
 // each reactor turn; geometry work is tighter because one message can reflow every pane in a tab.
 constexpr std::size_t client_messages_per_turn_max = 16;
 constexpr std::size_t client_geometry_messages_per_turn_max = 1;
-static_assert(client_messages_per_turn_max > 0 && client_geometry_messages_per_turn_max > 0);
+constexpr std::size_t client_input_steps_per_turn_max = 16;
+static_assert(client_messages_per_turn_max > 0 && client_geometry_messages_per_turn_max > 0 &&
+              client_input_steps_per_turn_max > 0);
 static_assert(tabs_per_session_max <= render::status_tabs_max);
 using platform::close_descriptor;
 using platform::set_nonblocking;
@@ -610,7 +614,9 @@ struct AttachmentRuntime final {
     input_backpressured = false;
     client_work_pending = false;
     client_close_state = ConnectionCloseState::none;
+    client_close_reason = protocol::DisconnectReason::protocol_error;
     retained_input_offset.reset();
+    pending_routed_input_size = 0;
     frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
     decoded_input_trace_matcher.reset();
@@ -636,7 +642,10 @@ struct AttachmentRuntime final {
   bool input_backpressured{false};
   bool client_work_pending{false};
   ConnectionCloseState client_close_state{ConnectionCloseState::none};
+  protocol::DisconnectReason client_close_reason{protocol::DisconnectReason::protocol_error};
   std::optional<std::size_t> retained_input_offset;
+  std::array<std::byte, input::deferred_input_bytes_max + 1U> pending_routed_input{};
+  std::uint8_t pending_routed_input_size{0};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher decoded_input_trace_matcher;
   std::uint64_t frame_trace_correlation{0};
@@ -652,7 +661,7 @@ struct SessionRecord final : Session {
                 const LaunchEnvironmentMode initial_environment_mode) noexcept
       : Session(session_name, initial_working_directory, initial_environment,
                 initial_environment_mode),
-        theme(vt::default_theme()) {}
+        input_router(input::default_input_map()), theme(vt::default_theme()) {}
 
   SessionRecord(const SessionRecord&) = delete;
   auto operator=(const SessionRecord&) -> SessionRecord& = delete;
@@ -661,6 +670,7 @@ struct SessionRecord final : Session {
   ~SessionRecord() = default;
 
   Attachment attachment;
+  input::InputRouter input_router;
   AttachmentRuntime attachment_runtime;
   vt::TerminalTheme theme;
   std::uint32_t connection_generation{0};
@@ -692,6 +702,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
 
   session.attachment.copy_mode = {};
   session.attachment.rename_prompt = {};
+  session.input_router.reset();
   session.attachment.selection_target.reset();
   session.attachment.mouse_capture.reset();
   session.attachment_runtime.reset_connection();
@@ -2849,77 +2860,79 @@ template <typename Value>
   return {.status = changed ? CommandStatus::applied : CommandStatus::no_effect};
 }
 
-// Resolving relative key bindings into stable IDs is deliberately centralized at the client/Core
+// Resolving relative input intent into stable IDs is deliberately centralized at the input/Core
 // bridge rather than represented as another semantic mutation primitive.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto command_from_pane_command(const SessionRecord& session,
-                                             const protocol::PaneCommand pane_command) noexcept
+[[nodiscard]] auto command_from_input(const SessionRecord& session,
+                                      const input::InputCommand input_command,
+                                      const CommandOrigin origin) noexcept
     -> std::optional<Command> {
-  Command command{.origin = CommandOrigin::client};
-  switch (pane_command) {
-  case protocol::PaneCommand::none:
-    return std::nullopt;
-  case protocol::PaneCommand::split_left_right:
+  Command command{.origin = origin};
+  switch (input_command) {
+  case input::InputCommand::detach:
+    command.kind = CommandKind::detach_client;
+    break;
+  case input::InputCommand::split_left_right:
     command.kind = CommandKind::split_left_right;
     break;
-  case protocol::PaneCommand::split_top_bottom:
+  case input::InputCommand::split_top_bottom:
     command.kind = CommandKind::split_top_bottom;
     break;
-  case protocol::PaneCommand::resize_left:
+  case input::InputCommand::resize_left:
     command.kind = CommandKind::resize_left;
     break;
-  case protocol::PaneCommand::resize_right:
+  case input::InputCommand::resize_right:
     command.kind = CommandKind::resize_right;
     break;
-  case protocol::PaneCommand::resize_up:
+  case input::InputCommand::resize_up:
     command.kind = CommandKind::resize_up;
     break;
-  case protocol::PaneCommand::resize_down:
+  case input::InputCommand::resize_down:
     command.kind = CommandKind::resize_down;
     break;
-  case protocol::PaneCommand::focus_left:
+  case input::InputCommand::focus_left:
     command.kind = CommandKind::focus_left;
     break;
-  case protocol::PaneCommand::focus_right:
+  case input::InputCommand::focus_right:
     command.kind = CommandKind::focus_right;
     break;
-  case protocol::PaneCommand::focus_up:
+  case input::InputCommand::focus_up:
     command.kind = CommandKind::focus_up;
     break;
-  case protocol::PaneCommand::focus_down:
+  case input::InputCommand::focus_down:
     command.kind = CommandKind::focus_down;
     break;
-  case protocol::PaneCommand::focus_next:
+  case input::InputCommand::focus_next:
     command.kind = CommandKind::focus_next;
     break;
-  case protocol::PaneCommand::focus_previous:
+  case input::InputCommand::focus_previous:
     command.kind = CommandKind::focus_previous;
     break;
-  case protocol::PaneCommand::close:
+  case input::InputCommand::close_pane:
     command.kind = CommandKind::close_pane;
     break;
-  case protocol::PaneCommand::zoom:
+  case input::InputCommand::toggle_zoom:
     command.kind = CommandKind::toggle_zoom;
     break;
-  case protocol::PaneCommand::enter_copy_mode:
+  case input::InputCommand::enter_copy_mode:
     command.kind = CommandKind::enter_copy_mode;
     break;
-  case protocol::PaneCommand::enter_copy_search_forward:
+  case input::InputCommand::enter_copy_search_forward:
     command.kind = CommandKind::enter_copy_search_forward;
     break;
-  case protocol::PaneCommand::enter_copy_search_backward:
+  case input::InputCommand::enter_copy_search_backward:
     command.kind = CommandKind::enter_copy_search_backward;
     break;
-  case protocol::PaneCommand::create_tab:
+  case input::InputCommand::create_tab:
     command.kind = CommandKind::create_tab;
     break;
-  case protocol::PaneCommand::next_tab:
+  case input::InputCommand::next_tab:
     command.kind = CommandKind::next_tab;
     break;
-  case protocol::PaneCommand::previous_tab:
+  case input::InputCommand::previous_tab:
     command.kind = CommandKind::previous_tab;
     break;
-  case protocol::PaneCommand::begin_rename_session:
+  case input::InputCommand::begin_rename_session:
     command.kind = CommandKind::begin_rename_session;
     command.target = {.session = session.id,
                       .tab = {},
@@ -2927,7 +2940,7 @@ template <typename Value>
                       .peer_pane = {},
                       .attachment = session.attachment.id};
     break;
-  case protocol::PaneCommand::begin_rename_tab:
+  case input::InputCommand::begin_rename_tab:
     command.kind = CommandKind::begin_rename_tab;
     command.target = {.session = session.id,
                       .tab = session.active_tab,
@@ -2935,8 +2948,8 @@ template <typename Value>
                       .peer_pane = {},
                       .attachment = session.attachment.id};
     break;
-  case protocol::PaneCommand::move_tab_left:
-  case protocol::PaneCommand::move_tab_right: {
+  case input::InputCommand::move_tab_left:
+  case input::InputCommand::move_tab_right: {
     const auto position = session.tab_order.position_of(session.active_tab);
     if (!position.has_value() || session.tab_order.size() <= 1U) {
       return std::nullopt;
@@ -2949,7 +2962,7 @@ template <typename Value>
                       .attachment = {}};
     const auto position_value = position.value_or(0);
     TabId before;
-    if (pane_command == protocol::PaneCommand::move_tab_left) {
+    if (input_command == input::InputCommand::move_tab_left) {
       if (position_value > 0) {
         before = session.tab_order.at(position_value - 1U).value_or(TabId{});
       }
@@ -2961,16 +2974,16 @@ template <typename Value>
     command.payload = TabPlacementCommand{.before = before};
     break;
   }
-  case protocol::PaneCommand::swap_pane_left:
-  case protocol::PaneCommand::swap_pane_right:
-  case protocol::PaneCommand::swap_pane_up:
-  case protocol::PaneCommand::swap_pane_down: {
+  case input::InputCommand::swap_pane_left:
+  case input::InputCommand::swap_pane_right:
+  case input::InputCommand::swap_pane_up:
+  case input::InputCommand::swap_pane_down: {
     auto direction = FocusDirection::left;
-    if (pane_command == protocol::PaneCommand::swap_pane_right) {
+    if (input_command == input::InputCommand::swap_pane_right) {
       direction = FocusDirection::right;
-    } else if (pane_command == protocol::PaneCommand::swap_pane_up) {
+    } else if (input_command == input::InputCommand::swap_pane_up) {
       direction = FocusDirection::up;
-    } else if (pane_command == protocol::PaneCommand::swap_pane_down) {
+    } else if (input_command == input::InputCommand::swap_pane_down) {
       direction = FocusDirection::down;
     }
     const auto* const tab = active_tab(session);
@@ -2989,30 +3002,128 @@ template <typename Value>
     command.payload = PaneSwapCommand{.other = *other};
     break;
   }
-  case protocol::PaneCommand::kill_tab:
+  case input::InputCommand::close_tab:
     command.kind = CommandKind::close_tab;
     break;
-  case protocol::PaneCommand::select_tab_0:
-  case protocol::PaneCommand::select_tab_1:
-  case protocol::PaneCommand::select_tab_2:
-  case protocol::PaneCommand::select_tab_3:
-  case protocol::PaneCommand::select_tab_4:
-  case protocol::PaneCommand::select_tab_5:
-  case protocol::PaneCommand::select_tab_6:
-  case protocol::PaneCommand::select_tab_7:
-  case protocol::PaneCommand::select_tab_8:
-  case protocol::PaneCommand::select_tab_9: {
+  case input::InputCommand::select_tab_0:
+  case input::InputCommand::select_tab_1:
+  case input::InputCommand::select_tab_2:
+  case input::InputCommand::select_tab_3:
+  case input::InputCommand::select_tab_4:
+  case input::InputCommand::select_tab_5:
+  case input::InputCommand::select_tab_6:
+  case input::InputCommand::select_tab_7:
+  case input::InputCommand::select_tab_8:
+  case input::InputCommand::select_tab_9: {
     command.kind = CommandKind::select_tab;
-    const auto encoded = static_cast<std::uint8_t>(pane_command);
+    const auto encoded = static_cast<std::uint8_t>(input_command);
+    const auto first = static_cast<std::uint8_t>(input::InputCommand::select_tab_0);
+    const auto logical = static_cast<std::uint16_t>(encoded - first);
     command.payload = CommandCoordinate{
-        .value = encoded == static_cast<std::uint8_t>('0')
-                     ? std::uint16_t{9}
-                     : static_cast<std::uint16_t>(encoded - static_cast<std::uint8_t>('1')),
-    };
+        .value = logical == 0U ? std::uint16_t{9} : static_cast<std::uint16_t>(logical - 1U)};
     break;
   }
+  case input::InputCommand::count:
+    return std::nullopt;
   }
   return command;
+}
+
+[[nodiscard]] constexpr auto pane_input_command(const protocol::PaneCommand command) noexcept
+    -> std::optional<input::InputCommand> {
+  using enum input::InputCommand;
+  switch (command) {
+  case protocol::PaneCommand::none:
+    return std::nullopt;
+  case protocol::PaneCommand::split_left_right:
+    return split_left_right;
+  case protocol::PaneCommand::split_top_bottom:
+    return split_top_bottom;
+  case protocol::PaneCommand::resize_left:
+    return resize_left;
+  case protocol::PaneCommand::resize_right:
+    return resize_right;
+  case protocol::PaneCommand::resize_up:
+    return resize_up;
+  case protocol::PaneCommand::resize_down:
+    return resize_down;
+  case protocol::PaneCommand::focus_left:
+    return focus_left;
+  case protocol::PaneCommand::focus_right:
+    return focus_right;
+  case protocol::PaneCommand::focus_up:
+    return focus_up;
+  case protocol::PaneCommand::focus_down:
+    return focus_down;
+  case protocol::PaneCommand::focus_next:
+    return focus_next;
+  case protocol::PaneCommand::focus_previous:
+    return focus_previous;
+  case protocol::PaneCommand::close:
+    return close_pane;
+  case protocol::PaneCommand::zoom:
+    return toggle_zoom;
+  case protocol::PaneCommand::enter_copy_mode:
+    return enter_copy_mode;
+  case protocol::PaneCommand::enter_copy_search_forward:
+    return enter_copy_search_forward;
+  case protocol::PaneCommand::enter_copy_search_backward:
+    return enter_copy_search_backward;
+  case protocol::PaneCommand::create_tab:
+    return create_tab;
+  case protocol::PaneCommand::next_tab:
+    return next_tab;
+  case protocol::PaneCommand::previous_tab:
+    return previous_tab;
+  case protocol::PaneCommand::begin_rename_session:
+    return begin_rename_session;
+  case protocol::PaneCommand::begin_rename_tab:
+    return begin_rename_tab;
+  case protocol::PaneCommand::move_tab_left:
+    return move_tab_left;
+  case protocol::PaneCommand::move_tab_right:
+    return move_tab_right;
+  case protocol::PaneCommand::swap_pane_left:
+    return swap_pane_left;
+  case protocol::PaneCommand::swap_pane_right:
+    return swap_pane_right;
+  case protocol::PaneCommand::swap_pane_up:
+    return swap_pane_up;
+  case protocol::PaneCommand::swap_pane_down:
+    return swap_pane_down;
+  case protocol::PaneCommand::kill_tab:
+    return close_tab;
+  case protocol::PaneCommand::select_tab_0:
+    return select_tab_0;
+  case protocol::PaneCommand::select_tab_1:
+    return select_tab_1;
+  case protocol::PaneCommand::select_tab_2:
+    return select_tab_2;
+  case protocol::PaneCommand::select_tab_3:
+    return select_tab_3;
+  case protocol::PaneCommand::select_tab_4:
+    return select_tab_4;
+  case protocol::PaneCommand::select_tab_5:
+    return select_tab_5;
+  case protocol::PaneCommand::select_tab_6:
+    return select_tab_6;
+  case protocol::PaneCommand::select_tab_7:
+    return select_tab_7;
+  case protocol::PaneCommand::select_tab_8:
+    return select_tab_8;
+  case protocol::PaneCommand::select_tab_9:
+    return select_tab_9;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] auto command_from_pane_command(const SessionRecord& session,
+                                             const protocol::PaneCommand pane_command) noexcept
+    -> std::optional<Command> {
+  const auto input_command = pane_input_command(pane_command);
+  return input_command.has_value()
+             ? command_from_input(session, *input_command, CommandOrigin::client)
+             : std::nullopt;
 }
 
 using SessionNameConflict = bool (*)(void* context, SessionId renamed,
@@ -3054,6 +3165,13 @@ struct SessionCommandContext final {
   if (command.kind == CommandKind::stop_session) {
     const bool changed = session.active;
     session.active = false;
+    return command_status(changed);
+  }
+  if (command.kind == CommandKind::cancel_attachment_interaction) {
+    const bool changed =
+        session.attachment.copy_mode.active() || session.attachment.rename_prompt.active();
+    leave_copy_mode(session, runtimes);
+    reset_rename_prompt(session);
     return command_status(changed);
   }
   if (command.kind == CommandKind::begin_rename_session) {
@@ -3127,6 +3245,7 @@ struct SessionCommandContext final {
   switch (command.kind) {
   case CommandKind::none:
   case CommandKind::detach_client:
+  case CommandKind::cancel_attachment_interaction:
   case CommandKind::begin_rename_session:
   case CommandKind::begin_rename_tab:
   case CommandKind::rename_session:
@@ -3363,6 +3482,7 @@ struct SessionCommandContext final {
     return true;
   case CommandKind::none:
   case CommandKind::detach_client:
+  case CommandKind::cancel_attachment_interaction:
   case CommandKind::create_tab:
   case CommandKind::next_tab:
   case CommandKind::previous_tab:
@@ -3401,6 +3521,7 @@ struct SessionCommandContext final {
       resolved.target.tab = selected->id;
     }
   } else if (resolved.kind != CommandKind::detach_client &&
+             resolved.kind != CommandKind::cancel_attachment_interaction &&
              resolved.kind != CommandKind::begin_rename_session &&
              resolved.kind != CommandKind::rename_session &&
              resolved.kind != CommandKind::stop_session && !resolved.target.tab.is_valid()) {
@@ -4033,8 +4154,441 @@ enum class ParseResult : std::uint8_t {
   backpressure,
   yield,
   detach,
+  peer_closed,
   error,
 };
+
+[[nodiscard]] constexpr auto physical_key(const protocol::KeyInputKey key) noexcept
+    -> input::PhysicalKey {
+  constexpr std::array mapping{
+      input::PhysicalKey::unidentified,
+      input::PhysicalKey::a,
+      input::PhysicalKey::b,
+      input::PhysicalKey::c,
+      input::PhysicalKey::d,
+      input::PhysicalKey::e,
+      input::PhysicalKey::f,
+      input::PhysicalKey::g,
+      input::PhysicalKey::h,
+      input::PhysicalKey::i,
+      input::PhysicalKey::j,
+      input::PhysicalKey::k,
+      input::PhysicalKey::l,
+      input::PhysicalKey::m,
+      input::PhysicalKey::n,
+      input::PhysicalKey::o,
+      input::PhysicalKey::p,
+      input::PhysicalKey::q,
+      input::PhysicalKey::r,
+      input::PhysicalKey::s,
+      input::PhysicalKey::t,
+      input::PhysicalKey::u,
+      input::PhysicalKey::v,
+      input::PhysicalKey::w,
+      input::PhysicalKey::x,
+      input::PhysicalKey::y,
+      input::PhysicalKey::z,
+      input::PhysicalKey::enter,
+      input::PhysicalKey::tab,
+      input::PhysicalKey::backspace,
+      input::PhysicalKey::escape,
+      input::PhysicalKey::space,
+      input::PhysicalKey::arrow_up,
+      input::PhysicalKey::arrow_down,
+      input::PhysicalKey::arrow_left,
+      input::PhysicalKey::arrow_right,
+      input::PhysicalKey::home,
+      input::PhysicalKey::end,
+      input::PhysicalKey::insert,
+      input::PhysicalKey::delete_key,
+      input::PhysicalKey::page_up,
+      input::PhysicalKey::page_down,
+      input::PhysicalKey::f1,
+      input::PhysicalKey::f2,
+      input::PhysicalKey::f3,
+      input::PhysicalKey::f4,
+      input::PhysicalKey::f5,
+      input::PhysicalKey::f6,
+      input::PhysicalKey::f7,
+      input::PhysicalKey::f8,
+      input::PhysicalKey::f9,
+      input::PhysicalKey::f10,
+      input::PhysicalKey::f11,
+      input::PhysicalKey::f12,
+  };
+  const auto index = static_cast<std::size_t>(key);
+  return index < mapping.size() ? std::span(mapping).subspan(index, 1).front()
+                                : input::PhysicalKey::unidentified;
+}
+
+[[nodiscard]] constexpr auto key_action(const protocol::KeyInputAction action) noexcept
+    -> input::KeyAction {
+  switch (action) {
+  case protocol::KeyInputAction::release:
+    return input::KeyAction::release;
+  case protocol::KeyInputAction::press:
+    return input::KeyAction::press;
+  case protocol::KeyInputAction::repeat:
+    return input::KeyAction::repeat;
+  }
+  return input::KeyAction::press;
+}
+
+[[nodiscard]] constexpr auto key_modifiers(const std::uint16_t modifiers) noexcept
+    -> std::uint16_t {
+  std::uint16_t result = 0;
+  result |= (modifiers & protocol::key_input_modifier_shift) != 0 ? input::key_modifier_shift : 0U;
+  result |=
+      (modifiers & protocol::key_input_modifier_control) != 0 ? input::key_modifier_control : 0U;
+  result |= (modifiers & protocol::key_input_modifier_alt) != 0 ? input::key_modifier_alt : 0U;
+  result |= (modifiers & protocol::key_input_modifier_super) != 0 ? input::key_modifier_super : 0U;
+  result |= (modifiers & protocol::key_input_modifier_caps_lock) != 0
+                ? input::key_modifier_caps_lock
+                : 0U;
+  result |=
+      (modifiers & protocol::key_input_modifier_num_lock) != 0 ? input::key_modifier_num_lock : 0U;
+  return result;
+}
+
+[[nodiscard]] auto routed_key_event(const protocol::KeyInput& key,
+                                    const std::span<const std::byte> text) noexcept
+    -> input::KeyEvent {
+  return {.action = key_action(key.action),
+          .key = physical_key(key.key),
+          .modifiers = key_modifiers(key.modifiers),
+          .unshifted_codepoint = key.unshifted_codepoint,
+          .text = text};
+}
+
+[[nodiscard]] auto focused_input_runtime(SessionRecord& session,
+                                         PaneRuntimeStore& runtimes) noexcept -> PaneRuntime* {
+  auto* const tab = active_tab(session);
+  auto* const pane = tab == nullptr ? nullptr : find_pane(session, *tab, tab->focused_pane);
+  return pane == nullptr ? nullptr : find_pane_runtime(runtimes, session, *tab, *pane);
+}
+
+[[nodiscard]] auto queue_application_bytes(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                           const std::span<const std::byte> bytes) noexcept
+    -> InputQueueResult {
+  auto* const runtime = focused_input_runtime(session, runtimes);
+  if (runtime == nullptr) {
+    return InputQueueResult::encoding_failed;
+  }
+  const auto queued_bytes_before = runtime->pending_writes.size();
+  const auto queued = queue_normalized_input(runtime->pending_writes, runtime->terminal, bytes);
+  if (queued != InputQueueResult::queued) {
+    return queued;
+  }
+  clear_mouse_selection(session, runtimes);
+  std::uint64_t trace_correlation = 0;
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+  trace_correlation = session.attachment_runtime.decoded_input_trace_matcher.observe(bytes);
+#endif
+  diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
+                                   static_cast<std::uint32_t>(runtime->pty), bytes.size(),
+                                   trace_correlation);
+  if (runtime->pending_writes.size() > queued_bytes_before &&
+      !scroll_viewport_for_application_input(session, *runtime)) {
+    return InputQueueResult::encoding_failed;
+  }
+  if (latency_sensitive_input(bytes.size())) {
+    runtime->interactive_damage.await_write(queued_bytes_before, runtime->pending_writes.size());
+  }
+  return InputQueueResult::queued;
+}
+
+[[nodiscard]] auto queue_application_key(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                         const protocol::KeyInput& key,
+                                         const std::span<const std::byte> text,
+                                         const std::span<const std::byte> prefix = {}) noexcept
+    -> InputQueueResult {
+  auto* const runtime = focused_input_runtime(session, runtimes);
+  if (runtime == nullptr) {
+    return InputQueueResult::encoding_failed;
+  }
+  const auto queued_bytes_before = runtime->pending_writes.size();
+  const auto queued =
+      prefix.empty()
+          ? queue_key_input(runtime->pending_writes, runtime->terminal, key, text)
+          : queue_prefixed_key_input(runtime->pending_writes, runtime->terminal, prefix, key, text);
+  if (queued != InputQueueResult::queued) {
+    return queued;
+  }
+  clear_mouse_selection(session, runtimes);
+  if (runtime->pending_writes.size() > queued_bytes_before) {
+    if (!scroll_viewport_for_application_input(session, *runtime)) {
+      return InputQueueResult::encoding_failed;
+    }
+    runtime->interactive_damage.await_write(queued_bytes_before, runtime->pending_writes.size());
+  }
+  return InputQueueResult::queued;
+}
+
+void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
+                        const bool presentation_changed,
+                        const bool interaction_preemption_requested) noexcept {
+  if (interaction_preemption_requested) {
+    const Command cancel{
+        .kind = CommandKind::cancel_attachment_interaction,
+        .origin = CommandOrigin::keymap,
+        .target = {.session = session.id,
+                   .tab = {},
+                   .pane = {},
+                   .peer_pane = {},
+                   .attachment = session.attachment.id},
+    };
+    const auto result = dispatch_session_command(session, runtimes, cancel);
+    LEMMA_ASSERT(result.succeeded());
+  }
+  if (presentation_changed) {
+    schedule_frame(session, FrameUrgency::state_change, false);
+  }
+}
+
+[[nodiscard]] auto dispatch_input_command(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                          const input::InputCommand input_command,
+                                          const SessionNameConflict name_conflict,
+                                          void* const name_conflict_context) noexcept
+    -> ParseResult {
+  finish_live_divider_resize(session, true);
+  const bool begins_rename = input_command == input::InputCommand::begin_rename_session ||
+                             input_command == input::InputCommand::begin_rename_tab;
+  if (session.attachment.rename_prompt.active() && !begins_rename) {
+    reset_rename_prompt(session);
+  }
+  const auto command = command_from_input(session, input_command, CommandOrigin::keymap);
+  if (!command.has_value()) {
+    return ParseResult::keep;
+  }
+  const auto result =
+      dispatch_session_command(session, runtimes, *command, name_conflict, name_conflict_context);
+  return result.status == CommandStatus::detach_requested || !session.active ? ParseResult::detach
+                                                                             : ParseResult::keep;
+}
+
+[[nodiscard]] auto materialize_legacy_input(
+    const input::ForwardLegacyInput& forwarded,
+    std::array<std::byte, input::deferred_input_bytes_max + 1U>& storage) noexcept
+    -> std::span<const std::byte> {
+  if (forwarded.prefix_size == 0U) {
+    return forwarded.current;
+  }
+  LEMMA_ASSERT(forwarded.prefix_size <= forwarded.prefix.size());
+  LEMMA_ASSERT(forwarded.current.size() <= storage.size() - forwarded.prefix_size);
+  std::ranges::copy(std::span(forwarded.prefix).first(forwarded.prefix_size), storage.begin());
+  std::ranges::copy(
+      forwarded.current,
+      std::span(storage).subspan(forwarded.prefix_size, forwarded.current.size()).begin());
+  return std::span(storage).first(forwarded.prefix_size + forwarded.current.size());
+}
+
+// One decoder-held input message is advanced monotonically. Context transitions and commands are
+// never replayed when the pane PTY queue applies backpressure.
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
+[[nodiscard]] auto process_routed_legacy_input(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                               const std::span<const std::byte> message,
+                                               std::size_t& input_budget,
+                                               const SessionNameConflict name_conflict,
+                                               void* const name_conflict_context) noexcept
+    -> ParseResult {
+  auto offset = session.attachment_runtime.retained_input_offset.value_or(0);
+  if (offset > message.size()) {
+    return ParseResult::error;
+  }
+  if (session.attachment_runtime.pending_routed_input_size > 0U) {
+    const auto pending = std::span(session.attachment_runtime.pending_routed_input)
+                             .first(session.attachment_runtime.pending_routed_input_size);
+    const auto queued = queue_application_bytes(session, runtimes, pending);
+    if (queued == InputQueueResult::full) {
+      return ParseResult::backpressure;
+    }
+    if (queued != InputQueueResult::queued) {
+      return ParseResult::error;
+    }
+    session.attachment_runtime.pending_routed_input_size = 0;
+  }
+
+  while (offset < message.size()) {
+    if (input_budget == 0U) {
+      session.attachment_runtime.retained_input_offset = offset;
+      return ParseResult::yield;
+    }
+    --input_budget;
+    std::optional<input::InputRouter> router_before;
+    if (session.input_router.legacy_route_requires_checkpoint()) {
+      router_before.emplace(session.input_router);
+    }
+    const auto forward_limit =
+        session.attachment.copy_mode.active() ? std::size_t{1} : message.size() - offset;
+    const auto routed = session.input_router.route_legacy(message.subspan(offset), forward_limit);
+    if (routed.consumed == 0U || routed.consumed > message.size() - offset) {
+      return ParseResult::error;
+    }
+    if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+        command != nullptr) {
+      accept_input_route(session, runtimes, routed.presentation_changed,
+                         routed.interaction_preemption_requested);
+      offset += routed.consumed;
+      const auto dispatched = dispatch_input_command(session, runtimes, command->command,
+                                                     name_conflict, name_conflict_context);
+      if (dispatched == ParseResult::detach) {
+        return dispatched;
+      }
+      continue;
+    }
+    if (std::holds_alternative<input::ConsumedInput>(routed.effect)) {
+      accept_input_route(session, runtimes, routed.presentation_changed,
+                         routed.interaction_preemption_requested);
+      offset += routed.consumed;
+      continue;
+    }
+
+    const auto& forwarded = std::get<input::ForwardLegacyInput>(routed.effect);
+    std::array<std::byte, input::deferred_input_bytes_max + 1U> storage{};
+    const auto application_input = materialize_legacy_input(forwarded, storage);
+    if (application_input.empty()) {
+      return ParseResult::error;
+    }
+    if (session.attachment.rename_prompt.active()) {
+      process_rename_prompt_input(session, runtimes, application_input, name_conflict,
+                                  name_conflict_context);
+    } else if (session.attachment.copy_mode.active()) {
+      const auto consumed = process_copy_mode_input(session, runtimes, application_input);
+      if (consumed > application_input.size()) {
+        return ParseResult::error;
+      }
+      const auto remaining = application_input.subspan(consumed);
+      if (!remaining.empty()) {
+        const auto queued = queue_application_bytes(session, runtimes, remaining);
+        if (queued == InputQueueResult::full) {
+          LEMMA_ASSERT(remaining.size() <= session.attachment_runtime.pending_routed_input.size());
+          std::ranges::copy(remaining, session.attachment_runtime.pending_routed_input.begin());
+          session.attachment_runtime.pending_routed_input_size =
+              static_cast<std::uint8_t>(remaining.size());
+          offset += routed.consumed;
+          session.attachment_runtime.retained_input_offset = offset;
+          accept_input_route(session, runtimes, routed.presentation_changed,
+                             routed.interaction_preemption_requested);
+          return ParseResult::backpressure;
+        }
+        if (queued != InputQueueResult::queued) {
+          return ParseResult::error;
+        }
+      }
+    } else {
+      const auto queued = queue_application_bytes(session, runtimes, application_input);
+      if (queued == InputQueueResult::full) {
+        if (router_before.has_value()) {
+          session.input_router = *router_before;
+        }
+        session.attachment_runtime.retained_input_offset = offset;
+        return ParseResult::backpressure;
+      }
+      if (queued != InputQueueResult::queued) {
+        return ParseResult::error;
+      }
+    }
+    accept_input_route(session, runtimes, routed.presentation_changed,
+                       routed.interaction_preemption_requested);
+    offset += routed.consumed;
+  }
+  session.attachment_runtime.retained_input_offset.reset();
+  return ParseResult::keep;
+}
+
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+[[nodiscard]] auto
+process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
+                         const protocol::KeyInput& key, const std::span<const std::byte> text,
+                         std::size_t& input_budget, const SessionNameConflict name_conflict,
+                         void* const name_conflict_context) noexcept -> ParseResult {
+  if (input_budget == 0U) {
+    return ParseResult::yield;
+  }
+  --input_budget;
+  auto router_before = session.input_router;
+  const auto routed = session.input_router.route_key(routed_key_event(key, text));
+  if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+      command != nullptr) {
+    accept_input_route(session, runtimes, routed.presentation_changed,
+                       routed.interaction_preemption_requested);
+    return dispatch_input_command(session, runtimes, command->command, name_conflict,
+                                  name_conflict_context);
+  }
+  if (std::holds_alternative<input::ConsumedInput>(routed.effect)) {
+    accept_input_route(session, runtimes, routed.presentation_changed,
+                       routed.interaction_preemption_requested);
+    return ParseResult::keep;
+  }
+
+  if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect)) {
+    if (session.attachment.rename_prompt.active()) {
+      process_typed_rename_prompt_input(session, runtimes, key, text, name_conflict,
+                                        name_conflict_context);
+    } else if (session.attachment.copy_mode.active()) {
+      process_typed_copy_mode_input(session, runtimes, key, text);
+    } else {
+      const auto queued = queue_application_key(session, runtimes, key, text);
+      if (queued == InputQueueResult::full) {
+        session.input_router = router_before;
+        return ParseResult::backpressure;
+      }
+      if (queued != InputQueueResult::queued) {
+        return ParseResult::error;
+      }
+    }
+  } else {
+    std::array<std::byte, input::deferred_input_bytes_max> prefix_storage{};
+    std::span<const std::byte> prefix;
+    bool forward_current = false;
+    if (const auto* const bytes = std::get_if<input::ForwardBytes>(&routed.effect);
+        bytes != nullptr) {
+      prefix_storage = bytes->bytes;
+      prefix = std::span(prefix_storage).first(bytes->size);
+    } else if (const auto* const following =
+                   std::get_if<input::ForwardBytesThenCurrentKey>(&routed.effect);
+               following != nullptr) {
+      prefix_storage = following->bytes;
+      prefix = std::span(prefix_storage).first(following->size);
+      forward_current = true;
+    } else {
+      return ParseResult::error;
+    }
+    if (prefix.empty()) {
+      return ParseResult::error;
+    }
+    if (session.attachment.rename_prompt.active()) {
+      process_rename_prompt_input(session, runtimes, prefix, name_conflict, name_conflict_context);
+      if (forward_current && session.attachment.rename_prompt.active()) {
+        process_typed_rename_prompt_input(session, runtimes, key, text, name_conflict,
+                                          name_conflict_context);
+      }
+    } else if (session.attachment.copy_mode.active()) {
+      static_cast<void>(process_copy_mode_input(session, runtimes, prefix));
+      if (forward_current) {
+        if (!session.attachment.copy_mode.active()) {
+          return ParseResult::error;
+        }
+        process_typed_copy_mode_input(session, runtimes, key, text);
+      }
+    } else {
+      const auto queued = forward_current
+                              ? queue_application_key(session, runtimes, key, text, prefix)
+                              : queue_application_bytes(session, runtimes, prefix);
+      if (queued == InputQueueResult::full) {
+        session.input_router = router_before;
+        return ParseResult::backpressure;
+      }
+      if (queued != InputQueueResult::queued) {
+        return ParseResult::error;
+      }
+    }
+  }
+  accept_input_route(session, runtimes, routed.presentation_changed,
+                     routed.interaction_preemption_requested);
+  return ParseResult::keep;
+}
+// NOLINTEND(readability-function-cognitive-complexity)
 
 [[nodiscard]] auto expensive_client_message(const SessionRecord& session,
                                             const protocol::ClientMessage& message) noexcept
@@ -4053,6 +4607,7 @@ enum class ParseResult : std::uint8_t {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto parse_client_packets(SessionRecord& session, PaneRuntimeStore& runtimes,
                                         std::size_t& message_budget, std::size_t& geometry_budget,
+                                        std::size_t& input_budget,
                                         const SessionNameConflict name_conflict,
                                         void* const name_conflict_context) noexcept -> ParseResult {
   while (true) {
@@ -4088,106 +4643,19 @@ enum class ParseResult : std::uint8_t {
       }
       break;
     case protocol::ClientMessageKind::input: {
-      if (session.attachment.rename_prompt.active()) {
-        process_rename_prompt_input(session, runtimes, message.input, name_conflict,
-                                    name_conflict_context);
-        break;
+      const auto result = process_routed_legacy_input(
+          session, runtimes, message.input, input_budget, name_conflict, name_conflict_context);
+      if (result != ParseResult::keep) {
+        return result;
       }
-      auto ordinary_input = message.input;
-      if (session.attachment_runtime.retained_input_offset.has_value()) {
-        if (*session.attachment_runtime.retained_input_offset > message.input.size()) {
-          return ParseResult::error;
-        }
-        ordinary_input = message.input.subspan(*session.attachment_runtime.retained_input_offset);
-      } else if (session.attachment.copy_mode.active()) {
-        const auto consumed = process_copy_mode_input(session, runtimes, message.input);
-        if (consumed > message.input.size()) {
-          return ParseResult::error;
-        }
-        ordinary_input = message.input.subspan(consumed);
-        if (ordinary_input.empty()) {
-          break;
-        }
-        // Copy-mode mutation has already consumed this prefix. Retain that fact while the decoder
-        // holds the message so a full PTY queue cannot replay UI-only bytes on retry.
-        session.attachment_runtime.retained_input_offset = consumed;
-      }
-      clear_mouse_selection(session, runtimes);
-      auto* const tab = active_tab(session);
-      if (tab == nullptr) {
-        return ParseResult::error;
-      }
-      auto* const pane = find_pane(session, *tab, tab->focused_pane);
-      if (pane == nullptr) {
-        return ParseResult::error;
-      }
-      std::uint64_t trace_correlation = 0;
-#ifdef LEMMA_ENABLE_LATENCY_TRACE
-      trace_correlation =
-          session.attachment_runtime.decoded_input_trace_matcher.observe(ordinary_input);
-#endif
-      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
-      if (runtime == nullptr) {
-        return ParseResult::error;
-      }
-      diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
-                                       static_cast<std::uint32_t>(runtime->pty),
-                                       ordinary_input.size(), trace_correlation);
-      const auto queued_bytes_before = runtime->pending_writes.size();
-      const auto queued =
-          queue_normalized_input(runtime->pending_writes, runtime->terminal, ordinary_input);
-      if (queued == InputQueueResult::full) {
-        return ParseResult::backpressure;
-      }
-      if (queued == InputQueueResult::encoding_failed) {
-        return ParseResult::error;
-      }
-      if (runtime->pending_writes.size() > queued_bytes_before &&
-          !scroll_viewport_for_application_input(session, *runtime)) {
-        return ParseResult::error;
-      }
-      if (latency_sensitive_input(ordinary_input.size())) {
-        runtime->interactive_damage.await_write(queued_bytes_before,
-                                                runtime->pending_writes.size());
-      }
-      session.attachment_runtime.retained_input_offset.reset();
       break;
     }
     case protocol::ClientMessageKind::key: {
-      if (session.attachment.rename_prompt.active()) {
-        process_typed_rename_prompt_input(session, runtimes, message.key, message.input,
-                                          name_conflict, name_conflict_context);
-        break;
-      }
-      if (session.attachment.copy_mode.active()) {
-        process_typed_copy_mode_input(session, runtimes, message.key, message.input);
-        break;
-      }
-      clear_mouse_selection(session, runtimes);
-      auto* const tab = active_tab(session);
-      auto* const pane = tab == nullptr ? nullptr : find_pane(session, *tab, tab->focused_pane);
-      if (pane == nullptr) {
-        return ParseResult::error;
-      }
-      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *pane);
-      if (runtime == nullptr) {
-        return ParseResult::error;
-      }
-      const auto queued_bytes_before = runtime->pending_writes.size();
-      const auto queued =
-          queue_key_input(runtime->pending_writes, runtime->terminal, message.key, message.input);
-      if (queued == InputQueueResult::full) {
-        return ParseResult::backpressure;
-      }
-      if (queued == InputQueueResult::encoding_failed) {
-        return ParseResult::error;
-      }
-      if (runtime->pending_writes.size() > queued_bytes_before) {
-        if (!scroll_viewport_for_application_input(session, *runtime)) {
-          return ParseResult::error;
-        }
-        runtime->interactive_damage.await_write(queued_bytes_before,
-                                                runtime->pending_writes.size());
+      const auto result =
+          process_routed_key_input(session, runtimes, message.key, message.input, input_budget,
+                                   name_conflict, name_conflict_context);
+      if (result != ParseResult::keep) {
+        return result;
       }
       break;
     }
@@ -4201,7 +4669,6 @@ enum class ParseResult : std::uint8_t {
       if (session.attachment.copy_mode.active()) {
         break;
       }
-      clear_mouse_selection(session, runtimes);
       auto* const tab = active_tab(session);
       auto* const pane = tab == nullptr ? nullptr : find_pane(session, *tab, tab->focused_pane);
       if (pane == nullptr) {
@@ -4220,6 +4687,7 @@ enum class ParseResult : std::uint8_t {
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
+      clear_mouse_selection(session, runtimes);
       if (runtime->pending_writes.size() > queued_bytes_before) {
         if (!scroll_viewport_for_application_input(session, *runtime)) {
           return ParseResult::error;
@@ -4565,10 +5033,11 @@ enum class ParseResult : std::uint8_t {
 
 [[nodiscard]] auto receive_client(SessionRecord& session, PaneRuntimeStore& runtimes,
                                   std::size_t& message_budget, std::size_t& geometry_budget,
+                                  std::size_t& input_budget,
                                   const SessionNameConflict name_conflict,
                                   void* const name_conflict_context) noexcept -> ParseResult {
   const auto buffered = parse_client_packets(session, runtimes, message_budget, geometry_budget,
-                                             name_conflict, name_conflict_context);
+                                             input_budget, name_conflict, name_conflict_context);
   if (buffered != ParseResult::keep) {
     return buffered;
   }
@@ -4579,18 +5048,18 @@ enum class ParseResult : std::uint8_t {
   const auto bytes_read =
       ::recv(session.attachment_runtime.client, available.data(), available.size(), 0);
   if (bytes_read == 0) {
-    return ParseResult::detach;
+    return ParseResult::peer_closed;
   }
   if (bytes_read < 0) {
     return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ? ParseResult::keep
-                                                                     : ParseResult::detach;
+                                                                     : ParseResult::peer_closed;
   }
   if (!session.attachment_runtime.decoder.commit(static_cast<std::size_t>(bytes_read))
            .has_value()) {
     return ParseResult::error;
   }
-  return parse_client_packets(session, runtimes, message_budget, geometry_budget, name_conflict,
-                              name_conflict_context);
+  return parse_client_packets(session, runtimes, message_budget, geometry_budget, input_budget,
+                              name_conflict, name_conflict_context);
 }
 
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
@@ -4813,6 +5282,9 @@ enum class ParseResult : std::uint8_t {
   for (const char character : prompt.view()) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
+  for (const char character : session.input_router.active_label()) {
+    mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
+  }
   return signature;
 }
 
@@ -4876,6 +5348,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
       .prompt_target = status_prompt_target(session.attachment.rename_prompt.kind),
       .prompt_feedback = status_prompt_feedback(session.attachment.rename_prompt.feedback),
       .prompt_value = session.attachment.rename_prompt.view(),
+      .input_context = session.input_router.active_label(),
       .prompt_cursor = session.attachment.rename_prompt.cursor,
       .dirty = dirty,
   };
@@ -5864,7 +6337,9 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   session->attachment_runtime.input_backpressured = false;
   session->attachment_runtime.client_work_pending = false;
   session->attachment_runtime.retained_input_offset.reset();
+  session->attachment_runtime.pending_routed_input_size = 0;
   session->attachment_runtime.client_close_state = ConnectionCloseState::none;
+  session->attachment_runtime.client_close_reason = protocol::DisconnectReason::protocol_error;
   session->attachment_runtime.frame_scheduler.cancel();
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   session->attachment_runtime.frame_trace_correlation = 0;
@@ -5875,10 +6350,11 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   }
   auto message_budget = client_messages_per_turn_max;
   auto geometry_budget = client_geometry_messages_per_turn_max;
+  auto input_budget = client_input_steps_per_turn_max;
   handle_client_parse_result(*session, runtimes,
                              parse_client_packets(*session, runtimes, message_budget,
-                                                  geometry_budget, &session_name_conflict,
-                                                  &sessions));
+                                                  geometry_budget, input_budget,
+                                                  &session_name_conflict, &sessions));
 }
 
 [[nodiscard]] auto write_pending_output(void* const context,
@@ -6163,11 +6639,15 @@ void queue_client_disconnect_if_ready(SessionRecord& session, PaneRuntimeStore& 
       session.attachment_runtime.output.busy()) {
     return;
   }
+  const auto reason = session.attachment_runtime.client_close_reason;
+  const auto diagnostic = reason == protocol::DisconnectReason::normal
+                              ? std::string_view{}
+                              : std::string_view{"invalid client protocol message"};
   if (session.attachment_runtime.server_sequence == 0 ||
       session.attachment_runtime.server_sequence == std::numeric_limits<std::uint32_t>::max() ||
       !session.attachment_runtime.output.queue_disconnect(
-          protocol::DisconnectReason::protocol_error, "invalid client protocol message",
-          session.attachment_runtime.server_sequence, std::chrono::steady_clock::now())) {
+          reason, diagnostic, session.attachment_runtime.server_sequence,
+          std::chrono::steady_clock::now())) {
     detach_attachment(session, runtimes);
     return;
   }
@@ -6180,10 +6660,19 @@ void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtim
   session.attachment_runtime.input_backpressured = result == ParseResult::backpressure;
   session.attachment_runtime.client_work_pending = result == ParseResult::yield;
   if (result == ParseResult::detach) {
+    session.attachment_runtime.client_close_reason = protocol::DisconnectReason::normal;
+    session.attachment_runtime.client_close_state = ConnectionCloseState::queue_disconnect;
+    session.attachment_runtime.input_backpressured = false;
+    session.attachment_runtime.client_work_pending = false;
+    queue_client_disconnect_if_ready(session, runtimes);
+    return;
+  }
+  if (result == ParseResult::peer_closed) {
     detach_attachment(session, runtimes);
     return;
   }
   if (result == ParseResult::error) {
+    session.attachment_runtime.client_close_reason = protocol::DisconnectReason::protocol_error;
     session.attachment_runtime.client_close_state = ConnectionCloseState::queue_disconnect;
     session.attachment_runtime.input_backpressured = false;
     session.attachment_runtime.client_work_pending = false;
@@ -6193,7 +6682,7 @@ void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtim
 
 void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes, const pollfd& events,
                            std::size_t& message_budget, std::size_t& geometry_budget,
-                           const SessionNameConflict name_conflict,
+                           std::size_t& input_budget, const SessionNameConflict name_conflict,
                            void* const name_conflict_context) noexcept {
   // Consume resizes before flushing queued output so resize_session can discard bytes composed
   // for the previous physical viewport. Decoder-held work is retried without socket readiness on a
@@ -6212,7 +6701,7 @@ void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes, c
        (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
     handle_client_parse_result(session, runtimes,
                                receive_client(session, runtimes, message_budget, geometry_budget,
-                                              name_conflict, name_conflict_context));
+                                              input_budget, name_conflict, name_conflict_context));
   }
 }
 
@@ -6758,8 +7247,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         client_message_budgets{};
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
         client_geometry_budgets{};
+    std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
+        client_input_budgets{};
     client_message_budgets.fill(client_messages_per_turn_max);
     client_geometry_budgets.fill(client_geometry_messages_per_turn_max);
+    client_input_budgets.fill(client_input_steps_per_turn_max);
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::client) {
@@ -6776,8 +7268,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
             std::span(client_message_budgets).subspan(session->id.slot(), 1).front();
         auto& geometry_budget =
             std::span(client_geometry_budgets).subspan(session->id.slot(), 1).front();
+        auto& input_budget = std::span(client_input_budgets).subspan(session->id.slot(), 1).front();
         process_client_events(*session, runtimes, events, message_budget, geometry_budget,
-                              &session_name_conflict, &sessions);
+                              input_budget, &session_name_conflict, &sessions);
       }
     }
     std::array<SessionRecord*, static_cast<std::size_t>(limits::sessions_hard_max)>
@@ -6872,8 +7365,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
             std::span(client_message_budgets).subspan(session->id.slot(), 1).front();
         auto& geometry_budget =
             std::span(client_geometry_budgets).subspan(session->id.slot(), 1).front();
+        auto& input_budget = std::span(client_input_budgets).subspan(session->id.slot(), 1).front();
         process_client_events(*session, runtimes, no_events, message_budget, geometry_budget,
-                              &session_name_conflict, &sessions);
+                              input_budget, &session_name_conflict, &sessions);
       }
     }
 

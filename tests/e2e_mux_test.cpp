@@ -369,7 +369,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.5")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.6")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -1177,6 +1177,88 @@ TEST_F(MuxProcessTest, RoutesDirectionalHjklAndNextPreviousFocus) {
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, RepeatsResizeCommandsInsideTransientInputContext) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "resize_context"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'%'}));
+  ASSERT_TRUE(wait_for_session(
+                  "resize_context", [](const SessionListing& value) { return value.panes == 2; },
+                  deadline_after(5s), &client)
+                  .has_value());
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'['}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'m'}));
+  ASSERT_TRUE(client.wait_for_screen("RESIZE", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("qprintf '__COPY_PREEMPTED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_PREEMPTED__", deadline_after(5s))) << client.screen();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1;4m", deadline_after(5s))) << client.raw_tail();
+  ASSERT_TRUE(client.send("discarded", deadline_after(2s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'m'}));
+  ASSERT_TRUE(client.wait_for_screen("RESIZE", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("hh", deadline_after(2s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+
+  PtyClient reattached;
+  ASSERT_TRUE(reattached.spawn(client_arguments("attach", "resize_context"), runtime_.environment(),
+                               80, 24));
+  ASSERT_TRUE(reattached.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(reattached.send("printf '__CONTEXT_RESIZED__ '; stty size\r", deadline_after(2s)));
+  ASSERT_TRUE(reattached.wait_for_screen("__CONTEXT_RESIZED__ 23 41", deadline_after(5s)))
+      << reattached.screen();
+  ASSERT_TRUE(send_prefix(reattached, std::byte{'d'}));
+  ASSERT_TRUE(reattached.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, BudgetsTransientContextCommandFloodWithoutStarvingAnotherSession) {
+  PtyClient flooded;
+  ASSERT_TRUE(flooded.spawn(client_arguments("new", "context_flood"), runtime_.environment()));
+  ASSERT_TRUE(flooded.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(flooded, std::byte{'%'}));
+  ASSERT_TRUE(send_prefix(flooded, std::byte{'m'}));
+  ASSERT_TRUE(flooded.wait_for_screen("RESIZE", deadline_after(5s))) << flooded.screen();
+  std::string settle(64, 'h');
+  settle += "qprintf '__CONTEXT_FLOOD_SETTLED__\\n'\r";
+  ASSERT_TRUE(flooded.send(settle, deadline_after(2s)));
+  ASSERT_TRUE(flooded.wait_for_screen("__CONTEXT_FLOOD_SETTLED__", deadline_after(5s)))
+      << flooded.screen();
+  ASSERT_TRUE(send_prefix(flooded, std::byte{'m'}));
+  ASSERT_TRUE(flooded.wait_for_screen("RESIZE", deadline_after(5s))) << flooded.screen();
+
+  PtyClient responsive;
+  ASSERT_TRUE(
+      responsive.spawn(client_arguments("new", "context_responsive"), runtime_.environment()));
+  ASSERT_TRUE(responsive.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+
+  std::string flood(1'024, 'h');
+  flood += "qprintf '__CONTEXT_FLOOD_COMPLETE__\\n'\r";
+  std::atomic<bool> flood_sent{false};
+  {
+    std::jthread sender([&] {
+      flood_sent.store(flooded.send(flood, deadline_after(10s)), std::memory_order_release);
+    });
+    std::this_thread::sleep_for(5ms);
+    ASSERT_TRUE(responsive.send("printf '__CONTEXT_FLOOD_RESPONSIVE__\\n'\r", deadline_after(2s)));
+    ASSERT_TRUE(responsive.wait_for_screen("__CONTEXT_FLOOD_RESPONSIVE__", deadline_after(5s)))
+        << responsive.screen() << "\nserver:\n"
+        << server_.output();
+  }
+  ASSERT_TRUE(flood_sent.load(std::memory_order_acquire));
+  ASSERT_TRUE(flooded.wait_for_screen("__CONTEXT_FLOOD_COMPLETE__", deadline_after(10s)))
+      << flooded.screen() << "\nserver:\n"
+      << server_.output();
+
+  ASSERT_TRUE(send_prefix(flooded, std::byte{'d'}));
+  ASSERT_TRUE(flooded.wait(deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(responsive, std::byte{'d'}));
+  ASSERT_TRUE(responsive.wait(deadline_after(5s)));
+}
+
 TEST_F(MuxProcessTest, PersistsTypedSplitResizeAcrossViewportAndReattach) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "split_ratio"), runtime_.environment()));

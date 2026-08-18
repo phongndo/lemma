@@ -57,6 +57,7 @@ struct StatusLine final {
   StatusPromptTarget prompt_target{StatusPromptTarget::none};
   StatusPromptFeedback prompt_feedback{StatusPromptFeedback::none};
   std::string_view prompt_value;
+  std::string_view input_context;
   std::size_t prompt_cursor{0};
   bool dirty{false};
 

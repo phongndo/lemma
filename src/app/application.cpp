@@ -116,7 +116,7 @@ template <typename Integer>
              "protocol version\n  demo            VT demo\n\nWithout a command, Lemma creates or "
              "enters `default`. C-b % and C-b \" split panes; C-b h/j/k/l focuses panes; C-b "
              "H/J/K/L swaps panes; C-b Ctrl-h/j/k/l or Alt-h/j/k/l, or dragging a separator "
-             "resizes; C-b c creates "
+             "resizes; C-b m enters transient resize context (h/j/k/l, q to exit); C-b c creates "
              "a tab; C-b n/p changes tabs; C-b R renames the session; C-b r renames the tab; C-b "
              "P/N reorders tabs; C-b d "
              "detaches.\n")

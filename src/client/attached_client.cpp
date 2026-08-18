@@ -4,7 +4,6 @@
 #include "client/host_terminal_theme.hpp"
 #include "daemon/server.hpp"
 #include "diagnostic/latency_trace.hpp"
-#include "lemma/assert.hpp"
 #include "platform/io.hpp"
 #include "platform/terminal_mode.hpp"
 #include "protocol/attachment.hpp"
@@ -34,7 +33,7 @@
 namespace lemma::client {
 namespace {
 
-constexpr auto prefix_flush_delay = std::chrono::milliseconds(50);
+constexpr auto host_input_flush_delay = std::chrono::milliseconds(50);
 // Window managers emit SIGWINCH repeatedly during one physical resize gesture. A trailing-edge
 // commit prevents those samples from becoming a stream of child PTY resizes and shell redraws.
 constexpr auto outer_resize_quiet_delay = std::chrono::milliseconds(50);
@@ -582,24 +581,6 @@ template <typename Header>
                       sequence);
 }
 
-[[nodiscard]] auto send_prefixed_input(const int connection, const protocol::PrefixResult& parsed,
-                                       const std::span<const std::byte> input,
-                                       std::uint32_t& sequence) noexcept -> bool {
-  std::size_t sent = 0;
-  for (const auto& action : std::span(parsed.actions).first(parsed.action_count)) {
-    LEMMA_ASSERT(action.input_bytes >= sent);
-    LEMMA_ASSERT(action.input_bytes <= input.size());
-    const auto ordinary_input = input.subspan(sent, action.input_bytes - sent);
-    if (!send_input(connection, ordinary_input, sequence) ||
-        !send_small_message(connection, protocol::encode_pane_command(action.command, sequence),
-                            sequence)) {
-      return false;
-    }
-    sent = action.input_bytes;
-  }
-  return send_input(connection, input.subspan(sent), sequence);
-}
-
 void report_disconnect(const protocol::ServerMessage& message) noexcept {
   static_cast<void>(write_text_interruptibly(STDERR_FILENO, "lemma attach failed: "));
   static_cast<void>(write_text_interruptibly(
@@ -664,6 +645,7 @@ enum class HandshakeResult : std::uint8_t {
 
 enum class ServerParseResult : std::uint8_t {
   keep,
+  clean_disconnect,
   disconnect,
   peer_closed,
   error,
@@ -681,7 +663,7 @@ public:
   }
 
   void record_disconnect(const protocol::ServerMessage& message) noexcept {
-    if (!empty()) {
+    if (!empty() || message.reason == protocol::DisconnectReason::normal) {
       return;
     }
     append("lemma attach failed: ");
@@ -742,8 +724,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     }
     if (message.kind == protocol::ServerMessageKind::disconnect) {
       live_diagnostic.record_disconnect(message);
+      const bool clean = message.reason == protocol::DisconnectReason::normal;
       decoder.consume();
-      return ServerParseResult::disconnect;
+      return clean ? ServerParseResult::clean_disconnect : ServerParseResult::disconnect;
     }
 
     std::uint64_t trace_correlation = 0;
@@ -922,131 +905,24 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       static_cast<void>(send_host_terminal_theme_query(outer_terminal.render_descriptor()));
     }
 
-    protocol::PrefixParser prefix_parser;
     std::array<std::byte, protocol::input_bytes_max> input{};
-    std::array<std::byte, protocol::input_bytes_max * 2U> encoded_input{};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
     diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
 #endif
     diagnostic::LatencyTraceMarkerMatcher output_trace_matcher;
     std::uint64_t pending_trace_correlation = 0;
-    auto prefix_deadline = std::chrono::steady_clock::time_point{};
     auto host_input_deadline = std::chrono::steady_clock::time_point{};
     auto outer_resize_deadline = std::chrono::steady_clock::time_point{};
     auto sent_size = size;
     bool outer_resize_deferred = false;
     bool attached = terminal_setup_succeeded;
-    bool swallow_prefix_release = false;
-    bool swallow_command_release = false;
-    auto swallowed_command_key = protocol::KeyInputKey::unidentified;
-    const auto forward_ordinary_input = [&](const std::span<const std::byte> bytes) noexcept {
-      if (bytes.empty()) {
-        return true;
-      }
-      const auto parsed = prefix_parser.parse(bytes, encoded_input);
-      if (!send_prefixed_input(connection, parsed, std::span(encoded_input).first(parsed.bytes),
-                               client_sequence)) {
-        return false;
-      }
-      if (prefix_parser.has_pending_escape_sequence()) {
-        prefix_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
-      }
-      if (parsed.detach) {
-        clean_detach = send_small_message(connection, protocol::encode_detach(client_sequence),
-                                          client_sequence);
-        attached = false;
-      }
-      return true;
-    };
-    // Typed key metadata and legacy mux-prefix compatibility intentionally converge here.
-    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-    const auto forward_key_input = [&](const HostInputEvent& event,
-                                       const std::span<const std::byte> text) noexcept {
-      const auto control_b = event.key.key == protocol::KeyInputKey::b &&
-                             (event.key.modifiers & protocol::key_input_modifier_control) != 0 &&
-                             (event.key.modifiers & (protocol::key_input_modifier_alt |
-                                                     protocol::key_input_modifier_super)) == 0;
-      if (event.key.action == protocol::KeyInputAction::release) {
-        if (control_b && swallow_prefix_release) {
-          swallow_prefix_release = false;
-          return true;
-        }
-        if (swallow_command_release && event.key.key == swallowed_command_key) {
-          swallow_command_release = false;
-          return true;
-        }
-        return send_small_message(
-            connection, protocol::encode_key(event.key, text, client_sequence), client_sequence);
-      }
-      if (control_b) {
-        // Give typed and byte-oriented prefixes one owner so a typed C-b can be followed by an
-        // ordinary text byte on terminals that intentionally leave printable keys unencoded.
-        constexpr std::array prefix{std::byte{0x02}};
-        swallow_prefix_release = event.key.action == protocol::KeyInputAction::press;
-        return forward_ordinary_input(prefix);
-      }
-      if (!prefix_parser.has_pending_input()) {
-        return send_small_message(
-            connection, protocol::encode_key(event.key, text, client_sequence), client_sequence);
-      }
-
-      const auto command_modifiers = static_cast<std::uint16_t>(
-          event.key.modifiers &
-          ~(protocol::key_input_modifier_shift | protocol::key_input_modifier_caps_lock |
-            protocol::key_input_modifier_num_lock));
-      const bool has_text_command =
-          text.size() == 1 && std::to_integer<std::uint8_t>(text.front()) <= 0x7FU;
-      const bool has_unshifted_command =
-          event.key.unshifted_codepoint > 0 && event.key.unshifted_codepoint <= 0x7FU;
-      const bool has_ascii_command =
-          (has_text_command || has_unshifted_command) && command_modifiers == 0;
-      if (has_ascii_command) {
-        const auto command =
-            has_text_command ? text.front() : static_cast<std::byte>(event.key.unshifted_codepoint);
-        const std::array command_input{command};
-        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
-        swallowed_command_key = event.key.key;
-        return forward_ordinary_input(command_input);
-      }
-
-      std::uint32_t command_codepoint = 0;
-      if (has_unshifted_command) {
-        command_codepoint = event.key.unshifted_codepoint;
-      } else if (has_text_command) {
-        command_codepoint = std::to_integer<std::uint8_t>(text.front());
-      }
-      const bool is_hjkl = command_codepoint == 'h' || command_codepoint == 'j' ||
-                           command_codepoint == 'k' || command_codepoint == 'l';
-      if (is_hjkl && command_modifiers == protocol::key_input_modifier_control) {
-        // Legacy terminals encode Ctrl-letter as its ASCII C0 offset; normalize typed metadata to
-        // that same bounded prefix-parser representation.
-        const std::array command_input{
-            static_cast<std::byte>(command_codepoint - static_cast<std::uint32_t>('`'))};
-        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
-        swallowed_command_key = event.key.key;
-        return forward_ordinary_input(command_input);
-      }
-      if (is_hjkl && command_modifiers == protocol::key_input_modifier_alt) {
-        // Legacy terminals encode Alt-letter as Escape followed by the letter.
-        const std::array command_input{std::byte{0x1B}, static_cast<std::byte>(command_codepoint)};
-        swallow_command_release = event.key.action == protocol::KeyInputAction::press;
-        swallowed_command_key = event.key.key;
-        return forward_ordinary_input(command_input);
-      }
-
-      // An unbound non-text key preserves the literal mux prefix before forwarding the key.
-      constexpr std::array literal_prefix{std::byte{0x02}};
-      return forward_ordinary_input(literal_prefix) &&
-             send_small_message(connection, protocol::encode_key(event.key, text, client_sequence),
-                                client_sequence);
-    };
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     const auto forward_host_batch = [&](const HostInputBatch& batch) noexcept {
       for (const auto& event : std::span(batch.events).first(batch.event_count)) {
         const auto bytes = std::span(classified_input).subspan(event.offset, event.size);
         switch (event.kind) {
         case HostInputKind::ordinary:
-          if (!forward_ordinary_input(bytes)) {
+          if (!send_input(connection, bytes, client_sequence)) {
             return false;
           }
           break;
@@ -1056,7 +932,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
           }
           break;
         case HostInputKind::key:
-          if (!forward_key_input(event, bytes)) {
+          if (!send_small_message(connection,
+                                  protocol::encode_key(event.key, bytes, client_sequence),
+                                  client_sequence)) {
             return false;
           }
           break;
@@ -1084,7 +962,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         return false;
       }
       if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
-        host_input_deadline = std::chrono::steady_clock::now() + prefix_flush_delay;
+        host_input_deadline = std::chrono::steady_clock::now() + host_input_flush_delay;
       }
       return true;
     };
@@ -1140,6 +1018,10 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                                     {},
 #endif
                                                     live_diagnostic);
+      if (buffered == ServerParseResult::clean_disconnect) {
+        clean_detach = true;
+        break;
+      }
       if (buffered == ServerParseResult::disconnect) {
         typed_disconnect = true;
         break;
@@ -1170,22 +1052,6 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
           const auto remaining =
               std::chrono::duration_cast<std::chrono::milliseconds>(host_input_deadline - now);
           poll_timeout = static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
-        }
-      }
-      if (prefix_parser.has_pending_escape_sequence()) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= prefix_deadline) {
-          const auto flushed = prefix_parser.flush_pending(encoded_input);
-          if (flushed != 0 &&
-              !send_input(connection, std::span(encoded_input).first(flushed), client_sequence)) {
-            break;
-          }
-        } else {
-          const auto remaining =
-              std::chrono::duration_cast<std::chrono::milliseconds>(prefix_deadline - now);
-          const auto prefix_timeout =
-              static_cast<int>(std::max(remaining.count(), std::int64_t{1}));
-          poll_timeout = poll_timeout < 0 ? prefix_timeout : std::min(poll_timeout, prefix_timeout);
         }
       }
       if (host_theme_query_pending) {
@@ -1233,6 +1099,10 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         const auto received =
             receive_server(connection, decoder, outer_terminal.render_descriptor(),
                            output_trace_matcher, pending_trace_correlation, live_diagnostic);
+        if (received == ServerParseResult::clean_disconnect) {
+          clean_detach = true;
+          break;
+        }
         if (received == ServerParseResult::disconnect) {
           typed_disconnect = true;
           break;

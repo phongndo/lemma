@@ -80,6 +80,13 @@ enum class InputQueueResult : std::uint8_t {
 [[nodiscard]] auto queue_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
                                    const protocol::KeyInput& key,
                                    std::span<const std::byte> text) noexcept -> InputQueueResult;
+// Encodes a bounded legacy prefix and one structured key before committing either packet. This
+// keeps an unbound one-shot input context transactional under PTY backpressure.
+[[nodiscard]] auto queue_prefixed_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
+                                            std::span<const std::byte> prefix,
+                                            const protocol::KeyInput& key,
+                                            std::span<const std::byte> text) noexcept
+    -> InputQueueResult;
 [[nodiscard]] auto queue_paste_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
                                      std::span<std::byte> input) noexcept -> InputQueueResult;
 [[nodiscard]] auto queue_focus_input(PanePtyWriteQueue& queue, const vt::Terminal& terminal,

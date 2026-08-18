@@ -14,6 +14,8 @@ Status terms:
 
 Lemma is one C++23 executable with client, daemon, extension-host, and control roles. A per-user daemon runs one `poll`-based reactor. The `lemma_core` target owns only semantic commands and the Session/Tab/Pane/Attachment model; `lemma_runtime` owns reactor and external-resource mechanics.
 
+A daemon-owned input-policy component compiles the built-in prefix and transient-resize keymap into bounded context and binding tables. Each attached Session record owns one direct per-Attachment router state; those physical bindings and named contexts remain outside mux Core and route only to typed commands or application input. Copy/search keeps its existing native semantic action table in this implementation slice; Lua keymap generations are not yet active.
+
 The current in-memory hierarchy is `Session -> Tab -> Pane`, with separate semantic and runtime counterparts:
 
 - `Pane` contains one Session-scoped `PaneId`, owning `TabId`, and committed layout geometry. A separate bounded runtime store resolves the direct generational `SessionId -> PaneId` address to one `PaneRuntime` without presentation-derived lookup.
@@ -65,7 +67,7 @@ Session, tab, pane, semantic Attachment, and runtime connection references use d
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Prefix keymap | Working | `C-b` dispatches built-in pane/tab/copy commands; `C-b C-b` sends a literal prefix. The directional layer is `C-b h/j/k/l` to focus, `C-b Shift-h/j/k/l` to swap, and either `C-b Ctrl-h/j/k/l` or `C-b Alt-h/j/k/l` to resize. `C-b R`/`r` opens session/tab rename, `C-b P`/`N` reorders tabs, and `C-b /`/`?` enters copy search. |
+| Compiled keymap and input contexts | Working | The daemon routes a bounded compiled built-in keymap; the client only decodes and transports physical input. `C-b` is a one-shot context, `C-b C-b` sends a literal prefix, and `C-b m` enters a visible transient resize context where `h/j/k/l` or arrows resize repeatedly and `q`, Escape, or Enter exits. Existing one-shot bindings remain: `C-b h/j/k/l` focuses, `C-b Shift-h/j/k/l` swaps, `C-b Ctrl-h/j/k/l` or `C-b Alt-h/j/k/l` resizes, `C-b R`/`r` renames, `C-b P`/`N` reorders tabs, and `C-b /`/`?` enters copy search. |
 | Key encoding | Working | The client requests Kitty disambiguation, event, alternate-key, and associated-text metadata without requesting `report all keys`; layout and IME text therefore remains ordinary text on hosts that omit associated text. Typed metadata is preserved and Ghostty encodes it against each pane's active modes. |
 | Typed paste/focus | Working | Outer bracketed-paste and focus reporting are enabled while attached. Reports are decoded across arbitrary read fragmentation, transported as bounded typed messages, and encoded from canonical Ghostty modes. Paste remains one opaque event up to 1 MiB and bypasses mux-prefix interpretation. |
 | Copy mode | Working | Typed Vim-shaped navigation (`h/j/k/l`, words, line/history/viewport, half/full-page, arrows), character/line/block Visual selection, endpoint swapping, tracked pane-local mouse selection, incremental wrapping literal search from the copy cursor with central-context match placement, viewport hold, a pane-local position overlay, and OSC 52 user copy are integrated. |
@@ -92,7 +94,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
 | Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.5. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
+The current private attached-client protocol is version 2.6. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 
@@ -103,7 +105,7 @@ The current private attached-client protocol is version 2.5. It transports daemo
 | Transactional registration | Working | Bounded command, keymap, event-subscription, and sidebar declarations commit as a generation. |
 | Crash/block isolation | Working foundation | IPC is nonblocking and processed after critical reactor work; disconnect clears the generation and schedules restart. |
 | Settings applied to mux | Absent | `lemma.setup` does not currently alter product settings. |
-| Lua command callbacks/keymaps | Absent from user path | Registrations are retained but do not drive attached commands. |
+| Lua command callbacks/keymaps | Absent from user path | Registrations are retained but are not yet compiled into the active input-policy generation and do not drive attached commands. |
 | Snapshots/events/UI/process APIs/reload | Absent | No complete runtime integration exists. |
 
 ## Testing and measurement present today

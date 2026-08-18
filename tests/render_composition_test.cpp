@@ -94,6 +94,7 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
@@ -104,6 +105,32 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ nvim ]"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
+}
+
+TEST(PaneCompositionTest, ReservesRightStatusColumnsForActiveInputContext) {
+  auto terminal = make_terminal(40, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 40, .rows = 2},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "shell", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 40, .rows = 3}, output, true,
+                                    {.session_name = "work",
+                                     .tabs = tabs,
+                                     .prompt_target = StatusPromptTarget::none,
+                                     .prompt_feedback = StatusPromptFeedback::none,
+                                     .prompt_value = {},
+                                     .input_context = " RESIZE ",
+                                     .prompt_cursor = 0,
+                                     .dirty = true});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;33H\x1B[0;7m RESIZE "));
+  EXPECT_THAT(encoded, testing::HasSubstr("[ shell ]"));
 }
 
 TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
@@ -123,6 +150,7 @@ TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
                                      .prompt_target = StatusPromptTarget::active_tab,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = "abc",
+                                     .input_context = {},
                                      .prompt_cursor = 1,
                                      .dirty = true});
 
@@ -155,6 +183,7 @@ TEST(PaneCompositionTest, NarrowTabEditorShowsOnlyItsBoundedField) {
                                      .prompt_target = StatusPromptTarget::active_tab,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = "abcdef",
+                                     .input_context = {},
                                      .prompt_cursor = 6,
                                      .dirty = true});
 
@@ -183,6 +212,7 @@ TEST(PaneCompositionTest, RejectsControlBytesInEditableStatusValues) {
                                      .prompt_target = StatusPromptTarget::active_tab,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = std::string_view(prompt.data(), prompt.size()),
+                                     .input_context = {},
                                      .prompt_cursor = prompt.size(),
                                      .dirty = true});
 
@@ -209,6 +239,7 @@ TEST(PaneCompositionTest, EditsSessionInlineWithActiveTabContextAndConflictFeedb
                                      .prompt_target = StatusPromptTarget::session,
                                      .prompt_feedback = StatusPromptFeedback::conflict,
                                      .prompt_value = "occupied",
+                                     .input_context = {},
                                      .prompt_cursor = 8,
                                      .dirty = true});
 
@@ -242,6 +273,7 @@ TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatu
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true},
                                     {.terminal = &terminal, .top_right = "[2/9]"});
@@ -273,6 +305,7 @@ TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
@@ -300,6 +333,7 @@ TEST(PaneCompositionTest, OffsetsPaneSeparatorsBelowTopStatus) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
@@ -326,6 +360,7 @@ TEST(PaneCompositionTest, RejectsPaneGeometryThatExceedsStatusReservedContent) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
@@ -355,6 +390,7 @@ TEST(PaneCompositionTest, KeepsActiveTabVisibleWhenStatusOverflows) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
+                                     .input_context = {},
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
@@ -379,6 +415,7 @@ TEST(PaneCompositionTest, OmitsCleanStatusFromIncrementalFrame) {
                                 .prompt_target = StatusPromptTarget::none,
                                 .prompt_feedback = StatusPromptFeedback::none,
                                 .prompt_value = {},
+                                .input_context = {},
                                 .prompt_cursor = 0,
                                 .dirty = true};
   ASSERT_TRUE(

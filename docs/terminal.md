@@ -114,7 +114,7 @@ Dropping a terminal response silently is a terminal-integrity failure, not norma
 physical input
       |
       v
-Lemma interpretation
+daemon input policy
    /          \
 mux command   application input
    |                |
@@ -124,9 +124,9 @@ mux command   application input
                 PTY queue
 ```
 
-The client or platform decoder preserves key, text, paste, focus, and mouse boundaries where the host exposes them. Core interprets bindings and mux policy. A mux action becomes the same typed command used by CLI, Lua, and agents. Application input is routed to a stable Pane ID, then Runtime asks that pane's Ghostty terminal to encode it from canonical terminal modes.
+The client or platform decoder preserves key, text, paste, focus, and mouse boundaries where the host exposes them. A daemon-owned input-policy component interprets a compiled keymap and bounded per-Attachment context stack. A mux action becomes the same typed command used by CLI, Lua, and agents; physical keys, prefixes, and named input contexts never enter mux Core. Application input is routed to a stable Pane ID, then Runtime asks that pane's Ghostty terminal to encode it from canonical terminal modes.
 
-Paste remains an opaque bounded event and cannot accidentally become prefix commands. Mouse coordinates are validated against attachment geometry and hit-tested against Lemma layout. Pane events are translated to pane-local coordinates and encoded by Ghostty when the application owns them. A left-dragged separator sends each distinct cell position through the typed command path against one generation-safe structural divider, atomically committing the real layout, pane geometry, child PTY geometry, and Ghostty surfaces. Do not fabricate key metadata unavailable from the physical host.
+Paste remains an opaque bounded event and bypasses keymap interpretation. Routing advances one decoder-held input cursor monotonically, so a context transition or command cannot be replayed when PTY backpressure retains later application input. Each Attachment advances at most 16 routing steps per reactor turn, separately from decoder storage and message capacity; one ordinary unbound byte run is one step. Mouse coordinates are validated against attachment geometry and hit-tested against Lemma layout. Pane events are translated to pane-local coordinates and encoded by Ghostty when the application owns them. A left-dragged separator sends each distinct cell position through the typed command path against one generation-safe structural divider, atomically committing the real layout, pane geometry, child PTY geometry, and Ghostty surfaces. Do not fabricate key metadata unavailable from the physical host.
 
 ## Resize flow
 

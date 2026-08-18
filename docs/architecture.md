@@ -3,12 +3,14 @@
 ## Model
 
 ```text
-human / CLI / mouse / Lua / agent
-                |
-          typed semantics
-                |
-                v
-             CORE
+physical keyboard       CLI / mouse / Lua / agent
+       |                         |
+ daemon input policy       typed semantics
+       |                         |
+       +------ typed command ----+
+                    |
+                    v
+                  CORE
                 |
         semantic intent
                 |
@@ -71,6 +73,7 @@ Every mutable value has exactly one owner. References are borrowed and bounded i
 | --- | --- |
 | Sessions, tabs, panes, layout, focus, zoom, stable IDs | Core store |
 | Attachments, controller/view/copy policy | Core store |
+| Compiled keymap generation and per-Attachment input contexts | Input policy |
 | PTYs, processes, PIDs, descriptors, polling, clocks | Runtime |
 | Concrete terminal lifetime and adapter queues | PaneRuntime / terminal component |
 | Canonical VT screen, history, modes, cursor, tracked terminal references | Ghostty behind `vt::Terminal` |
@@ -87,14 +90,14 @@ A value may be projected into another component, but the projection must be immu
 All semantic mutations converge on typed commands, regardless of origin:
 
 ```text
-keyboard / mouse / CLI / Lua / agent
-                 -> typed command
-                 -> validate actor, target ID, bounds, and policy
-                 -> one Core transition
-                 -> typed result + semantic intent
+keyboard -> daemon input policy -+
+mouse / CLI / Lua / agent --------+-> typed command
+                                      -> validate actor, target ID, bounds, and policy
+                                      -> one Core transition
+                                      -> typed result + semantic intent
 ```
 
-Physical input that is not a mux command becomes typed application input. Runtime resolves the target PaneRuntime and asks Ghostty to encode mode-dependent input. No frontend receives a private mutation path.
+Physical input that is not a mux command becomes typed application input. The daemon input-policy component owns compiled keymaps and bounded transient input contexts; named contexts and physical bindings are not mux state. Runtime resolves application input to the target PaneRuntime and asks Ghostty to encode mode-dependent input. No frontend receives a private mutation path.
 
 Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, and no-effect commands are explicit results. External failure never authorizes partial semantic mutation. Internal invariant failure is fail-fast.
 
@@ -103,7 +106,8 @@ Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, 
 Dependencies are explicit and acyclic:
 
 ```text
-frontends ---------> semantic values/commands ---------> Core
+frontends ---------> typed physical input
+input policy ------> semantic values/commands ---------> Core
 Runtime -----------> Core contracts
 Runtime -----------> terminal / render / protocol / platform
 terminal ----------> libghostty-vt
@@ -132,10 +136,11 @@ The current CMake target graph is transitional. Existing links do not define the
 13. Required input and terminal-response ordering is explicit and preserved.
 14. Visible state can be reconstructed from daemon authority without an unbounded event, PTY-byte, or render log.
 15. Capacity exhaustion and dependency failure degrade or reject boundedly; they never corrupt authority.
+16. Published input-policy generations contain only resolved, unambiguous bindings; context stacks are bounded, Attachment-scoped, and cannot outlive their generation.
 
 ## Runtime progress
 
-A reactor iteration has bounded work in each class: PTY reads, terminal parsing, PTY writes, client input, semantic commands, presentation, connection output, and extension work. Fair cursors prevent low-index resources from monopolizing repeated turns.
+A reactor iteration has bounded work in each class: PTY reads, terminal parsing, PTY writes, client input routing steps and routed commands, semantic commands, presentation, connection output, and extension work. Fair cursors prevent low-index resources from monopolizing repeated turns.
 
 Terminal responses generated while parsing PTY output enter the pane's ordered PTY queue before later accepted application input. Slow presentation retains at most bounded work; newer terminal damage stays canonical and is repaired by a full redraw or client disconnect.
 

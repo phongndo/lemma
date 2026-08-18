@@ -78,6 +78,46 @@ TEST(CoreInputTest, EncodesShiftedAssociatedTextAsTextInLegacyChildMode) {
   EXPECT_EQ(output.front(), std::byte{'A'});
 }
 
+TEST(CoreInputTest, CommitsDeferredPrefixAndStructuredKeyInOrder) {
+  auto terminal_result = vt::Terminal::create({});
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  PanePtyWriteQueue queue;
+  constexpr std::array prefix{std::byte{0x02}};
+  const protocol::KeyInput key{
+      .action = protocol::KeyInputAction::press,
+      .key = protocol::KeyInputKey::x,
+      .unshifted_codepoint = 'x',
+  };
+  constexpr std::array text{std::byte{'x'}};
+
+  ASSERT_EQ(queue_prefixed_key_input(queue, terminal, prefix, key, text), InputQueueResult::queued);
+  std::array<std::byte, 2> output{};
+  ASSERT_EQ(queue.read(output), output.size());
+  EXPECT_EQ(output.front(), std::byte{0x02});
+  EXPECT_EQ(output.back(), std::byte{'x'});
+}
+
+TEST(CoreInputTest, DeferredPrefixAndStructuredKeyLeaveFullQueueUnchanged) {
+  auto terminal_result = vt::Terminal::create({});
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  PanePtyWriteQueue queue;
+  const std::vector<std::byte> filler(PanePtyWriteQueue::capacity());
+  ASSERT_TRUE(queue.append(filler));
+  const auto original_size = queue.size();
+  constexpr std::array prefix{std::byte{0x02}};
+  const protocol::KeyInput key{
+      .action = protocol::KeyInputAction::press,
+      .key = protocol::KeyInputKey::x,
+      .unshifted_codepoint = 'x',
+  };
+  constexpr std::array text{std::byte{'x'}};
+
+  EXPECT_EQ(queue_prefixed_key_input(queue, terminal, prefix, key, text), InputQueueResult::full);
+  EXPECT_EQ(queue.size(), original_size);
+}
+
 TEST(CoreInputTest, EncodesOneAlternateScrollCursorKeyPerNormalizedWheelReport) {
   auto terminal_result = vt::Terminal::create({});
   ASSERT_TRUE(terminal_result.has_value());

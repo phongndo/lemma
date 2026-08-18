@@ -30,7 +30,6 @@ inline constexpr std::size_t working_directory_bytes_max = limits::working_direc
 inline constexpr std::size_t unavailable_working_directory_size = 0;
 inline constexpr std::size_t environment_bytes_max = limits::environment_bytes_max;
 inline constexpr std::size_t environment_entries_max = limits::environment_entries_max;
-inline constexpr std::size_t prefix_actions_max = 64;
 inline constexpr std::string_view shutdown_response = "lemma daemon stopped\n";
 
 struct Dimensions final {
@@ -139,11 +138,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.5. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.6. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{5};
+  std::uint8_t minor{6};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };
@@ -478,38 +477,6 @@ encode_client_hello(std::string_view session, Dimensions dimensions, std::uint32
 [[nodiscard]] auto encode_disconnect(DisconnectReason reason, std::string_view diagnostic,
                                      std::uint32_t sequence = 1) noexcept -> SmallMessage;
 [[nodiscard]] auto decode_error_diagnostic(DecodeError error) noexcept -> std::string_view;
-
-struct PrefixAction final {
-  std::size_t input_bytes{0};
-  PaneCommand command{PaneCommand::none};
-};
-
-struct PrefixResult final {
-  std::array<PrefixAction, prefix_actions_max> actions{};
-  std::size_t bytes{0};
-  std::size_t action_count{0};
-  bool detach{false};
-};
-
-class PrefixParser final {
-public:
-  [[nodiscard]] auto parse(std::span<const std::byte> input, std::span<std::byte> output) noexcept
-      -> PrefixResult;
-  [[nodiscard]] auto has_pending_input() const noexcept -> bool;
-  [[nodiscard]] auto has_pending_escape_sequence() const noexcept -> bool;
-  [[nodiscard]] auto flush_pending(std::span<std::byte> output) noexcept -> std::size_t;
-
-private:
-  enum class State : std::uint8_t {
-    normal,
-    prefix,
-    escape,
-    csi,
-  };
-
-  State state_{State::normal};
-  std::byte escape_introducer_{'['};
-};
 
 // Daemon-side incremental decoder. Returned payload views borrow storage until consume() or
 // reset().

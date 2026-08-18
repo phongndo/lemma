@@ -105,6 +105,27 @@ TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
             CommandStatus::invalid_command);
 }
 
+TEST(CommandDispatcherTest, RequiresAttachmentIdentityForInteractionCancellation) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const Command command{
+      .kind = CommandKind::cancel_attachment_interaction,
+      .origin = CommandOrigin::keymap,
+      .target = {.session = SessionId::from_parts(1, 2),
+                 .tab = {},
+                 .pane = {},
+                 .peer_pane = {},
+                 .attachment = AttachmentId::from_parts(1, 2)},
+  };
+
+  EXPECT_EQ(dispatcher.dispatch(command).status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 1U);
+  auto missing_attachment = command;
+  missing_attachment.target.attachment = {};
+  EXPECT_EQ(dispatcher.dispatch(missing_attachment).status, CommandStatus::invalid_target);
+  EXPECT_EQ(capture.calls, 1U);
+}
+
 TEST(CommandDispatcherTest, DispatchesGenerationSafeDividerResizeCommand) {
   CommandCapture capture;
   const CommandDispatcher dispatcher(&capture_command, &capture);

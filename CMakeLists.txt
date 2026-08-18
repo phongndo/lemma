@@ -141,6 +141,10 @@ add_library(
 lemma_internal_target(lemma_core)
 target_link_libraries(lemma_core PRIVATE lemma_base)
 
+add_library(lemma_input STATIC src/input/input_router.cpp)
+lemma_internal_target(lemma_input)
+target_link_libraries(lemma_input PRIVATE lemma_base)
+
 add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
@@ -159,6 +163,7 @@ target_link_libraries(
     lemma_base
     lemma_core
     lemma_diagnostic
+    lemma_input
     lemma_platform
     lemma_protocol
     lemma_render
@@ -201,7 +206,7 @@ add_library(lemma_lib INTERFACE)
 add_library(lemma::lib ALIAS lemma_lib)
 target_link_libraries(
   lemma_lib
-  INTERFACE lemma_core lemma_extension lemma_metadata lemma_runtime lemma_terminal
+  INTERFACE lemma_core lemma_extension lemma_input lemma_metadata lemma_runtime lemma_terminal
 )
 target_include_directories(
   lemma_lib
@@ -246,6 +251,7 @@ if(LEMMA_BUILD_TESTS)
     tests/ghostty_parity_regression_test.cpp
     tests/host_input_parser_test.cpp
     tests/host_terminal_theme_test.cpp
+    tests/input_router_test.cpp
     tests/layout_test.cpp
     tests/platform_test.cpp
     tests/protocol_test.cpp
