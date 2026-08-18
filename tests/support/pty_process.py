@@ -175,6 +175,19 @@ class AnsiScreenTracker:
             marker in row for row in self.cells
         )
 
+    def feed_observing(self, data: bytes, marker: bytes) -> bool:
+        if not marker:
+            self.feed(data)
+            return False
+        observed = False
+        offset = 0
+        while (candidate := data.find(marker[-1:], offset)) >= 0:
+            self.feed(data[offset : candidate + 1])
+            observed = observed or self.contains(marker)
+            offset = candidate + 1
+        self.feed(data[offset:])
+        return observed
+
     def text(self) -> str:
         return "\n".join(
             bytes(row).decode("ascii", errors="replace").rstrip() for row in self.cells
@@ -429,11 +442,19 @@ class PtyProcess:
                     break
             total += len(data)
             retained = (retained + data)[-(len(marker) + 64 * 1024) :]
+            visible_marker_observed = False
             if not from_pending:
-                self.screen.feed(data)
+                if visible_text:
+                    visible_marker_observed = self.screen.feed_observing(data, marker)
+                else:
+                    self.screen.feed(data)
                 self._retain_output(data)
             marker_offset = retained.find(marker)
-            if marker_offset >= 0 or (visible_text and self.screen.contains(marker)):
+            if (
+                marker_offset >= 0
+                or visible_marker_observed
+                or (visible_text and self.screen.contains(marker))
+            ):
                 suffix = (
                     retained[marker_offset + len(marker) :]
                     if marker_offset >= 0

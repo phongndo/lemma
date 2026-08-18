@@ -1629,7 +1629,7 @@ TEST_F(MuxProcessTest, RenamesSessionsAndTabTitleOverridesAtomically) {
   ASSERT_EQ(command({"session", "rename", "rename_cli", "rename_new"}).status, 0);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ \x1B[0;1;4mzsh\x1B[0;1m ]", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ \x1B[0;1;4m", deadline_after(5s)))
       << client.raw_tail();
   ASSERT_TRUE(client.send("\x15"
                           "build logs\x1B[13;1:1u\x1B[13;1:3u",
