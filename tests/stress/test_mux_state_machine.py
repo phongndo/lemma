@@ -9,6 +9,7 @@ from tests.support.mux_harness import (
     Pane,
     process_exists,
     wait_for_process_exit,
+    wait_until,
 )
 
 
@@ -92,11 +93,21 @@ class MuxStateMachineStressTest(unittest.TestCase):
                 for process in panes:
                     if not process_exists(process):
                         raise AssertionError(f"modeled live pane {process} exited")
-                marker = f"S{index:04d}X"
-                session.require_client().send(
-                    f"m='{marker[:-2]}'; printf \"${{m}}{marker[-2:]}\\n\"\r"
+                # Tiny panes can scroll a transient marker out before the daemon presents a frame.
+                # Use a durable shell-side acknowledgement while keeping the outer client flowing.
+                acknowledgement = server.root / f"a{index}"
+                client = session.require_client()
+                client.send(f': >"$TMPDIR/a{index}"\r')
+
+                def acknowledged() -> bool | None:
+                    client.drain(0.002)
+                    return True if acknowledgement.exists() else None
+
+                wait_until(
+                    f"state-machine input acknowledgement {index}",
+                    acknowledged,
+                    diagnostics=lambda: server.diagnostics(session.name),
                 )
-                session.require_client().expect_output(marker)
 
             session.detach()
             session.destroy()
