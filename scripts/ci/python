@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly python_paths=(benchmarks scripts tools conanfile.py)
+readonly python_paths=(bench benchmarks scripts test tests tools conanfile.py)
 
 uv lock --check
 uv run --locked ruff format --check "${python_paths[@]}"
@@ -9,3 +9,4 @@ uv run --locked ruff check "${python_paths[@]}"
 uv run --locked ty check
 uv run --locked python benchmarks/benchmark_tools_test.py >/dev/null
 uv run --locked python -m unittest discover -s tools -p 'test_ci*.py'
+uv run --locked python -m unittest discover -s tests/support -p 'test_*.py'

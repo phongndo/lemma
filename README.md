@@ -33,6 +33,11 @@ In the development shell, `just build`, `just test`, and `just run` default to r
 `just profile=debug build` (or `test`/`run`) for the in-tree debug build. Both variants use the same
 per-user daemon endpoint, so shut down the running daemon before switching between them.
 
+For selective feedback, use `./test unit`, `./test layout`, `./test terminal`, or
+`./test mux resize`; `./test stress` and `./test extended` are explicit. `./bench` runs the short
+native smoke, with `terminal`, `layout`, `protocol`, `mux`, and `extended` selectors. See
+[`docs/testing.md`](docs/testing.md) for the audited taxonomy.
+
 ## Python tooling
 
 Python benchmark and automation scripts use uv for dependency management, Ruff for formatting and

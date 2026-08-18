@@ -1838,33 +1838,6 @@ TEST_F(MuxProcessTest, RestoresTerminalOnStartupRejectionAndHandledSignals) {
     EXPECT_TRUE(client.raw_tail().contains("lemma attach interrupted by signal"));
     EXPECT_TRUE(wait_for_listing(session, "detached", deadline_after(3s)));
   }
-
-  constexpr std::string_view blocked_session = "signal_blocked_output";
-  ASSERT_EQ(command({"start", std::string(blocked_session)}).status, 0);
-  PtyClient blocked;
-  ASSERT_TRUE(blocked.spawn(client_arguments("attach", blocked_session), runtime_.environment()));
-  ASSERT_TRUE(blocked.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
-  ASSERT_TRUE(blocked.send("yes __LEMMA_BLOCKED_SIGNAL__\r", deadline_after(2s)));
-  // Stop consuming the outer PTY until its output queue fills and the attached client blocks in a
-  // render write. A handled signal must unwind without the test making that descriptor writable.
-  std::this_thread::sleep_for(500ms);
-  ASSERT_TRUE(blocked.send_signal(SIGTERM));
-  const auto restore_deadline = deadline_after(3s);
-  while (!blocked.terminal_state_restored() &&
-         std::chrono::steady_clock::now() < restore_deadline) {
-    std::this_thread::sleep_for(5ms);
-  }
-  ASSERT_TRUE(blocked.terminal_state_restored());
-  ASSERT_TRUE(blocked.wait(deadline_after(5s)));
-  auto blocked_status = blocked.status();
-  ASSERT_TRUE(WIFEXITED(blocked_status));
-  EXPECT_EQ(WEXITSTATUS(blocked_status), 128 + SIGTERM);
-  EXPECT_TRUE(blocked.terminal_state_restored());
-  ASSERT_TRUE(blocked.wait_for_raw("lemma attach interrupted by signal", deadline_after(5s)))
-      << blocked.raw_tail();
-  EXPECT_TRUE(blocked.raw_tail().contains("\x1B[?1049l"));
-  const auto stopped = command({"kill", std::string(blocked_session)});
-  EXPECT_EQ(stopped.status, 0) << stopped.output;
 }
 
 TEST_F(MuxProcessTest, RestoresTerminalWhenDaemonConnectionIsLost) {

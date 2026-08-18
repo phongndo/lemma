@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Build and run Lemma test tiers with low-friction filtering."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PROFILE = os.environ.get("LEMMA_TEST_PROFILE", "debug")
+BUILD = ROOT / "build" / PROFILE
+
+
+def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> None:
+    print("+", " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=ROOT, env=environment, check=True)
+
+
+def configure_if_needed() -> None:
+    if (BUILD / "build.ninja").is_file():
+        return
+    run(
+        [
+            str(ROOT / "scripts" / "ci" / "configure"),
+            PROFILE,
+            "-DLEMMA_BUILD_TESTS=ON",
+            "-DLEMMA_BUILD_BENCHMARKS=OFF",
+        ]
+    )
+
+
+def build(*targets: str) -> None:
+    configure_if_needed()
+    run(["cmake", "--build", str(BUILD), "--target", *targets])
+
+
+def binary(name: str, *arguments: str) -> None:
+    run([str(BUILD / name), *arguments])
+
+
+def mux_environment() -> dict[str, str]:
+    return {
+        **os.environ,
+        "LEMMA_TEST_SERVER": str(BUILD / "lemma_test_server"),
+        "LEMMA_TEST_CLI": str(BUILD / "lemma_test_cli"),
+        "LEMMA_TEST_PTY_PEER": str(BUILD / "lemma_test_pty_peer"),
+    }
+
+
+def run_mux(domain: str | None = None) -> None:
+    modules = {
+        "pane-lifecycle": "tests.mux.test_pane_lifecycle",
+        "session-lifecycle": "tests.mux.test_session_lifecycle",
+        "detach-reattach": "tests.mux.test_session_lifecycle",
+        "resize": "tests.mux.test_resize",
+        "terminal-boundary": "tests.mux.test_terminal_boundary",
+        "input": "tests.mux.test_terminal_boundary",
+        "output": "tests.mux.test_terminal_boundary",
+    }
+    if domain is not None and domain not in modules:
+        choices = ", ".join(sorted(modules))
+        raise SystemExit(f"unknown mux domain {domain!r}; choose one of: {choices}")
+    build("lemma_test_server", "lemma_test_cli", "lemma_test_pty_peer")
+    selected = (
+        [modules[domain]]
+        if domain is not None
+        else list(dict.fromkeys(modules.values()))
+    )
+    run(
+        [sys.executable, "-m", "unittest", "-v", *selected],
+        environment=mux_environment(),
+    )
+
+
+def run_unit(filter_value: str | None = None) -> None:
+    build("lemma_unit_tests")
+    arguments = ["--gtest_brief=1"]
+    if filter_value is not None:
+        arguments.append(f"--gtest_filter={filter_value}")
+    binary("lemma_unit_tests", *arguments)
+
+
+def run_terminal(filter_value: str | None = None) -> None:
+    build("lemma_terminal_boundary_tests", "lemma_dependency_integrity_tests")
+    arguments = ["--gtest_brief=1"]
+    if filter_value is not None:
+        arguments.append(f"--gtest_filter={filter_value}")
+    binary("lemma_terminal_boundary_tests", *arguments)
+    if filter_value is None:
+        binary("lemma_dependency_integrity_tests", "--gtest_brief=1")
+
+
+def run_component() -> None:
+    build("lemma_component_integration_tests")
+    binary("lemma_component_integration_tests", "--gtest_brief=1")
+
+
+def usage() -> str:
+    return """usage: ./test [tier [domain]]
+
+  ./test                         fast unit + terminal boundary + component + mux
+  ./test unit
+  ./test layout
+  ./test protocol
+  ./test input
+  ./test queues
+  ./test terminal
+  ./test component
+  ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary]
+  ./test stress                  deterministic/exhaustive native stress
+  ./test extended                legacy characterization, resources, allocation, and stress
+"""
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] in {"-h", "--help", "help"}:
+        print(usage())
+        return 0
+    tier = arguments[0] if arguments else "default"
+    extra = arguments[1:]
+    if len(extra) > 1 or (extra and tier != "mux"):
+        raise SystemExit(usage())
+
+    if tier == "default":
+        run_unit()
+        run_terminal()
+        run_component()
+        run_mux()
+    elif tier == "unit":
+        run_unit()
+    elif tier == "layout":
+        run_unit("PaneLayoutTest.*")
+    elif tier == "protocol":
+        run_unit("ProtocolTest.*:ExtensionProtocolTest.*")
+    elif tier == "input":
+        run_unit("InputMapTest.*:InputRouterTest.*:HostInputParserTest.*")
+    elif tier == "queues":
+        run_unit("BoundedByteQueueTest.*:ConnectionOutputTest.*")
+        run_terminal("PtyWriterTest.*")
+    elif tier == "terminal":
+        run_terminal()
+    elif tier == "component":
+        run_component()
+    elif tier == "mux":
+        run_mux(extra[0] if extra else None)
+    elif tier == "stress":
+        build(
+            "lemma_state_machine_stress_tests",
+            "lemma_terminal_resource_tests",
+            "lemma_test_server",
+            "lemma_test_cli",
+            "lemma_test_pty_peer",
+        )
+        binary("lemma_state_machine_stress_tests", "--gtest_brief=1")
+        run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "-v",
+                "tests.stress.test_mux_state_machine",
+            ],
+            environment=mux_environment(),
+        )
+        binary("lemma_terminal_resource_tests", "--gtest_brief=1")
+    elif tier == "extended":
+        configure_if_needed()
+        build(
+            "lemma_legacy_e2e_tests",
+            "lemma_state_machine_stress_tests",
+            "lemma_terminal_resource_tests",
+            "lemma_steady_state_allocation_audit",
+        )
+        run(
+            [
+                "ctest",
+                "--test-dir",
+                str(BUILD),
+                "-L",
+                "extended",
+                "--output-on-failure",
+                "-j1",
+            ]
+        )
+    else:
+        raise SystemExit(usage())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

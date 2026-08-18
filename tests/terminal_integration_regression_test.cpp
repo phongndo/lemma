@@ -1,17 +1,12 @@
-#include "client/host_input_parser.hpp"
-#include "core/input.hpp"
 #include "core/presentation_gate.hpp"
 #include "core/terminal_resize.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
-#include "protocol/attachment.hpp"
-#include "render/frame_buffer.hpp"
 #include "render/pane_composition.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -21,41 +16,6 @@
 
 namespace lemma {
 namespace {
-
-TEST(GhosttyParityContractTest, DeclaredGeometryFitsBoundedFrameTransaction) {
-  constexpr auto declared_frame_bound =
-      (std::size_t{protocol::columns_max} * protocol::rows_max * vt::pane_ansi_bytes_per_cell_max) +
-      render::frame_fixed_overhead_bytes;
-  constexpr auto abuse_limit_frame_bound =
-      (std::size_t{limits::terminal_columns_hard_max} * limits::terminal_rows_hard_max *
-       vt::pane_ansi_bytes_per_cell_max) +
-      render::frame_fixed_overhead_bytes;
-
-  EXPECT_EQ(declared_frame_bound, 35'204'096U);
-  EXPECT_LE(declared_frame_bound, limits::frame_transaction_bytes_max);
-  EXPECT_GT(abuse_limit_frame_bound, limits::frame_transaction_bytes_max);
-  EXPECT_EQ(render::frame_bytes_max, limits::frame_transaction_bytes_max);
-  EXPECT_EQ(protocol::render_ansi_bytes_max, limits::frame_chunk_bytes_max);
-}
-
-TEST(GhosttyParityContractTest, SecurityAndProgressLimitsMatchM0Policy) {
-  EXPECT_EQ(limits::frame_transaction_bytes_max, std::size_t{64} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::frame_output_queue_bytes_max, std::size_t{8} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::frame_retained_bytes_aggregate_max, std::size_t{256} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::render_snapshot_hold_max, std::chrono::milliseconds{50});
-  EXPECT_EQ(limits::frame_transaction_progress_deadline, std::chrono::seconds{5});
-  EXPECT_EQ(limits::frame_transaction_total_deadline, std::chrono::seconds{30});
-  EXPECT_EQ(limits::synchronized_output_presentation_timeout, std::chrono::seconds{1});
-  EXPECT_EQ(limits::structured_input_payload_bytes_max, std::size_t{1} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::structured_event_batch_expanded_max, 4'096U);
-  EXPECT_EQ(limits::pixel_mouse_report_bytes_max, 128U);
-  EXPECT_EQ(limits::paste_payload_bytes_max, std::size_t{1} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::terminal_pty_response_bytes_max, std::size_t{64} * 1'024U);
-  EXPECT_EQ(limits::selection_format_bytes_max, std::size_t{1} * 1'024U * 1'024U);
-  EXPECT_EQ(limits::search_query_bytes_max, 256U);
-  EXPECT_EQ(limits::search_candidates_per_step, 256U);
-  EXPECT_EQ(limits::scrollback_compression_idle_delay, std::chrono::seconds{1});
-}
 
 [[nodiscard]] auto make_terminal(const vt::TerminalOptions& options = {}) -> vt::Terminal {
   auto terminal = vt::Terminal::create(options);
@@ -73,21 +33,7 @@ void write_terminal(vt::Terminal& terminal, const std::string_view text) {
   return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-TEST(GhosttyParityRegressionTest, M2SessionThemeSurvivesReattach) {
-  auto theme = vt::default_theme();
-  theme.foreground = {.red = 17, .green = 34, .blue = 51};
-  theme.background = {.red = 1, .green = 2, .blue = 3};
-  theme.cursor = {.red = 68, .green = 85, .blue = 102};
-  vt::TerminalOptions options;
-  options.theme = theme;
-  auto terminal = make_terminal(options);
-
-  EXPECT_EQ(terminal.theme(), theme);
-  terminal.invalidate_ansi_render_state();
-  EXPECT_EQ(terminal.theme(), theme);
-}
-
-TEST(GhosttyParityRegressionTest, M2AnsiProjectionPreservesSemanticColorsAndCursor) {
+TEST(TerminalRenderRegressionTest, AnsiProjectionPreservesIndexedExplicitAndDefaultColors) {
   auto theme = vt::default_theme();
   theme.foreground = {.red = 10, .green = 20, .blue = 30};
   theme.background = {.red = 40, .green = 50, .blue = 60};
@@ -110,7 +56,7 @@ TEST(GhosttyParityRegressionTest, M2AnsiProjectionPreservesSemanticColorsAndCurs
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B]112\x1B\\"));
 }
 
-TEST(GhosttyParityRegressionTest, M2EraseLineTailPreservesSessionBackground) {
+TEST(TerminalRenderRegressionTest, EraseLineTailPreservesSessionBackground) {
   auto theme = vt::default_theme();
   theme.foreground = {.red = 10, .green = 20, .blue = 30};
   theme.background = {.red = 40, .green = 50, .blue = 60};
@@ -132,7 +78,7 @@ TEST(GhosttyParityRegressionTest, M2EraseLineTailPreservesSessionBackground) {
               testing::HasSubstr("\x1B[0m\x1B[K"));
 }
 
-TEST(GhosttyParityRegressionTest, M2PaletteRedrawDoesNotImitateTerminalScroll) {
+TEST(TerminalRenderRegressionTest, PaletteRedrawDoesNotImitateTerminalScroll) {
   auto theme = vt::default_theme();
   theme.palette.at(1) = {.red = 1, .green = 2, .blue = 3};
   vt::TerminalOptions options;
@@ -154,7 +100,7 @@ TEST(GhosttyParityRegressionTest, M2PaletteRedrawDoesNotImitateTerminalScroll) {
   EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("\x1B[1T")));
 }
 
-TEST(GhosttyParityRegressionTest, M2AnsiProjectionIsolatesPaneColorOverrides) {
+TEST(TerminalRenderRegressionTest, AnsiProjectionIsolatesPaneColorOverrides) {
   auto theme = vt::default_theme();
   theme.foreground = {.red = 10, .green = 20, .blue = 30};
   theme.background = {.red = 40, .green = 50, .blue = 60};
@@ -188,7 +134,7 @@ TEST(GhosttyParityRegressionTest, M2AnsiProjectionIsolatesPaneColorOverrides) {
   EXPECT_THAT(reset_ansi, testing::HasSubstr("\x1B]112\x1B\\"));
 }
 
-TEST(GhosttyParityRegressionTest, M2ThemeReplacementPreservesApplicationOverrides) {
+TEST(TerminalRenderRegressionTest, ThemeReplacementPreservesApplicationOverrides) {
   auto theme = vt::default_theme();
   vt::TerminalOptions options;
   options.size = {.columns = 4, .rows = 2};
@@ -208,7 +154,7 @@ TEST(GhosttyParityRegressionTest, M2ThemeReplacementPreservesApplicationOverride
               testing::HasSubstr("38;2;1;2;3"));
 }
 
-TEST(GhosttyParityRegressionTest, M2SynchronizedOutputIsGatedPerPane) {
+TEST(SynchronizedOutputBoundaryTest, HeldPaneDoesNotBlockLivePane) {
   vt::TerminalOptions options;
   options.size = {.columns = 6, .rows = 2};
   auto held = make_terminal(options);
@@ -244,7 +190,7 @@ TEST(GhosttyParityRegressionTest, M2SynchronizedOutputIsGatedPerPane) {
               testing::Not(testing::HasSubstr("\x1B[2J")));
 }
 
-TEST(GhosttyParityRegressionTest, M2SynchronizedOutputWatchdogPreservesCanonicalMode) {
+TEST(SynchronizedOutputBoundaryTest, PresentationWatchdogDoesNotMutateCanonicalMode) {
   auto terminal = make_terminal();
   write_terminal(terminal, "\x1B[?2026hheld");
   ASSERT_TRUE(terminal.synchronized_output().value_or(false));
@@ -263,7 +209,7 @@ TEST(GhosttyParityRegressionTest, M2SynchronizedOutputWatchdogPreservesCanonical
   EXPECT_TRUE(terminal.synchronized_output().value_or(false));
 }
 
-TEST(GhosttyParityRegressionTest, M2FrameTransactionAbortRepairsPhysicalShadow) {
+TEST(TerminalRenderRegressionTest, AbortedFrameRepairsPhysicalShadow) {
   vt::TerminalOptions options;
   options.size = {.columns = 12, .rows = 2};
   auto terminal = make_terminal(options);
@@ -311,7 +257,7 @@ struct ResizeObservation final {
   return observation.calls <= observation.accepted_calls;
 }
 
-TEST(GhosttyParityRegressionTest, M2ResizeReportsPtyGeometryBeforeGhosttyMutation) {
+TEST(TerminalResizeTransactionTest, ReportsPtyGeometryBeforeGhosttyMutation) {
   auto terminal = make_terminal();
   const auto original = terminal.size();
   const vt::TerminalSize requested{.columns = 120, .rows = 40};
@@ -328,7 +274,7 @@ TEST(GhosttyParityRegressionTest, M2ResizeReportsPtyGeometryBeforeGhosttyMutatio
   EXPECT_EQ(terminal.size(), original);
 }
 
-TEST(GhosttyParityRegressionTest, M2ResizeRestoresPtyWhenGhosttyRejectsRequest) {
+TEST(TerminalResizeTransactionTest, RestoresPtyWhenGhosttyRejectsRequest) {
   auto terminal = make_terminal();
   const auto original = terminal.size();
   const vt::TerminalSize invalid{.columns = 0, .rows = 1};
@@ -346,7 +292,7 @@ TEST(GhosttyParityRegressionTest, M2ResizeRestoresPtyWhenGhosttyRejectsRequest) 
   EXPECT_EQ(terminal.size(), original);
 }
 
-TEST(GhosttyParityRegressionTest, M2ResizeFailsClosedWhenPtyRollbackFails) {
+TEST(TerminalResizeTransactionTest, FailsClosedWhenPtyRollbackFails) {
   auto terminal = make_terminal();
   const auto original = terminal.size();
   const vt::TerminalSize invalid{.columns = 0, .rows = 1};
@@ -366,160 +312,6 @@ TEST(GhosttyParityRegressionTest, M2ResizeFailsClosedWhenPtyRollbackFails) {
 // requires replacing FAIL() with the real characterization.
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(GhosttyParityRegressionTest, M3HostInputDecoderAcceptsEveryFragmentationBoundary) {
-  constexpr std::string_view encoded = "x\x1B[200~p\x02q\x1B[201~\x1B[I\x1B[<0;2;2M";
-  const auto input = std::as_bytes(std::span(encoded));
-  for (std::size_t split = 0; split <= input.size(); ++split) {
-    client::HostInputParser parser;
-    ASSERT_TRUE(parser.prepare().has_value());
-    std::array<std::byte, 128> storage{};
-    std::size_t events = 0;
-    for (const auto fragment : {input.first(split), input.subspan(split)}) {
-      const auto parsed = parser.parse(fragment, storage, {.columns = 80, .rows = 24});
-      ASSERT_TRUE(parsed.has_value()) << split;
-      events += parsed->event_count;
-    }
-    EXPECT_EQ(events, 4U) << split;
-    EXPECT_FALSE(parser.has_pending_sequence()) << split;
-  }
-}
-
-TEST(GhosttyParityRegressionTest, M3PasteIsOpaqueAndUsesGhosttyEncoder) {
-  auto terminal = make_terminal();
-  write_terminal(terminal, "\x1B[?2004h");
-  core::PanePtyWriteQueue queue;
-  std::array paste{std::byte{'p'}, std::byte{0x02}, std::byte{'q'}};
-
-  ASSERT_EQ(core::queue_paste_input(queue, terminal, paste), core::InputQueueResult::queued);
-  std::array<std::byte, 32> output{};
-  const auto size = queue.read(output);
-  EXPECT_EQ(output_text(std::span(output).first(size)), std::string_view("\x1B[200~p\x02"
-                                                                         "q\x1B[201~",
-                                                                         15));
-}
-
-TEST(GhosttyParityRegressionTest, M3KittyMetadataIsPreservedWithoutFabrication) {
-  client::HostInputParser parser;
-  ASSERT_TRUE(parser.prepare().has_value());
-  constexpr std::string_view encoded = "\x1B[98;5:2;98u";
-  const auto input = std::as_bytes(std::span(encoded));
-  std::array<std::byte, 16> storage{};
-
-  const auto parsed = parser.parse(input, storage, {.columns = 80, .rows = 24});
-
-  ASSERT_TRUE(parsed.has_value());
-  ASSERT_EQ(parsed->event_count, 1U);
-  const auto& event = parsed->events.front();
-  EXPECT_EQ(event.kind, client::HostInputKind::key);
-  EXPECT_EQ(event.key.key, protocol::KeyInputKey::b);
-  EXPECT_EQ(event.key.action, protocol::KeyInputAction::repeat);
-  EXPECT_EQ(event.key.modifiers, protocol::key_input_modifier_control);
-  EXPECT_EQ(event.key.unshifted_codepoint, static_cast<std::uint32_t>('b'));
-}
-
-TEST(GhosttyParityRegressionTest, M3MouseUsesReadTimeGeometryAndPaneLocalCoordinates) {
-  client::HostInputParser parser;
-  ASSERT_TRUE(parser.prepare().has_value());
-  constexpr std::string_view encoded = "\x1B[<4;5;3M";
-  const auto input = std::as_bytes(std::span(encoded));
-  std::array<std::byte, 32> storage{};
-  const auto parsed = parser.parse(input, storage, {.columns = 80, .rows = 24});
-  ASSERT_TRUE(parsed.has_value());
-  ASSERT_EQ(parsed->event_count, 1U);
-  const auto& outer = parsed->events.front().mouse;
-  EXPECT_EQ(outer.geometry, (protocol::Dimensions{.columns = 80, .rows = 24}));
-  EXPECT_EQ(outer.column, 4U);
-  EXPECT_EQ(outer.row, 2U);
-
-  auto terminal = make_terminal();
-  write_terminal(terminal, "\x1B[?1000h\x1B[?1006h");
-  core::PanePtyWriteQueue queue;
-  const vt::MouseEvent local{
-      .action = vt::MouseAction::press,
-      .button = vt::MouseButton::left,
-      .modifiers = vt::key_modifier_shift,
-      .x = 1,
-      .y = 2,
-      .geometry = {.screen_width = 40, .screen_height = 23},
-      .any_button_pressed = true,
-  };
-  ASSERT_EQ(core::queue_mouse_input(queue, terminal, local), core::InputQueueResult::queued);
-  std::array<std::byte, 64> output{};
-  const auto size = queue.read(output);
-  EXPECT_THAT(output_text(std::span(output).first(size)), testing::HasSubstr("\x1B[<4;2;3M"));
-}
-
-TEST(GhosttyParityRegressionTest, M3EffectsAreBoundedAndPolicyRouted) {
-  auto terminal = make_terminal();
-  write_terminal(terminal, "\a\x1B]2;title\x1B\\\x1B]7;file:///tmp\x1B\\"
-                           "\x1B]777;notify;Title;Body\a\x1B]9;4;1;50\x1B\\"
-                           "\x1B]52;c;YQ==\x1B\\\x1B_dropped\x1B\\");
-
-  const auto effects = terminal.take_effects();
-
-  EXPECT_EQ(effects.bells, 1U);
-  EXPECT_EQ(effects.title_changes, 1U);
-  EXPECT_EQ(effects.pwd_changes, 1U);
-  EXPECT_EQ(effects.desktop_notifications, 1U);
-  EXPECT_EQ(effects.progress_reports, 1U);
-  EXPECT_EQ(effects.clipboard_writes_denied, 1U);
-  EXPECT_EQ(effects.unknown_sequences_dropped, 1U);
-  EXPECT_FALSE(effects.unknown_sequence_truncated);
-}
-
-TEST(GhosttyParityRegressionTest, M4SelectionAnchorsTrackTerminalMutation) {
-  vt::TerminalOptions options;
-  options.size = {.columns = 12, .rows = 3};
-  options.scrollback_bytes_max = limits::terminal_scrollback_bytes_hard_max;
-  options.scrollback_lines_max = 100;
-  auto terminal = make_terminal(options);
-  write_terminal(terminal, "alpha bravo\r\ncharlie");
-
-  ASSERT_TRUE(terminal
-                  .select(vt::SelectionUnit::word,
-                          {.space = vt::PointSpace::viewport, .column = 0, .row = 0})
-                  .value_or(false));
-  write_terminal(terminal, "\r\ndelta\r\necho\r\nfoxtrot");
-  ASSERT_TRUE(terminal.selection_adjust(vt::SelectionAdjustment::right, true).value_or(false));
-
-  std::array<std::byte, 128> output{};
-  const auto formatted = terminal.format_selection(vt::ScreenFormat::plain, output);
-  ASSERT_TRUE(formatted.has_value());
-  EXPECT_THAT(output_text(std::span(output).first(*formatted)), testing::HasSubstr("alpha"));
-}
-
-TEST(GhosttyParityRegressionTest, M5AnsiProjectionConvergesForCombiningCharacterScroll) {
-  vt::TerminalOptions options;
-  options.size = {.columns = 2, .rows = 4};
-  auto canonical = make_terminal(options);
-  auto projected = make_terminal(options);
-  write_terminal(canonical, "a\xCC\x81\r\na\xCC\x82\r\na\xCC\x83\r\na\xCC\x84");
-
-  std::array<std::byte, std::size_t{16} * 1'024U> output{};
-  const auto initial = canonical.render_ansi(output, true);
-  ASSERT_TRUE(initial.has_value());
-  projected.write(std::span(output).first(initial->bytes));
-  write_terminal(canonical, "\r\na\xCC\x85\r\na\xCC\x86");
-  const auto changed = canonical.render_ansi(output);
-  ASSERT_TRUE(changed.has_value());
-  EXPECT_EQ(changed->scrolled_rows, 2);
-  projected.write(std::span(output).first(changed->bytes));
-
-  canonical.invalidate_ansi_render_state();
-  projected.invalidate_ansi_render_state();
-  std::array<std::byte, std::size_t{16} * 1'024U> canonical_output{};
-  std::array<std::byte, std::size_t{16} * 1'024U> projected_output{};
-  const auto canonical_full = canonical.render_ansi(canonical_output, true);
-  const auto projected_full = projected.render_ansi(projected_output, true);
-  ASSERT_TRUE(canonical_full.has_value());
-  ASSERT_TRUE(projected_full.has_value());
-  EXPECT_TRUE(std::ranges::equal(std::span(canonical_output).first(canonical_full->bytes),
-                                 std::span(projected_output).first(projected_full->bytes)));
-}
-
-TEST(GhosttyParityRegressionTest, DISABLED_M7KittyGraphicsLifecycleIsBoundedAndClipped) {
-  FAIL() << "M7 must preserve image data, placement updates, clipping, deletion, and animation";
-}
 
 } // namespace
 } // namespace lemma

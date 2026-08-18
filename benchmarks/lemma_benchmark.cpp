@@ -1,11 +1,9 @@
 #include "core/layout.hpp"
 #include "input/input_router.hpp"
 #include "lemma/command.hpp"
-#include "lemma/lemma.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
-#include "protocol/extension.hpp"
 #include "render/pane_composition.hpp"
 
 #include <benchmark/benchmark.h>
@@ -35,12 +33,6 @@
 
 namespace lemma {
 namespace {
-
-void benchmark_greeting(benchmark::State& state) {
-  for ([[maybe_unused]] const auto iteration : state) {
-    benchmark::DoNotOptimize(greeting());
-  }
-}
 
 struct CommandBenchmarkContext final {
   std::uint64_t calls{0};
@@ -289,7 +281,6 @@ void benchmark_live_divider_pty_resize(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations());
   }
 
-  state.PauseTiming();
   static_cast<void>(::kill(child, SIGKILL));
   int status = 0;
   while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
@@ -433,36 +424,6 @@ void benchmark_layout_divider_hit_worst_depth(benchmark::State& state) {
   }
 }
 
-void benchmark_extension_registration_codec(benchmark::State& state) {
-  std::array<std::byte, 512> frame{};
-  for ([[maybe_unused]] const auto iteration : state) {
-    const auto encoded = protocol::extension::encode_command(
-        {.name = "agents.toggle", .description = "Toggle the agent sidebar"}, 42, frame);
-    if (!encoded.has_value()) {
-      state.SkipWithError("failed to encode extension registration");
-      return;
-    }
-    protocol::extension::Decoder decoder;
-    std::ranges::copy(std::span(frame).first(*encoded), decoder.writable_bytes().begin());
-    if (!decoder.commit(*encoded).has_value()) {
-      state.SkipWithError("failed to commit extension frame");
-      return;
-    }
-    const auto message = decoder.next();
-    if (!message.has_value() || !message->has_value()) {
-      state.SkipWithError("failed to decode extension frame");
-      return;
-    }
-    const auto registration = protocol::extension::decode_command(**message);
-    if (!registration.has_value()) {
-      state.SkipWithError("failed to decode extension registration");
-      return;
-    }
-    auto registration_value = *registration;
-    benchmark::DoNotOptimize(registration_value);
-  }
-}
-
 void benchmark_private_attach_input_codec(benchmark::State& state) {
   constexpr std::array payload{std::byte{'i'}, std::byte{'n'}, std::byte{'p'}, std::byte{'u'},
                                std::byte{'t'}};
@@ -499,7 +460,9 @@ void benchmark_terminal_small_writes(benchmark::State& state) {
     return;
   }
   auto terminal = std::move(result).value();
-  constexpr std::string_view input = "prompt> echo hello\r\n";
+  // Keep canonical state equivalent across iterations: this measures parsing a typical small
+  // cursor-addressed update rather than eventual history growth.
+  constexpr std::string_view input = "\x1B[1;1Hprompt> echo hello\x1B[K";
   const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
 
   for ([[maybe_unused]] const auto iteration : state) {
@@ -516,6 +479,10 @@ void benchmark_terminal_large_writes(benchmark::State& state) {
     return;
   }
   auto terminal = std::move(result).value();
+  // The alternate screen has no scrollback growth, so every iteration parses the same sustained
+  // full-screen scrolling workload without eventually changing allocator or pruning behavior.
+  constexpr std::string_view alternate_screen = "\x1B[?1049h";
+  terminal.write(std::as_bytes(std::span(alternate_screen.data(), alternate_screen.size())));
   std::array<std::byte, std::size_t{64} * 1'024U> input{};
   input.fill(std::byte{'x'});
 
@@ -524,27 +491,6 @@ void benchmark_terminal_large_writes(benchmark::State& state) {
     benchmark::ClobberMemory();
   }
   state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(input.size()));
-}
-
-void benchmark_terminal_render_updates(benchmark::State& state) {
-  auto result = vt::Terminal::create({});
-  if (!result.has_value()) {
-    state.SkipWithError("failed to create terminal");
-    return;
-  }
-  auto terminal = std::move(result).value();
-  constexpr std::string_view input = "changed row\r\n";
-  const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
-
-  for ([[maybe_unused]] const auto iteration : state) {
-    terminal.write(bytes);
-    auto update = terminal.update_render_state();
-    benchmark::DoNotOptimize(update);
-    if (!update.has_value() || !terminal.mark_rendered().has_value()) {
-      state.SkipWithError("failed to update render state");
-      break;
-    }
-  }
 }
 
 void benchmark_terminal_ansi_damage_frames(benchmark::State& state) {
@@ -765,26 +711,31 @@ void benchmark_terminal_full_frames(benchmark::State& state) {
     return;
   }
   auto terminal = std::move(result).value();
-  constexpr std::string_view input = "changed row with styled \x1B[1;32mcontent\x1B[0m\r\n";
-  const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
+  std::string contents;
+  contents.reserve(std::size_t{24} * 128U);
+  for (std::size_t row = 1; row <= 24; ++row) {
+    contents += "\x1B[" + std::to_string(row) + ";1H";
+    contents += row % 2U == 0 ? "\x1B[1;38;5;4m" : "\x1B[38;2;10;20;30m";
+    contents.append(79, static_cast<char>('a' + (row % 26U)));
+    contents += "\x1B[0m";
+  }
+  terminal.write(std::as_bytes(std::span(contents.data(), contents.size())));
   std::array<std::byte, std::size_t{256} * 1'024U> frame{};
   std::uint64_t output_bytes = 0;
 
   for ([[maybe_unused]] const auto iteration : state) {
-    terminal.write(bytes);
-    auto frame_size = terminal.format_screen(vt::ScreenFormat::vt_full, frame);
-    benchmark::DoNotOptimize(frame_size);
-    if (!frame_size.has_value()) {
-      state.SkipWithError("failed to format full frame");
+    auto rendered = terminal.render_ansi(frame, true);
+    benchmark::DoNotOptimize(rendered);
+    if (!rendered.has_value()) {
+      state.SkipWithError("failed to render full frame");
       break;
     }
-    output_bytes += *frame_size;
+    output_bytes += rendered->bytes;
   }
   state.counters["frame_bytes"] =
       benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
-BENCHMARK(benchmark_greeting);
 BENCHMARK(benchmark_command_dispatch);
 BENCHMARK(benchmark_input_router_unbound_run);
 BENCHMARK(benchmark_input_router_context_command);
@@ -799,11 +750,9 @@ BENCHMARK(benchmark_live_divider_pty_resize);
 BENCHMARK(benchmark_live_divider_resize)->Arg(2)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_layout_projection_worst_depth);
 BENCHMARK(benchmark_layout_divider_hit_worst_depth);
-BENCHMARK(benchmark_extension_registration_codec);
 BENCHMARK(benchmark_private_attach_input_codec);
 BENCHMARK(benchmark_terminal_small_writes);
 BENCHMARK(benchmark_terminal_large_writes);
-BENCHMARK(benchmark_terminal_render_updates);
 BENCHMARK(benchmark_terminal_ansi_damage_frames);
 BENCHMARK(benchmark_terminal_ansi_single_row);
 BENCHMARK(benchmark_terminal_ansi_scroll_operations);

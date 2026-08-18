@@ -2,7 +2,7 @@ nix := ""
 profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
-python_paths := "benchmarks scripts tools conanfile.py"
+python_paths := "bench benchmarks scripts test tests tools conanfile.py"
 
 _default:
     @just --list
@@ -61,13 +61,13 @@ kill: build
 demo: build
     {{ nix }} ./build/{{ profile }}/lemma demo
 
-# Run the GoogleTest/GoogleMock suite.
-test: build
-    {{ nix }} ctest --preset {{ profile }}
+# Run the fast native and real-mux developer suite (stress/extended remain explicit).
+test:
+    {{ nix }} LEMMA_TEST_PROFILE={{ profile }} ./test
 
-# Run Google Benchmark.
-bench: build
-    {{ nix }} ./build/{{ profile }}/lemma_benchmarks
+# Run the short native benchmark smoke (use ./bench <domain> for filtering).
+bench:
+    {{ nix }} LEMMA_BENCH_PROFILE={{ profile }} ./bench
 
 # Run release microbenchmarks and Lemma/tmux/Zellij/Herdr process baselines.
 mux-bench:

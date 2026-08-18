@@ -236,31 +236,53 @@ endif()
 if(LEMMA_BUILD_TESTS)
   enable_testing()
   find_package(GTest CONFIG REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   include(GoogleTest)
 
+  # Fast pure/component invariants. The developer entry point runs this binary once; CTest still
+  # discovers individual cases for filtering and CI reporting.
   add_executable(
-    lemma_tests
-    tests/client_frame_output_test.cpp
+    lemma_unit_tests
     tests/connection_output_test.cpp
-    tests/core_input_test.cpp
-    tests/extension_test.cpp
     tests/core_test.cpp
+    tests/extension_protocol_test.cpp
     tests/frame_scheduler_test.cpp
-    tests/lemma_test.cpp
-    tests/latency_trace_test.cpp
-    tests/ghostty_parity_regression_test.cpp
     tests/host_input_parser_test.cpp
     tests/host_terminal_theme_test.cpp
     tests/input_router_test.cpp
+    tests/latency_trace_test.cpp
     tests/layout_test.cpp
-    tests/platform_test.cpp
     tests/protocol_test.cpp
+  )
+  lemma_internal_target(lemma_unit_tests)
+  target_link_libraries(
+    lemma_unit_tests
+    PRIVATE
+      lemma_client
+      lemma_core
+      lemma_diagnostic
+      lemma_input
+      lemma_protocol
+      lemma_runtime
+      GTest::gtest_main
+      GTest::gmock
+  )
+  gtest_discover_tests(lemma_unit_tests PROPERTIES LABELS "unit")
+
+  # Lemma-owned assumptions at the concrete libghostty-vt boundary. These tests do not open PTYs
+  # or spawn children; expensive history/resource sweeps are separate below.
+  add_executable(
+    lemma_terminal_boundary_tests
+    tests/client_frame_output_test.cpp
+    tests/core_input_test.cpp
     tests/pty_writer_test.cpp
     tests/render_composition_test.cpp
+    tests/terminal_integration_regression_test.cpp
     tests/terminal_test.cpp
   )
+  lemma_internal_target(lemma_terminal_boundary_tests)
   target_link_libraries(
-    lemma_tests
+    lemma_terminal_boundary_tests
     PRIVATE
       lemma::lib
       lemma_client
@@ -268,33 +290,142 @@ if(LEMMA_BUILD_TESTS)
       lemma_platform
       lemma_protocol
       lemma_render
-      lemma_warnings
       GTest::gtest_main
       GTest::gmock
   )
-  gtest_discover_tests(lemma_tests)
+  gtest_discover_tests(lemma_terminal_boundary_tests PROPERTIES LABELS "terminal-unit")
 
+  # Real extension-host and platform-process contracts remain native but are never presented as
+  # pure unit tests.
   add_executable(
-    lemma_e2e_tests
+    lemma_component_integration_tests
+    tests/extension_test.cpp
+    tests/platform_test.cpp
+  )
+  lemma_internal_target(lemma_component_integration_tests)
+  target_link_libraries(
+    lemma_component_integration_tests
+    PRIVATE lemma::lib lemma_client lemma_platform lemma_protocol GTest::gtest_main
+  )
+  gtest_discover_tests(
+    lemma_component_integration_tests
+    PROPERTIES TIMEOUT 30 LABELS "component-integration" RUN_SERIAL TRUE
+  )
+
+  add_executable(lemma_dependency_integrity_tests tests/dependency_integrity_test.cpp)
+  lemma_internal_target(lemma_dependency_integrity_tests)
+  target_link_libraries(
+    lemma_dependency_integrity_tests PRIVATE lemma_terminal GTest::gtest_main
+  )
+  gtest_discover_tests(
+    lemma_dependency_integrity_tests PROPERTIES LABELS "dependency-terminal"
+  )
+  add_test(
+    NAME dependency.ghostty_header_boundary
+    COMMAND
+      "${CMAKE_COMMAND}" "-DLEMMA_SOURCE_DIR=${CMAKE_SOURCE_DIR}" -P
+      "${CMAKE_SOURCE_DIR}/cmake/CheckGhosttyHeaderBoundary.cmake"
+  )
+  set_tests_properties(
+    dependency.ghostty_header_boundary PROPERTIES LABELS "dependency;terminal"
+  )
+
+  add_executable(lemma_terminal_resource_tests tests/terminal_resource_test.cpp)
+  lemma_internal_target(lemma_terminal_resource_tests)
+  target_link_libraries(lemma_terminal_resource_tests PRIVATE lemma_terminal GTest::gtest_main)
+  gtest_discover_tests(
+    lemma_terminal_resource_tests
+    PROPERTIES TIMEOUT 60 LABELS "extended-stress-terminal" RUN_SERIAL TRUE
+  )
+
+  add_executable(lemma_state_machine_stress_tests tests/state_machine_stress_test.cpp)
+  lemma_internal_target(lemma_state_machine_stress_tests)
+  target_link_libraries(lemma_state_machine_stress_tests PRIVATE lemma_core GTest::gtest_main)
+  gtest_discover_tests(
+    lemma_state_machine_stress_tests
+    PROPERTIES TIMEOUT 30 LABELS "extended-stress" RUN_SERIAL TRUE
+  )
+
+  function(lemma_add_python_mux_test name module)
+    add_test(
+      NAME "mux.${name}"
+      COMMAND
+        "${CMAKE_COMMAND}" -E env
+        "LEMMA_TEST_SERVER=$<TARGET_FILE:lemma_test_server>"
+        "LEMMA_TEST_CLI=$<TARGET_FILE:lemma_test_cli>"
+        "LEMMA_TEST_PTY_PEER=$<TARGET_FILE:lemma_test_pty_peer>"
+        "${Python3_EXECUTABLE}" -m unittest -v "${module}"
+    )
+    set_tests_properties(
+      "mux.${name}"
+      PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 45
+        LABELS "mux;integration;pty"
+        RUN_SERIAL TRUE
+    )
+  endfunction()
+
+  lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
+  lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
+  lemma_add_python_mux_test(resize tests.mux.test_resize)
+  lemma_add_python_mux_test(terminal_boundary tests.mux.test_terminal_boundary)
+
+  add_custom_target(
+    lemma_fast_test_binaries
+    DEPENDS
+      lemma_unit_tests
+      lemma_terminal_boundary_tests
+      lemma_component_integration_tests
+      lemma_dependency_integrity_tests
+      lemma_test_server
+      lemma_test_cli
+      lemma_test_pty_peer
+  )
+
+  add_test(
+    NAME stress.mux_state_machine
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "LEMMA_TEST_SERVER=$<TARGET_FILE:lemma_test_server>"
+      "LEMMA_TEST_CLI=$<TARGET_FILE:lemma_test_cli>"
+      "LEMMA_TEST_PTY_PEER=$<TARGET_FILE:lemma_test_pty_peer>"
+      "${Python3_EXECUTABLE}" -m unittest -v tests.stress.test_mux_state_machine
+  )
+  set_tests_properties(
+    stress.mux_state_machine
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 180
+      LABELS "extended;integration;mux;stress"
+      RUN_SERIAL TRUE
+  )
+
+  # The audited C++ process suite remains an explicit extended characterization lane while its
+  # KEEP behavior is migrated by mux failure domain into the Python harness.
+  add_executable(
+    lemma_legacy_e2e_tests
     tests/support/process.cpp
     tests/e2e_mux_test.cpp
   )
-  lemma_internal_target(lemma_e2e_tests)
+  lemma_internal_target(lemma_legacy_e2e_tests)
   target_link_libraries(
-    lemma_e2e_tests
+    lemma_legacy_e2e_tests
     PRIVATE lemma_platform lemma_protocol lemma_terminal GTest::gtest_main
   )
   target_compile_definitions(
-    lemma_e2e_tests
+    lemma_legacy_e2e_tests
     PRIVATE
       LEMMA_TEST_SERVER_PATH="$<TARGET_FILE:lemma_test_server>"
       LEMMA_TEST_CLI_PATH="$<TARGET_FILE:lemma_test_cli>"
       LEMMA_TEST_PTY_PEER_PATH="$<TARGET_FILE:lemma_test_pty_peer>"
   )
-  add_dependencies(lemma_e2e_tests lemma_test_server lemma_test_cli lemma_test_pty_peer)
+  add_dependencies(
+    lemma_legacy_e2e_tests lemma_test_server lemma_test_cli lemma_test_pty_peer
+  )
   gtest_discover_tests(
-    lemma_e2e_tests
-    PROPERTIES TIMEOUT 120 LABELS "integration;pty"
+    lemma_legacy_e2e_tests
+    PROPERTIES TIMEOUT 120 LABELS "extended-integration-legacy-pty" RUN_SERIAL TRUE
   )
 
   add_executable(lemma_steady_state_allocation_audit tests/steady_state_allocation_audit.cpp)
@@ -313,7 +444,10 @@ if(LEMMA_BUILD_TESTS)
   )
   set_tests_properties(
     steady_state_allocation_audit
-    PROPERTIES TIMEOUT 30 LABELS "component;allocation"
+    PROPERTIES
+      TIMEOUT 30
+      LABELS "allocation;extended;performance"
+      RUN_SERIAL TRUE
   )
 endif()
 

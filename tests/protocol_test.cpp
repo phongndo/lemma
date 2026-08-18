@@ -453,12 +453,27 @@ TEST(ProtocolTest, EncodesAndDecodesTypedDisconnectDiagnostic) {
   EXPECT_EQ((**decoded).diagnostic, "attach protocol version mismatch");
 }
 
-TEST(ProtocolTest, EncodesBoundedControlContextSize) {
-  const auto encoded = encode_bounded_size(4'096);
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ProtocolTest, BoundedControlContextSizeUsesStableBigEndianBoundaries) {
+  struct Case final {
+    std::size_t value;
+    std::byte first;
+    std::byte second;
+  };
+  constexpr std::array cases{
+      Case{.value = 0, .first = std::byte{0x00}, .second = std::byte{0x00}},
+      Case{.value = 255, .first = std::byte{0x00}, .second = std::byte{0xFF}},
+      Case{.value = 256, .first = std::byte{0x01}, .second = std::byte{0x00}},
+      Case{.value = 65'535, .first = std::byte{0xFF}, .second = std::byte{0xFF}},
+  };
 
-  EXPECT_EQ(encoded.front(), std::byte{0x10});
-  EXPECT_EQ(encoded.back(), std::byte{0x00});
-  EXPECT_EQ(decode_bounded_size(encoded), 4'096U);
+  for (const auto& value : cases) {
+    const auto encoded = encode_bounded_size(value.value);
+    EXPECT_EQ(encoded.front(), value.first);
+    EXPECT_EQ(encoded.back(), value.second);
+    EXPECT_EQ(decode_bounded_size(encoded), value.value);
+  }
 }
 
 // NOLINTEND(bugprone-unchecked-optional-access)

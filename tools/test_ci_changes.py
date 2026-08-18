@@ -51,6 +51,12 @@ class CiChangesTests(unittest.TestCase):
     def test_test_change_selects_only_cpp_correctness(self):
         self.assertEqual(self.selected("tests/core_test.cpp"), {"cpp"})
 
+    def test_python_mux_change_selects_cpp_build_and_python_quality(self):
+        self.assertEqual(
+            self.selected("tests/mux/test_resize.py"),
+            {"cpp", "python"},
+        )
+
     def test_library_change_selects_cpp_correctness(self):
         self.assertEqual(
             self.selected("include/lemma/id.hpp", "src/core/lemma.cpp"),

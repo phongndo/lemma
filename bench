@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Build and run native or real-mux benchmark tiers."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PROFILE = os.environ.get("LEMMA_BENCH_PROFILE", "release")
+BUILD = ROOT / "build" / PROFILE
+
+
+def run(arguments: list[str]) -> None:
+    print("+", " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=ROOT, check=True)
+
+
+def configure_if_needed() -> None:
+    if (BUILD / "build.ninja").is_file():
+        return
+    run(
+        [
+            str(ROOT / "scripts" / "ci" / "configure"),
+            PROFILE,
+            "-DLEMMA_BUILD_TESTS=OFF",
+            "-DLEMMA_BUILD_BENCHMARKS=ON",
+            "-DLEMMA_ENABLE_LATENCY_TRACE=OFF",
+        ]
+    )
+
+
+def build(*targets: str) -> None:
+    configure_if_needed()
+    run(["cmake", "--build", str(BUILD), "--target", *targets])
+
+
+def micro(filter_value: str | None = None) -> None:
+    build("lemma_benchmarks")
+    arguments = [
+        str(BUILD / "lemma_benchmarks"),
+        "--benchmark_min_time=0.02s",
+        "--benchmark_repetitions=3",
+        "--benchmark_report_aggregates_only=true",
+    ]
+    if filter_value is not None:
+        arguments.append(f"--benchmark_filter={filter_value}")
+    run(arguments)
+
+
+def mux() -> None:
+    build("lemma_test_server", "lemma_test_cli", "lemma_test_pty_peer")
+    run(
+        [
+            sys.executable,
+            "benchmarks/mux_benchmark.py",
+            "--mode",
+            "interactive-output",
+            "--multiplexer",
+            "lemma",
+            "--repetitions",
+            "5",
+            "--server",
+            str(BUILD / "lemma_test_server"),
+            "--cli",
+            str(BUILD / "lemma_test_cli"),
+            "--peer",
+            str(BUILD / "lemma_test_pty_peer"),
+        ]
+    )
+
+
+def usage() -> str:
+    return """usage: ./bench [terminal|layout|protocol|mux|extended]
+
+The default is a short native smoke. Python only launches and reports; measured loops are native.
+"""
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] in {"-h", "--help", "help"}:
+        print(usage())
+        return 0
+    if len(arguments) > 1:
+        raise SystemExit(usage())
+    tier = arguments[0] if arguments else "micro"
+    if tier == "micro":
+        micro()
+    elif tier == "terminal":
+        micro("^benchmark_terminal_.*")
+    elif tier == "layout":
+        micro("^benchmark_(layout|live_divider)_.*")
+    elif tier == "protocol":
+        micro(
+            "^benchmark_(command_dispatch|input_router_.*|private_attach_input_codec)$"
+        )
+    elif tier == "mux":
+        mux()
+    elif tier == "extended":
+        run([str(ROOT / "scripts" / "ci" / "benchmarks"), "extended"])
+    else:
+        raise SystemExit(usage())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

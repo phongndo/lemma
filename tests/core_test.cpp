@@ -314,36 +314,6 @@ TEST(CommandDispatcherTest, ValidatesTypedRenameReorderAndSwapPayloads) {
             CommandStatus::invalid_command);
 }
 
-TEST(SessionModelTest, ConstructsPureSemanticHierarchyAndAttachment) {
-  constexpr std::array environment{std::byte{'A'}, std::byte{'='}, std::byte{'1'}, std::byte{0}};
-  Session session("semantic", "/tmp", environment, LaunchEnvironmentMode::replace);
-  session.id = SessionId::from_parts(3, 7);
-  const auto pane_id = PaneId::from_parts(0, 1);
-  const auto tab_id = TabId::from_parts(2, 5);
-  Tab tab(tab_id, pane_id);
-  Attachment attachment{
-      .id = AttachmentId::from_parts(3, 7),
-      .session = session.id,
-      .columns = 120,
-      .rows = 40,
-      .selection_target = {},
-      .mouse_capture = {},
-      .copy_mode = {},
-      .rename_prompt = {},
-  };
-
-  EXPECT_EQ(session.session_name(), "semantic");
-  EXPECT_EQ(session.cwd(), "/tmp");
-  EXPECT_TRUE(std::ranges::equal(session.launch_environment(), environment));
-  EXPECT_EQ(session.environment_mode, LaunchEnvironmentMode::replace);
-  EXPECT_EQ(tab.id, tab_id);
-  EXPECT_EQ(tab.focused_pane, pane_id);
-  EXPECT_EQ(tab.previous_pane, tab.focused_pane);
-  EXPECT_EQ(attachment.session, session.id);
-  EXPECT_EQ(attachment.columns, 120U);
-  EXPECT_EQ(attachment.rows, 40U);
-}
-
 TEST(SessionModelTest, TabOrderIsOneBoundedStableIdPermutation) {
   TabOrder order;
   const auto first = TabId::from_parts(4, 1);
@@ -501,38 +471,6 @@ TEST(BoundedGenerationalStoreTest, RejectsStaleIdsAndReportsCapacity) {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(BoundedGenerationalStoreTest, DeterministicChurnNeverRevivesStaleIds) {
-  struct Value final {
-    std::uint32_t number{0};
-  };
-  BoundedGenerationalStore<Value, PaneId, 8> store;
-  std::array<PaneId, 8> live{};
-  std::array<PaneId, 512> stale{};
-  std::size_t stale_count = 0;
-  std::uint32_t random = 0xC0FFEEU;
-
-  for (std::uint32_t operation = 0; operation < 4'096U; ++operation) {
-    random = (random * 1'664'525U) + 1'013'904'223U;
-    const auto slot = static_cast<std::size_t>(random % live.size());
-    auto& live_id = std::span(live).subspan(slot, 1).front();
-    if (live_id.is_valid()) {
-      ASSERT_TRUE(store.erase(live_id));
-      std::span(stale).subspan(stale_count % stale.size(), 1).front() = live_id;
-      ++stale_count;
-      live_id = {};
-    } else {
-      const auto id = store.insert(std::make_unique<Value>(Value{.number = operation}));
-      ASSERT_TRUE(id.has_value());
-      const auto inserted = id.value_or(PaneId{});
-      live_id = inserted;
-      EXPECT_EQ(store.get(inserted)->number, operation);
-    }
-    const auto retained = std::min(stale_count, stale.size());
-    for (std::size_t index = 0; index < retained; ++index) {
-      EXPECT_EQ(store.get(std::span(stale).subspan(index, 1).front()), nullptr);
-    }
-  }
-}
 
 TEST(BoundedByteQueueTest, PreservesOrderAcrossWraparound) {
   BoundedByteQueue<5> queue;

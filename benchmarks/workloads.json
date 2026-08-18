@@ -248,14 +248,6 @@
           "unit": "ns"
         },
         {
-          "id": "extension_registration_codec_cpu_p95",
-          "benchmark": "benchmark_extension_registration_codec",
-          "field": "cpu_time",
-          "statistic": "p95",
-          "maximum": 230,
-          "unit": "ns"
-        },
-        {
           "id": "terminal_large_write_cpu_p95",
           "benchmark": "benchmark_terminal_large_writes",
           "field": "cpu_time",

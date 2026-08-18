@@ -36,7 +36,7 @@ readonly report="${output_directory}/f5-${profile}-stress-${mode}.json"
 readonly log="${output_directory}/f5-${profile}-stress-${mode}.log"
 
 rm -f "${report}" "${log}"
-"./build/${profile}/lemma_e2e_tests" \
+"./build/${profile}/lemma_legacy_e2e_tests" \
   --gtest_filter="${filter}" \
   --gtest_repeat="${repetitions}" \
   --gtest_output="json:${report}" 2>&1 | tee "${log}"

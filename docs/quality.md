@@ -29,6 +29,9 @@ Do not move large amounts of code and discover the contract afterward. Keep stru
 
 ## Testing layers
 
+The audited taxonomy, developer entry points, and measured tier boundaries are in
+[`testing.md`](testing.md) and [`testing-results.md`](testing-results.md).
+
 ### A. Pure semantic/Core tests
 
 Mux semantics should be testable directly without:

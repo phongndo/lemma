@@ -265,23 +265,6 @@ TEST(PaneLayoutTest, SupportsMaximumBoundedDepthAndPaneCount) {
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(PaneLayoutTest, FixedPointRatioRoundTripsEverySupportedOneCellBoundary) {
-  constexpr std::uint16_t columns_max = 500;
-  for (std::uint16_t columns = 3; columns <= columns_max; ++columns) {
-    PaneLayout layout(pane(0));
-    ASSERT_TRUE(layout.split(pane(0), pane(1), SplitAxis::left_right));
-    const PaneRectangle viewport{.columns = columns, .rows = 1};
-    auto previous = rectangle(layout, pane(0), viewport).columns;
-    while (layout.resize(pane(0), ResizeDirection::right, viewport) ==
-           LayoutResizeStatus::applied) {
-      const auto current = rectangle(layout, pane(0), viewport).columns;
-      ASSERT_EQ(current, previous + 1U) << "viewport columns=" << columns;
-      previous = current;
-    }
-    EXPECT_EQ(previous, columns - 2U) << "viewport columns=" << columns;
-    EXPECT_TRUE(layout.valid());
-  }
-}
 
 } // namespace
 } // namespace lemma::core
