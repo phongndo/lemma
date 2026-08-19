@@ -196,6 +196,7 @@ enum class MouseCaptureOwner : std::uint8_t {
   application,
   selection,
   divider,
+  status_tab,
   discard_until_release,
 };
 
@@ -204,6 +205,10 @@ struct MouseCapture final {
   // Divider capture uses target.pane and peer_pane as generation-safe subtree representatives.
   // The Attachment owns this ephemeral gesture identity; PaneLayout remains the ratio authority.
   PaneId peer_pane;
+  // Status-tab capture owns a non-authoritative live ordering preview. The stable source is
+  // target.tab and this stable anchor has the same "place before" meaning as TabPlacementCommand;
+  // an invalid anchor means the end.
+  TabId status_tab_before;
   MouseCaptureOwner owner{MouseCaptureOwner::application};
   SplitAxis divider_axis{SplitAxis::left_right};
 };

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -88,6 +89,25 @@ struct CompositionResult final {
   bool full{false};
   bool status{false};
 };
+
+enum class StatusTargetKind : std::uint8_t {
+  tab,
+  create_tab,
+};
+
+struct StatusTarget final {
+  StatusTargetKind kind{StatusTargetKind::tab};
+  std::size_t tab_position{0};
+
+  [[nodiscard]] constexpr auto operator==(const StatusTarget&) const noexcept -> bool = default;
+};
+
+// Returns the status control owning the zero-based outer-terminal column. Session cells,
+// separators, overflow markers, spacing, prompts, and the input-context block are not targets.
+// The hit test and status renderer share one bounded projection.
+[[nodiscard]] auto status_target_at_column(StatusLine status, Viewport viewport,
+                                           std::uint16_t column) noexcept
+    -> std::optional<StatusTarget>;
 
 // Composes already-resolved content-area pane rectangles into one synchronized outer-terminal
 // update. A visible status line occupies the top row, and pane content and separators are offset

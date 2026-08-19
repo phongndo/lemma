@@ -612,6 +612,115 @@ TEST_F(MuxProcessTest, ClickFocusesTheHitPaneThroughTheCommandPath) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, ClicksStatusTabsAndCreateControlThroughTheTypedCommandPath) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_tabs"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_FALSE(wait_for_tabs(
+                   "mouse_tabs", [](const auto& tabs) { return tabs.size() == 3; },
+                   deadline_after(5s), &client)
+                   .empty());
+  ASSERT_EQ(command({"tab", "rename", "mouse_tabs", "1", "one"}).status, 0);
+  ASSERT_EQ(command({"tab", "rename", "mouse_tabs", "2", "two"}).status, 0);
+  ASSERT_EQ(command({"tab", "rename", "mouse_tabs", "3", "three"}).status, 0);
+  ASSERT_TRUE(client.wait_for_screen("[ 3:three ]", deadline_after(5s))) << client.screen();
+
+  // The reverse-video session occupies columns 1-12 and the ASCII separator columns 13-15.
+  // Column 24 is inside "2:two"; its release is retained by the status gesture and never reaches
+  // either child application.
+  ASSERT_TRUE(client.send("\x1B[<0;24;1M\x1B[<0;24;1m", deadline_after(2s)));
+  const auto second = wait_for_tabs(
+      "mouse_tabs",
+      [](const auto& tabs) {
+        return tabs.size() == 3 && std::span(tabs).subspan(1, 1).front().active;
+      },
+      deadline_after(5s), &client);
+  ASSERT_EQ(second.size(), 3U) << client.screen() << "\nraw:\n"
+                               << client.raw_tail() << "\ntabs:\n"
+                               << command({"tabs", "mouse_tabs"}).output;
+
+  ASSERT_TRUE(client.send("\x1B[<0;17;1M\x1B[<0;17;1m", deadline_after(2s)));
+  const auto first = wait_for_tabs(
+      "mouse_tabs", [](const auto& tabs) { return tabs.size() == 3 && tabs.front().active; },
+      deadline_after(5s), &client);
+  ASSERT_EQ(first.size(), 3U) << client.screen() << "\nraw:\n"
+                              << client.raw_tail() << "\ntabs:\n"
+                              << command({"tabs", "mouse_tabs"}).output;
+
+  // With the first tab active, the trailing ASCII '+' is at column 43.
+  ASSERT_TRUE(client.send("\x1B[<0;43;1M\x1B[<0;43;1m", deadline_after(2s)));
+  const auto created = wait_for_tabs(
+      "mouse_tabs", [](const auto& tabs) { return tabs.size() == 4 && tabs.back().active; },
+      deadline_after(5s), &client);
+  ASSERT_EQ(created.size(), 4U) << client.screen() << "\nraw:\n" << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, DragsStatusTabsWithPreviewAndCommitsOnRelease) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "drag_tabs"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_TRUE(send_prefix(client, std::byte{'c'}));
+  ASSERT_FALSE(wait_for_tabs(
+                   "drag_tabs", [](const auto& tabs) { return tabs.size() == 3; },
+                   deadline_after(5s), &client)
+                   .empty());
+  ASSERT_EQ(command({"tab", "rename", "drag_tabs", "1", "one"}).status, 0);
+  ASSERT_EQ(command({"tab", "rename", "drag_tabs", "2", "two"}).status, 0);
+  ASSERT_EQ(command({"tab", "rename", "drag_tabs", "3", "three"}).status, 0);
+  ASSERT_TRUE(client.wait_for_screen("[ 3:three ]", deadline_after(5s))) << client.screen();
+
+  // Pressing tab one selects it and starts an Attachment-owned preview without changing TabOrder.
+  ASSERT_TRUE(client.send("\x1B[<0;16;1M", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("[ 1:one ]", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(client.send("\x1B[<32;35;1M", deadline_after(2s)));
+  // Preview moves whole labels; position prefixes stay stable until release commits TabOrder.
+  ASSERT_TRUE(client.wait_for_screen("2:two  3:three  [ 1:one ]", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  const auto preview_order = command({"tabs", "drag_tabs"});
+  ASSERT_EQ(preview_order.status, 0) << preview_order.output;
+  const auto preview_one = preview_order.output.find("title \"one\"");
+  const auto preview_two = preview_order.output.find("title \"two\"");
+  const auto preview_three = preview_order.output.find("title \"three\"");
+  ASSERT_NE(preview_one, std::string::npos);
+  ASSERT_NE(preview_two, std::string::npos);
+  ASSERT_NE(preview_three, std::string::npos);
+  EXPECT_LT(preview_one, preview_two) << preview_order.output;
+  EXPECT_LT(preview_two, preview_three) << preview_order.output;
+
+  ASSERT_TRUE(client.send("\x1B[<0;35;1m", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("1:two  2:three  [ 3:one ]", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(client.send("printf '__TAB_DRAG_COMMITTED__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__TAB_DRAG_COMMITTED__", deadline_after(5s)))
+      << client.screen();
+  const auto committed_order = command({"tabs", "drag_tabs"});
+  ASSERT_EQ(committed_order.status, 0) << committed_order.output;
+  const auto committed_one = committed_order.output.find("title \"one\"");
+  const auto committed_two = committed_order.output.find("title \"two\"");
+  const auto committed_three = committed_order.output.find("title \"three\"");
+  ASSERT_NE(committed_one, std::string::npos);
+  ASSERT_NE(committed_two, std::string::npos);
+  ASSERT_NE(committed_three, std::string::npos);
+  EXPECT_LT(committed_two, committed_three) << committed_order.output;
+  EXPECT_LT(committed_three, committed_one) << committed_order.output;
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(MuxProcessTest, DragsBothSeparatorAxesThroughTypedResizeCommands) {
@@ -1609,7 +1718,7 @@ TEST_F(MuxProcessTest, RenamesSessionsAndTabTitleOverridesAtomically) {
   ASSERT_EQ(command({"start", "occupied"}).status, 0);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'R'}));
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m{ \x1B[0;1;4m", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1;7m \x1B[0;1;4;7m", deadline_after(5s)))
       << client.raw_tail();
   ASSERT_TRUE(client.send("occu pied!\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("Session already exists", deadline_after(5s)))
@@ -1629,7 +1738,7 @@ TEST_F(MuxProcessTest, RenamesSessionsAndTabTitleOverridesAtomically) {
   ASSERT_EQ(command({"session", "rename", "rename_cli", "rename_new"}).status, 0);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ \x1B[0;1;4m", deadline_after(5s)))
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ 1:\x1B[0;1;4m", deadline_after(5s)))
       << client.raw_tail();
   ASSERT_TRUE(client.send("\x15"
                           "build logs\x1B[13;1:1u\x1B[13;1:3u",

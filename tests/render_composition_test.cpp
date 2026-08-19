@@ -73,7 +73,7 @@ TEST(PaneCompositionTest, PlacesMultipleTerminalSurfacesInOneAtomicFrame) {
   EXPECT_EQ(occurrences(encoded, "\x1B[2J"), 1U);
 }
 
-TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
+TEST(PaneCompositionTest, LeftAlignsMinimalTabStatusAbovePaneContent) {
   auto terminal = make_terminal(40, 2);
   write_text(terminal, "content");
   const PaneSurface pane{
@@ -101,10 +101,69 @@ TEST(PaneCompositionTest, CentersMinimalTabStatusAbovePaneContent) {
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->status);
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;10H"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ nvim ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0m1:zsh"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ 2:nvim ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("  +"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
+}
+
+TEST(PaneCompositionTest, StatusControlHitTestMatchesRenderedLabelsAndOverflow) {
+  const std::array tabs{
+      StatusTab{.number = 1, .title = "zsh"},
+      StatusTab{.number = 2, .title = "nvim", .active = true},
+      StatusTab{.number = 3, .title = "logs"},
+  };
+  const StatusLine status{.session_name = "lemma",
+                          .tabs = tabs,
+                          .prompt_target = StatusPromptTarget::none,
+                          .prompt_feedback = StatusPromptFeedback::none,
+                          .prompt_value = {},
+                          .input_context = {},
+                          .prompt_cursor = 0,
+                          .dirty = false};
+
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 10),
+            (StatusTarget{.kind = StatusTargetKind::tab, .tab_position = 0}));
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 17),
+            (StatusTarget{.kind = StatusTargetKind::tab, .tab_position = 1}));
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 29),
+            (StatusTarget{.kind = StatusTargetKind::tab, .tab_position = 2}));
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 37),
+            (StatusTarget{.kind = StatusTargetKind::create_tab, .tab_position = 0}));
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 0), std::nullopt);
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 8), std::nullopt);
+  EXPECT_EQ(status_target_at_column(status, {.columns = 40, .rows = 3}, 15), std::nullopt);
+
+  const std::array overflow_tabs{
+      StatusTab{.number = 1, .title = "shell"},
+      StatusTab{.number = 2, .title = "api"},
+      StatusTab{.number = 3, .title = "nvim", .active = true},
+      StatusTab{.number = 4, .title = "tests"},
+      StatusTab{.number = 5, .title = "logs"},
+  };
+  const StatusLine overflow{.session_name = {},
+                            .tabs = overflow_tabs,
+                            .prompt_target = StatusPromptTarget::none,
+                            .prompt_feedback = StatusPromptFeedback::none,
+                            .prompt_value = {},
+                            .input_context = {},
+                            .prompt_cursor = 0,
+                            .dirty = false};
+  EXPECT_EQ(status_target_at_column(overflow, {.columns = 18, .rows = 3}, 2),
+            (StatusTarget{.kind = StatusTargetKind::tab, .tab_position = 2}));
+  EXPECT_EQ(status_target_at_column(overflow, {.columns = 18, .rows = 3}, 11),
+            (StatusTarget{.kind = StatusTargetKind::tab, .tab_position = 2}));
+  EXPECT_EQ(status_target_at_column(overflow, {.columns = 18, .rows = 3}, 16),
+            (StatusTarget{.kind = StatusTargetKind::create_tab, .tab_position = 0}));
+  EXPECT_EQ(status_target_at_column(overflow, {.columns = 18, .rows = 3}, 0), std::nullopt);
+  EXPECT_EQ(status_target_at_column(overflow, {.columns = 18, .rows = 3}, 12), std::nullopt);
+
+  auto prompting = status;
+  prompting.prompt_target = StatusPromptTarget::active_tab;
+  prompting.prompt_value = "nvim";
+  prompting.prompt_cursor = prompting.prompt_value.size();
+  EXPECT_EQ(status_target_at_column(prompting, {.columns = 40, .rows = 3}, 17), std::nullopt);
 }
 
 TEST(PaneCompositionTest, ReservesRightStatusColumnsForActiveInputContext) {
@@ -130,7 +189,7 @@ TEST(PaneCompositionTest, ReservesRightStatusColumnsForActiveInputContext) {
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;33H\x1B[0;7m RESIZE "));
-  EXPECT_THAT(encoded, testing::HasSubstr("[ shell ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("[ 1:shell ]"));
 }
 
 TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
@@ -156,11 +215,11 @@ TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m{ work }\x1B[0m"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;9H\x1B[0;1m[ \x1B[0;1;4mabc\x1B[0;1m ]"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;12H\x1B[6 q\x1B[?25h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1;7m work \x1B[0m | "));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;10H\x1B[0;1m[ 1:\x1B[0;1;4mabc\x1B[0;1m ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;15H\x1B[6 q\x1B[?25h"));
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;2m")));
-  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ zsh ]")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
 }
 
 TEST(PaneCompositionTest, NarrowTabEditorShowsOnlyItsBoundedField) {
@@ -245,12 +304,11 @@ TEST(PaneCompositionTest, EditsSessionInlineWithActiveTabContextAndConflictFeedb
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m{ \x1B[0;1;4moccupied\x1B[0;1m }"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ zsh ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1;7m \x1B[0;1;4;7moccupied\x1B[0;1;7m "));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0m | \x1B[1;14H\x1B[0;1m[ 1:zsh ]"));
   EXPECT_THAT(encoded, testing::HasSubstr("Session already exists"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;11H\x1B[6 q\x1B[?25h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;10H\x1B[6 q\x1B[?25h"));
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;2m")));
-  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;1;4;7m")));
 }
 
 TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatus) {
@@ -280,12 +338,12 @@ TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatu
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("[ zsh ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("[ 1:zsh ]"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;8H\x1B[0;7m[2/9]"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[3;2H\x1B[?25h"));
 }
 
-TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
+TEST(PaneCompositionTest, DrawsReverseVideoSessionBeforeLeftAlignedTabs) {
   auto terminal = make_terminal(40, 2);
   const PaneSurface pane{
       .terminal = &terminal,
@@ -311,9 +369,11 @@ TEST(PaneCompositionTest, DrawsSessionNameAsLeadingStatusBlock) {
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1m{ lemma }\x1B[0m"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ nvim ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1;7m lemma \x1B[0m | \x1B[1;11H"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[0;1m[ 2:nvim ]"));
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;2m")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[38")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[48")));
 }
 
 TEST(PaneCompositionTest, OffsetsPaneSeparatorsBelowTopStatus) {
@@ -396,7 +456,7 @@ TEST(PaneCompositionTest, KeepsActiveTabVisibleWhenStatusOverflows) {
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("[ nvim ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("[ 3:nvim ]"));
   EXPECT_THAT(encoded, testing::HasSubstr("…"));
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("1:shell")));
 }
@@ -430,7 +490,7 @@ TEST(PaneCompositionTest, OmitsCleanStatusFromIncrementalFrame) {
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(result->status);
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ zsh ]")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
 }
 
 TEST(PaneCompositionTest, DrawsDeclaredPaneSeparators) {

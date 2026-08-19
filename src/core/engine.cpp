@@ -2461,6 +2461,12 @@ void reset_removed_tab_attachment_state(SessionRecord& session, PaneRuntimeStore
       session.attachment.rename_prompt.tab == id) {
     reset_rename_prompt(session, false);
   }
+  if (session.attachment.mouse_capture.has_value() &&
+      session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab &&
+      (session.attachment.mouse_capture->target.tab == id ||
+       session.attachment.mouse_capture->status_tab_before == id)) {
+    session.attachment.mouse_capture.reset();
+  }
 }
 
 void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId id) noexcept {
@@ -3138,6 +3144,24 @@ struct SessionCommandContext final {
 
 [[nodiscard]] auto tab_title(const SessionRecord& session, const Tab& tab,
                              const PaneRuntimeStore& runtimes) noexcept -> std::string_view;
+
+enum class StatusHitKind : std::uint8_t {
+  tab,
+  create_tab,
+};
+
+struct StatusHit final {
+  TabId tab;
+  TabId next;
+  std::uint16_t position{0};
+  std::uint16_t moving_position{0};
+  StatusHitKind kind{StatusHitKind::tab};
+};
+
+[[nodiscard]] auto status_target_at_column(const SessionRecord& session,
+                                           const PaneRuntimeStore& runtimes,
+                                           std::uint16_t column) noexcept
+    -> std::optional<StatusHit>;
 
 // This is the only function that translates validated commands into authoritative mux mutations.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -4600,7 +4624,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   return message.kind == protocol::ClientMessageKind::mouse &&
          message.mouse.action != protocol::MouseInputAction::press &&
          session.attachment.mouse_capture.has_value() &&
-         session.attachment.mouse_capture->owner == MouseCaptureOwner::divider;
+         (session.attachment.mouse_capture->owner == MouseCaptureOwner::divider ||
+          session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab);
 }
 
 // Packet dispatch exhaustively maps validated protocol messages to session transitions.
@@ -4738,19 +4763,112 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       }
       const auto status_rows = session.attachment.rows >= 2 ? std::uint16_t{1} : std::uint16_t{0};
       if (message.mouse.action == protocol::MouseInputAction::press &&
-          session.attachment.mouse_capture.has_value() &&
-          session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
-        // A fresh press supersedes the completed divider gesture.
-        finish_live_divider_resize(session);
+          session.attachment.mouse_capture.has_value()) {
+        if (session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
+          // A fresh press supersedes the completed divider gesture.
+          finish_live_divider_resize(session);
+        } else if (session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
+          session.attachment.mouse_capture.reset();
+          schedule_frame(session, FrameUrgency::state_change, false);
+        }
       }
       const bool captured_continuation = session.attachment.mouse_capture.has_value() &&
                                          message.mouse.action != protocol::MouseInputAction::press;
       if (message.mouse.row < status_rows && !captured_continuation) {
+        if (message.mouse.action != protocol::MouseInputAction::press ||
+            message.mouse.button != protocol::MouseInputButton::left) {
+          break;
+        }
+        const auto target = status_target_at_column(session, runtimes, message.mouse.column);
+        session.attachment.mouse_capture = MouseCapture{
+            .target = {.tab = tab->id, .pane = tab->focused_pane},
+            .peer_pane = {},
+            .status_tab_before = {},
+            .owner = MouseCaptureOwner::discard_until_release,
+            .divider_axis = SplitAxis::left_right,
+        };
+        if (!target.has_value()) {
+          break;
+        }
+        if (target->kind == StatusHitKind::create_tab) {
+          const Command create{
+              .kind = CommandKind::create_tab,
+              .origin = CommandOrigin::client,
+              .target = {.session = session.id,
+                         .tab = {},
+                         .pane = {},
+                         .peer_pane = {},
+                         .attachment = session.attachment.id},
+          };
+          const auto created = dispatch_session_command(session, runtimes, create);
+          if (created.status == CommandStatus::failed) {
+            return ParseResult::error;
+          }
+          break;
+        }
+        session.attachment.mouse_capture = MouseCapture{
+            .target = {.tab = target->tab, .pane = {}},
+            .peer_pane = {},
+            .status_tab_before = target->next,
+            .owner = MouseCaptureOwner::status_tab,
+            .divider_axis = SplitAxis::left_right,
+        };
+        const Command select{
+            .kind = CommandKind::select_tab,
+            .origin = CommandOrigin::client,
+            .target = {.session = session.id,
+                       .tab = target->tab,
+                       .pane = {},
+                       .peer_pane = {},
+                       .attachment = session.attachment.id},
+            .payload = CommandCoordinate{.value = target->position},
+        };
+        if (!dispatch_session_command(session, runtimes, select).succeeded()) {
+          session.attachment.mouse_capture.reset();
+          return ParseResult::error;
+        }
         break;
       }
       const auto content_row = message.mouse.row < status_rows
                                    ? std::uint16_t{0}
                                    : static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      if (captured_continuation &&
+          session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
+        if (message.mouse.action == protocol::MouseInputAction::motion) {
+          const auto target = status_target_at_column(session, runtimes, message.mouse.column);
+          if (target.has_value()) {
+            auto before = session.attachment.mouse_capture->status_tab_before;
+            if (target->kind == StatusHitKind::create_tab) {
+              before = {};
+            } else if (target->tab != session.attachment.mouse_capture->target.tab) {
+              before = target->position < target->moving_position ? target->tab : target->next;
+            }
+            if (before != session.attachment.mouse_capture->status_tab_before) {
+              session.attachment.mouse_capture->status_tab_before = before;
+              schedule_frame(session, FrameUrgency::state_change, false);
+            }
+          }
+        } else if (message.mouse.action == protocol::MouseInputAction::release) {
+          const auto capture = *session.attachment.mouse_capture;
+          session.attachment.mouse_capture.reset();
+          schedule_frame(session, FrameUrgency::state_change, false);
+          const Command place{
+              .kind = CommandKind::place_tab,
+              .origin = CommandOrigin::client,
+              .target = {.session = session.id,
+                         .tab = capture.target.tab,
+                         .pane = {},
+                         .peer_pane = {},
+                         .attachment = session.attachment.id},
+              .payload = TabPlacementCommand{.before = capture.status_tab_before},
+          };
+          const auto placed = dispatch_session_command(session, runtimes, place);
+          if (placed.status == CommandStatus::failed) {
+            return ParseResult::error;
+          }
+        }
+        break;
+      }
       if (tab->layout_suspended) {
         if (session.attachment.mouse_capture.has_value() &&
             session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
@@ -4774,6 +4892,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
           session.attachment.mouse_capture = MouseCapture{
               .target = {.tab = tab->id, .pane = divider->first},
               .peer_pane = divider->second,
+              .status_tab_before = {},
               .owner = MouseCaptureOwner::divider,
               .divider_axis = divider->axis,
           };
@@ -4930,6 +5049,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
           session.attachment.mouse_capture = MouseCapture{
               .target = target,
               .peer_pane = {},
+              .status_tab_before = {},
               .owner = owner,
               .divider_axis = SplitAxis::left_right,
           };
@@ -5252,6 +5372,20 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
 }
 
+[[nodiscard]] auto status_tab_drag_signature(const SessionRecord& session) noexcept
+    -> std::uint64_t {
+  if (!session.attachment.mouse_capture.has_value() ||
+      session.attachment.mouse_capture->owner != MouseCaptureOwner::status_tab) {
+    return 0;
+  }
+  const auto& capture = *session.attachment.mouse_capture;
+  const auto source = (static_cast<std::uint64_t>(capture.target.tab.slot()) << 32U) |
+                      capture.target.tab.generation();
+  const auto anchor = (static_cast<std::uint64_t>(capture.status_tab_before.slot()) << 32U) |
+                      capture.status_tab_before.generation();
+  return (source * 1'099'511'628'211ULL) ^ anchor;
+}
+
 [[nodiscard]] auto current_status_signature(const SessionRecord& session,
                                             const PaneRuntimeStore& runtimes) noexcept
     -> std::uint64_t {
@@ -5285,6 +5419,15 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   for (const char character : session.input_router.active_label()) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
+  const auto drag = status_tab_drag_signature(session);
+  mix(static_cast<std::uint8_t>(drag));
+  mix(static_cast<std::uint8_t>(drag >> 8U));
+  mix(static_cast<std::uint8_t>(drag >> 16U));
+  mix(static_cast<std::uint8_t>(drag >> 24U));
+  mix(static_cast<std::uint8_t>(drag >> 32U));
+  mix(static_cast<std::uint8_t>(drag >> 40U));
+  mix(static_cast<std::uint8_t>(drag >> 48U));
+  mix(static_cast<std::uint8_t>(drag >> 56U));
   return signature;
 }
 
@@ -5314,43 +5457,165 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   return render::StatusPromptFeedback::none;
 }
 
-[[nodiscard]] auto
-collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
-                    std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
-    -> render::StatusLine {
-  std::size_t count = 0;
-  for (; count < session.tab_order.size(); ++count) {
-    const auto id = session.tab_order.at(count);
+void refresh_status_process_names(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
+  for (std::size_t position = 0; position < session.tab_order.size(); ++position) {
+    const auto id = session.tab_order.at(position);
     LEMMA_ASSERT(id.has_value());
     auto* const tab = find_tab(session, *id);
     LEMMA_ASSERT(tab != nullptr);
-    if (!session.attachment_runtime.status_valid) {
-      auto* const focused = find_pane(session, *tab, tab->focused_pane);
-      LEMMA_ASSERT(focused != nullptr);
-      auto* const runtime = find_pane_runtime(runtimes, session, *tab, *focused);
-      LEMMA_ASSERT(runtime != nullptr);
-      static_cast<void>(refresh_process_name(*runtime));
+    auto* const focused = find_pane(session, *tab, tab->focused_pane);
+    LEMMA_ASSERT(focused != nullptr);
+    auto* const runtime = find_pane_runtime(runtimes, session, *tab, *focused);
+    LEMMA_ASSERT(runtime != nullptr);
+    static_cast<void>(refresh_process_name(*runtime));
+  }
+}
+
+[[nodiscard]] auto
+collect_status_tab_order(const SessionRecord& session,
+                         std::array<TabId, render::status_tabs_max>& storage) noexcept
+    -> std::span<const TabId> {
+  std::array<TabId, render::status_tabs_max> semantic{};
+  const auto count = session.tab_order.size();
+  for (std::size_t position = 0; position < count; ++position) {
+    const auto id = session.tab_order.at(position);
+    LEMMA_ASSERT(id.has_value());
+    std::span(semantic).subspan(position, 1).front() = *id;
+  }
+  const auto copy_semantic = [&] {
+    std::ranges::copy(std::span(semantic).first(count), storage.begin());
+    return std::span<const TabId>(storage).first(count);
+  };
+  if (!session.attachment.mouse_capture.has_value() ||
+      session.attachment.mouse_capture->owner != MouseCaptureOwner::status_tab) {
+    return copy_semantic();
+  }
+
+  const auto& capture = *session.attachment.mouse_capture;
+  const bool source_present =
+      std::ranges::find(std::span(semantic).first(count), capture.target.tab) !=
+      std::span(semantic).first(count).end();
+  const bool anchor_present =
+      !capture.status_tab_before.is_valid() ||
+      std::ranges::find(std::span(semantic).first(count), capture.status_tab_before) !=
+          std::span(semantic).first(count).end();
+  if (!source_present || !anchor_present || capture.status_tab_before == capture.target.tab) {
+    return copy_semantic();
+  }
+
+  std::size_t projected = 0;
+  for (const auto id : std::span(semantic).first(count)) {
+    if (id == capture.target.tab) {
+      continue;
     }
-    std::span(storage).subspan(count, 1).front() = {
-        .number = static_cast<std::uint16_t>(count + 1U),
+    if (id == capture.status_tab_before) {
+      std::span(storage).subspan(projected, 1).front() = capture.target.tab;
+      ++projected;
+    }
+    std::span(storage).subspan(projected, 1).front() = id;
+    ++projected;
+  }
+  if (!capture.status_tab_before.is_valid()) {
+    std::span(storage).subspan(projected, 1).front() = capture.target.tab;
+    ++projected;
+  }
+  LEMMA_ASSERT(projected == count);
+  return std::span<const TabId>(storage).first(count);
+}
+
+[[nodiscard]] auto
+collect_status_tabs(const SessionRecord& session, const PaneRuntimeStore& runtimes,
+                    const std::span<const TabId> order,
+                    std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
+    -> std::span<const render::StatusTab> {
+  for (std::size_t position = 0; position < order.size(); ++position) {
+    const auto* const tab = find_tab(session, order.subspan(position, 1).front());
+    LEMMA_ASSERT(tab != nullptr);
+    const auto semantic_position = session.tab_order.position_of(tab->id);
+    LEMMA_ASSERT(semantic_position.has_value());
+    std::span(storage).subspan(position, 1).front() = {
+        // A drag moves complete labels while previewing. Position prefixes change only when the
+        // release commits TabOrder, so identical titles remain distinguishable throughout.
+        .number = static_cast<std::uint16_t>(*semantic_position + 1U),
         .title = tab_title(session, *tab, runtimes),
         .active = tab->id == session.active_tab,
     };
   }
-  const auto signature = current_status_signature(session, runtimes);
-  const bool dirty = !session.attachment_runtime.status_valid ||
-                     signature != session.attachment_runtime.status_signature;
-  session.attachment_runtime.status_signature = signature;
-  session.attachment_runtime.status_valid = true;
+  return std::span(storage).first(order.size());
+}
+
+[[nodiscard]] auto status_line_value(const SessionRecord& session,
+                                     const std::span<const render::StatusTab> tabs,
+                                     const bool dirty) noexcept -> render::StatusLine {
   return {
       .session_name = session.session_name(),
-      .tabs = std::span(storage).first(count),
+      .tabs = tabs,
       .prompt_target = status_prompt_target(session.attachment.rename_prompt.kind),
       .prompt_feedback = status_prompt_feedback(session.attachment.rename_prompt.feedback),
       .prompt_value = session.attachment.rename_prompt.view(),
       .input_context = session.input_router.active_label(),
       .prompt_cursor = session.attachment.rename_prompt.cursor,
       .dirty = dirty,
+  };
+}
+
+[[nodiscard]] auto
+collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
+                    std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
+    -> render::StatusLine {
+  if (!session.attachment_runtime.status_valid) {
+    refresh_status_process_names(session, runtimes);
+  }
+  std::array<TabId, render::status_tabs_max> order_storage{};
+  const auto order = collect_status_tab_order(session, order_storage);
+  const auto tabs = collect_status_tabs(session, runtimes, order, storage);
+  const auto signature = current_status_signature(session, runtimes);
+  const bool dirty = !session.attachment_runtime.status_valid ||
+                     signature != session.attachment_runtime.status_signature;
+  session.attachment_runtime.status_signature = signature;
+  session.attachment_runtime.status_valid = true;
+  return status_line_value(session, tabs, dirty);
+}
+
+[[nodiscard]] auto status_target_at_column(const SessionRecord& session,
+                                           const PaneRuntimeStore& runtimes,
+                                           const std::uint16_t column) noexcept
+    -> std::optional<StatusHit> {
+  std::array<TabId, render::status_tabs_max> order_storage{};
+  std::array<render::StatusTab, render::status_tabs_max> status_storage{};
+  const auto order = collect_status_tab_order(session, order_storage);
+  const auto tabs = collect_status_tabs(session, runtimes, order, status_storage);
+  const auto target = render::status_target_at_column(
+      status_line_value(session, tabs, false),
+      {.columns = session.attachment.columns, .rows = session.attachment.rows}, column);
+  if (!target.has_value()) {
+    return std::nullopt;
+  }
+  if (target->kind == render::StatusTargetKind::create_tab) {
+    return StatusHit{.tab = {},
+                     .next = {},
+                     .position = 0,
+                     .moving_position = 0,
+                     .kind = StatusHitKind::create_tab};
+  }
+  LEMMA_ASSERT(target->tab_position < order.size());
+  auto moving_position = target->tab_position;
+  if (session.attachment.mouse_capture.has_value() &&
+      session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
+    const auto moving = std::ranges::find(order, session.attachment.mouse_capture->target.tab);
+    if (moving == order.end()) {
+      return std::nullopt;
+    }
+    moving_position = static_cast<std::size_t>(std::distance(order.begin(), moving));
+  }
+  return StatusHit{
+      .tab = order.subspan(target->tab_position, 1).front(),
+      .next = target->tab_position + 1U < order.size()
+                  ? order.subspan(target->tab_position + 1U, 1).front()
+                  : TabId{},
+      .position = static_cast<std::uint16_t>(target->tab_position),
+      .moving_position = static_cast<std::uint16_t>(moving_position),
+      .kind = StatusHitKind::tab,
   };
 }
 
