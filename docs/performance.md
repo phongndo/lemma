@@ -173,6 +173,19 @@ The measured sustained-output improvements came from three independently retaine
 
 Across staged ten-sample reports, those changes reduced active outer bytes from roughly 63–536 KiB/s to roughly 9–10 KiB/s and active tree CPU p95 to 0.9–1.9 ms, without changing interactive/state-change urgency.
 
+An August 19, 2026 Linux x86-64 cloud-VM characterization measured retaining already-projected
+outer mouse, child terminal, and cursor shape/color modes instead of re-emitting them on every
+incremental frame. The comparison used release builds from the same checkout and ten one-second
+samples per pane profile. Median active outer traffic fell from 8,990 to 3,074 B/s for one pane
+(65.8%) and from 9,686 to 3,770 B/s for 64 panes (61.1%). A separate hundred-sample controlled
+interaction run reduced median client output from 633 to 531 bytes (16.1%); a synchronized 22-row
+TUI redraw reduced it from 2,114 to 2,012 bytes (4.8%). The same-host one-pane active
+key-to-visible p50 was effectively unchanged at 0.715 versus 0.718 ms, while p95 moved from 1.274
+to 1.358 ms. These results establish a substantial presentation-amplification reduction, not an
+interaction-latency win. Reports are `lemma-isolated-baseline-profiles-10.json`,
+`lemma-final-profiles-10.json`, `interaction-baseline-100.json`, and
+`final-interaction-100.json`.
+
 ## Isolation evidence
 
 A raw 500x200 non-reading client with a 4 KiB requested receive buffer was attached while its pane produced an unbounded flood. Another session completed exact-token interactions. Retained runs disconnected the non-reader after 5.016 seconds in the original qualification and 5.026/5.029 seconds in later thirty-interaction runs, within the 5-second no-progress deadline plus observation allowance.
