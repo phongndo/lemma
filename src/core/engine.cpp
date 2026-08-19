@@ -48,7 +48,6 @@
 #include <variant>
 
 #include <poll.h>
-#include <sched.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -7030,13 +7029,7 @@ void process_interactive_followups(const std::span<PaneWriteTarget> targets,
     std::span(owners).subspan(count, 1).front() = &target;
     ++count;
   }
-  if (count == 0) {
-    return;
-  }
-  // The child cannot produce its response until it is scheduled after the PTY write. Yield once
-  // without a timer, then consume only responses already ready under the fixed follow-up budgets.
-  static_cast<void>(::sched_yield());
-  if (::poll(descriptors.data(), static_cast<nfds_t>(count), 0) <= 0) {
+  if (count == 0 || ::poll(descriptors.data(), static_cast<nfds_t>(count), 0) <= 0) {
     return;
   }
 
