@@ -6995,6 +6995,53 @@ void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes, c
          PtyFlushStatus::hard_error;
 }
 
+struct PaneWriteTarget final {
+  SessionRecord* session{nullptr};
+  Pane* pane{nullptr};
+  PaneRuntime* runtime{nullptr};
+};
+
+constexpr std::size_t interactive_followup_read_bytes_per_pane_max = std::size_t{16} * 1'024U;
+constexpr std::size_t interactive_followup_read_bytes_per_turn_max = std::size_t{64} * 1'024U;
+
+void process_interactive_followups(const std::span<PaneWriteTarget> targets,
+                                   PaneRuntimeStore& runtimes) noexcept {
+  std::array<pollfd, static_cast<std::size_t>(limits::panes_hard_max)> descriptors{};
+  std::array<PaneWriteTarget*, static_cast<std::size_t>(limits::panes_hard_max)> owners{};
+  std::size_t count = 0;
+  for (auto& target : targets) {
+    LEMMA_ASSERT(target.session != nullptr && target.pane != nullptr && target.runtime != nullptr);
+    if (!target.runtime->live() || !target.runtime->interactive_damage.pending() ||
+        target.session->attachment_runtime.output.busy()) {
+      continue;
+    }
+    std::span(descriptors).subspan(count, 1).front() = {
+        .fd = target.runtime->pty, .events = POLLIN, .revents = 0};
+    std::span(owners).subspan(count, 1).front() = &target;
+    ++count;
+  }
+  if (count == 0 || ::poll(descriptors.data(), static_cast<nfds_t>(count), 0) <= 0) {
+    return;
+  }
+
+  std::size_t global_budget = interactive_followup_read_bytes_per_turn_max;
+  for (std::size_t index = 0; index < count && global_budget > 0; ++index) {
+    const auto& events = std::span(descriptors).subspan(index, 1).front();
+    if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+      continue;
+    }
+    auto& owner = *std::span(owners).subspan(index, 1).front();
+    auto* const tab = find_tab(*owner.session, owner.pane->tab);
+    LEMMA_ASSERT(tab != nullptr);
+    std::size_t pane_budget = std::min(global_budget, interactive_followup_read_bytes_per_pane_max);
+    const auto pane_budget_before = pane_budget;
+    std::size_t blocked_session_budget = 0;
+    process_pane_events(*owner.session, *tab, *owner.pane, *owner.runtime, runtimes, events,
+                        pane_budget, blocked_session_budget);
+    global_budget -= pane_budget_before - pane_budget;
+  }
+}
+
 struct PaneRuntimeOutcome final {
   PaneAddress pane;
   PaneRuntimeFailure failure{PaneRuntimeFailure::terminal_integrity_error};
@@ -7584,7 +7631,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
     std::size_t pty_write_budget = std::size_t{1} * 1'024U * 1'024U;
-    std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
+    std::array<PaneWriteTarget, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
     std::size_t writable_pane_count = 0;
     for (auto& session : sessions) {
       if (session == nullptr || !session->active) {
@@ -7597,7 +7644,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
         LEMMA_ASSERT(runtime != nullptr);
         if (runtime->live() && !runtime->pending_writes.empty()) {
-          std::span(writable_panes).subspan(writable_pane_count, 1).front() = runtime;
+          std::span(writable_panes).subspan(writable_pane_count, 1).front() = {
+              .session = session.get(), .pane = pane_slot.pane.get(), .runtime = runtime};
           ++writable_pane_count;
         }
       }
@@ -7607,15 +7655,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       std::size_t writable_visited = 0;
       for (; writable_visited < writable_pane_count && pty_write_budget > 0; ++writable_visited) {
         const auto index = (pty_flush_cursor + writable_visited) % writable_pane_count;
-        auto& runtime = *std::span(writable_panes).subspan(index, 1).front();
-        if (!flush_pane_writes(runtime, pty_write_budget)) {
-          runtime.fail(PaneRuntimeFailure::pty_write_error);
+        auto& target = std::span(writable_panes).subspan(index, 1).front();
+        if (!flush_pane_writes(*target.runtime, pty_write_budget)) {
+          target.runtime->fail(PaneRuntimeFailure::pty_write_error);
         }
       }
       pty_flush_cursor = (pty_flush_cursor + writable_visited) % writable_pane_count;
     } else {
       pty_flush_cursor = 0;
     }
+    process_interactive_followups(std::span(writable_panes).first(writable_pane_count), runtimes);
     for (auto& session : sessions) {
       if (session != nullptr && session->active) {
         reclaim_dead_panes(*session, runtimes);
