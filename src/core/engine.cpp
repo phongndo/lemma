@@ -122,7 +122,8 @@ private:
 [[nodiscard]] auto resize_pty_for_transaction(void* const context,
                                               const vt::TerminalSize& size) noexcept -> bool {
   const auto pty = *static_cast<const int*>(context);
-  return platform::resize_pty(pty, size.columns, size.rows);
+  return platform::resize_pty(pty, size.columns, size.rows, size.cell_width_px,
+                              size.cell_height_px);
 }
 
 [[nodiscard]] auto resize_pane_terminal(const int pty, vt::Terminal& terminal,
@@ -131,7 +132,13 @@ private:
     -> TerminalResizeStatus {
   const auto columns = std::clamp(requested_columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(requested_rows, std::uint16_t{1}, protocol::rows_max);
-  const vt::TerminalSize requested{.columns = columns, .rows = rows};
+  const auto previous = terminal.size();
+  const vt::TerminalSize requested{
+      .columns = columns,
+      .rows = rows,
+      .cell_width_px = previous.cell_width_px,
+      .cell_height_px = previous.cell_height_px,
+  };
   auto descriptor = pty;
   return resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor);
 }
@@ -829,7 +836,8 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   runtime->child = platform::spawn_login_shell(runtime->pty, working_directory, environment,
                                                platform_environment_mode(environment_mode));
   if (runtime->child <= 0 || !set_nonblocking(runtime->pty) ||
-      !platform::resize_pty(runtime->pty, columns, rows)) {
+      !platform::resize_pty(runtime->pty, columns, rows, options.size.cell_width_px,
+                            options.size.cell_height_px)) {
     return nullptr;
   }
   const auto compression_activity = runtime->terminal.compression_activity();
@@ -1092,6 +1100,13 @@ using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
   }
   if (status != TerminalResizeStatus::applied) {
     return status;
+  }
+  // Ghostty may emit mode-2048 size reports from resize itself. Those bytes must enter the
+  // pane's ordered PTY queue immediately; they are not left in the adapter until the next PTY
+  // read or keystroke.
+  if (!queue_terminal_responses(runtime.pending_writes, runtime.terminal)) {
+    runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
+    return TerminalResizeStatus::consistency_lost;
   }
   const auto synchronized = runtime.terminal.synchronized_output();
   if (!synchronized.has_value()) {

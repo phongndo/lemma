@@ -23,8 +23,9 @@ spawn_login_shell(int& pty_descriptor, std::string_view working_directory = {},
                   std::span<const std::byte> environment = {},
                   EnvironmentMode environment_mode = EnvironmentMode::inherit) noexcept -> pid_t;
 
-[[nodiscard]] auto resize_pty(int pty_descriptor, std::uint16_t columns,
-                              std::uint16_t rows) noexcept -> bool;
+[[nodiscard]] auto resize_pty(int pty_descriptor, std::uint16_t columns, std::uint16_t rows,
+                              std::uint32_t cell_width_px, std::uint32_t cell_height_px) noexcept
+    -> bool;
 
 // Returns the bounded process name for the PTY's foreground process group, or zero when the
 // foreground process cannot be inspected.

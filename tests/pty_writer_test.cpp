@@ -169,6 +169,39 @@ TEST(PtyWriterTest, ReusesDrainedCapacityAndReleasesItAtOwnerDestruction) {
   EXPECT_EQ(PanePtyWriteQueue::allocated_bytes_current(), baseline);
 }
 
+TEST(PtyWriterTest, QueuesInBandSizeReportsGeneratedByResize) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 80, .rows = 24, .cell_width_px = 8, .cell_height_px = 16};
+  auto terminal_result = vt::Terminal::create(options);
+  ASSERT_TRUE(terminal_result.has_value());
+  auto terminal = std::move(*terminal_result);
+  constexpr std::string_view enable = "\x1B[?2048h";
+  terminal.write(std::as_bytes(std::span(enable.data(), enable.size())));
+
+  PanePtyWriteQueue queue;
+  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  ScriptedWriter script;
+  std::size_t budget = 1'024;
+  ASSERT_EQ(flush_pty_write_queue(queue, budget, &scripted_write, &script),
+            PtyFlushStatus::drained);
+
+  const vt::TerminalSize resized{
+      .columns = 40,
+      .rows = 12,
+      .cell_width_px = 8,
+      .cell_height_px = 16,
+  };
+  ASSERT_TRUE(terminal.resize(resized).has_value());
+  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  budget = 1'024;
+  ASSERT_EQ(flush_pty_write_queue(queue, budget, &scripted_write, &script),
+            PtyFlushStatus::drained);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view written(reinterpret_cast<const char*>(script.written.data()),
+                                 script.written_size);
+  EXPECT_NE(written.find("\x1B[48;12;40;192;320t"), std::string_view::npos);
+}
+
 TEST(PtyWriterTest, RejectsInvalidWriterProgress) {
   PanePtyWriteQueue queue;
   const std::array input{std::byte{'a'}, std::byte{'b'}};

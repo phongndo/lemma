@@ -35,6 +35,44 @@ class ResizeMuxTest(unittest.TestCase):
         top_right.expect_alive()
         bottom_right.expect_alive()
 
+    def test_split_delivers_in_band_size_without_another_keystroke(self) -> None:
+        # After this Ghostty pin, resize itself emits CSI 48. That reply must reach the child PTY
+        # from the split transaction, not from a later keystroke or PTY read. Pixel fields follow
+        # the pane terminal's current cell metrics; the attach protocol does not transport host
+        # cell size, so this test asserts only the cell geometry of an 80x24 client minus status.
+        session = self.server.create_session("in_band_split")
+        pane = session.pane()
+        pane.send(
+            "stty -echo -icanon min 1 time 0; "
+            "esc=$(printf '\\033'); "
+            "printf '%s[?2048h' \"$esc\"; "
+            "buf=; "
+            "while :; do "
+            "c=$(dd bs=1 count=1 2>/dev/null) || exit 1; "
+            'buf="${buf}${c}"; '
+            'case $buf in *"${esc}[48;"*t) break ;; esac; '
+            "done; "
+            "printf '__2048_ARMED__\\n'; "
+            "buf=; "
+            "while :; do "
+            "c=$(dd bs=1 count=1 2>/dev/null) || exit 1; "
+            'buf="${buf}${c}"; '
+            'case $buf in *"${esc}[48;"*t) '
+            'report=${buf#*"${esc}[48;"}; '
+            "report=${report%%t*}; "
+            "rows=${report%%;*}; "
+            "rest=${report#*;}; "
+            "cols=${rest%%;*}; "
+            'printf \'__2048_SPLIT_%s_%s__\\n\' "$rows" "$cols"; '
+            "break ;; esac; "
+            "done\r"
+        )
+        pane.expect_output("__2048_ARMED__")
+
+        pane.split_down()
+        pane.expect_output("__2048_SPLIT_11_80__")
+        pane.expect_alive()
+
 
 if __name__ == "__main__":
     unittest.main()

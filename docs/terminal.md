@@ -106,7 +106,7 @@ Order and ownership:
 1. Runtime reads a bounded PTY chunk.
 2. The pane's `vt::Terminal` parses it once.
 3. Ghostty callbacks copy terminal responses and effects into bounded terminal-owned queues or counters; callbacks do not block.
-4. Terminal responses move to the PaneRuntime's ordered PTY write queue before later accepted application input can overtake them.
+4. Terminal responses move to the PaneRuntime's ordered PTY write queue before later accepted application input can overtake them. Resize-generated replies such as mode-2048 in-band size reports use the same queue; they are not left in the adapter until the next PTY read or keystroke.
 5. Lemma applies policy to effects such as title, bell, clipboard, notification, or unsupported graphics.
 6. Ghostty damage informs presentation scheduling. Rendering observes canonical state but does not become authority.
 
@@ -201,7 +201,7 @@ A 2026 feasibility investigation tested checkpoint-plus-tail client replicas aga
 - inactive primary-screen state while the alternate screen was active; and
 - progressive history, for which no stable bounded range hydration API existed.
 
-At that pin, the C API could not transactionally export both terminal state and persistent parser/decoder continuation, so the temporary prototype was removed. The current pin now exposes bounded snapshot encode/decode with parser continuation and progressive history, but snapshot format version 1 is explicitly a work in progress without a binary-compatibility guarantee. Lemma does not need client terminal replicas for its daemon-rendered architecture, so PTY replay and reconstructive client checkpoints remain intentionally absent rather than assumed.
+At that pin, the C API could not transactionally export both terminal state and persistent parser/decoder continuation, so the temporary prototype was removed. The current pin exposes bounded snapshot encode/decode with parser continuation, progressive history, and an optional decoder flag that retains continuation tracking on the restored terminal. Snapshot format version 1 is explicitly a work in progress without a binary-compatibility guarantee. Lemma does not need client terminal replicas for its daemon-rendered architecture, so PTY replay and reconstructive client checkpoints remain intentionally absent rather than assumed.
 
 Retrying that design requires a new decision, a stable upstream format, measured benefit over daemon rendering, transactional failure behavior, and explicit replica side-effect suppression. Private-memory snapshots, allocator identities, or implementation layouts are never acceptable wire contracts.
 

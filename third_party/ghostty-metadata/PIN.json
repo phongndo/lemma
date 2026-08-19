@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "https://github.com/ghostty-org/ghostty.git",
-  "commit": "226a91658da6400140a7da3f38b825ba0395bd5d",
+  "commit": "3e7230bf5d0e12d018b850ed3856daa848bfebb7",
   "zig_version": "0.16.0",
   "expected_version": "0.1.0-dev",
   "build_options": {

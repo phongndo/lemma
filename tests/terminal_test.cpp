@@ -144,6 +144,23 @@ TEST(TerminalTest, ReportsNewDamageWithoutConsumingPreviouslyPendingRows) {
   EXPECT_GE(retained->dirty_rows, 1U);
 }
 
+TEST(TerminalTest, FormatScreenPreservesPendingWrap) {
+  TerminalOptions options;
+  options.size = {.columns = 8, .rows = 2};
+  auto canonical = make_terminal(options);
+  auto replayed = make_terminal(options);
+  write_text(canonical, "xxxxxxxx");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> formatted{};
+  const auto formatted_size = canonical.format_screen(ScreenFormat::vt, formatted);
+  ASSERT_TRUE(formatted_size.has_value());
+  replayed.write(std::span(formatted).first(*formatted_size));
+
+  write_text(canonical, "y");
+  write_text(replayed, "y");
+  expect_full_projection_equal(canonical, replayed);
+}
+
 TEST(TerminalTest, FormatsDiagnosticSnapshotsIntoCallerStorage) {
   auto terminal = make_terminal();
   write_text(terminal, "plain \x1B[1;32mgreen\x1B[0m");
@@ -350,6 +367,54 @@ TEST(TerminalTest, ResizesWithCheckedPixelDimensions) {
   EXPECT_EQ(update->rows, resized.rows);
 }
 
+TEST(TerminalTest, OmitsFallbackTextOnKeyRelease) {
+  auto terminal = make_terminal();
+  std::array<std::byte, 128> output{};
+  const KeyEvent unidentified_release{
+      .action = KeyAction::release,
+      .key = Key::unidentified,
+      .text = "a",
+  };
+  const auto released = terminal.encode_key(unidentified_release, output);
+  ASSERT_TRUE(released.has_value());
+  EXPECT_EQ(*released, 0U);
+
+  const KeyEvent unidentified_press{
+      .action = KeyAction::press,
+      .key = Key::unidentified,
+      .text = "a",
+  };
+  const auto pressed = terminal.encode_key(unidentified_press, output);
+  ASSERT_TRUE(pressed.has_value());
+  ASSERT_EQ(*pressed, 1U);
+  EXPECT_EQ(output.front(), std::byte{'a'});
+
+  const KeyEvent letter_release_legacy{
+      .action = KeyAction::release,
+      .key = Key::a,
+      .unshifted_codepoint = 'a',
+      .text = "a",
+  };
+  const auto legacy_release = terminal.encode_key(letter_release_legacy, output);
+  ASSERT_TRUE(legacy_release.has_value());
+  EXPECT_EQ(*legacy_release, 0U);
+
+  write_text(terminal, "\x1B[>3u");
+  const KeyEvent letter_release{
+      .action = KeyAction::release,
+      .key = Key::a,
+      .unshifted_codepoint = 'a',
+      .text = "a",
+  };
+  const auto kitty_release = terminal.encode_key(letter_release, output);
+  ASSERT_TRUE(kitty_release.has_value());
+  ASSERT_GT(*kitty_release, 0U);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(output.data()), *kitty_release);
+  EXPECT_THAT(encoded, testing::StartsWith("\x1B["));
+  EXPECT_THAT(encoded, testing::Not(testing::StrEq("a")));
+}
+
 TEST(TerminalTest, EncodesNormalizedLegacyAndKittyKeys) {
   auto terminal = make_terminal();
   std::array<std::byte, 128> output{};
@@ -511,6 +576,53 @@ TEST(TerminalTest, PtyResponseOverflowIsStickyTerminalIntegrityFailure) {
   EXPECT_TRUE(terminal.take_effects().pty_response_overflowed);
   EXPECT_TRUE(terminal.pty_response_overflowed());
   EXPECT_TRUE(terminal.integrity_failed());
+}
+
+TEST(TerminalTest, ReportsInBandSizeWhenMode2048IsEnabled) {
+  TerminalOptions options;
+  options.size = {
+      .columns = 80,
+      .rows = 24,
+      .cell_width_px = 9,
+      .cell_height_px = 18,
+  };
+  auto terminal = make_terminal(options);
+  write_text(terminal, "\x1B[?2048h");
+
+  std::array<std::byte, 128> response{};
+  const auto response_size = terminal.read_pty_responses(response);
+  ASSERT_GT(response_size, 0U);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[48;24;80;432;720t"));
+}
+
+TEST(TerminalTest, ReportsInBandSizeWhenResizedAfterMode2048) {
+  TerminalOptions options;
+  options.size = {
+      .columns = 80,
+      .rows = 24,
+      .cell_width_px = 9,
+      .cell_height_px = 18,
+  };
+  auto terminal = make_terminal(options);
+  write_text(terminal, "\x1B[?2048h");
+  std::array<std::byte, 128> discarded{};
+  ASSERT_GT(terminal.read_pty_responses(discarded), 0U);
+
+  const TerminalSize resized{
+      .columns = 100,
+      .rows = 18,
+      .cell_width_px = 9,
+      .cell_height_px = 18,
+  };
+  ASSERT_TRUE(terminal.resize(resized).has_value());
+  std::array<std::byte, 128> response{};
+  const auto response_size = terminal.read_pty_responses(response);
+  ASSERT_GT(response_size, 0U);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[48;18;100;324;900t"));
 }
 
 TEST(TerminalTest, ReportsTruthfulChildVisibleIdentityAndGeometry) {

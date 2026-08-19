@@ -96,7 +96,7 @@ struct Terminal::Impl final {
 
   [[nodiscard]] auto dirty_state() const noexcept -> std::expected<DirtyState, Error>;
   [[nodiscard]] auto set_dirty_state(DirtyState dirty) const noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto populate_render_metadata(RenderUpdate& update) const noexcept
+  [[nodiscard]] auto populate_render_metadata(RenderUpdate& update) noexcept
       -> std::expected<void, Error>;
   [[nodiscard]] auto dirty_row_count() noexcept -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto calculate_row_hash() noexcept -> std::expected<std::uint64_t, Error>;
@@ -129,8 +129,11 @@ struct Terminal::Impl final {
   std::size_t physical_cell_capacity{0};
   std::size_t row_hash_count{0};
   std::array<bool, 12> mirrored_mode_values{};
+  GhosttyRenderStateCursorVisualStyle render_cursor_style{
+      GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK};
   GhosttyColorRgb projected_cursor_color{};
   std::uint8_t projected_cursor_code{0};
+  bool render_cursor_blinking{false};
   bool mirrored_modes_valid{false};
   bool mirrored_mouse_modes_valid{false};
   bool projected_cursor_valid{false};

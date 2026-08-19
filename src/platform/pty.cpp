@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -191,13 +192,26 @@ namespace {
 #endif
 }
 
+[[nodiscard]] constexpr auto window_pixels(const std::uint32_t cell_px,
+                                           const std::uint16_t cells) noexcept -> unsigned short {
+  if (cell_px == 0 || cells == 0) {
+    return 0;
+  }
+  constexpr auto pixel_max = std::numeric_limits<unsigned short>::max();
+  if (cell_px > static_cast<std::uint32_t>(pixel_max) / cells) {
+    return pixel_max;
+  }
+  return static_cast<unsigned short>(cell_px * cells);
+}
+
 [[nodiscard]] auto resize_pty(const int pty_descriptor, const std::uint16_t columns,
-                              const std::uint16_t rows) noexcept -> bool {
+                              const std::uint16_t rows, const std::uint32_t cell_width_px,
+                              const std::uint32_t cell_height_px) noexcept -> bool {
   winsize native_size{
       .ws_row = rows,
       .ws_col = columns,
-      .ws_xpixel = 0,
-      .ws_ypixel = 0,
+      .ws_xpixel = window_pixels(cell_width_px, columns),
+      .ws_ypixel = window_pixels(cell_height_px, rows),
   };
   // ioctl is variadic because its third argument depends on the request.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)

@@ -370,20 +370,13 @@ struct AnsiStyle final {
   return {};
 }
 
-[[nodiscard]] auto Terminal::Impl::populate_render_metadata(RenderUpdate& update) const noexcept
+[[nodiscard]] auto Terminal::Impl::populate_render_metadata(RenderUpdate& update) noexcept
     -> std::expected<void, Error> {
   const std::array keys{
       GHOSTTY_RENDER_STATE_DATA_COLS,
       GHOSTTY_RENDER_STATE_DATA_ROWS,
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE,
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
   };
-  std::array<void*, keys.size()> values{
-      &update.columns,
-      &update.rows,
-      &update.cursor_visible,
-      &update.cursor_in_viewport,
-  };
+  std::array<void*, keys.size()> values{&update.columns, &update.rows};
   std::size_t values_written = 0;
   auto result = ghostty_render_state_get_multi(render_state, keys.size(), keys.data(),
                                                values.data(), &values_written);
@@ -393,24 +386,19 @@ struct AnsiStyle final {
   if (values_written != keys.size()) {
     return std::unexpected(Error::invalid_state);
   }
-  if (!update.cursor_in_viewport) {
-    update.cursor_column = 0;
-    update.cursor_row = 0;
-    return {};
-  }
-  const std::array cursor_keys{
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
-      GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
-  };
-  std::array<void*, cursor_keys.size()> cursor_values{&update.cursor_column, &update.cursor_row};
-  values_written = 0;
-  result = ghostty_render_state_get_multi(render_state, cursor_keys.size(), cursor_keys.data(),
-                                          cursor_values.data(), &values_written);
+
+  GhosttyRenderStateCursor cursor = GHOSTTY_INIT_SIZED(GhosttyRenderStateCursor);
+  result = ghostty_render_state_get(render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR, &cursor);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
-  return values_written == cursor_keys.size() ? std::expected<void, Error>{}
-                                              : std::unexpected(Error::invalid_state);
+  update.cursor_visible = cursor.visible;
+  update.cursor_in_viewport = cursor.viewport_has_value;
+  update.cursor_column = cursor.viewport_has_value ? cursor.viewport_x : std::uint16_t{0};
+  update.cursor_row = cursor.viewport_has_value ? cursor.viewport_y : std::uint16_t{0};
+  render_cursor_style = cursor.visual_style;
+  render_cursor_blinking = cursor.blinking;
+  return {};
 }
 
 [[nodiscard]] auto Terminal::Impl::dirty_row_count() noexcept -> std::expected<std::size_t, Error> {
@@ -421,16 +409,9 @@ struct AnsiStyle final {
   }
 
   std::size_t count = 0;
-  while (ghostty_render_state_row_iterator_next(row_iterator)) {
-    bool row_dirty = false;
-    result =
-        ghostty_render_state_row_get(row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
-    if (row_dirty) {
-      ++count;
-    }
+  std::uint16_t row_y = 0;
+  while (ghostty_render_state_row_iterator_next_dirty(row_iterator, &row_y)) {
+    ++count;
   }
   return count;
 }
@@ -744,25 +725,7 @@ auto Terminal::mark_rendered() noexcept -> std::expected<void, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->render_state != nullptr);
 
-  auto result =
-      ghostty_render_state_get(impl_->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                               static_cast<void*>(&impl_->row_iterator));
-  if (result != GHOSTTY_SUCCESS) {
-    return std::unexpected(detail::map_error(result));
-  }
-
-  const bool clean = false;
-  while (ghostty_render_state_row_iterator_next(impl_->row_iterator)) {
-    result = ghostty_render_state_row_set(impl_->row_iterator,
-                                          GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
-  }
-
-  const auto clean_state = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
-  result = ghostty_render_state_set(impl_->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY,
-                                    &clean_state);
+  const auto result = ghostty_render_state_clean(impl_->render_state);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -841,7 +804,8 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
   impl_->render_colors.size = full || *dirty != DirtyState::clean
                                   ? sizeof(impl_->render_colors)
                                   : offsetof(GhosttyRenderStateColors, palette);
-  result = ghostty_render_state_colors_get(impl_->render_state, &impl_->render_colors);
+  result = ghostty_render_state_get(impl_->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS,
+                                    &impl_->render_colors);
   if (result != GHOSTTY_SUCCESS) {
     impl_->ansi_physical_valid = false;
     return std::unexpected(detail::map_error(result));
@@ -894,38 +858,43 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
       return std::unexpected(detail::map_error(result));
     }
 
-    std::size_t row_index = 0;
-    const bool clean = false;
-    while (ghostty_render_state_row_iterator_next(impl_->row_iterator)) {
-      bool row_dirty = false;
-      result = ghostty_render_state_row_get(impl_->row_iterator,
-                                            GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty);
-      if (result != GHOSTTY_SUCCESS) {
-        impl_->ansi_physical_valid = false;
-        return std::unexpected(detail::map_error(result));
-      }
+    const auto encode_changed_row =
+        [&](const std::size_t row_index) noexcept -> std::expected<void, Error> {
       const bool scroll_row_unchanged =
           scrolled_rows != 0 &&
           std::span(impl_->row_hashes).subspan(row_index, 1).front() ==
               std::span(impl_->current_row_hashes).subspan(row_index, 1).front();
-      if ((full || row_dirty) && !scroll_row_unchanged) {
-        const auto encoded =
-            impl_->encode_row(writer, row_index, full, origin_column, origin_row, !composed);
+      if (scroll_row_unchanged) {
+        return {};
+      }
+      const auto encoded =
+          impl_->encode_row(writer, row_index, full, origin_column, origin_row, !composed);
+      if (!encoded.has_value()) {
+        return std::unexpected(encoded.error());
+      }
+      rendered_rows += static_cast<std::size_t>(*encoded);
+      return {};
+    };
+
+    if (full) {
+      std::size_t row_index = 0;
+      while (ghostty_render_state_row_iterator_next(impl_->row_iterator)) {
+        const auto encoded = encode_changed_row(row_index);
         if (!encoded.has_value()) {
           impl_->ansi_physical_valid = false;
           return std::unexpected(encoded.error());
         }
-        rendered_rows += static_cast<std::size_t>(*encoded);
+        ++row_index;
       }
-      if (full || row_dirty) {
-        result = ghostty_render_state_row_set(impl_->row_iterator,
-                                              GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
-        if (result != GHOSTTY_SUCCESS) {
+    } else {
+      std::uint16_t row_index = 0;
+      while (ghostty_render_state_row_iterator_next_dirty(impl_->row_iterator, &row_index)) {
+        const auto encoded = encode_changed_row(row_index);
+        if (!encoded.has_value()) {
           impl_->ansi_physical_valid = false;
-          return std::unexpected(detail::map_error(result));
+          return std::unexpected(encoded.error());
         }
       }
-      ++row_index;
     }
   }
 
@@ -954,21 +923,9 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     return std::unexpected(Error::out_of_space);
   }
   if (!composed || focused) {
-    GhosttyRenderStateCursorVisualStyle cursor_style =
-        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
-    bool cursor_blinking = false;
-    if (!cursor_override) {
-      result = ghostty_render_state_get(
-          impl_->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_style);
-      if (result == GHOSTTY_SUCCESS) {
-        result = ghostty_render_state_get(
-            impl_->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &cursor_blinking);
-      }
-      if (result != GHOSTTY_SUCCESS) {
-        impl_->ansi_physical_valid = false;
-        return std::unexpected(detail::map_error(result));
-      }
-    }
+    const auto cursor_style = cursor_override ? GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+                                              : impl_->render_cursor_style;
+    const auto cursor_blinking = !cursor_override && impl_->render_cursor_blinking;
     const auto cursor_code = [cursor_style, cursor_blinking]() noexcept -> std::uint8_t {
       switch (cursor_style) {
       case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
@@ -1063,9 +1020,7 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     return std::unexpected(Error::out_of_space);
   }
 
-  const auto clean_state = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
-  result = ghostty_render_state_set(impl_->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY,
-                                    &clean_state);
+  result = ghostty_render_state_clean(impl_->render_state);
   if (result != GHOSTTY_SUCCESS) {
     impl_->ansi_physical_valid = false;
     return std::unexpected(detail::map_error(result));

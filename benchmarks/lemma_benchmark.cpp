@@ -273,7 +273,7 @@ void benchmark_live_divider_pty_resize(benchmark::State& state) {
     for ([[maybe_unused]] const auto iteration : state) {
       expanded = !expanded;
       if (!platform::resize_pty(descriptor, expanded ? std::uint16_t{40} : std::uint16_t{39},
-                                std::uint16_t{23})) {
+                                std::uint16_t{23}, 0, 0)) {
         state.SkipWithError("TIOCSWINSZ failed");
         break;
       }

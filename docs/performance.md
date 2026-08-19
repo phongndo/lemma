@@ -29,6 +29,8 @@ Large VT parsing measured 1.22 GiB/s. The result supports incremental damage and
 
 An August 19 adapter qualification added a clean-terminal-frame fast path and skipped the 256-entry palette suffix when Ghostty reported no canonical damage, while still querying scalar default and cursor colors. Twenty release repetitions reduced median clean-frame projection from the retained 335 ns baseline to 162 ns (51.6%) while preserving the same 49 emitted bytes. This is CPU saved on compositor-only frames and clean panes; it is not a claimed reduction for dirty full-screen TUI redraws. The rejected alternative—batching existing per-cell Ghostty getters—regressed sparse and full rendering by about 60% and was reverted.
 
+An August 19 pin upgrade to Ghostty `3e7230bf5` replaced the removed colors getter with `GHOSTTY_RENDER_STATE_DATA_COLORS`, read cursor state as one sized struct, iterated only dirty rows, and marked completed frames clean in one call. Matched release runs kept the same emitted frame sizes. CPU is not claimed from that pin bump; the allocation audit remained at zero general and terminal-quota allocations.
+
 A post-change five-repetition release microbenchmark populated 20,000 rows, held the Ghostty viewport 100 rows above the live area, alternated normalized one-row wheel movement, and forced the same complete pane redraw required by server-rendered viewport navigation. Median CPU was 46.991 us per event with 2,304 output bytes. This measures one 80x23 terminal projection, not split-pane composition or outer-device pixel scrolling. Reproduce with:
 
 ```sh

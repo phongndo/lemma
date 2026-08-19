@@ -340,6 +340,32 @@ struct ResizeObservation final {
   return observation.calls <= observation.accepted_calls;
 }
 
+TEST(TerminalResizeTransactionTest, PreservesCellPixelsAcrossAppliedLayoutResize) {
+  vt::TerminalOptions options;
+  options.size = {
+      .columns = 80,
+      .rows = 24,
+      .cell_width_px = 9,
+      .cell_height_px = 18,
+  };
+  auto terminal = make_terminal(options);
+  const vt::TerminalSize requested{
+      .columns = 40,
+      .rows = 12,
+      .cell_width_px = options.size.cell_width_px,
+      .cell_height_px = options.size.cell_height_px,
+  };
+  ResizeObservation observation{.terminal = &terminal, .accepted_calls = 1};
+
+  const auto status =
+      core::resize_terminal_transaction(terminal, requested, &observe_pty_resize, &observation);
+
+  EXPECT_EQ(status, core::TerminalResizeStatus::applied);
+  ASSERT_EQ(observation.calls, 1U);
+  EXPECT_EQ(observation.requested.front(), requested);
+  EXPECT_EQ(terminal.size(), requested);
+}
+
 TEST(TerminalResizeTransactionTest, ReportsPtyGeometryBeforeGhosttyMutation) {
   auto terminal = make_terminal();
   const auto original = terminal.size();
