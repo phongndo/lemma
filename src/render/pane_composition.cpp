@@ -1190,6 +1190,32 @@ struct CompositionPolicy final {
          (!project_outer_modes || projected()) && append(output, used, "\x1B[?2026l");
 }
 
+[[nodiscard]] auto finish_composition(const std::span<const PaneSurface> panes,
+                                      const PaneOverlay overlay, const StatusLine status,
+                                      const Viewport viewport, const std::span<std::byte> output,
+                                      std::size_t used, const std::uint16_t row_offset,
+                                      const bool force_full, const bool complete_frame,
+                                      const std::optional<OuterModeProjection> previous_outer_modes,
+                                      CompositionResult composition) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
+  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset) ||
+      !render_status_prompt_cursor(status, viewport, output, used)) {
+    invalidate_panes(panes);
+    return std::unexpected(CompositionError::output_exhausted);
+  }
+  // A pane-level repair does not make the protocol frame complete when suppression omitted a
+  // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
+  // advance.
+  composition.full = composition.full && complete_frame;
+  if (!finish_frame(output, used, composition.outer_modes,
+                    force_full || previous_outer_modes != composition.outer_modes)) {
+    invalidate_panes(panes);
+    return std::unexpected(CompositionError::output_exhausted);
+  }
+  composition.bytes = used;
+  return composition;
+}
+
 } // namespace
 
 [[nodiscard]] auto status_target_at_column(const StatusLine status, const Viewport viewport,
@@ -1261,22 +1287,8 @@ compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
   }
-  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset) ||
-      !render_status_prompt_cursor(status, viewport, output, used)) {
-    invalidate_panes(panes);
-    return std::unexpected(CompositionError::output_exhausted);
-  }
-  // A pane-level repair does not make the protocol frame complete when suppression omitted a
-  // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
-  // advance.
-  composition.full = composition.full && complete_frame;
-  if (!finish_frame(output, used, composition.outer_modes,
-                    force_full || previous_outer_modes != composition.outer_modes)) {
-    invalidate_panes(panes);
-    return std::unexpected(CompositionError::output_exhausted);
-  }
-  composition.bytes = used;
-  return composition;
+  return finish_composition(panes, overlay, status, viewport, output, used, row_offset, force_full,
+                            complete_frame, previous_outer_modes, composition);
 }
 
 } // namespace lemma::render

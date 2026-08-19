@@ -275,6 +275,8 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   return write_all_until("\x1B[?2026l", deadline);
 }
 
+// The branches are the explicit bounded states of the synthetic wheel peer.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_tui_wheel(const std::string_view receipt_path,
                                  const std::size_t burst_size) noexcept -> int {
   if (receipt_path.empty() || burst_size == 0 || burst_size > 256U) {
@@ -379,6 +381,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   static_cast<void>(::close(receipt));
   return 1;
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 [[nodiscard]] auto make_output_nonblocking() noexcept -> bool {
   // fcntl is variadic even when F_GETFL has no third argument.
@@ -658,6 +661,20 @@ enum class LatencyMode : std::uint8_t {
   tui_redraw,
 };
 
+[[nodiscard]] constexpr auto latency_ready_marker(const LatencyMode mode) noexcept
+    -> std::string_view {
+  switch (mode) {
+  case LatencyMode::idle:
+    return "\r\n__LEMMA_LATENCY_READY__\r\n";
+  case LatencyMode::autonomous_output:
+    return "\r\n__LEMMA_LATENCY_OUTPUT_READY__\r\n";
+  case LatencyMode::tui_redraw:
+    return "\x1B[?1049h\x1B[?2026h\x1B[2J\x1B[H"
+           "__LEMMA_TUI_REDRAW_READY__\x1B[?2026l";
+  }
+  return {};
+}
+
 // This benchmark peer keeps each framed receipt and echo bounded and explicit.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_latency(const std::string_view receipt_path,
@@ -680,10 +697,7 @@ enum class LatencyMode : std::uint8_t {
   // The socket ABI intentionally erases the concrete address type.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* generic = reinterpret_cast<const sockaddr*>(&address);
-  const std::string_view ready = autonomous_output ? "\r\n__LEMMA_LATENCY_OUTPUT_READY__\r\n"
-                                 : tui_redraw      ? "\x1B[?1049h\x1B[?2026h\x1B[2J\x1B[H"
-                                                     "__LEMMA_TUI_REDRAW_READY__\x1B[?2026l"
-                                                   : "\r\n__LEMMA_LATENCY_READY__\r\n";
+  const auto ready = latency_ready_marker(mode);
   if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
       !write_all(ready)) {
     static_cast<void>(::close(receipt));

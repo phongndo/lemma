@@ -1960,7 +1960,7 @@ TEST_F(MuxProcessTest, RestoresTerminalWhenDaemonConnectionIsLost) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
   EXPECT_TRUE(client.terminal_state_restored());
   EXPECT_TRUE(client.raw_tail().contains("\x1B[?1049l"));
-  EXPECT_TRUE(client.raw_tail().contains("connection was lost"));
+  EXPECT_TRUE(client.wait_for_raw("connection was lost", deadline_after(1s))) << client.raw_tail();
 }
 
 TEST_F(MuxProcessTest, LastShellExitReclaimsSessionAndRestoresTerminal) {
