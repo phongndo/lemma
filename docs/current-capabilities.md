@@ -89,12 +89,12 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Damage rendering | Working | Dirty rows/cell spans, grapheme-safe scroll detection, semantic default/indexed colors, distinguishable isolated RGB overrides, cursor, and mode projection emit bounded ANSI. Exact equal-to-default override provenance and transactional OSC 8 hyperlink projection still require narrower Ghostty render APIs. |
 | Pane composition | Working | Status, separators, panes, copy highlight/cursor, synchronized output, and focused terminal modes compose server-side. |
 | Full reconstruction | Working | Attach, resize, active-tab changes, and lag recovery can force a complete daemon-rendered frame. |
-| Slow-client isolation | Working | Local clients pass a nonblocking outer-terminal writer to the daemon; one retained transaction, bounded write budgets, fair cursor, progress/total deadlines, and full-redraw recovery apply directly to that sink. Non-negotiating peers retain framed socket rendering. |
+| Slow-client isolation | Working | One retained transaction, bounded write budgets, fair cursor, progress/total deadlines, and full-redraw recovery. |
 | Portable terminal replicas/checkpoints | Intentionally absent | The rejected design and evidence are summarized in [`terminal.md`](terminal.md). |
 | Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
 | Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.7. It negotiates local direct rendering through a transferred terminal descriptor while retaining framed socket rendering for non-negotiating peers. The control plane transports bounded typed key/paste/focus/mouse and pane-resize input plus a bounded client observation of the host default colors and 16-color ANSI palette during attach.
+The current private attached-client protocol is version 2.6. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors and 16-color ANSI palette during attach.
 
 ## Configuration and extensions
 

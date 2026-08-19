@@ -114,7 +114,7 @@ TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecyc
 
   const auto protocol_maximum = render::frame_capacity_for_viewport({.columns = 500, .rows = 200});
   ASSERT_TRUE(protocol_maximum.has_value());
-  EXPECT_EQ(*protocol_maximum, 35'204'096U);
+  EXPECT_EQ(*protocol_maximum, 35'604'096U);
   EXPECT_LE(*protocol_maximum, render::frame_bytes_max);
 
   ASSERT_TRUE(frame.prepare({.columns = 80, .rows = 24}));
@@ -222,24 +222,6 @@ TEST(ClientFrameOutputTest, ChunksDeclaredFrameTransactionAtProtocolBoundary) {
   readable = output.readable(frame);
   EXPECT_EQ(readable.size(), 123U);
   ASSERT_TRUE(output.consume(readable.size(), origin));
-  EXPECT_FALSE(output.busy());
-}
-
-TEST(ClientFrameOutputTest, DirectRenderQueuesOnlyRawFrameBytes) {
-  auto frame = make_frame();
-  constexpr std::string_view payload = "direct-render";
-  std::ranges::copy(std::as_bytes(std::span(payload.data(), payload.size())),
-                    frame->writable().begin());
-  ClientFrameOutput output;
-  output.set_direct_render(true);
-
-  ASSERT_TRUE(queue_frame(output, payload.size(), origin));
-  EXPECT_TRUE(output.direct_frame());
-  EXPECT_EQ(output.queued_message_count(), 0U);
-  EXPECT_EQ(output.size(), payload.size());
-  EXPECT_TRUE(std::ranges::equal(output.readable(*frame),
-                                 std::as_bytes(std::span(payload.data(), payload.size()))));
-  EXPECT_TRUE(output.consume(payload.size(), origin));
   EXPECT_FALSE(output.busy());
 }
 

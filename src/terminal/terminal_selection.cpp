@@ -660,8 +660,7 @@ struct SearchTextCursor final {
   if (!ref.has_value()) {
     return std::unexpected(ref.error());
   }
-  constexpr std::size_t codepoints_max = pane_ansi_grapheme_bytes_max / 4U;
-  std::array<std::uint32_t, codepoints_max> codepoints{};
+  std::array<std::uint32_t, pane_grapheme_codepoints_max> codepoints{};
   std::size_t codepoint_count = 0;
   const auto result =
       ghostty_grid_ref_graphemes(&*ref, codepoints.data(), codepoints.size(), &codepoint_count);

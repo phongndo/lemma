@@ -148,11 +148,9 @@ The exact scheduling algorithm is implementation policy, not an architectural ph
 
 ## Presentation
 
-The daemon uses server-rendered ANSI, but presentation remains downstream of canonical terminal and mux state. For a local attachment, the client passes one nonblocking duplicate of its outer-terminal writer with `SCM_RIGHTS`; the daemon writes composed frames directly while the client continues to own physical input, resize observation, host-theme discovery, termios, and emergency restoration. The control socket remains authoritative for setup, input, typed disconnect, and lifecycle. Peers that do not negotiate direct rendering retain the framed socket-render path.
+The daemon uses server-rendered ANSI, but presentation remains downstream of canonical terminal and mux state. Each AttachmentRuntime uses one bounded framed socket transport for control and rendered output; the replaceable client alone owns and writes the outer-terminal descriptor. A presentation snapshot, delta, retained physical shadow, or frame buffer is replaceable and non-authoritative.
 
-Exactly one normal presentation transport is active per AttachmentRuntime. The daemon owns the transferred writer and closes it before releasing the attachment; the client keeps an independent cleanup descriptor but never uses it for ordinary frames. Canonical state remains entirely in Ghostty behind the daemon-owned PaneRuntime, so descriptor transfer does not create a second terminal or presentation authority.
-
-A presentation snapshot, delta, retained physical shadow, or frame buffer is replaceable and non-authoritative.
+Do not add a second normal presentation transport or transfer the outer-terminal descriptor without new evidence that the latency benefit justifies the additional protocol, descriptor-lifetime, polling, fallback, and failure-recovery paths.
 
 A native renderer may be added only as another bounded projection. It must not require client PTY replay, a second parser authority, or private Ghostty representation outside the terminal component.
 

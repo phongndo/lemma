@@ -64,9 +64,11 @@ Lemma canonical grid
 renderer
 ```
 
-Ghostty remains canonical. The first theme-bearing attachment establishes stable child-facing session defaults; later attachments do not mutate that canonical theme. ANSI projection preserves inherited default and palette-indexed colors so each attaching terminal performs the final palette lookup. Explicit RGB and distinguishable pane-local OSC color overrides remain explicit RGB; pane overrides are never forwarded as global outer-terminal palette mutations.
+Ghostty remains canonical. The first theme-bearing attachment establishes stable child-facing session defaults; later attachments do not mutate that canonical theme. ANSI projection preserves inherited defaults and palette indices 0-15 only where the attachment's host-theme query established an equivalent outer entry. Extended indices 16-255, explicit RGB, and distinguishable pane-local OSC color overrides project as explicit RGB because the corresponding outer entries are not queried. Pane overrides are never forwarded as global outer-terminal palette mutations.
 
 The pinned Ghostty C API exposes effective and default colors but not override presence. An application override whose RGB value exactly equals the configured default is therefore indistinguishable and remains semantically indexed/default during projection. Exact handling of that edge requires Ghostty to expose its existing default and palette override provenance through the C API.
+
+The adapter's grapheme bound is part of dependency qualification: the pinned Ghostty stores one base codepoint plus at most 64 suffix codepoints, requiring at most 260 UTF-8 bytes. Lemma reserves that complete bound for render and search traversal and treats overflow as a dependency-contract failure rather than silently substituting a replacement character.
 
 OSC 8 hyperlink projection has a similar narrow upstream boundary: the render row/cell API does not expose stable hyperlink identity or URI as part of the acquired render state. Point-based grid-reference lookup is not a transactional per-cell render contract and would add multiplicative lookup work. Lemma therefore does not fabricate hyperlink projection; end-to-end ANSI hyperlink preservation awaits render-state hyperlink metadata from Ghostty.
 
@@ -79,6 +81,8 @@ Lemma-owned presentation snapshots, deltas, hashes, or retained physical shadows
 5. not a second implementation of terminal semantics.
 
 Prefer projecting from Ghostty into bounded caller-owned presentation storage. Ask for a scalar when only a scalar is needed; do not obtain or copy an aggregate terminal snapshot by default.
+
+When Lemma's compositor overrides child-owned non-mouse modes or cursor shape after pane rendering, it invalidates only the affected retained projection metadata. A later incremental frame restores the focused child's canonical state without discarding cell hashes or forcing unrelated repaint.
 
 PTY bytes are parsed exactly once. Raw PTY bytes are not retained merely in case a client may want to replay them.
 

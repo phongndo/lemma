@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -30,7 +29,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x07}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -59,27 +58,6 @@ TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
   ASSERT_NE((**decoded).host_theme, nullptr);
   EXPECT_EQ(*(**decoded).host_theme, theme);
   EXPECT_EQ((**decoded).session, "themed");
-}
-
-TEST(ProtocolTest, NegotiatesDirectRenderInHelloFlags) {
-  const auto client_hello = encode_client_hello("direct", {.columns = 80, .rows = 24}, 1,
-                                                current_version, std::nullopt, true);
-  ClientDecoder client_decoder;
-  ASSERT_TRUE(client_decoder.prepare().has_value());
-  std::ranges::copy(client_hello.bytes(), client_decoder.writable_bytes().begin());
-  ASSERT_TRUE(client_decoder.commit(client_hello.bytes().size()).has_value());
-  const auto client_message = client_decoder.next();
-  ASSERT_TRUE(client_message.has_value() && client_message->has_value());
-  EXPECT_TRUE((**client_message).direct_render);
-
-  const auto daemon_hello = encode_daemon_hello({.columns = 80, .rows = 24}, 1, true);
-  ServerDecoder server_decoder;
-  ASSERT_TRUE(server_decoder.prepare().has_value());
-  std::ranges::copy(daemon_hello.bytes(), server_decoder.writable_bytes().begin());
-  ASSERT_TRUE(server_decoder.commit(daemon_hello.bytes().size()).has_value());
-  const auto server_message = server_decoder.next();
-  ASSERT_TRUE(server_message.has_value() && server_message->has_value());
-  EXPECT_TRUE((**server_message).direct_render);
 }
 
 TEST(ProtocolTest, RoundTripsTypedPasteFocusAndMouseInput) {
@@ -187,7 +165,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x07}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x06}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };

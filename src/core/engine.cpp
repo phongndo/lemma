@@ -594,20 +594,15 @@ struct AttachmentRuntime final {
   auto operator=(const AttachmentRuntime&) -> AttachmentRuntime& = delete;
   AttachmentRuntime(AttachmentRuntime&&) = delete;
   auto operator=(AttachmentRuntime&&) -> AttachmentRuntime& = delete;
-  ~AttachmentRuntime() {
-    close_descriptor(render);
-    close_descriptor(client);
-  }
+  ~AttachmentRuntime() { close_descriptor(client); }
 
   void reset_connection() noexcept {
     copy_mode = {};
     clipboard_write.reset();
-    close_descriptor(render);
     close_descriptor(client);
     connection_id = {};
     decoder.release();
     output.reset();
-    output.set_direct_render(false);
     frame.release();
     server_sequence = 2;
     full_redraw_generation = 0;
@@ -643,7 +638,6 @@ struct AttachmentRuntime final {
   std::uint32_t pending_attach_generation{0};
   std::uint64_t status_signature{0};
   std::optional<render::OuterModeProjection> outer_modes;
-  int render{-1};
   int client{-1};
   bool status_valid{false};
   bool bell_pending{false};
@@ -5704,8 +5698,6 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
-// Composition validates and commits one bounded presentation transaction.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto compose_session_frame(SessionRecord& session, PaneRuntimeStore& runtimes,
                                          const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
@@ -5749,12 +5741,9 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
     output.subspan(frame_bytes, 1).front() = std::byte{0x07};
     ++frame_bytes;
   }
-  const auto frame_messages = session.attachment_runtime.render >= 0
-                                  ? 0U
-                                  : ClientFrameOutput::frame_message_count(frame_bytes);
-  if ((session.attachment_runtime.render < 0 && frame_messages == 0) ||
-      frame_messages >
-          std::numeric_limits<std::uint32_t>::max() - session.attachment_runtime.server_sequence) {
+  const auto frame_messages = ClientFrameOutput::frame_message_count(frame_bytes);
+  if (frame_messages == 0 || frame_messages > std::numeric_limits<std::uint32_t>::max() -
+                                                  session.attachment_runtime.server_sequence) {
     return false;
   }
   auto generation = session.attachment_runtime.full_redraw_generation;
@@ -5938,14 +5927,12 @@ enum class PendingState : std::uint8_t {
   read_working_directory,
   read_environment_size,
   read_environment,
-  read_render_descriptor,
   flush_response,
 };
 
 enum class PendingAction : std::uint8_t {
   close,
   attach,
-  await_render_descriptor,
   shutdown,
 };
 
@@ -5953,7 +5940,6 @@ struct PendingConnection final {
   [[nodiscard]] auto active() const noexcept -> bool { return state != PendingState::unused; }
 
   int descriptor{-1};
-  int render_descriptor{-1};
   std::uint32_t generation{0};
   PendingState state{PendingState::unused};
   PendingAction action{PendingAction::close};
@@ -5971,7 +5957,6 @@ struct PendingConnection final {
   protocol::ClientDecoder attach_decoder;
   protocol::Dimensions attach_dimensions{};
   std::optional<protocol::HostTerminalTheme> attach_host_theme;
-  bool attach_direct_render{false};
   SessionId attach_session;
   std::chrono::steady_clock::time_point deadline;
   std::chrono::steady_clock::time_point setup_deadline;
@@ -6077,7 +6062,6 @@ void close_pending(PendingConnections& connections, const std::size_t slot,
     return;
   }
   release_attach_reservation(*owner, slot, sessions);
-  close_descriptor(owner->render_descriptor);
   close_descriptor(owner->descriptor);
   owner.reset();
 }
@@ -6341,13 +6325,10 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
   session->attachment_runtime.pending_attach_generation = pending.generation;
   pending.attach_session = session->id;
   pending.output.reset();
-  const auto hello =
-      protocol::encode_daemon_hello(pending.attach_dimensions, 1, pending.attach_direct_render);
+  const auto hello = protocol::encode_daemon_hello(pending.attach_dimensions);
   const bool appended = pending.output.append(hello.bytes());
   LEMMA_ASSERT(appended);
-  finish_pending_output(pending, pending.attach_direct_render
-                                     ? PendingAction::await_render_descriptor
-                                     : PendingAction::attach);
+  finish_pending_output(pending, PendingAction::attach);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -6382,7 +6363,6 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     }
     break;
   case PendingState::read_attach:
-  case PendingState::read_render_descriptor:
     LEMMA_ASSERT(false);
     break;
   case PendingState::read_name_size: {
@@ -6532,7 +6512,6 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
         pending->attach_dimensions = message.dimensions;
         pending->attach_host_theme =
             message.host_theme == nullptr ? std::nullopt : std::optional{*message.host_theme};
-        pending->attach_direct_render = message.direct_render;
         pending->attach_decoder.consume();
         prepare_attach(*pending, sessions, runtimes, slot);
         continue;
@@ -6588,9 +6567,6 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
   }
 }
 
-void handoff_attached_connection(PendingConnections& connections, std::size_t slot,
-                                 Sessions& sessions, PaneRuntimeStore& runtimes) noexcept;
-
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
                           const std::size_t slot) noexcept {
@@ -6600,22 +6576,7 @@ void process_pending_read(PendingConnections& connections, Sessions& sessions,
     close_pending(connections, slot, sessions);
     return;
   }
-  if (pending->state != PendingState::read_render_descriptor) {
-    process_pending_fields(connections, sessions, runtimes, extensions, slot);
-    return;
-  }
-  const auto received =
-      platform::receive_descriptor(pending->descriptor, pending->render_descriptor);
-  if (received == platform::ReceiveDescriptorStatus::would_block) {
-    return;
-  }
-  if (received != platform::ReceiveDescriptorStatus::received ||
-      ::isatty(pending->render_descriptor) == 0 || !set_nonblocking(pending->render_descriptor)) {
-    close_pending(connections, slot, sessions);
-    return;
-  }
-  record_pending_progress(*pending);
-  handoff_attached_connection(connections, slot, sessions, runtimes);
+  process_pending_fields(connections, sessions, runtimes, extensions, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -6635,11 +6596,8 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   }
 
   const int connection = pending.descriptor;
-  const int render_descriptor = pending.render_descriptor;
   pending.descriptor = -1;
-  pending.render_descriptor = -1;
   session->attachment_runtime.client = connection;
-  session->attachment_runtime.render = render_descriptor;
   session->attachment_runtime.decoder = std::move(pending.attach_decoder);
   release_attach_reservation(pending, slot, sessions);
   owner.reset();
@@ -6648,7 +6606,6 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   session->attachment_runtime.connection_id =
       ConnectionId::from_parts(session->id.slot(), session->connection_generation);
   session->attachment_runtime.output.reset();
-  session->attachment_runtime.output.set_direct_render(render_descriptor >= 0);
   session->attachment_runtime.server_sequence = 2;
   session->attachment_runtime.full_redraw_generation = 0;
   session->attachment_runtime.input_backpressured = false;
@@ -6702,10 +6659,6 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   }
   if (action == PendingAction::attach) {
     handoff_attached_connection(connections, slot, sessions, runtimes);
-  } else if (action == PendingAction::await_render_descriptor) {
-    pending->state = PendingState::read_render_descriptor;
-    pending->action = PendingAction::attach;
-    record_pending_progress(*pending);
   } else {
     close_pending(connections, slot, sessions);
   }
@@ -7192,12 +7145,9 @@ void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
                                          const std::span<const std::byte> bytes) noexcept
     -> ClientFrameWriteAttempt {
   auto& session = *static_cast<SessionRecord*>(context);
-  const auto& output = session.attachment_runtime.output;
-  const auto written =
-      output.direct_frame()
-          ? ::write(session.attachment_runtime.render, bytes.data(), bytes.size())
-          : ::send(session.attachment_runtime.client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-  return {.bytes = written, .error = written < 0 ? errno : 0};
+  const auto sent =
+      ::send(session.attachment_runtime.client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+  return {.bytes = sent, .error = sent < 0 ? errno : 0};
 }
 
 void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
@@ -7210,8 +7160,6 @@ void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtime
   }
 }
 
-// Flush routing preserves direct-frame, socket-control, deadline, and teardown outcomes together.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                   const std::span<ClientFrameFlushTarget> storage,
                                   std::size_t& cursor,
@@ -7223,9 +7171,7 @@ void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes
     }
     LEMMA_ASSERT(count < storage.size());
     storage.subspan(count, 1).front() = {
-        .descriptor = session->attachment_runtime.output.direct_frame()
-                          ? session->attachment_runtime.render
-                          : session->attachment_runtime.client,
+        .descriptor = session->attachment_runtime.client,
         .frame = &session->attachment_runtime.frame,
         .output = &session->attachment_runtime.output,
         .write = &write_attached_client,
@@ -7360,7 +7306,6 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
 enum class DescriptorKind : std::uint8_t {
   pane,
   client,
-  client_render,
   pending,
   capacity_rejection,
   extension,
@@ -7408,10 +7353,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   if (!set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max =
-      std::size_t{2} + limits::panes_hard_max +
-      (std::size_t{2} * static_cast<std::size_t>(limits::sessions_hard_max)) +
-      limits::pending_connections_hard_max + capacity_rejection_connections_max;
+  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
+                                        static_cast<std::size_t>(limits::sessions_hard_max) +
+                                        limits::pending_connections_hard_max +
+                                        capacity_rejection_connections_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
@@ -7465,10 +7410,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                      session->attachment_runtime.client_close_state != ConnectionCloseState::none
                  ? 0
                  : POLLIN) |
-            (session->attachment_runtime.output.busy() &&
-                     !session->attachment_runtime.output.direct_frame()
-                 ? static_cast<short>(POLLOUT)
-                 : 0));
+            (session->attachment_runtime.output.busy() ? static_cast<short>(POLLOUT) : 0));
         std::span(descriptors).subspan(descriptor_count, 1).front() = {
             .fd = session->attachment_runtime.client, .events = client_events, .revents = 0};
         std::span(owners).subspan(descriptor_count, 1).front() = {
@@ -7479,19 +7421,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
             .auxiliary_slot = 0,
             .kind = DescriptorKind::client};
         ++descriptor_count;
-        if (session->attachment_runtime.render >= 0 && session->attachment_runtime.output.busy() &&
-            session->attachment_runtime.output.direct_frame()) {
-          std::span(descriptors).subspan(descriptor_count, 1).front() = {
-              .fd = session->attachment_runtime.render, .events = POLLOUT, .revents = 0};
-          std::span(owners).subspan(descriptor_count, 1).front() = {
-              .session = session->id,
-              .tab = {},
-              .pane = {},
-              .connection = session->attachment_runtime.connection_id,
-              .auxiliary_slot = 0,
-              .kind = DescriptorKind::client_render};
-          ++descriptor_count;
-        }
       }
     }
     for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
@@ -7599,17 +7528,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     client_input_budgets.fill(client_input_steps_per_turn_max);
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind == DescriptorKind::client_render) {
-        auto* const session = sessions.get(owner.session);
-        if (session != nullptr && session->active &&
-            session->attachment_runtime.connection_id == owner.connection) {
-          const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-          if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
-            session->attachment_runtime.output.mark_write_ready();
-          }
-        }
-        continue;
-      }
       if (owner.kind == DescriptorKind::client) {
         auto* const session = sessions.get(owner.session);
         if (session == nullptr || !session->active ||

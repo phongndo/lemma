@@ -737,6 +737,19 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   }
 }
 
+void invalidate_pane_mode_projections(const std::span<const PaneSurface> panes) noexcept {
+  for (const auto& pane : panes) {
+    pane.terminal->invalidate_ansi_mode_projection();
+  }
+}
+
+void invalidate_focused_cursor_projection(const std::span<const PaneSurface> panes) noexcept {
+  const auto focused = std::ranges::find(panes, true, &PaneSurface::focused);
+  if (focused != panes.end()) {
+    focused->terminal->invalidate_ansi_cursor_projection();
+  }
+}
+
 [[nodiscard]] auto valid_pane(const PaneSurface& pane, const Viewport viewport) noexcept -> bool {
   if (pane.terminal == nullptr || pane.rectangle.columns == 0 || pane.rectangle.rows == 0) {
     return false;
@@ -1207,10 +1220,20 @@ struct CompositionPolicy final {
   // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
   // advance.
   composition.full = composition.full && complete_frame;
-  if (!finish_frame(output, used, composition.outer_modes,
-                    force_full || previous_outer_modes != composition.outer_modes)) {
+  const bool project_outer_modes = force_full || previous_outer_modes != composition.outer_modes;
+  if (!finish_frame(output, used, composition.outer_modes, project_outer_modes)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
+  }
+  // Neutral projection resets child-owned non-mouse modes after pane rendering. Invalidate those
+  // physical shadows so a normally released synchronized pane restores its canonical modes.
+  if (project_outer_modes && composition.outer_modes == OuterModeProjection::neutral) {
+    invalidate_pane_mode_projections(panes);
+  }
+  // The status editor replaces the focused pane's cursor shape with a bar after pane rendering.
+  // The next frame must restore the canonical child shape even when no terminal damage occurred.
+  if (status.prompting() && viewport.rows >= 2) {
+    invalidate_focused_cursor_projection(panes);
   }
   composition.bytes = used;
   return composition;

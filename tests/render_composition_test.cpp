@@ -222,6 +222,61 @@ TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
 }
 
+TEST(PaneCompositionTest, LeavingStatusPromptRestoresFocusedPaneCursorShape) {
+  auto terminal = make_terminal(20, 2);
+  write_text(terminal, "\x1B[2 qcontent");
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 20, .rows = 2},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  auto outer = make_terminal(20, 3);
+
+  const StatusLine normal_status{
+      .session_name = "work",
+      .tabs = tabs,
+      .prompt_target = StatusPromptTarget::none,
+      .prompt_feedback = StatusPromptFeedback::none,
+      .prompt_value = {},
+      .input_context = {},
+      .prompt_cursor = 0,
+      .dirty = true,
+  };
+  const auto initial =
+      compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output, true, normal_status);
+  ASSERT_TRUE(initial.has_value());
+  outer.write(std::span(output).first(initial->bytes));
+
+  const StatusLine prompt_status{
+      .session_name = "work",
+      .tabs = tabs,
+      .prompt_target = StatusPromptTarget::active_tab,
+      .prompt_feedback = StatusPromptFeedback::none,
+      .prompt_value = "zsh",
+      .input_context = {},
+      .prompt_cursor = 1,
+      .dirty = true,
+  };
+  const auto prompt = compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output, false,
+                                    prompt_status, {}, initial->outer_modes);
+  ASSERT_TRUE(prompt.has_value());
+  outer.write(std::span(output).first(prompt->bytes));
+
+  const auto restored = compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output,
+                                      false, normal_status, {}, prompt->outer_modes);
+  ASSERT_TRUE(restored.has_value());
+  outer.write(std::span(output).first(restored->bytes));
+
+  outer.invalidate_ansi_render_state();
+  const auto projected = outer.render_ansi(output, true);
+  ASSERT_TRUE(projected.has_value());
+  const auto encoded = as_text(std::span(output).first(projected->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2 q"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[6 q")));
+}
+
 TEST(PaneCompositionTest, NarrowTabEditorShowsOnlyItsBoundedField) {
   auto terminal = make_terminal(4, 2);
   const PaneSurface pane{

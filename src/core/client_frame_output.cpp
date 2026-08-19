@@ -45,23 +45,19 @@ ClientFrameOutput::queue_frame(const std::size_t frame_bytes, const std::uint32_
                                const TimePoint now, const std::uint64_t trace_correlation) noexcept
     -> bool {
   const auto messages = frame_message_count(frame_bytes);
-  const auto queued_bytes =
-      direct_render_ ? frame_bytes : frame_bytes + (messages * frame_header_.size());
   if (frame_bytes == 0 || frame_bytes > render::frame_bytes_max || sequence == 0 ||
       full_redraw_generation == 0 || messages == 0 ||
       messages - 1U > std::numeric_limits<std::uint32_t>::max() - sequence ||
-      !begin_queue(queued_bytes, now, trace_correlation)) {
+      !begin_queue(frame_bytes + (messages * frame_header_.size()), now, trace_correlation)) {
     return false;
   }
   frame_bytes_ = frame_bytes;
   frame_offset_ = 0;
-  frame_message_count_ = direct_render_ ? 0 : messages;
+  frame_message_count_ = messages;
   frame_sequence_ = sequence;
   frame_generation_ = full_redraw_generation;
   source_ = Source::frame;
-  if (!direct_render_) {
-    prepare_frame_chunk(full_redraw);
-  }
+  prepare_frame_chunk(full_redraw);
   return true;
 }
 
@@ -108,11 +104,6 @@ void ClientFrameOutput::prepare_frame_chunk(const bool full_redraw) noexcept {
   if (source_ != Source::frame) {
     return {};
   }
-  if (direct_render_) {
-    const auto bytes = frame.readable(frame_bytes_);
-    return bytes.size() == frame_bytes_ && offset_ <= bytes.size() ? bytes.subspan(offset_)
-                                                                   : std::span<const std::byte>{};
-  }
   if (frame_header_offset_ < frame_header_.size()) {
     return std::span(frame_header_).subspan(frame_header_offset_);
   }
@@ -121,10 +112,6 @@ void ClientFrameOutput::prepare_frame_chunk(const bool full_redraw) noexcept {
                  frame_chunk_offset_ <= frame_chunk_bytes_
              ? bytes.subspan(frame_offset_, frame_chunk_bytes_ - frame_chunk_offset_)
              : std::span<const std::byte>{};
-}
-
-[[nodiscard]] auto ClientFrameOutput::direct_frame() const noexcept -> bool {
-  return direct_render_ && source_ == Source::frame;
 }
 
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -157,7 +144,7 @@ void ClientFrameOutput::mark_write_ready() noexcept {
   if (bytes == 0 || bytes > size_ - offset_) {
     return false;
   }
-  if (source_ == Source::frame && !direct_render_) {
+  if (source_ == Source::frame) {
     const auto segment_bytes = frame_header_offset_ < frame_header_.size()
                                    ? frame_header_.size() - frame_header_offset_
                                    : frame_chunk_bytes_ - frame_chunk_offset_;
@@ -168,9 +155,6 @@ void ClientFrameOutput::mark_write_ready() noexcept {
   offset_ += bytes;
   last_progress_at_ = now;
   if (source_ != Source::frame) {
-    return true;
-  }
-  if (direct_render_) {
     return true;
   }
   if (frame_header_offset_ < frame_header_.size()) {

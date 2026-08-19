@@ -126,7 +126,10 @@ struct AnsiRenderResult final {
   bool full{false};
 };
 
-inline constexpr std::size_t pane_ansi_grapheme_bytes_max = 256;
+// The pinned Ghostty cell retains one base codepoint plus at most 64 grapheme suffix codepoints.
+// UTF-8 requires at most four bytes per retained codepoint.
+inline constexpr std::size_t pane_grapheme_codepoints_max = 65;
+inline constexpr std::size_t pane_ansi_grapheme_bytes_max = pane_grapheme_codepoints_max * 4U;
 // Per-cell allocation contract for a composed pane: one maximum grapheme, a 78-byte full SGR
 // transition, a conservatively per-cell 14-byte absolute position (normally once per row), and the
 // 4-byte reset emitted once per nonempty pane.
@@ -478,6 +481,10 @@ public:
 
   // Invalidates retained ANSI output state after a composed frame is discarded.
   void invalidate_ansi_render_state() noexcept;
+  // The compositor sometimes overrides child modes or cursor shape after pane rendering. These
+  // targeted invalidations repair only the affected outer-terminal projection on the next frame.
+  void invalidate_ansi_mode_projection() noexcept;
+  void invalidate_ansi_cursor_projection() noexcept;
 
   // Encodes normalized input using the pane's active legacy or Kitty keyboard modes.
   [[nodiscard]] auto encode_key(const KeyEvent& event, std::span<std::byte> output) noexcept

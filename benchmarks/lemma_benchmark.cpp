@@ -558,6 +558,35 @@ void benchmark_terminal_ansi_single_row(benchmark::State& state) {
       benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
+void benchmark_terminal_ansi_clean_frame(benchmark::State& state) {
+  auto result = vt::Terminal::create({});
+  if (!result.has_value()) {
+    state.SkipWithError("failed to create terminal");
+    return;
+  }
+  auto terminal = std::move(result).value();
+  constexpr std::string_view contents = "unchanged styled \x1B[1;32mcontent\x1B[0m";
+  terminal.write(std::as_bytes(std::span(contents.data(), contents.size())));
+  std::array<std::byte, std::size_t{256} * 1'024U> frame{};
+  if (!terminal.render_ansi(frame, true).has_value()) {
+    state.SkipWithError("failed to render initial frame");
+    return;
+  }
+  std::uint64_t output_bytes = 0;
+
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto rendered = terminal.render_ansi(frame);
+    benchmark::DoNotOptimize(rendered);
+    if (!rendered.has_value() || rendered->rows != 0) {
+      state.SkipWithError("failed to render clean ANSI frame");
+      return;
+    }
+    output_bytes += rendered->bytes;
+  }
+  state.counters["frame_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
+}
+
 void benchmark_terminal_ansi_scroll_operations(benchmark::State& state) {
   vt::TerminalOptions options;
   options.size = {.columns = 80, .rows = 24};
@@ -755,6 +784,7 @@ BENCHMARK(benchmark_terminal_small_writes);
 BENCHMARK(benchmark_terminal_large_writes);
 BENCHMARK(benchmark_terminal_ansi_damage_frames);
 BENCHMARK(benchmark_terminal_ansi_single_row);
+BENCHMARK(benchmark_terminal_ansi_clean_frame);
 BENCHMARK(benchmark_terminal_ansi_scroll_operations);
 BENCHMARK(benchmark_terminal_viewport_wheel_frames);
 BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);

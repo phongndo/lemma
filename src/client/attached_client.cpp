@@ -590,8 +590,7 @@ void report_disconnect(const protocol::ServerMessage& message) noexcept {
 }
 
 enum class HandshakeResult : std::uint8_t {
-  accepted_socket,
-  accepted_direct,
+  accepted,
   rejected,
   error,
 };
@@ -622,9 +621,8 @@ enum class HandshakeResult : std::uint8_t {
             STDERR_FILENO, "lemma attach protocol error: invalid daemon hello\n"));
         return HandshakeResult::error;
       }
-      const bool direct_render = message.direct_render;
       decoder.consume();
-      return direct_render ? HandshakeResult::accepted_direct : HandshakeResult::accepted_socket;
+      return HandshakeResult::accepted;
     }
 
     auto available = decoder.writable_bytes();
@@ -892,15 +890,11 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     auto host_theme_deadline = std::chrono::steady_clock::time_point{};
     const auto size = terminal_size();
     const protocol::Dimensions dimensions{.columns = size.columns, .rows = size.rows};
-    const auto hello = protocol::encode_client_hello(session, dimensions, 1,
-                                                     protocol::current_version, std::nullopt, true);
-    const auto handshake = raw_terminal_entered && send_interruptibly(connection, hello.bytes())
-                               ? receive_handshake(connection, decoder, dimensions)
-                               : HandshakeResult::error;
-    const bool direct_render = handshake == HandshakeResult::accepted_direct;
-    terminal_setup_succeeded =
-        direct_render && outer_terminal.enter() &&
-        platform::send_descriptor(connection, outer_terminal.render_descriptor());
+    const auto hello = protocol::encode_client_hello(session, dimensions);
+    const bool handshake_accepted =
+        raw_terminal_entered && send_interruptibly(connection, hello.bytes()) &&
+        receive_handshake(connection, decoder, dimensions) == HandshakeResult::accepted;
+    terminal_setup_succeeded = handshake_accepted && outer_terminal.enter();
     if (terminal_setup_succeeded) {
       termination_render_descriptor = outer_terminal.render_descriptor();
       // A rejected handshake has not acquired an AttachmentRuntime and must not leave terminal

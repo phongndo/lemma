@@ -51,7 +51,7 @@ TUI_WHEEL_ARMED = b"__LEMMA_TUI_WHEEL_ARMED__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
-ATTACH_PROTOCOL_MINOR = 7
+ATTACH_PROTOCOL_MINOR = 6
 ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
@@ -2516,9 +2516,8 @@ def main() -> int:
             {
                 "version": f"{ATTACH_PROTOCOL_MAJOR}.{ATTACH_PROTOCOL_MINOR}",
                 "envelope_bytes_per_message": ATTACH_HEADER_BYTES,
-                "render_transport": "scm_rights_direct_terminal_fd",
-                "render_generation_bytes_per_frame": 0,
-                "render_wire_overhead_bytes_per_frame": 0,
+                "render_generation_bytes_per_frame": 4,
+                "render_wire_overhead_bytes_per_frame": ATTACH_HEADER_BYTES + 4,
                 "client_bytes_metric_excludes_private_framing": True,
             }
             if arguments.multiplexer == "lemma"

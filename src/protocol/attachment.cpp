@@ -64,8 +64,6 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
 }
 
 constexpr std::uint8_t hello_host_theme_flag = 0x01;
-constexpr std::uint8_t hello_direct_render_flag = 0x02;
-constexpr std::uint8_t daemon_hello_direct_render_flag = 0x01;
 constexpr std::uint8_t host_theme_foreground_flag = 0x01;
 constexpr std::uint8_t host_theme_background_flag = 0x02;
 
@@ -374,8 +372,8 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 
 [[nodiscard]] auto encode_client_hello(const std::string_view session, const Dimensions dimensions,
                                        const std::uint32_t sequence, const ProtocolVersion version,
-                                       const std::optional<HostTerminalTheme>& host_theme,
-                                       const bool direct_render) noexcept -> SmallMessage {
+                                       const std::optional<HostTerminalTheme>& host_theme) noexcept
+    -> SmallMessage {
   LEMMA_ASSERT(!session.empty());
   LEMMA_ASSERT(session.size() <= session_name_bytes_max);
   LEMMA_ASSERT(!host_theme.has_value() || !host_theme->empty());
@@ -388,10 +386,8 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   output.front() = static_cast<std::byte>(session.size());
   const auto dimensions_bytes = encode_dimensions(dimensions);
   std::ranges::copy(dimensions_bytes, output.subspan<1, 4>().begin());
-  const auto hello_flags =
-      static_cast<std::uint8_t>((host_theme.has_value() ? hello_host_theme_flag : 0U) |
-                                (direct_render ? hello_direct_render_flag : 0U));
-  output.subspan<5, 1>().front() = static_cast<std::byte>(hello_flags);
+  output.subspan<5, 1>().front() =
+      host_theme.has_value() ? static_cast<std::byte>(hello_host_theme_flag) : std::byte{0};
   if (host_theme.has_value()) {
     encode_host_theme(*host_theme, output.subspan<6, host_theme_wire_bytes>());
   }
@@ -401,13 +397,11 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   return message;
 }
 
-[[nodiscard]] auto encode_daemon_hello(const Dimensions dimensions, const std::uint32_t sequence,
-                                       const bool direct_render) noexcept -> SmallMessage {
+[[nodiscard]] auto encode_daemon_hello(const Dimensions dimensions,
+                                       const std::uint32_t sequence) noexcept -> SmallMessage {
   LEMMA_ASSERT(valid_dimensions(dimensions));
   SmallMessage message;
-  copy_header(encode_header(MessageKind::hello,
-                            direct_render ? daemon_hello_direct_render_flag : 0U, 4, sequence),
-              message.storage_, message.size_);
+  copy_header(encode_header(MessageKind::hello, 0, 4, sequence), message.storage_, message.size_);
   const auto encoded = encode_dimensions(dimensions);
   std::ranges::copy(encoded, std::span(message.storage_).subspan(message.size_).begin());
   message.size_ += encoded.size();
@@ -746,7 +740,7 @@ void ClientDecoder::release() noexcept {
     const auto name_size = std::to_integer<std::size_t>(payload.front());
     const auto hello_flags = std::to_integer<std::uint8_t>(payload.subspan<5, 1>().front());
     if (name_size == 0 || name_size > session_name_bytes_max ||
-        (hello_flags & ~(hello_host_theme_flag | hello_direct_render_flag)) != 0) {
+        (hello_flags & ~hello_host_theme_flag) != 0) {
       return std::unexpected(DecodeError::invalid_length);
     }
     const bool has_host_theme = (hello_flags & hello_host_theme_flag) != 0;
@@ -783,7 +777,6 @@ void ClientDecoder::release() noexcept {
         .session = session,
         .input = {},
         .sequence = envelope.sequence,
-        .direct_render = (hello_flags & hello_direct_render_flag) != 0,
     };
   }
   if (envelope.kind == MessageKind::host_theme) {
@@ -1019,9 +1012,7 @@ void ClientDecoder::reset(const std::uint32_t expected_sequence, const bool expe
       return std::unexpected(DecodeError::oversized);
     }
   } else {
-    const auto allowed_flags =
-        envelope.kind == MessageKind::hello ? daemon_hello_direct_render_flag : 0U;
-    if ((envelope.flags & ~allowed_flags) != 0) {
+    if (envelope.flags != 0) {
       return std::unexpected(DecodeError::invalid_flags);
     }
     if (envelope.kind == MessageKind::hello && envelope.payload_bytes != 4) {
@@ -1061,7 +1052,6 @@ void ClientDecoder::reset(const std::uint32_t expected_sequence, const bool expe
         .sequence = envelope.sequence,
         .full_redraw_generation = 0,
         .full_redraw = false,
-        .direct_render = (envelope.flags & daemon_hello_direct_render_flag) != 0,
     };
   }
   if (envelope.kind == MessageKind::disconnect) {
