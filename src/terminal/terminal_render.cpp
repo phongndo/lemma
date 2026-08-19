@@ -137,6 +137,13 @@ struct AnsiStyle final {
                                  const TerminalTheme& theme) noexcept -> AnsiColor {
   const auto current = std::span(colors.palette).subspan(index, 1).front();
   const auto configured = std::span(theme.palette).subspan(index, 1).front();
+  // Attach queries establish equivalence only for the configurable ANSI colors. Extended palette
+  // entries may differ in the outer terminal, so preserve their canonical RGB rather than relying
+  // on an unverified physical index.
+  constexpr GhosttyColorPaletteIndex host_palette_colors_queried = 16;
+  if (index >= host_palette_colors_queried) {
+    return ansi_rgb(current);
+  }
   // An OSC 4 override is pane-local and must not mutate the outer terminal's global palette.
   // Preserve the index only while Ghostty's effective entry still equals its configured default.
   return same_color(current, configured) ? ansi_palette(index) : ansi_rgb(current);
@@ -303,18 +310,12 @@ struct AnsiStyle final {
 }
 
 [[nodiscard]] auto rendered_cell_hash(const AnsiStyle& style, const GhosttyCellWide wide,
-                                      const bool replacement,
                                       const std::span<const std::uint8_t> grapheme) noexcept
     -> std::uint64_t {
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   auto hash = hash_style(hash_initial, style);
   hash = hash_byte(hash, static_cast<std::uint8_t>(wide));
-  if (replacement) {
-    constexpr std::string_view replacement_text = "\xEF\xBF\xBD";
-    for (const char byte : replacement_text) {
-      hash = hash_byte(hash, static_cast<std::uint8_t>(byte));
-    }
-  } else if (grapheme.empty()) {
+  if (grapheme.empty()) {
     hash = hash_byte(hash, 0);
   } else {
     for (const auto byte : grapheme) {
@@ -491,12 +492,14 @@ struct AnsiStyle final {
     };
     result = ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &grapheme_buffer);
-    const bool replacement = result == GHOSTTY_OUT_OF_SPACE;
-    if (!replacement && result != GHOSTTY_SUCCESS) {
+    if (result == GHOSTTY_OUT_OF_SPACE) {
+      return std::unexpected(Error::limit_exceeded);
+    }
+    if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    const auto bytes = std::span(grapheme).first(replacement ? 0 : grapheme_buffer.len);
-    row_hash = hash_u64(row_hash, rendered_cell_hash(*style, wide, replacement, bytes));
+    const auto bytes = std::span(grapheme).first(grapheme_buffer.len);
+    row_hash = hash_u64(row_hash, rendered_cell_hash(*style, wide, bytes));
     ++cell_count;
   }
   LEMMA_ASSERT(cell_count == options.size.columns);
@@ -618,13 +621,15 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     };
     result = ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &grapheme_buffer);
-    const bool replacement = result == GHOSTTY_OUT_OF_SPACE;
-    if (!replacement && result != GHOSTTY_SUCCESS) {
+    if (result == GHOSTTY_OUT_OF_SPACE) {
+      return std::unexpected(Error::limit_exceeded);
+    }
+    if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
 
-    const auto grapheme_bytes = std::span(grapheme).first(replacement ? 0 : grapheme_buffer.len);
-    const auto cell_hash = rendered_cell_hash(*style, wide, replacement, grapheme_bytes);
+    const auto grapheme_bytes = std::span(grapheme).first(grapheme_buffer.len);
+    const auto cell_hash = rendered_cell_hash(*style, wide, grapheme_bytes);
     row_hash = hash_u64(row_hash, cell_hash);
     const auto physical_index = (row_index * options.size.columns) + cell_count;
     LEMMA_ASSERT(physical_index < physical_cell_count);
@@ -651,7 +656,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       active_style = *style;
       active_style_valid = true;
 
-      const bool default_blank = !selected && !replacement && grapheme_buffer.len == 0 &&
+      const bool default_blank = !selected && grapheme_buffer.len == 0 &&
                                  wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
                                  ghostty_style_is_default(&ghostty_style) &&
                                  content_tag != GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE &&
@@ -668,11 +673,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
         trailing_blank_changed = false;
       }
 
-      if (replacement) {
-        if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && !writer.append("\xEF\xBF\xBD")) {
-          return std::unexpected(Error::out_of_space);
-        }
-      } else if (grapheme_buffer.len == 0) {
+      if (grapheme_buffer.len == 0) {
         if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && !writer.append(" ")) {
           return std::unexpected(Error::out_of_space);
         }
@@ -784,6 +785,20 @@ auto Terminal::render_pane_ansi(const std::span<std::byte> output,
 void Terminal::invalidate_ansi_render_state() noexcept {
   LEMMA_ASSERT(impl_ != nullptr);
   impl_->ansi_physical_valid = false;
+  impl_->mirrored_modes_valid = false;
+  impl_->mirrored_mouse_modes_valid = false;
+  impl_->projected_cursor_valid = false;
+}
+
+void Terminal::invalidate_ansi_mode_projection() noexcept {
+  LEMMA_ASSERT(impl_ != nullptr);
+  impl_->mirrored_modes_valid = false;
+  impl_->mirrored_mouse_modes_valid = false;
+}
+
+void Terminal::invalidate_ansi_cursor_projection() noexcept {
+  LEMMA_ASSERT(impl_ != nullptr);
+  impl_->projected_cursor_valid = false;
 }
 
 // Rendering is an explicit bounded pass over rows and cells owned by Ghostty's snapshot.
@@ -799,12 +814,6 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
   LEMMA_ASSERT(impl_->render_state != nullptr);
 
   auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
-  if (result != GHOSTTY_SUCCESS) {
-    impl_->ansi_physical_valid = false;
-    return std::unexpected(detail::map_error(result));
-  }
-  impl_->render_colors.size = sizeof(impl_->render_colors);
-  result = ghostty_render_state_colors_get(impl_->render_state, &impl_->render_colors);
   if (result != GHOSTTY_SUCCESS) {
     impl_->ansi_physical_valid = false;
     return std::unexpected(detail::map_error(result));
@@ -826,6 +835,17 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
                                      static_cast<std::uint64_t>(*dirty));
   }
   const bool full = force_full || !impl_->ansi_physical_valid;
+  // Cursor/default colors can change without cell damage, so every frame acquires the scalar
+  // prefix. Ghostty guarantees palette mutations force redraw; clean frames can therefore avoid
+  // copying the 256-entry suffix while retaining the previously acquired palette.
+  impl_->render_colors.size = full || *dirty != DirtyState::clean
+                                  ? sizeof(impl_->render_colors)
+                                  : offsetof(GhosttyRenderStateColors, palette);
+  result = ghostty_render_state_colors_get(impl_->render_state, &impl_->render_colors);
+  if (result != GHOSTTY_SUCCESS) {
+    impl_->ansi_physical_valid = false;
+    return std::unexpected(detail::map_error(result));
+  }
 
   AnsiWriter writer(output);
   if (!composed && (!writer.append("\x1B[?2026h\x1B[?25l\x1B[?7l") ||
@@ -865,44 +885,48 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     }
   }
 
-  result = ghostty_render_state_get(impl_->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
-                                    static_cast<void*>(&impl_->row_iterator));
-  if (result != GHOSTTY_SUCCESS) {
-    impl_->ansi_physical_valid = false;
-    return std::unexpected(detail::map_error(result));
-  }
-
-  std::size_t row_index = 0;
   std::size_t rendered_rows = 0;
-  const bool clean = false;
-  while (ghostty_render_state_row_iterator_next(impl_->row_iterator)) {
-    bool row_dirty = false;
-    result = ghostty_render_state_row_get(impl_->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
-                                          &row_dirty);
+  if (full || *dirty != DirtyState::clean) {
+    result = ghostty_render_state_get(impl_->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+                                      static_cast<void*>(&impl_->row_iterator));
     if (result != GHOSTTY_SUCCESS) {
       impl_->ansi_physical_valid = false;
       return std::unexpected(detail::map_error(result));
     }
-    const bool scroll_row_unchanged =
-        scrolled_rows != 0 &&
-        std::span(impl_->row_hashes).subspan(row_index, 1).front() ==
-            std::span(impl_->current_row_hashes).subspan(row_index, 1).front();
-    if ((full || row_dirty) && !scroll_row_unchanged) {
-      const auto encoded =
-          impl_->encode_row(writer, row_index, full, origin_column, origin_row, !composed);
-      if (!encoded.has_value()) {
+
+    std::size_t row_index = 0;
+    const bool clean = false;
+    while (ghostty_render_state_row_iterator_next(impl_->row_iterator)) {
+      bool row_dirty = false;
+      result = ghostty_render_state_row_get(impl_->row_iterator,
+                                            GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty);
+      if (result != GHOSTTY_SUCCESS) {
         impl_->ansi_physical_valid = false;
-        return std::unexpected(encoded.error());
+        return std::unexpected(detail::map_error(result));
       }
-      rendered_rows += static_cast<std::size_t>(*encoded);
+      const bool scroll_row_unchanged =
+          scrolled_rows != 0 &&
+          std::span(impl_->row_hashes).subspan(row_index, 1).front() ==
+              std::span(impl_->current_row_hashes).subspan(row_index, 1).front();
+      if ((full || row_dirty) && !scroll_row_unchanged) {
+        const auto encoded =
+            impl_->encode_row(writer, row_index, full, origin_column, origin_row, !composed);
+        if (!encoded.has_value()) {
+          impl_->ansi_physical_valid = false;
+          return std::unexpected(encoded.error());
+        }
+        rendered_rows += static_cast<std::size_t>(*encoded);
+      }
+      if (full || row_dirty) {
+        result = ghostty_render_state_row_set(impl_->row_iterator,
+                                              GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
+        if (result != GHOSTTY_SUCCESS) {
+          impl_->ansi_physical_valid = false;
+          return std::unexpected(detail::map_error(result));
+        }
+      }
+      ++row_index;
     }
-    result = ghostty_render_state_row_set(impl_->row_iterator,
-                                          GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
-    if (result != GHOSTTY_SUCCESS) {
-      impl_->ansi_physical_valid = false;
-      return std::unexpected(detail::map_error(result));
-    }
-    ++row_index;
   }
 
   if (!writer.append(composed ? "\x1B[0m" : "\x1B[0m\x1B[?7h")) {
@@ -962,10 +986,21 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     const auto cursor_color = impl_->render_colors.cursor_has_value
                                   ? impl_->render_colors.cursor
                                   : impl_->render_colors.foreground;
-    if (!append_cursor_color(writer, cursor_color, impl_->session_theme.cursor) ||
-        !writer.append("\x1B[") || !writer.append_integer(cursor_code) || !writer.append(" q")) {
-      impl_->ansi_physical_valid = false;
-      return std::unexpected(Error::out_of_space);
+    const bool cursor_projection_changed = cursor_override || full ||
+                                           !impl_->projected_cursor_valid ||
+                                           impl_->projected_cursor_code != cursor_code ||
+                                           impl_->projected_cursor_color.r != cursor_color.r ||
+                                           impl_->projected_cursor_color.g != cursor_color.g ||
+                                           impl_->projected_cursor_color.b != cursor_color.b;
+    if (cursor_projection_changed) {
+      if (!append_cursor_color(writer, cursor_color, impl_->session_theme.cursor) ||
+          !writer.append("\x1B[") || !writer.append_integer(cursor_code) || !writer.append(" q")) {
+        impl_->ansi_physical_valid = false;
+        return std::unexpected(Error::out_of_space);
+      }
+      impl_->projected_cursor_color = cursor_color;
+      impl_->projected_cursor_code = cursor_code;
+      impl_->projected_cursor_valid = true;
     }
   }
 
@@ -1006,7 +1041,7 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
         return std::unexpected(enabled.error());
       }
       auto& physical_value = std::span(impl_->mirrored_mode_values).subspan(mode_index, 1).front();
-      const bool must_emit = composed || full || !impl_->mirrored_modes_valid ||
+      const bool must_emit = full || !impl_->mirrored_modes_valid ||
                              (mode.mouse && !impl_->mirrored_mouse_modes_valid) ||
                              physical_value != *enabled;
       if (must_emit && (!writer.append("\x1B[?") || !writer.append_integer(mode.number) ||

@@ -148,7 +148,9 @@ The exact scheduling algorithm is implementation policy, not an architectural ph
 
 ## Presentation
 
-The daemon currently uses server-rendered ANSI, but presentation remains downstream of canonical terminal and mux state. A presentation snapshot, delta, retained physical shadow, or frame buffer is replaceable and non-authoritative.
+The daemon uses server-rendered ANSI, but presentation remains downstream of canonical terminal and mux state. Each AttachmentRuntime uses one bounded framed socket transport for control and rendered output; the replaceable client alone owns and writes the outer-terminal descriptor. A presentation snapshot, delta, retained physical shadow, or frame buffer is replaceable and non-authoritative.
+
+Do not add a second normal presentation transport or transfer the outer-terminal descriptor without new evidence that the latency benefit justifies the additional protocol, descriptor-lifetime, polling, fallback, and failure-recovery paths.
 
 A native renderer may be added only as another bounded projection. It must not require client PTY replay, a second parser authority, or private Ghostty representation outside the terminal component.
 

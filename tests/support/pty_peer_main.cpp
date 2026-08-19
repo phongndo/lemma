@@ -246,6 +246,143 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   return written >= 0 || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
+[[nodiscard]] auto write_tui_frame(const std::string_view marker,
+                                   const std::size_t sequence) noexcept -> bool {
+  constexpr std::size_t rows = 22;
+  constexpr std::size_t columns = 79;
+  constexpr std::size_t marker_row = rows / 2;
+  if (marker.empty() || marker.size() > columns) {
+    return false;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + 1s;
+  std::array<char, columns> line{};
+  line.fill(static_cast<char>('a' + (sequence % 26U)));
+  if (!write_all_until("\x1B[?2026h\x1B[H", deadline)) {
+    return false;
+  }
+  for (std::size_t row = 0; row < rows; ++row) {
+    if (row == marker_row) {
+      std::ranges::copy(marker, line.begin());
+    }
+    if (!write_all_until({line.data(), line.size()}, deadline) ||
+        (row + 1U < rows && !write_all_until("\r\n", deadline))) {
+      return false;
+    }
+    if (row == marker_row) {
+      line.fill(static_cast<char>('a' + (sequence % 26U)));
+    }
+  }
+  return write_all_until("\x1B[?2026l", deadline);
+}
+
+// The branches are the explicit bounded states of the synthetic wheel peer.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_tui_wheel(const std::string_view receipt_path,
+                                 const std::size_t burst_size) noexcept -> int {
+  if (receipt_path.empty() || burst_size == 0 || burst_size > 256U) {
+    return 1;
+  }
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  if (receipt_path.size() >= sizeof(address.sun_path)) {
+    return 1;
+  }
+  std::memcpy(std::span(address.sun_path).data(), receipt_path.data(), receipt_path.size());
+  const int receipt = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+  if (receipt < 0) {
+    return 1;
+  }
+  // The socket ABI intentionally erases the concrete address type.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* generic = reinterpret_cast<const sockaddr*>(&address);
+  constexpr std::string_view ready = "\x1B[?1049h\x1B[?1000h\x1B[?1006h\x1B[?2026h\x1B[2J\x1B[H"
+                                     "__LEMMA_TUI_WHEEL_READY__\x1B[?2026l";
+  if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
+      !write_all(ready)) {
+    static_cast<void>(::close(receipt));
+    return 1;
+  }
+
+  constexpr std::string_view armed_receipt = "__LEMMA_TUI_WHEEL_ARMED__";
+  std::array<char, 128> marker{};
+  std::size_t marker_size = 0;
+  std::size_t wheel_events = 0;
+  std::size_t sequence = 0;
+  bool armed = false;
+  auto deadline = std::chrono::steady_clock::now() + 120s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 100);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0) {
+      break;
+    }
+    if (polled == 0) {
+      continue;
+    }
+    std::array<char, 512> input{};
+    const auto count = ::read(STDIN_FILENO, input.data(), input.size());
+    if (count == 0) {
+      static_cast<void>(::close(receipt));
+      return 0;
+    }
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      break;
+    }
+    deadline = std::chrono::steady_clock::now() + 120s;
+    for (const char byte : std::span(input).first(static_cast<std::size_t>(count))) {
+      if (!armed) {
+        if (byte != '\n') {
+          if (marker_size == marker.size()) {
+            static_cast<void>(::close(receipt));
+            return 1;
+          }
+          std::span(marker).subspan(marker_size, 1).front() = byte;
+          ++marker_size;
+          continue;
+        }
+        if (marker_size == 0) {
+          static_cast<void>(::close(receipt));
+          return 1;
+        }
+        const auto sent = ::send(receipt, armed_receipt.data(), armed_receipt.size(), MSG_NOSIGNAL);
+        if (sent < 0 || static_cast<std::size_t>(sent) != armed_receipt.size()) {
+          static_cast<void>(::close(receipt));
+          return 1;
+        }
+        armed = true;
+        continue;
+      }
+      if (byte != 'M') {
+        continue;
+      }
+      ++wheel_events;
+      if (wheel_events != burst_size) {
+        continue;
+      }
+      const auto frame = std::string_view(marker.data(), marker_size);
+      const auto sent = ::send(receipt, frame.data(), frame.size(), MSG_NOSIGNAL);
+      if (sent < 0 || static_cast<std::size_t>(sent) != frame.size() ||
+          !write_tui_frame(frame, sequence)) {
+        static_cast<void>(::close(receipt));
+        return 1;
+      }
+      ++sequence;
+      marker_size = 0;
+      wheel_events = 0;
+      armed = false;
+    }
+  }
+  static_cast<void>(::close(receipt));
+  return 1;
+}
+// NOLINTEND(readability-function-cognitive-complexity)
+
 [[nodiscard]] auto make_output_nonblocking() noexcept -> bool {
   // fcntl is variadic even when F_GETFL has no third argument.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
@@ -518,13 +655,35 @@ struct GeometryResponse final {
   return 0;
 }
 
+enum class LatencyMode : std::uint8_t {
+  idle,
+  autonomous_output,
+  tui_redraw,
+};
+
+[[nodiscard]] constexpr auto latency_ready_marker(const LatencyMode mode) noexcept
+    -> std::string_view {
+  switch (mode) {
+  case LatencyMode::idle:
+    return "\r\n__LEMMA_LATENCY_READY__\r\n";
+  case LatencyMode::autonomous_output:
+    return "\r\n__LEMMA_LATENCY_OUTPUT_READY__\r\n";
+  case LatencyMode::tui_redraw:
+    return "\x1B[?1049h\x1B[?2026h\x1B[2J\x1B[H"
+           "__LEMMA_TUI_REDRAW_READY__\x1B[?2026l";
+  }
+  return {};
+}
+
 // This benchmark peer keeps each framed receipt and echo bounded and explicit.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_latency(const std::string_view receipt_path,
-                               const bool autonomous_output = false) noexcept -> int {
+                               const LatencyMode mode = LatencyMode::idle) noexcept -> int {
   if (receipt_path.empty()) {
     return 1;
   }
+  const bool autonomous_output = mode == LatencyMode::autonomous_output;
+  const bool tui_redraw = mode == LatencyMode::tui_redraw;
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
   if (receipt_path.size() >= sizeof(address.sun_path)) {
@@ -538,8 +697,7 @@ struct GeometryResponse final {
   // The socket ABI intentionally erases the concrete address type.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* generic = reinterpret_cast<const sockaddr*>(&address);
-  const std::string_view ready = autonomous_output ? "\r\n__LEMMA_LATENCY_OUTPUT_READY__\r\n"
-                                                   : "\r\n__LEMMA_LATENCY_READY__\r\n";
+  const auto ready = latency_ready_marker(mode);
   if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
       !write_all(ready)) {
     static_cast<void>(::close(receipt));
@@ -557,6 +715,7 @@ struct GeometryResponse final {
 
   std::array<char, 128> marker{};
   std::size_t marker_size = 0;
+  std::size_t tui_sequence = 0;
   auto deadline = std::chrono::steady_clock::now() + 120s;
   while (std::chrono::steady_clock::now() < deadline) {
     pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
@@ -619,6 +778,9 @@ struct GeometryResponse final {
         const auto visibility_deadline = std::chrono::steady_clock::now() + 1s;
         output_written = write_all_until(frame, visibility_deadline) &&
                          write_all_until("\r\n", visibility_deadline);
+      } else if (tui_redraw) {
+        output_written = write_tui_frame(frame, tui_sequence);
+        ++tui_sequence;
       } else {
         output_written = write_all(frame) && write_all("\r\n");
       }
@@ -721,7 +883,15 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 3 &&
       std::string_view(arguments.subspan(1, 1).front()) == "latency-output") {
-    return run_latency(arguments.subspan(2, 1).front(), true);
+    return run_latency(arguments.subspan(2, 1).front(), LatencyMode::autonomous_output);
+  }
+  if (arguments.size() == 3 && std::string_view(arguments.subspan(1, 1).front()) == "latency-tui") {
+    return run_latency(arguments.subspan(2, 1).front(), LatencyMode::tui_redraw);
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "latency-tui-wheel") {
+    return run_tui_wheel(arguments.subspan(2, 1).front(),
+                         parse_size(arguments.subspan(3, 1).front()));
   }
   if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "block") {
     return run_block(arguments.subspan(2, 1).front(), parse_size(arguments.subspan(3, 1).front()));

@@ -45,6 +45,9 @@ BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
 LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
+TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
+TUI_WHEEL_READY = b"__LEMMA_TUI_WHEEL_READY__"
+TUI_WHEEL_ARMED = b"__LEMMA_TUI_WHEEL_ARMED__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
@@ -53,6 +56,7 @@ ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
 PAYLOAD_SIZE = 2 * 1024 * 1024
+TUI_WHEEL_BURST_SIZE = 64
 BLOCKED_CLIENT_NO_PROGRESS_TIMEOUT_NS = 5_000_000_000
 # The workload starts its clock at the flood command rather than at the first queued daemon frame.
 # Allow a bounded startup and CLI polling margin without weakening the five-second contract.
@@ -219,6 +223,8 @@ def summary(samples: list[int]) -> dict[str, Any]:
 
 INTERACTION_LABEL_CODES = {
     "OUTPUT": b"OUT",
+    "TUI": b"TUI",
+    "WHEEL": b"WHE",
     "IDLE": b"IDL",
     "BLOCKED": b"BLK",
     "CLIENT_IDLE": b"CID",
@@ -1583,6 +1589,75 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
         receipts.close()
 
 
+def tui_redraw(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    receipts = PtyReceiptChannel(runtime.receipt_path)
+    try:
+        client = runtime.start_and_attach("tui_redraw")
+        launch = (
+            f"exec {shlex.quote(str(runtime.peer_path))} latency-tui "
+            f"{shlex.quote(str(runtime.receipt_path))}\r"
+        ).encode()
+        client.write_all(launch, 2.0)
+        client.read_until(
+            TUI_REDRAW_READY,
+            5.0,
+            visible_text=isinstance(runtime, HerdrRuntime),
+        )
+        client.drain(0.01)
+        return {
+            "status": "completed",
+            **latency_samples(client, receipts, "TUI", repetitions),
+        }
+    finally:
+        receipts.close()
+
+
+def tui_wheel_burst(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    receipts = PtyReceiptChannel(runtime.receipt_path)
+    try:
+        client = runtime.start_and_attach("tui_wheel")
+        launch = (
+            f"exec {shlex.quote(str(runtime.peer_path))} latency-tui-wheel "
+            f"{shlex.quote(str(runtime.receipt_path))} {TUI_WHEEL_BURST_SIZE}\r"
+        ).encode()
+        client.write_all(launch, 2.0)
+        client.read_until(
+            TUI_WHEEL_READY,
+            5.0,
+            visible_text=isinstance(runtime, HerdrRuntime),
+        )
+        client.drain(0.01)
+
+        key_to_pty: list[int] = []
+        key_to_visible: list[int] = []
+        client_bytes: list[int] = []
+        wheel_input = b"\x1b[<64;10;10M" * TUI_WHEEL_BURST_SIZE
+        for index in range(repetitions):
+            marker = interaction_marker("WHEEL", index)
+            visible_token = interaction_visible_token("WHEEL", index)
+            client.write_all(marker + b"\n", 2.0)
+            receipts.wait_for_receipt(TUI_WHEEL_ARMED, 1.0)
+            started_ns = time.monotonic_ns()
+            client.write_all(wheel_input, 2.0)
+            pty_latency, visible_latency, output_bytes = receipts.read_interaction(
+                client, marker, visible_token, 5.0, started_ns
+            )
+            key_to_pty.append(pty_latency)
+            key_to_visible.append(visible_latency)
+            client_bytes.append(output_bytes)
+            client.drain(0.01)
+        return {
+            "status": "completed",
+            "wheel_events_per_sample": TUI_WHEEL_BURST_SIZE,
+            "key_to_pty": summary(key_to_pty),
+            "key_to_visible": summary(key_to_visible),
+            "client_bytes": client_bytes,
+            "median_client_bytes": percentile(client_bytes, 0.50),
+        }
+    finally:
+        receipts.close()
+
+
 class WorkloadFailure(RuntimeError):
     def __init__(self, message: str, result: dict[str, Any]) -> None:
         super().__init__(message)
@@ -2155,6 +2230,8 @@ def main() -> int:
             "warm-scroll",
             "attach-visible",
             "interactive-output",
+            "tui-redraw",
+            "tui-wheel-burst",
             "idle-resources",
             "blocked-pty",
             "blocked-client",
@@ -2322,6 +2399,8 @@ def main() -> int:
                 "interactive_under_output",
                 interactive_under_output,
             ),
+            "tui-redraw": ("tui_redraw", tui_redraw),
+            "tui-wheel-burst": ("tui_wheel_burst", tui_wheel_burst),
             "idle-resources": ("idle_resources", idle_resources),
             "blocked-pty": ("blocked_pty", blocked_pty),
             "blocked-client": ("blocked_client", blocked_client),

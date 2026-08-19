@@ -56,6 +56,37 @@ TEST(TerminalRenderRegressionTest, AnsiProjectionPreservesIndexedExplicitAndDefa
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B]112\x1B\\"));
 }
 
+TEST(TerminalRenderRegressionTest, ProjectsUnqueriedExtendedPaletteEntriesAsRgb) {
+  auto theme = vt::default_theme();
+  theme.palette.at(200) = {.red = 10, .green = 20, .blue = 30};
+  vt::TerminalOptions options;
+  options.size = {.columns = 4, .rows = 2};
+  options.theme = theme;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\x1B[38;5;200mX");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  const auto ansi = output_text(std::span(output).first(rendered->bytes));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;2;10;20;30"));
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("38;5;200")));
+}
+
+TEST(TerminalRenderRegressionTest, CleanCellFrameStillProjectsChangedCursorColor) {
+  auto terminal = make_terminal();
+  write_terminal(terminal, "content");
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  ASSERT_TRUE(terminal.render_ansi(output, true).has_value());
+
+  write_terminal(terminal, "\x1B]12;rgb:0a/0b/0c\x1B\\");
+  const auto rendered = terminal.render_ansi(output);
+
+  ASSERT_TRUE(rendered.has_value());
+  EXPECT_THAT(output_text(std::span(output).first(rendered->bytes)),
+              testing::HasSubstr("\x1B]12;#0a0b0c\x1B\\"));
+}
+
 TEST(TerminalRenderRegressionTest, EraseLineTailPreservesSessionBackground) {
   auto theme = vt::default_theme();
   theme.foreground = {.red = 10, .green = 20, .blue = 30};
@@ -188,6 +219,58 @@ TEST(SynchronizedOutputBoundaryTest, HeldPaneDoesNotBlockLivePane) {
   EXPECT_FALSE(forced->full);
   EXPECT_THAT(output_text(std::span(output).first(forced->bytes)),
               testing::Not(testing::HasSubstr("\x1B[2J")));
+}
+
+TEST(SynchronizedOutputBoundaryTest, ReleasedFocusedPaneRestoresCanonicalInputModes) {
+  vt::TerminalOptions pane_options;
+  pane_options.size = {.columns = 6, .rows = 2};
+  auto held = make_terminal(pane_options);
+  auto live = make_terminal(pane_options);
+  vt::TerminalOptions outer_options;
+  outer_options.size = {.columns = 12, .rows = 2};
+  auto outer = make_terminal(outer_options);
+  std::array<std::byte, std::size_t{32} * 1'024U> output{};
+  std::array panes{
+      render::PaneSurface{
+          .terminal = &held, .rectangle = {.columns = 6, .rows = 2}, .focused = true},
+      render::PaneSurface{.terminal = &live, .rectangle = {.column = 6, .columns = 6, .rows = 2}},
+  };
+  write_terminal(held, "\x1B[?1h\x1B[?1004h\x1B[?2004h");
+  const auto initial = render::compose_frame(panes, {.columns = 12, .rows = 2}, output, true);
+  ASSERT_TRUE(initial.has_value());
+  outer.write(std::span(output).first(initial->bytes));
+
+  write_terminal(held, "\x1B[?2026hhidden");
+  write_terminal(live, "visible");
+  panes.front().presentation_suppressed = true;
+  const auto suppressed = render::compose_frame(panes, {.columns = 12, .rows = 2}, output, false,
+                                                {}, {}, initial->outer_modes);
+  ASSERT_TRUE(suppressed.has_value());
+  outer.write(std::span(output).first(suppressed->bytes));
+
+  write_terminal(held, "\x1B[?2026l");
+  panes.front().presentation_suppressed = false;
+  const auto released = render::compose_frame(panes, {.columns = 12, .rows = 2}, output, false, {},
+                                              {}, suppressed->outer_modes);
+  ASSERT_TRUE(released.has_value());
+  outer.write(std::span(output).first(released->bytes));
+
+  std::array<std::byte, 64> encoded{};
+  vt::KeyEvent key_event{};
+  key_event.action = vt::KeyAction::press;
+  key_event.key = vt::Key::arrow_up;
+  const auto key = outer.encode_key(key_event, encoded);
+  ASSERT_TRUE(key.has_value());
+  EXPECT_EQ(output_text(std::span(encoded).first(*key)), "\x1BOA");
+
+  std::array paste_input{std::byte{'x'}};
+  const auto paste = outer.encode_paste(paste_input, encoded);
+  ASSERT_TRUE(paste.has_value());
+  EXPECT_EQ(output_text(std::span(encoded).first(*paste)), "\x1B[200~x\x1B[201~");
+
+  const auto focus = outer.encode_focus(vt::FocusEvent::gained, encoded);
+  ASSERT_TRUE(focus.has_value());
+  EXPECT_EQ(output_text(std::span(encoded).first(*focus)), "\x1B[I");
 }
 
 TEST(SynchronizedOutputBoundaryTest, PresentationWatchdogDoesNotMutateCanonicalMode) {

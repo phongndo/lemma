@@ -72,6 +72,12 @@ struct PaneOverlay final {
   std::string_view top_right;
 };
 
+enum class OuterModeProjection : std::uint8_t {
+  neutral,
+  button_mouse,
+  any_mouse,
+};
+
 enum class CompositionError : std::uint8_t {
   invalid_viewport,
   too_many_panes,
@@ -86,6 +92,7 @@ struct CompositionResult final {
   std::size_t bytes{0};
   std::size_t panes{0};
   std::size_t rows{0};
+  OuterModeProjection outer_modes{OuterModeProjection::neutral};
   bool full{false};
   bool status{false};
 };
@@ -114,9 +121,10 @@ struct StatusTarget final {
 // below it. One optional bounded overlay is projected after pane rendering, then restores the copy
 // cursor. The focused surface otherwise owns cursor and terminal modes. Callers must force a full
 // frame after changing pane geometry.
-[[nodiscard]] auto compose_frame(std::span<const PaneSurface> panes, Viewport viewport,
-                                 std::span<std::byte> output, bool force_full,
-                                 StatusLine status = {}, PaneOverlay overlay = {}) noexcept
+[[nodiscard]] auto
+compose_frame(std::span<const PaneSurface> panes, Viewport viewport, std::span<std::byte> output,
+              bool force_full, StatusLine status = {}, PaneOverlay overlay = {},
+              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt) noexcept
     -> std::expected<CompositionResult, CompositionError>;
 
 } // namespace lemma::render

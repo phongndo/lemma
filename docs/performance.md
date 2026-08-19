@@ -27,6 +27,8 @@ An 80x24 release microbenchmark on August 9, 2026 measured medians from three cl
 
 Large VT parsing measured 1.22 GiB/s. The result supports incremental damage and retained physical-cell state for these workloads; it does not prove that every workload is faster or that further caching is useful.
 
+An August 19 adapter qualification added a clean-terminal-frame fast path and skipped the 256-entry palette suffix when Ghostty reported no canonical damage, while still querying scalar default and cursor colors. Twenty release repetitions reduced median clean-frame projection from the retained 335 ns baseline to 162 ns (51.6%) while preserving the same 49 emitted bytes. This is CPU saved on compositor-only frames and clean panes; it is not a claimed reduction for dirty full-screen TUI redraws. The rejected alternative—batching existing per-cell Ghostty getters—regressed sparse and full rendering by about 60% and was reverted.
+
 A post-change five-repetition release microbenchmark populated 20,000 rows, held the Ghostty viewport 100 rows above the live area, alternated normalized one-row wheel movement, and forced the same complete pane redraw required by server-rendered viewport navigation. Median CPU was 46.991 us per event with 2,304 output bytes. This measures one 80x23 terminal projection, not split-pane composition or outer-device pixel scrolling. Reproduce with:
 
 ```sh
@@ -172,6 +174,26 @@ The measured sustained-output improvements came from three independently retaine
 3. foreground-process title discovery is limited to once per 100 ms per output-active pane.
 
 Across staged ten-sample reports, those changes reduced active outer bytes from roughly 63–536 KiB/s to roughly 9–10 KiB/s and active tree CPU p95 to 0.9–1.9 ms, without changing interactive/state-change urgency.
+
+An August 19, 2026 Linux x86-64 cloud-VM characterization measured retaining already-projected
+outer mouse, child terminal, and cursor shape/color modes instead of re-emitting them on every
+incremental frame. The comparison used release builds from the same checkout and ten one-second
+samples per pane profile. Median active outer traffic fell from 8,990 to 3,074 B/s for one pane
+(65.8%) and from 9,686 to 3,770 B/s for 64 panes (61.1%). A separate hundred-sample controlled
+interaction run reduced median client output from 633 to 531 bytes (16.1%); a synchronized 22-row
+TUI redraw reduced it from 2,114 to 2,012 bytes (4.8%). The same-host one-pane active
+key-to-visible p50 was effectively unchanged at 0.715 versus 0.718 ms, while p95 moved from 1.274
+to 1.358 ms. These results establish a substantial presentation-amplification reduction, not an
+interaction-latency win. Reports are `lemma-isolated-baseline-profiles-10.json`,
+`lemma-final-profiles-10.json`, `interaction-baseline-100.json`, and
+`final-interaction-100.json`.
+
+A later experiment passed the client's terminal writer to the daemon with `SCM_RIGHTS`. On its
+Linux cloud VM, interaction-under-output moved from 1.152/1.804 ms to 0.800/1.560 ms p50/p95 and
+synchronized TUI redraw moved from 1.651/2.052 ms to 1.402/2.018 ms. The experiment was removed:
+the descriptor handoff, second render transport, protocol negotiation, polling, fallback, and
+failure-recovery paths were not justified by the workload-specific gain. Lemma retains the single
+framed socket-render path; the measurements are historical evidence, not current behavior.
 
 ## Isolation evidence
 

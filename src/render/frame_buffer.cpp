@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -137,12 +138,14 @@ void FrameBuffer::release() noexcept {
   return std::span<const std::byte>(storage_.get(), capacity_).first(bytes);
 }
 
-[[nodiscard]] auto compose_retained_frame(const std::span<const PaneSurface> panes,
-                                          const Viewport viewport, FrameBuffer& frame,
-                                          const bool force_full, const StatusLine status,
-                                          const PaneOverlay overlay) noexcept
+[[nodiscard]] auto
+compose_retained_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
+                       FrameBuffer& frame, const bool force_full, const StatusLine status,
+                       const PaneOverlay overlay,
+                       const std::optional<OuterModeProjection> previous_outer_modes) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  return compose_frame(panes, viewport, frame.writable(), force_full, status, overlay);
+  return compose_frame(panes, viewport, frame.writable(), force_full, status, overlay,
+                       previous_outer_modes);
 }
 
 [[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,

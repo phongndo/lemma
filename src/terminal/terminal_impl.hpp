@@ -129,8 +129,11 @@ struct Terminal::Impl final {
   std::size_t physical_cell_capacity{0};
   std::size_t row_hash_count{0};
   std::array<bool, 12> mirrored_mode_values{};
+  GhosttyColorRgb projected_cursor_color{};
+  std::uint8_t projected_cursor_code{0};
   bool mirrored_modes_valid{false};
   bool mirrored_mouse_modes_valid{false};
+  bool projected_cursor_valid{false};
   bool ansi_physical_valid{false};
   bool selection_checkpoint_rectangle{false};
   BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;

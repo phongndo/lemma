@@ -113,6 +113,26 @@
       ]
     },
     {
+      "id": "tui_redraw",
+      "input": "a full-screen alternate-buffer peer acknowledges each unique input token and synchronously redraws 22 changed 79-column rows",
+      "completion": "each token is acknowledged from the PTY and observable in the synchronized full-screen redraw",
+      "metrics": [
+        "key_to_pty_ns",
+        "key_to_visible_ns",
+        "client_bytes"
+      ]
+    },
+    {
+      "id": "tui_wheel_burst",
+      "input": "64 normalized SGR wheel reports target one full-screen alternate-buffer peer with application mouse reporting enabled",
+      "completion": "all 64 reports reach the PTY and the peer's synchronized redraw marker is observable",
+      "metrics": [
+        "key_to_pty_ns",
+        "key_to_visible_ns",
+        "client_bytes"
+      ]
+    },
+    {
       "id": "idle_resources",
       "input": "an attached warm shell with no injected input or output for one second per sample",
       "completion": "the client and session remain attached for the complete sample interval",

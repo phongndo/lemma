@@ -24,6 +24,46 @@ void write_text(Terminal& terminal, const std::string_view text) {
   return std::move(result).value();
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void expect_full_projection_equal(Terminal& canonical, Terminal& replayed) {
+  std::array<std::byte, std::size_t{512} * 1'024U> canonical_visible{};
+  std::array<std::byte, std::size_t{512} * 1'024U> replayed_visible{};
+  const auto canonical_visible_bytes =
+      canonical.format_screen(ScreenFormat::plain, canonical_visible);
+  const auto replayed_visible_bytes = replayed.format_screen(ScreenFormat::plain, replayed_visible);
+  ASSERT_TRUE(canonical_visible_bytes.has_value());
+  ASSERT_TRUE(replayed_visible_bytes.has_value());
+  // Construct owning diagnostics only in the test oracle so failures show the semantic difference.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string canonical_text(reinterpret_cast<const char*>(canonical_visible.data()),
+                                   *canonical_visible_bytes);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string replayed_text(reinterpret_cast<const char*>(replayed_visible.data()),
+                                  *replayed_visible_bytes);
+  EXPECT_EQ(canonical_text, replayed_text);
+
+  canonical.invalidate_ansi_render_state();
+  replayed.invalidate_ansi_render_state();
+  std::array<std::byte, std::size_t{512} * 1'024U> canonical_output{};
+  std::array<std::byte, std::size_t{512} * 1'024U> replayed_output{};
+  const auto canonical_frame = canonical.render_ansi(canonical_output, true);
+  const auto replayed_frame = replayed.render_ansi(replayed_output, true);
+  ASSERT_TRUE(canonical_frame.has_value());
+  ASSERT_TRUE(replayed_frame.has_value());
+  EXPECT_TRUE(std::ranges::equal(std::span(canonical_output).first(canonical_frame->bytes),
+                                 std::span(replayed_output).first(replayed_frame->bytes)));
+}
+
+void project_and_expect_convergence(Terminal& canonical, Terminal& projected,
+                                    const bool force_full = false) {
+  std::array<std::byte, std::size_t{512} * 1'024U> output{};
+  const auto rendered = canonical.render_ansi(output, force_full);
+  ASSERT_TRUE(rendered.has_value());
+  projected.write(std::span(output).first(rendered->bytes));
+  expect_full_projection_equal(canonical, projected);
+}
+
 TEST(TerminalTest, RejectsInvalidAndUnfundedConfigurations) {
   TerminalOptions invalid_dimensions;
   invalid_dimensions.size.columns = 0;
@@ -224,6 +264,72 @@ TEST(TerminalTest, ScrollDetectionHashesCompleteGraphemes) {
   ASSERT_TRUE(projected_full.has_value());
   EXPECT_TRUE(std::ranges::equal(std::span(canonical_output).first(canonical_full->bytes),
                                  std::span(projected_output).first(projected_full->bytes)));
+}
+
+TEST(TerminalTest, FragmentedWritesPreserveCanonicalState) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  auto single_write = make_terminal(options);
+  constexpr std::string_view input = "primary\x1B[2;3H\x1B[1;38;5;4m"
+                                     "\xE7\x95\x8C"
+                                     "e\xCC\x81\x1B[0m";
+  const auto bytes = std::as_bytes(std::span(input.data(), input.size()));
+  single_write.write(bytes);
+
+  for (std::size_t split = 1; split < bytes.size(); ++split) {
+    auto fragmented = make_terminal(options);
+    fragmented.write(bytes.first(split));
+    fragmented.write(bytes.subspan(split));
+    expect_full_projection_equal(single_write, fragmented);
+  }
+}
+
+TEST(TerminalTest, AnsiRoundTripConvergesVisibleContentAcrossAlternateScreenTransitions) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  auto canonical = make_terminal(options);
+  auto projected = make_terminal(options);
+
+  write_text(canonical, "primary \x1B[1;32m"
+                        "\xE7\x95\x8C"
+                        "e\xCC\x81\x1B[0m");
+  project_and_expect_convergence(canonical, projected, true);
+
+  write_text(canonical, "\x1B[?1049h\x1B[2 q\x1B[?25lalt \x1B[38;2;10;20;30m"
+                        "\xE7\x95\x8C"
+                        "e\xCC\x82\x1B[0m");
+  project_and_expect_convergence(canonical, projected);
+
+  write_text(canonical, "\x1B[?1049l\x1B[6 q\x1B[?25h");
+  project_and_expect_convergence(canonical, projected);
+}
+
+TEST(TerminalTest, PreservesPinnedMaximumGraphemeThroughRenderAndSearch) {
+  TerminalOptions options;
+  options.size = {.columns = 4, .rows = 2};
+  auto canonical = make_terminal(options);
+  auto projected = make_terminal(options);
+  std::string grapheme{"a"};
+  constexpr std::string_view four_byte_combining_mark = "\xF0\x9E\x80\x80";
+  for (std::size_t suffix = 0; suffix + 1U < pane_grapheme_codepoints_max; ++suffix) {
+    grapheme.append(four_byte_combining_mark);
+  }
+  grapheme.push_back('Z');
+  write_text(canonical, grapheme);
+
+  project_and_expect_convergence(canonical, projected, true);
+  std::optional<SearchCursor> cursor;
+  SearchStepResult search{};
+  for (std::size_t slice = 0; slice < options.size.columns; ++slice) {
+    const auto result = canonical.search_literal_step("Z", SearchDirection::forward, cursor, 1);
+    ASSERT_TRUE(result.has_value());
+    search = *result;
+    if (search.status != SearchStepStatus::pending) {
+      break;
+    }
+    cursor = search.next;
+  }
+  EXPECT_EQ(search.status, SearchStepStatus::found);
 }
 
 TEST(TerminalTest, ResizesWithCheckedPixelDimensions) {

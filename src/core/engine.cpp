@@ -609,6 +609,7 @@ struct AttachmentRuntime final {
     pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
     pending_attach_generation = 0;
     status_signature = 0;
+    outer_modes.reset();
     status_valid = false;
     bell_pending = false;
     input_backpressured = false;
@@ -636,6 +637,7 @@ struct AttachmentRuntime final {
   std::uint32_t pending_attach_slot{std::numeric_limits<std::uint32_t>::max()};
   std::uint32_t pending_attach_generation{0};
   std::uint64_t status_signature{0};
+  std::optional<render::OuterModeProjection> outer_modes;
   int client{-1};
   bool status_valid{false};
   bool bell_pending{false};
@@ -2667,6 +2669,11 @@ void focus_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
     }
     return;
   }
+  auto* const focused = find_pane(session, tab, tab.focused_pane);
+  LEMMA_ASSERT(focused != nullptr);
+  auto* const focused_runtime = find_pane_runtime(runtimes, session, tab, *focused);
+  LEMMA_ASSERT(focused_runtime != nullptr);
+  focused_runtime->terminal.invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, tab.zoomed);
 }
 
@@ -5713,7 +5720,8 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
                                    surfaces.size());
   const auto rendered = render::compose_retained_frame(
       surfaces, {.columns = session.attachment.columns, .rows = session.attachment.rows},
-      session.attachment_runtime.frame, force_full, status, overlay);
+      session.attachment_runtime.frame, force_full, status, overlay,
+      session.attachment_runtime.outer_modes);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
                                    rendered.has_value() ? rendered->bytes : 0);
@@ -5752,6 +5760,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
   session.attachment_runtime.server_sequence += static_cast<std::uint32_t>(frame_messages);
   session.attachment_runtime.full_redraw_generation = generation;
+  session.attachment_runtime.outer_modes = rendered->outer_modes;
   session.attachment_runtime.bell_pending = false;
   return true;
 }
