@@ -1,3 +1,4 @@
+#include "platform/io.hpp"
 #include "platform/pty.hpp"
 
 #include <array>
@@ -8,7 +9,9 @@
 #include <string_view>
 #include <thread>
 
+#include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -24,6 +27,31 @@
 
 namespace lemma::platform {
 namespace {
+
+TEST(PlatformIoTest, PassesOneCloseOnExecDescriptorWithStreamSentinel) {
+  std::array<int, 2> sockets{};
+  std::array<int, 2> pipe{};
+  ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()), 0);
+  ASSERT_EQ(::pipe(pipe.data()), 0);
+
+  ASSERT_TRUE(send_descriptor(sockets.front(), pipe.back()));
+  int received = -1;
+  ASSERT_EQ(receive_descriptor(sockets.back(), received), ReceiveDescriptorStatus::received);
+  ASSERT_GE(received, 0);
+  EXPECT_NE(::fcntl(received, F_GETFD, 0) & FD_CLOEXEC, 0);
+
+  constexpr std::byte value{0x5A};
+  ASSERT_EQ(::write(received, &value, 1), 1);
+  std::byte observed{};
+  ASSERT_EQ(::read(pipe.front(), &observed, 1), 1);
+  EXPECT_EQ(observed, value);
+
+  close_descriptor(received);
+  close_descriptor(sockets.front());
+  close_descriptor(sockets.back());
+  close_descriptor(pipe.front());
+  close_descriptor(pipe.back());
+}
 
 // GoogleTest assertions and explicit PTY child setup inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

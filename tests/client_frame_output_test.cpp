@@ -225,6 +225,24 @@ TEST(ClientFrameOutputTest, ChunksDeclaredFrameTransactionAtProtocolBoundary) {
   EXPECT_FALSE(output.busy());
 }
 
+TEST(ClientFrameOutputTest, DirectRenderQueuesOnlyRawFrameBytes) {
+  auto frame = make_frame();
+  constexpr std::string_view payload = "direct-render";
+  std::ranges::copy(std::as_bytes(std::span(payload.data(), payload.size())),
+                    frame->writable().begin());
+  ClientFrameOutput output;
+  output.set_direct_render(true);
+
+  ASSERT_TRUE(queue_frame(output, payload.size(), origin));
+  EXPECT_TRUE(output.direct_frame());
+  EXPECT_EQ(output.queued_message_count(), 0U);
+  EXPECT_EQ(output.size(), payload.size());
+  EXPECT_TRUE(std::ranges::equal(output.readable(*frame),
+                                 std::as_bytes(std::span(payload.data(), payload.size()))));
+  EXPECT_TRUE(output.consume(payload.size(), origin));
+  EXPECT_FALSE(output.busy());
+}
+
 TEST(ClientFrameOutputTest, CompositionAndFlushDoNotAllocateFrameStorage) {
   ScriptedFrameAllocator allocator;
   render::FrameBuffer frame(&allocate_test_frame, &allocator);

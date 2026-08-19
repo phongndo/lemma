@@ -138,11 +138,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.6. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.7. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{6};
+  std::uint8_t minor{7};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };
@@ -378,6 +378,7 @@ struct ClientMessage final {
   // Ghostty filters unsafe controls in place before encoding.
   std::span<std::byte> input;
   std::uint32_t sequence{0};
+  bool direct_render{false};
 };
 
 static_assert(sizeof(ClientMessage) <= 96U);
@@ -391,6 +392,7 @@ struct ServerMessage final {
   std::uint32_t sequence{0};
   std::uint32_t full_redraw_generation{0};
   bool full_redraw{false};
+  bool direct_render{false};
 };
 
 class SmallMessage final {
@@ -402,10 +404,10 @@ public:
 private:
   friend auto encode_client_hello(std::string_view session, Dimensions dimensions,
                                   std::uint32_t sequence, ProtocolVersion version,
-                                  const std::optional<HostTerminalTheme>& host_theme) noexcept
-      -> SmallMessage;
-  friend auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence) noexcept
-      -> SmallMessage;
+                                  const std::optional<HostTerminalTheme>& host_theme,
+                                  bool direct_render) noexcept -> SmallMessage;
+  friend auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence,
+                                  bool direct_render) noexcept -> SmallMessage;
   friend auto encode_resize(Dimensions dimensions, std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_detach(std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_pane_command(PaneCommand command, std::uint32_t sequence) noexcept
@@ -450,10 +452,10 @@ private:
 [[nodiscard]] auto
 encode_client_hello(std::string_view session, Dimensions dimensions, std::uint32_t sequence = 1,
                     ProtocolVersion version = current_version,
-                    const std::optional<HostTerminalTheme>& host_theme = std::nullopt) noexcept
-    -> SmallMessage;
-[[nodiscard]] auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence = 1) noexcept
-    -> SmallMessage;
+                    const std::optional<HostTerminalTheme>& host_theme = std::nullopt,
+                    bool direct_render = false) noexcept -> SmallMessage;
+[[nodiscard]] auto encode_daemon_hello(Dimensions dimensions, std::uint32_t sequence = 1,
+                                       bool direct_render = false) noexcept -> SmallMessage;
 [[nodiscard]] auto encode_input_header(std::size_t bytes, std::uint32_t sequence) noexcept
     -> std::array<std::byte, attach_header_bytes>;
 [[nodiscard]] auto encode_paste_header(std::size_t bytes, std::uint32_t sequence) noexcept

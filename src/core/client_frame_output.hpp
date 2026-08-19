@@ -47,6 +47,8 @@ public:
   }
   [[nodiscard]] auto offset() const noexcept -> std::size_t { return offset_; }
   [[nodiscard]] auto write_ready() const noexcept -> bool { return write_ready_; }
+  [[nodiscard]] auto direct_frame() const noexcept -> bool;
+  void set_direct_render(bool enabled) noexcept { direct_render_ = enabled; }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   [[nodiscard]] auto trace_correlation() const noexcept -> std::uint64_t;
 #endif
@@ -86,6 +88,7 @@ private:
   TimePoint last_progress_at_;
   Source source_{Source::none};
   bool write_ready_{false};
+  bool direct_render_{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   std::uint64_t latency_trace_correlation_{0};
 #endif

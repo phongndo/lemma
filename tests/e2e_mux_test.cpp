@@ -369,7 +369,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.6")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.7")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
