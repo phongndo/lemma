@@ -146,7 +146,7 @@ The transaction reports the target dimensions with `TIOCSWINSZ` before resizing 
 
 This enforces the directional terminal invariant: Ghostty never parses child output at dimensions that have not already been reported to that child PTY. Live divider motion has no geometry exception, timer, checkpoint, or deferred endpoint. Each distinct decoded cell position performs bounded fixed-plan work and may produce `SIGWINCH`; duplicate positions are no-ops.
 
-Daemon client decoding has a separate CPU bound from decoder storage: each session may apply at most 16 complete client messages and one geometry-bearing message per reactor turn. Retained valid work resumes on the next turn without requiring new socket readiness, so a motion flood cannot make one client monopolize PTY progress.
+Daemon client decoding has a separate CPU bound from decoder storage: each session may apply at most 64 complete client messages and one geometry-bearing message per reactor turn. Typed key routing remains independently limited to 16 steps. Retained valid work resumes on the next turn without requiring new socket readiness, so a motion flood cannot make one client monopolize PTY progress.
 
 The attached client treats repeated outer `SIGWINCH` samples as one physical gesture. It retains only the latest dimensions and sends the settled endpoint after 50 ms without another sample, or immediately before later user input so input cannot overtake geometry. The client does not forward every window-manager sample as a child PTY resize.
 
