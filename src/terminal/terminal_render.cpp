@@ -1006,7 +1006,7 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
         return std::unexpected(enabled.error());
       }
       auto& physical_value = std::span(impl_->mirrored_mode_values).subspan(mode_index, 1).front();
-      const bool must_emit = composed || full || !impl_->mirrored_modes_valid ||
+      const bool must_emit = full || !impl_->mirrored_modes_valid ||
                              (mode.mouse && !impl_->mirrored_mouse_modes_valid) ||
                              physical_value != *enabled;
       if (must_emit && (!writer.append("\x1B[?") || !writer.append_integer(mode.number) ||

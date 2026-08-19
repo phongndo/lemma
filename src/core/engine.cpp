@@ -2669,6 +2669,11 @@ void focus_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
     }
     return;
   }
+  auto* const focused = find_pane(session, tab, tab.focused_pane);
+  LEMMA_ASSERT(focused != nullptr);
+  auto* const focused_runtime = find_pane_runtime(runtimes, session, tab, *focused);
+  LEMMA_ASSERT(focused_runtime != nullptr);
+  focused_runtime->terminal.invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, tab.zoomed);
 }
 

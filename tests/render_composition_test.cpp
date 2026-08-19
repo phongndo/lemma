@@ -512,14 +512,17 @@ TEST(PaneCompositionTest, ProjectsOuterMouseModesOnlyWhenTheyChange) {
   const auto retained_text = as_text(std::span(output).first(retained->bytes));
   EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?1002h")));
   EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?1003h")));
+  EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?2004h")));
+  EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?2004l")));
 
-  write_text(terminal, "\x1B[?1003hmode change");
+  write_text(terminal, "\x1B[?1003h\x1B[?2004hmode change");
   const auto changed = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output, false,
                                      {}, {}, retained->outer_modes);
   ASSERT_TRUE(changed.has_value());
   EXPECT_EQ(changed->outer_modes, OuterModeProjection::any_mouse);
   const auto changed_text = as_text(std::span(output).first(changed->bytes));
   EXPECT_THAT(changed_text, testing::HasSubstr("\x1B[?1003h"));
+  EXPECT_THAT(changed_text, testing::HasSubstr("\x1B[?2004h"));
 }
 
 TEST(PaneCompositionTest, DrawsDeclaredPaneSeparators) {
