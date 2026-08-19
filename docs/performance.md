@@ -186,6 +186,16 @@ interaction-latency win. Reports are `lemma-isolated-baseline-profiles-10.json`,
 `lemma-final-profiles-10.json`, `interaction-baseline-100.json`, and
 `final-interaction-100.json`.
 
+A subsequent local direct-render qualification passed the client terminal writer to the daemon with
+`SCM_RIGHTS`, leaving input, resize, theme discovery, termios, and emergency restoration in the
+client. Against the retained socket-render reports above, hundred-sample interaction-under-output
+key-to-visible moved from 1.152/1.804 ms to 0.800/1.560 ms p50/p95 (30.6%/13.5% lower).
+Synchronized 22-row TUI redraw moved from 1.651/2.052 ms to 1.402/2.018 ms. The same run's pinned
+tmux 3.7b interaction result was 0.704/1.361 ms, so direct rendering removes most but not all of
+the latency gap. Reports are `direct-interaction-100.json`, `direct-tui-redraw-100.json`, and
+`direct-tui-wheel-100.json`. These cloud-VM results remain characterization rather than the
+host-scoped regression gate.
+
 ## Isolation evidence
 
 A raw 500x200 non-reading client with a 4 KiB requested receive buffer was attached while its pane produced an unbounded flood. Another session completed exact-token interactions. Retained runs disconnected the non-reader after 5.016 seconds in the original qualification and 5.026/5.029 seconds in later thirty-interaction runs, within the 5-second no-progress deadline plus observation allowance.
