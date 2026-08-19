@@ -45,6 +45,7 @@ BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
 LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
+TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
@@ -219,6 +220,7 @@ def summary(samples: list[int]) -> dict[str, Any]:
 
 INTERACTION_LABEL_CODES = {
     "OUTPUT": b"OUT",
+    "TUI": b"TUI",
     "IDLE": b"IDL",
     "BLOCKED": b"BLK",
     "CLIENT_IDLE": b"CID",
@@ -1583,6 +1585,29 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
         receipts.close()
 
 
+def tui_redraw(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    receipts = PtyReceiptChannel(runtime.receipt_path)
+    try:
+        client = runtime.start_and_attach("tui_redraw")
+        launch = (
+            f"exec {shlex.quote(str(runtime.peer_path))} latency-tui "
+            f"{shlex.quote(str(runtime.receipt_path))}\r"
+        ).encode()
+        client.write_all(launch, 2.0)
+        client.read_until(
+            TUI_REDRAW_READY,
+            5.0,
+            visible_text=isinstance(runtime, HerdrRuntime),
+        )
+        client.drain(0.01)
+        return {
+            "status": "completed",
+            **latency_samples(client, receipts, "TUI", repetitions),
+        }
+    finally:
+        receipts.close()
+
+
 class WorkloadFailure(RuntimeError):
     def __init__(self, message: str, result: dict[str, Any]) -> None:
         super().__init__(message)
@@ -2155,6 +2180,7 @@ def main() -> int:
             "warm-scroll",
             "attach-visible",
             "interactive-output",
+            "tui-redraw",
             "idle-resources",
             "blocked-pty",
             "blocked-client",
@@ -2322,6 +2348,7 @@ def main() -> int:
                 "interactive_under_output",
                 interactive_under_output,
             ),
+            "tui-redraw": ("tui_redraw", tui_redraw),
             "idle-resources": ("idle_resources", idle_resources),
             "blocked-pty": ("blocked_pty", blocked_pty),
             "blocked-client": ("blocked_client", blocked_client),
