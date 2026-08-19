@@ -72,12 +72,11 @@ namespace lemma::platform {
   std::byte sentinel{0xD7};
   iovec vector{.iov_base = &sentinel, .iov_len = 1};
   std::array<char, CMSG_SPACE(sizeof(int))> control{};
-  msghdr message{
-      .msg_iov = &vector,
-      .msg_iovlen = 1,
-      .msg_control = control.data(),
-      .msg_controllen = control.size(),
-  };
+  msghdr message{};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  message.msg_control = control.data();
+  message.msg_controllen = control.size();
   auto* const header = CMSG_FIRSTHDR(&message);
   if (header == nullptr) {
     return false;
@@ -105,12 +104,11 @@ namespace lemma::platform {
   std::byte sentinel{};
   iovec vector{.iov_base = &sentinel, .iov_len = 1};
   std::array<char, CMSG_SPACE(sizeof(int))> control{};
-  msghdr message{
-      .msg_iov = &vector,
-      .msg_iovlen = 1,
-      .msg_control = control.data(),
-      .msg_controllen = control.size(),
-  };
+  msghdr message{};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  message.msg_control = control.data();
+  message.msg_controllen = control.size();
   ssize_t received = 0;
   do {
     received = ::recvmsg(socket, &message, 0);
@@ -124,7 +122,7 @@ namespace lemma::platform {
   if (received != 1 || sentinel != std::byte{0xD7} || (message.msg_flags & MSG_CTRUNC) != 0) {
     return ReceiveDescriptorStatus::error;
   }
-  const auto* const header = CMSG_FIRSTHDR(&message);
+  auto* const header = CMSG_FIRSTHDR(&message);
   if (header == nullptr || CMSG_NXTHDR(&message, header) != nullptr ||
       header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
       header->cmsg_len != CMSG_LEN(sizeof(int))) {
