@@ -84,7 +84,7 @@ constexpr double mouse_repeat_click_distance = 1.0;
 constexpr std::size_t copy_escape_bytes_max = 16;
 // Decoder capacity is a storage bound, not a CPU bound. Every session gets a fresh bounded slice
 // each reactor turn; geometry work is tighter because one message can reflow every pane in a tab.
-constexpr std::size_t client_messages_per_turn_max = 64;
+constexpr std::size_t client_messages_per_turn_max = 16;
 constexpr std::size_t client_geometry_messages_per_turn_max = 1;
 constexpr std::size_t client_input_steps_per_turn_max = 16;
 static_assert(client_messages_per_turn_max > 0 && client_geometry_messages_per_turn_max > 0 &&

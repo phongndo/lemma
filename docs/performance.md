@@ -84,7 +84,7 @@ Reproduce with:
   --benchmark_report_aggregates_only=true
 ```
 
-The daemon applies at most 64 decoded client messages and one geometry-bearing message per session per reactor turn. Typed key routing remains independently limited to 16 steps. Valid retained packets resume on the next turn; this bounds one peer's resize work without dropping or reordering reports.
+The daemon applies at most 16 decoded client messages and one geometry-bearing message per session per reactor turn. Valid retained packets resume on the next turn; this bounds one peer's resize work without dropping or reordering reports.
 
 A real-PTY integration qualification delivered eight distinct outer sizes 10 ms apart. The attached client still settles that outer-window gesture before sending it to the daemon, and the child shell's `WINCH` trap observed exactly one signal. Live dividers are intentionally different: a three-position short drag observed three child notifications, an out-and-back drag observed both changed positions, and release at an already committed position was a no-op. A continuously outputting, cursor-addressed peer then dragged for 800 ms while comparing stable `TIOCGWINSZ` samples with Ghostty's CSI 18 t geometry report. The former PTY-only coalescer produced 15 stable mismatches in the characterization run; the replacement produced zero. The 512-motion cross-session flood test also retained bounded progress for the unrelated session.
 
