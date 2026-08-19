@@ -962,7 +962,8 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     const auto cursor_color = impl_->render_colors.cursor_has_value
                                   ? impl_->render_colors.cursor
                                   : impl_->render_colors.foreground;
-    const bool cursor_projection_changed = full || !impl_->projected_cursor_valid ||
+    const bool cursor_projection_changed = cursor_override || full ||
+                                           !impl_->projected_cursor_valid ||
                                            impl_->projected_cursor_code != cursor_code ||
                                            impl_->projected_cursor_color.r != cursor_color.r ||
                                            impl_->projected_cursor_color.g != cursor_color.g ||
