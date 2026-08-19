@@ -962,10 +962,20 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     const auto cursor_color = impl_->render_colors.cursor_has_value
                                   ? impl_->render_colors.cursor
                                   : impl_->render_colors.foreground;
-    if (!append_cursor_color(writer, cursor_color, impl_->session_theme.cursor) ||
-        !writer.append("\x1B[") || !writer.append_integer(cursor_code) || !writer.append(" q")) {
-      impl_->ansi_physical_valid = false;
-      return std::unexpected(Error::out_of_space);
+    const bool cursor_projection_changed = full || !impl_->projected_cursor_valid ||
+                                           impl_->projected_cursor_code != cursor_code ||
+                                           impl_->projected_cursor_color.r != cursor_color.r ||
+                                           impl_->projected_cursor_color.g != cursor_color.g ||
+                                           impl_->projected_cursor_color.b != cursor_color.b;
+    if (cursor_projection_changed) {
+      if (!append_cursor_color(writer, cursor_color, impl_->session_theme.cursor) ||
+          !writer.append("\x1B[") || !writer.append_integer(cursor_code) || !writer.append(" q")) {
+        impl_->ansi_physical_valid = false;
+        return std::unexpected(Error::out_of_space);
+      }
+      impl_->projected_cursor_color = cursor_color;
+      impl_->projected_cursor_code = cursor_code;
+      impl_->projected_cursor_valid = true;
     }
   }
 
