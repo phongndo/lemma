@@ -5704,6 +5704,8 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
+// Composition validates and commits one bounded presentation transaction.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto compose_session_frame(SessionRecord& session, PaneRuntimeStore& runtimes,
                                          const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
@@ -6380,6 +6382,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     }
     break;
   case PendingState::read_attach:
+  case PendingState::read_render_descriptor:
     LEMMA_ASSERT(false);
     break;
   case PendingState::read_name_size: {
@@ -6491,9 +6494,6 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       pending.output.reset();
       prepare_named_command(pending, sessions, runtimes, extensions);
     }
-    break;
-  case PendingState::read_render_descriptor:
-    LEMMA_ASSERT(false);
     break;
   case PendingState::unused:
   case PendingState::flush_response:
@@ -7210,6 +7210,8 @@ void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtime
   }
 }
 
+// Flush routing preserves direct-frame, socket-control, deadline, and teardown outcomes together.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                   const std::span<ClientFrameFlushTarget> storage,
                                   std::size_t& cursor,

@@ -110,9 +110,13 @@ namespace lemma::platform {
   message.msg_control = control.data();
   message.msg_controllen = control.size();
   ssize_t received = 0;
-  do {
+  while (true) {
     received = ::recvmsg(socket, &message, 0);
-  } while (received < 0 && errno == EINTR);
+    if (received < 0 && errno == EINTR) {
+      continue;
+    }
+    break;
+  }
   if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
     return ReceiveDescriptorStatus::would_block;
   }
@@ -129,6 +133,8 @@ namespace lemma::platform {
     return ReceiveDescriptorStatus::error;
   }
   std::memcpy(&descriptor, CMSG_DATA(header), sizeof(descriptor));
+  // fcntl is variadic because its third argument depends on the command.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   if (descriptor < 0 || ::fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0) {
     close_descriptor(descriptor);
     return ReceiveDescriptorStatus::error;
