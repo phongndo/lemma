@@ -1119,8 +1119,7 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
 }
 
 struct CompositionPolicy final {
-  bool has_presented_focus{false};
-  bool unbuttoned_mouse_motion{false};
+  OuterModeProjection outer_modes{OuterModeProjection::neutral};
 };
 
 [[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
@@ -1131,17 +1130,20 @@ struct CompositionPolicy final {
   if (!validation.has_value()) {
     return std::unexpected(validation.error());
   }
+  if (!*validation) {
+    return CompositionPolicy{};
+  }
   const auto focused = std::ranges::find(panes, true, &PaneSurface::focused);
   if (focused == panes.end()) {
-    return CompositionPolicy{.has_presented_focus = *validation};
+    return CompositionPolicy{};
   }
   const auto tracking = focused->terminal->mouse_tracking();
   if (!tracking.has_value()) {
     return std::unexpected(CompositionError::terminal_error);
   }
   return CompositionPolicy{
-      .has_presented_focus = *validation,
-      .unbuttoned_mouse_motion = tracking->unbuttoned_motion,
+      .outer_modes = tracking->unbuttoned_motion ? OuterModeProjection::any_mouse
+                                                 : OuterModeProjection::button_mouse,
   };
 }
 
@@ -1158,8 +1160,8 @@ struct CompositionPolicy final {
 }
 
 [[nodiscard]] auto finish_frame(const std::span<std::byte> output, std::size_t& used,
-                                const bool has_focus, const bool unbuttoned_mouse_motion) noexcept
-    -> bool {
+                                const OuterModeProjection outer_modes,
+                                const bool project_outer_modes) noexcept -> bool {
   constexpr std::string_view neutral_modes =
       "\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l\x1B[?1004l"
       "\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l\x1B[?2004l";
@@ -1172,11 +1174,20 @@ struct CompositionPolicy final {
   constexpr std::string_view any_mouse_capture =
       "\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003h\x1B[?1005l\x1B[?1015l"
       "\x1B[?1016l\x1B[?1006h";
+  const auto projected = [=, &output, &used]() noexcept {
+    switch (outer_modes) {
+    case OuterModeProjection::neutral:
+      return append(output, used, neutral_modes) && append(output, used, button_mouse_capture);
+    case OuterModeProjection::button_mouse:
+      return append(output, used, button_mouse_capture);
+    case OuterModeProjection::any_mouse:
+      return append(output, used, any_mouse_capture);
+    }
+    return false;
+  };
   return append(output, used, "\x1B[0m\x1B[?7h") &&
-         (has_focus ||
-          (append(output, used, "\x1B[?25l") && append(output, used, neutral_modes))) &&
-         append(output, used, unbuttoned_mouse_motion ? any_mouse_capture : button_mouse_capture) &&
-         append(output, used, "\x1B[?2026l");
+         (outer_modes != OuterModeProjection::neutral || append(output, used, "\x1B[?25l")) &&
+         (!project_outer_modes || projected()) && append(output, used, "\x1B[?2026l");
 }
 
 } // namespace
@@ -1213,9 +1224,11 @@ struct CompositionPolicy final {
 // Validation is a separate pass so malformed composition input cannot partially consume terminal
 // damage or alter retained pane state. The bounded branches preserve all-or-nothing composition.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
-                                 const std::span<std::byte> output, const bool force_full,
-                                 const StatusLine status, const PaneOverlay overlay) noexcept
+[[nodiscard]] auto
+compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
+              const std::span<std::byte> output, const bool force_full, const StatusLine status,
+              const PaneOverlay overlay,
+              const std::optional<OuterModeProjection> previous_outer_modes) noexcept
     -> std::expected<CompositionResult, CompositionError> {
   const auto policy = composition_policy(panes, viewport, status, overlay);
   if (!policy.has_value()) {
@@ -1230,6 +1243,7 @@ struct CompositionPolicy final {
   }
   CompositionResult composition{
       .panes = panes.size(),
+      .outer_modes = status.prompting() ? OuterModeProjection::button_mouse : policy->outer_modes,
       .full = complete_full,
   };
   const std::uint16_t row_offset = has_visible_status(viewport, status) ? 1U : 0U;
@@ -1256,8 +1270,8 @@ struct CompositionPolicy final {
   // surface. In that case no full-screen clear was emitted and the full-redraw generation must not
   // advance.
   composition.full = composition.full && complete_frame;
-  if (!finish_frame(output, used, policy->has_presented_focus || status.prompting(),
-                    status.prompting() ? false : policy->unbuttoned_mouse_motion)) {
+  if (!finish_frame(output, used, composition.outer_modes,
+                    force_full || previous_outer_modes != composition.outer_modes)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
   }

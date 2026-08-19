@@ -493,6 +493,35 @@ TEST(PaneCompositionTest, OmitsCleanStatusFromIncrementalFrame) {
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
 }
 
+TEST(PaneCompositionTest, ProjectsOuterMouseModesOnlyWhenTheyChange) {
+  auto terminal = make_terminal(12, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 12, .rows = 2},
+      .focused = true,
+  };
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto initial = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output, true);
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_EQ(initial->outer_modes, OuterModeProjection::button_mouse);
+
+  write_text(terminal, "ordinary damage");
+  const auto retained = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output,
+                                      false, {}, {}, initial->outer_modes);
+  ASSERT_TRUE(retained.has_value());
+  const auto retained_text = as_text(std::span(output).first(retained->bytes));
+  EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?1002h")));
+  EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?1003h")));
+
+  write_text(terminal, "\x1B[?1003hmode change");
+  const auto changed = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output, false,
+                                     {}, {}, retained->outer_modes);
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_EQ(changed->outer_modes, OuterModeProjection::any_mouse);
+  const auto changed_text = as_text(std::span(output).first(changed->bytes));
+  EXPECT_THAT(changed_text, testing::HasSubstr("\x1B[?1003h"));
+}
+
 TEST(PaneCompositionTest, DrawsDeclaredPaneSeparators) {
   auto terminal = make_terminal(4, 2);
   const PaneSurface pane{
