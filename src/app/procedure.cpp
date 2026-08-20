@@ -44,13 +44,22 @@ enum class JsonKind : std::uint8_t {
   object,
 };
 
+struct JsonMember;
+
 struct JsonValue final {
   JsonKind kind{JsonKind::null};
   bool boolean{false};
   std::int64_t number{0};
   std::string string;
   std::vector<JsonValue> array;
-  std::vector<std::pair<std::string, JsonValue>> object;
+  std::vector<JsonMember> object;
+};
+
+// Keep recursive object entries behind vector's incomplete-element support. Instantiating
+// pair<string, JsonValue> inside JsonValue requires the still-incomplete JsonValue on libstdc++.
+struct JsonMember final {
+  std::string key;
+  JsonValue value;
 };
 
 // UTF-8 validation rejects overlong, surrogate, truncated, and out-of-range scalar values.
@@ -321,14 +330,14 @@ private:
       auto key = parse_string();
       if (!key.has_value() || !consume(':') ||
           std::ranges::any_of(result.object,
-                              [&](const auto& entry) { return entry.first == *key; })) {
+                              [&](const JsonMember& entry) { return entry.key == *key; })) {
         return std::nullopt;
       }
       auto value = parse_value(depth + 1U);
       if (!value.has_value()) {
         return std::nullopt;
       }
-      result.object.emplace_back(std::move(*key), std::move(*value));
+      result.object.push_back(JsonMember{.key = std::move(*key), .value = std::move(*value)});
       if (consume('}')) {
         return result;
       }
@@ -406,9 +415,9 @@ private:
   if (object.kind != JsonKind::object) {
     return nullptr;
   }
-  const auto found =
-      std::ranges::find_if(object.object, [&](const auto& entry) { return entry.first == key; });
-  return found == object.object.end() ? nullptr : &found->second;
+  const auto found = std::ranges::find_if(
+      object.object, [&](const JsonMember& entry) { return entry.key == key; });
+  return found == object.object.end() ? nullptr : &found->value;
 }
 
 [[nodiscard]] auto string_member(const JsonValue& object, const std::string_view key) noexcept
