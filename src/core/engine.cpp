@@ -281,7 +281,8 @@ drain_pty(const int pty, vt::Terminal& terminal, PresentationGate& presentation_
       }
       continue;
     }
-    if (bytes_read == 0) {
+    // Linux PTY masters report EIO instead of a zero-byte EOF after the final slave closes.
+    if (bytes_read == 0 || errno == EIO) {
       drain.failure = PaneRuntimeFailure::child_exit;
       return drain;
     }
