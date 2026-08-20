@@ -16,6 +16,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace lemma::vt {
 namespace detail {
@@ -117,6 +118,47 @@ struct AnsiStyle final {
       .green = color.g,
       .blue = color.b,
   };
+}
+
+[[nodiscard]] constexpr auto ansi_rgb(const RgbColor color) noexcept -> AnsiColor {
+  return {
+      .tag = AnsiColorTag::rgb,
+      .red = color.red,
+      .green = color.green,
+      .blue = color.blue,
+  };
+}
+
+[[nodiscard]] constexpr auto mix_channel(const std::uint8_t from,
+                                         const std::uint8_t toward) noexcept -> std::uint8_t {
+  constexpr int weight = 72;
+  const auto delta = static_cast<int>(toward) - static_cast<int>(from);
+  return static_cast<std::uint8_t>(static_cast<int>(from) + ((delta * weight) / 256));
+}
+
+[[nodiscard]] constexpr auto derived_selection_background(const TerminalTheme& theme) noexcept
+    -> RgbColor {
+  return {
+      .red = mix_channel(theme.background.red, theme.foreground.red),
+      .green = mix_channel(theme.background.green, theme.foreground.green),
+      .blue = mix_channel(theme.background.blue, theme.foreground.blue),
+  };
+}
+
+void apply_selection_highlight(AnsiStyle& style, const bool selected,
+                               const TerminalTheme& theme) noexcept {
+  if (!selected) {
+    return;
+  }
+  if (style.inverse) {
+    std::swap(style.foreground, style.background);
+    style.inverse = false;
+  }
+  style.background =
+      ansi_rgb(theme.selection_background.value_or(derived_selection_background(theme)));
+  if (theme.selection_foreground.has_value()) {
+    style.foreground = ansi_rgb(*theme.selection_foreground);
+  }
 }
 
 [[nodiscard]] constexpr auto ansi_palette(const GhosttyColorPaletteIndex index) noexcept
@@ -463,7 +505,7 @@ struct AnsiStyle final {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    style->inverse = style->inverse != selected;
+    apply_selection_highlight(*style, selected, session_theme);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
@@ -592,7 +634,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    style->inverse = style->inverse != selected;
+    apply_selection_highlight(*style, selected, session_theme);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{

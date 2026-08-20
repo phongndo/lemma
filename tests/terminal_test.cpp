@@ -1110,6 +1110,29 @@ TEST(TerminalTest, RetainsPartialSearchMatchWhenSliceWorkIsExhausted) {
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 
+TEST(TerminalTest, ProjectsHostSelectionColorsInsteadOfReverseVideo) {
+  TerminalOptions options;
+  options.size = {.columns = 12, .rows = 2};
+  options.theme = default_theme();
+  options.theme->selection_background = RgbColor{.red = 10, .green = 20, .blue = 30};
+  options.theme->selection_foreground = RgbColor{.red = 200, .green = 210, .blue = 220};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "selected");
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::word, {.space = PointSpace::viewport, .column = 0, .row = 0})
+          .value_or(false));
+
+  std::array<std::byte, 8'192> output{};
+  const auto rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view ansi(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+
+  EXPECT_THAT(ansi, testing::HasSubstr("48;2;10;20;30"));
+  EXPECT_THAT(ansi, testing::HasSubstr("38;2;200;210;220"));
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("\x1B[0;7m")));
+}
+
 TEST(TerminalTest, ProjectsIncrementalSelectionAndCopyCursorHighlight) {
   TerminalOptions options;
   options.size = {.columns = 12, .rows = 2};
@@ -1140,7 +1163,8 @@ TEST(TerminalTest, ProjectsIncrementalSelectionAndCopyCursorHighlight) {
   ASSERT_TRUE(rendered.has_value());
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::string_view ansi(reinterpret_cast<const char*>(output.data()), rendered->bytes);
-  EXPECT_THAT(ansi, testing::HasSubstr(";7"));
+  EXPECT_THAT(ansi, testing::HasSubstr("48;2;"));
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("\x1B[0;7m")));
   EXPECT_THAT(ansi, testing::HasSubstr("mselected"));
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B[1;8H\x1B[?25h"));
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B[2 q"));

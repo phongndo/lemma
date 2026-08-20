@@ -369,7 +369,7 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.6")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.7")) << version.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -1022,8 +1022,8 @@ TEST_F(MuxProcessTest, CopiesMouseSelectionWithHostCopyChord) {
                                     "\x1B[<32;13;2M"
                                     "\x1B[<0;13;2m";
   ASSERT_TRUE(client.send(drag, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.screen() << "\nraw:\n"
-                                                                    << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_raw("48;2;", deadline_after(5s))) << client.screen() << "\nraw:\n"
+                                                                << client.raw_tail();
   constexpr std::string_view super_c = "\x1B[99;9:1u\x1B[99;9:3u";
   ASSERT_TRUE(client.send(super_c, deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_raw("\x1B]52;c;Q09QWV9QQVlMT0FE", deadline_after(5s)))
@@ -1034,20 +1034,17 @@ TEST_F(MuxProcessTest, CopiesMouseSelectionWithHostCopyChord) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
-TEST_F(MuxProcessTest, ConsumesHostCopyChordWithoutASelection) {
+TEST_F(MuxProcessTest, HostCopyChordWithoutASelectionDoesNotCopy) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "copy_noleak"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[>23u", deadline_after(5s)));
-  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; printf '__COPY_NOLEAK_READY__\\n'; "
-                          "v=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' '); "
-                          "stty sane; printf '__COPY_NOLEAK_%s__\\n' \"$v\"\r",
-                          deadline_after(2s)));
+  ASSERT_TRUE(client.send("printf '__COPY_NOLEAK_READY__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__COPY_NOLEAK_READY__", deadline_after(5s)))
       << client.screen();
   constexpr std::string_view super_c = "\x1B[99;9:1u\x1B[99;9:3u";
   ASSERT_TRUE(client.send(super_c, deadline_after(2s)));
-  ASSERT_TRUE(client.send("Z", deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_screen("__COPY_NOLEAK_5a__", deadline_after(5s)))
+  ASSERT_TRUE(client.send("printf '__COPY_NOLEAK_STILL_LIVE__\\n'\r", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_NOLEAK_STILL_LIVE__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
   EXPECT_EQ(client.raw_tail().find("\x1B]52;c;"), std::string::npos) << client.raw_tail();
@@ -1067,8 +1064,8 @@ TEST_F(MuxProcessTest, SelectsShellTextInsideItsPaneWithoutEnteringCopyMode) {
                                     "\x1B[<32;9;2M"
                                     "\x1B[<0;9;2m";
   ASSERT_TRUE(client.send(drag, deadline_after(2s)));
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.screen() << "\nraw:\n"
-                                                                    << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_raw("48;2;", deadline_after(5s))) << client.screen() << "\nraw:\n"
+                                                                << client.raw_tail();
 
   ASSERT_TRUE(client.send("printf '__MOUSE_SELECTION_INPUT__\\n'\r", deadline_after(2s)));
   ASSERT_TRUE(client.wait_for_screen("__MOUSE_SELECTION_INPUT__", deadline_after(5s)))
@@ -1577,7 +1574,7 @@ TEST_F(MuxProcessTest, CopyModeHighlightsSelectsCopiesAndIsolatesInput) {
                                                                    << client.raw_tail();
   EXPECT_NE(client.screen().find(live_status), std::string::npos);
   EXPECT_EQ(client.screen().find("[ COPY"), std::string::npos);
-  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.raw_tail();
+  ASSERT_TRUE(client.wait_for_raw("48;2;", deadline_after(5s))) << client.raw_tail();
 
   // Vi keys and physical arrow sequences move only the daemon-owned copy cursor, including an
   // escape sequence fragmented across separate client input messages.

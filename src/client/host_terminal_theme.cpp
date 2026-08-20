@@ -114,7 +114,8 @@ namespace {
   if (!body.has_value()) {
     return false;
   }
-  if (body->starts_with("10;") || body->starts_with("11;")) {
+  if (body->starts_with("10;") || body->starts_with("11;") || body->starts_with("17;") ||
+      body->starts_with("19;")) {
     auto color_text = *body;
     color_text.remove_prefix(3);
     const auto color = rgb_color(color_text);
@@ -123,8 +124,12 @@ namespace {
     }
     if (body->starts_with("10;")) {
       theme.foreground = *color;
-    } else {
+    } else if (body->starts_with("11;")) {
       theme.background = *color;
+    } else if (body->starts_with("17;")) {
+      theme.selection_background = *color;
+    } else {
+      theme.selection_foreground = *color;
     }
     return true;
   }
@@ -267,7 +272,7 @@ void HostTerminalThemeParser::finish() noexcept {
     used += text.size();
     return true;
   };
-  if (!append("\x1B]10;?\x1B\\\x1B]11;?\x1B\\")) {
+  if (!append("\x1B]17;?\x1B\\\x1B]19;?\x1B\\\x1B]10;?\x1B\\\x1B]11;?\x1B\\")) {
     return 0;
   }
   for (std::size_t index = 0; index < host_theme_palette_colors_queried; ++index) {

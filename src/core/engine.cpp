@@ -785,6 +785,12 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   if (host_theme.background.has_value()) {
     theme.background = terminal_color(*host_theme.background);
   }
+  if (host_theme.selection_foreground.has_value()) {
+    theme.selection_foreground = terminal_color(*host_theme.selection_foreground);
+  }
+  if (host_theme.selection_background.has_value()) {
+    theme.selection_background = terminal_color(*host_theme.selection_background);
+  }
   for (std::size_t index = 0; index < theme.palette.size(); ++index) {
     if (host_theme.has_palette_color(index)) {
       std::span(theme.palette).subspan(index, 1).front() =
@@ -1748,7 +1754,7 @@ command_status_for_copy_selection(const CopySelectionResult result) noexcept -> 
   if (session.attachment.copy_mode.active()) {
     leave_copy_mode(session, runtimes);
   } else {
-    clear_mouse_selection(session, runtimes);
+    schedule_frame(session, FrameUrgency::interactive, false);
   }
   return CopySelectionResult::applied;
 }
@@ -4436,7 +4442,6 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   if (queued != InputQueueResult::queued) {
     return queued;
   }
-  clear_mouse_selection(session, runtimes);
   std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   trace_correlation = session.attachment_runtime.decoded_input_trace_matcher.observe(bytes);
@@ -4444,9 +4449,11 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_input_message_received,
                                    static_cast<std::uint32_t>(runtime->pty), bytes.size(),
                                    trace_correlation);
-  if (runtime->pending_writes.size() > queued_bytes_before &&
-      !scroll_viewport_for_application_input(session, *runtime)) {
-    return InputQueueResult::encoding_failed;
+  if (runtime->pending_writes.size() > queued_bytes_before) {
+    clear_mouse_selection(session, runtimes);
+    if (!scroll_viewport_for_application_input(session, *runtime)) {
+      return InputQueueResult::encoding_failed;
+    }
   }
   if (latency_sensitive_input(bytes.size())) {
     runtime->interactive_damage.await_write(queued_bytes_before, runtime->pending_writes.size());
@@ -4471,8 +4478,8 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   if (queued != InputQueueResult::queued) {
     return queued;
   }
-  clear_mouse_selection(session, runtimes);
   if (runtime->pending_writes.size() > queued_bytes_before) {
+    clear_mouse_selection(session, runtimes);
     if (!scroll_viewport_for_application_input(session, *runtime)) {
       return InputQueueResult::encoding_failed;
     }
@@ -4653,6 +4660,19 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
   return ParseResult::keep;
 }
 
+[[nodiscard]] auto copyable_selection(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
+    -> bool {
+  auto* runtime = selection_runtime(session, runtimes);
+  if (runtime == nullptr) {
+    runtime = focused_input_runtime(session, runtimes);
+  }
+  if (runtime == nullptr) {
+    return false;
+  }
+  const auto active = runtime->terminal.selection_active();
+  return active.has_value() && *active;
+}
+
 // NOLINTBEGIN(readability-function-cognitive-complexity)
 [[nodiscard]] auto
 process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -4664,7 +4684,20 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
   --input_budget;
   auto router_before = session.input_router;
-  const auto routed = session.input_router.route_key(routed_key_event(key, text));
+  const auto unbound_before = session.input_router.unbound();
+  auto routed = session.input_router.route_key(routed_key_event(key, text));
+  if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+      command != nullptr && command->command == input::InputCommand::copy_selection &&
+      !copyable_selection(session, runtimes)) {
+    if (unbound_before == input::UnboundBehavior::forward) {
+      session.input_router = router_before;
+      routed.effect = input::ForwardCurrentKey{};
+    } else {
+      accept_input_route(session, runtimes, routed.presentation_changed,
+                         routed.interaction_preemption_requested);
+      return ParseResult::keep;
+    }
+  }
   if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
       command != nullptr) {
     accept_input_route(session, runtimes, routed.presentation_changed,
@@ -4848,7 +4881,6 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       if (queued == InputQueueResult::encoding_failed) {
         return ParseResult::error;
       }
-      clear_mouse_selection(session, runtimes);
       if (runtime->pending_writes.size() > queued_bytes_before) {
         if (!scroll_viewport_for_application_input(session, *runtime)) {
           return ParseResult::error;

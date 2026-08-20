@@ -377,6 +377,9 @@ public:
 
   void reset() noexcept;
   [[nodiscard]] auto active_label() const noexcept -> std::string_view;
+  [[nodiscard]] auto unbound() const noexcept -> UnboundBehavior {
+    return context(active_frame().context).unbound;
+  }
   [[nodiscard]] auto legacy_route_requires_checkpoint() const noexcept -> bool {
     const auto& frame = std::span(stack_).subspan(depth_ - 1U, 1).front();
     const auto& metadata = std::span(map_->contexts_).subspan(frame.context.slot_, 1).front();

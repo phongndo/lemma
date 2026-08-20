@@ -15,8 +15,8 @@ inline constexpr std::size_t host_theme_query_bytes_max = 512;
 inline constexpr std::size_t host_theme_palette_colors_queried =
     protocol::host_theme_palette_colors;
 
-// Filters bounded OSC 4/10/11 replies from the physical input stream while retaining every byte
-// that is not a valid theme reply for normal client input processing.
+// Filters bounded OSC 4/10/11/17/19 replies from the physical input stream while retaining every
+// byte that is not a valid theme reply for normal client input processing.
 class HostTerminalThemeParser final {
 public:
   void push(std::span<const std::byte> bytes) noexcept;

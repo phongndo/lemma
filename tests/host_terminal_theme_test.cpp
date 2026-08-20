@@ -74,9 +74,28 @@ TEST(HostTerminalThemeParserTest, BuildsBoundedCompleteQuery) {
   const std::string_view query(storage.data(), size);
 
   EXPECT_GT(size, 0U);
-  EXPECT_TRUE(query.starts_with("\x1B]10;?\x1B\\\x1B]11;?\x1B\\"));
+  EXPECT_TRUE(query.starts_with("\x1B]17;?\x1B\\\x1B]19;?\x1B\\\x1B]10;?\x1B\\\x1B]11;?\x1B\\"));
   EXPECT_TRUE(query.contains("\x1B]4;0;?\x1B\\"));
   EXPECT_TRUE(query.ends_with("\x1B]4;15;?\x1B\\"));
+}
+
+TEST(HostTerminalThemeParserTest, DecodesHighlightColorReplies) {
+  constexpr std::string_view replies = "\x1B]17;rgb:2020/2020/3030\x1B\\"
+                                       "\x1B]19;#c0c0c0\x07"
+                                       "\x1B]10;#d0d0d8\x07"
+                                       "\x1B]11;#0a0b0a\x07";
+  HostTerminalThemeParser parser;
+  parser.push(bytes(replies));
+  parser.finish();
+  const auto theme = parser.theme();
+  ASSERT_TRUE(theme.has_value());
+  const auto value = theme.value_or(protocol::HostTerminalTheme{});
+  EXPECT_EQ(value.selection_background,
+            (protocol::RgbColor{.red = 0x20, .green = 0x20, .blue = 0x30}));
+  EXPECT_EQ(value.selection_foreground,
+            (protocol::RgbColor{.red = 0xC0, .green = 0xC0, .blue = 0xC0}));
+  EXPECT_EQ(value.foreground, (protocol::RgbColor{.red = 0xD0, .green = 0xD0, .blue = 0xD8}));
+  EXPECT_EQ(value.background, (protocol::RgbColor{.red = 0x0A, .green = 0x0B, .blue = 0x0A}));
 }
 
 } // namespace

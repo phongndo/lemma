@@ -79,6 +79,8 @@ struct TerminalTheme final {
   RgbColor background{};
   RgbColor cursor{};
   std::array<RgbColor, 256> palette{};
+  std::optional<RgbColor> selection_foreground;
+  std::optional<RgbColor> selection_background;
 
   friend constexpr auto operator==(const TerminalTheme&, const TerminalTheme&) noexcept
       -> bool = default;

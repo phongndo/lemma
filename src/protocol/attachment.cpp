@@ -66,6 +66,11 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
 constexpr std::uint8_t hello_host_theme_flag = 0x01;
 constexpr std::uint8_t host_theme_foreground_flag = 0x01;
 constexpr std::uint8_t host_theme_background_flag = 0x02;
+constexpr std::uint8_t host_theme_selection_foreground_flag = 0x04;
+constexpr std::uint8_t host_theme_selection_background_flag = 0x08;
+constexpr std::uint8_t host_theme_flags_mask =
+    host_theme_foreground_flag | host_theme_background_flag | host_theme_selection_foreground_flag |
+    host_theme_selection_background_flag;
 
 void encode_rgb(const RgbColor color, const std::span<std::byte, 3> output) noexcept {
   output[0] = static_cast<std::byte>(color.red);
@@ -84,9 +89,11 @@ void encode_rgb(const RgbColor color, const std::span<std::byte, 3> output) noex
 
 void encode_host_theme(const HostTerminalTheme& theme,
                        const std::span<std::byte, host_theme_wire_bytes> output) noexcept {
-  output.front() =
-      static_cast<std::byte>((theme.foreground.has_value() ? host_theme_foreground_flag : 0U) |
-                             (theme.background.has_value() ? host_theme_background_flag : 0U));
+  output.front() = static_cast<std::byte>(
+      (theme.foreground.has_value() ? host_theme_foreground_flag : 0U) |
+      (theme.background.has_value() ? host_theme_background_flag : 0U) |
+      (theme.selection_foreground.has_value() ? host_theme_selection_foreground_flag : 0U) |
+      (theme.selection_background.has_value() ? host_theme_selection_background_flag : 0U));
   auto mask = output.subspan<1, host_theme_palette_mask_bytes>();
   for (std::size_t index = 0; index < theme.palette.size(); ++index) {
     if (theme.has_palette_color(index)) {
@@ -100,13 +107,17 @@ void encode_host_theme(const HostTerminalTheme& theme,
     encode_rgb(std::span(theme.palette).subspan(index, 1).front(),
                palette.subspan(index * 3U).first<3>());
   }
+  encode_rgb(theme.selection_foreground.value_or(RgbColor{}),
+             output.subspan<9 + (host_theme_palette_colors * 3U), 3>());
+  encode_rgb(theme.selection_background.value_or(RgbColor{}),
+             output.subspan<12 + (host_theme_palette_colors * 3U), 3>());
 }
 
 [[nodiscard]] auto
 decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input) noexcept
     -> std::expected<HostTerminalTheme, DecodeError> {
   const auto flags = std::to_integer<std::uint8_t>(input.front());
-  if ((flags & ~(host_theme_foreground_flag | host_theme_background_flag)) != 0) {
+  if ((flags & ~host_theme_flags_mask) != 0) {
     return std::unexpected(DecodeError::invalid_flags);
   }
   HostTerminalTheme theme;
@@ -123,6 +134,14 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
         0) {
       theme.set_palette_color(index, decode_rgb(palette.subspan(index * 3U).first<3>()));
     }
+  }
+  if ((flags & host_theme_selection_foreground_flag) != 0) {
+    theme.selection_foreground =
+        decode_rgb(input.subspan<9 + (host_theme_palette_colors * 3U), 3>());
+  }
+  if ((flags & host_theme_selection_background_flag) != 0) {
+    theme.selection_background =
+        decode_rgb(input.subspan<12 + (host_theme_palette_colors * 3U), 3>());
   }
   if (theme.empty()) {
     return std::unexpected(DecodeError::invalid_length);

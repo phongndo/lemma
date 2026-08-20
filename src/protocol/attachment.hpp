@@ -62,11 +62,15 @@ struct HostTerminalTheme final {
     palette_mask |= std::uint16_t{1} << static_cast<unsigned>(index);
   }
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
-    return !foreground.has_value() && !background.has_value() && palette_mask == 0;
+    return !foreground.has_value() && !background.has_value() &&
+           !selection_foreground.has_value() && !selection_background.has_value() &&
+           palette_mask == 0;
   }
 
   std::optional<RgbColor> foreground;
   std::optional<RgbColor> background;
+  std::optional<RgbColor> selection_foreground;
+  std::optional<RgbColor> selection_background;
   std::array<RgbColor, 16> palette{};
   std::uint16_t palette_mask{0};
 
@@ -138,11 +142,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.6. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.7. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{6};
+  std::uint8_t minor{7};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };
@@ -159,7 +163,7 @@ inline constexpr std::size_t diagnostic_bytes_max = 255;
 inline constexpr std::size_t host_theme_palette_colors = 16;
 inline constexpr std::size_t host_theme_palette_mask_bytes = 2;
 inline constexpr std::size_t host_theme_wire_bytes =
-    1U + host_theme_palette_mask_bytes + 6U + (host_theme_palette_colors * 3U);
+    1U + host_theme_palette_mask_bytes + 12U + (host_theme_palette_colors * 3U);
 inline constexpr std::size_t client_hello_payload_bytes_max =
     6U + host_theme_wire_bytes + session_name_bytes_max;
 inline constexpr std::size_t small_message_bytes_max =
