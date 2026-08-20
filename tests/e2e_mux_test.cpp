@@ -1955,6 +1955,8 @@ TEST_F(MuxProcessTest, RestoresTerminalWhenDaemonConnectionIsLost) {
   ASSERT_TRUE(client.spawn(client_arguments("attach", "daemon_loss"), runtime_.environment()));
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
 
+  // Abrupt daemon death can RST the Unix socket when unread bytes remain. RST and clean EOF
+  // must both restore the outer terminal and report connection loss, not a read-path error.
   server_.terminate();
 
   ASSERT_TRUE(client.wait(deadline_after(5s)));

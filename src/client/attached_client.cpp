@@ -678,12 +678,6 @@ public:
     }
   }
 
-  void record_connection_error() noexcept {
-    if (empty()) {
-      append("lemma attach error: daemon connection read failed\n");
-    }
-  }
-
   [[nodiscard]] auto empty() const noexcept -> bool { return size_ == 0; }
   [[nodiscard]] auto view() const noexcept -> std::string_view { return {storage_.data(), size_}; }
 
@@ -783,11 +777,12 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     return ServerParseResult::peer_closed;
   }
   if (received < 0) {
+    // Abrupt daemon death on a Unix socket can RST instead of FIN when unread bytes remain.
+    // That is peer loss, not a distinct protocol or read-path failure.
     if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
       return ServerParseResult::keep;
     }
-    live_diagnostic.record_connection_error();
-    return ServerParseResult::error;
+    return ServerParseResult::peer_closed;
   }
   const auto size = static_cast<std::size_t>(received);
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
