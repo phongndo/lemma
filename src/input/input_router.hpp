@@ -118,6 +118,7 @@ enum class InputCommand : std::uint8_t {
   enter_copy_mode,
   enter_copy_search_forward,
   enter_copy_search_backward,
+  copy_selection,
   create_tab,
   next_tab,
   previous_tab,
@@ -221,9 +222,13 @@ struct EnterContextBinding final {
 
 struct LeaveContextBinding final {};
 struct ForwardDeferredBinding final {};
+struct EncodeAsBinding final {
+  PhysicalKey key{PhysicalKey::unidentified};
+  std::uint16_t modifiers{0};
+};
 
-using BindingAction =
-    std::variant<CommandBinding, EnterContextBinding, LeaveContextBinding, ForwardDeferredBinding>;
+using BindingAction = std::variant<CommandBinding, EnterContextBinding, LeaveContextBinding,
+                                   ForwardDeferredBinding, EncodeAsBinding>;
 
 enum class InputMapError : std::uint8_t {
   capacity,
@@ -318,6 +323,11 @@ invoke(const InputCommand command,
 [[nodiscard]] constexpr auto forward_deferred() noexcept -> BindingAction {
   return ForwardDeferredBinding{};
 }
+[[nodiscard]] constexpr auto encode_as(const PhysicalKey key,
+                                       const std::uint16_t modifiers = 0) noexcept
+    -> BindingAction {
+  return EncodeAsBinding{.key = key, .modifiers = modifiers};
+}
 
 struct ConsumedInput final {};
 struct RoutedCommand final {
@@ -339,10 +349,14 @@ struct ForwardBytesThenCurrentKey final {
   std::array<std::byte, deferred_input_bytes_max> bytes{};
   std::uint8_t size{0};
 };
+struct EncodeAsKey final {
+  PhysicalKey key{PhysicalKey::unidentified};
+  std::uint16_t modifiers{0};
+};
 
 using LegacyRouteEffect = std::variant<ConsumedInput, RoutedCommand, ForwardLegacyInput>;
 using KeyRouteEffect = std::variant<ConsumedInput, RoutedCommand, ForwardCurrentKey, ForwardBytes,
-                                    ForwardBytesThenCurrentKey>;
+                                    ForwardBytesThenCurrentKey, EncodeAsKey>;
 
 struct LegacyRouteResult final {
   LegacyRouteEffect effect;
@@ -401,6 +415,10 @@ private:
   std::array<std::uint8_t, (static_cast<std::size_t>(PhysicalKey::count) + 1U) / 2U>
       captured_contexts_{};
   std::uint8_t depth_{0};
+  // One press-time rewrite is enough: host line-motion chords are not held together.
+  PhysicalKey encoded_hold_from_{PhysicalKey::unidentified};
+  PhysicalKey encoded_hold_to_{PhysicalKey::unidentified};
+  std::uint16_t encoded_hold_modifiers_{0};
   std::uint64_t captured_keys_{0};
   std::uint64_t forwarded_keys_{0};
 };

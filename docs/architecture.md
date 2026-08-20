@@ -97,7 +97,7 @@ mouse / CLI / Lua / agent --------+-> typed command
                                       -> typed result + semantic intent
 ```
 
-Physical input that is not a mux command becomes typed application input. The daemon input-policy component owns compiled keymaps and bounded transient input contexts; named contexts and physical bindings are not mux state. Runtime resolves application input to the target PaneRuntime and asks Ghostty to encode mode-dependent input. No frontend receives a private mutation path.
+Physical input that is not a mux command becomes typed application input. The daemon input-policy component owns compiled keymaps and bounded transient input contexts; named contexts and physical bindings are not mux state. A compiled binding may translate a physical chord to another application key and must preserve the originating action through release; host-modifier meaning lives in the generation, not in the encoder. Runtime resolves application input to the target PaneRuntime and asks Ghostty to encode mode-dependent input. No frontend receives a private mutation path.
 
 Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, and no-effect commands are explicit results. External failure never authorizes partial semantic mutation. Internal invariant failure is fail-fast.
 

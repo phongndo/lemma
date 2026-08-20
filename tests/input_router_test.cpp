@@ -49,6 +49,39 @@ TEST(InputMapTest, RejectsInvalidCommandDiscriminantsBeforePublication) {
   EXPECT_EQ(compiled.error(), InputMapError::invalid_action);
 }
 
+TEST(InputMapTest, RejectsInvalidEncodeAsTargetsBeforePublication) {
+  InputMapDraft draft;
+  const auto normal = draft.add_context({});
+  ASSERT_TRUE(normal.has_value());
+  ASSERT_TRUE(draft.bind(*normal, InputChord::key(PhysicalKey::arrow_left, key_modifier_super),
+                         encode_as(PhysicalKey::unidentified)));
+
+  const auto compiled = draft.compile();
+
+  ASSERT_FALSE(compiled.has_value());
+  EXPECT_EQ(compiled.error(), InputMapError::invalid_action);
+}
+
+TEST(InputMapTest, RejectsEncodeAsBindingsThatCollideWithLegacyMatching) {
+  InputMapDraft byte_draft;
+  const auto byte_context = byte_draft.add_context({});
+  ASSERT_TRUE(byte_context.has_value());
+  ASSERT_TRUE(byte_draft.bind(*byte_context, InputChord::byte('h', key_modifier_super),
+                              encode_as(PhysicalKey::home)));
+  const auto byte_compiled = byte_draft.compile();
+  ASSERT_FALSE(byte_compiled.has_value());
+  EXPECT_EQ(byte_compiled.error(), InputMapError::invalid_action);
+
+  InputMapDraft unmodified;
+  const auto unmodified_context = unmodified.add_context({});
+  ASSERT_TRUE(unmodified_context.has_value());
+  ASSERT_TRUE(unmodified.bind(*unmodified_context, InputChord::key(PhysicalKey::arrow_left),
+                              encode_as(PhysicalKey::home)));
+  const auto unmodified_compiled = unmodified.compile();
+  ASSERT_FALSE(unmodified_compiled.has_value());
+  EXPECT_EQ(unmodified_compiled.error(), InputMapError::invalid_action);
+}
+
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(InputMapTest, RejectsContextGraphsThatCannotFitTheRuntimeStack) {
@@ -304,6 +337,139 @@ TEST(InputRouterTest, PreservesShiftedControlAndAltLegacyBindingsForTypedKeys) {
 
   ASSERT_NE(std::get_if<RoutedCommand>(&routed.effect), nullptr);
   EXPECT_EQ(std::get<RoutedCommand>(routed.effect).command, InputCommand::resize_left);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(InputRouterTest, RoutesHostCopyChordsFromTheBaseContext) {
+  InputRouter router(default_input_map());
+  const KeyEvent super{.action = KeyAction::press,
+                       .key = PhysicalKey::c,
+                       .modifiers = key_modifier_super,
+                       .unshifted_codepoint = 'c',
+                       .text = {}};
+  const KeyEvent shift_control{.action = KeyAction::press,
+                               .key = PhysicalKey::c,
+                               .modifiers = key_modifier_control | key_modifier_shift,
+                               .unshifted_codepoint = 'c',
+                               .text = {}};
+
+  const auto super_routed = router.route_key(super);
+  const auto shift_control_routed = router.route_key(shift_control);
+
+  ASSERT_NE(std::get_if<RoutedCommand>(&super_routed.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(super_routed.effect).command, InputCommand::copy_selection);
+  ASSERT_NE(std::get_if<RoutedCommand>(&shift_control_routed.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(shift_control_routed.effect).command,
+            InputCommand::copy_selection);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(InputRouterTest, DefaultMapEncodesSuperArrowsAsHomeAndEnd) {
+  InputRouter router(default_input_map());
+  const KeyEvent left{.action = KeyAction::press,
+                      .key = PhysicalKey::arrow_left,
+                      .modifiers = key_modifier_super,
+                      .unshifted_codepoint = 0,
+                      .text = {}};
+  const KeyEvent right{.action = KeyAction::press,
+                       .key = PhysicalKey::arrow_right,
+                       .modifiers = key_modifier_super | key_modifier_shift,
+                       .unshifted_codepoint = 0,
+                       .text = {}};
+
+  const auto left_routed = router.route_key(left);
+  const auto right_routed = router.route_key(right);
+
+  ASSERT_NE(std::get_if<EncodeAsKey>(&left_routed.effect), nullptr);
+  EXPECT_EQ(std::get<EncodeAsKey>(left_routed.effect).key, PhysicalKey::home);
+  EXPECT_EQ(std::get<EncodeAsKey>(left_routed.effect).modifiers, 0U);
+  ASSERT_NE(std::get_if<EncodeAsKey>(&right_routed.effect), nullptr);
+  EXPECT_EQ(std::get<EncodeAsKey>(right_routed.effect).key, PhysicalKey::end);
+  EXPECT_EQ(std::get<EncodeAsKey>(right_routed.effect).modifiers, key_modifier_shift);
+}
+
+TEST(InputRouterTest, RemembersEncodeAsThroughAModifierlessRelease) {
+  InputRouter router(default_input_map());
+  const KeyEvent press{.action = KeyAction::press,
+                       .key = PhysicalKey::arrow_left,
+                       .modifiers = key_modifier_super,
+                       .unshifted_codepoint = 0,
+                       .text = {}};
+  const KeyEvent release{.action = KeyAction::release,
+                         .key = PhysicalKey::arrow_left,
+                         .modifiers = 0,
+                         .unshifted_codepoint = 0,
+                         .text = {}};
+
+  const auto pressed = router.route_key(press);
+  ASSERT_NE(std::get_if<EncodeAsKey>(&pressed.effect), nullptr);
+  const auto released = router.route_key(release);
+  ASSERT_NE(std::get_if<EncodeAsKey>(&released.effect), nullptr);
+  EXPECT_EQ(std::get<EncodeAsKey>(released.effect).key, PhysicalKey::home);
+  EXPECT_EQ(std::get<EncodeAsKey>(released.effect).modifiers, 0U);
+}
+
+TEST(InputRouterTest, ResizeContextConsumesHostLineMotionAndKeepsCopy) {
+  InputRouter router(default_input_map());
+  const KeyEvent prefix{.action = KeyAction::press,
+                        .key = PhysicalKey::b,
+                        .modifiers = key_modifier_control,
+                        .unshifted_codepoint = 'b',
+                        .text = {}};
+  const KeyEvent resize{.action = KeyAction::press,
+                        .key = PhysicalKey::m,
+                        .modifiers = 0,
+                        .unshifted_codepoint = 'm',
+                        .text = {}};
+  const KeyEvent left{.action = KeyAction::press,
+                      .key = PhysicalKey::arrow_left,
+                      .modifiers = key_modifier_super,
+                      .unshifted_codepoint = 0,
+                      .text = {}};
+  const KeyEvent copy{.action = KeyAction::press,
+                      .key = PhysicalKey::c,
+                      .modifiers = key_modifier_super,
+                      .unshifted_codepoint = 'c',
+                      .text = {}};
+
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(prefix).effect));
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(resize).effect));
+  EXPECT_EQ(router.active_label(), " RESIZE ");
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(left).effect));
+  const auto copied = router.route_key(copy);
+  ASSERT_NE(std::get_if<RoutedCommand>(&copied.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(copied.effect).command, InputCommand::copy_selection);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(InputRouterTest, CustomGenerationCanReplaceOrForwardHostCopyChords) {
+  InputMapDraft replaced;
+  const auto replaced_base = replaced.add_context({});
+  ASSERT_TRUE(replaced_base.has_value());
+  ASSERT_TRUE(replaced.bind(*replaced_base, InputChord::byte('c', key_modifier_super),
+                            invoke(InputCommand::create_tab)));
+  const auto replaced_map = replaced.compile();
+  ASSERT_TRUE(replaced_map.has_value());
+  InputRouter replaced_router(*replaced_map);
+  const KeyEvent super_c{.action = KeyAction::press,
+                         .key = PhysicalKey::c,
+                         .modifiers = key_modifier_super,
+                         .unshifted_codepoint = 'c',
+                         .text = {}};
+  const auto replaced_routed = replaced_router.route_key(super_c);
+  ASSERT_NE(std::get_if<RoutedCommand>(&replaced_routed.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(replaced_routed.effect).command, InputCommand::create_tab);
+
+  InputMapDraft empty;
+  const auto empty_base = empty.add_context({});
+  ASSERT_TRUE(empty_base.has_value());
+  const auto empty_map = empty.compile();
+  ASSERT_TRUE(empty_map.has_value());
+  InputRouter empty_router(*empty_map);
+  EXPECT_TRUE(std::holds_alternative<ForwardCurrentKey>(empty_router.route_key(super_c).effect));
 }
 
 TEST(InputRouterTest, ACompiledMapCanUseDirectBindingsWithoutAnyTransientContext) {

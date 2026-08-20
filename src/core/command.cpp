@@ -38,6 +38,7 @@ namespace {
   case CommandKind::enter_copy_mode:
   case CommandKind::enter_copy_search_forward:
   case CommandKind::enter_copy_search_backward:
+  case CommandKind::copy_selection:
   case CommandKind::create_tab:
   case CommandKind::next_tab:
   case CommandKind::previous_tab:

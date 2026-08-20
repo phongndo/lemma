@@ -55,6 +55,15 @@ namespace {
   return context == CommandContextDisposition::retain || context == CommandContextDisposition::base;
 }
 
+[[nodiscard]] constexpr auto encode_as_valid(const EncodeAsBinding encoded) noexcept -> bool {
+  return encoded.key != PhysicalKey::unidentified && encoded.key < PhysicalKey::count &&
+         (encoded.modifiers & ~key_modifiers_all) == 0;
+}
+
+[[nodiscard]] constexpr auto encode_as_chord_valid(const InputChord chord) noexcept -> bool {
+  return chord.kind == ChordKind::key && chord.modifiers != 0;
+}
+
 [[nodiscard]] constexpr auto chord_less(const InputChord left, const InputChord right) noexcept
     -> bool {
   return std::tuple{left.kind, left.code, left.modifiers} <
@@ -230,6 +239,11 @@ auto InputMapDraft::compile() const noexcept -> std::expected<CompiledInputMap, 
         (!command_valid(command->command) || !command_context_valid(command->context))) {
       return std::unexpected(InputMapError::invalid_action);
     }
+    if (const auto* const encoded = std::get_if<EncodeAsBinding>(&source.action);
+        encoded != nullptr &&
+        (!encode_as_valid(*encoded) || !encode_as_chord_valid(source.chord))) {
+      return std::unexpected(InputMapError::invalid_action);
+    }
     if (const auto* const enter = std::get_if<EnterContextBinding>(&source.action);
         enter != nullptr && (!enter->context.valid() || enter->context.slot_ >= context_count_ ||
                              enter->deferred_size > enter->deferred.size())) {
@@ -322,6 +336,9 @@ void InputRouter::reset() noexcept {
   captured_contexts_ = {};
   stack_.front().context = InputContextId(0);
   depth_ = 1;
+  encoded_hold_from_ = PhysicalKey::unidentified;
+  encoded_hold_to_ = PhysicalKey::unidentified;
+  encoded_hold_modifiers_ = 0;
   captured_keys_ = 0;
   forwarded_keys_ = 0;
 }
@@ -556,6 +573,8 @@ auto InputRouter::route_legacy(const std::span<const std::byte> input,
             effect =
                 ForwardLegacyInput{.prefix = deferred, .prefix_size = deferred_size, .current = {}};
           }
+        } else if constexpr (std::is_same_v<Action, EncodeAsBinding>) {
+          // Structured-key translation is not a legacy-byte effect.
         }
       },
       matched->action);
@@ -568,8 +587,19 @@ auto InputRouter::route_legacy(const std::span<const std::byte> input,
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
   if (event.action == KeyAction::release) {
+    const bool encoded_release =
+        encoded_hold_from_ == event.key && event.key != PhysicalKey::unidentified;
+    const auto encoded = EncodeAsKey{.key = encoded_hold_to_, .modifiers = encoded_hold_modifiers_};
+    if (encoded_release) {
+      encoded_hold_from_ = PhysicalKey::unidentified;
+      encoded_hold_to_ = PhysicalKey::unidentified;
+      encoded_hold_modifiers_ = 0;
+    }
     const bool consumed = captured(event.key);
     release(event.key);
+    if (encoded_release) {
+      return {.effect = encoded};
+    }
     return {.effect =
                 consumed ? KeyRouteEffect{ConsumedInput{}} : KeyRouteEffect{ForwardCurrentKey{}}};
   }
@@ -650,6 +680,13 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
           if (deferred_size > 0U) {
             effect = ForwardBytes{.bytes = deferred, .size = deferred_size};
           }
+        } else if constexpr (std::is_same_v<Action, EncodeAsBinding>) {
+          if (encoded_hold_from_ == PhysicalKey::unidentified) {
+            encoded_hold_from_ = event.key;
+            encoded_hold_to_ = action.key;
+            encoded_hold_modifiers_ = action.modifiers;
+          }
+          effect = EncodeAsKey{.key = action.key, .modifiers = action.modifiers};
         }
       },
       matched->action);
@@ -719,6 +756,24 @@ auto default_input_map() noexcept -> const CompiledInputMap& {
                 CommandContextDisposition::base);
     bind_prefix(InputChord::byte('?'), InputCommand::enter_copy_search_backward,
                 CommandContextDisposition::base);
+    for (const auto modifiers :
+         {key_modifier_super,
+          static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift)}) {
+      const auto chord = InputChord::byte('c', modifiers);
+      LEMMA_ASSERT(draft.bind(*normal, chord, invoke(InputCommand::copy_selection)));
+      LEMMA_ASSERT(draft.bind(*prefix, chord, invoke(InputCommand::copy_selection)));
+      LEMMA_ASSERT(draft.bind(*resize, chord, invoke(InputCommand::copy_selection)));
+    }
+    for (const auto super : {key_modifier_super,
+                             static_cast<std::uint16_t>(key_modifier_super | key_modifier_shift)}) {
+      const auto shift = static_cast<std::uint16_t>(super & key_modifier_shift);
+      const auto left = encode_as(PhysicalKey::home, shift);
+      const auto right = encode_as(PhysicalKey::end, shift);
+      LEMMA_ASSERT(draft.bind(*normal, InputChord::key(PhysicalKey::arrow_left, super), left));
+      LEMMA_ASSERT(draft.bind(*prefix, InputChord::key(PhysicalKey::arrow_left, super), left));
+      LEMMA_ASSERT(draft.bind(*normal, InputChord::key(PhysicalKey::arrow_right, super), right));
+      LEMMA_ASSERT(draft.bind(*prefix, InputChord::key(PhysicalKey::arrow_right, super), right));
+    }
     bind_prefix(InputChord::byte('c'), InputCommand::create_tab);
     bind_prefix(InputChord::byte('n'), InputCommand::next_tab);
     bind_prefix(InputChord::byte('p'), InputCommand::previous_tab);

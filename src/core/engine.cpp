@@ -1669,13 +1669,54 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   return 4U * ((bytes + 2U) / 3U);
 }
 
+enum class CopySelectionResult : std::uint8_t {
+  applied,
+  no_effect,
+  unavailable,
+  failed,
+};
+
+[[nodiscard]] constexpr auto
+command_status_for_copy_selection(const CopySelectionResult result) noexcept -> CommandStatus {
+  switch (result) {
+  case CopySelectionResult::applied:
+    return CommandStatus::applied;
+  case CopySelectionResult::no_effect:
+    return CommandStatus::no_effect;
+  case CopySelectionResult::unavailable:
+    return CommandStatus::unavailable;
+  case CopySelectionResult::failed:
+    return CommandStatus::failed;
+  }
+  return CommandStatus::failed;
+}
+
+[[nodiscard]] constexpr auto copy_selection_result(const CopyModeFeedback feedback) noexcept
+    -> CopySelectionResult {
+  switch (feedback) {
+  case CopyModeFeedback::empty_selection:
+    return CopySelectionResult::no_effect;
+  case CopyModeFeedback::clipboard_busy:
+  case CopyModeFeedback::too_large:
+    return CopySelectionResult::unavailable;
+  case CopyModeFeedback::none:
+  case CopyModeFeedback::no_match:
+  case CopyModeFeedback::failed:
+    return CopySelectionResult::failed;
+  }
+  return CopySelectionResult::failed;
+}
+
 [[nodiscard]] auto copy_selection_to_outer_clipboard(SessionRecord& session, PaneRuntime& runtime,
-                                                     PaneRuntimeStore& runtimes) noexcept -> bool {
+                                                     PaneRuntimeStore& runtimes) noexcept
+    -> CopySelectionResult {
   constexpr std::size_t osc_overhead = 9;
   const auto fail = [&](const CopyModeFeedback feedback) noexcept {
-    session.attachment.copy_mode.feedback = feedback;
-    invalidate_copy_presentation(session, runtime);
-    return false;
+    if (session.attachment.copy_mode.active()) {
+      session.attachment.copy_mode.feedback = feedback;
+      invalidate_copy_presentation(session, runtime);
+    }
+    return copy_selection_result(feedback);
   };
   if (session.attachment_runtime.clipboard_write.bytes != nullptr) {
     return fail(CopyModeFeedback::clipboard_busy);
@@ -1704,8 +1745,12 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   }
   session.attachment_runtime.clipboard_write.bytes = std::move(storage);
   session.attachment_runtime.clipboard_write.size = *formatted;
-  leave_copy_mode(session, runtimes);
-  return true;
+  if (session.attachment.copy_mode.active()) {
+    leave_copy_mode(session, runtimes);
+  } else {
+    clear_mouse_selection(session, runtimes);
+  }
+  return CopySelectionResult::applied;
 }
 
 enum class CopyEscapeStatus : std::uint8_t {
@@ -2103,7 +2148,8 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
     return true;
   }
   case CopyActionKind::copy:
-    return !copy_selection_to_outer_clipboard(session, runtime, runtimes);
+    return copy_selection_to_outer_clipboard(session, runtime, runtimes) !=
+           CopySelectionResult::applied;
   case CopyActionKind::begin_search_forward:
   case CopyActionKind::begin_search_backward:
     if (!begin_copy_search_prompt(session, runtime,
@@ -2951,6 +2997,9 @@ template <typename Value>
   case input::InputCommand::enter_copy_search_backward:
     command.kind = CommandKind::enter_copy_search_backward;
     break;
+  case input::InputCommand::copy_selection:
+    command.kind = CommandKind::copy_selection;
+    break;
   case input::InputCommand::create_tab:
     command.kind = CommandKind::create_tab;
     break;
@@ -3284,7 +3333,8 @@ struct StatusHit final {
   };
   const bool copy_command = command.kind == CommandKind::enter_copy_mode ||
                             command.kind == CommandKind::enter_copy_search_forward ||
-                            command.kind == CommandKind::enter_copy_search_backward;
+                            command.kind == CommandKind::enter_copy_search_backward ||
+                            command.kind == CommandKind::copy_selection;
   if (session.attachment.copy_mode.active() && !copy_command) {
     leave_copy_mode(session, runtimes);
   }
@@ -3424,6 +3474,24 @@ struct StatusHit final {
     }
     return {.status = CommandStatus::applied};
   }
+  case CommandKind::copy_selection: {
+    auto* runtime = selection_runtime(session, runtimes);
+    if (runtime == nullptr) {
+      runtime = find_pane_runtime(runtimes, session, *tab, *targeted_pane);
+    }
+    if (runtime == nullptr) {
+      return {.status = CommandStatus::unavailable};
+    }
+    const auto active = runtime->terminal.selection_active();
+    if (!active.has_value()) {
+      return {.status = CommandStatus::failed};
+    }
+    if (!*active) {
+      return {.status = CommandStatus::no_effect};
+    }
+    return {.status = command_status_for_copy_selection(
+                copy_selection_to_outer_clipboard(session, *runtime, runtimes))};
+  }
   case CommandKind::rename_tab: {
     const auto& title = command_payload_value<TabTitleValue>(command.payload);
     if (tab->title_override() == title.view()) {
@@ -3524,6 +3592,7 @@ struct StatusHit final {
   case CommandKind::enter_copy_mode:
   case CommandKind::enter_copy_search_forward:
   case CommandKind::enter_copy_search_backward:
+  case CommandKind::copy_selection:
   case CommandKind::swap_panes:
     return true;
   case CommandKind::none:
@@ -4267,6 +4336,32 @@ enum class ParseResult : std::uint8_t {
                                 : input::PhysicalKey::unidentified;
 }
 
+static_assert(static_cast<std::uint8_t>(input::PhysicalKey::unidentified) ==
+              static_cast<std::uint8_t>(protocol::KeyInputKey::unidentified));
+static_assert(static_cast<std::uint8_t>(input::PhysicalKey::a) ==
+              static_cast<std::uint8_t>(protocol::KeyInputKey::a));
+static_assert(static_cast<std::uint8_t>(input::PhysicalKey::home) ==
+              static_cast<std::uint8_t>(protocol::KeyInputKey::home));
+static_assert(static_cast<std::uint8_t>(input::PhysicalKey::f12) ==
+              static_cast<std::uint8_t>(protocol::KeyInputKey::f12));
+static_assert(static_cast<std::size_t>(input::PhysicalKey::count) ==
+              static_cast<std::size_t>(protocol::KeyInputKey::f12) + 1U);
+static_assert(input::key_modifier_shift == protocol::key_input_modifier_shift);
+static_assert(input::key_modifier_control == protocol::key_input_modifier_control);
+static_assert(input::key_modifier_alt == protocol::key_input_modifier_alt);
+static_assert(input::key_modifier_super == protocol::key_input_modifier_super);
+static_assert(input::key_modifier_caps_lock == protocol::key_input_modifier_caps_lock);
+static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_lock);
+
+[[nodiscard]] constexpr auto protocol_physical_key(const input::PhysicalKey key) noexcept
+    -> protocol::KeyInputKey {
+  const auto index = static_cast<std::uint8_t>(key);
+  return key == input::PhysicalKey::unidentified ||
+                 index >= static_cast<std::uint8_t>(input::PhysicalKey::count)
+             ? protocol::KeyInputKey::unidentified
+             : static_cast<protocol::KeyInputKey>(index);
+}
+
 [[nodiscard]] constexpr auto key_action(const protocol::KeyInputAction action) noexcept
     -> input::KeyAction {
   switch (action) {
@@ -4296,6 +4391,11 @@ enum class ParseResult : std::uint8_t {
   return result;
 }
 
+[[nodiscard]] constexpr auto protocol_key_modifiers(const std::uint16_t modifiers) noexcept
+    -> std::uint16_t {
+  return modifiers;
+}
+
 [[nodiscard]] auto routed_key_event(const protocol::KeyInput& key,
                                     const std::span<const std::byte> text) noexcept
     -> input::KeyEvent {
@@ -4304,6 +4404,17 @@ enum class ParseResult : std::uint8_t {
           .modifiers = key_modifiers(key.modifiers),
           .unshifted_codepoint = key.unshifted_codepoint,
           .text = text};
+}
+
+[[nodiscard]] auto encoded_application_key(const protocol::KeyInput& original,
+                                           const input::EncodeAsKey& encoded) noexcept
+    -> protocol::KeyInput {
+  auto key = original;
+  key.key = protocol_physical_key(encoded.key);
+  key.modifiers = protocol_key_modifiers(encoded.modifiers);
+  key.consumed_modifiers = 0;
+  key.unshifted_codepoint = 0;
+  return key;
 }
 
 [[nodiscard]] auto focused_input_runtime(SessionRecord& session,
@@ -4567,14 +4678,17 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     return ParseResult::keep;
   }
 
-  if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect)) {
+  const auto* const encoded = std::get_if<input::EncodeAsKey>(&routed.effect);
+  if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect) || encoded != nullptr) {
+    const auto application = encoded != nullptr ? encoded_application_key(key, *encoded) : key;
+    const auto application_text = encoded != nullptr ? std::span<const std::byte>{} : text;
     if (session.attachment.rename_prompt.active()) {
-      process_typed_rename_prompt_input(session, runtimes, key, text, name_conflict,
-                                        name_conflict_context);
+      process_typed_rename_prompt_input(session, runtimes, application, application_text,
+                                        name_conflict, name_conflict_context);
     } else if (session.attachment.copy_mode.active()) {
-      process_typed_copy_mode_input(session, runtimes, key, text);
+      process_typed_copy_mode_input(session, runtimes, application, application_text);
     } else {
-      const auto queued = queue_application_key(session, runtimes, key, text);
+      const auto queued = queue_application_key(session, runtimes, application, application_text);
       if (queued == InputQueueResult::full) {
         session.input_router = router_before;
         return ParseResult::backpressure;

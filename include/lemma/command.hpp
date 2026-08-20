@@ -38,6 +38,7 @@ enum class CommandKind : std::uint8_t {
   enter_copy_mode,
   enter_copy_search_forward,
   enter_copy_search_backward,
+  copy_selection,
   create_tab,
   next_tab,
   previous_tab,

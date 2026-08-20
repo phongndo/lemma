@@ -563,6 +563,26 @@ TEST_F(MuxProcessTest, RoutesKittyKeyMetadataThroughMuxAndGhostty) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
+TEST_F(MuxProcessTest, RewritesHostLineMotionChordsToHomeAndEnd) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "line_motion"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[>23u", deadline_after(5s)));
+  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; printf '__LINE_MOTION_READY__\\n'; "
+                          "v=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -d ' '); "
+                          "stty sane; printf '__LINE_MOTION_%s__\\n' \"$v\"\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LINE_MOTION_READY__", deadline_after(5s)))
+      << client.screen();
+  constexpr std::string_view super_left = "\x1B[1;9:1D\x1B[1;9:3D";
+  ASSERT_TRUE(client.send(super_left, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__LINE_MOTION_1b5b48__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
 TEST_F(MuxProcessTest, RoutesPasteFocusAndMouseBoundariesToGhostty) {
   PtyClient client;
   ASSERT_TRUE(client.spawn(client_arguments("new", "structured_input"), runtime_.environment()));
@@ -985,6 +1005,52 @@ TEST_F(MuxProcessTest, HandlesMouseEdgesCopyTransitionsAndDeletedCaptureTargets)
   ASSERT_TRUE(client.wait_for_screen("__STALE_CAPTURE_SURVIVED__", deadline_after(5s)))
       << client.screen() << "\nraw:\n"
       << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, CopiesMouseSelectionWithHostCopyChord) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "mouse_copy"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.send("printf '\\033[2J\\033[HCOPY_PAYLOAD\\n__COPY_%s__\\n' READY\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_READY__", deadline_after(5s))) << client.screen();
+
+  constexpr std::string_view drag = "\x1B[<0;1;2M"
+                                    "\x1B[<32;13;2M"
+                                    "\x1B[<0;13;2m";
+  ASSERT_TRUE(client.send(drag, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[0;7m", deadline_after(5s))) << client.screen() << "\nraw:\n"
+                                                                    << client.raw_tail();
+  constexpr std::string_view super_c = "\x1B[99;9:1u\x1B[99;9:3u";
+  ASSERT_TRUE(client.send(super_c, deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_raw("\x1B]52;c;Q09QWV9QQVlMT0FE", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, ConsumesHostCopyChordWithoutASelection) {
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("new", "copy_noleak"), runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[>23u", deadline_after(5s)));
+  ASSERT_TRUE(client.send("stty -echo -icanon min 1 time 0; printf '__COPY_NOLEAK_READY__\\n'; "
+                          "v=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' '); "
+                          "stty sane; printf '__COPY_NOLEAK_%s__\\n' \"$v\"\r",
+                          deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_NOLEAK_READY__", deadline_after(5s)))
+      << client.screen();
+  constexpr std::string_view super_c = "\x1B[99;9:1u\x1B[99;9:3u";
+  ASSERT_TRUE(client.send(super_c, deadline_after(2s)));
+  ASSERT_TRUE(client.send("Z", deadline_after(2s)));
+  ASSERT_TRUE(client.wait_for_screen("__COPY_NOLEAK_5a__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  EXPECT_EQ(client.raw_tail().find("\x1B]52;c;"), std::string::npos) << client.raw_tail();
 
   ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
