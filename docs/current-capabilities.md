@@ -35,7 +35,7 @@ The target ownership model is in [`architecture.md`](architecture.md).
 | Default invocation | Working | Plain `lemma` strictly creates a fresh numerically named session and attaches. Unnamed creation allocates the lowest available nonnegative numeric name atomically in the daemon. |
 | Session lifecycle | Working | Top-level `new` creates and attaches, `start` creates detached, omitted `attach` targets the most recently active detached session, and explicit duplicate names fail. Creation accepts `-c`/`--cwd`, optional `--hold`, and bounded exact argv after `--`; the login shell remains the default. Top-level `list` (also `ls`)/`inspect`/`rename`/`kill` complete session control; a redundant `session` namespace is rejected. Attachment-owned inline status editors rename the current session (`C-b R`) or tab (`C-b r`) without leaving the mux. |
 | Daemon lifecycle | Working | Session creation starts the per-user daemon automatically and the daemon exits after its final session ends. The transitional `shutdown --confirm` control remains available for development and destructive replacement. |
-| Agent skill | Working | `show skill` prints a version-matched single-file Agent Skills guide without contacting the daemon. |
+| Agent skill | Working | `skill` prints a version-matched single-file Agent Skills guide without contacting the daemon. |
 | Help/version/errors | Working | Dedicated output and nonzero invalid-command behavior exist. |
 | Per-user daemon | Working | Owner-only Unix socket, lock, stale-socket checks, daemonization, and cleanup. |
 | Detach continuity | Working | Client detach/EOF does not end pane processes while the daemon remains alive. |

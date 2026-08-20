@@ -131,7 +131,7 @@ template <typename Integer>
       "  pane wait SESSION PANE (--contains TEXT|--exit|--exit-code CODE|--signal SIGNAL)\n"
       "                         [--timeout DURATION]\n"
       "  proc FILE|-            execute a bounded action procedure\n"
-      "  show skill             print the Lemma agent skill\n"
+      "  skill                  print the Lemma agent skill\n"
       "  help                   show this help\n"
       "  version                show build and protocol version\n\n"
       "Without a command, Lemma creates a fresh numbered session and attaches.\n";
@@ -771,8 +771,7 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   if (command == "proc" && command_arguments.size() == 2) {
     return run_procedure(endpoint, command_arguments.back());
   }
-  if (command == "show" && command_arguments.size() == 2 &&
-      std::string_view(command_arguments.back()) == "skill") {
+  if (command == "skill" && command_arguments.size() == 1) {
     return print_skill();
   }
 

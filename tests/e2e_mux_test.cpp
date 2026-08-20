@@ -376,14 +376,16 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   EXPECT_EQ(help.status, 0) << help.output;
   EXPECT_TRUE(help.output.contains("Usage: lemma")) << help.output;
   EXPECT_TRUE(help.output.contains("new [NAME] [--hold] [-c DIR] [-- COMMAND...]")) << help.output;
-  EXPECT_TRUE(help.output.contains("show skill")) << help.output;
+  EXPECT_TRUE(help.output.contains("skill                  print the Lemma agent skill"))
+      << help.output;
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
   EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.9")) << version.output;
-  const auto skill = command({"show", "skill"});
+  const auto skill = command({"skill"});
   EXPECT_EQ(skill.status, 0) << skill.output;
   EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\n")) << skill.output;
+  EXPECT_EQ(command_exact({"show", "skill"}).status, 2);
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
