@@ -196,7 +196,7 @@ target_link_libraries(
   PRIVATE lemma_daemon lemma_diagnostic lemma_platform lemma_protocol
 )
 
-add_library(lemma_app STATIC src/app/application.cpp)
+add_library(lemma_app STATIC src/app/application.cpp src/app/procedure.cpp)
 lemma_internal_target(lemma_app)
 target_link_libraries(lemma_app PRIVATE lemma_client lemma_daemon lemma_terminal)
 

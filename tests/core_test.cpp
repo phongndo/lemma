@@ -27,6 +27,8 @@ using core::CopyKeyKind;
 using core::CopyModePhase;
 using core::LaunchEnvironmentMode;
 using core::Pane;
+using core::PaneExitPolicy;
+using core::ProcessExitKind;
 using core::Session;
 using core::Tab;
 using core::TabOrder;
@@ -103,6 +105,30 @@ TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
                            .payload = CommandCoordinate{.value = 1}})
                 .status,
             CommandStatus::invalid_command);
+}
+
+TEST(CommandDispatcherTest, DispatchesTypedAbsoluteZoomCommand) {
+  CommandCapture capture;
+  const CommandDispatcher dispatcher(&capture_command, &capture);
+  const Command command{
+      .kind = CommandKind::set_zoom,
+      .origin = CommandOrigin::cli,
+      .target = {.session = SessionId::from_parts(1, 2),
+                 .tab = TabId::from_parts(2, 3),
+                 .pane = PaneId::from_parts(3, 4),
+                 .peer_pane = {},
+                 .attachment = {}},
+      .payload = PaneZoomCommand{.enabled = true},
+  };
+
+  EXPECT_EQ(dispatcher.dispatch(command).status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 1U);
+  EXPECT_TRUE(std::get<PaneZoomCommand>(capture.command.payload).enabled);
+
+  auto missing_value = command;
+  missing_value.payload = std::monostate{};
+  EXPECT_EQ(dispatcher.dispatch(missing_value).status, CommandStatus::invalid_command);
+  EXPECT_EQ(capture.calls, 1U);
 }
 
 TEST(CommandDispatcherTest, RequiresAttachmentIdentityForInteractionCancellation) {
@@ -343,6 +369,30 @@ TEST(SessionModelTest, TabOrderIsOneBoundedStableIdPermutation) {
   EXPECT_EQ(order.at(0), third);
   EXPECT_EQ(order.at(1), first);
   EXPECT_FALSE(order.position_of(second).has_value());
+}
+
+TEST(SessionModelTest, PaneCommitsProcessOutcomeOnlyUnderExplicitHoldPolicy) {
+  Pane closing{.id = PaneId::from_parts(0, 1),
+               .tab = TabId::from_parts(0, 1),
+               .rectangle = {},
+               .launch_command_storage = nullptr,
+               .process_exit = std::nullopt,
+               .exit_policy = PaneExitPolicy::close};
+  EXPECT_FALSE(closing.commit_process_exit({.kind = ProcessExitKind::exited, .value = 7}));
+  EXPECT_FALSE(closing.process_exit.has_value());
+
+  Pane held{.id = PaneId::from_parts(1, 1),
+            .tab = TabId::from_parts(0, 1),
+            .rectangle = {},
+            .launch_command_storage = nullptr,
+            .process_exit = std::nullopt,
+            .exit_policy = PaneExitPolicy::hold};
+  EXPECT_TRUE(held.commit_process_exit({.kind = ProcessExitKind::signaled, .value = 15}));
+  const auto outcome = held.process_exit.value_or(core::ProcessExit{});
+  EXPECT_EQ(outcome.kind, ProcessExitKind::signaled);
+  EXPECT_EQ(outcome.value, 15U);
+  EXPECT_FALSE(held.commit_process_exit({.kind = ProcessExitKind::exited, .value = 0}));
+  EXPECT_EQ(held.process_exit.value_or(core::ProcessExit{}).kind, ProcessExitKind::signaled);
 }
 
 TEST(SessionModelTest, RenameAndTabTitleValuesAreBoundedAndValidated) {

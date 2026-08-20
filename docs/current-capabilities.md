@@ -18,8 +18,8 @@ A daemon-owned input-policy component compiles the built-in prefix and transient
 
 The current in-memory hierarchy is `Session -> Tab -> Pane`, with separate semantic and runtime counterparts:
 
-- `Pane` contains one Session-scoped `PaneId`, owning `TabId`, and committed layout geometry. A separate bounded runtime store resolves the direct generational `SessionId -> PaneId` address to one `PaneRuntime` without presentation-derived lookup.
-- `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, typed failure state, and teardown. Staged creation publishes the semantic pane and runtime counterpart together; runtime failure becomes a typed outcome consumed by Core pane-exit policy.
+- `Pane` contains one Session-scoped `PaneId`, owning `TabId`, committed layout geometry, indirect exact launch argv, exit policy, and an optional committed process outcome. A separate bounded runtime store resolves the direct generational `SessionId -> PaneId` address to one `PaneRuntime` without presentation-derived lookup.
+- `PaneRuntime` owns the child PID, PTY descriptor, `vt::Terminal`, PTY write queue, presentation gate, process-title refresh state, compression scheduling, trace state, observed pre-commit child outcome, typed failure state, and teardown. Staged creation publishes the semantic pane and runtime counterpart together; Runtime reports failure or exit to Core, which closes the pane or retains its canonical terminal under explicit hold policy.
 - `Tab` owns a binary layout tree referencing Session pane IDs, geometry, focus, previous focus, a bounded optional title override, zoom, and suspension state. Layout topology and resize candidates are planned separately, applied transactionally to PaneRuntimes, and committed to semantic geometry only after Runtime succeeds.
 - `Session` owns identity, bounded launch context, Session-scoped generational pane slots, generational tab slots, one private bounded `TabOrder` permutation, active/previous tab, lifecycle, and theme-binding policy. Its destructor performs no I/O.
 - `Attachment` owns the stable semantic relationship to one Session, viewport geometry, copy policy, bounded rename-editor state, and a fully scoped generational pane or split-divider mouse capture target. Current single-controller policy creates one Attachment per Session.
@@ -33,7 +33,7 @@ The target ownership model is in [`architecture.md`](architecture.md).
 | Capability | Status | Current behavior |
 | --- | --- | --- |
 | Default invocation | Working | Plain `lemma` strictly creates a fresh numerically named session and attaches. Unnamed creation allocates the lowest available nonnegative numeric name atomically in the daemon. |
-| Session lifecycle | Working | `new` creates and attaches, `start` creates detached, omitted `attach` targets the most recently active detached session, and explicit duplicate names fail. Creation accepts `-c`/`--cwd` and bounded exact argv after `--`; the login shell remains the default. `list`, hierarchical `session rename`/`session kill`, `tab list`/`tab rename`, and transitional legacy control spellings are implemented. Attachment-owned inline status editors rename the current session (`C-b R`) or tab (`C-b r`) without leaving the mux. |
+| Session lifecycle | Working | Top-level `new` creates and attaches, `start` creates detached, omitted `attach` targets the most recently active detached session, and explicit duplicate names fail. Creation accepts `-c`/`--cwd`, optional `--hold`, and bounded exact argv after `--`; the login shell remains the default. Top-level `list` (also `ls`)/`inspect`/`rename`/`kill` complete session control; a redundant `session` namespace is rejected. Attachment-owned inline status editors rename the current session (`C-b R`) or tab (`C-b r`) without leaving the mux. |
 | Daemon lifecycle | Working | Session creation starts the per-user daemon automatically and the daemon exits after its final session ends. The transitional `shutdown --confirm` control remains available for development and destructive replacement. |
 | Agent skill | Working | `show skill` prints a version-matched single-file Agent Skills guide without contacting the daemon. |
 | Help/version/errors | Working | Dedicated output and nonzero invalid-command behavior exist. |
@@ -41,7 +41,7 @@ The target ownership model is in [`architecture.md`](architecture.md).
 | Detach continuity | Working | Client detach/EOF does not end pane processes while the daemon remains alive. |
 | Restart/reboot durability | Absent | Process, topology, terminal, and scrollback state are not persisted across daemon death. |
 | Multiple viewers/controllers | Absent | One attached client is allowed per session. |
-| Machine-readable semantic API | Absent | There is no public JSON command surface or persistent agent automation socket. |
+| Machine-readable semantic API | Working foundation | [`proc FILE|-`](procedures.md) strictly validates one bounded `lemma.proc/v1` JSON document with up to 64 ordered actions before side effects. It supports typed prior-result references, stop/continue runtime-failure policy, structured session/tab/pane query arrays, exact argv, capture, expected process outcomes, waits, and cleanup, and emits compact `lemma.results/v1` JSON with structured document errors. Procedures use the same daemon operations as one-shot commands, are non-atomic, and do not add a persistent automation socket. |
 | Installable release artifacts | Working | The Nix flake exposes the default release package as `lemma` and a separate debug package as `delemma`. |
 
 Session names are unique 1–32 ASCII letters, digits, underscores, or hyphens and may not begin with a hyphen; the inline editor silently ignores unsupported characters and excess input. Tab title overrides are empty (derived process/terminal title) or 1–64 printable ASCII bytes. The daemon admits up to 64 sessions.
@@ -50,9 +50,9 @@ Session names are unique 1–32 ASCII letters, digits, underscores, or hyphens a
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Tabs | Working | Up to 16 tabs per session; create, cycle, numeric select, list, close, stable reorder (`C-b P`/`C-b N`), and bounded title override. Display order is one Session-owned permutation independent of stable IDs and storage slots. |
-| Split panes | Working | Nested left/right and top/bottom binary splits, up to 64 panes per session and 4,096 daemon-wide. |
-| Focus/close/zoom | Working | Directional/next/previous focus, close, and zoom use generational pane IDs. |
+| Tabs | Working | Up to 16 tabs per session; create with exact argv/cwd/exit policy, cycle, numeric or CLI select, list, close, stable absolute CLI placement or relative key reorder (`C-b P`/`C-b N`), and bounded title override. Display order is one Session-owned permutation independent of stable IDs and storage slots. |
+| Split panes | Working | Nested left/right and top/bottom binary splits, up to 64 panes per session and 4,096 daemon-wide. `pane split` targets a stable pane ID and accepts exact argv, explicit cwd, and `--hold`. New tab/split processes use the Session's captured environment and creation cwd unless an explicit cwd is supplied. |
+| Focus/close/zoom | Working | Directional/next/previous focus, close, and zoom use generational pane IDs. One-shot `pane focus`, `swap`, bounded directional `resize`, deterministic `zoom --on/--off`, and `kill` converge on the typed command dispatcher. |
 | Resize | Working | Outer-window resize samples coalesce to one settled endpoint after a 50-ms quiet interval, or immediately before subsequent user input. The daemon then resolves the active layout and coordinates Ghostty/PTY resize with rollback/fail-closed behavior. |
 | Inactive output | Working | Inactive tabs continue draining and parsing PTY output. |
 | Status | Working | A top row renders the session as a bold reverse-video block, followed by an ASCII ` | ` boundary and left-aligned tabs; the active tab is bold and framed as `[ <position>:<title> ]`. A trailing ASCII `+` creates a tab when capacity allows. Inactive tabs retain contiguous positions and bounded manual-or-process-derived titles. Presentation uses only the terminal's default colors plus standard ANSI attributes. Clearing a manual title resumes derivation. Copy mode preserves those titles and projects its position or search feedback as a bounded top-right pane overlay. |
@@ -60,9 +60,11 @@ Session names are unique 1–32 ASCII letters, digits, underscores, or hyphens a
 | Rename/reorder | Working | Attachment-owned bounded inline status editors and hierarchical CLI commands rename sessions/tabs; cyclic relative tab reorder and mouse drag release use typed stable-ID commands. A tab drag retains only a stable source and `place before` anchor in Attachment-owned gesture state: motion projects a live non-authoritative order while keeping each whole label and pre-drop position prefix together, then release commits the real Session-owned `TabOrder` and renumbers the labels. The edited identity stays in its normal position with surrounding context: session input remains inside the reverse-video session block and active-tab input remains inside `[ <position>:<title> ]`; the fixed inner spaces hold the steady bar cursor without changing either block's length, and only entered characters are underlined. Validation feedback appears at the right only when needed. Duplicate session names remain editable with explicit feedback and no mutation. |
 | Pane swap | Working | `C-b Shift-h/j/k/l` swaps the focused pane with its spatial neighbor in that direction while preserving layout shape and ratios. Focus and swap use the same bounded directional scoring. |
 | Pane move between tabs or sessions | Deferred | Moving panes out of their tab has no command or default binding. Session launch, theme, attachment, and process-lifecycle ownership is not crossed. |
-| Pane identification UI | Partial | IDs appear in listings and typed command targets, but there is no pane overlay or naming UX. |
+| Pane automation | Working foundation | `pane list`, literal `send --text`, visible-screen plain-text `capture`, and bounded polling `wait --contains`/`--exit` target stable pane IDs. Waits can require an exact exit code or signal and report mismatches explicitly. Semantic key/paste input, historical capture/search, and streaming events are not yet exposed through the CLI. |
+| Held process outcome | Working | `--hold` on session, tab, or split creation keeps the canonical terminal and typed exit code/signal after PTY EOF. Held panes reject input, remain capturable/resizable, consume ordinary pane/terminal capacity, and keep their session and daemon alive until killed. |
+| Pane identification UI | Partial | IDs appear in listings, creation results, procedure results, and typed command targets, but there is no pane overlay or naming UX. |
 
-Session, tab, pane, semantic Attachment, and runtime connection references use distinct generational IDs internally. The one-shot control protocol remains mostly name-oriented.
+Session, tab, pane, semantic Attachment, and runtime connection references use distinct generational IDs internally. Control requests use the session name as the parent selector and stable generational Tab/Pane IDs for machine-targeted descendants; procedure-local references retain only prior typed results in the transient CLI process.
 
 ## Input, copy, and mouse
 
@@ -95,7 +97,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
 | Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.8. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors, optional OSC 17/19 highlight colors, and 16-color ANSI palette during attach. Selected cells are painted with those highlight colors, or a bg-toward-fg mix that keeps cell foregrounds, instead of reverse video.
+The current private attached-client and control protocol is version 2.9. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors, optional OSC 17/19 highlight colors, and 16-color ANSI palette during attach. Selected cells are painted with those highlight colors, or a bg-toward-fg mix that keeps cell foregrounds, instead of reverse video.
 
 ## Configuration and extensions
 

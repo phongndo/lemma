@@ -9,15 +9,52 @@ The mux hierarchy is **Session -> Tab -> Pane**. Ghostty owns terminal semantics
 ## Usage
 
 ```sh
-lemma                            # create a numbered session and attach
-lemma new work                    # create named session and attach
-lemma start logs                  # create named session detached
-lemma new editor -c ~/src -- nvim # explicit cwd and argv
-lemma list
+lemma                                    # create a numbered session and attach
+lemma new work                            # create named session and attach
+lemma start logs                          # create named session detached
+lemma new editor -c ~/src -- nvim
+lemma list                                # alias: lemma ls
 lemma attach work
+
+lemma tab new work --title tests --hold -- just test
+lemma pane list work
+lemma pane capture work 1:1
+lemma pane wait work 1:1 --exit --timeout 30s
 ```
 
-Use `C-b d` to detach. Run `lemma --help` for all commands and bindings.
+Session controls are top-level; tab and pane actions use explicit namespaces. `--hold` keeps an
+exited pane's canonical terminal and exit status available until the pane is killed. Pane waits can
+require an exact exit code or signal. Use `C-b d` to detach and run `lemma --help` for the complete
+command surface.
+
+## Procedures
+
+`lemma proc` executes up to 64 ordered actions from one bounded `lemma.proc/v1` JSON document.
+Actions may reference session, tab, or pane IDs returned by earlier actions. The complete document
+is validated strictly before any action runs. Procedures are sequential and non-atomic; they stop
+at the first runtime failure unless `"on_error":"continue"` is set.
+
+```sh
+lemma proc - <<'JSON'
+{
+  "schema": "lemma.proc/v1",
+  "on_error": "continue",
+  "actions": [
+    {"id":"qa", "action":"session.start", "name":"qa"},
+    {"id":"tests", "action":"tab.new", "session":{"result":"qa"},
+     "hold":true, "argv":["just","test"]},
+    {"action":"pane.wait", "pane":{"result":"tests"},
+     "exit":{"code":0}, "timeout_ms":120000},
+    {"action":"pane.capture", "pane":{"result":"tests"}, "lines":100},
+    {"action":"session.kill", "session":{"result":"qa"}}
+  ]
+}
+JSON
+```
+
+The procedure result is compact `lemma.results/v1` JSON containing each action's status and any
+created IDs, structured topology arrays, captured text, or process exit outcome. See [`docs/procedures.md`](docs/procedures.md)
+for the schema and supported action fields.
 
 ## Builds
 

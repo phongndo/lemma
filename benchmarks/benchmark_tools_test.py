@@ -22,12 +22,34 @@ from check_regression import (
 from latency_trace import input_paths
 from mux_benchmark import (
     INTERACTION_LABEL_CODES,
+    LemmaRuntime,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
     open_descriptor_snapshot,
     percentile,
 )
+
+
+class LemmaBenchmarkAdapterTest(unittest.TestCase):
+    def test_maps_generic_lifecycle_commands_to_the_canonical_cli(self) -> None:
+        runtime = object.__new__(LemmaRuntime)
+        runtime.cli_path = Path("/tmp/lemma-test-cli")
+        runtime.socket_path = Path("/tmp/lemma-test.sock")
+        runtime.environment = {}
+
+        with mock.patch("mux_benchmark.subprocess.run") as run:
+            runtime.command("kill", "work")
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/tmp/lemma-test-cli",
+                "/tmp/lemma-test.sock",
+                "kill",
+                "work",
+            ],
+        )
 
 
 class BenchmarkStatisticsTest(unittest.TestCase):

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -65,7 +66,7 @@ protected:
     }
   }
 
-  [[nodiscard]] auto command(const std::vector<std::string>& arguments) -> CommandResult {
+  [[nodiscard]] auto command_exact(const std::vector<std::string>& arguments) -> CommandResult {
     std::vector<std::string> command_arguments{LEMMA_TEST_CLI_PATH, runtime_.socket_path()};
     command_arguments.insert(command_arguments.end(), arguments.begin(), arguments.end());
     ChildProcess process;
@@ -78,6 +79,17 @@ protected:
         .status = WIFEXITED(status) ? WEXITSTATUS(status) : -1,
         .output = process.output(),
     };
+  }
+
+  [[nodiscard]] auto command(const std::vector<std::string>& arguments) -> CommandResult {
+    std::vector<std::string> normalized = arguments;
+    if (normalized.size() == 2 && normalized.front() == "list") {
+      normalized.front() = "inspect";
+    } else if (!normalized.empty() && normalized.front() == "tabs") {
+      normalized.front() = "tab";
+      normalized.insert(normalized.begin() + 1, "list");
+    }
+    return command_exact(normalized);
   }
 
   [[nodiscard]] auto wait_for_listing(const std::string_view session,
@@ -363,18 +375,25 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   const auto help = command({"--help"});
   EXPECT_EQ(help.status, 0) << help.output;
   EXPECT_TRUE(help.output.contains("Usage: lemma")) << help.output;
-  EXPECT_TRUE(help.output.contains("new [NAME] [-c DIR] [-- COMMAND...]")) << help.output;
+  EXPECT_TRUE(help.output.contains("new [NAME] [--hold] [-c DIR] [-- COMMAND...]")) << help.output;
   EXPECT_TRUE(help.output.contains("show skill")) << help.output;
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.8")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.9")) << version.output;
   const auto skill = command({"show", "skill"});
   EXPECT_EQ(skill.status, 0) << skill.output;
   EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\n")) << skill.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
+  EXPECT_EQ(command_exact({"session", "list"}).status, 2);
+  EXPECT_EQ(command_exact({"session", "start", "legacy"}).status, 2);
+  const auto list = command_exact({"list"});
+  const auto ls = command_exact({"ls"});
+  EXPECT_EQ(list.status, 0) << list.output;
+  EXPECT_EQ(ls.status, list.status) << ls.output;
+  EXPECT_EQ(ls.output, list.output);
 
   PtyClient client;
   ASSERT_TRUE(client.spawn({LEMMA_TEST_CLI_PATH, runtime_.socket_path()}, runtime_.environment()));
@@ -441,15 +460,277 @@ TEST_F(MuxProcessTest, CommitsShutdownWhenControlPeerDisconnectsBeforeAcknowledg
 TEST_F(MuxProcessTest, ExitsDaemonAfterFinalSessionEnds) {
   ASSERT_EQ(command({"start", "last"}).status, 0);
 
-  const auto killed = command({"session", "kill", "last"});
+  const auto killed = command({"kill", "last"});
 
   EXPECT_EQ(killed.status, 0) << killed.output;
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, SupportsScopedOneShotPaneAutomationAndHeldExitStatus) {
+  const auto started =
+      command({"start", "held", "--hold", "--", "/bin/sh", "-c", "printf '__HELD_QA__'; exit 7"});
+  ASSERT_EQ(started.status, 0) << started.output;
+  ASSERT_TRUE(wait_for_listing("held", "detached", deadline_after(3s)));
+
+  const auto unexpected =
+      command({"pane", "wait", "held", "0:1", "--exit-code", "0", "--timeout", "3s"});
+  EXPECT_EQ(unexpected.status, 1) << unexpected.output;
+  EXPECT_TRUE(unexpected.output.contains("exited unexpectedly")) << unexpected.output;
+  const auto waited =
+      command({"pane", "wait", "held", "0:1", "--exit-code", "7", "--timeout", "3s"});
+  EXPECT_EQ(waited.status, 0) << waited.output;
+  const auto panes = command({"pane", "list", "held"});
+  ASSERT_EQ(panes.status, 0) << panes.output;
+  EXPECT_TRUE(panes.output.contains("exited, code 7")) << panes.output;
+  const auto captured = command({"pane", "capture", "held", "0:1"});
+  ASSERT_EQ(captured.status, 0) << captured.output;
+  EXPECT_TRUE(captured.output.contains("__HELD_QA__")) << captured.output;
+
+  PtyClient client;
+  ASSERT_TRUE(client.spawn(client_arguments("attach", "held"), runtime_.environment(), 100, 30));
+  ASSERT_TRUE(client.wait_for_screen("__HELD_QA__", deadline_after(5s))) << client.screen();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+
+  EXPECT_EQ(command({"pane", "kill", "held", "0:1"}).status, 0);
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, DrivesTopologyAndApplicationInputWithOneShotActions) {
+  ASSERT_EQ(command({"start", "actions"}).status, 0);
+  ASSERT_EQ(command({"pane", "send", "actions", "0:1", "--text", "printf '__ONESHOT_SEND__\\n'\r"})
+                .status,
+            0);
+  ASSERT_EQ(command({"pane", "wait", "actions", "0:1", "--contains", "__ONESHOT_SEND__",
+                     "--timeout", "3s"})
+                .status,
+            0);
+  EXPECT_TRUE(command({"pane", "capture", "actions", "0:1"}).output.contains("__ONESHOT_SEND__"));
+
+  const auto split = command({"pane", "split", "actions", "0:1", "--right", "--hold", "--",
+                              "/bin/sh", "-c", "printf '__ONESHOT_SPLIT__'; exit 4"});
+  ASSERT_EQ(split.status, 0) << split.output;
+  ASSERT_EQ(command({"pane", "wait", "actions", "1:1", "--exit", "--timeout", "3s"}).status, 0);
+  EXPECT_TRUE(command({"pane", "capture", "actions", "1:1"}).output.contains("__ONESHOT_SPLIT__"));
+  EXPECT_EQ(command({"pane", "focus", "actions", "0:1"}).status, 0);
+  EXPECT_EQ(command({"pane", "swap", "actions", "0:1", "1:1"}).status, 0);
+  EXPECT_EQ(command({"pane", "resize", "actions", "0:1", "right", "1"}).status, 0);
+  EXPECT_EQ(command({"pane", "zoom", "actions", "0:1", "--on"}).status, 0);
+  EXPECT_EQ(command({"pane", "zoom", "actions", "1:1", "--on"}).status, 0);
+  const auto retargeted = command({"pane", "list", "actions"});
+  EXPECT_TRUE(retargeted.output.contains("lemma pane 1:1: tab 1, focused")) << retargeted.output;
+  EXPECT_EQ(command({"pane", "zoom", "actions", "0:1", "--off"}).status, 0);
+
+  ASSERT_EQ(command({"tab", "new", "actions", "--title", "two"}).status, 0);
+  ASSERT_EQ(command({"tab", "new", "actions", "--title", "three"}).status, 0);
+  ASSERT_EQ(command({"tab", "move", "actions", "3", "1"}).status, 0);
+  const auto moved = command({"tab", "list", "actions"});
+  ASSERT_EQ(moved.status, 0) << moved.output;
+  EXPECT_TRUE(moved.output.starts_with("lemma tab 1: 1 pane(s), active, title \"three\""))
+      << moved.output;
+  EXPECT_EQ(command({"tab", "select", "actions", "2"}).status, 0);
+  EXPECT_EQ(command({"tab", "kill", "actions", "1"}).status, 0);
+  EXPECT_EQ(command({"kill", "actions"}).status, 0);
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, ExecutesVersionedProcedureWithReferencesWaitCaptureAndCleanup) {
+  const auto malformed_path = runtime_.owned_path("bad-proc.json");
+  {
+    std::ofstream malformed(malformed_path);
+    ASSERT_TRUE(malformed.good());
+    malformed << R"({"schema":"lemma.proc/v1","actions":[})";
+  }
+  const auto malformed = command({"proc", malformed_path});
+  EXPECT_EQ(malformed.status, 2) << malformed.output;
+  EXPECT_TRUE(malformed.output.contains(R"("reason":"invalid_json")")) << malformed.output;
+
+  const auto wrong_schema_path = runtime_.owned_path("wrong-proc.json");
+  {
+    std::ofstream wrong_schema(wrong_schema_path);
+    ASSERT_TRUE(wrong_schema.good());
+    wrong_schema << R"({"schema":"wrong","actions":[]})";
+  }
+  EXPECT_EQ(command({"proc", wrong_schema_path}).status, 2);
+
+  constexpr std::size_t procedure_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+  constexpr std::string_view bounded_document =
+      R"({"schema":"lemma.proc/v1","actions":[{"action":"session.list"}]})";
+  static_assert(bounded_document.size() < procedure_bytes_max);
+  const auto bounded_path = runtime_.owned_path("bounded-proc.json");
+  {
+    std::ofstream bounded(bounded_path);
+    ASSERT_TRUE(bounded.good());
+    bounded << bounded_document << std::string(procedure_bytes_max - bounded_document.size(), ' ');
+  }
+  const auto bounded = command({"proc", bounded_path});
+  EXPECT_EQ(bounded.status, 0) << bounded.output;
+  EXPECT_TRUE(bounded.output.starts_with(R"({"schema":"lemma.results/v1")")) << bounded.output;
+
+  const auto oversized_path = runtime_.owned_path("oversized-proc.json");
+  {
+    std::ofstream oversized(oversized_path);
+    ASSERT_TRUE(oversized.good());
+    oversized << bounded_document
+              << std::string((procedure_bytes_max + 1U) - bounded_document.size(), ' ');
+  }
+  const auto oversized = command({"proc", oversized_path});
+  EXPECT_EQ(oversized.status, 2) << oversized.output;
+  EXPECT_TRUE(oversized.output.contains(R"("reason":"read_failed")")) << oversized.output;
+
+  const auto procedure_path = runtime_.owned_path("qa-proc.json");
+  {
+    std::ofstream procedure(procedure_path);
+    ASSERT_TRUE(procedure.good());
+    procedure << R"({
+      "schema":"lemma.proc/v1",
+      "actions":[
+        {"id":"qa","action":"session.start","name":"procedure"},
+        {"action":"session.rename","session":{"result":"qa"},"name":"procedure-renamed"},
+        {"action":"session.list"},
+        {"action":"tab.list","session":{"result":"qa"}},
+        {"action":"pane.list","session":{"result":"qa"}},
+        {"action":"pane.focus","pane":{"result":"qa","field":"pane"}},
+        {"action":"pane.send","pane":{"result":"qa","field":"pane"},
+         "text":"printf '__PROC_SEND__\\n'\r"},
+        {"action":"pane.wait","pane":{"result":"qa","field":"pane"},
+         "contains":"__PROC_SEND__","timeout_ms":3000},
+        {"action":"pane.capture","pane":{"result":"qa","field":"pane"}},
+        {"id":"task","action":"tab.new","session":{"result":"qa"},"hold":true,
+         "argv":["/bin/sh","-c","printf '__PROC_EXIT__'; exit 9"]},
+        {"action":"pane.wait","pane":{"result":"task"},"exit":true,"timeout_ms":3000},
+        {"action":"pane.capture","pane":{"result":"task"}},
+        {"action":"session.kill","session":{"result":"qa","field":"session"}}
+      ]
+    })";
+  }
+
+  const auto executed = command({"proc", procedure_path});
+  ASSERT_EQ(executed.status, 0) << executed.output;
+  EXPECT_TRUE(executed.output.starts_with(R"({"schema":"lemma.results/v1")")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("\"session\":\"procedure-renamed\"")) << executed.output;
+  EXPECT_TRUE(executed.output.contains(R"("sessions":[{"name":"procedure-renamed")"))
+      << executed.output;
+  EXPECT_TRUE(executed.output.contains(R"("tabs":[{"position":1)")) << executed.output;
+  EXPECT_TRUE(executed.output.contains(R"("panes":[{"id":)")) << executed.output;
+  EXPECT_FALSE(executed.output.contains(R"("text":"lemma )")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("\"state\":\"exited\",\"value\":9")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("__PROC_SEND__")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("\"text\":\"__PROC_EXIT__\"")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("\"status\":\"no_effect\"")) << executed.output;
+  EXPECT_TRUE(executed.output.contains("\"ok\":true")) << executed.output;
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, ProcedureValidatesBeforeSideEffectsAndContinuesRuntimeCleanup) {
+  const auto invalid_path = runtime_.owned_path("invalid-whole-proc.json");
+  {
+    std::ofstream procedure(invalid_path);
+    ASSERT_TRUE(procedure.good());
+    procedure << R"({
+      "schema":"lemma.proc/v1",
+      "actions":[
+        {"action":"session.start","name":"must-not-exist"},
+        {"action":"session.list","typo":true}
+      ]
+    })";
+  }
+  const auto invalid = command({"proc", invalid_path});
+  EXPECT_EQ(invalid.status, 2) << invalid.output;
+  EXPECT_TRUE(
+      invalid.output.contains(R"("reason":"unknown_field","action_index":1,"field":"typo")"))
+      << invalid.output;
+  EXPECT_EQ(command({"inspect", "must-not-exist"}).status, 1);
+
+  const auto empty_path = runtime_.owned_path("empty-proc.json");
+  {
+    std::ofstream procedure(empty_path);
+    ASSERT_TRUE(procedure.good());
+    procedure << R"({"schema":"lemma.proc/v1","actions":[]})";
+  }
+  const auto empty = command({"proc", empty_path});
+  EXPECT_EQ(empty.status, 0) << empty.output;
+  EXPECT_EQ(empty.output, R"({"schema":"lemma.results/v1","ok":true,"results":[]}
+)");
+
+  const auto procedure_path = runtime_.owned_path("continue-proc.json");
+  {
+    std::ofstream procedure(procedure_path);
+    ASSERT_TRUE(procedure.good());
+    procedure << R"({
+      "schema":"lemma.proc/v1",
+      "on_error":"continue",
+      "actions":[
+        {"id":"qa","action":"session.start","name":"continue-cleanup"},
+        {"action":"session.inspect","session":{"name":"missing"}},
+        {"action":"session.kill","session":{"result":"qa"}}
+      ]
+    })";
+  }
+
+  const auto executed = command({"proc", procedure_path});
+  EXPECT_EQ(executed.status, 1) << executed.output;
+  EXPECT_TRUE(executed.output.starts_with(R"({"schema":"lemma.results/v1","ok":false)"))
+      << executed.output;
+  EXPECT_TRUE(executed.output.contains(R"("action":"session.inspect","status":"missing")"))
+      << executed.output;
+  EXPECT_TRUE(executed.output.ends_with(
+      R"("action":"session.kill","status":"applied","session":"continue-cleanup"}]}
+)")) << executed.output;
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, ProcedureChecksExpectedExitCodeAndSignal) {
+  const auto procedure_path = runtime_.owned_path("expected-exit-proc.json");
+  {
+    std::ofstream procedure(procedure_path);
+    ASSERT_TRUE(procedure.good());
+    procedure << R"({
+      "schema":"lemma.proc/v1",
+      "on_error":"continue",
+      "actions":[
+        {"id":"sentinel","action":"session.start","name":"exit-sentinel",
+         "argv":["/bin/cat"]},
+        {"id":"code","action":"session.start","name":"expected-code","hold":true,
+         "argv":["/bin/sh","-c","exit 7"]},
+        {"action":"pane.wait","pane":{"result":"code"},"exit":{"code":7},
+         "timeout_ms":3000},
+        {"action":"session.kill","session":{"result":"code"}},
+        {"id":"signal","action":"session.start","name":"expected-signal","hold":true,
+         "argv":["/bin/sh","-c","kill -TERM $$"]},
+        {"action":"pane.wait","pane":{"result":"signal"},"exit":{"signal":15},
+         "timeout_ms":3000},
+        {"action":"session.kill","session":{"result":"signal"}},
+        {"id":"bad","action":"session.start","name":"unexpected-code","hold":true,
+         "argv":["/bin/sh","-c","exit 9"]},
+        {"action":"pane.wait","pane":{"result":"bad"},"exit":{"code":0},
+         "timeout_ms":3000},
+        {"action":"session.kill","session":{"result":"bad"}},
+        {"action":"session.kill","session":{"result":"sentinel"}}
+      ]
+    })";
+  }
+
+  const auto executed = command({"proc", procedure_path});
+  EXPECT_EQ(executed.status, 1) << executed.output;
+  EXPECT_NE(
+      executed.output.find(R"("action":"pane.wait","status":"applied","session":"expected-code")"),
+      std::string::npos)
+      << executed.output;
+  EXPECT_NE(executed.output.find(R"("state":"signaled","value":15)"), std::string::npos)
+      << executed.output;
+  EXPECT_NE(executed.output.find(R"("status":"unexpected_exit","session":"unexpected-code")"),
+            std::string::npos)
+      << executed.output;
+  EXPECT_NE(executed.output.find(R"("state":"exited","value":9)"), std::string::npos)
+      << executed.output;
   EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
 }
 
 TEST_F(MuxProcessTest, PreservesExplicitlyEmptyLaunchEnvironment) {
   constexpr std::string_view session = "empty_context";
   auto request = named_request(protocol::ControlCommand::create_with_context, session);
+  request.push_back(std::byte{0});
   const auto directory_size = protocol::encode_bounded_size(runtime_.directory().size());
   request.insert(request.end(), directory_size.begin(), directory_size.end());
   const auto directory =
@@ -1872,9 +2153,9 @@ TEST_F(MuxProcessTest, RenamesSessionsAndTabTitleOverridesAtomically) {
   EXPECT_NE(renamed.output.find("rename_new"), std::string::npos) << renamed.output;
   ASSERT_TRUE(client.wait_for_screen("rename_new", deadline_after(5s))) << client.screen();
 
-  ASSERT_EQ(command({"session", "rename", "rename_new", "rename_cli"}).status, 0);
+  ASSERT_EQ(command({"rename", "rename_new", "rename_cli"}).status, 0);
   EXPECT_EQ(command({"list", "rename_cli"}).status, 0);
-  ASSERT_EQ(command({"session", "rename", "rename_cli", "rename_new"}).status, 0);
+  ASSERT_EQ(command({"rename", "rename_cli", "rename_new"}).status, 0);
 
   ASSERT_TRUE(send_prefix(client, std::byte{'r'}));
   ASSERT_TRUE(client.wait_for_raw("\x1B[0;1m[ 1:\x1B[0;1;4m", deadline_after(5s)))
@@ -2200,8 +2481,25 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   const auto invalid_name = named_request(protocol::ControlCommand::create, "bad.name");
   EXPECT_TRUE(expect_close(invalid_name));
 
+  auto invalid_hold = named_request(protocol::ControlCommand::create_with_context, "badhold");
+  invalid_hold.push_back(std::byte{2});
+  EXPECT_TRUE(expect_close(invalid_hold));
+
+  auto empty_surface = named_request(protocol::ControlCommand::surface_create, "healthy");
+  const auto empty_surface_size = protocol::encode_bounded_size(0);
+  empty_surface.insert(empty_surface.end(), empty_surface_size.begin(), empty_surface_size.end());
+  EXPECT_TRUE(expect_close(empty_surface));
+
+  auto malformed_action = named_request(protocol::ControlCommand::semantic_action, "healthy");
+  const auto malformed_action_size = protocol::encode_bounded_size(1);
+  malformed_action.insert(malformed_action.end(), malformed_action_size.begin(),
+                          malformed_action_size.end());
+  malformed_action.push_back(std::byte{0xff});
+  EXPECT_TRUE(expect_close(malformed_action));
+
   auto unavailable_context =
       named_request(protocol::ControlCommand::create_with_context, "missingcontext");
+  unavailable_context.push_back(std::byte{0});
   const auto unavailable_size =
       protocol::encode_bounded_size(protocol::unavailable_working_directory_size);
   unavailable_context.insert(unavailable_context.end(), unavailable_size.begin(),
@@ -2210,6 +2508,7 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   EXPECT_NE(command({"list", "missingcontext"}).status, 0);
 
   auto invalid_environment = named_request(protocol::ControlCommand::create_with_context, "badenv");
+  invalid_environment.push_back(std::byte{0});
   const auto cwd_size = protocol::encode_bounded_size(1);
   invalid_environment.insert(invalid_environment.end(), cwd_size.begin(), cwd_size.end());
   invalid_environment.push_back(std::byte{'/'});
@@ -2222,6 +2521,7 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   EXPECT_TRUE(expect_close(invalid_environment));
 
   auto invalid_command = named_request(protocol::ControlCommand::create_with_context, "badcommand");
+  invalid_command.push_back(std::byte{0});
   invalid_command.insert(invalid_command.end(), cwd_size.begin(), cwd_size.end());
   invalid_command.push_back(std::byte{'/'});
   const auto empty_environment_size = protocol::encode_bounded_size(0);

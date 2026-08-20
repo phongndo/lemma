@@ -101,6 +101,8 @@ Physical input that is not a mux command becomes typed application input. The da
 
 Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, and no-effect commands are explicit results. External failure never authorizes partial semantic mutation. Internal invariant failure is fail-fast.
 
+A CLI procedure is a bounded frontend sequence, not a Core transaction or workflow object. Before the first daemon request, the CLI validates the complete versioned document, action schemas, selectors, bounds, and backward-only typed result references. It then submits each ordinary action through the same control boundary as a one-shot command. Process and PTY effects are non-rollbackable, so procedure stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic action still commits through one Core transition; frontend sequencing cannot split one action into multiple partial mutations.
+
 ## Dependency direction
 
 Dependencies are explicit and acyclic:

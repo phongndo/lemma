@@ -1,5 +1,7 @@
 #include "protocol/attachment.hpp"
 
+#include "lemma/id.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -29,7 +31,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x08}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x09}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -60,6 +62,24 @@ TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
   ASSERT_NE((**decoded).host_theme, nullptr);
   EXPECT_EQ(*(**decoded).host_theme, theme);
   EXPECT_EQ((**decoded).session, "themed");
+}
+
+TEST(ProtocolTest, RoundTripsBoundedControlIds) {
+  const auto pane = PaneId::from_parts(63, 42);
+  const auto encoded = encode_control_id(pane);
+  const auto decoded = decode_control_id<PaneId>(encoded);
+
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(*decoded, pane);
+
+  const auto omitted = encode_control_id(PaneId{});
+  const auto decoded_omitted = decode_control_id<PaneId>(omitted);
+  ASSERT_TRUE(decoded_omitted.has_value());
+  EXPECT_FALSE(decoded_omitted->is_valid());
+
+  auto malformed = encoded;
+  std::ranges::fill(std::span(malformed).subspan(4, 4), std::byte{0});
+  EXPECT_FALSE(decode_control_id<PaneId>(malformed).has_value());
 }
 
 TEST(ProtocolTest, RoundTripsOmittedAttachTarget) {
@@ -180,7 +200,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x08}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x09}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };

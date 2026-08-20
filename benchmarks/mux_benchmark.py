@@ -51,7 +51,7 @@ TUI_WHEEL_ARMED = b"__LEMMA_TUI_WHEEL_ARMED__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
-ATTACH_PROTOCOL_MINOR = 6
+ATTACH_PROTOCOL_MINOR = 9
 ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
@@ -911,8 +911,11 @@ class LemmaRuntime:
         raise TimeoutError("Lemma benchmark server did not become ready")
 
     def command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        normalized = list(arguments)
+        if len(normalized) == 2 and normalized[0] == "list":
+            normalized[0] = "inspect"
         return subprocess.run(
-            [str(self.cli_path), str(self.socket_path), *arguments],
+            [str(self.cli_path), str(self.socket_path), *normalized],
             env=self.environment,
             check=True,
             capture_output=True,
@@ -2014,6 +2017,10 @@ def pane_profile(
 def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     if not isinstance(runtime, LemmaRuntime):
         raise TypeError("lifecycle churn requires Lemma")
+    # Keep one ordinary session alive so deleting the churn target does not intentionally stop the
+    # daemon whose descriptor and memory plateau this workload audits. Final-session auto-exit has
+    # separate process coverage; the runtime process group reclaims this sentinel after sampling.
+    runtime.command("start", "lifecycle_sentinel", "--", "/bin/cat")
     baseline = runtime_resource_snapshot(runtime)
     if baseline.get("available") is not True:
         raise RuntimeError("lifecycle churn baseline resource snapshot is unavailable")
@@ -2122,6 +2129,7 @@ def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     return {
         "status": "completed",
         "cycles": repetitions,
+        "baseline_condition": "one ordinary sentinel session remains live across cycles",
         "operations_per_cycle": [
             "create",
             "attach",

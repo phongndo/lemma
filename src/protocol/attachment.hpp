@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -87,18 +88,91 @@ enum class ControlCommand : std::uint8_t {
   list = 'L',
   list_session = 'Q',
   list_tabs = 'W',
+  list_panes = 'P',
+  query_sessions = 'l',
+  query_session = 'q',
+  query_tabs = 'w',
+  query_panes = 'p',
   rename_session = 'R',
   rename_tab = 'T',
   kill = 'K',
+  surface_create = 'F',
+  semantic_action = 'O',
+  send_pane = 'E',
+  capture_pane = 'G',
+  pane_status = 'U',
   kill_all = 'X',
   shutdown = 'S',
 };
 
+enum class SurfaceCreateKind : std::uint8_t {
+  tab = 1,
+  split_right = 2,
+  split_down = 3,
+};
+
+enum class ControlAction : std::uint8_t {
+  tab_select = 1,
+  tab_move = 2,
+  tab_kill = 3,
+  pane_focus = 4,
+  pane_swap = 5,
+  pane_resize_left = 6,
+  pane_resize_right = 7,
+  pane_resize_up = 8,
+  pane_resize_down = 9,
+  pane_zoom_on = 10,
+  pane_zoom_off = 11,
+  pane_kill = 12,
+  session_kill = 13,
+};
+
+inline constexpr std::size_t control_id_bytes = 8;
+inline constexpr std::size_t semantic_action_payload_bytes = 1U + (3U * control_id_bytes) + 4U;
+inline constexpr std::size_t control_payload_bytes_max = environment_bytes_max;
+
+template <typename Id>
+[[nodiscard]] constexpr auto encode_control_id(const Id id) noexcept
+    -> std::array<std::byte, control_id_bytes> {
+  const auto slot = id.is_valid() ? id.slot() : std::numeric_limits<std::uint32_t>::max();
+  const auto generation = id.is_valid() ? id.generation() : 0U;
+  return {
+      static_cast<std::byte>((slot >> 24U) & 0xffU),
+      static_cast<std::byte>((slot >> 16U) & 0xffU),
+      static_cast<std::byte>((slot >> 8U) & 0xffU),
+      static_cast<std::byte>(slot & 0xffU),
+      static_cast<std::byte>((generation >> 24U) & 0xffU),
+      static_cast<std::byte>((generation >> 16U) & 0xffU),
+      static_cast<std::byte>((generation >> 8U) & 0xffU),
+      static_cast<std::byte>(generation & 0xffU),
+  };
+}
+
+template <typename Id>
+[[nodiscard]] constexpr auto
+decode_control_id(const std::span<const std::byte, control_id_bytes> bytes) noexcept
+    -> std::optional<Id> {
+  const auto decode = [](const std::span<const std::byte, 4> value) {
+    return (std::to_integer<std::uint32_t>(value.subspan(0, 1).front()) << 24U) |
+           (std::to_integer<std::uint32_t>(value.subspan(1, 1).front()) << 16U) |
+           (std::to_integer<std::uint32_t>(value.subspan(2, 1).front()) << 8U) |
+           std::to_integer<std::uint32_t>(value.subspan(3, 1).front());
+  };
+  const auto slot = decode(bytes.template first<4>());
+  const auto generation = decode(bytes.template subspan<4, 4>());
+  if (slot == std::numeric_limits<std::uint32_t>::max() && generation == 0) {
+    return Id{};
+  }
+  return Id::try_from_parts(slot, generation);
+}
+
 enum class ControlResponse : std::uint8_t {
   ready = 'Y',
+  no_effect = 'I',
   missing = 'M',
   capacity = 'C',
   conflict = 'D',
+  unavailable = 'U',
   failed = 'F',
 };
 
@@ -145,11 +219,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.8. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.9. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{8};
+  std::uint8_t minor{9};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };

@@ -31,6 +31,22 @@ enum class LaunchEnvironmentMode : std::uint8_t {
   replace,
 };
 
+enum class PaneExitPolicy : std::uint8_t {
+  close,
+  hold,
+};
+
+enum class ProcessExitKind : std::uint8_t {
+  unknown,
+  exited,
+  signaled,
+};
+
+struct ProcessExit final {
+  ProcessExitKind kind{ProcessExitKind::unknown};
+  std::uint32_t value{0};
+};
+
 struct PaneLaunchCommand final {
   std::vector<std::byte> bytes;
 };
@@ -42,12 +58,24 @@ struct Pane final {
                : std::span<const std::byte>(launch_command_storage->bytes);
   }
 
+  [[nodiscard]] auto commit_process_exit(const ProcessExit outcome) noexcept -> bool {
+    if (exit_policy != PaneExitPolicy::hold || process_exit.has_value()) {
+      return false;
+    }
+    process_exit = outcome;
+    return true;
+  }
+
   PaneId id;
   TabId tab;
   PaneRectangle rectangle{};
   // Pane-owned semantic launch intent. Null means the account login shell. Keeping cold launch
   // payload storage indirect avoids adding a vector to every hot layout Pane.
   std::unique_ptr<PaneLaunchCommand> launch_command_storage;
+  // Core owns exit policy and the committed process outcome. Runtime retains the canonical
+  // terminal for held panes but cannot independently decide semantic pane lifetime.
+  std::optional<ProcessExit> process_exit;
+  PaneExitPolicy exit_policy{PaneExitPolicy::close};
 };
 
 struct PaneSlot final {

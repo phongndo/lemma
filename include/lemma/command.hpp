@@ -35,6 +35,7 @@ enum class CommandKind : std::uint8_t {
   focus_pane,
   close_pane,
   toggle_zoom,
+  set_zoom,
   enter_copy_mode,
   enter_copy_search_forward,
   enter_copy_search_backward,
@@ -111,8 +112,13 @@ struct PaneSwapCommand final {
   PaneId other;
 };
 
-using CommandPayload = std::variant<std::monostate, CommandCoordinate, SessionNameValue,
-                                    TabTitleValue, TabPlacementCommand, PaneSwapCommand>;
+struct PaneZoomCommand final {
+  bool enabled{false};
+};
+
+using CommandPayload =
+    std::variant<std::monostate, CommandCoordinate, SessionNameValue, TabTitleValue,
+                 TabPlacementCommand, PaneSwapCommand, PaneZoomCommand>;
 
 struct Command final {
   CommandKind kind{CommandKind::none};

@@ -35,6 +35,7 @@ namespace {
   case CommandKind::focus_pane:
   case CommandKind::close_pane:
   case CommandKind::toggle_zoom:
+  case CommandKind::set_zoom:
   case CommandKind::enter_copy_mode:
   case CommandKind::enter_copy_search_forward:
   case CommandKind::enter_copy_search_backward:
@@ -96,6 +97,9 @@ namespace {
   if (command.kind == CommandKind::swap_panes) {
     const auto* const swap = std::get_if<PaneSwapCommand>(&command.payload);
     return swap != nullptr && swap->other.is_valid() && swap->other != command.target.pane;
+  }
+  if (command.kind == CommandKind::set_zoom) {
+    return std::holds_alternative<PaneZoomCommand>(command.payload);
   }
   return std::holds_alternative<std::monostate>(command.payload);
 }

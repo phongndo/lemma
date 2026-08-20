@@ -32,7 +32,7 @@ Lemma owns product and mux semantics, including:
 - client and extension lifecycle; and
 - agent and automation semantics.
 
-A `PaneRuntime` owns one concrete `vt::Terminal`. The terminal component owns every Ghostty handle and any adapter storage needed to use it. Core addresses the pane by Lemma ID and expresses policy without receiving a Ghostty value.
+A `PaneRuntime` owns one concrete `vt::Terminal`. The terminal component owns every Ghostty handle and any adapter storage needed to use it. Core addresses the pane by Lemma ID and expresses policy without receiving a Ghostty value. Under explicit hold-on-exit policy, Runtime closes the exited PTY but retains that same canonical terminal for capture and presentation; it does not create a second screen or transfer terminal authority to the procedure frontend.
 
 ## Representation boundary
 

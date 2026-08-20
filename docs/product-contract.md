@@ -36,15 +36,15 @@ A space, workspace, project, worktree, task, or agent run is not inherently a ke
 - Lemma must not call detach continuity “persistence across daemon failure.”
 - Endpoint ownership and permissions prevent another local user from controlling the daemon.
 
-Plain `lemma` creates a fresh numerically named session and attaches. `new` does the same with an optional explicit name, while `start` creates detached and `attach` enters an existing session. Explicit creation is strict and fails on a duplicate name. When an attach target is omitted, Lemma selects the most recently active detached session.
+Plain `lemma` creates a fresh numerically named session and attaches. Session control is top-level: `lemma new` does the same with an optional explicit name, `lemma start` creates detached, `lemma attach` enters an existing session, and `lemma list` (`lemma ls`)/`inspect`/`rename`/`kill` provide the remaining lifecycle controls. Explicit creation is strict and fails on a duplicate name. When an attach target is omitted, Lemma selects the most recently active detached session. Tab and pane actions live under the singular `tab` and `pane` namespaces; a redundant `session` namespace is not part of the public CLI.
 
 ## Launch context
 
-Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly. `new` and `start` may launch an exact bounded argv after `--`; no command launches the account login shell. The argv is executed directly without shell-string interpretation.
+Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly. `lemma new` and `lemma start` may launch an exact bounded argv after `--`; no command launches the account login shell. The argv is executed directly without shell-string interpretation.
 
 A new tab or split should use a documented deterministic cwd rule. Safely observed focused-pane cwd may be preferred; the session creation directory is the fallback. Missing or inaccessible directories produce an observable fallback rather than undefined process behavior.
 
-The account login shell is the default process. Arbitrary commands use the same typed launch contract with explicit cwd, captured environment, bounded argv, pane identity, and observable process-lifetime failure rather than ad hoc shell strings.
+The account login shell is the default process. Arbitrary commands use the same typed launch contract with explicit cwd, captured environment, bounded argv, pane identity, and observable process-lifetime failure rather than ad hoc shell strings. The default exit policy closes the pane. An explicit `--hold` policy instead keeps the exited semantic pane, canonical terminal, and typed exit code or signal until the pane is killed; a held pane accepts no application input and keeps its session alive.
 
 ## Human and machine semantics
 
@@ -55,7 +55,8 @@ Keyboard, mouse, CLI, Lua, and agents converge on typed commands, stable targets
 - Equivalent keyboard and mouse actions dispatch the same semantic command.
 - Application input is distinct from mux commands and is encoded from canonical terminal modes.
 - Paste is a bounded opaque input event and cannot become prefix commands.
-- Human-readable CLI output remains the default; machine surfaces use explicit typed/machine-readable contracts.
+- Human-readable one-shot CLI output remains the default; machine surfaces use explicit typed/machine-readable contracts.
+- A bounded procedure is an ordered, non-atomic envelope over ordinary actions. Its complete schema and backward-only typed references are validated before side effects. It reports structured queries and one typed result per executed action, can require an exact process exit code or signal, and has explicit stop/continue runtime-failure behavior.
 - Every supported human mutation has an automation equivalent or a documented exclusion.
 
 The default key vocabulary follows familiar tmux conventions, including `C-b` as prefix, while configuration may replace bindings without creating another mutation path. Prefixes and transient interaction contexts are compiled input policy rather than mux state: direct chords, one-shot prefix maps, and persistent contexts dispatch the same typed commands.

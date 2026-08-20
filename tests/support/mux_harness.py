@@ -106,7 +106,12 @@ class Client:
         self.columns = columns
         self.rows = rows
         self.process = PtyProcess(
-            [str(server.cli_path), str(server.socket_path), "attach", session],
+            [
+                str(server.cli_path),
+                str(server.socket_path),
+                "attach",
+                session,
+            ],
             server.environment,
             terminal_restore_sequence=LEMMA_OUTER_TERMINAL_RESTORE,
         )
@@ -298,7 +303,7 @@ class LemmaServer:
         for client in self.clients:
             if client.session == name and client.running:
                 client.drain(0.002)
-        result = self.command("list", name)
+        result = self.command("inspect", name)
         if result.status != 0:
             return None
         match = _LISTING.match(result.output)
