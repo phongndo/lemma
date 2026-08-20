@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace lemma::core {
 
@@ -30,10 +31,23 @@ enum class LaunchEnvironmentMode : std::uint8_t {
   replace,
 };
 
+struct PaneLaunchCommand final {
+  std::vector<std::byte> bytes;
+};
+
 struct Pane final {
+  [[nodiscard]] auto launch_command() const noexcept -> std::span<const std::byte> {
+    return launch_command_storage == nullptr
+               ? std::span<const std::byte>{}
+               : std::span<const std::byte>(launch_command_storage->bytes);
+  }
+
   PaneId id;
   TabId tab;
   PaneRectangle rectangle{};
+  // Pane-owned semantic launch intent. Null means the account login shell. Keeping cold launch
+  // payload storage indirect avoids adding a vector to every hot layout Pane.
+  std::unique_ptr<PaneLaunchCommand> launch_command_storage;
 };
 
 struct PaneSlot final {
@@ -248,6 +262,8 @@ struct Session {
   std::array<std::byte, limits::environment_bytes_max> environment{};
   std::size_t environment_size{0};
   LaunchEnvironmentMode environment_mode{LaunchEnvironmentMode::inherit};
+  // Core-owned ordering used only to resolve an omitted CLI attach target.
+  std::uint64_t activity_order{0};
   std::array<PaneSlot, panes_per_session_max> panes{};
   std::array<TabSlot, tabs_per_session_max> tabs{};
   TabOrder tab_order;

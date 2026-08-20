@@ -10,10 +10,14 @@
 #include <cstddef>
 #include <cstdio>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
+
+#include <unistd.h>
 
 namespace lemma::app {
 namespace {
@@ -101,27 +105,25 @@ template <typename Integer>
 }
 
 [[nodiscard]] auto print_usage(std::FILE* const stream) noexcept -> int {
-  return write_fragment(
-             stream,
-             "Usage: lemma [command [arguments...]]\n\nCommands:\n  new [name]      start and "
-             "attach\n  start [name]    start detached\n  attach [name]   attach\n  list "
-             "[name]     list all or one\n  tabs [name]     list tabs\n  session rename OLD NEW\n  "
-             "                rename a session\n  tab rename SESSION NUMBER [TITLE]\n              "
-             "    set or clear a tab title override\n  kill [name]     stop "
-             "one session\n  kill-all        stop every session\n  shutdown        show "
-             "destructive "
-             "shutdown warning\n  shutdown --confirm\n                  stop the daemon and every "
-             "session\n"
-             "  help            show this help\n  version         show build and "
-             "protocol version\n  demo            VT demo\n\nWithout a command, Lemma creates or "
-             "enters `default`. C-b % and C-b \" split panes; C-b h/j/k/l focuses panes; C-b "
-             "H/J/K/L swaps panes; C-b Ctrl-h/j/k/l or Alt-h/j/k/l, or dragging a separator "
-             "resizes; C-b m enters transient resize context (h/j/k/l, q to exit); C-b c creates "
-             "a tab; C-b n/p changes tabs; C-b R renames the session; C-b r renames the tab; C-b "
-             "P/N reorders tabs; C-b d "
-             "detaches.\n")
-             ? 0
-             : 1;
+  constexpr std::string_view usage =
+      "Usage: lemma [command [arguments...]]\n\n"
+      "Commands:\n"
+      "  new [NAME] [-c DIR] [-- COMMAND...]\n"
+      "                         create and attach\n"
+      "  start [NAME] [-c DIR] [-- COMMAND...]\n"
+      "                         create detached\n"
+      "  attach [NAME]          attach to an existing session\n"
+      "  list                   list sessions\n"
+      "  session rename OLD NEW rename a session\n"
+      "  session kill NAME      stop a session\n"
+      "  tab list SESSION       list tabs\n"
+      "  tab rename SESSION TAB [TITLE]\n"
+      "                         set or clear a tab title override\n"
+      "  show skill             print the Lemma agent skill\n"
+      "  help                   show this help\n"
+      "  version                show build and protocol version\n\n"
+      "Without a command, Lemma creates a fresh numbered session and attaches.\n";
+  return write_fragment(stream, usage) ? 0 : 1;
 }
 
 [[nodiscard]] auto print_version() noexcept -> int {
@@ -133,102 +135,223 @@ template <typename Integer>
              : 1;
 }
 
-// CLI spellings deliberately converge on the small set of daemon/client operations.
+[[nodiscard]] auto print_skill() noexcept -> int {
+  constexpr std::string_view skill = R"SKILL(---
+name: lemma
+description: Operate Lemma terminal-multiplexer sessions. Use when creating, attaching, listing, renaming, or stopping Lemma sessions and tabs.
+---
+
+# Lemma
+
+Use explicit Lemma CLI commands; do not emulate mux commands by sending prefix keys.
+
+```sh
+lemma new [NAME] [-c DIR] [-- COMMAND...]
+lemma start [NAME] [-c DIR] [-- COMMAND...]
+lemma attach [NAME]
+lemma list
+lemma session rename OLD NEW
+lemma session kill NAME
+lemma tab list SESSION
+lemma tab rename SESSION TAB [TITLE]
+```
+
+`new` creates and attaches. `start` creates detached. Omit `NAME` to receive a numeric session
+name. Creation is strict and fails when an explicit name already exists. Arguments after `--` are
+executed directly without a shell. Omitting `TITLE` clears a tab title override.
+)SKILL";
+  return write_fragment(stdout, skill) ? 0 : 1;
+}
+
+struct CreationArguments final {
+  std::optional<std::string_view> name;
+  std::string_view working_directory;
+  std::vector<std::string_view> command;
+};
+
+[[nodiscard]] auto invalid_arguments(const std::string_view command) noexcept -> int {
+  static_cast<void>(write_fragment(stderr, "invalid lemma "));
+  static_cast<void>(write_fragment(stderr, command));
+  static_cast<void>(write_fragment(stderr, " arguments\n"));
+  static_cast<void>(print_usage(stderr));
+  return 2;
+}
+
+// The branches are the complete bounded grammar for optional name, cwd, and argv.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto dispatch(const daemon::RuntimeEndpoint& endpoint, const std::string_view command,
-                            const std::string_view session, const bool named) -> int {
-  if ((command == "help" || command == "--help" || command == "-h") && !named) {
+[[nodiscard]] auto parse_creation(const std::span<char*> arguments)
+    -> std::optional<CreationArguments> {
+  CreationArguments parsed;
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    const std::string_view argument(arguments.subspan(index, 1).front());
+    if (argument == "--") {
+      if (index + 1U == arguments.size()) {
+        return std::nullopt;
+      }
+      parsed.command.reserve(arguments.size() - index - 1U);
+      for (char* const value : arguments.subspan(index + 1U)) {
+        parsed.command.emplace_back(value);
+      }
+      return parsed;
+    }
+    if (argument == "-c" || argument == "--cwd") {
+      if (!parsed.working_directory.empty() || index + 1U == arguments.size()) {
+        return std::nullopt;
+      }
+      ++index;
+      parsed.working_directory = arguments.subspan(index, 1).front();
+      if (parsed.working_directory.empty()) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    if (argument.starts_with('-') || parsed.name.has_value()) {
+      return std::nullopt;
+    }
+    parsed.name = argument;
+  }
+  return parsed;
+}
+
+[[nodiscard]] auto run_creation(const daemon::RuntimeEndpoint& endpoint,
+                                const std::span<char*> arguments, const bool attach_after_create)
+    -> int {
+  const auto parsed = parse_creation(arguments);
+  if (!parsed.has_value()) {
+    return invalid_arguments(attach_after_create ? "new" : "start");
+  }
+  if (attach_after_create && (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0)) {
+    static_cast<void>(write_fragment(stderr, "lemma new requires a terminal\n"));
+    return 1;
+  }
+  const daemon::LaunchOptions options{.working_directory = parsed->working_directory,
+                                      .command = parsed->command};
+  if (!attach_after_create) {
+    return daemon::start(endpoint, parsed->name, options);
+  }
+  const auto created = daemon::create(endpoint, parsed->name, options);
+  return created.has_value() ? client::attach(endpoint, *created) : 1;
+}
+
+[[nodiscard]] constexpr auto help_flag(const std::string_view value) noexcept -> bool {
+  return value == "-h" || value == "--help";
+}
+
+} // namespace
+
+// Top-level branches are the complete CLI command grammar.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run(const daemon::RuntimeEndpoint& endpoint, const int argument_count,
+                       char** argument_values) -> int {
+  const std::span arguments(argument_values, static_cast<std::size_t>(argument_count));
+  if (arguments.size() == 1) {
+    return run_creation(endpoint, {}, true);
+  }
+  const std::string_view command(arguments.subspan(1, 1).front());
+  if (command == "help" || command == "--help" || command == "-h") {
+    return arguments.size() == 2 ? print_usage(stdout) : invalid_arguments("help");
+  }
+  if (command == "version" || command == "--version" || command == "-V") {
+    return arguments.size() == 2 ? print_version() : invalid_arguments("version");
+  }
+  if (command == "new" || command == "start") {
+    if (arguments.size() == 3 && help_flag(arguments.subspan(2, 1).front())) {
+      return print_usage(stdout);
+    }
+    return run_creation(endpoint, arguments.subspan(2), command == "new");
+  }
+  if (help_flag(arguments.back())) {
     return print_usage(stdout);
   }
-  if ((command == "version" || command == "--version" || command == "-V") && !named) {
-    return print_version();
-  }
-  if (command == "demo" && !named) {
-    return run_demo();
-  }
-  if (command == "new") {
-    return daemon::ensure(endpoint, session) == 0 ? client::attach(endpoint, session) : 1;
-  }
-  if (command == "start") {
-    return daemon::start(endpoint, session);
-  }
   if (command == "attach") {
+    if (arguments.size() == 3 && help_flag(arguments.subspan(2, 1).front())) {
+      return print_usage(stdout);
+    }
+    if (arguments.size() > 3) {
+      return invalid_arguments("attach");
+    }
+    const std::string_view session = arguments.size() == 3
+                                         ? std::string_view(arguments.subspan(2, 1).front())
+                                         : std::string_view{};
     return client::attach(endpoint, session);
   }
-  if (command == "list" || command == "ls" || command == "lookup") {
-    return named ? daemon::list(endpoint, session) : daemon::list(endpoint);
+  if (command == "list" || command == "ls") {
+    if (arguments.size() == 2) {
+      return daemon::list(endpoint);
+    }
+    // Retained as a narrow compatibility spelling for focused diagnostics.
+    return arguments.size() == 3 ? daemon::list(endpoint, arguments.subspan(2, 1).front())
+                                 : invalid_arguments("list");
   }
-  if (command == "tabs") {
-    return daemon::list_tabs(endpoint, session);
+  if (command == "session") {
+    if (arguments.size() == 3 && help_flag(arguments.subspan(2, 1).front())) {
+      return print_usage(stdout);
+    }
+    if (arguments.size() == 5 && std::string_view(arguments.subspan(2, 1).front()) == "rename") {
+      return daemon::rename_session(endpoint, arguments.subspan(3, 1).front(),
+                                    arguments.subspan(4, 1).front());
+    }
+    if (arguments.size() == 4 && std::string_view(arguments.subspan(2, 1).front()) == "kill") {
+      return daemon::kill(endpoint, arguments.subspan(3, 1).front());
+    }
+    return invalid_arguments("session");
   }
-  if (command == "kill") {
-    return daemon::kill(endpoint, session);
+  if (command == "tab") {
+    if (arguments.size() == 3 && help_flag(arguments.subspan(2, 1).front())) {
+      return print_usage(stdout);
+    }
+    const std::string_view operation = arguments.size() > 2
+                                           ? std::string_view(arguments.subspan(2, 1).front())
+                                           : std::string_view{};
+    if (operation == "list" && arguments.size() == 4) {
+      return daemon::list_tabs(endpoint, arguments.subspan(3, 1).front());
+    }
+    if (operation == "rename" && (arguments.size() == 5 || arguments.size() == 6)) {
+      const std::string_view encoded_position(arguments.subspan(4, 1).front());
+      std::size_t position = 0;
+      const auto parsed =
+          std::from_chars(encoded_position.begin(), encoded_position.end(), position);
+      if (parsed.ec != std::errc{} || parsed.ptr != encoded_position.end()) {
+        static_cast<void>(write_fragment(stderr, "invalid tab position\n"));
+        return 2;
+      }
+      const std::string_view title = arguments.size() == 6
+                                         ? std::string_view(arguments.subspan(5, 1).front())
+                                         : std::string_view{};
+      return daemon::rename_tab(endpoint, arguments.subspan(3, 1).front(), position, title);
+    }
+    return invalid_arguments("tab");
   }
-  if (command == "kill-all" && !named) {
+  if (command == "show" && arguments.size() == 3 &&
+      std::string_view(arguments.subspan(2, 1).front()) == "skill") {
+    return print_skill();
+  }
+
+  // Transitional operational spellings remain accepted but are intentionally absent from help.
+  if (command == "tabs" && arguments.size() == 3) {
+    return daemon::list_tabs(endpoint, arguments.subspan(2, 1).front());
+  }
+  if (command == "kill" && arguments.size() == 3) {
+    return daemon::kill(endpoint, arguments.subspan(2, 1).front());
+  }
+  if (command == "kill-all" && arguments.size() == 2) {
     return daemon::kill_all(endpoint);
   }
-  if (command == "shutdown") {
+  if (command == "shutdown" && arguments.size() == 3 &&
+      std::string_view(arguments.subspan(2, 1).front()) == "--confirm") {
     constexpr std::string_view warning =
         "WARNING: daemon shutdown ends every session and its pane processes.\n";
-    if (!named) {
-      static_cast<void>(write_fragment(stderr, warning));
-      static_cast<void>(write_fragment(stderr, "Re-run `lemma shutdown --confirm` to continue.\n"));
-      return 1;
-    }
-    if (session == "--confirm") {
-      if (!write_fragment(stderr, warning)) {
-        return 1;
-      }
-      return daemon::shutdown(endpoint);
-    }
+    return write_fragment(stderr, warning) ? daemon::shutdown(endpoint) : 1;
   }
+  if (command == "demo" && arguments.size() == 2) {
+    return run_demo();
+  }
+
   static_cast<void>(write_fragment(stderr, "invalid lemma command or arguments: "));
   static_cast<void>(write_fragment(stderr, command));
   static_cast<void>(write_fragment(stderr, "\n"));
   static_cast<void>(print_usage(stderr));
   return 2;
-}
-
-} // namespace
-
-[[nodiscard]] auto run(const daemon::RuntimeEndpoint& endpoint, const int argument_count,
-                       char** argument_values) -> int {
-  const std::span arguments(argument_values, static_cast<std::size_t>(argument_count));
-  if (arguments.size() == 1) {
-    return dispatch(endpoint, "new", daemon::default_session, false);
-  }
-  const std::string_view command(arguments.subspan(1, 1).front());
-  if (command == "session" && arguments.size() == 5 &&
-      std::string_view(arguments.subspan(2, 1).front()) == "rename") {
-    return daemon::rename_session(endpoint, arguments.subspan(3, 1).front(),
-                                  arguments.subspan(4, 1).front());
-  }
-  if (command == "tab" && (arguments.size() == 5 || arguments.size() == 6) &&
-      std::string_view(arguments.subspan(2, 1).front()) == "rename") {
-    const std::string_view encoded_position(arguments.subspan(4, 1).front());
-    std::size_t position = 0;
-    const auto parsed = std::from_chars(encoded_position.begin(), encoded_position.end(), position);
-    if (parsed.ec != std::errc{} || parsed.ptr != encoded_position.end()) {
-      static_cast<void>(write_fragment(stderr, "invalid tab position\n"));
-      return 2;
-    }
-    const std::string_view title = arguments.size() == 6
-                                       ? std::string_view(arguments.subspan(5, 1).front())
-                                       : std::string_view{};
-    return daemon::rename_tab(endpoint, arguments.subspan(3, 1).front(), position, title);
-  }
-  if (arguments.size() != 2 && arguments.size() != 3) {
-    static_cast<void>(write_fragment(stderr, "invalid number of arguments\n"));
-    static_cast<void>(print_usage(stderr));
-    return 2;
-  }
-
-  std::string_view session = daemon::default_session;
-  const bool named = arguments.size() == 3;
-  if (named) {
-    session = arguments.subspan(2, 1).front();
-  }
-  return dispatch(endpoint, command, session, named);
 }
 
 } // namespace lemma::app

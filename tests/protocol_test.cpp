@@ -29,7 +29,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x07}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x08}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -60,6 +60,19 @@ TEST(ProtocolTest, RoundTripsBoundedHostThemeInClientHello) {
   ASSERT_NE((**decoded).host_theme, nullptr);
   EXPECT_EQ(*(**decoded).host_theme, theme);
   EXPECT_EQ((**decoded).session, "themed");
+}
+
+TEST(ProtocolTest, RoundTripsOmittedAttachTarget) {
+  const auto encoded = encode_client_hello({}, {.columns = 80, .rows = 24});
+  ClientDecoder decoder;
+  ASSERT_TRUE(decoder.prepare().has_value());
+  std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
+  ASSERT_TRUE(decoder.commit(encoded.bytes().size()).has_value());
+
+  const auto decoded = decoder.next();
+
+  ASSERT_TRUE(decoded.has_value() && decoded->has_value());
+  EXPECT_TRUE((**decoded).session.empty());
 }
 
 TEST(ProtocolTest, RoundTripsTypedPasteFocusAndMouseInput) {
@@ -167,7 +180,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x07}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x08}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };

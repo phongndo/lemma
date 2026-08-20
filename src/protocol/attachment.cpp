@@ -55,7 +55,7 @@ void encode_u32(const std::uint32_t value, const std::span<std::byte, 4> output)
 }
 
 [[nodiscard]] auto valid_session_name(const std::string_view session) noexcept -> bool {
-  return !session.empty() && session.size() <= session_name_bytes_max &&
+  return !session.empty() && session.front() != '-' && session.size() <= session_name_bytes_max &&
          std::ranges::all_of(session, [](const char character) {
            return (character >= 'a' && character <= 'z') ||
                   (character >= 'A' && character <= 'Z') ||
@@ -393,7 +393,6 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
                                        const std::uint32_t sequence, const ProtocolVersion version,
                                        const std::optional<HostTerminalTheme>& host_theme) noexcept
     -> SmallMessage {
-  LEMMA_ASSERT(!session.empty());
   LEMMA_ASSERT(session.size() <= session_name_bytes_max);
   LEMMA_ASSERT(!host_theme.has_value() || !host_theme->empty());
   SmallMessage message;
@@ -663,7 +662,7 @@ void ClientDecoder::release() noexcept {
     if (envelope.kind != MessageKind::hello) {
       return std::unexpected(DecodeError::invalid_kind);
     }
-    if (envelope.payload_bytes < 7U || envelope.payload_bytes > client_hello_payload_bytes_max) {
+    if (envelope.payload_bytes < 6U || envelope.payload_bytes > client_hello_payload_bytes_max) {
       return std::unexpected(envelope.payload_bytes > client_hello_payload_bytes_max
                                  ? DecodeError::oversized
                                  : DecodeError::invalid_length);
@@ -758,8 +757,7 @@ void ClientDecoder::release() noexcept {
   if (envelope.kind == MessageKind::hello) {
     const auto name_size = std::to_integer<std::size_t>(payload.front());
     const auto hello_flags = std::to_integer<std::uint8_t>(payload.subspan<5, 1>().front());
-    if (name_size == 0 || name_size > session_name_bytes_max ||
-        (hello_flags & ~hello_host_theme_flag) != 0) {
+    if (name_size > session_name_bytes_max || (hello_flags & ~hello_host_theme_flag) != 0) {
       return std::unexpected(DecodeError::invalid_length);
     }
     const bool has_host_theme = (hello_flags & hello_host_theme_flag) != 0;
@@ -785,7 +783,7 @@ void ClientDecoder::release() noexcept {
     const std::string_view session(
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         reinterpret_cast<const char*>(payload.subspan(6U + theme_bytes).data()), name_size);
-    if (!valid_session_name(session)) {
+    if (!session.empty() && !valid_session_name(session)) {
       return std::unexpected(DecodeError::invalid_session);
     }
     return ClientMessage{

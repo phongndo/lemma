@@ -28,7 +28,7 @@ A space, workspace, project, worktree, task, or agent run is not inherently a ke
 
 ## Daemon and lifecycle behavior
 
-- One daemon per user is authoritative for sessions, child processes, PTYs, and terminal state.
+- One daemon per user is authoritative for sessions, child processes, PTYs, and terminal state. Creation starts it automatically; it exits after its final session ends.
 - Detaching or losing a client does not end pane processes.
 - Reattachment reconstructs visible state from daemon authority.
 - Explicitly killing a pane/session or shutting down the daemon is destructive and distinct from detach.
@@ -36,15 +36,15 @@ A space, workspace, project, worktree, task, or agent run is not inherently a ke
 - Lemma must not call detach continuity “persistence across daemon failure.”
 - Endpoint ownership and permissions prevent another local user from controlling the daemon.
 
-Plain `lemma` means “enter the literal `default` session”: create and attach if missing, attach if detached, and fail visibly if already controlled under a single-controller policy. Explicit create/start/attach commands retain distinct behavior.
+Plain `lemma` creates a fresh numerically named session and attaches. `new` does the same with an optional explicit name, while `start` creates detached and `attach` enters an existing session. Explicit creation is strict and fails on a duplicate name. When an attach target is omitted, Lemma selects the most recently active detached session.
 
 ## Launch context
 
-Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly.
+Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly. `new` and `start` may launch an exact bounded argv after `--`; no command launches the account login shell. The argv is executed directly without shell-string interpretation.
 
 A new tab or split should use a documented deterministic cwd rule. Safely observed focused-pane cwd may be preferred; the session creation directory is the fallback. Missing or inaccessible directories produce an observable fallback rather than undefined process behavior.
 
-The account login shell is the default process. Arbitrary commands require a typed launch contract that includes cwd, environment, identity, exit reason, and error behavior rather than ad hoc shell strings.
+The account login shell is the default process. Arbitrary commands use the same typed launch contract with explicit cwd, captured environment, bounded argv, pane identity, and observable process-lifetime failure rather than ad hoc shell strings.
 
 ## Human and machine semantics
 

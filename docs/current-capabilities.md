@@ -32,9 +32,10 @@ The target ownership model is in [`architecture.md`](architecture.md).
 
 | Capability | Status | Current behavior |
 | --- | --- | --- |
-| Default invocation | Working | Plain `lemma` creates or enters session `default`; an already attached session fails visibly. |
-| Named sessions | Working | `new`, `start`, `attach`, `list`, `tabs`, hierarchical `session rename`/`tab rename`, `kill`, and `kill-all` are implemented. Attachment-owned inline status editors rename the current session (`C-b R`) or tab (`C-b r`) without leaving the mux. |
-| Explicit shutdown | Working | `shutdown` warns; `shutdown --confirm` stops the daemon and owned sessions. |
+| Default invocation | Working | Plain `lemma` strictly creates a fresh numerically named session and attaches. Unnamed creation allocates the lowest available nonnegative numeric name atomically in the daemon. |
+| Session lifecycle | Working | `new` creates and attaches, `start` creates detached, omitted `attach` targets the most recently active detached session, and explicit duplicate names fail. Creation accepts `-c`/`--cwd` and bounded exact argv after `--`; the login shell remains the default. `list`, hierarchical `session rename`/`session kill`, `tab list`/`tab rename`, and transitional legacy control spellings are implemented. Attachment-owned inline status editors rename the current session (`C-b R`) or tab (`C-b r`) without leaving the mux. |
+| Daemon lifecycle | Working | Session creation starts the per-user daemon automatically and the daemon exits after its final session ends. The transitional `shutdown --confirm` control remains available for development and destructive replacement. |
+| Agent skill | Working | `show skill` prints a version-matched single-file Agent Skills guide without contacting the daemon. |
 | Help/version/errors | Working | Dedicated output and nonzero invalid-command behavior exist. |
 | Per-user daemon | Working | Owner-only Unix socket, lock, stale-socket checks, daemonization, and cleanup. |
 | Detach continuity | Working | Client detach/EOF does not end pane processes while the daemon remains alive. |
@@ -43,7 +44,7 @@ The target ownership model is in [`architecture.md`](architecture.md).
 | Machine-readable semantic API | Absent | There is no public JSON command surface or persistent agent automation socket. |
 | Installable release artifacts | Working | The Nix flake exposes the default release package as `lemma` and a separate debug package as `delemma`. |
 
-Session names are unique 1–32 ASCII letters, digits, underscores, or hyphens; the inline editor silently ignores unsupported characters and excess input. Tab title overrides are empty (derived process/terminal title) or 1–64 printable ASCII bytes. The daemon admits up to 64 sessions.
+Session names are unique 1–32 ASCII letters, digits, underscores, or hyphens and may not begin with a hyphen; the inline editor silently ignores unsupported characters and excess input. Tab title overrides are empty (derived process/terminal title) or 1–64 printable ASCII bytes. The daemon admits up to 64 sessions.
 
 ## Tabs, panes, and layout
 
@@ -94,7 +95,7 @@ Copy/search work is daemon-owned for the one attachment. PTY parsing continues w
 | Graphics and glyph protocol | Disabled | Kitty storage/media/APC and Glyph Protocol advertisement are disabled until bounded canonical presentation support exists. |
 | Terminal identity/terminfo | Partial | Child queries receive a consistent Lemma identity, xterm-compatible DA, geometry, color scheme, and `xterm-256color` terminfo name; Lemma still ships no dedicated terminfo entry. |
 
-The current private attached-client protocol is version 2.7. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors, optional OSC 17/19 highlight colors, and 16-color ANSI palette during attach. Selected cells are painted with those highlight colors, or a bg-toward-fg mix that keeps cell foregrounds, instead of reverse video.
+The current private attached-client protocol is version 2.8. It transports daemon-rendered ANSI, bounded typed key/paste/focus/mouse and pane-resize input, and a bounded client observation of the host default colors, optional OSC 17/19 highlight colors, and 16-color ANSI palette during attach. Selected cells are painted with those highlight colors, or a bg-toward-fg mix that keeps cell foregrounds, instead of reverse video.
 
 ## Configuration and extensions
 

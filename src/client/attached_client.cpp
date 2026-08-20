@@ -1204,7 +1204,8 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
 
 [[nodiscard]] auto attach(const daemon::RuntimeEndpoint& endpoint, const std::string_view session)
     -> int {
-  return daemon::validate_session(session) ? attach_client(endpoint, session) : 1;
+  return session.empty() || daemon::validate_session(session) ? attach_client(endpoint, session)
+                                                              : 1;
 }
 
 } // namespace lemma::client

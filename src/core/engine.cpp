@@ -46,6 +46,7 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <poll.h>
 #include <sys/socket.h>
@@ -57,6 +58,8 @@ namespace {
 constexpr auto command_create = protocol::wire_byte(protocol::ControlCommand::create);
 constexpr auto command_create_with_context =
     protocol::wire_byte(protocol::ControlCommand::create_with_context);
+constexpr auto command_create_auto_with_context =
+    protocol::wire_byte(protocol::ControlCommand::create_auto_with_context);
 constexpr auto command_list = protocol::wire_byte(protocol::ControlCommand::list);
 constexpr auto command_list_session = protocol::wire_byte(protocol::ControlCommand::list_session);
 constexpr auto command_list_tabs = protocol::wire_byte(protocol::ControlCommand::list_tabs);
@@ -326,8 +329,30 @@ struct SessionName final {
   return true;
 }
 
+[[nodiscard]] auto valid_launch_command(const std::span<const std::byte> command) noexcept -> bool {
+  if (command.empty() || command.size() > protocol::command_bytes_max) {
+    return command.empty();
+  }
+  std::size_t offset = 0;
+  std::size_t arguments = 0;
+  while (offset < command.size()) {
+    const auto remaining = command.subspan(offset);
+    const auto terminator = std::ranges::find(remaining, std::byte{0});
+    if (terminator == remaining.end() || (arguments == 0 && terminator == remaining.begin())) {
+      return false;
+    }
+    ++arguments;
+    if (arguments > protocol::command_arguments_max) {
+      return false;
+    }
+    offset += static_cast<std::size_t>(std::distance(remaining.begin(), terminator)) + 1U;
+  }
+  return true;
+}
+
 [[nodiscard]] constexpr auto valid_session_name(const std::string_view session) noexcept -> bool {
-  if (session.empty() || session.size() > protocol::session_name_bytes_max) {
+  if (session.empty() || session.front() == '-' ||
+      session.size() > protocol::session_name_bytes_max) {
     return false;
   }
   return std::ranges::all_of(session, [](const char character) {
@@ -819,11 +844,10 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   return true;
 }
 
-[[nodiscard]] auto create_pane_runtime(const std::uint16_t columns, const std::uint16_t rows,
-                                       const std::string_view working_directory,
-                                       const std::span<const std::byte> environment,
-                                       const LaunchEnvironmentMode environment_mode,
-                                       const vt::TerminalTheme& theme) noexcept
+[[nodiscard]] auto create_pane_runtime(
+    const std::uint16_t columns, const std::uint16_t rows, const std::string_view working_directory,
+    const std::span<const std::byte> environment, const LaunchEnvironmentMode environment_mode,
+    const vt::TerminalTheme& theme, const std::span<const std::byte> launch_command = {}) noexcept
     -> std::unique_ptr<PaneRuntime> {
   vt::TerminalOptions options;
   options.size = {.columns = columns, .rows = rows};
@@ -839,8 +863,9 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
-  runtime->child = platform::spawn_login_shell(runtime->pty, working_directory, environment,
-                                               platform_environment_mode(environment_mode));
+  runtime->child =
+      platform::spawn_process(runtime->pty, working_directory, environment,
+                              platform_environment_mode(environment_mode), launch_command);
   if (runtime->child <= 0 || !set_nonblocking(runtime->pty) ||
       !platform::resize_pty(runtime->pty, columns, rows, options.size.cell_width_px,
                             options.size.cell_height_px)) {
@@ -997,7 +1022,8 @@ refresh_process_name_if_due(PaneRuntime& runtime,
 
 // Allocation stages all fallible owners before publishing the Session pane/tab/order relation.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto allocate_tab(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept
+[[nodiscard]] auto allocate_tab(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                const std::span<const std::byte> launch_command = {}) noexcept
     -> Tab* {
   if (!session.id.is_valid() || tab_count(session) >= session.tabs.size() ||
       pane_count(session) >= panes_per_session_max || runtimes.size() >= limits::panes_hard_max ||
@@ -1020,10 +1046,22 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     }
     const auto tab_generation = next_generation(tab_slot.generation);
     const auto tab_id = TabId::from_parts(static_cast<std::uint32_t>(index), tab_generation);
+    std::unique_ptr<PaneLaunchCommand> retained_launch_command;
+    if (!launch_command.empty()) {
+      try {
+        retained_launch_command = std::make_unique<PaneLaunchCommand>();
+        retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
+      } catch (...) {
+        return nullptr;
+      }
+    }
+    const auto retained_launch = retained_launch_command == nullptr
+                                     ? std::span<const std::byte>{}
+                                     : std::span<const std::byte>(retained_launch_command->bytes);
     const PaneAddress address{.session = session.id, .pane = pane_id};
     auto runtime = create_pane_runtime(
         session.attachment.columns, pane_rows(session.attachment.rows), session.cwd(),
-        session.launch_environment(), session.environment_mode, session.theme);
+        session.launch_environment(), session.environment_mode, session.theme, retained_launch);
     if (runtime == nullptr) {
       return nullptr;
     }
@@ -1035,6 +1073,7 @@ refresh_process_name_if_due(PaneRuntime& runtime,
           .tab = tab_id,
           .rectangle = {.columns = session.attachment.columns,
                         .rows = pane_rows(session.attachment.rows)},
+          .launch_command_storage = std::move(retained_launch_command),
       });
       created = std::make_unique<Tab>(tab_id, pane_id);
     } catch (const std::bad_alloc&) {
@@ -2639,8 +2678,10 @@ void create_tab(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
   }
   std::unique_ptr<Pane> created;
   try {
-    created =
-        std::make_unique<Pane>(Pane{.id = pane_id, .tab = tab.id, .rectangle = *new_rectangle});
+    created = std::make_unique<Pane>(Pane{.id = pane_id,
+                                          .tab = tab.id,
+                                          .rectangle = *new_rectangle,
+                                          .launch_command_storage = nullptr});
   } catch (const std::bad_alloc&) {
     return false;
   }
@@ -6029,6 +6070,39 @@ private:
   return nullptr;
 }
 
+[[nodiscard]] auto allocate_numeric_session_name(Sessions& sessions) noexcept
+    -> std::optional<SessionName> {
+  // At most 64 live sessions exist, so one of the first 65 numeric names must be free even when
+  // every live Session has an explicit numeric name.
+  for (std::size_t candidate = 0; candidate <= Sessions::capacity(); ++candidate) {
+    SessionName name;
+    const auto encoded = std::to_chars(name.bytes.begin(), name.bytes.end(), candidate);
+    if (encoded.ec != std::errc{}) {
+      return std::nullopt;
+    }
+    name.size = static_cast<std::size_t>(std::distance(name.bytes.begin(), encoded.ptr));
+    if (find_session(sessions, name.view()) == nullptr) {
+      return name;
+    }
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] auto most_recent_detached_session(Sessions& sessions) noexcept -> SessionRecord* {
+  SessionRecord* selected = nullptr;
+  for (auto& session : sessions) {
+    if (session == nullptr || !session->active || session->attachment_runtime.client >= 0 ||
+        session->attachment_runtime.pending_attach_slot !=
+            std::numeric_limits<std::uint32_t>::max()) {
+      continue;
+    }
+    if (selected == nullptr || session->activity_order > selected->activity_order) {
+      selected = session.get();
+    }
+  }
+  return selected;
+}
+
 [[nodiscard]] auto session_name_conflict(void* const context, const SessionId renamed,
                                          const std::string_view candidate) noexcept -> bool {
   auto& sessions = *static_cast<Sessions*>(context);
@@ -6088,6 +6162,8 @@ enum class PendingState : std::uint8_t {
   read_working_directory,
   read_environment_size,
   read_environment,
+  read_launch_command_size,
+  read_launch_command,
   flush_response,
 };
 
@@ -6107,7 +6183,10 @@ struct PendingConnection final {
   std::byte command{};
   SessionName session;
   WorkingDirectory working_directory;
+  std::vector<std::byte> environment;
   std::size_t environment_size{0};
+  std::vector<std::byte> launch_command;
+  std::size_t launch_command_size{0};
   std::array<char, protocol::tab_title_bytes_max> mutation_text{};
   std::size_t mutation_text_size{0};
   std::uint8_t mutation_position{0};
@@ -6251,6 +6330,17 @@ void finish_pending_byte(PendingConnection& pending, const std::byte response,
   finish_pending_output(pending, action);
 }
 
+void finish_pending_create(PendingConnection& pending, const std::string_view session) noexcept {
+  pending.output.reset();
+  const auto name_size = static_cast<std::byte>(session.size());
+  const bool appended =
+      pending.output.append(std::span(&response_ready, 1)) &&
+      pending.output.append(std::span(&name_size, 1)) &&
+      pending.output.append(std::as_bytes(std::span(session.data(), session.size())));
+  LEMMA_ASSERT(appended);
+  finish_pending_output(pending);
+}
+
 void fail_pending_output(PendingConnection& pending) noexcept {
   finish_pending_byte(pending, response_failed);
 }
@@ -6363,25 +6453,36 @@ void prepare_rename_command(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_named_command(PendingConnection& pending, Sessions& sessions,
-                           PaneRuntimeStore& runtimes,
-                           const ExtensionRuntime* const extensions) noexcept {
+                           PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
+                           std::uint64_t& activity_order) noexcept {
+  const bool create_command = pending.command == command_create ||
+                              pending.command == command_create_with_context ||
+                              pending.command == command_create_auto_with_context;
+  if (pending.command == command_create_auto_with_context) {
+    const auto name = allocate_numeric_session_name(sessions);
+    if (!name.has_value()) {
+      finish_pending_byte(pending, response_capacity);
+      return;
+    }
+    pending.session = *name;
+  }
   SessionRecord* session = find_session(sessions, pending.session.view());
-  if (pending.command == command_create || pending.command == command_create_with_context) {
+  if (create_command) {
     if (session != nullptr) {
-      finish_pending_byte(pending, response_ready);
+      finish_pending_byte(pending, response_conflict);
       return;
     }
     if (sessions.size() == Sessions::capacity()) {
       finish_pending_byte(pending, response_capacity);
       return;
     }
-    const auto environment_mode = pending.command == command_create_with_context
+    const auto environment_mode = pending.command == command_create_with_context ||
+                                          pending.command == command_create_auto_with_context
                                       ? LaunchEnvironmentMode::replace
                                       : LaunchEnvironmentMode::inherit;
-    auto created =
-        create_session(pending.session.view(), pending.working_directory.view(),
-                       std::span<const std::byte>(pending.field).first(pending.environment_size),
-                       environment_mode);
+    const std::span<const std::byte> environment(pending.environment);
+    auto created = create_session(pending.session.view(), pending.working_directory.view(),
+                                  environment, environment_mode);
     if (created == nullptr) {
       finish_pending_byte(pending, response_failed);
       return;
@@ -6396,14 +6497,22 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     inserted->id = *id;
     inserted->attachment.id = AttachmentId::from_parts(id->slot(), id->generation());
     inserted->attachment.session = *id;
-    if (allocate_tab(*inserted, runtimes) == nullptr) {
+    if (activity_order == std::numeric_limits<std::uint64_t>::max()) {
+      const bool erased = sessions.erase(*id);
+      LEMMA_ASSERT(erased);
+      finish_pending_byte(pending, response_capacity);
+      return;
+    }
+    inserted->activity_order = ++activity_order;
+    const std::span<const std::byte> launch_command(pending.launch_command);
+    if (allocate_tab(*inserted, runtimes, launch_command) == nullptr) {
       const bool erased = sessions.erase(*id);
       LEMMA_ASSERT(erased);
       finish_pending_byte(pending, response_failed);
       return;
     }
     inserted->previous_tab = inserted->active_tab;
-    finish_pending_byte(pending, response_ready);
+    finish_pending_create(pending, inserted->session_name());
     return;
   }
   if (session == nullptr) {
@@ -6442,10 +6551,13 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
 
 void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
                     const std::size_t slot) noexcept {
-  SessionRecord* const session = find_session(sessions, pending.session.view());
+  SessionRecord* const session = pending.session.size == 0
+                                     ? most_recent_detached_session(sessions)
+                                     : find_session(sessions, pending.session.view());
   if (session == nullptr) {
     finish_pending_disconnect(pending, protocol::DisconnectReason::session_missing,
-                              "no lemma session");
+                              pending.session.size == 0 ? "no detached lemma session"
+                                                        : "no lemma session");
     return;
   }
   if (session->attachment_runtime.client >= 0 || session->attachment_runtime.pending_attach_slot !=
@@ -6494,8 +6606,8 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
-                            PaneRuntimeStore& runtimes,
-                            const ExtensionRuntime* const extensions) noexcept {
+                            PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
+                            std::uint64_t& activity_order) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
@@ -6513,6 +6625,8 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
                pending.command == command_shutdown) {
       pending.output.reset();
       prepare_unnamed_command(pending, sessions, runtimes, extensions);
+    } else if (pending.command == command_create_auto_with_context) {
+      begin_pending_field(pending, PendingState::read_working_directory_size, 2);
     } else if (pending.command == command_create ||
                pending.command == command_create_with_context ||
                pending.command == command_list_session || pending.command == command_list_tabs ||
@@ -6549,7 +6663,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       begin_pending_field(pending, PendingState::read_mutation_position, 1);
     } else {
       pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions);
+      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
     }
     break;
   case PendingState::read_mutation_position:
@@ -6589,11 +6703,8 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   case PendingState::read_working_directory_size: {
     const auto size =
         protocol::decode_bounded_size(std::span<const std::byte>(pending.field).first<2>());
-    if (size == protocol::unavailable_working_directory_size) {
-      finish_pending_byte(pending, find_session(sessions, pending.session.view()) != nullptr
-                                       ? response_ready
-                                       : response_failed);
-    } else if (size > protocol::working_directory_bytes_max) {
+    if (size == protocol::unavailable_working_directory_size ||
+        size > protocol::working_directory_bytes_max) {
       pending.state = PendingState::unused;
     } else {
       begin_pending_field(pending, PendingState::read_working_directory, size);
@@ -6618,9 +6729,9 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     if (size > protocol::environment_bytes_max) {
       pending.state = PendingState::unused;
     } else if (size == 0) {
+      pending.environment.clear();
       pending.environment_size = 0;
-      pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions);
+      begin_pending_field(pending, PendingState::read_launch_command_size, 2);
     } else {
       pending.environment_size = size;
       begin_pending_field(pending, PendingState::read_environment, size);
@@ -6632,10 +6743,51 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
             std::span<const std::byte>(pending.field).first(pending.environment_size))) {
       pending.state = PendingState::unused;
     } else {
-      pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions);
+      try {
+        pending.environment.resize(pending.environment_size);
+      } catch (...) {
+        fail_pending_output(pending);
+        break;
+      }
+      std::ranges::copy(std::span(pending.field).first(pending.environment_size),
+                        pending.environment.begin());
+      begin_pending_field(pending, PendingState::read_launch_command_size, 2);
     }
     break;
+  case PendingState::read_launch_command_size: {
+    const auto size =
+        protocol::decode_bounded_size(std::span<const std::byte>(pending.field).first<2>());
+    if (size > protocol::command_bytes_max) {
+      pending.state = PendingState::unused;
+    } else if (size == 0) {
+      pending.launch_command.clear();
+      pending.launch_command_size = 0;
+      pending.output.reset();
+      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
+    } else {
+      try {
+        pending.launch_command.resize(size);
+      } catch (...) {
+        fail_pending_output(pending);
+        break;
+      }
+      pending.launch_command_size = size;
+      pending.state = PendingState::read_launch_command;
+      pending.field_size = 0;
+      pending.field_target = size;
+    }
+    break;
+  }
+  case PendingState::read_launch_command: {
+    const std::span<const std::byte> command(pending.launch_command);
+    if (!valid_launch_command(command)) {
+      pending.state = PendingState::unused;
+    } else {
+      pending.output.reset();
+      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
+    }
+    break;
+  }
   case PendingState::unused:
   case PendingState::flush_response:
     LEMMA_ASSERT(false);
@@ -6647,7 +6799,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                            const std::size_t slot) noexcept {
+                            std::uint64_t& activity_order, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
@@ -6703,14 +6855,18 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
       return;
     }
 
-    auto available = std::span(pending->field)
-                         .subspan(pending->field_size, pending->field_target - pending->field_size);
+    auto available =
+        pending->state == PendingState::read_launch_command
+            ? std::span(pending->launch_command)
+                  .subspan(pending->field_size, pending->field_target - pending->field_size)
+            : std::span(pending->field)
+                  .subspan(pending->field_size, pending->field_target - pending->field_size);
     const auto received = ::recv(pending->descriptor, available.data(), available.size(), 0);
     if (received > 0) {
       pending->field_size += static_cast<std::size_t>(received);
       record_pending_progress(*pending);
       if (pending->field_size == pending->field_target) {
-        complete_pending_field(*pending, sessions, runtimes, extensions);
+        complete_pending_field(*pending, sessions, runtimes, extensions, activity_order);
       }
       continue;
     }
@@ -6730,21 +6886,22 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                          const std::size_t slot) noexcept {
+                          std::uint64_t& activity_order, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   if (std::chrono::steady_clock::now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, runtimes, extensions, slot);
+  process_pending_fields(connections, sessions, runtimes, extensions, activity_order, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
                                 ParseResult result) noexcept;
 
 void handoff_attached_connection(PendingConnections& connections, const std::size_t slot,
-                                 Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
+                                 Sessions& sessions, PaneRuntimeStore& runtimes,
+                                 std::uint64_t& activity_order) noexcept {
   auto& owner = std::span(connections).subspan(slot, 1).front();
   LEMMA_ASSERT(owner != nullptr);
   auto& pending = *owner;
@@ -6763,6 +6920,9 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   release_attach_reservation(pending, slot, sessions);
   owner.reset();
 
+  if (activity_order < std::numeric_limits<std::uint64_t>::max()) {
+    session->activity_order = ++activity_order;
+  }
   session->connection_generation = next_generation(session->connection_generation);
   session->attachment_runtime.connection_id =
       ConnectionId::from_parts(session->id.slot(), session->connection_generation);
@@ -6805,7 +6965,8 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 
 [[nodiscard]] auto flush_pending_output(PendingConnections& connections, const std::size_t slot,
                                         std::size_t& global_budget, Sessions& sessions,
-                                        PaneRuntimeStore& runtimes) noexcept -> bool {
+                                        PaneRuntimeStore& runtimes,
+                                        std::uint64_t& activity_order) noexcept -> bool {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   const auto action = pending->action;
@@ -6819,7 +6980,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
     return false;
   }
   if (action == PendingAction::attach) {
-    handoff_attached_connection(connections, slot, sessions, runtimes);
+    handoff_attached_connection(connections, slot, sessions, runtimes, activity_order);
   } else {
     close_pending(connections, slot, sessions);
   }
@@ -7527,6 +7688,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
+  std::uint64_t activity_order = 0;
+  bool owned_a_session = false;
 
   while (true) {
     if (stop_requested != nullptr && stop_requested()) {
@@ -7738,7 +7901,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         if (pending->state != PendingState::flush_response &&
             (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, extensions.get(),
-                               owner.auxiliary_slot);
+                               activity_order, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -7820,7 +7983,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0 &&
             flush_pending_output(pending_connections, owner.auxiliary_slot, pending_output_budget,
-                                 sessions, runtimes)) {
+                                 sessions, runtimes, activity_order)) {
           shutdown_after_outputs = true;
           break;
         }
@@ -7848,7 +8011,15 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     expire_pending_connections(pending_connections, sessions);
     expire_capacity_rejections(capacity_rejections);
+    owned_a_session = owned_a_session || sessions.size() > 0;
     reclaim_inactive_sessions(sessions, runtimes);
+    const bool pending_control =
+        std::ranges::any_of(pending_connections, [](const auto& connection) {
+          return connection != nullptr && connection->active();
+        });
+    if (owned_a_session && sessions.size() == 0 && !pending_control) {
+      return 0;
+    }
 
     // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
     // client input, queued writes, or due frame composition.

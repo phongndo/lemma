@@ -30,6 +30,8 @@ inline constexpr std::size_t working_directory_bytes_max = limits::working_direc
 inline constexpr std::size_t unavailable_working_directory_size = 0;
 inline constexpr std::size_t environment_bytes_max = limits::environment_bytes_max;
 inline constexpr std::size_t environment_entries_max = limits::environment_entries_max;
+inline constexpr std::size_t command_bytes_max = limits::command_bytes_hard_max;
+inline constexpr std::size_t command_arguments_max = limits::command_arguments_hard_max;
 inline constexpr std::string_view shutdown_response = "lemma daemon stopped\n";
 
 struct Dimensions final {
@@ -81,6 +83,7 @@ struct HostTerminalTheme final {
 enum class ControlCommand : std::uint8_t {
   create = 'N',
   create_with_context = 'C',
+  create_auto_with_context = 'A',
   list = 'L',
   list_session = 'Q',
   list_tabs = 'W',
@@ -142,11 +145,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.7. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.8. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{7};
+  std::uint8_t minor{8};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };

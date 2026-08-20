@@ -361,6 +361,7 @@ TEST(SessionModelTest, RenameAndTabTitleValuesAreBoundedAndValidated) {
   EXPECT_TRUE(tab.title_override().empty());
 
   EXPECT_TRUE(SessionNameValue::create("valid-name").has_value());
+  EXPECT_FALSE(SessionNameValue::create("-option-like").has_value());
   EXPECT_FALSE(SessionNameValue::create("invalid name").has_value());
   EXPECT_TRUE(TabTitleValue::create("").has_value());
   EXPECT_FALSE(TabTitleValue::create(std::string_view{"bad\n", 4}).has_value());

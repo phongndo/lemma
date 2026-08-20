@@ -15,13 +15,14 @@ enum class EnvironmentMode : std::uint8_t {
   replace,
 };
 
-// Spawns the account's login shell with a new controlling PTY. The parent receives the child PID
-// and master descriptor; the child replaces itself or exits with status 127. Replacement clears the
-// inherited environment even when the supplied snapshot is empty.
-[[nodiscard]] auto
-spawn_login_shell(int& pty_descriptor, std::string_view working_directory = {},
-                  std::span<const std::byte> environment = {},
-                  EnvironmentMode environment_mode = EnvironmentMode::inherit) noexcept -> pid_t;
+// Spawns an exact NUL-separated argv, or the account's login shell when launch_command is empty,
+// with a new controlling PTY. The parent receives the child PID and master descriptor; the child
+// replaces itself or exits with status 127. Replacement clears the inherited environment even when
+// the supplied snapshot is empty.
+[[nodiscard]] auto spawn_process(int& pty_descriptor, std::string_view working_directory = {},
+                                 std::span<const std::byte> environment = {},
+                                 EnvironmentMode environment_mode = EnvironmentMode::inherit,
+                                 std::span<const std::byte> launch_command = {}) noexcept -> pid_t;
 
 [[nodiscard]] auto resize_pty(int pty_descriptor, std::uint16_t columns, std::uint16_t rows,
                               std::uint32_t cell_width_px, std::uint32_t cell_height_px) noexcept

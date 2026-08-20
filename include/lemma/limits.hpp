@@ -20,8 +20,8 @@ inline constexpr std::size_t tab_title_bytes_max = 64;
 inline constexpr std::size_t working_directory_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t environment_bytes_max = 65'535;
 inline constexpr std::size_t environment_entries_max = 256;
-
-inline constexpr std::size_t command_bytes_hard_max = std::size_t{64} * 1'024U;
+inline constexpr std::size_t command_bytes_hard_max = 65'535;
+inline constexpr std::size_t command_arguments_hard_max = 256;
 
 // Presentation transaction limits. A frame can span chunks, but queued bytes never retain a
 // Ghostty RenderState snapshot while waiting for socket writability.

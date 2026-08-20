@@ -359,17 +359,19 @@ attach_request(const std::string_view session, const protocol::Dimensions dimens
   return false;
 }
 
-TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
+TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdown) {
   const auto help = command({"--help"});
   EXPECT_EQ(help.status, 0) << help.output;
   EXPECT_TRUE(help.output.contains("Usage: lemma")) << help.output;
-  EXPECT_TRUE(help.output.contains("shutdown --confirm")) << help.output;
-  EXPECT_TRUE(help.output.contains("C-b R renames the session; C-b r renames the tab"))
-      << help.output;
+  EXPECT_TRUE(help.output.contains("new [NAME] [-c DIR] [-- COMMAND...]")) << help.output;
+  EXPECT_TRUE(help.output.contains("show skill")) << help.output;
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
-  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.7")) << version.output;
+  EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.8")) << version.output;
+  const auto skill = command({"show", "skill"});
+  EXPECT_EQ(skill.status, 0) << skill.output;
+  EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\n")) << skill.output;
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
@@ -379,20 +381,51 @@ TEST_F(MuxProcessTest, ProvidesDefaultInvocationHelpVersionErrorsAndShutdown) {
   ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
   ASSERT_TRUE(client.send(std::array{std::byte{0x02}, std::byte{'d'}}, deadline_after(2s)));
   ASSERT_TRUE(client.wait(deadline_after(5s)));
-  ASSERT_TRUE(wait_for_listing("default", "detached", deadline_after(3s)));
-
-  const auto unconfirmed_shutdown = command({"shutdown"});
-  EXPECT_NE(unconfirmed_shutdown.status, 0) << unconfirmed_shutdown.output;
-  EXPECT_TRUE(unconfirmed_shutdown.output.contains("WARNING")) << unconfirmed_shutdown.output;
-  EXPECT_TRUE(unconfirmed_shutdown.output.contains("shutdown --confirm"))
-      << unconfirmed_shutdown.output;
-  EXPECT_FALSE(server_.wait(deadline_after(100ms))) << server_.output();
+  ASSERT_TRUE(wait_for_listing("0", "detached", deadline_after(3s)));
 
   const auto shutdown = command({"shutdown", "--confirm"});
   EXPECT_EQ(shutdown.status, 0) << shutdown.output;
   EXPECT_TRUE(shutdown.output.contains("WARNING")) << shutdown.output;
   EXPECT_TRUE(shutdown.output.contains("lemma daemon stopped")) << shutdown.output;
   EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, AllocatesNumericNamesAndAttachesMostRecentDetachedSession) {
+  const auto noninteractive_new = command({"new", "not_created"});
+  EXPECT_NE(noninteractive_new.status, 0);
+  EXPECT_TRUE(noninteractive_new.output.contains("requires a terminal"))
+      << noninteractive_new.output;
+  EXPECT_NE(command({"list", "not_created"}).status, 0);
+
+  const auto first = command({"start"});
+  ASSERT_EQ(first.status, 0) << first.output;
+  EXPECT_TRUE(first.output.contains("lemma session \"0\"")) << first.output;
+  const auto second = command({"start"});
+  ASSERT_EQ(second.status, 0) << second.output;
+  EXPECT_TRUE(second.output.contains("lemma session \"1\"")) << second.output;
+
+  PtyClient client;
+  ASSERT_TRUE(client.spawn({LEMMA_TEST_CLI_PATH, runtime_.socket_path(), "attach"},
+                           runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(wait_for_listing("1", "attached", deadline_after(3s), &client));
+  EXPECT_TRUE(command({"list", "0"}).output.contains("detached"));
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+
+  PtyClient explicit_first;
+  ASSERT_TRUE(explicit_first.spawn(client_arguments("attach", "0"), runtime_.environment()));
+  ASSERT_TRUE(explicit_first.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(send_prefix(explicit_first, std::byte{'d'}));
+  ASSERT_TRUE(explicit_first.wait(deadline_after(5s)));
+
+  PtyClient recent;
+  ASSERT_TRUE(recent.spawn({LEMMA_TEST_CLI_PATH, runtime_.socket_path(), "attach"},
+                           runtime_.environment()));
+  ASSERT_TRUE(recent.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(wait_for_listing("0", "attached", deadline_after(3s), &recent));
+  ASSERT_TRUE(send_prefix(recent, std::byte{'d'}));
+  ASSERT_TRUE(recent.wait(deadline_after(5s)));
 }
 
 TEST_F(MuxProcessTest, CommitsShutdownWhenControlPeerDisconnectsBeforeAcknowledgement) {
@@ -402,6 +435,15 @@ TEST_F(MuxProcessTest, CommitsShutdownWhenControlPeerDisconnectsBeforeAcknowledg
   ASSERT_TRUE(requester.send(request, deadline_after(2s)));
   requester.close();
 
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+TEST_F(MuxProcessTest, ExitsDaemonAfterFinalSessionEnds) {
+  ASSERT_EQ(command({"start", "last"}).status, 0);
+
+  const auto killed = command({"session", "kill", "last"});
+
+  EXPECT_EQ(killed.status, 0) << killed.output;
   EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
 }
 
@@ -415,6 +457,8 @@ TEST_F(MuxProcessTest, PreservesExplicitlyEmptyLaunchEnvironment) {
   request.insert(request.end(), directory.begin(), directory.end());
   const auto environment_size = protocol::encode_bounded_size(0);
   request.insert(request.end(), environment_size.begin(), environment_size.end());
+  const auto command_size = protocol::encode_bounded_size(0);
+  request.insert(request.end(), command_size.begin(), command_size.end());
 
   RawPeer creator;
   ASSERT_TRUE(creator.connect(runtime_.socket_path(), deadline_after(2s)));
@@ -467,7 +511,38 @@ TEST_F(MuxProcessTest, CapturesInvokingWorkingDirectoryForSessionPanes) {
   ASSERT_TRUE(client.wait(deadline_after(5s)));
 }
 
-TEST_F(MuxProcessTest, ReusesExistingSessionAndFallsBackForFreshSessionWithoutCwd) {
+TEST_F(MuxProcessTest, AppliesExplicitCwdAndExactLaunchArgv) {
+  constexpr std::string_view literal_argument = "literal ; $HOME";
+  constexpr std::string_view script =
+      R"(printf '__ARGV__%s__ARGV__\n__CWD__%s__CWD__\n' "$1" "$PWD"; exec /bin/sh -l)";
+  PtyClient client;
+  const std::vector<std::string> arguments{LEMMA_TEST_CLI_PATH,
+                                           runtime_.socket_path(),
+                                           "new",
+                                           "launch_flags",
+                                           "--cwd",
+                                           runtime_.directory(),
+                                           "--",
+                                           "/bin/sh",
+                                           "-c",
+                                           std::string(script),
+                                           "sh",
+                                           std::string(literal_argument)};
+  ASSERT_TRUE(client.spawn(arguments, runtime_.environment()));
+  ASSERT_TRUE(client.wait_for_raw("\x1B[?1049h", deadline_after(5s)));
+  ASSERT_TRUE(client.wait_for_screen("__ARGV__literal ; $HOME__ARGV__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  const auto directory_name =
+      runtime_.directory().substr(runtime_.directory().find_last_of('/') + 1U);
+  ASSERT_TRUE(client.wait_for_screen(directory_name + "__CWD__", deadline_after(5s)))
+      << client.screen() << "\nraw:\n"
+      << client.raw_tail();
+  ASSERT_TRUE(send_prefix(client, std::byte{'d'}));
+  ASSERT_TRUE(client.wait(deadline_after(5s)));
+}
+
+TEST_F(MuxProcessTest, RejectsDuplicateSessionAndFallsBackForFreshSessionWithoutCwd) {
   ASSERT_EQ(command({"start", "existing"}).status, 0);
   const auto deleted_directory = runtime_.owned_path("deleted-cwd");
   const auto launch = "mkdir " + shell_quote(deleted_directory) + " && cd " +
@@ -480,10 +555,11 @@ TEST_F(MuxProcessTest, ReusesExistingSessionAndFallsBackForFreshSessionWithoutCw
   ASSERT_TRUE(invoker.wait(deadline_after(5s))) << invoker.output();
   auto status = invoker.status();
   ASSERT_TRUE(WIFEXITED(status)) << invoker.output();
-  EXPECT_EQ(WEXITSTATUS(status), 0) << invoker.output();
+  EXPECT_NE(WEXITSTATUS(status), 0) << invoker.output();
   EXPECT_TRUE(invoker.output().contains("warning: current directory unavailable"))
       << invoker.output();
-  EXPECT_TRUE(invoker.output().contains("existing")) << invoker.output();
+  EXPECT_TRUE(invoker.output().contains("already exists")) << invoker.output();
+  EXPECT_EQ(command({"list", "existing"}).status, 0);
 
   const auto fresh_deleted_directory = runtime_.owned_path("fresh-deleted-cwd");
   const auto fresh_launch = "mkdir " + shell_quote(fresh_deleted_directory) + " && cd " +
@@ -2144,6 +2220,19 @@ TEST_F(MuxProcessTest, RejectsMalformedAndDisconnectingSetupAndReusesSlots) {
   invalid_environment.insert(invalid_environment.end(), malformed_environment.begin(),
                              malformed_environment.end());
   EXPECT_TRUE(expect_close(invalid_environment));
+
+  auto invalid_command = named_request(protocol::ControlCommand::create_with_context, "badcommand");
+  invalid_command.insert(invalid_command.end(), cwd_size.begin(), cwd_size.end());
+  invalid_command.push_back(std::byte{'/'});
+  const auto empty_environment_size = protocol::encode_bounded_size(0);
+  invalid_command.insert(invalid_command.end(), empty_environment_size.begin(),
+                         empty_environment_size.end());
+  const std::array unterminated_command{std::byte{'x'}, std::byte{'y'}};
+  const auto command_size = protocol::encode_bounded_size(unterminated_command.size());
+  invalid_command.insert(invalid_command.end(), command_size.begin(), command_size.end());
+  invalid_command.insert(invalid_command.end(), unterminated_command.begin(),
+                         unterminated_command.end());
+  EXPECT_TRUE(expect_close(invalid_command));
 
   const auto disconnecting_attach =
       attach_request("healthy", protocol::Dimensions{.columns = 80, .rows = 24});

@@ -51,7 +51,8 @@ using platform::write_all;
 using platform::write_text;
 
 [[nodiscard]] constexpr auto valid_session_name(const std::string_view session) noexcept -> bool {
-  if (session.empty() || session.size() > protocol::session_name_bytes_max) {
+  if (session.empty() || session.front() == '-' ||
+      session.size() > protocol::session_name_bytes_max) {
     return false;
   }
   return std::ranges::all_of(session, [](const char character) {
@@ -336,58 +337,131 @@ void redirect_standard_descriptors() noexcept {
   return home.size();
 }
 
-[[nodiscard]] auto send_existing_session_request(const int connection,
-                                                 const std::string_view session) noexcept -> bool {
-  const auto unavailable_context =
-      protocol::encode_bounded_size(protocol::unavailable_working_directory_size);
-  return send_session_request(connection, protocol::ControlCommand::create_with_context, session) &&
-         send_all(connection, unavailable_context);
-}
-
-[[nodiscard]] auto send_create_request(const int connection,
-                                       const std::string_view session) noexcept -> bool {
-  std::array<char, protocol::working_directory_bytes_max + 1U> directory{};
-  bool used_home_directory = false;
-  if (::getcwd(directory.data(), directory.size()) == nullptr) {
-    if (capture_home_directory(directory) == 0) {
-      return send_existing_session_request(connection, session);
+[[nodiscard]] auto
+capture_working_directory(const std::string_view requested,
+                          std::array<char, protocol::working_directory_bytes_max + 1U>& output,
+                          bool& used_home_directory) noexcept -> std::optional<std::string_view> {
+  used_home_directory = false;
+  if (requested.empty()) {
+    if (::getcwd(output.data(), output.size()) != nullptr) {
+      return std::string_view(output.data());
+    }
+    const auto home_size = capture_home_directory(output);
+    if (home_size == 0) {
+      return std::nullopt;
     }
     used_home_directory = true;
+    return std::string_view(output.data(), home_size);
   }
-  const std::string_view working_directory(directory.data());
+  if (requested.contains('\0') || requested.size() > protocol::working_directory_bytes_max) {
+    return std::nullopt;
+  }
+  std::array<char, protocol::working_directory_bytes_max + 1U> candidate{};
+  std::ranges::copy(requested, candidate.begin());
+  if (::realpath(candidate.data(), output.data()) == nullptr) {
+    return std::nullopt;
+  }
+  struct stat info{};
+  const std::string_view resolved(output.data());
+  if (resolved.size() > protocol::working_directory_bytes_max ||
+      ::stat(output.data(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+    return std::nullopt;
+  }
+  return resolved;
+}
+
+[[nodiscard]] auto
+encode_launch_command(const std::span<const std::string_view> arguments,
+                      std::array<std::byte, protocol::command_bytes_max>& output) noexcept
+    -> std::optional<std::size_t> {
+  if (arguments.size() > protocol::command_arguments_max ||
+      (!arguments.empty() && arguments.front().empty())) {
+    return std::nullopt;
+  }
+  std::size_t size = 0;
+  for (const auto argument : arguments) {
+    if (argument.contains('\0') || argument.size() + 1U > output.size() - size) {
+      return std::nullopt;
+    }
+    std::ranges::copy(std::as_bytes(std::span(argument.data(), argument.size())),
+                      std::span(output).subspan(size).begin());
+    size += argument.size();
+    std::span(output).subspan(size, 1).front() = std::byte{0};
+    ++size;
+  }
+  return size;
+}
+
+struct CapturedLaunchContext final {
+  std::array<char, protocol::working_directory_bytes_max + 1U> working_directory{};
   std::array<std::byte, protocol::environment_bytes_max> environment{};
-  std::size_t environment_size = 0;
+  std::array<std::byte, protocol::command_bytes_max> command{};
+  std::size_t working_directory_size{0};
+  std::size_t environment_size{0};
+  std::size_t command_size{0};
+};
+
+[[nodiscard]] auto capture_launch_context(const LaunchOptions options,
+                                          CapturedLaunchContext& context) noexcept -> bool {
+  bool used_home_directory = false;
+  const auto working_directory = capture_working_directory(
+      options.working_directory, context.working_directory, used_home_directory);
+  if (!working_directory.has_value()) {
+    static_cast<void>(write_text(STDERR_FILENO, "invalid or unavailable working directory\n"));
+    return false;
+  }
+  context.working_directory_size = working_directory->size();
+
   std::size_t environment_entries = 0;
   // POSIX exposes the process environment as a null-terminated pointer vector.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   for (char** entry = process_environment(); entry != nullptr && *entry != nullptr; ++entry) {
     const std::string_view value(*entry);
     const auto encoded_size = value.size() + 1U;
-    if (encoded_size > environment.size() - environment_size ||
+    if (encoded_size > context.environment.size() - context.environment_size ||
         environment_entries == protocol::environment_entries_max) {
-      return send_existing_session_request(connection, session);
+      static_cast<void>(write_text(STDERR_FILENO, "launch environment exceeds lemma limits\n"));
+      return false;
     }
     std::ranges::copy(std::as_bytes(std::span(value.data(), value.size())),
-                      std::span(environment).subspan(environment_size).begin());
-    environment_size += value.size();
-    std::span(environment).subspan(environment_size, 1).front() = std::byte{0};
-    ++environment_size;
+                      std::span(context.environment).subspan(context.environment_size).begin());
+    context.environment_size += value.size();
+    std::span(context.environment).subspan(context.environment_size, 1).front() = std::byte{0};
+    ++context.environment_size;
     ++environment_entries;
   }
-  if (used_home_directory &&
-      !write_text(
-          STDERR_FILENO,
-          "warning: current directory unavailable; new session will use home directory\n")) {
+
+  const auto command_size = encode_launch_command(options.command, context.command);
+  if (!command_size.has_value()) {
+    static_cast<void>(write_text(STDERR_FILENO, "launch command exceeds lemma limits\n"));
     return false;
   }
-  const auto directory_size = protocol::encode_bounded_size(working_directory.size());
-  const auto encoded_environment_size = protocol::encode_bounded_size(environment_size);
-  return send_session_request(connection, protocol::ControlCommand::create_with_context, session) &&
-         send_all(connection, directory_size) &&
-         send_all(connection,
-                  std::as_bytes(std::span(working_directory.data(), working_directory.size()))) &&
-         send_all(connection, encoded_environment_size) &&
-         send_all(connection, std::span(environment).first(environment_size));
+  context.command_size = *command_size;
+  return !used_home_directory ||
+         write_text(
+             STDERR_FILENO,
+             "warning: current directory unavailable; new session will use home directory\n");
+}
+
+[[nodiscard]] auto send_create_request(const int connection,
+                                       const std::optional<std::string_view> session,
+                                       const CapturedLaunchContext& context) noexcept -> bool {
+  const auto directory_size = protocol::encode_bounded_size(context.working_directory_size);
+  const auto environment_size = protocol::encode_bounded_size(context.environment_size);
+  const auto command_size = protocol::encode_bounded_size(context.command_size);
+  const bool sent_header =
+      session.has_value()
+          ? send_session_request(connection, protocol::ControlCommand::create_with_context,
+                                 *session)
+          : send_all(connection, std::array{protocol::wire_byte(
+                                     protocol::ControlCommand::create_auto_with_context)});
+  return sent_header && send_all(connection, directory_size) &&
+         send_all(connection, std::as_bytes(std::span(context.working_directory))
+                                  .first(context.working_directory_size)) &&
+         send_all(connection, environment_size) &&
+         send_all(connection, std::span(context.environment).first(context.environment_size)) &&
+         send_all(connection, command_size) &&
+         send_all(connection, std::span(context.command).first(context.command_size));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -505,9 +579,9 @@ void redirect_standard_descriptors() noexcept {
   if (valid_session_name(session)) {
     return true;
   }
-  static_cast<void>(write_text(
-      STDERR_FILENO,
-      "invalid session name; use 1-32 ASCII letters, digits, underscores, or hyphens\n"));
+  static_cast<void>(write_text(STDERR_FILENO,
+                               "invalid session name; use 1-32 ASCII letters, digits, "
+                               "underscores, or hyphens, and do not start with a hyphen\n"));
   return false;
 }
 
@@ -539,34 +613,61 @@ void redirect_standard_descriptors() noexcept {
   return open_connection(std::string(endpoint.socket_path()));
 }
 
-[[nodiscard]] auto ensure(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
-  if (!validate_session(session)) {
-    return 1;
+// Creation reports each bounded setup and daemon outcome without publishing partial client state.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto create(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
+            const LaunchOptions options) -> std::optional<std::string> {
+  if (session.has_value() && !validate_session(*session)) {
+    return std::nullopt;
+  }
+  CapturedLaunchContext launch_context;
+  if (!capture_launch_context(options, launch_context)) {
+    return std::nullopt;
   }
   const std::string path(endpoint.socket_path());
   if (!ensure_server(path)) {
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
-    return 1;
+    return std::nullopt;
   }
   int connection = open_connection(path);
-  if (connection < 0 || !send_create_request(connection, session)) {
+  if (connection < 0 || !send_create_request(connection, session, launch_context)) {
     close_descriptor(connection);
-    return 1;
+    return std::nullopt;
   }
   std::array<std::byte, 1> response{};
   const bool received = read_exact(connection, response);
-  close_descriptor(connection);
-  if (received && response.front() == response_ready) {
-    return 0;
+  if (!received || response.front() != response_ready) {
+    close_descriptor(connection);
+    if (received && response.front() == response_capacity) {
+      static_cast<void>(write_text(STDERR_FILENO, "lemma session capacity reached\n"));
+    } else if (received && response.front() == response_conflict) {
+      static_cast<void>(write_text(STDERR_FILENO, "lemma session already exists\n"));
+    } else {
+      static_cast<void>(write_text(STDERR_FILENO, "failed to create lemma session\n"));
+    }
+    return std::nullopt;
   }
-  static_cast<void>(write_text(STDERR_FILENO, received && response.front() == response_capacity
-                                                  ? "lemma session capacity reached\n"
-                                                  : "failed to create lemma session\n"));
-  return 1;
+  std::array<std::byte, 1> encoded_name_size{};
+  if (!read_exact(connection, encoded_name_size)) {
+    close_descriptor(connection);
+    return std::nullopt;
+  }
+  const auto name_size = std::to_integer<std::size_t>(encoded_name_size.front());
+  if (name_size == 0 || name_size > protocol::session_name_bytes_max) {
+    close_descriptor(connection);
+    return std::nullopt;
+  }
+  std::array<char, protocol::session_name_bytes_max> name{};
+  const bool read_name =
+      read_exact(connection, std::as_writable_bytes(std::span(name)).first(name_size));
+  close_descriptor(connection);
+  return read_name ? std::optional{std::string(name.data(), name_size)} : std::nullopt;
 }
 
-auto start(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
-  return ensure(endpoint, session) == 0 ? list(endpoint, session) : 1;
+auto start(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
+           const LaunchOptions options) -> int {
+  const auto created = create(endpoint, session, options);
+  return created.has_value() ? list(endpoint, *created) : 1;
 }
 
 auto list(const RuntimeEndpoint& endpoint) -> int {

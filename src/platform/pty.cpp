@@ -1,5 +1,6 @@
 #include "platform/pty.hpp"
 
+#include "lemma/limits.hpp"
 #include "lemma/version.hpp"
 
 #include <algorithm>
@@ -89,20 +90,53 @@ namespace {
 
 } // namespace
 
-[[nodiscard]] auto spawn_login_shell(int& pty_descriptor, const std::string_view working_directory,
-                                     const std::span<const std::byte> environment,
-                                     const EnvironmentMode environment_mode) noexcept -> pid_t {
-  std::array<char, (std::size_t{4} * 1'024U) + 1U> directory{};
+// Validation and child replacement outcomes are intentionally explicit at the platform boundary.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto spawn_process(int& pty_descriptor, const std::string_view working_directory,
+                                 const std::span<const std::byte> environment,
+                                 const EnvironmentMode environment_mode,
+                                 const std::span<const std::byte> launch_command) noexcept
+    -> pid_t {
+  std::array<char, limits::working_directory_bytes_max + 1U> directory{};
   if (working_directory.size() >= directory.size() || working_directory.contains('\0') ||
       (!working_directory.empty() && working_directory.front() != '/')) {
     return -1;
   }
   std::ranges::copy(working_directory, directory.begin());
-  std::array<char, std::size_t{64} * 1'024U> environment_copy{};
+  std::array<char, limits::environment_bytes_max> environment_copy{};
   if (environment.size() > environment_copy.size()) {
     return -1;
   }
   std::ranges::copy(environment, std::as_writable_bytes(std::span(environment_copy)).begin());
+
+  std::array<char, limits::command_bytes_hard_max> command_copy{};
+  std::array<char*, limits::command_arguments_hard_max + 1U> command_arguments{};
+  std::size_t command_argument_count = 0;
+  if (!launch_command.empty()) {
+    if (launch_command.size() > command_copy.size()) {
+      return -1;
+    }
+    std::ranges::copy(launch_command, std::as_writable_bytes(std::span(command_copy)).begin());
+    std::size_t offset = 0;
+    while (offset < launch_command.size()) {
+      if (command_argument_count == limits::command_arguments_hard_max) {
+        return -1;
+      }
+      const auto remaining =
+          std::span(command_copy).subspan(offset, launch_command.size() - offset);
+      const auto terminator = std::ranges::find(remaining, '\0');
+      if (terminator == remaining.end()) {
+        return -1;
+      }
+      if (command_argument_count == 0 && terminator == remaining.begin()) {
+        return -1;
+      }
+      std::span(command_arguments).subspan(command_argument_count, 1).front() = remaining.data();
+      ++command_argument_count;
+      offset += static_cast<std::size_t>(std::distance(remaining.begin(), terminator)) + 1U;
+    }
+  }
+
   winsize initial_size{.ws_row = 24, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0};
   const auto child = ::forkpty(&pty_descriptor, nullptr, nullptr, &initial_size);
   if (child != 0) {
@@ -110,8 +144,24 @@ namespace {
   }
 
   // The daemon ignores these signals for its own I/O and child-reaping behavior. Ignored
-  // dispositions survive exec, so restore normal shell semantics before launching the login shell.
+  // dispositions survive exec, so restore normal process semantics before launching the child.
   if (::signal(SIGCHLD, SIG_DFL) == SIG_ERR || ::signal(SIGPIPE, SIG_DFL) == SIG_ERR) {
+    ::_exit(127);
+  }
+
+  if ((!working_directory.empty() && ::chdir(directory.data()) != 0) ||
+      !install_environment(std::span(environment_copy).first(environment.size()),
+                           environment_mode) ||
+      ::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
+      ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
+      // version is backed by a null-terminated string literal.
+      // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
+      ::setenv("TERM_PROGRAM_VERSION", lemma::version.data(), 1) != 0) {
+    ::_exit(127);
+  }
+
+  if (command_argument_count > 0) {
+    ::execvp(command_arguments.front(), command_arguments.data());
     ::_exit(127);
   }
 
@@ -129,18 +179,6 @@ namespace {
       shell = account.pw_shell;
     }
   }
-
-  if ((!working_directory.empty() && ::chdir(directory.data()) != 0) ||
-      !install_environment(std::span(environment_copy).first(environment.size()),
-                           environment_mode) ||
-      ::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
-      ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
-      // version is backed by a null-terminated string literal.
-      // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
-      ::setenv("TERM_PROGRAM_VERSION", lemma::version.data(), 1) != 0) {
-    ::_exit(127);
-  }
-
   std::array login_argument{'-', 'l', '\0'};
   const std::array arguments{shell, login_argument.data(), static_cast<char*>(nullptr)};
   ::execv(shell, arguments.data());

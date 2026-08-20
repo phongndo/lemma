@@ -157,7 +157,7 @@ namespace {
 
 auto SessionNameValue::create(const std::string_view value) noexcept
     -> std::optional<SessionNameValue> {
-  if (value.empty() || value.size() > limits::session_name_bytes_max ||
+  if (value.empty() || value.front() == '-' || value.size() > limits::session_name_bytes_max ||
       !std::ranges::all_of(value, [](const char character) {
         return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
                (character >= '0' && character <= '9') || character == '_' || character == '-';

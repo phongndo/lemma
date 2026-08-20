@@ -1,6 +1,6 @@
 # Lemma
 
-Lemma is a self-hosted terminal multiplexer. A per-user daemon owns sessions, processes, PTYs, and terminal state, so clients can detach without ending pane processes.
+Lemma is a self-hosted terminal multiplexer. A per-user daemon owns sessions, processes, PTYs, and terminal state, so clients can detach without ending pane processes. Creation starts the daemon automatically; it exits after its final session ends.
 
 The mux hierarchy is **Session -> Tab -> Pane**. Ghostty owns terminal semantics; Lemma owns mux behavior. Keyboard, mouse, CLI, Lua, and agents share one typed command model.
 
@@ -9,9 +9,10 @@ The mux hierarchy is **Session -> Tab -> Pane**. Ghostty owns terminal semantics
 ## Usage
 
 ```sh
-lemma                 # create or enter "default"
-lemma new work        # create and attach
-lemma start logs      # create detached
+lemma                            # create a numbered session and attach
+lemma new work                    # create named session and attach
+lemma start logs                  # create named session detached
+lemma new editor -c ~/src -- nvim # explicit cwd and argv
 lemma list
 lemma attach work
 ```

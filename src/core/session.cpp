@@ -15,7 +15,7 @@ namespace lemma::core {
 namespace {
 
 [[nodiscard]] constexpr auto valid_session_name(const std::string_view name) noexcept -> bool {
-  return !name.empty() && name.size() <= limits::session_name_bytes_max &&
+  return !name.empty() && name.front() != '-' && name.size() <= limits::session_name_bytes_max &&
          std::ranges::all_of(name, [](const char character) {
            return (character >= 'a' && character <= 'z') ||
                   (character >= 'A' && character <= 'Z') ||
