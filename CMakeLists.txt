@@ -429,7 +429,7 @@ if(LEMMA_BUILD_TESTS)
   lemma_internal_target(lemma_legacy_e2e_tests)
   target_link_libraries(
     lemma_legacy_e2e_tests
-    PRIVATE lemma_platform lemma_protocol lemma_terminal GTest::gtest_main
+    PRIVATE lemma_api lemma_platform lemma_protocol lemma_terminal GTest::gtest_main
   )
   target_compile_definitions(
     lemma_legacy_e2e_tests

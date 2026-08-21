@@ -60,7 +60,13 @@ lemma kill project
 lemma action tab new --session work --title tests
 lemma action pane split --session work --pane 0:1 --right
 lemma action pane capture --session work --pane 0:1
+lemma action pane split --help
 ```
+
+`lemma action DOMAIN OP --help` prints the exact installed CLI grammar for each Action without
+contacting the daemon. Use the full JSON Schema only when exact Action or Proc document shapes are
+needed. Launches keep running without `--hold`; that option retains a pane only after its process
+exits so final terminal output remains observable.
 
 Inside a Lemma pane, the CLI reads `LEMMA_SESSION_ID`, `LEMMA_TAB_ID`, and `LEMMA_PANE_ID` from the
 child environment. Omitted targets resolve from those stable IDs before transmission. Explicit
@@ -68,8 +74,11 @@ child environment. Omitted targets resolve from those stable IDs before transmis
 CLI convenience; the Action crossing CONTROL is concrete and deterministic.
 
 `lemma action` prints the canonical JSON Action result. `lemma proc` prints the canonical Proc
-result. These CLI commands are the shell and coding-agent interface. Dedicated integrations may
-use CONTROL and OBSERVE directly.
+result. `pane.list` includes each Pane's zero-based `column` and `row` in the Session content grid,
+as well as its `columns` and `rows`, so layout order remains observable after swaps. Pane resize
+directions move the nearest matching divider rather than promising to grow the target: right/down
+grows the divider's left/top side, while left/up grows its right/bottom side. These CLI commands are
+the shell and coding-agent interface. Dedicated integrations may use CONTROL and OBSERVE directly.
 
 ## CONTROL connection
 

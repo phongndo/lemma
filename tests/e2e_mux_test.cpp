@@ -13,6 +13,7 @@
 #include <csignal>
 #include <cstddef>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -399,6 +400,8 @@ attach_request(const std::string_view session, const protocol::Dimensions dimens
   return false;
 }
 
+// Assertions cover independent CLI and skill contracts in one daemon lifecycle.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdown) {
   const auto help = command({"--help"});
   EXPECT_EQ(help.status, 0) << help.output;
@@ -436,6 +439,10 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
       << skill.output;
   EXPECT_TRUE(skill.output.contains("prefer returned generational IDs")) << skill.output;
   EXPECT_TRUE(skill.output.contains("Do not add `sh -c` unless shell")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("Long-running programs remain alive without `--hold`"))
+      << skill.output;
+  EXPECT_TRUE(skill.output.contains("lemma action DOMAIN OP --help")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("Do not inspect Lemma source code")) << skill.output;
   EXPECT_TRUE(
       skill.output.contains("Clean up temporary resources created solely for the current task"))
       << skill.output;
@@ -450,6 +457,49 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   EXPECT_TRUE(invalid.output.contains("invalid lemma command")) << invalid.output;
   EXPECT_EQ(command_exact({"session", "list"}).status, 2);
   EXPECT_EQ(command_exact({"session", "start", "legacy"}).status, 2);
+
+  const auto action_help = command_exact({"action", "--help"});
+  EXPECT_EQ(action_help.status, 0) << action_help.output;
+  EXPECT_TRUE(action_help.output.contains("lemma action DOMAIN OP --help")) << action_help.output;
+  constexpr std::array<std::array<std::string_view, 2>, 20> action_commands{{
+      {"session", "start"}, {"session", "list"}, {"session", "inspect"}, {"session", "rename"},
+      {"session", "kill"},  {"tab", "new"},      {"tab", "list"},        {"tab", "select"},
+      {"tab", "move"},      {"tab", "rename"},   {"tab", "kill"},        {"pane", "split"},
+      {"pane", "list"},     {"pane", "focus"},   {"pane", "swap"},       {"pane", "resize"},
+      {"pane", "zoom"},     {"pane", "send"},    {"pane", "capture"},    {"pane", "kill"},
+  }};
+  for (const auto& action : action_commands) {
+    const auto operation_help = command_exact(
+        {"action", std::string(action.front()), std::string(action.back()), "--help"});
+    EXPECT_EQ(operation_help.status, 0) << operation_help.output;
+    EXPECT_TRUE(operation_help.output.starts_with("Usage:\n")) << operation_help.output;
+  }
+  const auto option_help = command_exact({"action", "pane", "list", "--session", "0:1", "--help"});
+  EXPECT_EQ(option_help.status, 0) << option_help.output;
+  EXPECT_TRUE(option_help.output.contains("zero-based content-grid geometry"))
+      << option_help.output;
+  const auto unknown_help = command_exact({"action", "pane", "spawn", "--help"});
+  EXPECT_EQ(unknown_help.status, 2) << unknown_help.output;
+  EXPECT_TRUE(unknown_help.output.contains("unknown Lemma Action: pane spawn"))
+      << unknown_help.output;
+  const auto split_help = command_exact({"action", "pane", "split", "--help"});
+  EXPECT_EQ(split_help.status, 0) << split_help.output;
+  EXPECT_TRUE(split_help.output.contains("(--right|--down)")) << split_help.output;
+  EXPECT_TRUE(split_help.output.contains("Long-running programs do not need --hold"))
+      << split_help.output;
+  const auto resize_help = command_exact({"action", "pane", "resize", "--help"});
+  EXPECT_EQ(resize_help.status, 0) << resize_help.output;
+  EXPECT_TRUE(resize_help.output.contains("nearest matching divider")) << resize_help.output;
+  EXPECT_TRUE(resize_help.output.contains("Direction moves the divider, not necessarily"))
+      << resize_help.output;
+  const auto proc_help = command_exact({"proc", "--help"});
+  EXPECT_EQ(proc_help.status, 0) << proc_help.output;
+  EXPECT_TRUE(proc_help.output.contains("non-atomic")) << proc_help.output;
+  const auto events_help = command_exact({"events", "--help"});
+  EXPECT_EQ(events_help.status, 0) << events_help.output;
+  EXPECT_TRUE(events_help.output.contains("open-ended")) << events_help.output;
+  EXPECT_EQ(command_exact({"events", "--screen"}).status, 2);
+
   const auto list = command_exact({"list"});
   const auto ls = command_exact({"ls"});
   EXPECT_EQ(list.status, 0) << list.output;
@@ -683,6 +733,125 @@ TEST_F(MuxProcessTest, ExposesPersistentActionsEventsAndOfflineSchema) {
   EXPECT_TRUE(std::string_view(reinterpret_cast<const char*>(response.data()),
                                static_cast<std::size_t>(killed))
                   .contains(R"("status":"applied")"));
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+// GoogleTest assertions and the bounded observation loop inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, AgentCliStreamsEventsAndReportsTypedFailures) {
+  const auto started = command_exact({"action", "session", "start", "agent-cli", "--", "/bin/sh"});
+  ASSERT_EQ(started.status, 0) << started.output;
+  EXPECT_TRUE(started.output.contains(R"("action":"session.start","status":"applied")"))
+      << started.output;
+
+  ChildProcess observer;
+  ASSERT_TRUE(observer.spawn({LEMMA_TEST_CLI_PATH, runtime_.socket_path(), "events", "--session",
+                              "agent-cli", "--pane", "0:1", "--screen"},
+                             runtime_.environment()));
+  const auto wait_for_observation = [&observer](const std::string_view expected,
+                                                const Deadline deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (observer.output().contains(expected)) {
+        return true;
+      }
+      std::this_thread::sleep_for(10ms);
+    }
+    return false;
+  };
+  ASSERT_TRUE(wait_for_observation(R"("event":"snapshot")", deadline_after(3s)))
+      << observer.output();
+
+  const auto sent = command_exact({"action", "pane", "send", "--session", "agent-cli", "--pane",
+                                   "0:1", "--text", "printf '__CLI_EVENT__\\n'\r"});
+  ASSERT_EQ(sent.status, 0) << sent.output;
+  ASSERT_TRUE(wait_for_observation("__CLI_EVENT__", deadline_after(5s))) << observer.output();
+  EXPECT_TRUE(observer.output().contains(R"("event":"pane.screen")")) << observer.output();
+
+  const auto second_tab =
+      command_exact({"action", "tab", "new", "--session", "agent-cli", "--", "/bin/sh"});
+  ASSERT_EQ(second_tab.status, 0) << second_tab.output;
+  EXPECT_TRUE(second_tab.output.contains(R"("tab":"1:1","pane":"1:1")")) << second_tab.output;
+
+  const auto conflict = command_exact({"action", "session", "start", "agent-cli"});
+  EXPECT_EQ(conflict.status, 1) << conflict.output;
+  EXPECT_TRUE(conflict.output.contains(R"("status":"conflict")")) << conflict.output;
+
+  const auto stale =
+      command_exact({"action", "pane", "capture", "--session", "agent-cli", "--pane", "99:1"});
+  EXPECT_EQ(stale.status, 1) << stale.output;
+  EXPECT_TRUE(stale.output.contains(R"("status":"stale")")) << stale.output;
+
+  const auto closed =
+      command_exact({"action", "pane", "kill", "--session", "agent-cli", "--pane", "0:1"});
+  ASSERT_EQ(closed.status, 0) << closed.output;
+  EXPECT_TRUE(wait_for_observation(R"("event":"pane.closed")", deadline_after(3s)))
+      << observer.output();
+  observer.terminate();
+
+  const auto killed = command_exact({"action", "session", "kill", "--session", "agent-cli"});
+  EXPECT_EQ(killed.status, 0) << killed.output;
+  EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
+}
+
+// Assertions decode the machine-readable projection before and after one semantic swap.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(MuxProcessTest, ActionPaneListReportsCoordinatesAcrossSwap) {
+  const auto started =
+      command_exact({"action", "session", "start", "coordinate-list", "--", "/bin/sh"});
+  ASSERT_EQ(started.status, 0) << started.output;
+  const auto split = command_exact({"action", "pane", "split", "--session", "coordinate-list",
+                                    "--pane", "0:1", "--right", "--", "/bin/sh"});
+  ASSERT_EQ(split.status, 0) << split.output;
+  EXPECT_TRUE(split.output.contains(R"("pane":"1:1")")) << split.output;
+
+  const auto pane_entry = [](const api::JsonValue& document,
+                             const std::string_view id) -> const api::JsonValue* {
+    const auto* const panes = api::json_member(document, "panes");
+    if (panes == nullptr || panes->kind != api::JsonKind::array) {
+      return nullptr;
+    }
+    const auto found = std::ranges::find_if(panes->array, [&](const api::JsonValue& pane) {
+      return api::json_string(pane, "id") == std::optional<std::string_view>{id};
+    });
+    return found == panes->array.end() ? nullptr : &*found;
+  };
+
+  const auto before = command_exact({"action", "pane", "list", "--session", "coordinate-list"});
+  ASSERT_EQ(before.status, 0) << before.output;
+  auto before_document = api::parse_json(before.output);
+  ASSERT_TRUE(before_document.value.has_value()) << before_document.error_offset;
+  const auto before_value = std::move(before_document.value).value_or(api::JsonValue{});
+  const auto* const first_before = pane_entry(before_value, "0:1");
+  const auto* const second_before = pane_entry(before_value, "1:1");
+  ASSERT_NE(first_before, nullptr);
+  ASSERT_NE(second_before, nullptr);
+  const auto first_column = api::json_unsigned(*first_before, "column");
+  const auto second_column = api::json_unsigned(*second_before, "column");
+  ASSERT_TRUE(first_column.has_value());
+  ASSERT_TRUE(second_column.has_value());
+  EXPECT_EQ(first_column.value_or(std::numeric_limits<std::uint64_t>::max()), 0U);
+  EXPECT_GT(second_column.value_or(0),
+            first_column.value_or(std::numeric_limits<std::uint64_t>::max()));
+  EXPECT_EQ(api::json_unsigned(*first_before, "row"), std::optional<std::uint64_t>{0});
+  EXPECT_EQ(api::json_unsigned(*second_before, "row"), std::optional<std::uint64_t>{0});
+
+  const auto swapped = command_exact(
+      {"action", "pane", "swap", "--session", "coordinate-list", "--pane", "0:1", "1:1"});
+  ASSERT_EQ(swapped.status, 0) << swapped.output;
+  const auto after = command_exact({"action", "pane", "list", "--session", "coordinate-list"});
+  ASSERT_EQ(after.status, 0) << after.output;
+  auto after_document = api::parse_json(after.output);
+  ASSERT_TRUE(after_document.value.has_value()) << after_document.error_offset;
+  const auto after_value = std::move(after_document.value).value_or(api::JsonValue{});
+  const auto* const first_after = pane_entry(after_value, "0:1");
+  const auto* const second_after = pane_entry(after_value, "1:1");
+  ASSERT_NE(first_after, nullptr);
+  ASSERT_NE(second_after, nullptr);
+  EXPECT_EQ(api::json_unsigned(*first_after, "column"), second_column);
+  EXPECT_EQ(api::json_unsigned(*second_after, "column"), first_column);
+
+  const auto killed = command_exact({"action", "session", "kill", "--session", "coordinate-list"});
+  EXPECT_EQ(killed.status, 0) << killed.output;
   EXPECT_TRUE(server_.wait(deadline_after(5s))) << server_.output();
 }
 

@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -20,6 +22,39 @@ TEST(ApiTest, EmbedsParseableVersionedSchema) {
   ASSERT_TRUE(parsed.value.has_value()) << parsed.error_offset;
   EXPECT_EQ(json_string(*parsed.value, "$schema"), "https://json-schema.org/draft/2020-12/schema");
   EXPECT_EQ(json_string(*parsed.value, "$id"), "urn:lemma:schema:api:v1");
+}
+
+// GoogleTest assertions and nested schema traversal inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ApiTest, DefinesStructuredPaneListingGeometry) {
+  const auto parsed = parse_json(schema_document());
+  ASSERT_TRUE(parsed.value.has_value()) << parsed.error_offset;
+  const auto* const definitions = json_member(*parsed.value, "$defs");
+  ASSERT_NE(definitions, nullptr);
+  const auto* const pane_listing = json_member(*definitions, "paneListing");
+  ASSERT_NE(pane_listing, nullptr);
+  const auto* const required = json_member(*pane_listing, "required");
+  ASSERT_NE(required, nullptr);
+  ASSERT_EQ(required->kind, JsonKind::array);
+  const auto has_required = [required](const std::string_view field) {
+    return std::ranges::any_of(required->array, [field](const JsonValue& entry) {
+      return entry.kind == JsonKind::string && entry.string == field;
+    });
+  };
+  EXPECT_TRUE(has_required("column"));
+  EXPECT_TRUE(has_required("row"));
+  EXPECT_TRUE(has_required("columns"));
+  EXPECT_TRUE(has_required("rows"));
+
+  const auto* const action_result = json_member(*definitions, "actionResult");
+  ASSERT_NE(action_result, nullptr);
+  const auto* const properties = json_member(*action_result, "properties");
+  ASSERT_NE(properties, nullptr);
+  const auto* const panes = json_member(*properties, "panes");
+  ASSERT_NE(panes, nullptr);
+  const auto* const items = json_member(*panes, "items");
+  ASSERT_NE(items, nullptr);
+  EXPECT_EQ(json_string(*items, "$ref"), std::optional<std::string_view>{"#/$defs/paneListing"});
 }
 
 TEST(ApiTest, DecodesConcreteActionAndRejectsUnknownFields) {

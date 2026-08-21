@@ -282,6 +282,31 @@
         }
       ]
     },
+    "paneProcess": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["running", "exiting", "exited_unknown", "exited", "signaled"] },
+        "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      },
+      "additionalProperties": false
+    },
+    "paneListing": {
+      "type": "object",
+      "required": ["id", "tab", "tab_position", "focused", "column", "row", "columns", "rows", "process"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tab": { "$ref": "#/$defs/id" },
+        "tab_position": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "focused": { "type": "boolean" },
+        "column": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "row": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "columns": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "rows": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "process": { "$ref": "#/$defs/paneProcess" }
+      },
+      "additionalProperties": false
+    },
     "status": {
       "enum": ["applied", "no_effect", "stale", "wrong_owner", "conflict", "capacity", "unavailable", "failed"]
     },
@@ -306,7 +331,11 @@
         "pane": { "$ref": "#/$defs/id" },
         "sessions": { "type": "array" },
         "tabs": { "type": "array" },
-        "panes": { "type": "array" },
+        "panes": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/paneListing" }
+        },
         "text": { "type": "string" },
         "error": {
           "type": "object",

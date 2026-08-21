@@ -6321,6 +6321,8 @@ template <typename Id>
           !output.append_number(tab_position + 1U) ||
           !output.append_text(pane.id == tab->focused_pane ? ",\"focused\":true"
                                                            : ",\"focused\":false") ||
+          !output.append_text(",\"column\":") || !output.append_number(pane.rectangle.column) ||
+          !output.append_text(",\"row\":") || !output.append_number(pane.rectangle.row) ||
           !output.append_text(",\"columns\":") || !output.append_number(pane.rectangle.columns) ||
           !output.append_text(",\"rows\":") || !output.append_number(pane.rectangle.rows) ||
           !output.append_text(",\"process\":") ||

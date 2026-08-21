@@ -21,7 +21,11 @@ lemma kill NAME
 lemma action tab new --session work --title tests --hold -- just test
 lemma action pane split --session work --pane 0:1 --right
 lemma action pane capture --session work --pane 0:1
+lemma action pane split --help
 ```
+
+Use `lemma action DOMAIN OP --help` for exact installed CLI grammar. Long-running programs remain
+alive without `--hold`; use it only when a pane and its final output must remain after process exit.
 
 Common Session lifecycle commands are noun-free at the top level. The complete Session, Tab, and
 Pane operation set is symmetric under `action`; there are no `lemma tab ...` or `lemma pane ...`
