@@ -403,6 +403,24 @@ struct ViewportState final {
   bool follows_output{true};
 };
 
+enum class ActiveScreen : std::uint8_t {
+  primary,
+  alternate,
+};
+
+// Compact, point-in-time terminal metadata for introspection. It contains no terminal text and no
+// Ghostty representation. Child-reported strings such as title and PWD remain separate borrowed
+// queries so callers must preserve their provenance explicitly.
+struct TerminalInspection final {
+  ViewportState viewport;
+  std::size_t scrollback_rows{0};
+  std::uint16_t cursor_column{0};
+  std::uint16_t cursor_row{0};
+  ActiveScreen active_screen{ActiveScreen::primary};
+  bool cursor_visible{false};
+  bool cursor_at_prompt{false};
+};
+
 enum class CompressionResult : std::uint8_t {
   unsupported,
   pending,
@@ -511,8 +529,23 @@ public:
   // Canonical child mode used by the pane-owned presentation gate.
   [[nodiscard]] auto synchronized_output() const noexcept -> std::expected<bool, Error>;
 
-  // Diagnostic formatter for tests, demos, and full-state fallback.
-  [[nodiscard]] auto format_screen(ScreenFormat format, std::span<std::byte> output) noexcept
+  // Diagnostic formatter for tests, demos, full-state fallback, and bounded public capture.
+  [[nodiscard]] auto format_screen(ScreenFormat format, std::span<std::byte> output,
+                                   bool unwrap = false) noexcept
+      -> std::expected<std::size_t, Error>;
+  // Formats the last bounded content rows of the canonical viewport. This is the bounded fallback
+  // for a visible capture that cannot fit in caller storage.
+  [[nodiscard]] auto format_visible_tail(ScreenFormat format, std::size_t rows,
+                                         std::span<std::byte> output, bool unwrap = false) noexcept
+      -> std::expected<std::size_t, Error>;
+  // Formats the last bounded rows of the active screen including retained scrollback without
+  // moving the canonical viewport or installing a terminal selection.
+  [[nodiscard]] auto format_recent(ScreenFormat format, std::size_t rows,
+                                   std::span<std::byte> output, bool unwrap = false) noexcept
+      -> std::expected<std::size_t, Error>;
+  // Formats the most recent OSC 133-delimited command-output range when Ghostty can derive one.
+  [[nodiscard]] auto format_last_command(ScreenFormat format, std::span<std::byte> output,
+                                         bool unwrap = true) noexcept
       -> std::expected<std::size_t, Error>;
 
   // Ghostty owns gesture interpretation and converts installed snapshots to tracked endpoints.
@@ -553,6 +586,8 @@ public:
   [[nodiscard]] auto scroll_viewport_to_bottom() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto scroll_selection_into_view() noexcept -> std::expected<bool, Error>;
   [[nodiscard]] auto viewport_state() const noexcept -> std::expected<ViewportState, Error>;
+  [[nodiscard]] auto cursor_at_prompt() const noexcept -> std::expected<bool, Error>;
+  [[nodiscard]] auto inspection() const noexcept -> std::expected<TerminalInspection, Error>;
 
   [[nodiscard]] auto compression_activity() const noexcept -> std::expected<std::uint64_t, Error>;
   [[nodiscard]] auto compress_scrollback() noexcept -> std::expected<CompressionResult, Error>;
@@ -574,8 +609,9 @@ public:
   // Replaces the embedder-owned defaults while preserving application OSC color overrides.
   [[nodiscard]] auto set_theme(const TerminalTheme& theme) noexcept -> std::expected<void, Error>;
 
-  // The borrowed title remains valid only until the next terminal mutation.
+  // Borrowed child-reported metadata remains valid only until the next terminal mutation.
   [[nodiscard]] auto title() const noexcept -> std::expected<std::string_view, Error>;
+  [[nodiscard]] auto pwd() const noexcept -> std::expected<std::string_view, Error>;
   [[nodiscard]] auto scrollback_rows() const noexcept -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto take_effects() noexcept -> EffectBatch;
 

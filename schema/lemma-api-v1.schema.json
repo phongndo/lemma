@@ -93,6 +93,341 @@
         "argv": { "$ref": "#/$defs/argv" }
       }
     },
+    "focusPolicy": { "enum": ["created", "preserve"] },
+    "inputEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": { "enum": ["text", "paste"] },
+            "text": { "type": "string", "minLength": 1, "maxLength": 65535 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "key"],
+          "properties": {
+            "kind": { "const": "key" },
+            "key": { "enum": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "enter", "tab", "backspace", "escape", "space", "up", "down", "left", "right", "home", "end", "insert", "delete", "page_up", "page_down", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"] },
+            "modifiers": {
+              "type": "array",
+              "uniqueItems": true,
+              "maxItems": 4,
+              "items": { "enum": ["shift", "control", "alt", "super"] }
+            },
+            "action": { "enum": ["press", "repeat", "release"], "default": "press" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "capture": {
+      "type": "object",
+      "required": ["source", "format", "wrap", "terminal_generation", "truncated", "text"],
+      "properties": {
+        "source": { "enum": ["visible", "recent", "last-command"] },
+        "format": { "enum": ["plain", "ansi"] },
+        "wrap": { "enum": ["rendered", "logical"] },
+        "terminal_generation": { "type": "integer", "minimum": 1 },
+        "truncated": { "type": "boolean" },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "attachmentCounts": {
+      "type": "object",
+      "required": ["connected", "controllers", "viewers"],
+      "properties": {
+        "connected": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "controllers": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "viewers": { "const": 0 }
+      },
+      "additionalProperties": false
+    },
+    "resourceUsage": {
+      "type": "object",
+      "required": ["used", "limit"],
+      "properties": {
+        "used": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "daemonInspection": {
+      "type": "object",
+      "required": ["version", "api", "resources", "attachments"],
+      "properties": {
+        "version": { "type": "string" },
+        "api": { "const": "lemma.action/v1" },
+        "resources": {
+          "type": "object",
+          "required": ["sessions", "panes", "scrollback_bytes"],
+          "properties": {
+            "sessions": { "$ref": "#/$defs/resourceUsage" },
+            "panes": { "$ref": "#/$defs/resourceUsage" },
+            "scrollback_bytes": {
+              "type": "object",
+              "required": ["reserved", "limit"],
+              "properties": {
+                "reserved": { "type": "integer", "minimum": 0 },
+                "limit": { "type": "integer", "minimum": 1 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "attachments": {
+          "type": "object",
+          "required": ["connected"],
+          "properties": { "connected": { "type": "integer", "minimum": 0, "maximum": 64 } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sessionSummary": {
+      "type": "object",
+      "required": ["name", "id", "attached", "revision", "tabs", "panes", "attachments", "columns", "rows", "active_tab", "focused_pane"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" },
+        "id": { "$ref": "#/$defs/id" },
+        "attached": { "type": "boolean" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "tabs": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "panes": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "attachments": { "$ref": "#/$defs/attachmentCounts" },
+        "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "active_tab": { "$ref": "#/$defs/id" },
+        "focused_pane": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "sessionInspection": {
+      "type": "object",
+      "required": ["id", "name", "revision", "launch", "active_tab", "previous_tab", "tabs", "panes", "theme_bound", "geometry", "attachments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "launch": {
+          "type": "object",
+          "required": ["cwd", "environment"],
+          "properties": {
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+            "environment": {
+              "type": "object",
+              "required": ["mode", "entries"],
+              "properties": {
+                "mode": { "enum": ["captured", "inherited"] },
+                "entries": { "type": "integer", "minimum": 0 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "active_tab": { "$ref": "#/$defs/id" },
+        "previous_tab": { "$ref": "#/$defs/id" },
+        "tabs": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "panes": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "theme_bound": { "type": "boolean" },
+        "geometry": {
+          "type": "object",
+          "required": ["columns", "rows"],
+          "properties": {
+            "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "rows": { "type": "integer", "minimum": 1, "maximum": 200 }
+          },
+          "additionalProperties": false
+        },
+        "attachments": { "$ref": "#/$defs/attachmentCounts" }
+      },
+      "additionalProperties": false
+    },
+    "tabSummary": {
+      "type": "object",
+      "required": ["position", "id", "active", "title", "zoomed", "panes", "focused_pane"],
+      "properties": {
+        "position": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "id": { "$ref": "#/$defs/id" },
+        "active": { "type": "boolean" },
+        "title": { "type": "string" },
+        "zoomed": { "type": "boolean" },
+        "panes": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "focused_pane": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "layoutNode": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["pane"],
+          "properties": { "pane": { "$ref": "#/$defs/id" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["split", "ratio", "first", "second"],
+          "properties": {
+            "split": { "enum": ["left_right", "top_bottom"] },
+            "ratio": { "type": "integer", "minimum": 1, "maximum": 65534 },
+            "first": { "$ref": "#/$defs/layoutNode" },
+            "second": { "$ref": "#/$defs/layoutNode" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "tabInspection": {
+      "type": "object",
+      "required": ["id", "position", "title", "active", "focused_pane", "previous_pane", "zoomed", "layout_suspended", "geometry", "layout"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "position": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "title": { "type": "string" },
+        "active": { "type": "boolean" },
+        "focused_pane": { "$ref": "#/$defs/id" },
+        "previous_pane": { "$ref": "#/$defs/id" },
+        "zoomed": { "type": "boolean" },
+        "layout_suspended": { "type": "boolean" },
+        "geometry": {
+          "type": "object",
+          "required": ["columns", "rows"],
+          "properties": {
+            "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "rows": { "type": "integer", "minimum": 1, "maximum": 200 }
+          },
+          "additionalProperties": false
+        },
+        "layout": { "$ref": "#/$defs/layoutNode" }
+      },
+      "additionalProperties": false
+    },
+    "eventProcess": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["running", "exiting", "exited_unknown", "exited", "signaled"] },
+        "code": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "signal": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      },
+      "additionalProperties": false
+    },
+    "processInspection": {
+      "type": "object",
+      "required": ["state", "pid", "launch", "observed_title"],
+      "properties": {
+        "state": { "enum": ["running", "exiting", "exited_unknown", "exited", "signaled"] },
+        "code": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "signal": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "pid": { "type": "integer", "minimum": 0 },
+        "launch": {
+          "type": "object",
+          "required": ["cwd", "argv", "exit_policy"],
+          "properties": {
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+            "argv": {
+              "type": "array",
+              "maxItems": 256,
+              "items": { "type": "string" }
+            },
+            "exit_policy": { "enum": ["close", "hold"] }
+          },
+          "additionalProperties": false
+        },
+        "observed_title": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "paneInspection": {
+      "type": "object",
+      "required": ["pane", "process", "terminal"],
+      "properties": {
+        "pane": {
+          "type": "object",
+          "required": ["id", "tab", "rectangle"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "tab": { "$ref": "#/$defs/id" },
+            "rectangle": {
+              "type": "object",
+              "required": ["column", "row", "columns", "rows"],
+              "properties": {
+                "column": { "type": "integer", "minimum": 0 },
+                "row": { "type": "integer", "minimum": 0 },
+                "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+                "rows": { "type": "integer", "minimum": 1, "maximum": 200 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "process": { "$ref": "#/$defs/processInspection" },
+        "terminal": {
+          "type": "object",
+          "required": ["generation", "size", "screen", "viewport", "history", "cursor", "title", "pwd", "cursor_at_prompt", "input_accepted", "health"],
+          "properties": {
+            "generation": { "type": "integer", "minimum": 1 },
+            "size": {
+              "type": "object",
+              "required": ["columns", "rows"],
+              "properties": {
+                "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+                "rows": { "type": "integer", "minimum": 1, "maximum": 200 }
+              },
+              "additionalProperties": false
+            },
+            "screen": { "enum": ["primary", "alternate"] },
+            "viewport": {
+              "type": "object",
+              "required": ["at_bottom", "offset_rows"],
+              "properties": {
+                "at_bottom": { "type": "boolean" },
+                "offset_rows": { "type": "integer", "minimum": 0 }
+              },
+              "additionalProperties": false
+            },
+            "history": {
+              "type": "object",
+              "required": ["retained_rows"],
+              "properties": { "retained_rows": { "type": "integer", "minimum": 0 } },
+              "additionalProperties": false
+            },
+            "cursor": {
+              "type": "object",
+              "required": ["column", "row", "visible"],
+              "properties": {
+                "column": { "type": "integer", "minimum": 0 },
+                "row": { "type": "integer", "minimum": 0 },
+                "visible": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            },
+            "title": { "type": "string" },
+            "pwd": {
+              "type": "object",
+              "required": ["value", "source"],
+              "properties": {
+                "value": { "type": "string" },
+                "source": { "enum": ["unknown", "osc7"] }
+              },
+              "additionalProperties": false
+            },
+            "cursor_at_prompt": { "type": "boolean" },
+            "input_accepted": { "type": "boolean" },
+            "health": { "enum": ["ok", "failed"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "action": {
       "title": "Lemma Action v1",
       "oneOf": [
@@ -101,7 +436,7 @@
           "required": ["schema", "action"],
           "properties": {
             "schema": { "const": "lemma.action/v1" },
-            "action": { "const": "session.list" }
+            "action": { "enum": ["daemon.inspect", "session.list"] }
           },
           "additionalProperties": false
         },
@@ -111,7 +446,32 @@
           "properties": {
             "schema": { "const": "lemma.action/v1" },
             "action": { "enum": ["session.inspect", "session.kill", "tab.list", "pane.list"] },
-            "session": { "$ref": "#/$defs/sessionSelector" }
+            "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["schema", "action", "session", "tab"],
+          "properties": {
+            "schema": { "const": "lemma.action/v1" },
+            "action": { "const": "tab.inspect" },
+            "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "tab": { "$ref": "#/$defs/tabSelector" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["schema", "action", "session", "pane"],
+          "properties": {
+            "schema": { "const": "lemma.action/v1" },
+            "action": { "const": "pane.inspect" },
+            "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "pane": { "$ref": "#/$defs/paneSelector" }
           },
           "additionalProperties": false
         },
@@ -140,6 +500,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "session.rename" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" }
           },
           "additionalProperties": false
@@ -151,10 +512,12 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "tab.new" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "title": { "type": "string", "maxLength": 64, "pattern": "^[ -~]*$" },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
             "hold": { "type": "boolean", "default": false },
-            "argv": { "$ref": "#/$defs/argv" }
+            "argv": { "$ref": "#/$defs/argv" },
+            "focus": { "$ref": "#/$defs/focusPolicy" }
           },
           "additionalProperties": false
         },
@@ -165,6 +528,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "enum": ["tab.select", "tab.kill"] },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/tabSelector" }
           },
           "additionalProperties": false
@@ -176,6 +540,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "tab.move" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/tabSelector" },
             "to_position": { "type": "integer", "minimum": 1, "maximum": 16 }
           },
@@ -188,6 +553,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "tab.rename" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/tabSelector" },
             "title": { "type": "string", "maxLength": 64, "pattern": "^[ -~]*$", "default": "" }
           },
@@ -200,11 +566,13 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.split" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
             "direction": { "enum": ["right", "down"] },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
             "hold": { "type": "boolean", "default": false },
-            "argv": { "$ref": "#/$defs/argv" }
+            "argv": { "$ref": "#/$defs/argv" },
+            "focus": { "$ref": "#/$defs/focusPolicy" }
           },
           "additionalProperties": false
         },
@@ -215,6 +583,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "enum": ["pane.focus", "pane.kill"] },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" }
           },
           "additionalProperties": false
@@ -226,6 +595,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.swap" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
             "other": { "$ref": "#/$defs/paneSelector" }
           },
@@ -238,6 +608,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.resize" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
             "direction": { "enum": ["left", "right", "up", "down"] },
             "amount": { "type": "integer", "minimum": 1, "maximum": 100, "default": 1 }
@@ -251,6 +622,7 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.zoom" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
             "enabled": { "type": "boolean" }
           },
@@ -263,8 +635,27 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.send" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
             "text": { "type": "string", "minLength": 1, "maxLength": 65527 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["schema", "action", "session", "pane", "events"],
+          "properties": {
+            "schema": { "const": "lemma.action/v1" },
+            "action": { "const": "pane.input" },
+            "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "pane": { "$ref": "#/$defs/paneSelector" },
+            "events": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/inputEvent" }
+            }
           },
           "additionalProperties": false
         },
@@ -275,9 +666,54 @@
             "schema": { "const": "lemma.action/v1" },
             "action": { "const": "pane.capture" },
             "session": { "$ref": "#/$defs/sessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/paneSelector" },
-            "lines": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "lines": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "source": { "enum": ["visible", "recent", "last-command"], "default": "visible" },
+            "format": { "enum": ["plain", "ansi"], "default": "plain" },
+            "wrap": { "enum": ["rendered", "logical"], "default": "rendered" }
           },
+          "allOf": [
+            {
+              "if": { "properties": { "source": { "const": "last-command" } }, "required": ["source"] },
+              "then": { "not": { "required": ["lines"] } }
+            }
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["schema", "action", "session", "pane"],
+          "properties": {
+            "schema": { "const": "lemma.action/v1" },
+            "action": { "const": "pane.wait" },
+            "session": { "$ref": "#/$defs/sessionSelector" },
+            "pane": { "$ref": "#/$defs/paneSelector" },
+            "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "signal": { "type": "integer", "minimum": 1, "maximum": 127 },
+            "contains": { "type": "string", "minLength": 1, "maxLength": 65535 },
+            "until_prompt": { "const": true },
+            "after_generation": { "type": "integer", "minimum": 0 },
+            "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000, "default": 30000 }
+          },
+          "allOf": [
+            {
+              "not": {
+                "anyOf": [
+                  { "required": ["exit_code", "signal"] },
+                  { "required": ["exit_code", "contains"] },
+                  { "required": ["exit_code", "until_prompt"] },
+                  { "required": ["signal", "contains"] },
+                  { "required": ["signal", "until_prompt"] },
+                  { "required": ["contains", "until_prompt"] }
+                ]
+              }
+            },
+            {
+              "if": { "required": ["after_generation"] },
+              "then": { "anyOf": [{ "required": ["contains"] }, { "required": ["until_prompt"] }] }
+            }
+          ],
           "additionalProperties": false
         }
       ]
@@ -293,7 +729,7 @@
     },
     "paneListing": {
       "type": "object",
-      "required": ["id", "tab", "tab_position", "focused", "column", "row", "columns", "rows", "process"],
+      "required": ["id", "tab", "tab_position", "focused", "column", "row", "columns", "rows", "process", "terminal_generation", "observed_title"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "tab": { "$ref": "#/$defs/id" },
@@ -303,7 +739,9 @@
         "row": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "columns": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "rows": { "type": "integer", "minimum": 0, "maximum": 65535 },
-        "process": { "$ref": "#/$defs/paneProcess" }
+        "process": { "$ref": "#/$defs/paneProcess" },
+        "terminal_generation": { "type": "integer", "minimum": 1 },
+        "observed_title": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -323,27 +761,47 @@
           "required": ["id", "name"],
           "properties": {
             "id": { "$ref": "#/$defs/id" },
-            "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" }
+            "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" },
+            "revision": { "type": "integer", "minimum": 1 }
           },
           "additionalProperties": false
         },
         "tab": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
-        "sessions": { "type": "array" },
-        "tabs": { "type": "array" },
+        "terminal_generation": { "type": "integer", "minimum": 1 },
+        "condition": { "enum": ["process-exit", "exit-code", "signal", "contains", "prompt"] },
+        "process": { "$ref": "#/$defs/eventProcess" },
+        "daemon": { "$ref": "#/$defs/daemonInspection" },
+        "session_state": { "$ref": "#/$defs/sessionInspection" },
+        "tab_state": { "$ref": "#/$defs/tabInspection" },
+        "pane_state": { "$ref": "#/$defs/paneInspection" },
+        "sessions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/sessionSummary" }
+        },
+        "tabs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/tabSummary" }
+        },
         "panes": {
           "type": "array",
           "maxItems": 64,
           "items": { "$ref": "#/$defs/paneListing" }
         },
         "text": { "type": "string" },
+        "capture": { "$ref": "#/$defs/capture" },
         "error": {
           "type": "object",
           "required": ["reason"],
           "properties": {
             "reason": { "type": "string" },
             "field": { "type": "string" },
-            "byte": { "type": "integer", "minimum": 0 }
+            "byte": { "type": "integer", "minimum": 0 },
+            "retryable": { "type": "boolean" },
+            "expected": { "type": "integer", "minimum": 1 },
+            "current": { "type": "integer", "minimum": 1 }
           },
           "additionalProperties": false
         }
@@ -356,7 +814,7 @@
         {
           "type": "object",
           "required": ["action"],
-          "properties": { "action": { "const": "session.list" } },
+          "properties": { "action": { "enum": ["daemon.inspect", "session.list"] } },
           "additionalProperties": false
         },
         {
@@ -364,7 +822,38 @@
           "required": ["action", "session"],
           "properties": {
             "action": { "enum": ["session.inspect", "session.kill", "tab.list", "pane.list"] },
-            "session": { "$ref": "#/$defs/procedureSessionSelector" }
+            "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "tab"],
+          "anyOf": [
+            { "required": ["session"] },
+            { "properties": { "tab": { "$ref": "#/$defs/resultReference" } } }
+          ],
+          "properties": {
+            "action": { "const": "tab.inspect" },
+            "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "tab": { "$ref": "#/$defs/procedureTabSelector" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "pane"],
+          "anyOf": [
+            { "required": ["session"] },
+            { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
+          ],
+          "properties": {
+            "action": { "const": "pane.inspect" },
+            "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "pane": { "$ref": "#/$defs/procedurePaneSelector" }
           },
           "additionalProperties": false
         },
@@ -392,6 +881,7 @@
           "properties": {
             "action": { "const": "session.rename" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" }
           },
           "additionalProperties": false
@@ -403,10 +893,12 @@
             "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
             "action": { "const": "tab.new" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "title": { "type": "string", "maxLength": 64, "pattern": "^[ -~]*$" },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
             "hold": { "type": "boolean", "default": false },
-            "argv": { "$ref": "#/$defs/argv" }
+            "argv": { "$ref": "#/$defs/argv" },
+            "focus": { "$ref": "#/$defs/focusPolicy" }
           },
           "additionalProperties": false
         },
@@ -420,6 +912,7 @@
           "properties": {
             "action": { "enum": ["tab.select", "tab.kill"] },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procedureTabSelector" }
           },
           "additionalProperties": false
@@ -434,6 +927,7 @@
           "properties": {
             "action": { "const": "tab.move" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procedureTabSelector" },
             "to_position": { "type": "integer", "minimum": 1, "maximum": 16 }
           },
@@ -449,6 +943,7 @@
           "properties": {
             "action": { "const": "tab.rename" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procedureTabSelector" },
             "title": { "type": "string", "maxLength": 64, "pattern": "^[ -~]*$", "default": "" }
           },
@@ -465,11 +960,13 @@
             "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
             "action": { "const": "pane.split" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
             "direction": { "enum": ["right", "down"] },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
             "hold": { "type": "boolean", "default": false },
-            "argv": { "$ref": "#/$defs/argv" }
+            "argv": { "$ref": "#/$defs/argv" },
+            "focus": { "$ref": "#/$defs/focusPolicy" }
           },
           "additionalProperties": false
         },
@@ -483,6 +980,7 @@
           "properties": {
             "action": { "enum": ["pane.focus", "pane.kill"] },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" }
           },
           "additionalProperties": false
@@ -498,6 +996,7 @@
           "properties": {
             "action": { "const": "pane.swap" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
             "other": { "$ref": "#/$defs/procedurePaneSelector" }
           },
@@ -513,6 +1012,7 @@
           "properties": {
             "action": { "const": "pane.resize" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
             "direction": { "enum": ["left", "right", "up", "down"] },
             "amount": { "type": "integer", "minimum": 1, "maximum": 100, "default": 1 }
@@ -529,6 +1029,7 @@
           "properties": {
             "action": { "const": "pane.zoom" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
             "enabled": { "type": "boolean" }
           },
@@ -544,8 +1045,30 @@
           "properties": {
             "action": { "const": "pane.send" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
             "text": { "type": "string", "minLength": 1, "maxLength": 65527 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "pane", "events"],
+          "anyOf": [
+            { "required": ["session"] },
+            { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
+          ],
+          "properties": {
+            "action": { "const": "pane.input" },
+            "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
+            "pane": { "$ref": "#/$defs/procedurePaneSelector" },
+            "events": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/inputEvent" }
+            }
           },
           "additionalProperties": false
         },
@@ -559,9 +1082,57 @@
           "properties": {
             "action": { "const": "pane.capture" },
             "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procedurePaneSelector" },
-            "lines": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "lines": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "source": { "enum": ["visible", "recent", "last-command"], "default": "visible" },
+            "format": { "enum": ["plain", "ansi"], "default": "plain" },
+            "wrap": { "enum": ["rendered", "logical"], "default": "rendered" }
           },
+          "allOf": [
+            {
+              "if": { "properties": { "source": { "const": "last-command" } }, "required": ["source"] },
+              "then": { "not": { "required": ["lines"] } }
+            }
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "pane"],
+          "anyOf": [
+            { "required": ["session"] },
+            { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
+          ],
+          "properties": {
+            "action": { "const": "pane.wait" },
+            "session": { "$ref": "#/$defs/procedureSessionSelector" },
+            "pane": { "$ref": "#/$defs/procedurePaneSelector" },
+            "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "signal": { "type": "integer", "minimum": 1, "maximum": 127 },
+            "contains": { "type": "string", "minLength": 1, "maxLength": 65535 },
+            "until_prompt": { "const": true },
+            "after_generation": { "type": "integer", "minimum": 0 },
+            "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000, "default": 30000 }
+          },
+          "allOf": [
+            {
+              "not": {
+                "anyOf": [
+                  { "required": ["exit_code", "signal"] },
+                  { "required": ["exit_code", "contains"] },
+                  { "required": ["exit_code", "until_prompt"] },
+                  { "required": ["signal", "contains"] },
+                  { "required": ["signal", "until_prompt"] },
+                  { "required": ["contains", "until_prompt"] }
+                ]
+              }
+            },
+            {
+              "if": { "required": ["after_generation"] },
+              "then": { "anyOf": [{ "required": ["contains"] }, { "required": ["until_prompt"] }] }
+            }
+          ],
           "additionalProperties": false
         }
       ]
@@ -615,15 +1186,37 @@
         "schema": { "const": "lemma.events/v1" },
         "session": { "$ref": "#/$defs/sessionSelector" },
         "pane": { "$ref": "#/$defs/paneSelector" },
+        "panes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/paneSelector" }
+        },
         "screen": { "type": "boolean", "default": false }
       },
-      "dependentRequired": { "pane": ["session"] },
+      "dependentRequired": { "pane": ["session"], "panes": ["session"] },
       "allOf": [
         {
+          "not": { "required": ["pane", "panes"] }
+        },
+        {
           "if": { "required": ["screen"], "properties": { "screen": { "const": true } } },
-          "then": { "required": ["pane"] }
+          "then": { "anyOf": [{ "required": ["pane"] }, { "required": ["panes"] }] }
         }
       ],
+      "additionalProperties": false
+    },
+    "observedPane": {
+      "type": "object",
+      "required": ["pane", "present"],
+      "properties": {
+        "session": { "$ref": "#/$defs/id" },
+        "pane": { "$ref": "#/$defs/id" },
+        "present": { "type": "boolean" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "process": { "$ref": "#/$defs/eventProcess" }
+      },
       "additionalProperties": false
     },
     "event": {
@@ -633,13 +1226,27 @@
       "properties": {
         "schema": { "const": "lemma.event/v1" },
         "sequence": { "type": "integer", "minimum": 0 },
-        "event": { "enum": ["snapshot", "state.changed", "pane.screen", "pane.process", "pane.closed"] },
+        "event": { "enum": ["snapshot", "state.changed", "pane.terminal", "pane.screen", "pane.process", "pane.closed"] },
         "sessions": { "type": "array" },
         "session": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
+        "panes": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/observedPane" }
+        },
+        "present": { "type": "boolean" },
         "generation": { "type": "integer", "minimum": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "cursor_at_prompt": { "type": "boolean" },
+        "changed": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["screen", "cursor", "prompt", "title", "pwd"] }
+        },
         "text": { "type": "string" },
-        "process": { "type": "object" }
+        "capture": { "$ref": "#/$defs/capture" },
+        "process": { "$ref": "#/$defs/eventProcess" }
       },
       "additionalProperties": false
     }

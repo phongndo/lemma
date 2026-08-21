@@ -86,6 +86,19 @@ When Lemma's compositor overrides child-owned non-mouse modes or cursor shape af
 
 PTY bytes are parsed exactly once. Raw PTY bytes are not retained merely in case a client may want to replay them.
 
+Public terminal introspection remains two narrow projections. `pane.inspect` returns scalar metadata
+(size, active screen, viewport/history extent, cursor, child-reported title/PWD provenance, prompt
+state, input availability, integrity, and terminal generation) without terminal text. `pane.capture`
+returns one bounded visible, recent, or OSC-133 command-output projection in plain or ANSI form with
+explicit wrapping, generation, and truncation. `pane.wait` Actions and screen Events reuse that same capture value;
+they do not own another formatter or text grid.
+
+Recent capture formats a caller-selected tail from Ghostty's canonical active screen and scrollback
+without moving the viewport or installing a selection. Last-command capture asks Ghostty's semantic
+selection primitive for an OSC-133-delimited output range. Lemma does not synthesize mouse wheel
+input to scrape an alternate-screen application's private transcript: such a read would mutate the
+application, race with a controller, and require application-specific idle/detection policy.
+
 ## PTY output flow
 
 ```text

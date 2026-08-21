@@ -118,6 +118,47 @@ auto PaneLayout::pane_count() const noexcept -> std::size_t {
       std::ranges::count_if(nodes_, [](const Node& node) { return node.active && node.leaf; }));
 }
 
+// The recursive branch mirrors the bounded binary topology into one dense value.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto PaneLayout::snapshot() const noexcept -> std::optional<LayoutSnapshot> {
+  LayoutSnapshot output;
+  const auto visit = [&](auto&& self, const std::size_t source_index,
+                         const std::size_t depth) noexcept -> std::optional<std::int16_t> {
+    if (source_index >= nodes_.size() || depth >= limits::layout_depth_hard_max ||
+        output.size >= output.nodes.size()) {
+      return std::nullopt;
+    }
+    const auto& source = std::span(nodes_).subspan(source_index, 1).front();
+    if (!source.active) {
+      return std::nullopt;
+    }
+    const auto target_index = output.size++;
+    auto& target = std::span(output.nodes).subspan(target_index, 1).front();
+    target = {.pane = source.pane,
+              .first = -1,
+              .second = -1,
+              .ratio = source.leaf ? std::uint16_t{0} : source.ratio.value(),
+              .leaf = source.leaf,
+              .axis = source.axis};
+    if (source.leaf) {
+      return static_cast<std::int16_t>(target_index);
+    }
+    if (!valid_node_index(source.first) || !valid_node_index(source.second)) {
+      return std::nullopt;
+    }
+    const auto first = self(self, static_cast<std::size_t>(source.first), depth + 1U);
+    const auto second = self(self, static_cast<std::size_t>(source.second), depth + 1U);
+    if (!first.has_value() || !second.has_value()) {
+      return std::nullopt;
+    }
+    target.first = *first;
+    target.second = *second;
+    return static_cast<std::int16_t>(target_index);
+  };
+  const auto root = visit(visit, 0, 0);
+  return root == std::optional<std::int16_t>{0} ? std::optional{output} : std::nullopt;
+}
+
 auto PaneLayout::first_leaf(std::size_t node_index) const noexcept -> PaneId {
   for (std::size_t depth = 0; depth < limits::layout_depth_hard_max; ++depth) {
     if (node_index >= nodes_.size()) {

@@ -411,6 +411,13 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   EXPECT_TRUE(help.output.contains("action DOMAIN OP [ARGUMENTS...]")) << help.output;
   EXPECT_TRUE(help.output.contains("Creation options:")) << help.output;
   EXPECT_TRUE(help.output.contains("Print the Lemma agent skill")) << help.output;
+  EXPECT_FALSE(help.output.contains("wait [PANE]")) << help.output;
+  const auto wait_help = command({"action", "pane", "wait", "--help"});
+  EXPECT_EQ(wait_help.status, 0) << wait_help.output;
+  EXPECT_TRUE(wait_help.output.contains("lemma action pane wait")) << wait_help.output;
+  EXPECT_TRUE(wait_help.output.contains("Wait for the Pane child process to complete"))
+      << wait_help.output;
+  EXPECT_EQ(command({"wait"}).status, 2);
   const auto version = command({"--version"});
   EXPECT_EQ(version.status, 0) << version.output;
   EXPECT_TRUE(version.output.contains("lemma 0.1.0")) << version.output;
@@ -418,10 +425,10 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   const auto skill = command({"skill"});
   EXPECT_EQ(skill.status, 0) << skill.output;
   EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\ndescription: Use when")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("one operation       -> lemma action")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("one interaction     -> lemma action")) << skill.output;
   EXPECT_TRUE(skill.output.contains("dependent sequence  -> lemma proc")) << skill.output;
   EXPECT_TRUE(skill.output.contains("observation stream  -> lemma events")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("observation stream, not a wait command")) << skill.output;
+  EXPECT_FALSE(skill.output.contains("Wait   =")) << skill.output;
   EXPECT_TRUE(skill.output.contains("schema discovery    -> lemma api schema --json"))
       << skill.output;
   EXPECT_TRUE(skill.output.contains("do not open sockets, write RPC clients, or wrap the protocol"))
@@ -437,6 +444,7 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
       << skill.output;
   EXPECT_TRUE(skill.output.contains("provide explicit targets for operations that require them"))
       << skill.output;
+  EXPECT_TRUE(skill.output.contains("`lemma action pane wait` defaults")) << skill.output;
   EXPECT_TRUE(skill.output.contains("prefer returned generational IDs")) << skill.output;
   EXPECT_TRUE(skill.output.contains("Do not add `sh -c` unless shell")) << skill.output;
   EXPECT_TRUE(skill.output.contains("Long-running programs remain alive without `--hold`"))
@@ -586,7 +594,7 @@ TEST_F(MuxProcessTest, SupportsScopedOneShotPaneAutomationAndHeldExitStatus) {
   const auto unexpected =
       command({"pane", "wait", "held", "0:1", "--exit-code", "0", "--timeout", "3s"});
   EXPECT_EQ(unexpected.status, 1) << unexpected.output;
-  EXPECT_TRUE(unexpected.output.contains("exited unexpectedly")) << unexpected.output;
+  EXPECT_TRUE(unexpected.output.contains(R"("reason":"unexpected_exit")")) << unexpected.output;
   const auto waited =
       command({"pane", "wait", "held", "0:1", "--exit-code", "7", "--timeout", "3s"});
   EXPECT_EQ(waited.status, 0) << waited.output;
@@ -668,7 +676,7 @@ TEST_F(MuxProcessTest, ExposesPersistentActionsEventsAndOfflineSchema) {
                                  static_cast<std::size_t>(created));
   EXPECT_TRUE(created_text.contains(R"("action":"session.start")")) << created_text;
   EXPECT_TRUE(created_text.contains(R"("status":"applied")")) << created_text;
-  EXPECT_TRUE(created_text.contains(R"("session":{"id":"0:1","name":"public-api"})"))
+  EXPECT_TRUE(created_text.contains(R"("session":{"id":"0:1","name":"public-api","revision":1})"))
       << created_text;
 
   ASSERT_TRUE(actions.send(
@@ -1059,7 +1067,8 @@ TEST_F(MuxProcessTest, ExecutesVersionedProcedureWithReferencesAndCleanup) {
   ASSERT_EQ(executed.status, 0) << executed.output;
   EXPECT_TRUE(executed.output.starts_with(R"({"schema":"lemma.proc-result/v1")"))
       << executed.output;
-  EXPECT_TRUE(executed.output.contains(R"("session":{"id":"0:1","name":"procedure-renamed"})"))
+  EXPECT_TRUE(
+      executed.output.contains(R"("session":{"id":"0:1","name":"procedure-renamed","revision":2})"))
       << executed.output;
   EXPECT_TRUE(executed.output.contains(R"("sessions":[{"name":"procedure-renamed")"))
       << executed.output;

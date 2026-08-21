@@ -730,6 +730,68 @@ auto Terminal::set_theme(const TerminalTheme& theme) noexcept -> std::expected<v
   return {};
 }
 
+auto Terminal::cursor_at_prompt() const noexcept -> std::expected<bool, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  bool value = false;
+  const auto result =
+      ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &value);
+  return result == GHOSTTY_SUCCESS ? std::expected<bool, Error>{value}
+                                   : std::unexpected(detail::map_error(result));
+}
+
+auto Terminal::inspection() const noexcept -> std::expected<TerminalInspection, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  GhosttyTerminalScrollbar scrollbar{};
+  GhosttyTerminalScreen screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+  std::size_t scrollback = 0;
+  std::uint16_t cursor_x = 0;
+  std::uint16_t cursor_y = 0;
+  bool viewport_active = true;
+  bool cursor_visible = false;
+  bool cursor_at_prompt = false;
+  const std::array keys{
+      GHOSTTY_TERMINAL_DATA_SCROLLBAR,       GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+      GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, GHOSTTY_TERMINAL_DATA_CURSOR_X,
+      GHOSTTY_TERMINAL_DATA_CURSOR_Y,        GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE,
+      GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE,  GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT,
+  };
+  std::array<void*, keys.size()> values{&scrollbar,      &screen,          &scrollback,
+                                        &cursor_x,       &cursor_y,        &viewport_active,
+                                        &cursor_visible, &cursor_at_prompt};
+  std::size_t written = 0;
+  const auto result = ghostty_terminal_get_multi(impl_->terminal, keys.size(), keys.data(),
+                                                 values.data(), &written);
+  if (result != GHOSTTY_SUCCESS || written != keys.size()) {
+    return std::unexpected(detail::map_error(result));
+  }
+  ActiveScreen active_screen{ActiveScreen::primary};
+  switch (screen) {
+  case GHOSTTY_TERMINAL_SCREEN_PRIMARY:
+    active_screen = ActiveScreen::primary;
+    break;
+  case GHOSTTY_TERMINAL_SCREEN_ALTERNATE:
+    active_screen = ActiveScreen::alternate;
+    break;
+  case GHOSTTY_TERMINAL_SCREEN_MAX_VALUE:
+    return std::unexpected(Error::invalid_state);
+  }
+  return TerminalInspection{
+      .viewport = {.total_rows = scrollbar.total,
+                   .offset = scrollbar.offset,
+                   .visible_rows = scrollbar.len,
+                   .follows_output = viewport_active},
+      .scrollback_rows = scrollback,
+      .cursor_column = cursor_x,
+      .cursor_row = cursor_y,
+      .active_screen = active_screen,
+      .cursor_visible = cursor_visible,
+      .cursor_at_prompt = cursor_at_prompt,
+  };
+}
+
 auto Terminal::scrollback_rows() const noexcept -> std::expected<std::size_t, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);

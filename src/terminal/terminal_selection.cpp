@@ -93,6 +93,83 @@ namespace {
   return rows;
 }
 
+[[nodiscard]] auto point_has_text(const GhosttyTerminal terminal,
+                                  const TerminalPoint point) noexcept
+    -> std::expected<bool, Error> {
+  const auto ref = grid_ref(terminal, point);
+  if (!ref.has_value()) {
+    return std::unexpected(ref.error());
+  }
+  GhosttyCell cell = 0;
+  auto result = ghostty_grid_ref_cell(&*ref, &cell);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  bool has_text = false;
+  result = ghostty_cell_get(cell, GHOSTTY_CELL_DATA_HAS_TEXT, &has_text);
+  return result == GHOSTTY_SUCCESS ? std::expected<bool, Error>{has_text}
+                                   : std::unexpected(detail::map_error(result));
+}
+
+[[nodiscard]] auto row_has_content(const GhosttyTerminal terminal, const PointSpace space,
+                                   const std::uint32_t row, const std::uint16_t columns) noexcept
+    -> std::expected<bool, Error> {
+  const auto first = grid_ref(terminal, {.space = space, .column = 0, .row = row});
+  if (!first.has_value()) {
+    return std::unexpected(first.error());
+  }
+  GhosttyRow value = 0;
+  auto result = ghostty_grid_ref_row(&*first, &value);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  bool styled = false;
+  GhosttyRowSemanticPrompt prompt = GHOSTTY_ROW_SEMANTIC_NONE;
+  const std::array keys{GHOSTTY_ROW_DATA_STYLED, GHOSTTY_ROW_DATA_SEMANTIC_PROMPT};
+  std::array<void*, keys.size()> values{&styled, &prompt};
+  std::size_t written = 0;
+  result = ghostty_row_get_multi(value, keys.size(), keys.data(), values.data(), &written);
+  if (result != GHOSTTY_SUCCESS || written != keys.size()) {
+    return std::unexpected(detail::map_error(result));
+  }
+  if (styled || prompt != GHOSTTY_ROW_SEMANTIC_NONE) {
+    return true;
+  }
+  for (std::uint16_t column = 0; column < columns; ++column) {
+    const auto has_text = point_has_text(terminal, {.space = space, .column = column, .row = row});
+    if (!has_text.has_value()) {
+      return std::unexpected(has_text.error());
+    }
+    if (*has_text) {
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] auto
+format_selection_buffer(const GhosttyTerminal terminal, const GhosttySelection& selection,
+                        const ScreenFormat format, const std::span<std::byte> output,
+                        const bool unwrap) noexcept -> std::expected<std::size_t, Error> {
+  GhosttyTerminalSelectionFormatOptions options{};
+  options.size = sizeof(options);
+  options.emit = formatter_format(format);
+  options.unwrap = unwrap;
+  options.trim = format != ScreenFormat::vt_full;
+  options.selection = &selection;
+  // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* output_data = reinterpret_cast<std::uint8_t*>(output.data());
+  std::size_t bytes_written = 0;
+  const auto result = ghostty_terminal_selection_format_buf(terminal, options, output_data,
+                                                            output.size(), &bytes_written);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  LEMMA_ASSERT(bytes_written <= output.size());
+  return bytes_written;
+}
+
 [[nodiscard]] auto point_from_ref(const GhosttyTerminal terminal, const GhosttyGridRef& ref,
                                   const PointSpace space) noexcept
     -> std::expected<TerminalPoint, Error> {
@@ -712,14 +789,15 @@ struct SearchTextCursor final {
 
 } // namespace
 
-auto Terminal::format_screen(const ScreenFormat format, const std::span<std::byte> output) noexcept
-    -> std::expected<std::size_t, Error> {
+auto Terminal::format_screen(const ScreenFormat format, const std::span<std::byte> output,
+                             const bool unwrap) noexcept -> std::expected<std::size_t, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
 
   GhosttyFormatterTerminalOptions options{};
   options.size = sizeof(options);
   options.emit = formatter_format(format);
+  options.unwrap = unwrap;
   options.trim = format != ScreenFormat::vt_full;
   options.extra.size = sizeof(options.extra);
   options.extra.screen.size = sizeof(options.extra.screen);
@@ -746,6 +824,169 @@ auto Terminal::format_screen(const ScreenFormat format, const std::span<std::byt
   }
   LEMMA_ASSERT(bytes_written <= output.size());
   return bytes_written;
+}
+
+// Selection construction and caller-buffer formatting have independent bounded failures.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Terminal::format_visible_tail(const ScreenFormat format, const std::size_t rows,
+                                   const std::span<std::byte> output, const bool unwrap) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  const auto terminal_size = size();
+  if (rows == 0 || terminal_size.columns == 0 || terminal_size.rows == 0) {
+    return std::unexpected(Error::invalid_options);
+  }
+  std::size_t relevant_rows = 0;
+  for (std::size_t remaining = terminal_size.rows; remaining > 0; --remaining) {
+    const auto row = remaining - 1U;
+    const auto has_content =
+        row_has_content(impl_->terminal, PointSpace::viewport, static_cast<std::uint32_t>(row),
+                        terminal_size.columns);
+    if (!has_content.has_value()) {
+      return std::unexpected(has_content.error());
+    }
+    if (*has_content) {
+      relevant_rows = remaining;
+      break;
+    }
+  }
+  if (relevant_rows == 0) {
+    return std::size_t{0};
+  }
+  const auto first_row = relevant_rows > rows ? relevant_rows - rows : 0U;
+  const auto start = grid_ref(
+      impl_->terminal,
+      {.space = PointSpace::viewport, .column = 0, .row = static_cast<std::uint32_t>(first_row)});
+  const auto end =
+      grid_ref(impl_->terminal, {.space = PointSpace::viewport,
+                                 .column = static_cast<std::uint16_t>(terminal_size.columns - 1U),
+                                 .row = static_cast<std::uint32_t>(relevant_rows - 1U)});
+  if (!start.has_value() || !end.has_value()) {
+    return std::unexpected(!start.has_value() ? start.error() : end.error());
+  }
+  const GhosttySelection selection{
+      .size = sizeof(GhosttySelection), .start = *start, .end = *end, .rectangle = false};
+  return format_selection_buffer(impl_->terminal, selection, format, output, unwrap);
+}
+
+// Selection construction and caller-buffer formatting have independent bounded failures.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Terminal::format_recent(const ScreenFormat format, const std::size_t rows,
+                             const std::span<std::byte> output, const bool unwrap) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  if (rows == 0) {
+    return std::unexpected(Error::invalid_options);
+  }
+  const auto available = total_rows(impl_->terminal);
+  if (!available.has_value() || *available == 0) {
+    return std::unexpected(available.has_value() ? Error::invalid_state : available.error());
+  }
+  const auto inspected = inspection();
+  if (!inspected.has_value()) {
+    return std::unexpected(inspected.error());
+  }
+  const auto terminal_size = size();
+  const auto columns = terminal_size.columns;
+  const auto cursor_end = inspected->scrollback_rows + inspected->cursor_row + 1U;
+  auto relevant_rows = std::min(*available, cursor_end);
+  const auto active_start =
+      *available > terminal_size.rows ? *available - terminal_size.rows : std::size_t{0};
+  for (std::size_t remaining = *available; remaining > active_start; --remaining) {
+    const auto row = remaining - 1U;
+    if (row > std::numeric_limits<std::uint32_t>::max()) {
+      return std::unexpected(Error::limit_exceeded);
+    }
+    const auto has_content = row_has_content(impl_->terminal, PointSpace::screen,
+                                             static_cast<std::uint32_t>(row), columns);
+    if (!has_content.has_value()) {
+      return std::unexpected(has_content.error());
+    }
+    if (*has_content) {
+      relevant_rows = std::max(relevant_rows, remaining);
+      break;
+    }
+  }
+  const auto first_row = relevant_rows > rows ? relevant_rows - rows : 0U;
+  if (relevant_rows == 0 || first_row > std::numeric_limits<std::uint32_t>::max() ||
+      relevant_rows - 1U > std::numeric_limits<std::uint32_t>::max()) {
+    return std::unexpected(Error::limit_exceeded);
+  }
+  const auto start = grid_ref(
+      impl_->terminal,
+      {.space = PointSpace::screen, .column = 0, .row = static_cast<std::uint32_t>(first_row)});
+  const auto end =
+      grid_ref(impl_->terminal, {.space = PointSpace::screen,
+                                 .column = static_cast<std::uint16_t>(columns - 1U),
+                                 .row = static_cast<std::uint32_t>(relevant_rows - 1U)});
+  if (!start.has_value() || !end.has_value()) {
+    return std::unexpected(!start.has_value() ? start.error() : end.error());
+  }
+  const GhosttySelection selection{
+      .size = sizeof(GhosttySelection), .start = *start, .end = *end, .rectangle = false};
+  return format_selection_buffer(impl_->terminal, selection, format, output, unwrap);
+}
+
+// Bounded reverse traversal qualifies candidate cells before asking Ghostty for semantic output.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Terminal::format_last_command(const ScreenFormat format, const std::span<std::byte> output,
+                                   const bool unwrap) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+  const auto available = total_rows(impl_->terminal);
+  if (!available.has_value() || *available == 0) {
+    return std::unexpected(available.has_value() ? Error::invalid_state : available.error());
+  }
+  const auto columns = size().columns;
+  constexpr std::size_t inspected_cells_max = std::size_t{64} * 1'024U;
+  std::size_t inspected = 0;
+  for (std::size_t remaining_rows = *available;
+       remaining_rows > 0 && inspected < inspected_cells_max; --remaining_rows) {
+    const auto row = static_cast<std::uint32_t>(remaining_rows - 1U);
+    for (std::uint16_t remaining_columns = columns;
+         remaining_columns > 0 && inspected < inspected_cells_max; --remaining_columns) {
+      const auto column = static_cast<std::uint16_t>(remaining_columns - 1U);
+      const auto ref =
+          grid_ref(impl_->terminal, {.space = PointSpace::screen, .column = column, .row = row});
+      ++inspected;
+      if (!ref.has_value()) {
+        return std::unexpected(ref.error());
+      }
+      GhosttyCell cell = 0;
+      auto result = ghostty_grid_ref_cell(&*ref, &cell);
+      if (result != GHOSTTY_SUCCESS) {
+        return std::unexpected(detail::map_error(result));
+      }
+      bool has_text = false;
+      GhosttyCellSemanticContent semantic = GHOSTTY_CELL_SEMANTIC_OUTPUT;
+      const std::array keys{GHOSTTY_CELL_DATA_HAS_TEXT, GHOSTTY_CELL_DATA_SEMANTIC_CONTENT};
+      std::array<void*, keys.size()> values{&has_text, &semantic};
+      std::size_t written = 0;
+      result = ghostty_cell_get_multi(cell, keys.size(), keys.data(), values.data(), &written);
+      if (result != GHOSTTY_SUCCESS || written != keys.size()) {
+        return std::unexpected(detail::map_error(result));
+      }
+      if (has_text && semantic == GHOSTTY_CELL_SEMANTIC_INPUT) {
+        return std::size_t{0};
+      }
+      if (!has_text || semantic != GHOSTTY_CELL_SEMANTIC_OUTPUT) {
+        continue;
+      }
+      GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+      result = ghostty_terminal_select_output(impl_->terminal, *ref, &selection);
+      if (result == GHOSTTY_NO_VALUE) {
+        continue;
+      }
+      if (result != GHOSTTY_SUCCESS) {
+        return std::unexpected(detail::map_error(result));
+      }
+      return format_selection_buffer(impl_->terminal, selection, format, output, unwrap);
+    }
+  }
+  return std::unexpected(Error::invalid_state);
 }
 
 // Event phases have intentionally distinct Ghostty option contracts.

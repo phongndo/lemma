@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -47,15 +48,18 @@ struct ProcessExit final {
   std::uint32_t value{0};
 };
 
-struct PaneLaunchCommand final {
+struct PaneLaunchIntent final {
   std::vector<std::byte> bytes;
+  std::string working_directory;
 };
 
 struct Pane final {
   [[nodiscard]] auto launch_command() const noexcept -> std::span<const std::byte> {
-    return launch_command_storage == nullptr
-               ? std::span<const std::byte>{}
-               : std::span<const std::byte>(launch_command_storage->bytes);
+    return launch_intent == nullptr ? std::span<const std::byte>{}
+                                    : std::span<const std::byte>(launch_intent->bytes);
+  }
+  [[nodiscard]] auto launch_working_directory() const noexcept -> std::string_view {
+    return launch_intent == nullptr ? std::string_view{} : launch_intent->working_directory;
   }
 
   [[nodiscard]] auto commit_process_exit(const ProcessExit outcome) noexcept -> bool {
@@ -69,9 +73,10 @@ struct Pane final {
   PaneId id;
   TabId tab;
   PaneRectangle rectangle{};
-  // Pane-owned semantic launch intent. Null means the account login shell. Keeping cold launch
-  // payload storage indirect avoids adding a vector to every hot layout Pane.
-  std::unique_ptr<PaneLaunchCommand> launch_command_storage;
+  // Pane-owned semantic launch intent. An empty argv means the account login shell. Keeping cold
+  // argv and working-directory storage indirect avoids adding owning strings to every hot layout
+  // Pane.
+  std::unique_ptr<PaneLaunchIntent> launch_intent;
   // Core owns exit policy and the committed process outcome. Runtime retains the canonical
   // terminal for held panes but cannot independently decide semantic pane lifetime.
   std::optional<ProcessExit> process_exit;

@@ -56,6 +56,7 @@ def run_mux(domain: str | None = None) -> None:
         "detach-reattach": "tests.mux.test_session_lifecycle",
         "resize": "tests.mux.test_resize",
         "terminal-boundary": "tests.mux.test_terminal_boundary",
+        "agent-automation": "tests.mux.test_agent_automation",
         "input": "tests.mux.test_terminal_boundary",
         "output": "tests.mux.test_terminal_boundary",
     }
@@ -108,7 +109,7 @@ def usage() -> str:
   ./test queues
   ./test terminal
   ./test component
-  ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary]
+  ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary|agent-automation]
   ./test stress                  deterministic/exhaustive native stress
   ./test extended                legacy characterization, resources, allocation, and stress
 """

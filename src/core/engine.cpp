@@ -21,6 +21,7 @@
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "lemma/version.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
@@ -423,7 +424,10 @@ struct PaneRuntime final {
   InteractiveDamageLatch interactive_damage;
   PresentationGate presentation_gate;
   std::uint64_t compression_activity{0};
+  // Content generation invalidates bounded search continuations. Observation generation also
+  // advances for viewport-only changes that alter public visible capture.
   std::uint64_t mutation_generation{1};
+  std::uint64_t observation_generation{1};
   std::size_t scrollback_bytes_reserved{0};
   std::chrono::steady_clock::time_point compression_deadline;
   bool compression_scheduled{false};
@@ -569,6 +573,9 @@ public:
   }
 
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] auto scrollback_bytes_reserved() const noexcept -> std::size_t {
+    return scrollback_bytes_reserved_;
+  }
   [[nodiscard]] auto can_reserve_scrollback(const std::size_t bytes) const noexcept -> bool {
     return bytes <= limits::terminal_scrollback_bytes_aggregate_max - scrollback_bytes_reserved_;
   }
@@ -581,11 +588,19 @@ private:
 
 static_assert(sizeof(PaneRuntimeStore) <= std::size_t{4} * 1'024U);
 
+void record_terminal_observation(PaneRuntime& runtime) noexcept {
+  runtime.observation_generation =
+      runtime.observation_generation == std::numeric_limits<std::uint64_t>::max()
+          ? std::uint64_t{1}
+          : runtime.observation_generation + 1U;
+}
+
 void record_terminal_mutation(PaneRuntime& runtime) noexcept {
   runtime.mutation_generation =
       runtime.mutation_generation == std::numeric_limits<std::uint64_t>::max()
           ? std::uint64_t{1}
           : runtime.mutation_generation + 1U;
+  record_terminal_observation(runtime);
 }
 
 enum class ConnectionCloseState : std::uint8_t {
@@ -764,6 +779,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
     runtime->terminal.clear_selection_checkpoint();
     runtime->terminal.clear_selection();
     runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+    record_terminal_observation(*runtime);
     runtime->interactive_damage.reset();
   }
 
@@ -1096,8 +1112,8 @@ refresh_process_name_if_due(PaneRuntime& runtime,
 [[nodiscard]] auto allocate_tab(SessionRecord& session, PaneRuntimeStore& runtimes,
                                 const std::span<const std::byte> launch_command = {},
                                 const std::string_view working_directory = {},
-                                const PaneExitPolicy exit_policy = PaneExitPolicy::close) noexcept
-    -> Tab* {
+                                const PaneExitPolicy exit_policy = PaneExitPolicy::close,
+                                const bool activate = true) noexcept -> Tab* {
   if (!session.id.is_valid() || tab_count(session) >= session.tabs.size() ||
       pane_count(session) >= panes_per_session_max || runtimes.size() >= limits::panes_hard_max ||
       !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
@@ -1119,20 +1135,17 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     }
     const auto tab_generation = next_generation(tab_slot.generation);
     const auto tab_id = TabId::from_parts(static_cast<std::uint32_t>(index), tab_generation);
-    std::unique_ptr<PaneLaunchCommand> retained_launch_command;
-    if (!launch_command.empty()) {
-      try {
-        retained_launch_command = std::make_unique<PaneLaunchCommand>();
-        retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
-      } catch (...) {
-        return nullptr;
-      }
-    }
-    const auto retained_launch = retained_launch_command == nullptr
-                                     ? std::span<const std::byte>{}
-                                     : std::span<const std::byte>(retained_launch_command->bytes);
-    const PaneAddress address{.session = session.id, .pane = pane_id};
     const auto launch_directory = working_directory.empty() ? session.cwd() : working_directory;
+    std::unique_ptr<PaneLaunchIntent> retained_launch_command;
+    try {
+      retained_launch_command = std::make_unique<PaneLaunchIntent>();
+      retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
+      retained_launch_command->working_directory = launch_directory;
+    } catch (...) {
+      return nullptr;
+    }
+    const auto retained_launch = std::span<const std::byte>(retained_launch_command->bytes);
+    const PaneAddress address{.session = session.id, .pane = pane_id};
     auto runtime = create_pane_runtime(
         session.attachment.columns, pane_rows(session.attachment.rows), launch_directory,
         session.launch_environment(), session.environment_mode, session.theme, session.id,
@@ -1148,7 +1161,7 @@ refresh_process_name_if_due(PaneRuntime& runtime,
           .tab = tab_id,
           .rectangle = {.columns = session.attachment.columns,
                         .rows = pane_rows(session.attachment.rows)},
-          .launch_command_storage = std::move(retained_launch_command),
+          .launch_intent = std::move(retained_launch_command),
           .process_exit = std::nullopt,
           .exit_policy = exit_policy,
       });
@@ -1170,8 +1183,10 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     pane_slot.pane = std::move(first_pane);
     tab_slot.generation = tab_generation;
     tab_slot.tab = std::move(created);
-    session.previous_tab = session.active_tab;
-    session.active_tab = tab_id;
+    if (activate) {
+      session.previous_tab = session.active_tab;
+      session.active_tab = tab_id;
+    }
     return tab_slot.tab.get();
   }
   return nullptr;
@@ -1507,6 +1522,7 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
     return false;
   }
   if (*scrolled) {
+    record_terminal_observation(runtime);
     note_compression_activity(runtime);
     schedule_frame(session, FrameUrgency::interactive, true);
   }
@@ -1547,6 +1563,7 @@ void leave_copy_mode(SessionRecord& session, PaneRuntimeStore& runtimes) noexcep
     runtime->terminal.clear_selection();
     if (changed) {
       runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+      record_terminal_observation(*runtime);
       note_compression_activity(*runtime);
     }
   }
@@ -1699,6 +1716,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
     session.attachment.copy_mode.viewport_offset = scrolled->offset;
   }
   if (changed) {
+    record_terminal_observation(runtime);
     note_compression_activity(runtime);
     schedule_frame(session, FrameUrgency::interactive, true);
   }
@@ -1745,6 +1763,9 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
     if (!scrolled.has_value() || !update_copy_viewport_offset(session, runtime)) {
       leave_copy_mode(session, runtimes);
       return false;
+    }
+    if (*scrolled) {
+      record_terminal_observation(runtime);
     }
     session.attachment.copy_mode.feedback = CopyModeFeedback::none;
     note_compression_activity(runtime);
@@ -1976,6 +1997,7 @@ struct CopyEscapeDecode final {
   }
   runtime.terminal.scroll_viewport(
       vt::ViewportScroll::row, static_cast<std::int64_t>(*search.search_restore_viewport_offset));
+  record_terminal_observation(runtime);
   return update_copy_viewport_offset(session, runtime);
 }
 
@@ -2713,12 +2735,12 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
 [[nodiscard]] auto create_tab(SessionRecord& session, PaneRuntimeStore& runtimes,
                               const std::span<const std::byte> launch_command = {},
                               const std::string_view working_directory = {},
-                              const PaneExitPolicy exit_policy = PaneExitPolicy::close) noexcept
-    -> Tab* {
+                              const PaneExitPolicy exit_policy = PaneExitPolicy::close,
+                              const bool activate = true) noexcept -> Tab* {
   const auto previous_active = session.active_tab;
   const auto previous_previous = session.previous_tab;
   auto* const created =
-      allocate_tab(session, runtimes, launch_command, working_directory, exit_policy);
+      allocate_tab(session, runtimes, launch_command, working_directory, exit_policy, activate);
   if (created == nullptr) {
     return nullptr;
   }
@@ -2734,7 +2756,7 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
     }
     return nullptr;
   }
-  schedule_frame(session, FrameUrgency::state_change, true);
+  schedule_frame(session, FrameUrgency::state_change, session.active_tab == created->id);
   record_session_mutation(session);
   return created;
 }
@@ -2746,8 +2768,8 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
                               const PaneId source_pane, const SplitAxis axis,
                               const std::span<const std::byte> launch_command = {},
                               const std::string_view working_directory = {},
-                              const PaneExitPolicy exit_policy = PaneExitPolicy::close) noexcept
-    -> Pane* {
+                              const PaneExitPolicy exit_policy = PaneExitPolicy::close,
+                              const bool focus_created = true) noexcept -> Pane* {
   if (pane_count(session) >= panes_per_session_max ||
       find_pane(session, tab, source_pane) == nullptr ||
       !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
@@ -2785,18 +2807,15 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   }
   std::unique_ptr<Pane> created;
   try {
-    std::unique_ptr<PaneLaunchCommand> retained_launch_command;
-    if (!launch_command.empty()) {
-      retained_launch_command = std::make_unique<PaneLaunchCommand>();
-      retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
-    }
-    created =
-        std::make_unique<Pane>(Pane{.id = pane_id,
-                                    .tab = tab.id,
-                                    .rectangle = *new_rectangle,
-                                    .launch_command_storage = std::move(retained_launch_command),
-                                    .process_exit = std::nullopt,
-                                    .exit_policy = exit_policy});
+    auto retained_launch_command = std::make_unique<PaneLaunchIntent>();
+    retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
+    retained_launch_command->working_directory = launch_directory;
+    created = std::make_unique<Pane>(Pane{.id = pane_id,
+                                          .tab = tab.id,
+                                          .rectangle = *new_rectangle,
+                                          .launch_intent = std::move(retained_launch_command),
+                                          .process_exit = std::nullopt,
+                                          .exit_policy = exit_policy});
   } catch (...) {
     return nullptr;
   }
@@ -2812,8 +2831,10 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   pane_slot.generation = pane_generation;
   pane_slot.pane = std::move(created);
   tab.zoomed = false;
-  tab.previous_pane = source_pane;
-  tab.focused_pane = pane_id;
+  if (focus_created) {
+    tab.previous_pane = source_pane;
+    tab.focused_pane = pane_id;
+  }
   if (!resolve_session_layout(session, tab, runtimes, &proposed_layout)) {
     if (session.active) {
       const bool erased = runtimes.erase(address);
@@ -4642,6 +4663,98 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   return InputQueueResult::queued;
 }
 
+[[nodiscard]] auto public_input_key(const api::InputEvent& event) noexcept -> protocol::KeyInput {
+  static_assert(static_cast<std::uint8_t>(api::InputKey::a) + 1U ==
+                static_cast<std::uint8_t>(protocol::KeyInputKey::a));
+  static_assert(static_cast<std::uint8_t>(api::InputKey::f12) + 1U ==
+                static_cast<std::uint8_t>(protocol::KeyInputKey::f12));
+  auto action = protocol::KeyInputAction::press;
+  if (event.action == api::InputKeyAction::repeat) {
+    action = protocol::KeyInputAction::repeat;
+  } else if (event.action == api::InputKeyAction::release) {
+    action = protocol::KeyInputAction::release;
+  }
+  const auto key = static_cast<protocol::KeyInputKey>(
+      static_cast<std::uint8_t>(event.key) + static_cast<std::uint8_t>(protocol::KeyInputKey::a));
+  protocol::KeyInput result{.action = action,
+                            .key = key,
+                            .modifiers = event.modifiers,
+                            .consumed_modifiers = 0,
+                            .unshifted_codepoint = 0,
+                            .composing = false};
+  if (event.key >= api::InputKey::a && event.key <= api::InputKey::z) {
+    result.unshifted_codepoint = static_cast<std::uint32_t>('a') +
+                                 static_cast<std::uint32_t>(event.key) -
+                                 static_cast<std::uint32_t>(api::InputKey::a);
+  } else if (event.key == api::InputKey::space) {
+    result.unshifted_codepoint = static_cast<std::uint32_t>(' ');
+  }
+  return result;
+}
+
+// Event-specific encoders stage into one queue before the batch is admitted atomically.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto queue_public_input_batch(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                            PaneRuntime& runtime,
+                                            const std::span<const api::InputEvent> events) noexcept
+    -> InputQueueResult {
+  if (!runtime.accepts_input() || events.empty()) {
+    return InputQueueResult::encoding_failed;
+  }
+  PanePtyWriteQueue staged;
+  for (const auto& event : events) {
+    InputQueueResult queued = InputQueueResult::encoding_failed;
+    if (event.kind == api::InputEventKind::text) {
+      queued = queue_normalized_input(
+          staged, runtime.terminal, std::as_bytes(std::span(event.text.data(), event.text.size())));
+    } else if (event.kind == api::InputEventKind::paste) {
+      std::vector<std::byte> paste;
+      try {
+        const auto bytes = std::as_bytes(std::span(event.text.data(), event.text.size()));
+        paste.assign(bytes.begin(), bytes.end());
+      } catch (...) {
+        return InputQueueResult::encoding_failed;
+      }
+      queued = queue_paste_input(staged, runtime.terminal, paste);
+    } else {
+      const auto key = public_input_key(event);
+      std::array<std::byte, 1> text{};
+      auto key_text = std::span<const std::byte>{};
+      if (event.action != api::InputKeyAction::release &&
+          ((event.key >= api::InputKey::a && event.key <= api::InputKey::z) ||
+           event.key == api::InputKey::space)) {
+        char character = ' ';
+        if (event.key != api::InputKey::space) {
+          const auto offset = static_cast<char>(event.key) - static_cast<char>(api::InputKey::a);
+          character = static_cast<char>(
+              ((event.modifiers & api::input_modifier_shift) != 0 ? 'A' : 'a') + offset);
+        }
+        text.front() = static_cast<std::byte>(character);
+        key_text = text;
+      }
+      queued = queue_key_input(staged, runtime.terminal, key, key_text);
+    }
+    if (queued != InputQueueResult::queued) {
+      return queued;
+    }
+  }
+  if (staged.empty()) {
+    return InputQueueResult::queued;
+  }
+  if (staged.size() > runtime.pending_writes.remaining()) {
+    return InputQueueResult::full;
+  }
+  if (!scroll_viewport_for_application_input(session, runtime)) {
+    return InputQueueResult::encoding_failed;
+  }
+  const auto queued_bytes_before = runtime.pending_writes.size();
+  const bool appended = runtime.pending_writes.append(staged.readable_span());
+  LEMMA_ASSERT(appended);
+  clear_mouse_selection(session, runtimes);
+  runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
+  return InputQueueResult::queued;
+}
+
 [[nodiscard]] auto queue_application_bytes(SessionRecord& session, PaneRuntimeStore& runtimes,
                                            const std::span<const std::byte> bytes) noexcept
     -> InputQueueResult {
@@ -5606,6 +5719,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   if (target_offset != viewport->offset) {
     runtime.terminal.scroll_viewport(vt::ViewportScroll::row,
                                      static_cast<std::int64_t>(target_offset));
+    record_terminal_observation(runtime);
   }
   if (!update_copy_viewport_offset(session, runtime)) {
     return false;
@@ -6236,19 +6350,52 @@ template <typename Id>
   }
   return output.append_text(R"({"name":")") && output.append_text(session.session_name()) &&
          output.append_text(R"(","id":)") && append_json_id(output, session.id) &&
-         output.append_text(session.attachment_runtime.client >= 0 ? ",\"attached\":true"
-                                                                   : ",\"attached\":false") &&
-         output.append_text(",\"tabs\":") && output.append_number(tab_count(session)) &&
-         output.append_text(",\"panes\":") && output.append_number(pane_count(session)) &&
-         output.append_text(",\"columns\":") && output.append_number(session.attachment.columns) &&
-         output.append_text(",\"rows\":") && output.append_number(session.attachment.rows) &&
-         output.append_text(",\"active_tab\":") && append_json_id(output, tab->id) &&
-         output.append_text(",\"focused_pane\":") && append_json_id(output, tab->focused_pane) &&
-         output.append_text("}");
+         output.append_text(session.attachment_runtime.client >= 0 ? R"(,"attached":true)"
+                                                                   : R"(,"attached":false)") &&
+         output.append_text(R"(,"revision":)") &&
+         output.append_number(session.mutation_generation) && output.append_text(R"(,"tabs":)") &&
+         output.append_number(tab_count(session)) && output.append_text(R"(,"panes":)") &&
+         output.append_number(pane_count(session)) &&
+         output.append_text(R"(,"attachments":{"connected":)") &&
+         output.append_number(session.attachment_runtime.client >= 0 ? 1U : 0U) &&
+         output.append_text(R"(,"controllers":)") &&
+         output.append_number(session.attachment_runtime.client >= 0 ? 1U : 0U) &&
+         output.append_text(R"(,"viewers":0})") && output.append_text(R"(,"columns":)") &&
+         output.append_number(session.attachment.columns) && output.append_text(R"(,"rows":)") &&
+         output.append_number(session.attachment.rows) && output.append_text(R"(,"active_tab":)") &&
+         append_json_id(output, tab->id) && output.append_text(R"(,"focused_pane":)") &&
+         append_json_id(output, tab->focused_pane) && output.append_text("}");
 }
 
-[[nodiscard]] auto append_structured_tabs(ConnectionOutput& output,
-                                          const SessionRecord& session) noexcept -> bool {
+// Closed JSON escaping is deliberately local to the fixed-capacity ConnectionOutput projection.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto append_connection_json_string(ConnectionOutput& output,
+                                                 const std::string_view value) noexcept -> bool {
+  if (!output.append_text("\"")) {
+    return false;
+  }
+  for (const char character : value) {
+    if (character == '"') {
+      if (!output.append_text("\\\"")) {
+        return false;
+      }
+    } else if (character == '\\') {
+      if (!output.append_text("\\\\")) {
+        return false;
+      }
+    } else if (static_cast<unsigned char>(character) < 0x20U) {
+      if (!output.append_text("?")) {
+        return false;
+      }
+    } else if (!output.append_text(std::string_view(&character, 1))) {
+      return false;
+    }
+  }
+  return output.append_text("\"");
+}
+
+[[nodiscard]] auto append_structured_tabs(ConnectionOutput& output, const SessionRecord& session,
+                                          const PaneRuntimeStore& runtimes) noexcept -> bool {
   if (!output.append_text("[")) {
     return false;
   }
@@ -6257,11 +6404,14 @@ template <typename Id>
     LEMMA_ASSERT(id.has_value());
     const auto* const tab = find_tab(session, *id);
     LEMMA_ASSERT(tab != nullptr);
+    const auto title = tab_title(session, *tab, runtimes);
     if ((position > 0 && !output.append_text(",")) || !output.append_text("{\"position\":") ||
         !output.append_number(position + 1U) || !output.append_text(",\"id\":") ||
         !append_json_id(output, tab->id) ||
         !output.append_text(tab->id == session.active_tab ? ",\"active\":true"
                                                           : ",\"active\":false") ||
+        !output.append_text(",\"title\":") || !append_connection_json_string(output, title) ||
+        !output.append_text(tab->zoomed ? ",\"zoomed\":true" : ",\"zoomed\":false") ||
         !output.append_text(",\"panes\":") || !output.append_number(pane_count(*tab)) ||
         !output.append_text(",\"focused_pane\":") || !append_json_id(output, tab->focused_pane) ||
         !output.append_text("}")) {
@@ -6326,7 +6476,13 @@ template <typename Id>
           !output.append_text(",\"columns\":") || !output.append_number(pane.rectangle.columns) ||
           !output.append_text(",\"rows\":") || !output.append_number(pane.rectangle.rows) ||
           !output.append_text(",\"process\":") ||
-          !append_structured_process(output, pane, *runtime) || !output.append_text("}")) {
+          !append_structured_process(output, pane, *runtime) ||
+          !output.append_text(",\"terminal_generation\":") ||
+          !output.append_number(runtime->observation_generation) ||
+          !output.append_text(",\"observed_title\":") ||
+          !append_connection_json_string(
+              output, std::string_view(runtime->process_name.data(), runtime->process_name_size)) ||
+          !output.append_text("}")) {
         return false;
       }
       ++emitted;
@@ -6542,6 +6698,7 @@ enum class PendingState : std::uint8_t {
   read_control_payload_size,
   read_control_payload,
   read_public_json,
+  execute_public_action_wait,
   execute_public_procedure,
   prepare_public_observer,
   observe,
@@ -6557,6 +6714,21 @@ enum class PendingAction : std::uint8_t {
 };
 
 struct ProcedureExecutionState;
+
+struct PublicActionWait final {
+  api::Action action;
+  std::chrono::steady_clock::time_point deadline;
+  std::uint64_t observed_terminal_generation{0};
+  bool observed{false};
+  bool pane_was_present{false};
+};
+
+struct PublicObservedPaneState final {
+  std::uint64_t terminal_generation{0};
+  ProcessExit process{};
+  bool present{false};
+  bool process_exited{false};
+};
 
 struct PendingConnection final {
   PendingConnection() = default;
@@ -6590,13 +6762,12 @@ struct PendingConnection final {
   std::string public_output;
   std::size_t public_output_offset{0};
   std::unique_ptr<ProcedureExecutionState> procedure;
+  std::optional<PublicActionWait> wait;
   api::EventSubscription subscription;
   std::uint64_t event_sequence{0};
   std::uint64_t observed_semantic_hash{0};
-  std::uint64_t observed_terminal_generation{0};
-  ProcessExit observed_process{};
-  bool observed_pane_present{false};
-  bool observed_process_exited{false};
+  std::array<PublicObservedPaneState, api::event_panes_max> observed_panes{};
+  std::size_t observed_pane_cursor{0};
   bool public_connection{false};
   protocol::ClientDecoder attach_decoder;
   protocol::Dimensions attach_dimensions{};
@@ -6614,6 +6785,10 @@ using PendingConnectionGenerations =
     std::array<std::uint32_t, limits::pending_connections_hard_max>;
 using PublicScratchStorage = std::array<std::byte, api::json_bytes_max>;
 using PublicScratch = std::unique_ptr<PublicScratchStorage>;
+// A JSON string may expand one raw control byte to six ASCII bytes. Reserve envelope space so every
+// successful capture can still fit in one public record after escaping.
+inline constexpr std::size_t public_capture_bytes_max =
+    (api::json_bytes_max - (std::size_t{4} * 1'024U)) / 6U;
 
 [[nodiscard]] auto acquire_public_scratch(PublicScratch& owner) noexcept -> std::span<std::byte> {
   if (owner == nullptr) {
@@ -6623,7 +6798,7 @@ using PublicScratch = std::unique_ptr<PublicScratchStorage>;
       return {};
     }
   }
-  return *owner;
+  return std::span(*owner).first(public_capture_bytes_max);
 }
 
 static_assert(sizeof(PendingConnection) <= std::size_t{160} * 1'024U);
@@ -6636,6 +6811,12 @@ static_assert(sizeof(PendingConnectionGenerations) ==
                                    std::size_t one_based_position) noexcept
     -> std::optional<std::optional<TabId>>;
 
+struct ObservedPane final {
+  SessionRecord* session{nullptr};
+  Pane* pane{nullptr};
+  PaneRuntime* runtime{nullptr};
+};
+
 struct PublicActionExecution final {
   CommandStatus status{CommandStatus::failed};
   std::string session_name;
@@ -6645,7 +6826,17 @@ struct PublicActionExecution final {
   std::string value_field;
   std::string value_json;
   std::string text;
+  std::string error_reason;
+  std::optional<ProcessExit> process;
+  std::uint64_t session_revision{0};
+  std::uint64_t terminal_generation{0};
+  api::CaptureSource capture_source{api::CaptureSource::visible};
+  api::CaptureFormat capture_format{api::CaptureFormat::plain};
+  api::CaptureWrap capture_wrap{api::CaptureWrap::rendered};
   bool has_text{false};
+  bool has_capture{false};
+  bool capture_truncated{false};
+  bool retryable{false};
 };
 
 [[nodiscard]] auto append_public(std::string& output, const std::string_view text) -> bool {
@@ -6775,22 +6966,291 @@ struct PublicActionExecution final {
   return true;
 }
 
-void retain_tail_lines(std::string& text, const std::uint16_t lines) {
-  if (lines == 0 || text.empty()) {
-    return;
+struct PublicCaptureFormatting final {
+  std::expected<std::size_t, vt::Error> result{std::unexpected(vt::Error::invalid_state)};
+  bool truncated{false};
+};
+
+[[nodiscard]] auto format_public_visible(vt::Terminal& terminal, const vt::ScreenFormat format,
+                                         const api::CaptureWrap wrap, const std::uint16_t lines,
+                                         const std::span<std::byte> output) noexcept
+    -> PublicCaptureFormatting {
+  const bool unwrap = wrap == api::CaptureWrap::logical;
+  const auto requested_rows = static_cast<std::size_t>(lines == 0 ? terminal.size().rows : lines);
+  auto formatted = terminal.format_visible_tail(format, requested_rows, output, unwrap);
+  if (formatted.has_value() || formatted.error() != vt::Error::out_of_space) {
+    return {.result = formatted, .truncated = false};
   }
-  std::size_t offset = text.size();
-  std::uint16_t found = 0;
-  if (text.back() == '\n') {
-    --offset;
-  }
-  while (offset > 0) {
-    --offset;
-    if (text.substr(offset, 1).front() == '\n' && ++found == lines) {
-      text.erase(0, offset + 1U);
-      return;
+  auto rows = requested_rows;
+  while (rows > 1U) {
+    rows /= 2U;
+    formatted = terminal.format_visible_tail(format, rows, output, unwrap);
+    if (formatted.has_value() || formatted.error() != vt::Error::out_of_space) {
+      return {.result = formatted, .truncated = true};
     }
   }
+  return {.result = formatted, .truncated = true};
+}
+
+[[nodiscard]] auto append_json_id_field(std::string& output, const std::string_view field,
+                                        const auto id) -> bool {
+  return append_public(output, "\"") && append_public(output, field) &&
+         append_public(output, "\":") && append_public_id(output, id);
+}
+
+[[nodiscard]] auto append_launch_argv(std::string& output, const std::span<const std::byte> command)
+    -> bool {
+  if (!append_public(output, "[")) {
+    return false;
+  }
+  std::size_t offset = 0;
+  std::size_t argument = 0;
+  while (offset < command.size()) {
+    const auto remaining = command.subspan(offset);
+    const auto terminator = std::ranges::find(remaining, std::byte{0});
+    if (terminator == remaining.end()) {
+      return false;
+    }
+    const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
+    if (argument++ > 0 && !append_public(output, ",")) {
+      return false;
+    }
+    // Command bytes were validated as non-NUL argv at creation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view value(reinterpret_cast<const char*>(remaining.data()), size);
+    if (!api::append_json_string(output, value)) {
+      return false;
+    }
+    offset += size + 1U;
+  }
+  return append_public(output, "]");
+}
+
+[[nodiscard]] auto append_layout_node(std::string& output, const LayoutSnapshot& layout,
+                                      const std::size_t index, const std::size_t depth = 0)
+    -> bool {
+  if (index >= layout.size || depth >= limits::layout_depth_hard_max) {
+    return false;
+  }
+  const auto& node = std::span(layout.nodes).subspan(index, 1).front();
+  if (node.leaf) {
+    return append_public(output, R"({"pane":)") && append_public_id(output, node.pane) &&
+           append_public(output, "}");
+  }
+  const auto first = static_cast<std::size_t>(node.first);
+  const auto second = static_cast<std::size_t>(node.second);
+  return node.first >= 0 && node.second >= 0 && append_public(output, R"({"split":)") &&
+         api::append_json_string(output, node.axis == SplitAxis::left_right ? "left_right"
+                                                                            : "top_bottom") &&
+         append_public(output, R"(,"ratio":)") && append_public_number(output, node.ratio) &&
+         append_public(output, R"(,"first":)") &&
+         append_layout_node(output, layout, first, depth + 1U) &&
+         append_public(output, R"(,"second":)") &&
+         append_layout_node(output, layout, second, depth + 1U) && append_public(output, "}");
+}
+
+[[nodiscard]] auto daemon_inspection(const Sessions& sessions, const PaneRuntimeStore& runtimes)
+    -> std::string {
+  std::size_t active_sessions = 0;
+  std::size_t attached_sessions = 0;
+  for (const auto& session : sessions) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    ++active_sessions;
+    attached_sessions += session->attachment_runtime.client >= 0 ? 1U : 0U;
+  }
+  std::string output = R"({"version":)";
+  if (!api::append_json_string(output, lemma::version) || !append_public(output, R"(,"api":)") ||
+      !api::append_json_string(output, api::action_schema) ||
+      !append_public(output, R"(,"resources":{"sessions":{"used":)") ||
+      !append_public_number(output, active_sessions) || !append_public(output, R"(,"limit":)") ||
+      !append_public_number(output, limits::sessions_hard_max) ||
+      !append_public(output, R"(},"panes":{"used":)") ||
+      !append_public_number(output, runtimes.size()) || !append_public(output, R"(,"limit":)") ||
+      !append_public_number(output, limits::panes_hard_max) ||
+      !append_public(output, R"(},"scrollback_bytes":{"reserved":)") ||
+      !append_public_number(output, runtimes.scrollback_bytes_reserved()) ||
+      !append_public(output, R"(,"limit":)") ||
+      !append_public_number(output, limits::terminal_scrollback_bytes_aggregate_max) ||
+      !append_public(output, R"(}},"attachments":{"connected":)") ||
+      !append_public_number(output, attached_sessions) || !append_public(output, "}}")) {
+    return {};
+  }
+  return output;
+}
+
+[[nodiscard]] auto session_inspection(const SessionRecord& session) -> std::string {
+  std::string output = "{";
+  const auto environment_entries =
+      static_cast<std::size_t>(std::ranges::count(session.launch_environment(), std::byte{0}));
+  if (!append_json_id_field(output, "id", session.id) || !append_public(output, R"(,"name":)") ||
+      !api::append_json_string(output, session.session_name()) ||
+      !append_public(output, R"(,"revision":)") ||
+      !append_public_number(output, session.mutation_generation) ||
+      !append_public(output, R"(,"launch":{"cwd":)") ||
+      !api::append_json_string(output, session.cwd()) ||
+      !append_public(output, R"(,"environment":{"mode":)") ||
+      !api::append_json_string(output, session.environment_mode == LaunchEnvironmentMode::replace
+                                           ? "captured"
+                                           : "inherited") ||
+      !append_public(output, R"(,"entries":)") ||
+      !append_public_number(output, environment_entries) || !append_public(output, "}}") ||
+      !append_public(output, R"(,"active_tab":)") ||
+      !append_public_id(output, session.active_tab) ||
+      !append_public(output, R"(,"previous_tab":)") ||
+      !append_public_id(output, session.previous_tab) || !append_public(output, R"(,"tabs":)") ||
+      !append_public_number(output, tab_count(session)) || !append_public(output, R"(,"panes":)") ||
+      !append_public_number(output, pane_count(session)) ||
+      !append_public(output, R"(,"theme_bound":)") ||
+      !append_public(output, session.theme_bound ? "true" : "false") ||
+      !append_public(output, R"(,"geometry":{"columns":)") ||
+      !append_public_number(output, session.attachment.columns) ||
+      !append_public(output, R"(,"rows":)") ||
+      !append_public_number(output, session.attachment.rows) ||
+      !append_public(output, R"(},"attachments":{"connected":)") ||
+      !append_public_number(output, session.attachment_runtime.client >= 0 ? 1U : 0U) ||
+      !append_public(output, R"(,"controllers":)") ||
+      !append_public_number(output, session.attachment_runtime.client >= 0 ? 1U : 0U) ||
+      !append_public(output, R"(,"viewers":0}})")) {
+    return {};
+  }
+  return output;
+}
+
+[[nodiscard]] auto tab_inspection(const SessionRecord& session, const Tab& tab,
+                                  const PaneRuntimeStore& runtimes) -> std::string {
+  const auto position = session.tab_order.position_of(tab.id);
+  const auto layout = tab.layout.snapshot();
+  if (!position.has_value() || !layout.has_value()) {
+    return {};
+  }
+  std::string output = "{";
+  const auto title = tab_title(session, tab, runtimes);
+  if (!append_json_id_field(output, "id", tab.id) || !append_public(output, R"(,"position":)") ||
+      !append_public_number(output, *position + 1U) || !append_public(output, R"(,"title":)") ||
+      !api::append_json_string(output, title) || !append_public(output, R"(,"active":)") ||
+      !append_public(output, tab.id == session.active_tab ? "true" : "false") ||
+      !append_public(output, R"(,"focused_pane":)") ||
+      !append_public_id(output, tab.focused_pane) ||
+      !append_public(output, R"(,"previous_pane":)") ||
+      !append_public_id(output, tab.previous_pane) || !append_public(output, R"(,"zoomed":)") ||
+      !append_public(output, tab.zoomed ? "true" : "false") ||
+      !append_public(output, R"(,"layout_suspended":)") ||
+      !append_public(output, tab.layout_suspended ? "true" : "false") ||
+      !append_public(output, R"(,"geometry":{"columns":)") ||
+      !append_public_number(output, tab.layout_columns) || !append_public(output, R"(,"rows":)") ||
+      !append_public_number(output, tab.layout_rows) || !append_public(output, R"(},"layout":)") ||
+      !append_layout_node(output, *layout, 0) || !append_public(output, "}")) {
+    return {};
+  }
+  return output;
+}
+
+[[nodiscard]] constexpr auto process_exit_name(const ProcessExitKind kind) noexcept
+    -> std::string_view {
+  switch (kind) {
+  case ProcessExitKind::unknown:
+    return "exited_unknown";
+  case ProcessExitKind::exited:
+    return "exited";
+  case ProcessExitKind::signaled:
+    return "signaled";
+  }
+  return "exited_unknown";
+}
+
+// Process lifecycle variants share the launch and observed metadata suffix.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto append_process_inspection(std::string& output, const Pane& pane,
+                                             const PaneRuntime& runtime) -> bool {
+  if (!append_public(output, R"({"state":)")) {
+    return false;
+  }
+  if (!pane.process_exit.has_value()) {
+    if (!api::append_json_string(output, runtime.child > 0 ? "running" : "exiting")) {
+      return false;
+    }
+  } else {
+    if (!api::append_json_string(output, process_exit_name(pane.process_exit->kind))) {
+      return false;
+    }
+    if (pane.process_exit->kind != ProcessExitKind::unknown &&
+        (!append_public(output, pane.process_exit->kind == ProcessExitKind::signaled
+                                    ? R"(,"signal":)"
+                                    : R"(,"code":)") ||
+         !append_public_number(output, pane.process_exit->value))) {
+      return false;
+    }
+  }
+  return append_public(output, R"(,"pid":)") &&
+         append_public_number(output,
+                              runtime.child > 0 ? static_cast<std::uint64_t>(runtime.child) : 0U) &&
+         append_public(output, R"(,"launch":{"cwd":)") &&
+         api::append_json_string(output, pane.launch_working_directory()) &&
+         append_public(output, R"(,"argv":)") &&
+         append_launch_argv(output, pane.launch_command()) &&
+         append_public(output, R"(,"exit_policy":)") &&
+         api::append_json_string(output,
+                                 pane.exit_policy == PaneExitPolicy::hold ? "hold" : "close") &&
+         append_public(output, R"(},"observed_title":)") &&
+         api::append_json_string(
+             output, std::string_view(runtime.process_name.data(), runtime.process_name_size)) &&
+         append_public(output, "}");
+}
+
+[[nodiscard]] auto pane_inspection(const Tab& tab, const Pane& pane, const PaneRuntime& runtime)
+    -> std::string {
+  const auto terminal = runtime.terminal.inspection();
+  const auto title = runtime.terminal.title();
+  const auto pwd = runtime.terminal.pwd();
+  if (!terminal.has_value() || !title.has_value() || !pwd.has_value()) {
+    return {};
+  }
+  std::string output = R"({"pane":{)";
+  if (!append_json_id_field(output, "id", pane.id) || !append_public(output, R"(,"tab":)") ||
+      !append_public_id(output, tab.id) || !append_public(output, R"(,"rectangle":{"column":)") ||
+      !append_public_number(output, pane.rectangle.column) ||
+      !append_public(output, R"(,"row":)") || !append_public_number(output, pane.rectangle.row) ||
+      !append_public(output, R"(,"columns":)") ||
+      !append_public_number(output, pane.rectangle.columns) ||
+      !append_public(output, R"(,"rows":)") || !append_public_number(output, pane.rectangle.rows) ||
+      !append_public(output, R"(}},"process":)") ||
+      !append_process_inspection(output, pane, runtime) ||
+      !append_public(output, R"(,"terminal":{"generation":)") ||
+      !append_public_number(output, runtime.observation_generation) ||
+      !append_public(output, R"(,"size":{"columns":)") ||
+      !append_public_number(output, runtime.terminal.size().columns) ||
+      !append_public(output, R"(,"rows":)") ||
+      !append_public_number(output, runtime.terminal.size().rows) ||
+      !append_public(output, R"(},"screen":)") ||
+      !api::append_json_string(
+          output, terminal->active_screen == vt::ActiveScreen::primary ? "primary" : "alternate") ||
+      !append_public(output, R"(,"viewport":{"at_bottom":)") ||
+      !append_public(output, terminal->viewport.follows_output ? "true" : "false") ||
+      !append_public(output, R"(,"offset_rows":)") ||
+      !append_public_number(output, terminal->viewport.offset) ||
+      !append_public(output, R"(},"history":{"retained_rows":)") ||
+      !append_public_number(output, terminal->scrollback_rows) ||
+      !append_public(output, R"(},"cursor":{"column":)") ||
+      !append_public_number(output, terminal->cursor_column) ||
+      !append_public(output, R"(,"row":)") || !append_public_number(output, terminal->cursor_row) ||
+      !append_public(output, R"(,"visible":)") ||
+      !append_public(output, terminal->cursor_visible ? "true" : "false") ||
+      !append_public(output, R"(},"title":)") || !api::append_json_string(output, *title) ||
+      !append_public(output, R"(,"pwd":{"value":)") || !api::append_json_string(output, *pwd) ||
+      !append_public(output, R"(,"source":)") ||
+      !api::append_json_string(output, pwd->empty() ? "unknown" : "osc7") ||
+      !append_public(output, R"(},"cursor_at_prompt":)") ||
+      !append_public(output, terminal->cursor_at_prompt ? "true" : "false") ||
+      !append_public(output, R"(,"input_accepted":)") ||
+      !append_public(output, runtime.accepts_input() ? "true" : "false") ||
+      !append_public(output, R"(,"health":)") ||
+      !api::append_json_string(output, runtime.terminal.integrity_failed() ? "failed" : "ok") ||
+      !append_public(output, "}}")) {
+    return {};
+  }
+  return output;
 }
 
 // Every public Action reaches the same semantic transitions and runtime helpers as keyboard and
@@ -6801,6 +7261,12 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
                                          const std::span<std::byte> scratch)
     -> PublicActionExecution {
   PublicActionExecution result;
+  if (action.kind == api::ActionKind::daemon_inspect) {
+    result.value_json = daemon_inspection(sessions, runtimes);
+    result.value_field = "daemon";
+    result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
+    return result;
+  }
   if (action.kind == api::ActionKind::session_list) {
     ConnectionOutput encoded;
     result.status = append_structured_sessions(encoded, sessions) &&
@@ -6895,6 +7361,7 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
     result.status = CommandStatus::applied;
     result.session_name = std::string(inserted->session_name());
     result.session = inserted->id;
+    result.session_revision = inserted->mutation_generation;
     result.tab = tab->id;
     result.pane = tab->focused_pane;
     return result;
@@ -6907,17 +7374,39 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
   }
   result.session_name = std::string(session->session_name());
   result.session = session->id;
+  result.session_revision = session->mutation_generation;
+  if (action.expected_session_revision.has_value() &&
+      *action.expected_session_revision != session->mutation_generation) {
+    result.status = CommandStatus::conflict;
+    result.error_reason = "revision_mismatch";
+    result.retryable = true;
+    return result;
+  }
 
-  if (action.kind == api::ActionKind::session_inspect || action.kind == api::ActionKind::tab_list ||
-      action.kind == api::ActionKind::pane_list) {
+  if (action.kind == api::ActionKind::session_inspect) {
+    result.value_json = session_inspection(*session);
+    result.value_field = "session_state";
+    result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
+    return result;
+  }
+  if (action.kind == api::ActionKind::tab_inspect) {
+    auto* const tab = public_tab(*session, action.tab);
+    if (tab == nullptr) {
+      result.status = CommandStatus::stale_target;
+      return result;
+    }
+    result.tab = tab->id;
+    result.value_json = tab_inspection(*session, *tab, runtimes);
+    result.value_field = "tab_state";
+    result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
+    return result;
+  }
+
+  if (action.kind == api::ActionKind::tab_list || action.kind == api::ActionKind::pane_list) {
     ConnectionOutput encoded;
     bool appended = false;
-    if (action.kind == api::ActionKind::session_inspect) {
-      appended = encoded.append_text("[") && append_structured_session(encoded, *session) &&
-                 encoded.append_text("]");
-      result.value_field = "sessions";
-    } else if (action.kind == api::ActionKind::tab_list) {
-      appended = append_structured_tabs(encoded, *session);
+    if (action.kind == api::ActionKind::tab_list) {
+      appended = append_structured_tabs(encoded, *session, runtimes);
       result.value_field = "tabs";
     } else {
       appended = append_structured_panes(encoded, *session, runtimes);
@@ -6948,11 +7437,13 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
     if (result.status == CommandStatus::applied) {
       result.session_name = action.name;
     }
+    result.session_revision = session->mutation_generation;
     return result;
   }
   if (action.kind == api::ActionKind::session_kill) {
     const Command command{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
     result.status = dispatch_session_command(*session, runtimes, command).status;
+    result.session_revision = session->mutation_generation;
     return result;
   }
   if (action.kind == api::ActionKind::tab_new) {
@@ -6968,7 +7459,8 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
       return result;
     }
     auto* const created = create_tab(*session, runtimes, command, action.working_directory,
-                                     action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close);
+                                     action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                                     action.focus == api::FocusPolicy::created);
     if (created == nullptr) {
       result.status = CommandStatus::failed;
       return result;
@@ -6979,8 +7471,14 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
       return result;
     }
     result.status = CommandStatus::applied;
+    result.session_revision = session->mutation_generation;
     result.tab = created->id;
     result.pane = created->focused_pane;
+    const auto* const created_pane = find_pane(*session, created->focused_pane);
+    const auto* const created_runtime =
+        created_pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *created_pane);
+    result.terminal_generation =
+        created_runtime == nullptr ? 0 : created_runtime->observation_generation;
     return result;
   }
   if (action.kind == api::ActionKind::tab_select || action.kind == api::ActionKind::tab_move ||
@@ -7022,6 +7520,7 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
     result.status =
         dispatch_session_command(*session, runtimes, command, &session_name_conflict, &sessions)
             .status;
+    result.session_revision = session->mutation_generation;
     return result;
   }
 
@@ -7034,6 +7533,13 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
   }
   result.tab = tab->id;
   result.pane = pane->id;
+  result.terminal_generation = runtime->observation_generation;
+  if (action.kind == api::ActionKind::pane_inspect) {
+    result.value_json = pane_inspection(*tab, *pane, *runtime);
+    result.value_field = "pane_state";
+    result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
+    return result;
+  }
   if (action.kind == api::ActionKind::pane_split) {
     if (pane_count(*session) >= panes_per_session_max ||
         runtimes.size() >= limits::panes_hard_max) {
@@ -7049,26 +7555,69 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
         action.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
     auto* const created =
         split_pane(*session, *tab, runtimes, pane->id, axis, command, action.working_directory,
-                   action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close);
+                   action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                   action.focus == api::FocusPolicy::created);
     result.status = created == nullptr ? CommandStatus::failed : CommandStatus::applied;
     if (created != nullptr) {
       result.pane = created->id;
+      const auto* const created_runtime = find_pane_runtime(runtimes, *session, *created);
+      result.terminal_generation =
+          created_runtime == nullptr ? 0 : created_runtime->observation_generation;
     }
+    result.session_revision = session->mutation_generation;
     return result;
   }
   if (action.kind == api::ActionKind::pane_send) {
-    result.status = queue_application_bytes_to(
-                        *session, runtimes, *runtime,
-                        std::as_bytes(std::span(action.text.data(), action.text.size()))) ==
-                            InputQueueResult::queued
-                        ? CommandStatus::applied
-                        : CommandStatus::unavailable;
+    const auto queued = queue_application_bytes_to(
+        *session, runtimes, *runtime,
+        std::as_bytes(std::span(action.text.data(), action.text.size())));
+    result.status =
+        queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
+    if (queued != InputQueueResult::queued) {
+      result.error_reason =
+          queued == InputQueueResult::full ? "input_backpressure" : "input_unavailable";
+      result.retryable = queued == InputQueueResult::full;
+    }
+    return result;
+  }
+  if (action.kind == api::ActionKind::pane_input) {
+    const auto queued = queue_public_input_batch(*session, runtimes, *runtime, action.input_events);
+    result.status =
+        queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
+    if (queued != InputQueueResult::queued) {
+      result.error_reason =
+          queued == InputQueueResult::full ? "input_backpressure" : "input_unavailable";
+      result.retryable = queued == InputQueueResult::full;
+    }
     return result;
   }
   if (action.kind == api::ActionKind::pane_capture) {
-    const auto formatted = runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
+    const auto format = action.capture_format == api::CaptureFormat::plain ? vt::ScreenFormat::plain
+                                                                           : vt::ScreenFormat::vt;
+    const bool unwrap = action.capture_wrap == api::CaptureWrap::logical;
+    std::expected<std::size_t, vt::Error> formatted = std::unexpected(vt::Error::invalid_state);
+    if (action.capture_source == api::CaptureSource::visible) {
+      auto visible = format_public_visible(runtime->terminal, format, action.capture_wrap,
+                                           action.lines, scratch);
+      formatted = std::move(visible.result);
+      result.capture_truncated = visible.truncated;
+    } else if (action.capture_source == api::CaptureSource::recent) {
+      auto rows = static_cast<std::size_t>(action.lines == 0 ? 80U : action.lines);
+      formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
+      while (!formatted.has_value() && formatted.error() == vt::Error::out_of_space && rows > 1U) {
+        rows /= 2U;
+        result.capture_truncated = true;
+        formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
+      }
+    } else {
+      formatted = runtime->terminal.format_last_command(format, scratch, unwrap);
+    }
     if (!formatted.has_value()) {
-      result.status = CommandStatus::failed;
+      result.status = action.capture_source == api::CaptureSource::last_command
+                          ? CommandStatus::unavailable
+                          : CommandStatus::failed;
+      result.error_reason = formatted.error() == vt::Error::out_of_space ? "capture_too_large"
+                                                                         : "capture_unavailable";
       return result;
     }
     try {
@@ -7079,8 +7628,12 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
       result.status = CommandStatus::failed;
       return result;
     }
-    retain_tail_lines(result.text, action.lines);
     result.has_text = true;
+    result.has_capture = true;
+    result.capture_source = action.capture_source;
+    result.capture_format = action.capture_format;
+    result.capture_wrap = action.capture_wrap;
+    result.terminal_generation = runtime->observation_generation;
     result.status = CommandStatus::applied;
     return result;
   }
@@ -7124,7 +7677,207 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
     command.payload = CommandCoordinate{.value = action.amount};
   }
   result.status = dispatch_session_command(*session, runtimes, command).status;
+  result.session_revision = session->mutation_generation;
   return result;
+}
+
+[[nodiscard]] auto begin_public_wait(api::Action action) -> PublicActionWait {
+  const auto timeout = std::chrono::milliseconds(action.wait_timeout_milliseconds);
+  return {.action = std::move(action),
+          .deadline = std::chrono::steady_clock::now() + timeout,
+          .observed_terminal_generation = 0,
+          .observed = false,
+          .pane_was_present = false};
+}
+
+[[nodiscard]] auto public_wait_target(const PublicActionWait& wait, Sessions& sessions,
+                                      PaneRuntimeStore& runtimes) noexcept -> ObservedPane {
+  auto* const session = public_session(sessions, wait.action.session);
+  auto* const pane = session == nullptr ? nullptr : find_pane(*session, wait.action.pane.id);
+  auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
+  return {.session = session, .pane = pane, .runtime = runtime};
+}
+
+[[nodiscard]] constexpr auto is_terminal_wait(const api::Action& action) noexcept -> bool {
+  return action.wait_condition == api::WaitCondition::contains ||
+         action.wait_condition == api::WaitCondition::prompt;
+}
+
+[[nodiscard]] auto public_wait_has_work(const PublicActionWait& wait, Sessions& sessions,
+                                        PaneRuntimeStore& runtimes,
+                                        const std::chrono::steady_clock::time_point now) noexcept
+    -> bool {
+  if (!wait.observed || now >= wait.deadline) {
+    return true;
+  }
+  const auto target = public_wait_target(wait, sessions, runtimes);
+  if (target.pane == nullptr || target.runtime == nullptr) {
+    return wait.pane_was_present;
+  }
+  if (target.pane->process_exit.has_value()) {
+    return true;
+  }
+  return is_terminal_wait(wait.action) &&
+         target.runtime->observation_generation > wait.action.after_terminal_generation &&
+         target.runtime->observation_generation != wait.observed_terminal_generation;
+}
+
+[[nodiscard]] auto wait_process_matches(const api::Action& action,
+                                        const ProcessExit process) noexcept -> bool {
+  switch (action.wait_condition) {
+  case api::WaitCondition::process_exit:
+    return true;
+  case api::WaitCondition::exit_code:
+    return process.kind == ProcessExitKind::exited && process.value == action.wait_value;
+  case api::WaitCondition::signal:
+    return process.kind == ProcessExitKind::signaled && process.value == action.wait_value;
+  case api::WaitCondition::contains:
+  case api::WaitCondition::prompt:
+    return false;
+  }
+  return false;
+}
+
+[[nodiscard]] auto public_action_failure(const std::string_view reason,
+                                         const bool retryable = false) -> PublicActionExecution {
+  PublicActionExecution result;
+  result.status = CommandStatus::failed;
+  result.error_reason = reason;
+  result.retryable = retryable;
+  return result;
+}
+
+[[nodiscard]] auto complete_process_wait(PublicActionExecution result, const api::Action& action,
+                                         const ProcessExit process) -> PublicActionExecution {
+  result.process = process;
+  if (wait_process_matches(action, process)) {
+    result.status = CommandStatus::applied;
+  } else {
+    result.status = CommandStatus::failed;
+    result.error_reason = "unexpected_exit";
+  }
+  return result;
+}
+
+[[nodiscard]] auto missing_public_wait(const PublicActionWait& wait) -> PublicActionExecution {
+  PublicActionExecution result;
+  if (!wait.observed || !wait.pane_was_present) {
+    result.status = CommandStatus::stale_target;
+    return result;
+  }
+  return complete_process_wait(std::move(result), wait.action, ProcessExit{});
+}
+
+[[nodiscard]] auto public_wait_result(const ObservedPane target) -> PublicActionExecution {
+  PublicActionExecution result;
+  result.session_name = std::string(target.session->session_name());
+  result.session = target.session->id;
+  result.session_revision = target.session->mutation_generation;
+  result.tab = target.pane->tab;
+  result.pane = target.pane->id;
+  result.terminal_generation = target.runtime->observation_generation;
+  return result;
+}
+
+[[nodiscard]] auto complete_terminal_wait(PublicActionWait& wait, const ObservedPane target,
+                                          const std::span<std::byte> scratch,
+                                          PublicActionExecution result)
+    -> std::optional<PublicActionExecution> {
+  const auto generation = target.runtime->observation_generation;
+  if (generation <= wait.action.after_terminal_generation ||
+      generation == wait.observed_terminal_generation) {
+    return std::nullopt;
+  }
+  wait.observed_terminal_generation = generation;
+  const auto formatted = format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
+                                               api::CaptureWrap::rendered, 0, scratch);
+  const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
+  if (!formatted.result.has_value() || !at_prompt.has_value()) {
+    result.status = CommandStatus::unavailable;
+    result.error_reason = "capture_unavailable";
+    return result;
+  }
+  // Byte payloads and character storage have the same object representation.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
+  const bool matched = wait.action.wait_condition == api::WaitCondition::prompt
+                           ? *at_prompt
+                           : text.contains(wait.action.contains);
+  if (!matched) {
+    return std::nullopt;
+  }
+  try {
+    result.text = text;
+  } catch (...) {
+    result.status = CommandStatus::failed;
+    return result;
+  }
+  result.has_text = true;
+  result.has_capture = true;
+  result.capture_source = api::CaptureSource::visible;
+  result.capture_format = api::CaptureFormat::plain;
+  result.capture_wrap = api::CaptureWrap::rendered;
+  result.capture_truncated = formatted.truncated;
+  result.status = CommandStatus::applied;
+  return result;
+}
+
+[[nodiscard]] auto completed_public_wait(PublicActionWait& wait, Sessions& sessions,
+                                         PaneRuntimeStore& runtimes,
+                                         const std::span<std::byte> scratch)
+    -> std::optional<PublicActionExecution> {
+  const auto target = public_wait_target(wait, sessions, runtimes);
+  if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
+    return missing_public_wait(wait);
+  }
+  wait.observed = true;
+  wait.pane_was_present = true;
+  wait.action.session.id = target.session->id;
+  wait.action.session.name.clear();
+  auto result = public_wait_result(target);
+  if (is_terminal_wait(wait.action)) {
+    auto completed = complete_terminal_wait(wait, target, scratch, result);
+    if (completed.has_value()) {
+      return completed;
+    }
+  }
+  if (target.pane->process_exit.has_value()) {
+    return complete_process_wait(std::move(result), wait.action, *target.pane->process_exit);
+  }
+  if (std::chrono::steady_clock::now() >= wait.deadline) {
+    result.status = CommandStatus::failed;
+    result.error_reason = "timeout";
+    result.retryable = true;
+    return result;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] auto poll_public_wait(PublicActionWait& wait, Sessions& sessions,
+                                    PaneRuntimeStore& runtimes, PublicScratch& scratch_owner)
+    -> std::optional<PublicActionExecution> {
+  auto scratch = std::span<std::byte>{};
+  if (is_terminal_wait(wait.action)) {
+    scratch = acquire_public_scratch(scratch_owner);
+    if (scratch.empty()) {
+      return public_action_failure("resource_failure");
+    }
+  }
+  return completed_public_wait(wait, sessions, runtimes, scratch);
+}
+
+[[nodiscard]] auto append_wait_process(std::string& output, const ProcessExit process) -> bool {
+  switch (process.kind) {
+  case ProcessExitKind::unknown:
+    return append_public(output, R"({"state":"exited_unknown"})");
+  case ProcessExitKind::exited:
+    return append_public(output, R"({"state":"exited","code":)") &&
+           append_public_number(output, process.value) && append_public(output, "}");
+  case ProcessExitKind::signaled:
+    return append_public(output, R"({"state":"signaled","signal":)") &&
+           append_public_number(output, process.value) && append_public(output, "}");
+  }
+  return false;
 }
 
 [[nodiscard]] auto encode_public_error(const api::ActionDecodeError error,
@@ -7162,10 +7915,19 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
         !api::append_json_string(output, public_status_name(result.status))) {
       return {};
     }
+    if (action.kind == api::ActionKind::pane_wait &&
+        (!append_public(output, R"(,"condition":)") ||
+         !api::append_json_string(output, api::wait_condition_name(action.wait_condition)))) {
+      return {};
+    }
     if (result.session.is_valid()) {
       if (!append_public(output, R"(,"session":{"id":)") ||
           !append_public_id(output, result.session) || !append_public(output, ",\"name\":") ||
-          !api::append_json_string(output, result.session_name) || !append_public(output, "}")) {
+          !api::append_json_string(output, result.session_name) ||
+          (result.session_revision > 0 &&
+           (!append_public(output, R"(,"revision":)") ||
+            !append_public_number(output, result.session_revision))) ||
+          !append_public(output, "}")) {
         return {};
       }
     }
@@ -7173,8 +7935,21 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
         (!append_public(output, ",\"tab\":") || !append_public_id(output, result.tab))) {
       return {};
     }
-    if (result.pane.is_valid() &&
-        (!append_public(output, ",\"pane\":") || !append_public_id(output, result.pane))) {
+    auto result_pane = result.pane;
+    if (!result_pane.is_valid() && action.kind == api::ActionKind::pane_wait) {
+      result_pane = action.pane.id;
+    }
+    if (result_pane.is_valid() &&
+        (!append_public(output, ",\"pane\":") || !append_public_id(output, result_pane))) {
+      return {};
+    }
+    if (result.terminal_generation > 0 &&
+        (!append_public(output, R"(,"terminal_generation":)") ||
+         !append_public_number(output, result.terminal_generation))) {
+      return {};
+    }
+    if (result.process.has_value() && (!append_public(output, R"(,"process":)") ||
+                                       !append_wait_process(output, *result.process))) {
       return {};
     }
     if (!result.value_field.empty() &&
@@ -7182,8 +7957,33 @@ void retain_tail_lines(std::string& text, const std::uint16_t lines) {
          !append_public(output, "\":") || !append_public(output, result.value_json))) {
       return {};
     }
-    if (result.has_text &&
+    if (result.has_text && !result.has_capture &&
         (!append_public(output, ",\"text\":") || !api::append_json_string(output, result.text))) {
+      return {};
+    }
+    if (!result.error_reason.empty()) {
+      if (!append_public(output, R"(,"error":{"reason":)") ||
+          !api::append_json_string(output, result.error_reason) ||
+          !append_public(output, R"(,"retryable":)") ||
+          !append_public(output, result.retryable ? "true" : "false")) {
+        return {};
+      }
+      if (action.expected_session_revision.has_value() &&
+          (!append_public(output, R"(,"expected":)") ||
+           !append_public_number(output, *action.expected_session_revision) ||
+           !append_public(output, R"(,"current":)") ||
+           !append_public_number(output, result.session_revision))) {
+        return {};
+      }
+      if (!append_public(output, "}")) {
+        return {};
+      }
+    }
+    if (result.has_capture &&
+        (!append_public(output, R"(,"capture":)") ||
+         !api::append_capture(output, result.capture_source, result.capture_format,
+                              result.capture_wrap, result.terminal_generation,
+                              result.capture_truncated, result.text))) {
       return {};
     }
     return append_public(output, "}\n") ? output : std::string{};
@@ -7205,6 +8005,7 @@ struct ProcedureExecutionState final {
   std::vector<ProcedureBinding> shapes;
   std::vector<ProcedureBinding> bindings;
   std::vector<std::string> results;
+  std::optional<PublicActionWait> wait;
   std::size_t retained_result_bytes{0};
   std::size_t next_action{0};
   bool continue_on_error{false};
@@ -7496,17 +8297,35 @@ encode_procedure_result(const ProcedureExecutionState& state,
   }
   const auto index = state.next_action;
   const auto& source = std::span(state.actions).subspan(index, 1).front();
-  auto action = concrete_procedure_action(source, state.bindings, false);
+  std::optional<api::Action> action;
   PublicActionExecution execution;
-  if (action.has_value()) {
-    auto scratch = std::span<std::byte>{};
-    if (action->kind == api::ActionKind::pane_capture) {
-      scratch = acquire_public_scratch(scratch_owner);
+  if (state.wait.has_value()) {
+    if (!public_wait_has_work(*state.wait, sessions, runtimes, std::chrono::steady_clock::now())) {
+      return std::nullopt;
     }
-    if (scratch.empty() && action->kind == api::ActionKind::pane_capture) {
-      execution.status = CommandStatus::failed;
-    } else {
-      execution = execute_public_action(*action, sessions, runtimes, activity_order, scratch);
+    auto completed = poll_public_wait(*state.wait, sessions, runtimes, scratch_owner);
+    if (!completed.has_value()) {
+      return std::nullopt;
+    }
+    action = std::move(state.wait->action);
+    state.wait.reset();
+    execution = std::move(*completed);
+  } else {
+    action = concrete_procedure_action(source, state.bindings, false);
+    if (action.has_value() && action->kind == api::ActionKind::pane_wait) {
+      state.wait = begin_public_wait(std::move(*action));
+      return std::nullopt;
+    }
+    if (action.has_value()) {
+      auto scratch = std::span<std::byte>{};
+      if (action->kind == api::ActionKind::pane_capture) {
+        scratch = acquire_public_scratch(scratch_owner);
+      }
+      if (scratch.empty() && action->kind == api::ActionKind::pane_capture) {
+        execution.status = CommandStatus::failed;
+      } else {
+        execution = execute_public_action(*action, sessions, runtimes, activity_order, scratch);
+      }
     }
   }
   const auto result_template = concrete_procedure_action(source, state.shapes, true);
@@ -7578,6 +8397,39 @@ void finish_public_output(PendingConnection& pending, std::string output,
 }
 
 // NOLINTNEXTLINE(bugprone-exception-escape)
+void service_public_waits(PendingConnections& connections, Sessions& sessions,
+                          PaneRuntimeStore& runtimes, PublicScratch& scratch_owner,
+                          std::size_t& cursor) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
+    const auto slot = (cursor + visited) % connections.size();
+    auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+    if (pending == nullptr || pending->state != PendingState::execute_public_action_wait ||
+        !pending->wait.has_value() ||
+        !public_wait_has_work(*pending->wait, sessions, runtimes, now)) {
+      continue;
+    }
+    try {
+      auto execution = poll_public_wait(*pending->wait, sessions, runtimes, scratch_owner);
+      if (execution.has_value()) {
+        auto output = encode_public_result(pending->wait->action, *execution);
+        pending->wait.reset();
+        finish_public_output(*pending, std::move(output), PendingAction::keep_action);
+      }
+    } catch (...) {
+      const auto execution = public_action_failure("resource_failure");
+      auto output = pending->wait.has_value()
+                        ? encode_public_result(pending->wait->action, execution)
+                        : std::string{};
+      pending->wait.reset();
+      finish_public_output(*pending, std::move(output), PendingAction::keep_action);
+    }
+    cursor = (slot + 1U) % connections.size();
+    return;
+  }
+}
+
+// NOLINTNEXTLINE(bugprone-exception-escape)
 void service_public_procedures(PendingConnections& connections, Sessions& sessions,
                                PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
                                PublicScratch& scratch, std::size_t& cursor) noexcept {
@@ -7640,20 +8492,15 @@ void service_public_procedures(PendingConnections& connections, Sessions& sessio
   return value;
 }
 
-struct ObservedPane final {
-  SessionRecord* session{nullptr};
-  Pane* pane{nullptr};
-  PaneRuntime* runtime{nullptr};
-};
-
 [[nodiscard]] auto observed_pane(PendingConnection& pending, Sessions& sessions,
-                                 PaneRuntimeStore& runtimes) noexcept -> ObservedPane {
-  if (!pending.subscription.session.has_value() || !pending.subscription.pane.has_value()) {
+                                 PaneRuntimeStore& runtimes, const std::size_t index) noexcept
+    -> ObservedPane {
+  if (!pending.subscription.session.has_value() || index >= pending.subscription.panes.size()) {
     return {};
   }
   auto* const session = public_session(sessions, *pending.subscription.session);
-  auto* const pane =
-      session == nullptr ? nullptr : find_pane(*session, pending.subscription.pane->id);
+  const auto pane_id = std::span(pending.subscription.panes).subspan(index, 1).front().id;
+  auto* const pane = session == nullptr ? nullptr : find_pane(*session, pane_id);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   return {.session = session, .pane = pane, .runtime = runtime};
 }
@@ -7719,19 +8566,26 @@ struct ObservedPane final {
   if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
     return false;
   }
-  const auto formatted = target.runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
-  if (!formatted.has_value() || !append_event_header(output, pending, event) ||
-      !append_public(output, R"(,"session":)") || !append_public_id(output, target.session->id) ||
-      !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
-      !append_public(output, R"(,"generation":)") ||
-      !append_public_number(output, target.runtime->mutation_generation) ||
-      !append_public(output, R"(,"text":)")) {
+  const auto formatted = format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
+                                               api::CaptureWrap::rendered, 0, scratch);
+  const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
+  if (!formatted.result.has_value() || !at_prompt.has_value() ||
+      !append_event_header(output, pending, event) || !append_public(output, R"(,"session":)") ||
+      !append_public_id(output, target.session->id) || !append_public(output, R"(,"pane":)") ||
+      !append_public_id(output, target.pane->id) || !append_public(output, R"(,"generation":)") ||
+      !append_public_number(output, target.runtime->observation_generation) ||
+      !append_public(output, R"(,"cursor_at_prompt":)") ||
+      !append_public(output, *at_prompt ? "true" : "false")) {
     return false;
   }
   // Byte payloads and character storage have the same object representation.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted);
-  return api::append_json_string(output, text) && append_public(output, "}\n");
+  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
+  return append_public(output, R"(,"capture":)") &&
+         api::append_capture(output, api::CaptureSource::visible, api::CaptureFormat::plain,
+                             api::CaptureWrap::rendered, target.runtime->observation_generation,
+                             formatted.truncated, text) &&
+         append_public(output, "}\n");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -7741,43 +8595,102 @@ struct ObservedPane final {
   std::string output;
   try {
     pending.event_sequence = 0;
+    pending.observed_pane_cursor = 0;
     if (!append_event_header(output, pending, "snapshot") ||
         !append_public(output, R"(,"sessions":)") ||
         !append_sessions_snapshot(output, sessions, pending.subscription.session)) {
       return {};
     }
-    const auto target = observed_pane(pending, sessions, runtimes);
-    if (target.pane != nullptr && target.runtime != nullptr) {
-      if (!append_public(output, R"(,"session":)") ||
-          !append_public_id(output, target.session->id) || !append_public(output, R"(,"pane":)") ||
-          !append_public_id(output, target.pane->id) || !append_public(output, R"(,"process":)") ||
-          !append_public_process(output, *target.pane, *target.runtime)) {
+    if (pending.subscription.panes.size() == 1U) {
+      const auto target = observed_pane(pending, sessions, runtimes, 0);
+      auto& observed = pending.observed_panes.front();
+      const bool present =
+          target.session != nullptr && target.pane != nullptr && target.runtime != nullptr;
+      if (!append_public(output, R"(,"present":)") ||
+          !append_public(output, present ? "true" : "false")) {
         return {};
       }
-      if (pending.subscription.screen) {
-        const auto formatted =
-            target.runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
-        if (!formatted.has_value() || !append_public(output, R"(,"generation":)") ||
-            !append_public_number(output, target.runtime->mutation_generation) ||
-            !append_public(output, R"(,"text":)")) {
+      if (present) {
+        if (!append_public(output, R"(,"session":)") ||
+            !append_public_id(output, target.session->id) ||
+            !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
+            !append_public(output, R"(,"generation":)") ||
+            !append_public_number(output, target.runtime->observation_generation) ||
+            !append_public(output, R"(,"process":)") ||
+            !append_public_process(output, *target.pane, *target.runtime)) {
           return {};
         }
-        // Byte payloads and character storage have the same object representation.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted);
-        if (!api::append_json_string(output, text)) {
+        if (pending.subscription.screen) {
+          const auto formatted =
+              format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
+                                    api::CaptureWrap::rendered, 0, scratch);
+          const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
+          if (!formatted.result.has_value() || !at_prompt.has_value() ||
+              !append_public(output, R"(,"cursor_at_prompt":)") ||
+              !append_public(output, *at_prompt ? "true" : "false")) {
+            return {};
+          }
+          // Byte payloads and character storage have the same object representation.
+          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+          const std::string_view text(reinterpret_cast<const char*>(scratch.data()),
+                                      *formatted.result);
+          if (!append_public(output, R"(,"capture":)") ||
+              !api::append_capture(output, api::CaptureSource::visible, api::CaptureFormat::plain,
+                                   api::CaptureWrap::rendered,
+                                   target.runtime->observation_generation, formatted.truncated,
+                                   text)) {
+            return {};
+          }
+        }
+        observed.present = true;
+        observed.terminal_generation = target.runtime->observation_generation;
+        observed.process = target.pane->process_exit.value_or(ProcessExit{});
+        observed.process_exited = target.pane->process_exit.has_value();
+      } else {
+        observed = {};
+      }
+    } else if (!pending.subscription.panes.empty()) {
+      if (!append_public(output, R"(,"panes":[)")) {
+        return {};
+      }
+      for (std::size_t index = 0; index < pending.subscription.panes.size(); ++index) {
+        if (index > 0 && !append_public(output, ",")) {
           return {};
+        }
+        const auto target = observed_pane(pending, sessions, runtimes, index);
+        auto& observed = std::span(pending.observed_panes).subspan(index, 1).front();
+        const auto requested = std::span(pending.subscription.panes).subspan(index, 1).front().id;
+        const bool present =
+            target.session != nullptr && target.pane != nullptr && target.runtime != nullptr;
+        if (!append_public(output, R"({"pane":)") || !append_public_id(output, requested) ||
+            !append_public(output, R"(,"present":)") ||
+            !append_public(output, present ? "true" : "false")) {
+          return {};
+        }
+        if (present && (!append_public(output, R"(,"session":)") ||
+                        !append_public_id(output, target.session->id) ||
+                        !append_public(output, R"(,"generation":)") ||
+                        !append_public_number(output, target.runtime->observation_generation) ||
+                        !append_public(output, R"(,"process":)") ||
+                        !append_public_process(output, *target.pane, *target.runtime))) {
+          return {};
+        }
+        if (!append_public(output, "}")) {
+          return {};
+        }
+        if (present) {
+          observed.present = true;
+          observed.terminal_generation =
+              pending.subscription.screen ? 0 : target.runtime->observation_generation;
+          observed.process = target.pane->process_exit.value_or(ProcessExit{});
+          observed.process_exited = target.pane->process_exit.has_value();
+        } else {
+          observed = {};
         }
       }
-      pending.observed_pane_present = true;
-      pending.observed_terminal_generation = target.runtime->mutation_generation;
-      pending.observed_process = target.pane->process_exit.value_or(ProcessExit{});
-      pending.observed_process_exited = target.pane->process_exit.has_value();
-    } else {
-      pending.observed_pane_present = false;
-      pending.observed_process_exited = false;
-      pending.observed_terminal_generation = 0;
-      pending.observed_process = {};
+      if (!append_public(output, "]")) {
+        return {};
+      }
     }
     pending.observed_semantic_hash = semantic_hash(sessions, pending.subscription.session);
     return append_public(output, "}\n") ? output : std::string{};
@@ -7801,10 +8714,16 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
     }
     const auto schema = api::json_string(*parsed.value, "schema");
     if (schema == std::optional<std::string_view>{api::action_schema}) {
-      const auto decoded = api::decode_action(*parsed.value);
+      auto decoded = api::decode_action(*parsed.value);
       if (!decoded.action.has_value()) {
         finish_public_output(pending, encode_public_error(decoded.error),
                              PendingAction::keep_action);
+        return;
+      }
+      if (decoded.action->kind == api::ActionKind::pane_wait) {
+        pending.wait = begin_public_wait(std::move(*decoded.action));
+        std::string{}.swap(pending.public_input);
+        pending.state = PendingState::execute_public_action_wait;
         return;
       }
       auto scratch = std::span<std::byte>{};
@@ -7879,15 +8798,17 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
     std::string output;
     try {
       if (pending.state == PendingState::prepare_public_observer) {
-        if (pending.subscription.screen && formatted_screen) {
+        const bool snapshot_screen =
+            pending.subscription.screen && pending.subscription.panes.size() == 1U;
+        if (snapshot_screen && formatted_screen) {
           screen_work_pending = true;
           continue;
         }
         auto scratch = std::span<std::byte>{};
-        if (pending.subscription.screen) {
+        if (snapshot_screen) {
           scratch = acquire_public_scratch(scratch_owner);
         }
-        if (pending.subscription.screen && scratch.empty()) {
+        if (snapshot_screen && scratch.empty()) {
           finish_public_output(pending,
                                encode_public_error({.reason = "resource_failure", .field = {}}),
                                PendingAction::close);
@@ -7901,7 +8822,7 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
           continue;
         }
         finish_public_output(pending, std::move(snapshot), PendingAction::keep_observe);
-        if (pending.subscription.screen) {
+        if (snapshot_screen) {
           formatted_screen = true;
           cursor = (slot + 1U) % connections.size();
         }
@@ -7909,61 +8830,94 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
       }
       const auto hash = semantic_hash(sessions, pending.subscription.session);
       if (hash != pending.observed_semantic_hash) {
-        if (!append_event_header(output, pending, "state.changed") ||
-            !append_public(output, R"(,"sessions":)") ||
-            !append_sessions_snapshot(output, sessions, pending.subscription.session) ||
-            !append_public(output, "}\n")) {
+        if (!append_event_header(output, pending, "state.changed")) {
+          pending.state = PendingState::unused;
+          continue;
+        }
+        if (pending.subscription.session.has_value()) {
+          const auto* const changed = public_session(sessions, *pending.subscription.session);
+          if (changed != nullptr && changed->active &&
+              (!append_public(output, R"(,"session":)") || !append_public_id(output, changed->id) ||
+               !append_public(output, R"(,"revision":)") ||
+               !append_public_number(output, changed->mutation_generation))) {
+            pending.state = PendingState::unused;
+            continue;
+          }
+        } else if (!append_public(output, R"(,"sessions":)") ||
+                   !append_sessions_snapshot(output, sessions, std::nullopt)) {
+          pending.state = PendingState::unused;
+          continue;
+        }
+        if (!append_public(output, "}\n")) {
           pending.state = PendingState::unused;
           continue;
         }
         pending.observed_semantic_hash = hash;
       }
-      const auto target = observed_pane(pending, sessions, runtimes);
-      const bool present = target.pane != nullptr && target.runtime != nullptr;
-      if (!present && pending.observed_pane_present) {
-        if (!append_event_header(output, pending, "pane.closed") || !append_public(output, "}\n")) {
-          pending.state = PendingState::unused;
-          continue;
-        }
-        pending.observed_pane_present = false;
-        pending.observed_process_exited = false;
-        pending.observed_terminal_generation = 0;
-        pending.observed_process = {};
-      } else if (present) {
-        const auto process = target.pane->process_exit.value_or(ProcessExit{});
-        const bool process_exited = target.pane->process_exit.has_value();
-        if (!pending.observed_pane_present || process_exited != pending.observed_process_exited ||
-            process.kind != pending.observed_process.kind ||
-            process.value != pending.observed_process.value) {
-          if (!append_event_header(output, pending, "pane.process") ||
-              !append_public(output, R"(,"session":)") ||
-              !append_public_id(output, target.session->id) ||
-              !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
-              !append_public(output, R"(,"process":)") ||
-              !append_public_process(output, *target.pane, *target.runtime) ||
+      if (!pending.subscription.panes.empty()) {
+        const auto pane_index = pending.observed_pane_cursor % pending.subscription.panes.size();
+        pending.observed_pane_cursor = (pane_index + 1U) % pending.subscription.panes.size();
+        auto& observed = pending.observed_panes.at(pane_index);
+        const auto target = observed_pane(pending, sessions, runtimes, pane_index);
+        const bool present = target.pane != nullptr && target.runtime != nullptr;
+        if (!present && observed.present) {
+          if (!append_event_header(output, pending, "pane.closed") ||
+              !append_public(output, R"(,"pane":)") ||
+              !append_public_id(output, pending.subscription.panes.at(pane_index).id) ||
               !append_public(output, "}\n")) {
             pending.state = PendingState::unused;
             continue;
           }
-          pending.observed_process = process;
-          pending.observed_process_exited = process_exited;
-        }
-        if (pending.subscription.screen &&
-            target.runtime->mutation_generation != pending.observed_terminal_generation) {
-          if (!output.empty() || formatted_screen) {
-            screen_work_pending = true;
-          } else {
-            const auto scratch = acquire_public_scratch(scratch_owner);
-            if (scratch.empty() || !append_screen_event(output, pending, target, scratch)) {
+          observed = {};
+        } else if (present) {
+          const auto process = target.pane->process_exit.value_or(ProcessExit{});
+          const bool process_exited = target.pane->process_exit.has_value();
+          if (!observed.present || process_exited != observed.process_exited ||
+              process.kind != observed.process.kind || process.value != observed.process.value) {
+            if (!append_event_header(output, pending, "pane.process") ||
+                !append_public(output, R"(,"session":)") ||
+                !append_public_id(output, target.session->id) ||
+                !append_public(output, R"(,"pane":)") ||
+                !append_public_id(output, target.pane->id) ||
+                !append_public(output, R"(,"process":)") ||
+                !append_public_process(output, *target.pane, *target.runtime) ||
+                !append_public(output, "}\n")) {
               pending.state = PendingState::unused;
               continue;
             }
-            pending.observed_terminal_generation = target.runtime->mutation_generation;
-            formatted_screen = true;
-            cursor = (slot + 1U) % connections.size();
+            observed.process = process;
+            observed.process_exited = process_exited;
           }
+          if (target.runtime->observation_generation != observed.terminal_generation) {
+            if (!output.empty() || (pending.subscription.screen && formatted_screen)) {
+              screen_work_pending = screen_work_pending || pending.subscription.screen;
+            } else if (pending.subscription.screen) {
+              const auto scratch = acquire_public_scratch(scratch_owner);
+              if (scratch.empty() || !append_screen_event(output, pending, target, scratch)) {
+                pending.state = PendingState::unused;
+                continue;
+              }
+              observed.terminal_generation = target.runtime->observation_generation;
+              formatted_screen = true;
+              cursor = (slot + 1U) % connections.size();
+            } else {
+              if (!append_event_header(output, pending, "pane.terminal") ||
+                  !append_public(output, R"(,"session":)") ||
+                  !append_public_id(output, target.session->id) ||
+                  !append_public(output, R"(,"pane":)") ||
+                  !append_public_id(output, target.pane->id) ||
+                  !append_public(output, R"(,"generation":)") ||
+                  !append_public_number(output, target.runtime->observation_generation) ||
+                  !append_public(output, R"(,"changed":["screen"]})") ||
+                  !append_public(output, "\n")) {
+                pending.state = PendingState::unused;
+                continue;
+              }
+              observed.terminal_generation = target.runtime->observation_generation;
+            }
+          }
+          observed.present = true;
         }
-        pending.observed_pane_present = true;
       }
       if (!output.empty()) {
         finish_public_output(pending, std::move(output), PendingAction::keep_observe);
@@ -8719,7 +9673,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
                  append_structured_session(pending.output, *session) &&
                  pending.output.append_text("]");
     } else if (pending.command == command_query_tabs) {
-      appended = append_structured_tabs(pending.output, *session);
+      appended = append_structured_tabs(pending.output, *session, runtimes);
     } else {
       appended = append_structured_panes(pending.output, *session, runtimes);
     }
@@ -9033,6 +9987,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     prepare_control_payload(pending, sessions, runtimes);
     break;
   case PendingState::read_public_json:
+  case PendingState::execute_public_action_wait:
   case PendingState::execute_public_procedure:
   case PendingState::prepare_public_observer:
   case PendingState::observe:
@@ -9046,7 +10001,9 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
                          std::uint64_t& activity_order, PublicScratch& scratch) noexcept {
-  if (pending.state == PendingState::observe) {
+  if (pending.state == PendingState::observe ||
+      pending.state == PendingState::execute_public_action_wait ||
+      pending.state == PendingState::execute_public_procedure) {
     std::array<std::byte, 256> unexpected{};
     const auto received = ::recv(pending.descriptor, unexpected.data(), unexpected.size(), 0);
     if (received == 0 || received > 0 ||
@@ -9110,7 +10067,8 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
   for (std::size_t operation = 0; operation < operations_per_turn_max && pending->active() &&
                                   pending->state != PendingState::flush_response;
        ++operation) {
-    if (pending->state == PendingState::execute_public_procedure ||
+    if (pending->state == PendingState::execute_public_action_wait ||
+        pending->state == PendingState::execute_public_procedure ||
         pending->state == PendingState::prepare_public_observer) {
       return;
     }
@@ -9461,7 +10419,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
+[[nodiscard]] auto poll_timeout(Sessions& sessions, PaneRuntimeStore& runtimes,
                                 const PendingConnections& pending,
                                 const CapacityRejectionConnections& capacity_rejections,
                                 const ExtensionRuntime* const extensions,
@@ -9485,8 +10443,25 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     if (connection == nullptr || !connection->active()) {
       continue;
     }
+    if (connection->state == PendingState::execute_public_action_wait) {
+      if (!connection->wait.has_value() ||
+          public_wait_has_work(*connection->wait, sessions, runtimes, now)) {
+        return 0;
+      }
+      if (tighten(*connection->wait)) {
+        return 0;
+      }
+      continue;
+    }
     if (connection->state == PendingState::execute_public_procedure) {
-      return 0;
+      if (connection->procedure == nullptr || !connection->procedure->wait.has_value()) {
+        return 0;
+      }
+      if (public_wait_has_work(*connection->procedure->wait, sessions, runtimes, now) ||
+          tighten(*connection->procedure->wait)) {
+        return 0;
+      }
+      continue;
     }
     if ((!connection->public_connection || public_deadline_applies(*connection)) &&
         tighten(*connection)) {
@@ -10114,6 +11089,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
+  std::size_t wait_cursor = 0;
   std::size_t procedure_cursor = 0;
   std::size_t observer_cursor = 0;
   std::uint64_t activity_order = 0;
@@ -10192,8 +11168,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       short events = 0;
       if (pending->state == PendingState::flush_response) {
         events = POLLOUT;
-      } else if (pending->state != PendingState::execute_public_procedure &&
-                 pending->state != PendingState::prepare_public_observer) {
+      } else if (pending->state != PendingState::prepare_public_observer) {
         events = POLLIN;
       }
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
@@ -10341,10 +11316,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           continue;
         }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-        if (pending->state != PendingState::flush_response &&
-            pending->state != PendingState::execute_public_procedure &&
-            pending->state != PendingState::prepare_public_observer &&
-            (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        const bool execution_pending = pending->state == PendingState::execute_public_action_wait ||
+                                       pending->state == PendingState::execute_public_procedure;
+        if (execution_pending && (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+          process_public_read(*pending, sessions, runtimes, activity_order, public_scratch);
+          if (pending->state == PendingState::unused) {
+            close_pending(pending_connections, owner.auxiliary_slot, sessions);
+          }
+        } else if (pending->state != PendingState::flush_response &&
+                   pending->state != PendingState::prepare_public_observer &&
+                   (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, extensions.get(),
                                activity_order, public_scratch, owner.auxiliary_slot);
         }
@@ -10358,6 +11339,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
       }
     }
+    service_public_waits(pending_connections, sessions, runtimes, public_scratch, wait_cursor);
     service_public_procedures(pending_connections, sessions, runtimes, activity_order,
                               public_scratch, procedure_cursor);
 

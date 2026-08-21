@@ -388,7 +388,7 @@ TEST(SessionModelTest, PaneCommitsProcessOutcomeOnlyUnderExplicitHoldPolicy) {
   Pane closing{.id = PaneId::from_parts(0, 1),
                .tab = TabId::from_parts(0, 1),
                .rectangle = {},
-               .launch_command_storage = nullptr,
+               .launch_intent = nullptr,
                .process_exit = std::nullopt,
                .exit_policy = PaneExitPolicy::close};
   EXPECT_FALSE(closing.commit_process_exit({.kind = ProcessExitKind::exited, .value = 7}));
@@ -397,7 +397,7 @@ TEST(SessionModelTest, PaneCommitsProcessOutcomeOnlyUnderExplicitHoldPolicy) {
   Pane held{.id = PaneId::from_parts(1, 1),
             .tab = TabId::from_parts(0, 1),
             .rectangle = {},
-            .launch_command_storage = nullptr,
+            .launch_intent = nullptr,
             .process_exit = std::nullopt,
             .exit_policy = PaneExitPolicy::hold};
   EXPECT_TRUE(held.commit_process_exit({.kind = ProcessExitKind::signaled, .value = 15}));

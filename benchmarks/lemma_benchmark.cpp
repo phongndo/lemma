@@ -660,6 +660,35 @@ void benchmark_terminal_viewport_wheel_frames(benchmark::State& state) {
       benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
+void benchmark_terminal_visible_capture(benchmark::State& state) {
+  const auto rows = static_cast<std::uint16_t>(state.range(0));
+  const auto columns = rows >= 200U ? std::uint16_t{500} : std::uint16_t{80};
+  vt::TerminalOptions options;
+  options.size = {.columns = columns, .rows = rows};
+  auto result = vt::Terminal::create(options);
+  if (!result.has_value()) {
+    state.SkipWithError("failed to create terminal");
+    return;
+  }
+  auto terminal = std::move(result).value();
+  constexpr std::string_view contents = "top-row";
+  terminal.write(std::as_bytes(std::span(contents.data(), contents.size())));
+  std::array<std::byte, std::size_t{256} * 1'024U> output{};
+  std::uint64_t output_bytes = 0;
+
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto formatted =
+        terminal.format_visible_tail(vt::ScreenFormat::plain, rows, output, false);
+    if (!formatted.has_value()) {
+      state.SkipWithError("failed to capture visible terminal");
+      return;
+    }
+    output_bytes += *formatted;
+  }
+  state.counters["capture_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
+}
+
 void benchmark_terminal_multiple_panes(benchmark::State& state) {
   const auto pane_count = static_cast<std::size_t>(state.range(0));
   std::size_t grid_columns = 8;
@@ -787,6 +816,7 @@ BENCHMARK(benchmark_terminal_ansi_single_row);
 BENCHMARK(benchmark_terminal_ansi_clean_frame);
 BENCHMARK(benchmark_terminal_ansi_scroll_operations);
 BENCHMARK(benchmark_terminal_viewport_wheel_frames);
+BENCHMARK(benchmark_terminal_visible_capture)->Arg(23)->Arg(200);
 BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_terminal_full_frames);
 

@@ -59,7 +59,10 @@ lemma kill project
 
 lemma action tab new --session work --title tests
 lemma action pane split --session work --pane 0:1 --right
-lemma action pane capture --session work --pane 0:1
+lemma action pane inspect --session work --pane 0:1
+lemma action pane input --session work --pane 0:1 --paste 'just test' --key enter
+lemma action pane wait --session work --pane 0:1 --until-prompt --timeout 2m
+lemma action pane capture --session work --pane 0:1 --source recent --wrap logical
 lemma action pane split --help
 ```
 
@@ -73,9 +76,12 @@ child environment. Omitted targets resolve from those stable IDs before transmis
 `--session`, `--tab`, and `--pane` selectors operate on other resources. Context inference is only a
 CLI convenience; the Action crossing CONTROL is concrete and deterministic.
 
-`lemma action` prints the canonical JSON Action result. `lemma proc` prints the canonical Proc
-result. `pane.list` includes each Pane's zero-based `column` and `row` in the Session content grid,
-as well as its `columns` and `rows`, so layout order remains observable after swaps. Pane resize
+`lemma action` prints the canonical JSON Action result, and `lemma proc` prints the canonical Proc
+result. List Actions return bounded
+summaries; `daemon/session/tab/pane.inspect` return one detailed resource without embedding terminal
+text. Results carry the current Session revision and relevant terminal generation. `pane.list`
+includes each Pane's zero-based `column` and `row` in the Session content grid, as well as its
+`columns` and `rows`, so layout order remains observable after swaps. Pane resize
 directions move the nearest matching divider rather than promising to grow the target: right/down
 grows the divider's left/top side, while left/up grows its right/bottom side. These CLI commands are
 the shell and coding-agent interface. Dedicated integrations may use CONTROL and OBSERVE directly.
@@ -91,9 +97,11 @@ CONTROL accepts either:
 - one complete `lemma.proc/v1` Procedure.
 
 The connection is lock-step: send one record, consume its complete result, then send the next.
-There is no pipelining, request-ID layer, or multiplexed Event traffic. An idle CONTROL connection
-may remain open for a persistent agent; once a client starts an incomplete record, it must continue
-making progress or the daemon closes it after the bounded setup timeout.
+There is no pipelining, request-ID layer, or multiplexed Event traffic. A finite `pane.wait` Action
+may keep the request pending until its deadline while the daemon reactor continues servicing PTYs,
+clients, and observers. An idle CONTROL connection may remain open for a persistent agent; once a
+client starts an incomplete record, it must continue making progress or the daemon closes it after
+the bounded setup timeout.
 
 Example Action:
 
@@ -104,7 +112,7 @@ Example Action:
 Example result:
 
 ```json
-{"schema":"lemma.action-result/v1","action":"pane.capture","status":"applied","session":{"id":"0:1","name":"work"},"tab":"1:1","pane":"1:3","text":"..."}
+{"schema":"lemma.action-result/v1","action":"pane.capture","status":"applied","session":{"id":"0:1","name":"work","revision":12},"tab":"1:1","pane":"1:3","terminal_generation":94,"capture":{"source":"visible","format":"plain","wrap":"rendered","terminal_generation":94,"truncated":false,"text":"..."}}
 ```
 
 Names and one-based Tab positions are convenience selectors. Persistent clients should retain
@@ -126,8 +134,8 @@ A Proc adds only:
 3. backward-only typed references to prior creation results.
 
 References are resolved to concrete IDs before each Action reaches the same daemon-owned executor.
-Proc contains Actions only; waiting and streaming remain Event concerns. See
-[`procedures.md`](procedures.md).
+Proc can sequence the same finite `pane.wait` Action used by a one-Action request; streaming remains
+an Event concern. See [`procedures.md`](procedures.md).
 
 ## OBSERVE connection
 
@@ -138,11 +146,33 @@ The first record is a `lemma.events/v1` subscription:
 ```
 
 The daemon returns sequence zero as an initial snapshot, followed by ordered `state.changed`,
-`pane.process`, `pane.screen`, and `pane.closed` records. `pane.screen` is opt-in and contains a
-coalesced current plain-text projection, not raw or lossless PTY replay.
+`pane.process`, compact `pane.terminal`, optional `pane.screen`, and `pane.closed` records. A
+subscription may select one legacy `pane` or a bounded `panes` array of up to eight stable IDs.
+The initial snapshot explicitly reports each requested Pane as present or missing with current
+process and terminal generation metadata. Multi-Pane screen initialization is then staged so at
+most one screen is formatted per reactor turn.
+`pane.terminal` carries only a generation and changed categories; `pane.screen` is opt-in and
+contains a coalesced current plain-text projection plus prompt state, not raw or lossless PTY
+replay.
 
 Observers are Runtime-owned replaceable resources, not Attachments. They cannot mutate state, never
 block PTY progress, and retain no replay log. Reconnection begins with a new authoritative snapshot.
+
+## Pane wait Action
+
+`lemma action pane wait [PANE]` is a finite synchronization Action. With no condition it waits for
+child-process completion; omitting PANE inside Lemma selects the current Pane. Because Pane IDs are
+Session-scoped, an external invocation also supplies `--session`. Specialized waits may require an
+exact exit code or signal, a literal visible-screen condition, or an OSC-133 prompt after an
+optional terminal generation. The default timeout is 30 seconds and `--timeout` may set another
+bounded deadline.
+
+A match returns an `applied` Action result with condition and process or capture evidence. Timeout
+and unexpected process exit return `failed` with `error.reason` set to `timeout` or
+`unexpected_exit`; stale and unavailable resources use the ordinary Action statuses. A
+close-on-exit Pane completes with `exited_unknown`; exact code or signal matching requires `--hold`
+so the typed outcome remains inspectable. Proc can use the same Action and stop or continue from its
+ordinary result status.
 
 ## Schema
 

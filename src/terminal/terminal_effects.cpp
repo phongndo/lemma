@@ -158,6 +158,20 @@ auto Terminal::title() const noexcept -> std::expected<std::string_view, Error> 
   return std::string_view(reinterpret_cast<const char*>(title.ptr), title.len);
 }
 
+auto Terminal::pwd() const noexcept -> std::expected<std::string_view, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  GhosttyString pwd{};
+  const auto result = ghostty_terminal_get(impl_->terminal, GHOSTTY_TERMINAL_DATA_PWD, &pwd);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  // Ghostty exposes UTF-8 as uint8_t while string_view uses char.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  return std::string_view(reinterpret_cast<const char*>(pwd.ptr), pwd.len);
+}
+
 auto Terminal::take_effects() noexcept -> EffectBatch {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);

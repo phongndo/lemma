@@ -4,7 +4,6 @@
 #include "api/action.hpp"
 #include "lemma/id.hpp"
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -69,8 +68,6 @@ enum class OperationStatus : std::uint8_t {
   conflict,
   capacity,
   unavailable,
-  timeout,
-  unexpected_exit,
   failed,
 };
 
@@ -147,28 +144,6 @@ struct PaneStatus final {
   std::uint32_t value{0};
 };
 
-enum class ProcessExpectationKind : std::uint8_t {
-  any,
-  exit_code,
-  signal,
-};
-
-struct ProcessExpectation final {
-  ProcessExpectationKind kind{ProcessExpectationKind::any};
-  std::uint32_t value{0};
-};
-
-struct PaneWaitOptions final {
-  std::string_view contains;
-  std::optional<ProcessExpectation> process;
-  std::chrono::milliseconds timeout{30'000};
-};
-
-struct PaneWaitResult final {
-  OperationStatus status{OperationStatus::failed};
-  std::optional<PaneStatus> process;
-};
-
 // Creates one new Session and returns its assigned name. An empty optional name requests the
 // daemon's bounded numeric allocator. Creation is strict: an explicit duplicate is a conflict.
 [[nodiscard]] auto create_detailed(const RuntimeEndpoint& endpoint,
@@ -196,11 +171,9 @@ struct PaneWaitResult final {
                                 PaneId pane) -> std::pair<OperationStatus, std::string>;
 [[nodiscard]] auto pane_status(const RuntimeEndpoint& endpoint, std::string_view session,
                                PaneId pane) -> PaneStatus;
-[[nodiscard]] auto wait_pane(const RuntimeEndpoint& endpoint, std::string_view session, PaneId pane,
-                             PaneWaitOptions options) -> PaneWaitResult;
 // Streams NDJSON observations until the daemon closes the subscription or the output fails.
 [[nodiscard]] auto events(const RuntimeEndpoint& endpoint, std::optional<std::string_view> session,
-                          std::optional<PaneId> pane, bool screen) -> int;
+                          std::span<const PaneId> panes, bool screen) -> int;
 [[nodiscard]] auto rename_session_status(const RuntimeEndpoint& endpoint, std::string_view session,
                                          std::string_view new_name) -> OperationStatus;
 [[nodiscard]] auto rename_session(const RuntimeEndpoint& endpoint, std::string_view session,

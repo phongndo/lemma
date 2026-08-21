@@ -38,6 +38,28 @@ TEST(PaneLayoutTest, EqualSplitPreservesExistingOddCellBehavior) {
   EXPECT_TRUE(layout.valid());
 }
 
+TEST(PaneLayoutTest, IntrospectionSnapshotIsDenseAndPreservesTopology) {
+  PaneLayout layout(pane(0));
+  ASSERT_TRUE(layout.split(pane(0), pane(1), SplitAxis::left_right));
+  ASSERT_TRUE(layout.split(pane(1), pane(2), SplitAxis::top_bottom));
+
+  const auto snapshot = layout.snapshot();
+
+  ASSERT_TRUE(snapshot.has_value());
+  const auto value = snapshot.value_or(LayoutSnapshot{});
+  ASSERT_EQ(value.size, 5U);
+  const auto& root = value.nodes.at(0);
+  EXPECT_FALSE(root.leaf);
+  EXPECT_EQ(root.axis, SplitAxis::left_right);
+  EXPECT_EQ(root.first, 1);
+  EXPECT_EQ(root.second, 2);
+  EXPECT_EQ(value.nodes.at(1).pane, pane(0));
+  EXPECT_FALSE(value.nodes.at(2).leaf);
+  EXPECT_EQ(value.nodes.at(2).axis, SplitAxis::top_bottom);
+  EXPECT_EQ(value.nodes.at(3).pane, pane(1));
+  EXPECT_EQ(value.nodes.at(4).pane, pane(2));
+}
+
 TEST(PaneLayoutTest, OneCellResizePersistsAcrossViewportChanges) {
   PaneLayout layout(pane(0));
   ASSERT_TRUE(layout.split(pane(0), pane(1), SplitAxis::left_right));

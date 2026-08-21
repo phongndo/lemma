@@ -114,7 +114,7 @@ subscription filter. An observer is not an Attachment and cannot mutate state. P
 legacy control, keyboard, mouse, and extensions must converge on the same typed semantic transition
 rather than gaining transport-specific policy. See [`control-api.md`](control-api.md).
 
-A Proc is a bounded CONTROL request, not a Core transaction or workflow object. Before its first Action executes, the daemon validates the complete versioned document, Action schemas, selectors, bounds, and backward-only typed result references. It resolves each reference to a concrete Action and submits it through the same executor as one-Action RPC and `lemma action`. Process and PTY effects are non-rollbackable, so Proc stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic Action still commits through one Core transition; sequencing cannot split one Action into multiple partial mutations.
+A Proc is a bounded CONTROL request, not a Core transaction or workflow object. Before its first Action executes, the daemon validates the complete versioned document, Action schemas, selectors, bounds, and backward-only typed result references. It resolves each reference to a concrete Action and submits it through the same executor as one-Action RPC and `lemma action`. Process and PTY effects are non-rollbackable, so Proc stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic Action still commits through one Core transition; sequencing cannot split one Action into multiple partial mutations. A finite `pane.wait` Action retains only its concrete target, condition, observed generation, and deadline while the reactor continues servicing PTYs, clients, and observers. Proc composes that same Action rather than gaining a separate synchronization mechanism.
 
 ## Dependency direction
 
@@ -150,7 +150,7 @@ The current CMake target graph is transitional. Existing links do not define the
 12. Workflow concepts such as projects, workspaces, and agent runs remain outside the kernel unless correctness truly requires kernel ownership.
 13. Required input and terminal-response ordering is explicit and preserved.
 14. Visible state can be reconstructed from daemon authority without an unbounded event, PTY-byte, or render log.
-15. Action is the semantic primitive, Proc composes Actions, and Events only observe post-state.
+15. Action is the bounded interaction primitive, including finite synchronization; Proc composes Actions, and Events stream immutable post-state observations.
 16. Capacity exhaustion and dependency failure degrade or reject boundedly; they never corrupt authority.
 17. Published input-policy generations contain only resolved, unambiguous bindings; context stacks are bounded, Attachment-scoped, and cannot outlive their generation.
 

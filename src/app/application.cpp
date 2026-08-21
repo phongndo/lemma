@@ -166,9 +166,10 @@ template <typename Integer>
       "  Proc    lemma.proc/v1 -> lemma.proc-result/v1\n"
       "  Events  lemma.events/v1 -> lemma.event/v1\n\n"
       "Actions\n"
+      "  daemon   inspect\n"
       "  session  start list inspect rename kill\n"
-      "  tab      new list select move rename kill\n"
-      "  pane     split list focus swap resize zoom send capture kill\n\n"
+      "  tab      new list inspect select move rename kill\n"
+      "  pane     split list inspect focus swap resize zoom input capture wait kill\n\n"
       "Use `lemma api schema --json` for JSON Schema 2020-12.\n";
   return write_fragment(stdout, summary) ? 0 : 1;
 }
@@ -189,16 +190,16 @@ Lemma's hierarchy is `Session -> Tab -> Pane`. Use typed Actions; never emulate 
 sending prefix keys.
 
 ```text
-Action = one operation/query
+Action = one bounded interaction, including reads and synchronization
 Proc   = bounded dependent sequence of Actions
-Event  = observation
+Event  = immutable asynchronous observation
 ```
 
 Operate Lemma only through its CLI. These commands use Lemma's typed daemon control API internally;
 do not open sockets, write RPC clients, or wrap the protocol.
 
 ```text
-one operation       -> lemma action
+one interaction     -> lemma action
 dependent sequence  -> lemma proc
 observation stream  -> lemma events
 schema discovery    -> lemma api schema --json
@@ -209,11 +210,15 @@ schema discovery    -> lemma api schema --json
 - Do not run bare `lemma`, `lemma new`, or `lemma attach` from a noninteractive tool: they attach to
   a terminal. Use `lemma action session start` for detached agent-created work.
 - Inside a Lemma pane, the CLI infers targets from `LEMMA_SESSION_ID`, `LEMMA_TAB_ID`, and
-  `LEMMA_PANE_ID`. Outside Lemma, provide explicit targets for operations that require them.
+  `LEMMA_PANE_ID`. Outside Lemma, provide explicit targets for operations that require them. Pane
+  IDs are Session-scoped.
 - Names and Tab positions are human/discovery conveniences; prefer returned generational IDs for
   subsequent operations. Tab and Pane IDs are Session-scoped.
-- Read every canonical JSON result. Only `applied` and `no_effect` are successful. On `stale` or
-  `wrong_owner`, inspect current state instead of blindly retrying.
+- Read every canonical JSON result. Only `applied` and `no_effect` are successful. On `stale`,
+  `wrong_owner`, or `conflict`, inspect current state instead of blindly retrying. Use returned
+  Session revisions for conditional semantic mutations and terminal generations for waits.
+- Agent-created Tabs and splits in user-owned Sessions should use `--focus preserve` unless changing
+  focus is explicitly intended.
 - Arguments after `--` execute directly without a shell. Do not add `sh -c` unless shell
   interpretation is actually required. Long-running programs remain alive without `--hold`. Use
   `--hold` / `"hold":true` only when an exited process and its final terminal output must remain
@@ -223,7 +228,9 @@ schema discovery    -> lemma api schema --json
 - Clean up temporary resources created solely for the current task without confirmation. Do not
   destroy pre-existing, user-owned, or intentionally persistent resources unless explicitly
   requested.
-- Bound every observation with the agent host's timeout or cancellation mechanism.
+- `lemma action pane wait` defaults to current-Pane child-process completion. Use its condition
+  options only for exact process, output, or prompt waits. Proc may compose the same Action with
+  other steps. Bound open-ended `lemma events` streams with the agent host's cancellation mechanism.
 
 ## CLI
 
@@ -231,23 +238,28 @@ Inside the current Lemma pane:
 
 ```sh
 lemma action session inspect
-lemma action pane split --right --hold -- just test
-lemma action pane capture --lines 200
+lemma action pane split --right --focus preserve --hold -- just test
+lemma action pane inspect
+lemma action pane wait
+lemma action pane capture --source recent --lines 200 --wrap logical
 ```
 
 Outside Lemma or when targeting another resource:
 
 ```sh
+lemma action daemon inspect
 lemma action session list
-lemma action pane capture --session 0:1 --pane 1:3 --lines 200
+lemma action pane input --session 0:1 --pane 1:3 --paste 'just test' --key enter
+lemma action pane wait --session 0:1 --pane 1:3
+lemma action pane capture --session 0:1 --pane 1:3 --source recent --lines 200
 lemma events --session 0:1 --pane 1:3 --screen
 lemma proc FILE|-
 lemma api schema --json
 ```
 
-`lemma action` and `lemma proc` print canonical JSON. Read IDs from creation results rather than
-assuming them. `lemma events` is an observation stream, not a wait command. Stop it after the
-required condition or the agent host's deadline.
+`lemma action` and `lemma proc` print canonical JSON. Read IDs, revisions, and
+terminal generations from results rather than assuming them. Prefer exact argv launch for ordinary
+commands; use atomic `pane.input` only for an existing interactive terminal.
 
 Use `lemma action DOMAIN OP --help` for CLI grammar before reaching for the full schema. Use
 `lemma api schema --json` for exact Action, Proc, result, subscription, and Event shapes, fields,
@@ -283,6 +295,7 @@ struct SurfaceArguments final {
   std::string_view working_directory;
   std::string_view title;
   std::vector<std::string_view> command;
+  api::FocusPolicy focus{api::FocusPolicy::created};
   bool hold{false};
 };
 
@@ -303,6 +316,11 @@ struct SurfaceArguments final {
 [[nodiscard]] constexpr auto action_help(const std::string_view domain,
                                          const std::string_view operation) noexcept
     -> std::string_view {
+  if (domain == "daemon") {
+    return operation == "inspect" ? "Usage:\n  lemma action daemon inspect\n\nInspect live "
+                                    "versions, capacities, resource usage, and attachment counts.\n"
+                                  : std::string_view{};
+  }
   if (domain == "session") {
     if (operation == "list") {
       return "Usage:\n"
@@ -341,12 +359,17 @@ struct SurfaceArguments final {
     }
     if (operation == "new") {
       return "Usage:\n"
-             "  lemma action tab new [--session NAME|ID] [--title TITLE] [--cwd DIR] [--hold] "
-             "[-- COMMAND [ARGUMENTS...]]\n\n"
+             "  lemma action tab new [--session NAME|ID] [--title TITLE] "
+             "[--focus created|preserve] [--cwd DIR] [--hold] [-- COMMAND [ARGUMENTS...]]\n\n"
              "Create a Tab and return its stable Tab and Pane IDs. COMMAND is exact argv.\n"
              "Long-running programs do not need --hold; --hold retains final output after exit.\n";
     }
-    if (operation == "select" || operation == "kill") {
+    if (operation == "inspect" || operation == "select" || operation == "kill") {
+      if (operation == "inspect") {
+        return "Usage:\n"
+               "  lemma action tab inspect [--session NAME|ID] [TAB | --tab ID|POSITION]\n\n"
+               "Inspect one Tab, including focus, geometry, zoom, and split topology.\n";
+      }
       return operation == "select"
                  ? "Usage:\n"
                    "  lemma action tab select [--session NAME|ID] [TAB | --tab ID|POSITION]\n\n"
@@ -379,9 +402,15 @@ struct SurfaceArguments final {
   if (operation == "split") {
     return "Usage:\n"
            "  lemma action pane split [--session NAME|ID] [PANE | --pane ID] "
-           "(--right|--down) [--cwd DIR] [--hold] [-- COMMAND [ARGUMENTS...]]\n\n"
+           "(--right|--down) [--focus created|preserve] [--cwd DIR] [--hold] "
+           "[-- COMMAND [ARGUMENTS...]]\n\n"
            "Split the target Pane and return the new Pane ID. COMMAND is exact argv.\n"
            "Long-running programs do not need --hold; --hold retains final output after exit.\n";
+  }
+  if (operation == "inspect") {
+    return "Usage:\n"
+           "  lemma action pane inspect [--session NAME|ID] [PANE | --pane ID]\n\n"
+           "Inspect one Pane's identity, process, and compact canonical terminal state.\n";
   }
   if (operation == "focus" || operation == "kill") {
     return operation == "focus"
@@ -411,6 +440,12 @@ struct SurfaceArguments final {
            "  lemma action pane zoom [--session NAME|ID] [PANE | --pane ID] (--on|--off)\n\n"
            "Enable or disable zoom for the target Pane's Tab.\n";
   }
+  if (operation == "input") {
+    return "Usage:\n"
+           "  lemma action pane input [--session NAME|ID] [PANE | --pane ID] "
+           "(--text TEXT | --paste TEXT | --key [MODIFIER+]KEY)...\n\n"
+           "Atomically enqueue a bounded ordered application-input batch.\n";
+  }
   if (operation == "send") {
     return "Usage:\n"
            "  lemma action pane send [--session NAME|ID] [PANE | --pane ID] --text TEXT\n\n"
@@ -418,8 +453,19 @@ struct SurfaceArguments final {
   }
   if (operation == "capture") {
     return "Usage:\n"
-           "  lemma action pane capture [--session NAME|ID] [PANE | --pane ID] [--lines N]\n\n"
-           "Capture canonical plain text. --lines retains the last 1 through 65535 lines.\n";
+           "  lemma action pane capture [--session NAME|ID] [PANE | --pane ID] [--lines N] "
+           "[--source visible|recent|last-command] [--format plain|ansi] "
+           "[--wrap rendered|logical]\n\n"
+           "Capture one bounded canonical terminal projection without moving its viewport. "
+           "--lines applies to visible and recent sources.\n";
+  }
+  if (operation == "wait") {
+    return "Usage:\n"
+           "  lemma action pane wait [--session NAME|ID] [PANE | --pane ID] [CONDITION] "
+           "[--timeout DURATION]\n\n"
+           "Wait for the Pane child process to complete. Conditions may instead require "
+           "--exit-code N, --signal N, --contains TEXT, or --until-prompt. Terminal conditions "
+           "may use --after-generation N. The default timeout is 30s.\n";
   }
   return {};
 }
@@ -432,16 +478,21 @@ struct SurfaceArguments final {
       "Usage:\n"
       "  lemma action DOMAIN OP [ARGUMENTS...]\n\n"
       "Domains and operations:\n"
+      "  daemon   inspect\n"
       "  session  start list inspect rename kill\n"
-      "  tab      new list select move rename kill\n"
-      "  pane     split list focus swap resize zoom send capture kill\n\n"
-      "Use `lemma action DOMAIN OP --help` for exact CLI grammar.\n"
+      "  tab      new list inspect select move rename kill\n"
+      "  pane     split list inspect focus swap resize zoom input capture wait kill\n\n"
+      "Use `lemma action DOMAIN OP --help` for exact CLI grammar. Session-scoped Actions may use "
+      "--if-session-revision N for an optimistic precondition.\n"
       "Every invocation prints one canonical lemma.action-result/v1 JSON value.\n";
   if (arguments.empty()) {
     return write_fragment(stdout, overview) ? 0 : 1;
   }
   const std::string_view domain(arguments.front());
   if (arguments.size() == 1U) {
+    constexpr std::string_view daemon =
+        "Daemon Actions\n\n"
+        "  inspect                               Inspect live versions and capacity\n";
     constexpr std::string_view session =
         "Session Actions\n\n"
         "  start [NAME] [OPTIONS]               Create a detached Session\n"
@@ -453,6 +504,7 @@ struct SurfaceArguments final {
         "Tab Actions\n\n"
         "  new [OPTIONS]                        Create a Tab\n"
         "  list                                 List Tabs\n"
+        "  inspect [TAB]                        Inspect a Tab and its layout\n"
         "  select [TAB]                         Select a Tab\n"
         "  move [TAB] POSITION                  Move a Tab\n"
         "  rename [TAB] [TITLE]                 Rename or clear a Tab title\n"
@@ -461,13 +513,18 @@ struct SurfaceArguments final {
         "Pane Actions\n\n"
         "  split [PANE] DIRECTION [OPTIONS]     Split a Pane right or down\n"
         "  list                                 List Panes\n"
+        "  inspect [PANE]                       Inspect process and terminal state\n"
         "  focus [PANE]                         Focus a Pane\n"
         "  swap [PANE] OTHER                    Swap two Panes\n"
         "  resize [PANE] DIRECTION [AMOUNT]     Move a structural divider\n"
         "  zoom [PANE] (--on|--off)             Set Pane zoom\n"
-        "  send [PANE] --text TEXT              Send application input\n"
-        "  capture [PANE] [--lines N]           Capture plain text\n"
+        "  input [PANE] EVENTS...               Send atomic semantic application input\n"
+        "  capture [PANE] [OPTIONS]             Capture terminal content\n"
+        "  wait [PANE] [OPTIONS]                Wait for process or terminal state\n"
         "  kill [PANE]                          Kill a Pane\n";
+    if (domain == "daemon") {
+      return write_fragment(stdout, daemon) ? 0 : 1;
+    }
     if (domain == "session") {
       return write_fragment(stdout, session) ? 0 : 1;
     }
@@ -521,8 +578,9 @@ struct SurfaceArguments final {
   if (command == "events" && arguments.size() == 1U) {
     constexpr std::string_view help =
         "Usage:\n"
-        "  lemma events [--session NAME|ID] [--pane ID [--screen]]\n\n"
-        "Stream an initial snapshot followed by NDJSON Events. --screen requires a Pane filter.\n"
+        "  lemma events [--session NAME|ID] [--pane ID ... [--screen]]\n\n"
+        "Stream an initial snapshot followed by NDJSON Events. --pane is repeatable up to 8 "
+        "times; --screen requires at least one Pane filter.\n"
         "The stream is open-ended; bound it with the caller's timeout or cancellation mechanism.\n";
     return write_fragment(stdout, help) ? 0 : 1;
   }
@@ -598,6 +656,7 @@ template <typename Id>
   SurfaceArguments parsed;
   bool cwd_seen = false;
   bool title_seen = false;
+  bool focus_seen = false;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const std::string_view argument(arguments.subspan(index, 1).front());
     if (argument == "--") {
@@ -627,6 +686,21 @@ template <typename Id>
       cwd_seen = true;
       continue;
     }
+    if (argument == "--focus") {
+      if (focus_seen || index + 1U == arguments.size()) {
+        return std::nullopt;
+      }
+      const std::string_view value(arguments.subspan(++index, 1).front());
+      if (value == "created") {
+        parsed.focus = api::FocusPolicy::created;
+      } else if (value == "preserve") {
+        parsed.focus = api::FocusPolicy::preserve;
+      } else {
+        return std::nullopt;
+      }
+      focus_seen = true;
+      continue;
+    }
     if (argument == "--title" && allow_title) {
       if (title_seen || index + 1U == arguments.size()) {
         return std::nullopt;
@@ -645,6 +719,7 @@ struct ActionCliArguments final {
   std::optional<api::SessionSelector> session;
   std::optional<api::TabSelector> tab;
   std::optional<api::PaneSelector> pane;
+  std::optional<std::uint64_t> expected_session_revision;
   bool valid{true};
 };
 
@@ -701,6 +776,7 @@ struct ActionCliArguments final {
 
 // Target options are frontend conveniences. They are removed before operation-specific parsing so
 // the Action crossing the socket contains only concrete selectors.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto parse_action_cli_arguments(const std::span<char*> arguments)
     -> ActionCliArguments {
   ActionCliArguments parsed;
@@ -726,6 +802,11 @@ struct ActionCliArguments final {
     } else if (argument == "--pane" && !parsed.pane.has_value() && index + 1U < arguments.size()) {
       parsed.pane = pane_selector(arguments.subspan(++index, 1).front());
       parsed.valid = parsed.valid && parsed.pane.has_value();
+    } else if (argument == "--if-session-revision" &&
+               !parsed.expected_session_revision.has_value() && index + 1U < arguments.size()) {
+      parsed.expected_session_revision =
+          parse_integer<std::uint64_t>(arguments.subspan(++index, 1).front());
+      parsed.valid = parsed.valid && parsed.expected_session_revision.value_or(0) > 0;
     } else {
       parsed.values.push_back(raw);
     }
@@ -752,6 +833,19 @@ struct ActionCliArguments final {
   return daemon::run_action(endpoint, action, action.kind == api::ActionKind::session_start);
 }
 
+[[nodiscard]] auto run_daemon_action(const daemon::RuntimeEndpoint& endpoint,
+                                     const std::string_view operation,
+                                     const ActionCliArguments& arguments) -> int {
+  if (operation != "inspect" || !arguments.valid || !arguments.values.empty() ||
+      arguments.session.has_value() || arguments.tab.has_value() || arguments.pane.has_value() ||
+      arguments.expected_session_revision.has_value()) {
+    return invalid_arguments("action daemon");
+  }
+  api::Action action;
+  action.kind = api::ActionKind::daemon_inspect;
+  return run_concrete_action(endpoint, action);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_session_action(const daemon::RuntimeEndpoint& endpoint,
                                       const std::string_view operation,
@@ -760,14 +854,16 @@ struct ActionCliArguments final {
     return invalid_arguments("action session");
   }
   api::Action action;
-  if (operation == "list" && arguments.values.empty() && !arguments.session.has_value()) {
+  action.expected_session_revision = arguments.expected_session_revision;
+  if (operation == "list" && arguments.values.empty() && !arguments.session.has_value() &&
+      !arguments.expected_session_revision.has_value()) {
     action.kind = api::ActionKind::session_list;
     return run_concrete_action(endpoint, action);
   }
   if (operation == "start") {
     const auto parsed = parse_creation(arguments.values);
     if (!parsed.has_value() || arguments.session.has_value() || arguments.tab.has_value() ||
-        arguments.pane.has_value()) {
+        arguments.pane.has_value() || arguments.expected_session_revision.has_value()) {
       return invalid_arguments("action session start");
     }
     action.kind = api::ActionKind::session_start;
@@ -827,6 +923,7 @@ struct ActionCliArguments final {
   }
   api::Action action;
   action.session = std::move(*session);
+  action.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.tab.has_value()) {
     action.kind = api::ActionKind::tab_list;
     return run_concrete_action(endpoint, action);
@@ -840,12 +937,13 @@ struct ActionCliArguments final {
     action.title = parsed->title;
     action.working_directory = parsed->working_directory;
     action.hold = parsed->hold;
+    action.focus = parsed->focus;
     for (const auto value : parsed->command) {
       action.arguments.emplace_back(value);
     }
     return run_concrete_action(endpoint, action);
   }
-  if (operation == "select" || operation == "kill") {
+  if (operation == "inspect" || operation == "select" || operation == "kill") {
     if (arguments.values.size() > 1U) {
       return invalid_arguments("action tab");
     }
@@ -854,7 +952,12 @@ struct ActionCliArguments final {
     if (!target.has_value()) {
       return invalid_arguments("action tab");
     }
-    action.kind = operation == "select" ? api::ActionKind::tab_select : api::ActionKind::tab_kill;
+    action.kind = api::ActionKind::tab_kill;
+    if (operation == "inspect") {
+      action.kind = api::ActionKind::tab_inspect;
+    } else if (operation == "select") {
+      action.kind = api::ActionKind::tab_select;
+    }
     action.tab = *target;
     return run_concrete_action(endpoint, action);
   }
@@ -898,6 +1001,40 @@ struct ActionCliArguments final {
   return invalid_arguments("action tab");
 }
 
+[[nodiscard]] auto parse_input_key(std::string_view value) -> std::optional<api::InputEvent> {
+  api::InputEvent event{.kind = api::InputEventKind::key, .text = {}};
+  while (value.contains('+')) {
+    const auto separator = value.find('+');
+    const auto modifier = value.substr(0, separator);
+    std::uint16_t bit = 0;
+    if (modifier == "shift") {
+      bit = api::input_modifier_shift;
+    } else if (modifier == "control" || modifier == "ctrl") {
+      bit = api::input_modifier_control;
+    } else if (modifier == "alt") {
+      bit = api::input_modifier_alt;
+    } else if (modifier == "super") {
+      bit = api::input_modifier_super;
+    } else {
+      return std::nullopt;
+    }
+    if ((event.modifiers & bit) != 0) {
+      return std::nullopt;
+    }
+    event.modifiers |= bit;
+    value.remove_prefix(separator + 1U);
+  }
+  const auto key = api::parse_input_key_name(value);
+  if (!key.has_value()) {
+    return std::nullopt;
+  }
+  event.key = *key;
+  return event;
+}
+
+[[nodiscard]] auto parse_duration(std::string_view value)
+    -> std::optional<std::chrono::milliseconds>;
+
 [[nodiscard]] auto parse_direction(const std::string_view value) noexcept
     -> std::optional<api::Direction> {
   if (value == "left" || value == "--left") {
@@ -928,6 +1065,7 @@ struct ActionCliArguments final {
   }
   api::Action action;
   action.session = std::move(*session);
+  action.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.pane.has_value()) {
     action.kind = api::ActionKind::pane_list;
     return run_concrete_action(endpoint, action);
@@ -946,11 +1084,16 @@ struct ActionCliArguments final {
   }
   action.pane = *target;
 
-  if (operation == "focus" || operation == "kill") {
+  if (operation == "inspect" || operation == "focus" || operation == "kill") {
     if (!values.empty()) {
       return invalid_arguments("action pane");
     }
-    action.kind = operation == "focus" ? api::ActionKind::pane_focus : api::ActionKind::pane_kill;
+    action.kind = api::ActionKind::pane_kill;
+    if (operation == "inspect") {
+      action.kind = api::ActionKind::pane_inspect;
+    } else if (operation == "focus") {
+      action.kind = api::ActionKind::pane_focus;
+    }
     return run_concrete_action(endpoint, action);
   }
   if (operation == "split") {
@@ -968,6 +1111,7 @@ struct ActionCliArguments final {
     action.direction = *direction;
     action.working_directory = parsed->working_directory;
     action.hold = parsed->hold;
+    action.focus = parsed->focus;
     for (const auto value : parsed->command) {
       action.arguments.emplace_back(value);
     }
@@ -1018,18 +1162,147 @@ struct ActionCliArguments final {
     action.text = values.back();
     return run_concrete_action(endpoint, action);
   }
-  if (operation == "capture") {
-    if (!values.empty()) {
-      if (values.size() != 2U || std::string_view(values.front()) != "--lines") {
-        return invalid_arguments("action pane capture");
+  if (operation == "input") {
+    action.kind = api::ActionKind::pane_input;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const std::string_view option(values.subspan(index, 1).front());
+      if ((option == "--text" || option == "--paste") && index + 1U < values.size()) {
+        const std::string_view text(values.subspan(++index, 1).front());
+        if (text.empty()) {
+          return invalid_arguments("action pane input");
+        }
+        action.input_events.push_back(
+            {.kind = option == "--text" ? api::InputEventKind::text : api::InputEventKind::paste,
+             .text = std::string(text)});
+      } else if (option == "--key" && index + 1U < values.size()) {
+        auto key = parse_input_key(values.subspan(++index, 1).front());
+        if (!key.has_value()) {
+          return invalid_arguments("action pane input");
+        }
+        action.input_events.push_back(std::move(*key));
+      } else {
+        return invalid_arguments("action pane input");
       }
-      const auto lines = parse_integer<std::uint16_t>(values.back());
-      if (!lines.has_value() || *lines == 0) {
-        return invalid_arguments("action pane capture");
-      }
-      action.lines = *lines;
     }
+    if (action.input_events.empty() || action.input_events.size() > api::input_events_max) {
+      return invalid_arguments("action pane input");
+    }
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "wait") {
+    if (action.expected_session_revision.has_value()) {
+      return invalid_arguments("action pane wait");
+    }
+    action.kind = api::ActionKind::pane_wait;
+    bool condition_seen = false;
+    bool timeout_seen = false;
+    bool generation_seen = false;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const std::string_view option(values.subspan(index, 1).front());
+      if ((option == "--exit-code" || option == "--signal") && !condition_seen &&
+          index + 1U < values.size()) {
+        const auto value = parse_integer<std::uint32_t>(values.subspan(++index, 1).front());
+        const bool valid =
+            value.has_value() && ((option == "--exit-code" && *value <= 255U) ||
+                                  (option == "--signal" && *value > 0 && *value <= 127U));
+        if (!valid) {
+          return invalid_arguments("action pane wait");
+        }
+        action.wait_condition =
+            option == "--exit-code" ? api::WaitCondition::exit_code : api::WaitCondition::signal;
+        action.wait_value = *value;
+        condition_seen = true;
+      } else if (option == "--contains" && !condition_seen && index + 1U < values.size()) {
+        const std::string_view contains(values.subspan(++index, 1).front());
+        if (contains.empty() || contains.size() > std::numeric_limits<std::uint16_t>::max()) {
+          return invalid_arguments("action pane wait");
+        }
+        action.wait_condition = api::WaitCondition::contains;
+        action.contains = contains;
+        condition_seen = true;
+      } else if (option == "--until-prompt" && !condition_seen) {
+        action.wait_condition = api::WaitCondition::prompt;
+        condition_seen = true;
+      } else if (option == "--after-generation" && !generation_seen && index + 1U < values.size()) {
+        const auto generation = parse_integer<std::uint64_t>(values.subspan(++index, 1).front());
+        if (!generation.has_value()) {
+          return invalid_arguments("action pane wait");
+        }
+        action.after_terminal_generation = *generation;
+        generation_seen = true;
+      } else if (option == "--timeout" && !timeout_seen && index + 1U < values.size()) {
+        const auto timeout = parse_duration(values.subspan(++index, 1).front());
+        if (!timeout.has_value()) {
+          return invalid_arguments("action pane wait");
+        }
+        action.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
+        timeout_seen = true;
+      } else {
+        return invalid_arguments("action pane wait");
+      }
+    }
+    if ((action.wait_condition == api::WaitCondition::process_exit ||
+         action.wait_condition == api::WaitCondition::exit_code ||
+         action.wait_condition == api::WaitCondition::signal) &&
+        action.after_terminal_generation != 0) {
+      return invalid_arguments("action pane wait");
+    }
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "capture") {
     action.kind = api::ActionKind::pane_capture;
+    bool lines_seen = false;
+    bool source_seen = false;
+    bool format_seen = false;
+    bool wrap_seen = false;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const std::string_view option(values.subspan(index, 1).front());
+      if (option == "--lines" && !lines_seen && index + 1U < values.size()) {
+        const auto lines = parse_integer<std::uint16_t>(values.subspan(++index, 1).front());
+        if (!lines.has_value() || *lines == 0) {
+          return invalid_arguments("action pane capture");
+        }
+        action.lines = *lines;
+        lines_seen = true;
+      } else if (option == "--source" && !source_seen && index + 1U < values.size()) {
+        const std::string_view source(values.subspan(++index, 1).front());
+        if (source == "visible") {
+          action.capture_source = api::CaptureSource::visible;
+        } else if (source == "recent") {
+          action.capture_source = api::CaptureSource::recent;
+        } else if (source == "last-command") {
+          action.capture_source = api::CaptureSource::last_command;
+        } else {
+          return invalid_arguments("action pane capture");
+        }
+        source_seen = true;
+      } else if (option == "--format" && !format_seen && index + 1U < values.size()) {
+        const std::string_view format(values.subspan(++index, 1).front());
+        if (format == "plain") {
+          action.capture_format = api::CaptureFormat::plain;
+        } else if (format == "ansi") {
+          action.capture_format = api::CaptureFormat::ansi;
+        } else {
+          return invalid_arguments("action pane capture");
+        }
+        format_seen = true;
+      } else if (option == "--wrap" && !wrap_seen && index + 1U < values.size()) {
+        const std::string_view wrap(values.subspan(++index, 1).front());
+        if (wrap == "rendered") {
+          action.capture_wrap = api::CaptureWrap::rendered;
+        } else if (wrap == "logical") {
+          action.capture_wrap = api::CaptureWrap::logical;
+        } else {
+          return invalid_arguments("action pane capture");
+        }
+        wrap_seen = true;
+      } else {
+        return invalid_arguments("action pane capture");
+      }
+    }
+    if (action.capture_source == api::CaptureSource::last_command && lines_seen) {
+      return invalid_arguments("action pane capture");
+    }
     return run_concrete_action(endpoint, action);
   }
   return invalid_arguments("action pane");
@@ -1043,6 +1316,9 @@ struct ActionCliArguments final {
   const std::string_view domain(arguments.front());
   const std::string_view operation(arguments.subspan(1, 1).front());
   auto parsed = parse_action_cli_arguments(arguments.subspan(2));
+  if (domain == "daemon") {
+    return run_daemon_action(endpoint, operation, parsed);
+  }
   if (domain == "session") {
     return run_session_action(endpoint, operation, std::move(parsed));
   }
@@ -1170,27 +1446,29 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
 [[nodiscard]] auto run_events(const daemon::RuntimeEndpoint& endpoint,
                               const std::span<char*> arguments) -> int {
   std::optional<std::string_view> session;
-  std::optional<PaneId> pane;
+  std::vector<PaneId> panes;
   bool screen = false;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const std::string_view argument(arguments.subspan(index, 1).front());
     if (argument == "--session" && !session.has_value() && index + 1U < arguments.size()) {
       session = arguments.subspan(++index, 1).front();
-    } else if (argument == "--pane" && !pane.has_value() && index + 1U < arguments.size()) {
-      pane = parse_id<PaneId>(arguments.subspan(++index, 1).front());
-      if (!pane.has_value()) {
+    } else if (argument == "--pane" && index + 1U < arguments.size()) {
+      const auto pane = parse_id<PaneId>(arguments.subspan(++index, 1).front());
+      if (!pane.has_value() || panes.size() >= api::event_panes_max ||
+          std::ranges::find(panes, *pane) != panes.end()) {
         return invalid_arguments("events");
       }
+      panes.push_back(*pane);
     } else if (argument == "--screen" && !screen) {
       screen = true;
     } else {
       return invalid_arguments("events");
     }
   }
-  if ((pane.has_value() && !session.has_value()) || (screen && !pane.has_value())) {
+  if ((!panes.empty() && !session.has_value()) || (screen && panes.empty())) {
     return invalid_arguments("events");
   }
-  return daemon::events(endpoint, session, pane, screen);
+  return daemon::events(endpoint, session, panes, screen);
 }
 
 [[nodiscard]] auto run_session_control(const daemon::RuntimeEndpoint& endpoint,
@@ -1416,20 +1694,23 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
     return write_fragment(stdout, tail_lines(text, lines)) ? 0 : 1;
   }
   if (operation == "wait" && arguments.size() >= 4) {
+    const auto session = session_selector(arguments.subspan(1, 1).front());
     const auto pane = parse_id<PaneId>(arguments.subspan(2, 1).front());
-    if (!pane.has_value()) {
+    if (!session.has_value() || !pane.has_value()) {
       return invalid_arguments("pane wait");
     }
-    std::optional<daemon::ProcessExpectation> process;
-    std::string_view contains;
-    auto timeout = std::chrono::milliseconds(30'000);
+    api::Action action;
+    action.kind = api::ActionKind::pane_wait;
+    action.session = *session;
+    action.pane = {.id = *pane};
+    bool condition_seen = false;
     bool timeout_seen = false;
     for (std::size_t index = 3; index < arguments.size(); ++index) {
       const std::string_view argument(arguments.subspan(index, 1).front());
-      if (argument == "--exit" && contains.empty() && !process.has_value()) {
-        process = daemon::ProcessExpectation{};
-      } else if ((argument == "--exit-code" || argument == "--signal") && contains.empty() &&
-                 !process.has_value() && index + 1U < arguments.size()) {
+      if (argument == "--exit" && !condition_seen) {
+        condition_seen = true;
+      } else if ((argument == "--exit-code" || argument == "--signal") && !condition_seen &&
+                 index + 1U < arguments.size()) {
         const auto value = parse_integer<std::uint32_t>(arguments.subspan(++index, 1).front());
         const bool valid =
             value.has_value() && ((argument == "--exit-code" && *value <= 255U) ||
@@ -1437,40 +1718,29 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
         if (!valid) {
           return invalid_arguments("pane wait");
         }
-        process = daemon::ProcessExpectation{.kind = argument == "--exit-code"
-                                                         ? daemon::ProcessExpectationKind::exit_code
-                                                         : daemon::ProcessExpectationKind::signal,
-                                             .value = *value};
-      } else if (argument == "--contains" && !process.has_value() && contains.empty() &&
-                 index + 1U < arguments.size()) {
-        contains = arguments.subspan(++index, 1).front();
-        if (contains.empty()) {
+        action.wait_condition =
+            argument == "--exit-code" ? api::WaitCondition::exit_code : api::WaitCondition::signal;
+        action.wait_value = *value;
+        condition_seen = true;
+      } else if (argument == "--contains" && !condition_seen && index + 1U < arguments.size()) {
+        action.contains = arguments.subspan(++index, 1).front();
+        if (action.contains.empty()) {
           return invalid_arguments("pane wait");
         }
+        action.wait_condition = api::WaitCondition::contains;
+        condition_seen = true;
       } else if (argument == "--timeout" && !timeout_seen && index + 1U < arguments.size()) {
-        const auto parsed = parse_duration(arguments.subspan(++index, 1).front());
-        if (!parsed.has_value()) {
+        const auto timeout = parse_duration(arguments.subspan(++index, 1).front());
+        if (!timeout.has_value()) {
           return invalid_arguments("pane wait");
         }
-        timeout = *parsed;
+        action.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
         timeout_seen = true;
       } else {
         return invalid_arguments("pane wait");
       }
     }
-    if (process.has_value() == !contains.empty()) {
-      return invalid_arguments("pane wait");
-    }
-    const auto waited =
-        daemon::wait_pane(endpoint, arguments.subspan(1, 1).front(), *pane,
-                          {.contains = contains, .process = process, .timeout = timeout});
-    if (waited.status != daemon::OperationStatus::applied) {
-      return report_operation(waited.status, {});
-    }
-    return write_fragment(stdout, process.has_value() ? "lemma pane process exit matched\n"
-                                                      : "lemma pane condition matched\n")
-               ? 0
-               : 1;
+    return condition_seen ? run_concrete_action(endpoint, action) : invalid_arguments("pane wait");
   }
   return invalid_arguments("pane");
 }

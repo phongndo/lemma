@@ -21,7 +21,6 @@
 #include <cstring>
 #include <expected>
 #include <iterator>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -646,6 +645,52 @@ template <typename Id>
   }
 }
 
+// Multi-Pane request encoding keeps one closed public grammar and one legacy single-Pane spelling.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto event_request(const std::optional<std::string_view> session,
+                                 const std::span<const PaneId> panes, const bool screen)
+    -> std::optional<std::string> {
+  if (panes.size() > api::event_panes_max || (screen && panes.empty()) ||
+      (!panes.empty() && !session.has_value())) {
+    return std::nullopt;
+  }
+  if (panes.size() <= 1U) {
+    return event_request(
+        session, panes.empty() ? std::optional<PaneId>{} : std::optional{panes.front()}, screen);
+  }
+  const auto session_value = session.value_or(std::string_view{});
+  const auto session_id = parse_public_id<SessionId>(session_value);
+  if (!session_id.has_value() && !valid_session_name(session_value)) {
+    return std::nullopt;
+  }
+  try {
+    std::string request = R"({"schema":"lemma.events/v1")";
+    if (session_id.has_value()) {
+      request += R"(,"session":{"id":")" + std::to_string(session_id->slot()) + ":" +
+                 std::to_string(session_id->generation()) + "\"}";
+    } else {
+      request += R"(,"session":{"name":")" + std::string(session_value) + "\"}";
+    }
+    request += R"(,"panes":[)";
+    bool separator = false;
+    for (const auto pane : panes) {
+      if (!pane.is_valid()) {
+        return std::nullopt;
+      }
+      if (separator) {
+        request += ',';
+      }
+      separator = true;
+      request += R"({"id":")" + std::to_string(pane.slot()) + ":" +
+                 std::to_string(pane.generation()) + "\"}";
+    }
+    request += screen ? "],\"screen\":true}\n" : "]}\n";
+    return request;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 enum class EventReadError : std::uint8_t {
   timeout,
   closed,
@@ -734,7 +779,9 @@ private:
   return OperationStatus::failed;
 }
 
-[[nodiscard]] auto invoke_public_action(const RuntimeEndpoint& endpoint, std::string request)
+[[nodiscard]] auto
+invoke_public_action(const RuntimeEndpoint& endpoint, std::string request,
+                     const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
     -> std::optional<api::JsonValue> {
   try {
     if (!request.ends_with('\n')) {
@@ -750,13 +797,40 @@ private:
     return std::nullopt;
   }
   EventReader reader(connection);
-  const auto line = reader.next(std::chrono::steady_clock::now() + std::chrono::seconds(10));
+  const auto line = reader.next(std::chrono::steady_clock::now() + response_timeout);
   close_descriptor(connection);
   if (!line.has_value()) {
     return std::nullopt;
   }
   auto parsed = api::parse_json(*line);
   return parsed.value.has_value() ? std::move(parsed.value) : std::nullopt;
+}
+
+struct ProcedureRequestPolicy final {
+  std::chrono::milliseconds response_timeout{std::chrono::seconds(10)};
+  bool starts_session{false};
+};
+
+[[nodiscard]] auto procedure_request_policy(const api::JsonValue& document) noexcept
+    -> ProcedureRequestPolicy {
+  ProcedureRequestPolicy policy;
+  const auto* const actions = api::json_member(document, "actions");
+  if (actions == nullptr || actions->kind != api::JsonKind::array) {
+    return policy;
+  }
+  for (const auto& action : actions->array) {
+    const auto name = api::json_string(action, "action");
+    policy.starts_session =
+        policy.starts_session || name == std::optional<std::string_view>{"session.start"};
+    if (name != std::optional<std::string_view>{"pane.wait"}) {
+      continue;
+    }
+    const auto timeout = std::min(
+        api::json_unsigned(action, "timeout_ms").value_or(api::wait_timeout_default_milliseconds),
+        static_cast<std::uint64_t>(api::wait_timeout_max_milliseconds));
+    policy.response_timeout += std::chrono::milliseconds(static_cast<std::int64_t>(timeout));
+  }
+  return policy;
 }
 
 [[nodiscard]] auto append_public_session_selector(std::string& request,
@@ -806,23 +880,6 @@ template <typename Id>
   } catch (...) {
     return false;
   }
-}
-
-[[nodiscard]] auto open_event_connection(const RuntimeEndpoint& endpoint,
-                                         const std::string_view session, const PaneId pane,
-                                         const bool screen) -> int {
-  const auto request = event_request(session, pane, screen);
-  if (!request.has_value()) {
-    return -1;
-  }
-  int connection = open_connection(std::string(endpoint.socket_path()));
-  const auto& request_value = request.value();
-  if (connection < 0 ||
-      !send_all(connection, std::as_bytes(std::span(request_value.data(), request_value.size())))) {
-    close_descriptor(connection);
-    return -1;
-  }
-  return connection;
 }
 
 } // namespace
@@ -915,7 +972,12 @@ auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action, cons
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
     return 1;
   }
-  auto result = invoke_public_action(endpoint, *document);
+  const auto response_timeout =
+      concrete.kind == api::ActionKind::pane_wait
+          ? std::chrono::milliseconds(concrete.wait_timeout_milliseconds) +
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10))
+          : std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10));
+  auto result = invoke_public_action(endpoint, *document, response_timeout);
   if (!result.has_value()) {
     std::string unavailable = R"({"schema":"lemma.action-result/v1","action":)";
     if (!api::append_json_string(unavailable, api::action_name(concrete.kind))) {
@@ -948,18 +1010,12 @@ auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) 
   if (!api::append_json_value(compact, *parsed.value)) {
     return 2;
   }
-  bool starts_session = false;
-  if (const auto* const actions = api::json_member(*parsed.value, "actions");
-      actions != nullptr && actions->kind == api::JsonKind::array) {
-    starts_session = std::ranges::any_of(actions->array, [](const api::JsonValue& action) {
-      return api::json_string(action, "action") == std::optional<std::string_view>{"session.start"};
-    });
-  }
-  if (starts_session && !ensure_server(std::string(endpoint.socket_path()))) {
+  const auto policy = procedure_request_policy(*parsed.value);
+  if (policy.starts_session && !ensure_server(std::string(endpoint.socket_path()))) {
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
     return 1;
   }
-  auto result = invoke_public_action(endpoint, std::move(compact));
+  auto result = invoke_public_action(endpoint, std::move(compact), policy.response_timeout);
   if (!result.has_value()) {
     constexpr std::string_view unavailable =
         R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"unavailable"},"results":[]}
@@ -1399,7 +1455,10 @@ auto capture_pane(const RuntimeEndpoint& endpoint, const std::string_view sessio
       return {OperationStatus::failed, {}};
     }
     const auto status = public_operation_status(*result);
-    const auto text = api::json_string(*result, "text");
+    const auto* const capture = api::json_member(*result, "capture");
+    const auto text = capture != nullptr && capture->kind == api::JsonKind::object
+                          ? api::json_string(*capture, "text")
+                          : api::json_string(*result, "text");
     return status == OperationStatus::applied && text.has_value()
                ? std::pair{status, std::string(*text)}
                : std::pair{status, std::string{}};
@@ -1440,111 +1499,9 @@ auto pane_status(const RuntimeEndpoint& endpoint, const std::string_view session
   return {.status = OperationStatus::applied, .process = process, .value = value};
 }
 
-[[nodiscard]] constexpr auto matches_expectation(const PaneStatus& actual,
-                                                 const ProcessExpectation expected) noexcept
-    -> bool {
-  switch (expected.kind) {
-  case ProcessExpectationKind::any:
-    return actual.process != ProcessState::running;
-  case ProcessExpectationKind::exit_code:
-    return actual.process == ProcessState::exited && actual.value == expected.value;
-  case ProcessExpectationKind::signal:
-    return actual.process == ProcessState::signaled && actual.value == expected.value;
-  }
-  return false;
-}
-
-[[nodiscard]] auto process_from_event(const api::JsonValue& event) -> std::optional<PaneStatus> {
-  const auto* const process = api::json_member(event, "process");
-  if (process == nullptr || process->kind != api::JsonKind::object) {
-    return std::nullopt;
-  }
-  const auto state = api::json_string(*process, "state");
-  if (state == std::optional<std::string_view>{"running"} ||
-      state == std::optional<std::string_view>{"exiting"}) {
-    return PaneStatus{
-        .status = OperationStatus::applied, .process = ProcessState::running, .value = 0};
-  }
-  if (state == std::optional<std::string_view>{"exited_unknown"}) {
-    return PaneStatus{
-        .status = OperationStatus::applied, .process = ProcessState::exited_unknown, .value = 0};
-  }
-  if (state == std::optional<std::string_view>{"exited"}) {
-    const auto code = api::json_unsigned(*process, "code");
-    return code.has_value() && *code <= std::numeric_limits<std::uint32_t>::max()
-               ? std::optional{PaneStatus{.status = OperationStatus::applied,
-                                          .process = ProcessState::exited,
-                                          .value = static_cast<std::uint32_t>(*code)}}
-               : std::nullopt;
-  }
-  if (state == std::optional<std::string_view>{"signaled"}) {
-    const auto signal = api::json_unsigned(*process, "signal");
-    return signal.has_value() && *signal <= std::numeric_limits<std::uint32_t>::max()
-               ? std::optional{PaneStatus{.status = OperationStatus::applied,
-                                          .process = ProcessState::signaled,
-                                          .value = static_cast<std::uint32_t>(*signal)}}
-               : std::nullopt;
-  }
-  return std::nullopt;
-}
-
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto wait_pane(const RuntimeEndpoint& endpoint, const std::string_view session, const PaneId pane,
-               const PaneWaitOptions options) -> PaneWaitResult {
-  constexpr auto timeout_max = std::chrono::minutes(10);
-  const bool waits_for_process = options.process.has_value();
-  if (!validate_session(session) || !pane.is_valid() ||
-      (waits_for_process == !options.contains.empty()) || options.timeout.count() <= 0 ||
-      options.timeout > timeout_max) {
-    return {};
-  }
-  int connection = open_event_connection(endpoint, session, pane, !waits_for_process);
-  if (connection < 0) {
-    return {.status = OperationStatus::unavailable, .process = std::nullopt};
-  }
-  EventReader reader(connection);
-  const auto deadline = std::chrono::steady_clock::now() + options.timeout;
-  const auto expected = options.process.value_or(ProcessExpectation{});
-  while (true) {
-    const auto line = reader.next(deadline);
-    if (!line.has_value()) {
-      close_descriptor(connection);
-      return {.status = line.error() == EventReadError::timeout ? OperationStatus::timeout
-                                                                : OperationStatus::unavailable,
-              .process = std::nullopt};
-    }
-    const auto parsed = api::parse_json(*line);
-    if (!parsed.value.has_value()) {
-      close_descriptor(connection);
-      return {.status = OperationStatus::failed, .process = std::nullopt};
-    }
-    const auto event = api::json_string(*parsed.value, "event");
-    if (event == std::optional<std::string_view>{"pane.closed"}) {
-      close_descriptor(connection);
-      return {.status = OperationStatus::missing, .process = std::nullopt};
-    }
-    if (!waits_for_process) {
-      const auto text = api::json_string(*parsed.value, "text");
-      if (text.has_value() && text->contains(options.contains)) {
-        close_descriptor(connection);
-        return {.status = OperationStatus::applied, .process = std::nullopt};
-      }
-      continue;
-    }
-    const auto actual = process_from_event(*parsed.value);
-    if (!actual.has_value() || actual->process == ProcessState::running) {
-      continue;
-    }
-    close_descriptor(connection);
-    return {.status = matches_expectation(*actual, expected) ? OperationStatus::applied
-                                                             : OperationStatus::unexpected_exit,
-            .process = actual};
-  }
-}
-
 auto events(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
-            const std::optional<PaneId> pane, const bool screen) -> int {
-  const auto request = event_request(session, pane, screen);
+            const std::span<const PaneId> panes, const bool screen) -> int {
+  const auto request = event_request(session, panes, screen);
   if (!request.has_value()) {
     return 2;
   }

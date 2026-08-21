@@ -184,6 +184,106 @@ TEST(TerminalTest, FormatsDiagnosticSnapshotsIntoCallerStorage) {
   EXPECT_EQ(insufficient.error(), Error::out_of_space);
 }
 
+TEST(TerminalTest, InspectsTerminalMetadataAndChildReportedPwd) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 3};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "\x1B]7;file:///tmp/project\x07");
+  write_text(terminal, "one\r\ntwo\r\nthree\r\nfour\r\nfive");
+
+  const auto inspected = terminal.inspection();
+  ASSERT_TRUE(inspected.has_value());
+  EXPECT_EQ(inspected->active_screen, ActiveScreen::primary);
+  EXPECT_GE(inspected->scrollback_rows, 2U);
+  EXPECT_TRUE(inspected->viewport.follows_output);
+  const auto pwd = terminal.pwd();
+  ASSERT_TRUE(pwd.has_value());
+  EXPECT_EQ(*pwd, "file:///tmp/project");
+}
+
+TEST(TerminalTest, VisibleCaptureTracksCanonicalViewport) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 3};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "one\r\ntwo\r\nthree\r\nfour\r\nfive");
+
+  std::array<std::byte, 1'024> bottom_output{};
+  const auto bottom_size =
+      terminal.format_visible_tail(ScreenFormat::plain, options.size.rows, bottom_output);
+  ASSERT_TRUE(bottom_size.has_value());
+  terminal.scroll_viewport(ViewportScroll::top);
+  std::array<std::byte, 1'024> top_output{};
+  const auto top_size =
+      terminal.format_visible_tail(ScreenFormat::plain, options.size.rows, top_output);
+  ASSERT_TRUE(top_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view bottom(reinterpret_cast<const char*>(bottom_output.data()), *bottom_size);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view top(reinterpret_cast<const char*>(top_output.data()), *top_size);
+  EXPECT_NE(top, bottom);
+  EXPECT_THAT(top, testing::HasSubstr("one"));
+  EXPECT_THAT(bottom, testing::HasSubstr("five"));
+}
+
+TEST(TerminalTest, VisibleAnsiTailCarriesStyleAtSelectionBoundary) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 3};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "\x1B[31mone\r\ntwo");
+
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  const auto size = terminal.format_visible_tail(ScreenFormat::vt, 1, output);
+  ASSERT_TRUE(size.has_value()) << static_cast<int>(size.error());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(output.data()), *size);
+  EXPECT_THAT(text, testing::HasSubstr("two"));
+  EXPECT_THAT(text, testing::Not(testing::HasSubstr("one")));
+  EXPECT_TRUE(text.contains("31m") || text.contains("38;5;1m")) << text;
+}
+
+TEST(TerminalTest, RecentCaptureUsesLastContentRatherThanCursorPosition) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 5};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "one\r\ntwo\r\nthree\x1B[H");
+
+  std::array<std::byte, 1'024> recent{};
+  const auto recent_size = terminal.format_recent(ScreenFormat::plain, 2, recent, true);
+  ASSERT_TRUE(recent_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view recent_text(reinterpret_cast<const char*>(recent.data()), *recent_size);
+  EXPECT_THAT(recent_text, testing::HasSubstr("two"));
+  EXPECT_THAT(recent_text, testing::HasSubstr("three"));
+  EXPECT_THAT(recent_text, testing::Not(testing::HasSubstr("one")));
+}
+
+TEST(TerminalTest, LastCommandCaptureDoesNotFallBackToOlderOutput) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 6};
+  auto unmarked = make_terminal(options);
+  write_text(unmarked, "ordinary output");
+  std::array<std::byte, 128> unavailable{};
+  EXPECT_FALSE(unmarked.format_last_command(ScreenFormat::plain, unavailable).has_value());
+
+  auto semantic = make_terminal(options);
+  write_text(semantic, "\x1B]133;A\a$ \x1B]133;B\aecho hi\x1B]133;C\a\r\nhi\r\n"
+                       "\x1B]133;D;0\a\x1B]133;A\a$ ");
+  std::array<std::byte, 1'024> command{};
+  const auto prompt = semantic.cursor_at_prompt();
+  ASSERT_TRUE(prompt.has_value());
+  EXPECT_TRUE(*prompt);
+  const auto command_size = semantic.format_last_command(ScreenFormat::plain, command);
+  ASSERT_TRUE(command_size.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view command_text(reinterpret_cast<const char*>(command.data()), *command_size);
+  EXPECT_THAT(command_text, testing::HasSubstr("hi"));
+
+  write_text(semantic, "\x1B]133;B\atrue\x1B]133;C\a\r\n\x1B]133;D;0\a\x1B]133;A\a$ ");
+  const auto empty_size = semantic.format_last_command(ScreenFormat::plain, command);
+  ASSERT_TRUE(empty_size.has_value());
+  EXPECT_EQ(*empty_size, 0U);
+}
+
 TEST(TerminalTest, RendersOnlyChangedAnsiRows) {
   TerminalOptions options;
   options.size = {.columns = 20, .rows = 4};

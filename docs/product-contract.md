@@ -60,10 +60,12 @@ lemma events ...
 lemma api schema
 ```
 
-An Action is one fundamental immediate mutation or point-in-time query. Proc composes Actions and
-adds only sequencing, backward-only typed references, and whole-plan validation. Events are
-immutable asynchronous observations and never another mutation path. `lemma action`, `lemma proc`,
-and `lemma events` are the shell frontends for humans and coding agents. The per-user Unix endpoint
+An Action is one bounded structured interaction: mutation, query, capture, input, or finite
+synchronization. Proc composes Actions and adds sequencing, backward-only typed references, and
+whole-plan validation. Events are immutable asynchronous observations and never another mutation
+path. `lemma action`, `lemma proc`, and `lemma events` are the automation frontends for humans and
+coding agents.
+The per-user Unix endpoint
 is the public integration API for dedicated CONTROL and OBSERVE clients. See
 [`control-api.md`](control-api.md).
 
@@ -73,9 +75,13 @@ is the public integration API for dedicated CONTROL and OBSERVE clients. See
 - Application input is distinct from mux commands and is encoded from canonical terminal modes.
 - Paste is a bounded opaque input event and cannot become prefix commands.
 - `lemma action` and `lemma proc` print canonical structured results suitable for both shell users and automation.
-- A bounded procedure is an ordered, non-atomic envelope over ordinary Actions. Its complete schema and backward-only typed references are validated before side effects. It reports one canonical typed result per Action and has explicit stop/continue runtime-failure behavior.
+- Daemon, Session, Tab, and Pane inspection separates bounded summary discovery from one-resource detail; terminal text remains an explicit capture rather than inspect payload.
+- Session semantic revisions and Pane terminal generations make conflicts and observation freshness explicit without duplicating authoritative state.
+- Tab and Pane creation accept an explicit focus policy, so automation can preserve a controller's current selection without an inspect-then-mutate race.
+- One `pane.input` Action atomically admits a bounded ordered batch of text, opaque paste, and logical keys through canonical terminal modes.
+- A bounded procedure is an ordered, non-atomic envelope over ordinary Actions, including finite `pane.wait` synchronization. Its complete schema and backward-only typed references are validated before side effects. It reports one canonical typed result per Action and has explicit stop/continue runtime-failure behavior.
 - `lemma api schema` summarizes the contract for people; `lemma api schema --json` exposes the binary's complete machine-readable JSON Schema 2020-12 contract without contacting the daemon.
-- OBSERVE subscriptions begin with an authoritative snapshot and then emit bounded NDJSON updates; slow observers cannot block PTY progress.
+- OBSERVE subscriptions begin with an authoritative snapshot and then emit bounded NDJSON updates; a subscription may monitor up to eight explicit Panes, terminal content is opt-in, and slow observers cannot block PTY progress.
 - Every supported human mutation has an automation equivalent or a documented exclusion.
 
 The default key vocabulary follows familiar tmux conventions, including `C-b` as prefix, while configuration may replace bindings without creating another mutation path. Prefixes and transient interaction contexts are compiled input policy rather than mux state: direct chords, one-shot prefix maps, and persistent contexts dispatch the same typed commands.

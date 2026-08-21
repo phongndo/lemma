@@ -53,6 +53,20 @@ struct LayoutDivider final {
       -> bool = default;
 };
 
+struct LayoutSnapshotNode final {
+  PaneId pane;
+  std::int16_t first{-1};
+  std::int16_t second{-1};
+  std::uint16_t ratio{0};
+  bool leaf{true};
+  SplitAxis axis{SplitAxis::left_right};
+};
+
+struct LayoutSnapshot final {
+  std::array<LayoutSnapshotNode, pane_layout_nodes_max> nodes{};
+  std::size_t size{0};
+};
+
 struct LayoutProjection final {
   std::array<PaneRectangle, pane_layout_panes_max> rectangles{};
   std::array<PaneId, pane_layout_panes_max> panes{};
@@ -75,6 +89,9 @@ public:
   [[nodiscard]] auto pane_count() const noexcept -> std::size_t;
   [[nodiscard]] auto project(PaneRectangle viewport) const noexcept
       -> std::optional<LayoutProjection>;
+  // Dense preorder projection for bounded public introspection. Child indices refer only to this
+  // snapshot and never expose private PaneLayout storage slots.
+  [[nodiscard]] auto snapshot() const noexcept -> std::optional<LayoutSnapshot>;
   [[nodiscard]] auto divider_at(PaneRectangle viewport, std::uint16_t column,
                                 std::uint16_t row) const noexcept -> std::optional<LayoutDivider>;
   [[nodiscard]] auto divider_rectangle(LayoutDivider divider, PaneRectangle viewport) const noexcept
@@ -103,6 +120,7 @@ private:
     [[nodiscard]] constexpr auto valid() const noexcept -> bool {
       return first_share_ > 0 && first_share_ < scale;
     }
+    [[nodiscard]] constexpr auto value() const noexcept -> std::uint16_t { return first_share_; }
 
     friend constexpr auto operator==(const SplitRatio&, const SplitRatio&) noexcept
         -> bool = default;

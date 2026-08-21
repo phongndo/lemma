@@ -28,7 +28,8 @@ Event  = asynchronous observation
   invalid bounds reject the Proc without side effects.
 - `on_error` is `stop` (default) or `continue`.
 - Actions execute in document order and are non-atomic. Completed Actions are never rolled back.
-- Proc contains Actions only. Waiting and streaming are observation concerns handled by Events.
+- Proc contains Actions only. Finite synchronization uses `pane.wait`; open-ended streaming remains
+  an Event concern.
 
 ## References
 
@@ -65,17 +66,26 @@ Titles are never selectors.
 
 ## Actions
 
-Proc accepts the same immediate Actions exposed by `lemma action` and `lemma.action/v1`:
+Proc accepts the same bounded Actions exposed by `lemma action` and `lemma.action/v1`:
 
+- `daemon.inspect`
 - `session.list`, `session.inspect`, `session.start`, `session.rename`, `session.kill`
-- `tab.list`, `tab.new`, `tab.select`, `tab.move`, `tab.rename`, `tab.kill`
-- `pane.list`, `pane.split`, `pane.focus`, `pane.swap`, `pane.resize`, `pane.zoom`, `pane.send`,
-  `pane.capture`, `pane.kill`
+- `tab.list`, `tab.inspect`, `tab.new`, `tab.select`, `tab.move`, `tab.rename`, `tab.kill`
+- `pane.list`, `pane.inspect`, `pane.split`, `pane.focus`, `pane.swap`, `pane.resize`, `pane.zoom`,
+  `pane.input`, legacy `pane.send`, `pane.capture`, `pane.wait`, `pane.kill`
 
 Launch `argv` is an exact JSON string array and is executed without shell interpretation. `hold`
-retains an exited pane and its canonical terminal until a later Action kills it. A Proc
+retains an exited pane and its canonical terminal until a later Action kills it. Tab and split
+creation can preserve existing focus. `pane.input` is one atomic bounded input batch; its text,
+paste, and logical-key entries cannot be split across Proc steps by another producer. A Proc
 `session.start` that omits `cwd` and `environment` uses the account home directory and a bounded
-snapshot of the daemon process environment; explicit values replace those defaults.
+snapshot of the daemon process environment; explicit values replace those defaults. `pane.wait`
+uses the same bounded process, literal-output, and semantic-prompt conditions in one-Action and Proc
+execution:
+
+```json
+{"action":"pane.wait","pane":{"result":"tests"},"contains":"tests passed","timeout_ms":120000}
+```
 
 The complete action-specific fields, limits, selector unions, and result shapes are available from:
 
@@ -108,7 +118,8 @@ lemma api schema --json
 
 Each entry contains the same canonical Action result returned by one-action CONTROL RPC. Successful
 statuses are `applied` and `no_effect`. Other statuses include `stale`, `wrong_owner`, `conflict`,
-`capacity`, `unavailable`, and `failed`. The daemon yields to other reactor work between Actions.
+`capacity`, `unavailable`, and `failed`; wait timeout and unexpected exit are typed failed reasons.
+The daemon yields to other reactor work between Actions and throughout a pending wait.
 If retained results would exceed the 1 MiB record bound, it stops with `partial: true`, preserves all
 previously encoded results, and reports the overflowing Action index and whether that Action had
 already executed.
