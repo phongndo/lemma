@@ -229,6 +229,7 @@
             pkgs.ninja
             pkgs.nixd
             pkgs.nixpkgs-fmt
+            pkgs.pkg-config
             pkgs.python3
             pkgs.uv
             zigPackage
