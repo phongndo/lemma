@@ -62,9 +62,9 @@ lemma api schema
 
 An Action is one fundamental immediate mutation or point-in-time query. Proc composes Actions and
 adds only sequencing, backward-only typed references, and whole-plan validation. Events are
-immutable asynchronous observations and never another mutation path. `lemma action` and `lemma
-proc` are human- and agent-friendly shell frontends; persistent agents normally use the same
-Action/Proc RPC directly. See
+immutable asynchronous observations and never another mutation path. `lemma action`, `lemma proc`,
+and `lemma events` are the shell frontends for humans and coding agents. The per-user Unix endpoint
+is the public integration API for dedicated CONTROL and OBSERVE clients. See
 [`control-api.md`](control-api.md).
 
 - Every core workflow is keyboard-complete.

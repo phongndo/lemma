@@ -1,7 +1,7 @@
 # Lemma procedures
 
-`lemma proc FILE|-` executes one bounded `lemma.proc/v1` document. Persistent agents may send the
-same document directly over the public CONTROL connection.
+`lemma proc FILE|-` executes one bounded `lemma.proc/v1` document. Dedicated CONTROL clients may
+send the same document directly over the public integration API.
 
 A Proc is not a second operation model:
 

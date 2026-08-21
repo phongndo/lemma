@@ -58,12 +58,12 @@ for the schema and supported action fields.
 
 ## Machine control and observation
 
-Persistent agents normally connect to the owner-only `/tmp/lemma-UID.sock` endpoint instead of
-spawning CLI commands. A CONTROL connection accepts lock-step `lemma.action/v1` Actions and
-`lemma.proc/v1` Procedures. An OBSERVE connection begins with a `lemma.events/v1` subscription and receives an initial snapshot
-plus typed NDJSON Events. `lemma events` is the shell wrapper for observation, and
-`lemma api schema --json` prints the complete version-matched JSON Schema without contacting the daemon.
-See [`docs/control-api.md`](docs/control-api.md).
+Coding agents should use `lemma action`, `lemma proc`, and `lemma events` (`lemma skill`). The
+owner-only `/tmp/lemma-UID.sock` endpoint is the public integration API for dedicated clients: a
+CONTROL connection accepts lock-step `lemma.action/v1` Actions and `lemma.proc/v1` Procedures, and
+an OBSERVE connection begins with a `lemma.events/v1` subscription then receives an initial
+snapshot plus typed NDJSON Events. `lemma api schema --json` prints the complete version-matched
+JSON Schema without contacting the daemon. See [`docs/control-api.md`](docs/control-api.md).
 
 ## Builds
 

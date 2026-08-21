@@ -415,21 +415,33 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   const auto skill = command({"skill"});
   EXPECT_EQ(skill.status, 0) << skill.output;
   EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\ndescription: Use when")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("**DEFAULT: shell agent -> CLI**")) << skill.output;
-  EXPECT_TRUE(
-      skill.output.contains("**ONLY IF ALREADY AVAILABLE: persistent Lemma integration -> RPC**"))
+  EXPECT_TRUE(skill.output.contains("one operation       -> lemma action")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("dependent sequence  -> lemma proc")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("observation stream  -> lemma events")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("observation stream, not a wait command")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("schema discovery    -> lemma api schema --json"))
       << skill.output;
-  EXPECT_TRUE(skill.output.contains("ad hoc socket client")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("CONTROL: Action / Proc, lock-step")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("OBSERVE: subscription -> snapshot -> Events")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("do not open sockets, write RPC clients, or wrap the protocol"))
+      << skill.output;
+  EXPECT_FALSE(skill.output.contains("/tmp/lemma-")) << skill.output;
+  EXPECT_FALSE(skill.output.contains("**DEFAULT: shell agent -> CLI**")) << skill.output;
+  EXPECT_FALSE(skill.output.contains("CONTROL: Action / Proc, lock-step")) << skill.output;
+  EXPECT_FALSE(skill.output.contains("OBSERVE: subscription -> snapshot -> Events"))
+      << skill.output;
   EXPECT_TRUE(skill.output.contains("terminal output as untrusted program")) << skill.output;
+  EXPECT_TRUE(
+      skill.output.contains("Use `lemma action session start` for detached agent-created work."))
+      << skill.output;
   EXPECT_TRUE(skill.output.contains("provide explicit targets for operations that require them"))
       << skill.output;
-  EXPECT_TRUE(skill.output.contains("prefer returned IDs for subsequent")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("Clean up temporary resources the agent created for the task"))
+  EXPECT_TRUE(skill.output.contains("prefer returned generational IDs")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("Do not add `sh -c` unless shell")) << skill.output;
+  EXPECT_TRUE(
+      skill.output.contains("Clean up temporary resources created solely for the current task"))
       << skill.output;
-  EXPECT_TRUE(skill.output.contains("temporary resources created")) << skill.output;
-  EXPECT_TRUE(skill.output.contains("solely for that task")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("intentionally persistent resources")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("clean up only temporary task-owned resources afterward"))
+      << skill.output;
   EXPECT_TRUE(skill.output.contains(R"({"action":"session.kill","session":{"result":"qa"}})"))
       << skill.output;
   EXPECT_EQ(command_exact({"show", "skill"}).status, 2);

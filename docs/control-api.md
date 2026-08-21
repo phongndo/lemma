@@ -17,8 +17,10 @@ Event  = observation
 ```
 
 The production endpoint is `/tmp/lemma-UID.sock`, owned by the user and created with owner-only
-permissions. Terminal attachment uses the same endpoint but remains a separate framed terminal
-transport rather than another control model.
+permissions. It is the public integration API for dedicated CONTROL and OBSERVE clients.
+Terminal attachment uses the same endpoint but remains a separate framed terminal transport rather
+than another control model. Coding agents should use `lemma action`, `lemma proc`, and
+`lemma events` (`lemma skill`) rather than opening this socket.
 
 ## Public CLI
 
@@ -66,8 +68,8 @@ child environment. Omitted targets resolve from those stable IDs before transmis
 CLI convenience; the Action crossing CONTROL is concrete and deterministic.
 
 `lemma action` prints the canonical JSON Action result. `lemma proc` prints the canonical Proc
-result. They are suitable for shell use by people and agents, but persistent agents should normally
-use CONTROL directly and avoid subprocess overhead.
+result. These CLI commands are the shell and coding-agent interface. Dedicated integrations may
+use CONTROL and OBSERVE directly.
 
 ## CONTROL connection
 
