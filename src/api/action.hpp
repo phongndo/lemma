@@ -4,7 +4,6 @@
 #include "api/json.hpp"
 #include "lemma/id.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
