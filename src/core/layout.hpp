@@ -83,8 +83,8 @@ public:
   [[nodiscard]] auto split(PaneId source, PaneId added, SplitAxis axis) noexcept -> bool;
   [[nodiscard]] auto swap(PaneId first, PaneId second) noexcept -> bool;
   [[nodiscard]] auto remove(PaneId pane) noexcept -> std::optional<PaneId>;
-  [[nodiscard]] auto resize(PaneId pane, ResizeDirection direction, PaneRectangle viewport) noexcept
-      -> LayoutResizeStatus;
+  [[nodiscard]] auto resize(PaneId pane, ResizeDirection direction, PaneRectangle viewport,
+                            std::uint16_t amount = 1) noexcept -> LayoutResizeStatus;
   [[nodiscard]] auto resize_divider(LayoutDivider divider, std::uint16_t coordinate,
                                     PaneRectangle viewport) noexcept -> LayoutResizeStatus;
 

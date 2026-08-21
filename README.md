@@ -9,23 +9,25 @@ The mux hierarchy is **Session -> Tab -> Pane**. Ghostty owns terminal semantics
 ## Usage
 
 ```sh
-lemma                                    # create a numbered session and attach
-lemma new work                            # create named session and attach
-lemma start logs                          # create named session detached
-lemma new editor -c ~/src -- nvim
-lemma list                                # alias: lemma ls
-lemma attach work
+lemma                                      # create a numbered session and attach
+lemma new [NAME] ...                       # create a session and attach
+lemma start [NAME] ...                     # create a detached session
+lemma attach [NAME]
+lemma list                                 # alias: lemma ls
+lemma inspect NAME
+lemma rename OLD NEW
+lemma kill NAME
 
-lemma tab new work --title tests --hold -- just test
-lemma pane list work
-lemma pane capture work 1:1
-lemma pane wait work 1:1 --exit --timeout 30s
+lemma action tab new --session work --title tests --hold -- just test
+lemma action pane split --session work --pane 0:1 --right
+lemma action pane capture --session work --pane 0:1
 ```
 
-Session controls are top-level; tab and pane actions use explicit namespaces. `--hold` keeps an
-exited pane's canonical terminal and exit status available until the pane is killed. Pane waits can
-require an exact exit code or signal. Use `C-b d` to detach and run `lemma --help` for the complete
-command surface.
+Common Session lifecycle commands are noun-free at the top level. The complete Session, Tab, and
+Pane operation set is symmetric under `action`; there are no `lemma tab ...` or `lemma pane ...`
+command families. Inside a Lemma pane, omitted `--session`, `--tab`, and `--pane` targets resolve
+from the caller's current stable Lemma context. Explicit selectors operate on other resources.
+Keybindings and mouse remain the primary interactive mux interface. Use `C-b d` to detach.
 
 ## Procedures
 
@@ -43,18 +45,25 @@ lemma proc - <<'JSON'
     {"id":"qa", "action":"session.start", "name":"qa"},
     {"id":"tests", "action":"tab.new", "session":{"result":"qa"},
      "hold":true, "argv":["just","test"]},
-    {"action":"pane.wait", "pane":{"result":"tests"},
-     "exit":{"code":0}, "timeout_ms":120000},
-    {"action":"pane.capture", "pane":{"result":"tests"}, "lines":100},
+    {"action":"pane.zoom", "pane":{"result":"tests"}, "enabled":true},
     {"action":"session.kill", "session":{"result":"qa"}}
   ]
 }
 JSON
 ```
 
-The procedure result is compact `lemma.results/v1` JSON containing each action's status and any
-created IDs, structured topology arrays, captured text, or process exit outcome. See [`docs/procedures.md`](docs/procedures.md)
+The procedure result is compact `lemma.proc-result/v1` JSON containing the canonical typed result
+of each Action. See [`docs/procedures.md`](docs/procedures.md)
 for the schema and supported action fields.
+
+## Machine control and observation
+
+Persistent agents normally connect to the owner-only `/tmp/lemma-UID.sock` endpoint instead of
+spawning CLI commands. A CONTROL connection accepts lock-step `lemma.action/v1` Actions and
+`lemma.proc/v1` Procedures. An OBSERVE connection begins with a `lemma.events/v1` subscription and receives an initial snapshot
+plus typed NDJSON Events. `lemma events` is the shell wrapper for observation, and
+`lemma api schema --json` prints the complete version-matched JSON Schema without contacting the daemon.
+See [`docs/control-api.md`](docs/control-api.md).
 
 ## Builds
 

@@ -1,0 +1,14 @@
+#include "api/schema.hpp"
+
+#include <string_view>
+
+namespace lemma::api {
+namespace {
+
+constexpr std::string_view document = R"LEMMA_API_SCHEMA(@LEMMA_API_SCHEMA@)LEMMA_API_SCHEMA";
+
+} // namespace
+
+auto schema_document() noexcept -> std::string_view { return document; }
+
+} // namespace lemma::api

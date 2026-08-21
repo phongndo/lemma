@@ -1,15 +1,18 @@
 #include "daemon/server.hpp"
 
+#include "api/action.hpp"
+#include "api/json.hpp"
 #include "core/engine.hpp"
 #include "extension/host.hpp"
 #include "lemma/id.hpp"
-#include "lemma/version.hpp"
 #include "platform/io.hpp"
+#include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
@@ -17,16 +20,19 @@
 #include <cstdlib>
 #include <cstring>
 #include <expected>
+#include <iterator>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include <fcntl.h>
-#include <pwd.h>
+#include <poll.h>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -34,10 +40,6 @@
 #include <sys/wait.h>
 #include <syslog.h>
 #include <unistd.h>
-
-#ifdef __APPLE__
-#include <crt_externs.h>
-#endif
 
 namespace lemma::daemon {
 namespace {
@@ -348,29 +350,8 @@ void redirect_standard_descriptors() noexcept {
          send_all(connection, std::as_bytes(std::span(session.data(), session.size())));
 }
 
-[[nodiscard]] auto process_environment() noexcept -> char** {
-#ifdef __APPLE__
-  return *_NSGetEnviron();
-#elifdef __linux__
-  return ::environ;
-#endif
-}
-
 [[nodiscard]] auto capture_home_directory(const std::span<char> output) noexcept -> std::size_t {
-  std::array<char, std::size_t{16} * 1'024U> account_buffer{};
-  struct passwd account{};
-  struct passwd* result = nullptr;
-  if (::getpwuid_r(::getuid(), &account, account_buffer.data(), account_buffer.size(), &result) !=
-          0 ||
-      result == nullptr || account.pw_dir == nullptr) {
-    return 0;
-  }
-  const std::string_view home(account.pw_dir);
-  if (home.empty() || home.front() != '/' || home.size() >= output.size() || home.contains('\0')) {
-    return 0;
-  }
-  std::ranges::copy(home, output.begin());
-  return home.size();
+  return platform::account_home_directory(output);
 }
 
 [[nodiscard]] auto
@@ -449,24 +430,12 @@ struct CapturedLaunchContext final {
   }
   context.working_directory_size = working_directory->size();
 
-  std::size_t environment_entries = 0;
-  // POSIX exposes the process environment as a null-terminated pointer vector.
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  for (char** entry = process_environment(); entry != nullptr && *entry != nullptr; ++entry) {
-    const std::string_view value(*entry);
-    const auto encoded_size = value.size() + 1U;
-    if (encoded_size > context.environment.size() - context.environment_size ||
-        environment_entries == protocol::environment_entries_max) {
-      static_cast<void>(write_text(STDERR_FILENO, "launch environment exceeds lemma limits\n"));
-      return false;
-    }
-    std::ranges::copy(std::as_bytes(std::span(value.data(), value.size())),
-                      std::span(context.environment).subspan(context.environment_size).begin());
-    context.environment_size += value.size();
-    std::span(context.environment).subspan(context.environment_size, 1).front() = std::byte{0};
-    ++context.environment_size;
-    ++environment_entries;
+  const auto environment_size = platform::capture_process_environment(context.environment);
+  if (!environment_size.has_value()) {
+    static_cast<void>(write_text(STDERR_FILENO, "launch environment exceeds lemma limits\n"));
+    return false;
   }
+  context.environment_size = *environment_size;
 
   const auto command_size = encode_launch_command(options.command, context.command);
   if (!command_size.has_value()) {
@@ -479,28 +448,6 @@ struct CapturedLaunchContext final {
          write_text(
              STDERR_FILENO,
              "warning: current directory unavailable; new session will use home directory\n");
-}
-
-[[nodiscard]] auto send_create_request(const int connection,
-                                       const std::optional<std::string_view> session,
-                                       const CapturedLaunchContext& context) noexcept -> bool {
-  const auto directory_size = protocol::encode_bounded_size(context.working_directory_size);
-  const auto environment_size = protocol::encode_bounded_size(context.environment_size);
-  const auto command_size = protocol::encode_bounded_size(context.command_size);
-  const bool sent_header =
-      session.has_value()
-          ? send_session_request(connection, protocol::ControlCommand::create_with_context,
-                                 *session)
-          : send_all(connection, std::array{protocol::wire_byte(
-                                     protocol::ControlCommand::create_auto_with_context)});
-  const std::array flags{static_cast<std::byte>(context.hold ? 1 : 0)};
-  return sent_header && send_all(connection, flags) && send_all(connection, directory_size) &&
-         send_all(connection, std::as_bytes(std::span(context.working_directory))
-                                  .first(context.working_directory_size)) &&
-         send_all(connection, environment_size) &&
-         send_all(connection, std::span(context.environment).first(context.environment_size)) &&
-         send_all(connection, command_size) &&
-         send_all(connection, std::span(context.command).first(context.command_size));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -563,37 +510,6 @@ struct CapturedLaunchContext final {
     return 1;
   }
   return write_text(STDOUT_FILENO, result.text) ? 0 : 1;
-}
-
-[[nodiscard]] auto
-capture_rename_request(const RuntimeEndpoint& endpoint, const protocol::ControlCommand command,
-                       const std::string_view session, const std::span<const std::byte> fields)
-    -> OperationStatus {
-  int connection = open_connection(std::string(endpoint.socket_path()));
-  if (connection < 0 || !send_session_request(connection, command, session) ||
-      !send_all(connection, fields)) {
-    close_descriptor(connection);
-    return OperationStatus::failed;
-  }
-  std::array<std::byte, 1> response{};
-  const bool received = read_exact(connection, response);
-  close_descriptor(connection);
-  if (!received) {
-    return OperationStatus::failed;
-  }
-  if (response.front() == response_ready) {
-    return OperationStatus::applied;
-  }
-  if (response.front() == response_missing) {
-    return OperationStatus::missing;
-  }
-  if (response.front() == response_conflict) {
-    return OperationStatus::conflict;
-  }
-  if (response.front() == response_capacity) {
-    return OperationStatus::capacity;
-  }
-  return OperationStatus::failed;
 }
 
 [[nodiscard]] auto report_rename_status(const OperationStatus status) -> int {
@@ -680,70 +596,233 @@ capture_rename_request(const RuntimeEndpoint& endpoint, const protocol::ControlC
   return connection;
 }
 
-[[nodiscard]] auto read_operation_response(int connection) noexcept -> OperationStatus {
-  std::array<std::byte, 1> response{};
-  const bool received = read_exact(connection, response);
-  close_descriptor(connection);
-  return received ? operation_status(response.front()) : OperationStatus::failed;
-}
-
-[[nodiscard]] constexpr auto protocol_surface_kind(const SurfaceCreateKind kind) noexcept
-    -> protocol::SurfaceCreateKind {
-  switch (kind) {
-  case SurfaceCreateKind::tab:
-    return protocol::SurfaceCreateKind::tab;
-  case SurfaceCreateKind::split_right:
-    return protocol::SurfaceCreateKind::split_right;
-  case SurfaceCreateKind::split_down:
-    return protocol::SurfaceCreateKind::split_down;
-  }
-  return protocol::SurfaceCreateKind::tab;
-}
-
-[[nodiscard]] constexpr auto protocol_action(const SemanticAction action) noexcept
-    -> protocol::ControlAction {
-  switch (action) {
-  case SemanticAction::tab_select:
-    return protocol::ControlAction::tab_select;
-  case SemanticAction::tab_move:
-    return protocol::ControlAction::tab_move;
-  case SemanticAction::tab_kill:
-    return protocol::ControlAction::tab_kill;
-  case SemanticAction::pane_focus:
-    return protocol::ControlAction::pane_focus;
-  case SemanticAction::pane_swap:
-    return protocol::ControlAction::pane_swap;
-  case SemanticAction::pane_resize_left:
-    return protocol::ControlAction::pane_resize_left;
-  case SemanticAction::pane_resize_right:
-    return protocol::ControlAction::pane_resize_right;
-  case SemanticAction::pane_resize_up:
-    return protocol::ControlAction::pane_resize_up;
-  case SemanticAction::pane_resize_down:
-    return protocol::ControlAction::pane_resize_down;
-  case SemanticAction::pane_zoom_on:
-    return protocol::ControlAction::pane_zoom_on;
-  case SemanticAction::pane_zoom_off:
-    return protocol::ControlAction::pane_zoom_off;
-  case SemanticAction::pane_kill:
-    return protocol::ControlAction::pane_kill;
-  case SemanticAction::session_kill:
-    return protocol::ControlAction::session_kill;
-  }
-  return protocol::ControlAction::pane_kill;
-}
-
-void encode_control_u16(const std::uint16_t value, const std::span<std::byte, 2> output) noexcept {
-  output.front() = static_cast<std::byte>((value >> 8U) & 0xffU);
-  output.back() = static_cast<std::byte>(value & 0xffU);
-}
-
 [[nodiscard]] constexpr auto decode_control_u32(const std::span<const std::byte, 4> input) noexcept
     -> std::uint32_t {
   return (std::to_integer<std::uint32_t>(input.subspan(0, 1).front()) << 24U) |
          (std::to_integer<std::uint32_t>(input.subspan(1, 1).front()) << 16U) |
          (std::to_integer<std::uint32_t>(input.subspan(2, 1).front()) << 8U) |
          std::to_integer<std::uint32_t>(input.subspan(3, 1).front());
+}
+
+template <typename Id>
+[[nodiscard]] auto parse_public_id(std::string_view value) noexcept -> std::optional<Id>;
+
+[[nodiscard]] auto event_request(const std::optional<std::string_view> session,
+                                 const std::optional<PaneId> pane, const bool screen)
+    -> std::optional<std::string> {
+  const auto session_id = session.has_value() ? parse_public_id<SessionId>(*session) : std::nullopt;
+  if ((session.has_value() && !session_id.has_value() && !valid_session_name(*session)) ||
+      (pane.has_value() && (!pane->is_valid() || !session.has_value())) ||
+      (screen && !pane.has_value())) {
+    return std::nullopt;
+  }
+  try {
+    std::string request = R"({"schema":"lemma.events/v1")";
+    if (session_id.has_value()) {
+      request += R"(,"session":{"id":")";
+      request += std::to_string(session_id->slot());
+      request += ":";
+      request += std::to_string(session_id->generation());
+      request += "\"}";
+    } else if (session.has_value()) {
+      request += R"(,"session":{"name":")";
+      request += *session;
+      request += "\"}";
+    }
+    if (pane.has_value()) {
+      request += R"(,"pane":{"id":")";
+      request += std::to_string(pane->slot());
+      request += ":";
+      request += std::to_string(pane->generation());
+      request += "\"}";
+    }
+    if (screen) {
+      request += R"(,"screen":true)";
+    }
+    request += "}\n";
+    return request;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+enum class EventReadError : std::uint8_t {
+  timeout,
+  closed,
+  failed,
+};
+
+class EventReader final {
+public:
+  explicit EventReader(const int descriptor) noexcept : descriptor_(descriptor) {}
+
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+  [[nodiscard]] auto next(const std::chrono::steady_clock::time_point deadline)
+      -> std::expected<std::string, EventReadError> {
+    while (true) {
+      if (const auto newline = buffered_.find('\n'); newline != std::string::npos) {
+        auto line = buffered_.substr(0, newline);
+        buffered_.erase(0, newline + 1U);
+        return line;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        return std::unexpected(EventReadError::timeout);
+      }
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+      pollfd descriptor{.fd = descriptor_, .events = POLLIN, .revents = 0};
+      const auto waited =
+          ::poll(&descriptor, 1, static_cast<int>(std::max(remaining.count(), std::int64_t{1})));
+      if (waited == 0) {
+        return std::unexpected(EventReadError::timeout);
+      }
+      if (waited < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return std::unexpected(EventReadError::failed);
+      }
+      std::array<char, std::size_t{16} * 1'024U> input{};
+      const auto received = ::recv(descriptor_, input.data(), input.size(), 0);
+      if (received > 0) {
+        const auto size = static_cast<std::size_t>(received);
+        if (size > api::json_bytes_max - buffered_.size()) {
+          return std::unexpected(EventReadError::failed);
+        }
+        try {
+          buffered_.append(input.data(), size);
+        } catch (...) {
+          return std::unexpected(EventReadError::failed);
+        }
+        continue;
+      }
+      if (received < 0 && errno == EINTR) {
+        continue;
+      }
+      return std::unexpected(received == 0 ? EventReadError::closed : EventReadError::failed);
+    }
+  }
+
+private:
+  int descriptor_{-1};
+  std::string buffered_;
+};
+
+[[nodiscard]] auto public_operation_status(const api::JsonValue& result) noexcept
+    -> OperationStatus {
+  const auto status = api::json_string(result, "status");
+  if (status == std::optional<std::string_view>{"applied"}) {
+    return OperationStatus::applied;
+  }
+  if (status == std::optional<std::string_view>{"no_effect"}) {
+    return OperationStatus::no_effect;
+  }
+  if (status == std::optional<std::string_view>{"missing"} ||
+      status == std::optional<std::string_view>{"stale"} ||
+      status == std::optional<std::string_view>{"wrong_owner"}) {
+    return OperationStatus::missing;
+  }
+  if (status == std::optional<std::string_view>{"conflict"}) {
+    return OperationStatus::conflict;
+  }
+  if (status == std::optional<std::string_view>{"capacity"}) {
+    return OperationStatus::capacity;
+  }
+  if (status == std::optional<std::string_view>{"unavailable"}) {
+    return OperationStatus::unavailable;
+  }
+  return OperationStatus::failed;
+}
+
+[[nodiscard]] auto invoke_public_action(const RuntimeEndpoint& endpoint, std::string request)
+    -> std::optional<api::JsonValue> {
+  try {
+    if (!request.ends_with('\n')) {
+      request.push_back('\n');
+    }
+  } catch (...) {
+    return std::nullopt;
+  }
+  int connection = open_connection(std::string(endpoint.socket_path()));
+  if (connection < 0 ||
+      !send_all(connection, std::as_bytes(std::span(request.data(), request.size())))) {
+    close_descriptor(connection);
+    return std::nullopt;
+  }
+  EventReader reader(connection);
+  const auto line = reader.next(std::chrono::steady_clock::now() + std::chrono::seconds(10));
+  close_descriptor(connection);
+  if (!line.has_value()) {
+    return std::nullopt;
+  }
+  auto parsed = api::parse_json(*line);
+  return parsed.value.has_value() ? std::move(parsed.value) : std::nullopt;
+}
+
+[[nodiscard]] auto append_public_session_selector(std::string& request,
+                                                  const std::string_view session) -> bool {
+  try {
+    request += R"(,"session":{"name":")";
+    request += session;
+    request += "\"}";
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+template <typename Id>
+// NOLINTNEXTLINE(bugprone-exception-escape)
+[[nodiscard]] auto parse_public_id(const std::string_view value) noexcept -> std::optional<Id> {
+  const auto separator = value.find(':');
+  if (separator == std::string_view::npos || separator == 0 || separator + 1U == value.size()) {
+    return std::nullopt;
+  }
+  std::uint32_t slot = 0;
+  std::uint32_t generation = 0;
+  const auto slot_text = value.substr(0, separator);
+  const auto generation_text = value.substr(separator + 1U);
+  const auto slot_result = std::from_chars(slot_text.begin(), slot_text.end(), slot);
+  const auto generation_result =
+      std::from_chars(generation_text.begin(), generation_text.end(), generation);
+  return slot_result.ec == std::errc{} && slot_result.ptr == slot_text.end() &&
+                 generation_result.ec == std::errc{} &&
+                 generation_result.ptr == generation_text.end()
+             ? Id::try_from_parts(slot, generation)
+             : std::nullopt;
+}
+
+[[nodiscard]] auto append_public_id_selector(std::string& request, const std::string_view field,
+                                             const auto id) -> bool {
+  try {
+    request += ",\"";
+    request += field;
+    request += R"(":{"id":")";
+    request += std::to_string(id.slot());
+    request += ":";
+    request += std::to_string(id.generation());
+    request += "\"}";
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+[[nodiscard]] auto open_event_connection(const RuntimeEndpoint& endpoint,
+                                         const std::string_view session, const PaneId pane,
+                                         const bool screen) -> int {
+  const auto request = event_request(session, pane, screen);
+  if (!request.has_value()) {
+    return -1;
+  }
+  int connection = open_connection(std::string(endpoint.socket_path()));
+  const auto& request_value = request.value();
+  if (connection < 0 ||
+      !send_all(connection, std::as_bytes(std::span(request_value.data(), request_value.size())))) {
+    close_descriptor(connection);
+    return -1;
+  }
+  return connection;
 }
 
 } // namespace
@@ -768,8 +847,7 @@ void encode_control_u16(const std::uint16_t value, const std::span<std::byte, 2>
 }
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint {
-  auto endpoint = RuntimeEndpoint::create("/tmp/" + std::string(private_protocol_version) + "-" +
-                                          std::to_string(::getuid()) + ".sock");
+  auto endpoint = RuntimeEndpoint::create("/tmp/lemma-" + std::to_string(::getuid()) + ".sock");
   // The fixed production path is absolute and well below sockaddr_un::sun_path on supported hosts.
   if (!endpoint.has_value()) {
     std::abort();
@@ -784,6 +862,122 @@ void encode_control_u16(const std::uint16_t value, const std::span<std::byte, 2>
 
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int {
   return open_connection(std::string(endpoint.socket_path()));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action, const bool start_daemon)
+    -> int {
+  auto concrete = action;
+  if (concrete.kind == api::ActionKind::session_start &&
+      (concrete.working_directory.empty() || !concrete.environment_set)) {
+    std::vector<std::string_view> arguments;
+    try {
+      arguments.reserve(concrete.arguments.size());
+      for (const auto& argument : concrete.arguments) {
+        arguments.emplace_back(argument);
+      }
+    } catch (...) {
+      return 1;
+    }
+    CapturedLaunchContext context;
+    if (!capture_launch_context({.working_directory = concrete.working_directory,
+                                 .command = arguments,
+                                 .hold = concrete.hold},
+                                context)) {
+      return 1;
+    }
+    if (concrete.working_directory.empty()) {
+      concrete.working_directory.assign(context.working_directory.data(),
+                                        context.working_directory_size);
+    }
+    if (!concrete.environment_set) {
+      std::size_t offset = 0;
+      while (offset < context.environment_size) {
+        const auto remaining =
+            std::span(context.environment).first(context.environment_size).subspan(offset);
+        const auto terminator = std::ranges::find(remaining, std::byte{0});
+        if (terminator == remaining.end()) {
+          return 1;
+        }
+        const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        concrete.environment.emplace_back(reinterpret_cast<const char*>(remaining.data()), size);
+        offset += size + 1U;
+      }
+      concrete.environment_set = true;
+    }
+  }
+  const auto document = api::encode_action(concrete);
+  if (!document.has_value()) {
+    return 2;
+  }
+  if (start_daemon && !ensure_server(std::string(endpoint.socket_path()))) {
+    static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
+    return 1;
+  }
+  auto result = invoke_public_action(endpoint, *document);
+  if (!result.has_value()) {
+    std::string unavailable = R"({"schema":"lemma.action-result/v1","action":)";
+    if (!api::append_json_string(unavailable, api::action_name(concrete.kind))) {
+      return 1;
+    }
+    unavailable += R"(,"status":"unavailable"}
+)";
+    static_cast<void>(write_text(STDOUT_FILENO, unavailable));
+    return 1;
+  }
+  std::string encoded;
+  if (!api::append_json_value(encoded, *result) || !write_text(STDOUT_FILENO, encoded) ||
+      !write_text(STDOUT_FILENO, "\n")) {
+    return 1;
+  }
+  const auto status = public_operation_status(*result);
+  return status == OperationStatus::applied || status == OperationStatus::no_effect ? 0 : 1;
+}
+
+auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) -> int {
+  auto parsed = api::parse_json(document);
+  if (!parsed.value.has_value()) {
+    constexpr std::string_view error =
+        R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"invalid_json"},"results":[]}
+)";
+    static_cast<void>(write_text(STDOUT_FILENO, error));
+    return 2;
+  }
+  std::string compact;
+  if (!api::append_json_value(compact, *parsed.value)) {
+    return 2;
+  }
+  bool starts_session = false;
+  if (const auto* const actions = api::json_member(*parsed.value, "actions");
+      actions != nullptr && actions->kind == api::JsonKind::array) {
+    starts_session = std::ranges::any_of(actions->array, [](const api::JsonValue& action) {
+      return api::json_string(action, "action") == std::optional<std::string_view>{"session.start"};
+    });
+  }
+  if (starts_session && !ensure_server(std::string(endpoint.socket_path()))) {
+    static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
+    return 1;
+  }
+  auto result = invoke_public_action(endpoint, std::move(compact));
+  if (!result.has_value()) {
+    constexpr std::string_view unavailable =
+        R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"unavailable"},"results":[]}
+)";
+    static_cast<void>(write_text(STDOUT_FILENO, unavailable));
+    return 1;
+  }
+  std::string encoded;
+  if (!api::append_json_value(encoded, *result) || !write_text(STDOUT_FILENO, encoded) ||
+      !write_text(STDOUT_FILENO, "\n")) {
+    return 1;
+  }
+  const auto ok = api::json_boolean(*result, "ok");
+  const auto partial = api::json_boolean(*result, "partial").value_or(false);
+  if (api::json_member(*result, "error") != nullptr && !partial) {
+    return 2;
+  }
+  return ok.has_value() && *ok ? 0 : 1;
 }
 
 // Creation reports each bounded setup and daemon outcome without publishing partial client state.
@@ -802,57 +996,86 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
     return {};
   }
-  int connection = open_connection(path);
-  if (connection < 0 || !send_create_request(connection, session, launch_context)) {
-    close_descriptor(connection);
-    return {};
-  }
-  std::array<std::byte, 1> response{};
-  const bool received = read_exact(connection, response);
-  if (!received || response.front() != response_ready) {
-    close_descriptor(connection);
-    if (received && response.front() == response_capacity) {
-      static_cast<void>(write_text(STDERR_FILENO, "lemma session capacity reached\n"));
-    } else if (received && response.front() == response_conflict) {
-      static_cast<void>(write_text(STDERR_FILENO, "lemma session already exists\n"));
-    } else {
-      static_cast<void>(write_text(STDERR_FILENO, "failed to create lemma session\n"));
+  try {
+    std::string request = R"({"schema":"lemma.action/v1","action":"session.start")";
+    if (session.has_value()) {
+      request += R"(,"name":)";
+      if (!api::append_json_string(request, *session)) {
+        return {};
+      }
     }
-    auto status = OperationStatus::failed;
-    if (received && response.front() == response_capacity) {
-      status = OperationStatus::capacity;
-    } else if (received && response.front() == response_conflict) {
-      status = OperationStatus::conflict;
+    request += R"(,"cwd":)";
+    if (!api::append_json_string(request, {launch_context.working_directory.data(),
+                                           launch_context.working_directory_size})) {
+      return {};
     }
-    return {.status = status, .session = {}, .tab = {}, .pane = {}};
-  }
-  std::array<std::byte, 1> encoded_name_size{};
-  if (!read_exact(connection, encoded_name_size)) {
-    close_descriptor(connection);
+    if (launch_context.hold) {
+      request += R"(,"hold":true)";
+    }
+    if (!options.command.empty()) {
+      request += R"(,"argv":[)";
+      for (std::size_t index = 0; index < options.command.size(); ++index) {
+        if (index > 0) {
+          request += ",";
+        }
+        if (!api::append_json_string(request,
+                                     std::span(options.command).subspan(index, 1).front())) {
+          return {};
+        }
+      }
+      request += "]";
+    }
+    request += R"(,"environment":[)";
+    std::size_t environment_offset = 0;
+    std::size_t environment_index = 0;
+    while (environment_offset < launch_context.environment_size) {
+      const auto remaining = std::span(launch_context.environment)
+                                 .first(launch_context.environment_size)
+                                 .subspan(environment_offset);
+      const auto terminator = std::ranges::find(remaining, std::byte{0});
+      if (terminator == remaining.end()) {
+        return {};
+      }
+      const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
+      if (environment_index++ > 0) {
+        request += ",";
+      }
+      // Environment entries are validated byte strings captured from the local POSIX process.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      const std::string_view entry(reinterpret_cast<const char*>(remaining.data()), size);
+      if (!api::append_json_string(request, entry)) {
+        return {};
+      }
+      environment_offset += size + 1U;
+    }
+    request += "]}";
+    auto public_result = invoke_public_action(endpoint, std::move(request));
+    if (public_result.has_value()) {
+      const auto status = public_operation_status(*public_result);
+      if (status != OperationStatus::applied) {
+        if (status == OperationStatus::conflict) {
+          static_cast<void>(write_text(STDERR_FILENO, "lemma session already exists\n"));
+        } else if (status == OperationStatus::capacity) {
+          static_cast<void>(write_text(STDERR_FILENO, "lemma session capacity reached\n"));
+        }
+        return {.status = status, .session = {}, .tab = {}, .pane = {}};
+      }
+      const auto* const session_value = api::json_member(*public_result, "session");
+      const auto name = session_value == nullptr ? std::optional<std::string_view>{}
+                                                 : api::json_string(*session_value, "name");
+      const auto tab_text = api::json_string(*public_result, "tab");
+      const auto pane_text = api::json_string(*public_result, "pane");
+      const auto tab = tab_text.has_value() ? parse_public_id<TabId>(*tab_text) : std::nullopt;
+      const auto pane = pane_text.has_value() ? parse_public_id<PaneId>(*pane_text) : std::nullopt;
+      if (!name.has_value() || !tab.has_value() || !pane.has_value()) {
+        return {};
+      }
+      return {.status = status, .session = std::string(*name), .tab = *tab, .pane = *pane};
+    }
+    return {};
+  } catch (...) {
     return {};
   }
-  const auto name_size = std::to_integer<std::size_t>(encoded_name_size.front());
-  if (name_size == 0 || name_size > protocol::session_name_bytes_max) {
-    close_descriptor(connection);
-    return {};
-  }
-  std::array<char, protocol::session_name_bytes_max> name{};
-  std::array<std::byte, protocol::control_id_bytes> tab_bytes{};
-  std::array<std::byte, protocol::control_id_bytes> pane_bytes{};
-  const bool read_result =
-      read_exact(connection, std::as_writable_bytes(std::span(name)).first(name_size)) &&
-      read_exact(connection, tab_bytes) && read_exact(connection, pane_bytes);
-  close_descriptor(connection);
-  const auto tab = protocol::decode_control_id<TabId>(tab_bytes);
-  const auto pane = protocol::decode_control_id<PaneId>(pane_bytes);
-  if (!read_result || !tab.has_value() || !pane.has_value() || !tab->is_valid() ||
-      !pane->is_valid()) {
-    return {};
-  }
-  return {.status = OperationStatus::applied,
-          .session = std::string(name.data(), name_size),
-          .tab = *tab,
-          .pane = *pane};
 }
 
 auto create(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
@@ -879,17 +1102,48 @@ auto query(const RuntimeEndpoint& endpoint, const QueryKind kind, const std::str
     }
     close_descriptor(connection);
   }
+  std::string_view action;
+  std::string_view field;
   switch (kind) {
   case QueryKind::sessions:
-    return capture_control_command(endpoint, protocol::ControlCommand::query_sessions, {});
+    action = "session.list";
+    field = "sessions";
+    break;
   case QueryKind::session:
-    return capture_control_command(endpoint, protocol::ControlCommand::query_session, session);
+    action = "session.inspect";
+    field = "sessions";
+    break;
   case QueryKind::tabs:
-    return capture_control_command(endpoint, protocol::ControlCommand::query_tabs, session);
+    action = "tab.list";
+    field = "tabs";
+    break;
   case QueryKind::panes:
-    return capture_control_command(endpoint, protocol::ControlCommand::query_panes, session);
+    action = "pane.list";
+    field = "panes";
+    break;
   }
-  return {};
+  try {
+    std::string request = R"({"schema":"lemma.action/v1","action":)";
+    if (!api::append_json_string(request, action) ||
+        (kind != QueryKind::sessions && !append_public_session_selector(request, session))) {
+      return {};
+    }
+    request += "}";
+    auto result = invoke_public_action(endpoint, std::move(request));
+    if (!result.has_value()) {
+      return {};
+    }
+    const auto status = public_operation_status(*result);
+    const auto* const value = api::json_member(*result, field);
+    std::string text;
+    if (status != OperationStatus::applied || value == nullptr ||
+        !api::append_json_value(text, *value)) {
+      return {.status = status, .text = {}};
+    }
+    return {.status = status, .text = std::move(text)};
+  } catch (...) {
+    return {};
+  }
 }
 
 auto list(const RuntimeEndpoint& endpoint) -> int {
@@ -949,86 +1203,159 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
     static_cast<void>(write_text(STDERR_FILENO, "launch command exceeds lemma limits\n"));
     return {};
   }
-  constexpr std::size_t header_size = 15;
-  const auto payload_size = header_size + options.title.size() + directory_size + *command_size;
-  if (payload_size > protocol::control_payload_bytes_max) {
-    return {.status = OperationStatus::capacity, .session = {}, .tab = {}, .pane = {}};
-  }
-  std::vector<std::byte> payload;
   try {
-    payload.resize(payload_size);
+    std::string request = R"({"schema":"lemma.action/v1","action":)";
+    if (!api::append_json_string(request,
+                                 kind == SurfaceCreateKind::tab ? "tab.new" : "pane.split") ||
+        !append_public_session_selector(request, session)) {
+      return {};
+    }
+    if (kind != SurfaceCreateKind::tab) {
+      if (!append_public_id_selector(request, "pane", target)) {
+        return {};
+      }
+      request += kind == SurfaceCreateKind::split_right ? R"(,"direction":"right")"
+                                                        : R"(,"direction":"down")";
+    }
+    if (!options.title.empty()) {
+      request += R"(,"title":)";
+      if (!api::append_json_string(request, options.title)) {
+        return {};
+      }
+    }
+    if (directory_size > 0) {
+      request += R"(,"cwd":)";
+      if (!api::append_json_string(request, {directory.data(), directory_size})) {
+        return {};
+      }
+    }
+    if (options.hold) {
+      request += R"(,"hold":true)";
+    }
+    if (!options.command.empty()) {
+      request += R"(,"argv":[)";
+      for (std::size_t index = 0; index < options.command.size(); ++index) {
+        if (index > 0) {
+          request += ",";
+        }
+        if (!api::append_json_string(request,
+                                     std::span(options.command).subspan(index, 1).front())) {
+          return {};
+        }
+      }
+      request += "]";
+    }
+    request += "}";
+    auto public_result = invoke_public_action(endpoint, std::move(request));
+    if (public_result.has_value()) {
+      const auto status = public_operation_status(*public_result);
+      const auto tab_text = api::json_string(*public_result, "tab");
+      const auto pane_text = api::json_string(*public_result, "pane");
+      const auto tab = tab_text.has_value() ? parse_public_id<TabId>(*tab_text) : std::nullopt;
+      const auto pane = pane_text.has_value() ? parse_public_id<PaneId>(*pane_text) : std::nullopt;
+      if (status != OperationStatus::applied || !tab.has_value() || !pane.has_value()) {
+        return {.status = status, .session = {}, .tab = {}, .pane = {}};
+      }
+      return {.status = status, .session = std::string(session), .tab = *tab, .pane = *pane};
+    }
+    return {};
   } catch (...) {
     return {};
   }
-  payload.front() = static_cast<std::byte>(protocol_surface_kind(kind));
-  const auto target_id = protocol::encode_control_id(target);
-  std::ranges::copy(target_id, std::span(payload).subspan(1, protocol::control_id_bytes).begin());
-  std::span(payload).subspan(9, 1).front() = static_cast<std::byte>(options.hold ? 1 : 0);
-  std::span(payload).subspan(10, 1).front() = static_cast<std::byte>(options.title.size());
-  encode_control_u16(static_cast<std::uint16_t>(directory_size),
-                     std::span(payload).subspan<11, 2>());
-  encode_control_u16(static_cast<std::uint16_t>(*command_size),
-                     std::span(payload).subspan<13, 2>());
-  std::size_t offset = header_size;
-  std::ranges::copy(std::as_bytes(std::span(options.title.data(), options.title.size())),
-                    std::span(payload).subspan(offset).begin());
-  offset += options.title.size();
-  std::ranges::copy(std::as_bytes(std::span(directory)).first(directory_size),
-                    std::span(payload).subspan(offset).begin());
-  offset += directory_size;
-  std::ranges::copy(std::span(command).first(*command_size),
-                    std::span(payload).subspan(offset).begin());
-
-  int connection =
-      open_payload_request(endpoint, protocol::ControlCommand::surface_create, session, payload);
-  if (connection < 0) {
-    return {};
-  }
-  std::array<std::byte, 1> response{};
-  if (!read_exact(connection, response) || response.front() != response_ready) {
-    close_descriptor(connection);
-    return {.status = operation_status(response.front()), .session = {}, .tab = {}, .pane = {}};
-  }
-  std::array<std::byte, protocol::control_id_bytes> tab_bytes{};
-  std::array<std::byte, protocol::control_id_bytes> pane_bytes{};
-  const bool read_ids = read_exact(connection, tab_bytes) && read_exact(connection, pane_bytes);
-  close_descriptor(connection);
-  const auto tab = protocol::decode_control_id<TabId>(tab_bytes);
-  const auto pane = protocol::decode_control_id<PaneId>(pane_bytes);
-  if (!read_ids || !tab.has_value() || !pane.has_value() || !tab->is_valid() || !pane->is_valid()) {
-    return {};
-  }
-  return {.status = OperationStatus::applied,
-          .session = std::string(session),
-          .tab = *tab,
-          .pane = *pane};
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-branch-clone)
 auto perform_action(const RuntimeEndpoint& endpoint, const std::string_view session,
                     const SemanticAction action, const ActionTarget target) -> OperationStatus {
   if (!validate_session(session)) {
     return OperationStatus::failed;
   }
-  std::array<std::byte, protocol::semantic_action_payload_bytes> payload{};
-  payload.front() = static_cast<std::byte>(protocol_action(action));
-  const auto tab = protocol::encode_control_id(target.tab);
-  const auto pane = protocol::encode_control_id(target.pane);
-  const auto peer = protocol::encode_control_id(target.peer_pane);
-  std::ranges::copy(tab, std::span(payload).subspan(1, protocol::control_id_bytes).begin());
-  std::ranges::copy(pane, std::span(payload)
-                              .subspan(1U + protocol::control_id_bytes, protocol::control_id_bytes)
-                              .begin());
-  std::ranges::copy(peer,
-                    std::span(payload)
-                        .subspan(1U + (2U * protocol::control_id_bytes), protocol::control_id_bytes)
-                        .begin());
-  encode_control_u16(target.tab_position,
-                     std::span(payload).subspan<1U + (3U * protocol::control_id_bytes), 2>());
-  encode_control_u16(target.value,
-                     std::span(payload).subspan<3U + (3U * protocol::control_id_bytes), 2>());
-  const int connection =
-      open_payload_request(endpoint, protocol::ControlCommand::semantic_action, session, payload);
-  return connection < 0 ? OperationStatus::failed : read_operation_response(connection);
+  try {
+    std::string_view name;
+    switch (action) {
+    case SemanticAction::tab_select:
+      name = "tab.select";
+      break;
+    case SemanticAction::tab_move:
+      name = "tab.move";
+      break;
+    case SemanticAction::tab_kill:
+      name = "tab.kill";
+      break;
+    case SemanticAction::pane_focus:
+      name = "pane.focus";
+      break;
+    case SemanticAction::pane_swap:
+      name = "pane.swap";
+      break;
+    case SemanticAction::pane_resize_left:
+    case SemanticAction::pane_resize_right:
+    case SemanticAction::pane_resize_up:
+    case SemanticAction::pane_resize_down:
+      name = "pane.resize";
+      break;
+    case SemanticAction::pane_zoom_on:
+    case SemanticAction::pane_zoom_off:
+      name = "pane.zoom";
+      break;
+    case SemanticAction::pane_kill:
+      name = "pane.kill";
+      break;
+    case SemanticAction::session_kill:
+      name = "session.kill";
+      break;
+    }
+    std::string request = R"({"schema":"lemma.action/v1","action":)";
+    if (!api::append_json_string(request, name) ||
+        !append_public_session_selector(request, session)) {
+      return OperationStatus::failed;
+    }
+    if (action == SemanticAction::tab_select || action == SemanticAction::tab_move ||
+        action == SemanticAction::tab_kill) {
+      request += R"(,"tab":{)";
+      if (target.tab.is_valid()) {
+        request += R"("id":")" + std::to_string(target.tab.slot()) + ":" +
+                   std::to_string(target.tab.generation()) + "\"}";
+      } else {
+        request += R"("position":)" + std::to_string(target.tab_position) + "}";
+      }
+      if (action == SemanticAction::tab_move) {
+        request += R"(,"to_position":)" + std::to_string(target.value);
+      }
+    } else if (action != SemanticAction::session_kill) {
+      if (!append_public_id_selector(request, "pane", target.pane)) {
+        return OperationStatus::failed;
+      }
+      if (action == SemanticAction::pane_swap &&
+          !append_public_id_selector(request, "other", target.peer_pane)) {
+        return OperationStatus::failed;
+      }
+      if (action == SemanticAction::pane_resize_left ||
+          action == SemanticAction::pane_resize_right || action == SemanticAction::pane_resize_up ||
+          action == SemanticAction::pane_resize_down) {
+        std::string_view direction = "left";
+        if (action == SemanticAction::pane_resize_right) {
+          direction = "right";
+        } else if (action == SemanticAction::pane_resize_up) {
+          direction = "up";
+        } else if (action == SemanticAction::pane_resize_down) {
+          direction = "down";
+        }
+        request += R"(,"direction":")";
+        request += direction;
+        request += R"(","amount":)" + std::to_string(target.value);
+      } else if (action == SemanticAction::pane_zoom_on ||
+                 action == SemanticAction::pane_zoom_off) {
+        request +=
+            action == SemanticAction::pane_zoom_on ? R"(,"enabled":true)" : R"(,"enabled":false)";
+      }
+    }
+    request += "}";
+    const auto result = invoke_public_action(endpoint, std::move(request));
+    return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
+  } catch (...) {
+    return OperationStatus::failed;
+  }
 }
 
 auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, const PaneId pane,
@@ -1037,19 +1364,22 @@ auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
       text.size() > protocol::control_payload_bytes_max - protocol::control_id_bytes) {
     return OperationStatus::failed;
   }
-  std::vector<std::byte> payload;
   try {
-    payload.resize(protocol::control_id_bytes + text.size());
+    std::string request = R"({"schema":"lemma.action/v1","action":"pane.send")";
+    if (!append_public_session_selector(request, session) ||
+        !append_public_id_selector(request, "pane", pane)) {
+      return OperationStatus::failed;
+    }
+    request += R"(,"text":)";
+    if (!api::append_json_string(request, text)) {
+      return OperationStatus::failed;
+    }
+    request += "}";
+    const auto result = invoke_public_action(endpoint, std::move(request));
+    return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
   }
-  const auto encoded = protocol::encode_control_id(pane);
-  std::ranges::copy(encoded, payload.begin());
-  std::ranges::copy(std::as_bytes(std::span(text.data(), text.size())),
-                    std::span(payload).subspan(protocol::control_id_bytes).begin());
-  const int connection =
-      open_payload_request(endpoint, protocol::ControlCommand::send_pane, session, payload);
-  return connection < 0 ? OperationStatus::failed : read_operation_response(connection);
 }
 
 auto capture_pane(const RuntimeEndpoint& endpoint, const std::string_view session,
@@ -1057,31 +1387,25 @@ auto capture_pane(const RuntimeEndpoint& endpoint, const std::string_view sessio
   if (!validate_session(session) || !pane.is_valid()) {
     return {OperationStatus::failed, {}};
   }
-  const auto payload = protocol::encode_control_id(pane);
-  int connection =
-      open_payload_request(endpoint, protocol::ControlCommand::capture_pane, session, payload);
-  if (connection < 0) {
-    return {OperationStatus::failed, {}};
-  }
-  std::array<std::byte, 3> header{};
-  if (!read_exact(connection, header) || header.front() != response_ready) {
-    close_descriptor(connection);
-    return {operation_status(header.front()), {}};
-  }
-  const auto size = static_cast<std::size_t>(
-      (std::to_integer<std::uint16_t>(std::span(header).subspan(1, 1).front()) << 8U) |
-      std::to_integer<std::uint16_t>(std::span(header).subspan(2, 1).front()));
-  std::string output;
   try {
-    output.resize(size);
+    std::string request = R"({"schema":"lemma.action/v1","action":"pane.capture")";
+    if (!append_public_session_selector(request, session) ||
+        !append_public_id_selector(request, "pane", pane)) {
+      return {OperationStatus::failed, {}};
+    }
+    request += "}";
+    auto result = invoke_public_action(endpoint, std::move(request));
+    if (!result.has_value()) {
+      return {OperationStatus::failed, {}};
+    }
+    const auto status = public_operation_status(*result);
+    const auto text = api::json_string(*result, "text");
+    return status == OperationStatus::applied && text.has_value()
+               ? std::pair{status, std::string(*text)}
+               : std::pair{status, std::string{}};
   } catch (...) {
-    close_descriptor(connection);
     return {OperationStatus::failed, {}};
   }
-  const bool received = read_exact(connection, std::as_writable_bytes(std::span(output)));
-  close_descriptor(connection);
-  return received ? std::pair{OperationStatus::applied, std::move(output)}
-                  : std::pair{OperationStatus::failed, std::string{}};
 }
 
 auto pane_status(const RuntimeEndpoint& endpoint, const std::string_view session, const PaneId pane)
@@ -1130,34 +1454,41 @@ auto pane_status(const RuntimeEndpoint& endpoint, const std::string_view session
   return false;
 }
 
-[[nodiscard]] auto poll_process_wait(const RuntimeEndpoint& endpoint,
-                                     const std::string_view session, const PaneId pane,
-                                     const ProcessExpectation expected)
-    -> std::optional<PaneWaitResult> {
-  const auto actual = pane_status(endpoint, session, pane);
-  if (actual.status != OperationStatus::applied) {
-    return PaneWaitResult{.status = actual.status, .process = std::nullopt};
-  }
-  if (actual.process == ProcessState::running) {
+[[nodiscard]] auto process_from_event(const api::JsonValue& event) -> std::optional<PaneStatus> {
+  const auto* const process = api::json_member(event, "process");
+  if (process == nullptr || process->kind != api::JsonKind::object) {
     return std::nullopt;
   }
-  const auto status = matches_expectation(actual, expected) ? OperationStatus::applied
-                                                            : OperationStatus::unexpected_exit;
-  return PaneWaitResult{.status = status, .process = actual};
-}
-
-[[nodiscard]] auto poll_text_wait(const RuntimeEndpoint& endpoint, const std::string_view session,
-                                  const PaneId pane, const std::string_view contains)
-    -> std::optional<PaneWaitResult> {
-  const auto [status, text] = capture_pane(endpoint, session, pane);
-  if (status != OperationStatus::applied) {
-    return PaneWaitResult{.status = status, .process = std::nullopt};
+  const auto state = api::json_string(*process, "state");
+  if (state == std::optional<std::string_view>{"running"} ||
+      state == std::optional<std::string_view>{"exiting"}) {
+    return PaneStatus{
+        .status = OperationStatus::applied, .process = ProcessState::running, .value = 0};
   }
-  return text.contains(contains) ? std::optional{PaneWaitResult{.status = OperationStatus::applied,
-                                                                .process = std::nullopt}}
-                                 : std::nullopt;
+  if (state == std::optional<std::string_view>{"exited_unknown"}) {
+    return PaneStatus{
+        .status = OperationStatus::applied, .process = ProcessState::exited_unknown, .value = 0};
+  }
+  if (state == std::optional<std::string_view>{"exited"}) {
+    const auto code = api::json_unsigned(*process, "code");
+    return code.has_value() && *code <= std::numeric_limits<std::uint32_t>::max()
+               ? std::optional{PaneStatus{.status = OperationStatus::applied,
+                                          .process = ProcessState::exited,
+                                          .value = static_cast<std::uint32_t>(*code)}}
+               : std::nullopt;
+  }
+  if (state == std::optional<std::string_view>{"signaled"}) {
+    const auto signal = api::json_unsigned(*process, "signal");
+    return signal.has_value() && *signal <= std::numeric_limits<std::uint32_t>::max()
+               ? std::optional{PaneStatus{.status = OperationStatus::applied,
+                                          .process = ProcessState::signaled,
+                                          .value = static_cast<std::uint32_t>(*signal)}}
+               : std::nullopt;
+  }
+  return std::nullopt;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto wait_pane(const RuntimeEndpoint& endpoint, const std::string_view session, const PaneId pane,
                const PaneWaitOptions options) -> PaneWaitResult {
   constexpr auto timeout_max = std::chrono::minutes(10);
@@ -1167,21 +1498,78 @@ auto wait_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
       options.timeout > timeout_max) {
     return {};
   }
-  const auto deadline = std::chrono::steady_clock::now() + options.timeout;
-  auto polling_delay = std::chrono::milliseconds(25);
-  const auto expected = options.process.value_or(ProcessExpectation{});
-  while (std::chrono::steady_clock::now() < deadline) {
-    const auto completed = waits_for_process
-                               ? poll_process_wait(endpoint, session, pane, expected)
-                               : poll_text_wait(endpoint, session, pane, options.contains);
-    if (completed.has_value()) {
-      return *completed;
-    }
-    std::this_thread::sleep_for(polling_delay);
-    polling_delay =
-        std::min(polling_delay + std::chrono::milliseconds(25), std::chrono::milliseconds(250));
+  int connection = open_event_connection(endpoint, session, pane, !waits_for_process);
+  if (connection < 0) {
+    return {.status = OperationStatus::unavailable, .process = std::nullopt};
   }
-  return {.status = OperationStatus::timeout, .process = std::nullopt};
+  EventReader reader(connection);
+  const auto deadline = std::chrono::steady_clock::now() + options.timeout;
+  const auto expected = options.process.value_or(ProcessExpectation{});
+  while (true) {
+    const auto line = reader.next(deadline);
+    if (!line.has_value()) {
+      close_descriptor(connection);
+      return {.status = line.error() == EventReadError::timeout ? OperationStatus::timeout
+                                                                : OperationStatus::unavailable,
+              .process = std::nullopt};
+    }
+    const auto parsed = api::parse_json(*line);
+    if (!parsed.value.has_value()) {
+      close_descriptor(connection);
+      return {.status = OperationStatus::failed, .process = std::nullopt};
+    }
+    const auto event = api::json_string(*parsed.value, "event");
+    if (event == std::optional<std::string_view>{"pane.closed"}) {
+      close_descriptor(connection);
+      return {.status = OperationStatus::missing, .process = std::nullopt};
+    }
+    if (!waits_for_process) {
+      const auto text = api::json_string(*parsed.value, "text");
+      if (text.has_value() && text->contains(options.contains)) {
+        close_descriptor(connection);
+        return {.status = OperationStatus::applied, .process = std::nullopt};
+      }
+      continue;
+    }
+    const auto actual = process_from_event(*parsed.value);
+    if (!actual.has_value() || actual->process == ProcessState::running) {
+      continue;
+    }
+    close_descriptor(connection);
+    return {.status = matches_expectation(*actual, expected) ? OperationStatus::applied
+                                                             : OperationStatus::unexpected_exit,
+            .process = actual};
+  }
+}
+
+auto events(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
+            const std::optional<PaneId> pane, const bool screen) -> int {
+  const auto request = event_request(session, pane, screen);
+  if (!request.has_value()) {
+    return 2;
+  }
+  int connection = open_server_connection(endpoint);
+  if (connection < 0 ||
+      !send_all(connection, std::as_bytes(std::span(request->data(), request->size())))) {
+    close_descriptor(connection);
+    return 1;
+  }
+  std::array<std::byte, std::size_t{16} * 1'024U> buffer{};
+  while (true) {
+    const auto received = ::recv(connection, buffer.data(), buffer.size(), 0);
+    if (received > 0) {
+      if (!write_all(STDOUT_FILENO, std::span(buffer).first(static_cast<std::size_t>(received)))) {
+        close_descriptor(connection);
+        return 1;
+      }
+      continue;
+    }
+    if (received < 0 && errno == EINTR) {
+      continue;
+    }
+    close_descriptor(connection);
+    return received == 0 ? 0 : 1;
+  }
 }
 
 auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_view session,
@@ -1189,12 +1577,21 @@ auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_vi
   if (!valid_session_name(session) || !valid_session_name(new_name)) {
     return OperationStatus::failed;
   }
-  std::array<std::byte, 1U + protocol::session_name_bytes_max> fields{};
-  fields.front() = std::byte{static_cast<std::uint8_t>(new_name.size())};
-  std::ranges::copy(std::as_bytes(std::span(new_name.data(), new_name.size())),
-                    std::span(fields).subspan(1).begin());
-  return capture_rename_request(endpoint, protocol::ControlCommand::rename_session, session,
-                                std::span(fields).first(1U + new_name.size()));
+  try {
+    std::string request = R"({"schema":"lemma.action/v1","action":"session.rename")";
+    if (!append_public_session_selector(request, session)) {
+      return OperationStatus::failed;
+    }
+    request += R"(,"name":)";
+    if (!api::append_json_string(request, new_name)) {
+      return OperationStatus::failed;
+    }
+    request += "}";
+    const auto result = invoke_public_action(endpoint, std::move(request));
+    return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
+  } catch (...) {
+    return OperationStatus::failed;
+  }
 }
 
 auto rename_session(const RuntimeEndpoint& endpoint, const std::string_view session,
@@ -1212,13 +1609,21 @@ auto rename_tab_status(const RuntimeEndpoint& endpoint, const std::string_view s
       one_based_position > protocol::tab_slots_max || !valid_tab_title(title)) {
     return OperationStatus::failed;
   }
-  std::array<std::byte, 2U + protocol::tab_title_bytes_max> fields{};
-  fields.front() = std::byte{static_cast<std::uint8_t>(one_based_position - 1U)};
-  std::span(fields).subspan(1, 1).front() = std::byte{static_cast<std::uint8_t>(title.size())};
-  std::ranges::copy(std::as_bytes(std::span(title.data(), title.size())),
-                    std::span(fields).subspan(2).begin());
-  return capture_rename_request(endpoint, protocol::ControlCommand::rename_tab, session,
-                                std::span(fields).first(2U + title.size()));
+  try {
+    std::string request = R"({"schema":"lemma.action/v1","action":"tab.rename")";
+    if (!append_public_session_selector(request, session)) {
+      return OperationStatus::failed;
+    }
+    request += R"(,"tab":{"position":)" + std::to_string(one_based_position) + R"(},"title":)";
+    if (!api::append_json_string(request, title)) {
+      return OperationStatus::failed;
+    }
+    request += "}";
+    const auto result = invoke_public_action(endpoint, std::move(request));
+    return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
+  } catch (...) {
+    return OperationStatus::failed;
+  }
 }
 
 auto rename_tab(const RuntimeEndpoint& endpoint, const std::string_view session,
@@ -1233,9 +1638,18 @@ auto rename_tab(const RuntimeEndpoint& endpoint, const std::string_view session,
 }
 
 auto kill(const RuntimeEndpoint& endpoint, const std::string_view session) -> int {
-  return validate_session(session)
-             ? run_control_command(endpoint, protocol::ControlCommand::kill, session, true)
-             : 1;
+  if (!validate_session(session)) {
+    return 1;
+  }
+  const auto status = perform_action(endpoint, session, SemanticAction::session_kill, {});
+  if (status == OperationStatus::applied || status == OperationStatus::no_effect) {
+    const auto message = "lemma session \"" + std::string(session) + "\" stopped\n";
+    return write_text(STDOUT_FILENO, message) ? 0 : 1;
+  }
+  static_cast<void>(write_text(STDERR_FILENO, status == OperationStatus::missing
+                                                  ? "no lemma session\n"
+                                                  : "lemma operation failed\n"));
+  return 1;
 }
 
 auto kill_all(const RuntimeEndpoint& endpoint) -> int {

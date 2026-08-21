@@ -36,11 +36,11 @@ A space, workspace, project, worktree, task, or agent run is not inherently a ke
 - Lemma must not call detach continuity “persistence across daemon failure.”
 - Endpoint ownership and permissions prevent another local user from controlling the daemon.
 
-Plain `lemma` creates a fresh numerically named session and attaches. Session control is top-level: `lemma new` does the same with an optional explicit name, `lemma start` creates detached, `lemma attach` enters an existing session, and `lemma list` (`lemma ls`)/`inspect`/`rename`/`kill` provide the remaining lifecycle controls. Explicit creation is strict and fails on a duplicate name. When an attach target is omitted, Lemma selects the most recently active detached session. Tab and pane actions live under the singular `tab` and `pane` namespaces; a redundant `session` namespace is not part of the public CLI.
+Plain `lemma` creates a fresh numerically named session and attaches. Common Session lifecycle commands remain noun-free: `lemma new [NAME]`, `lemma start [NAME]`, `lemma attach [NAME]`, `lemma list` (also `lemma ls`), `lemma inspect NAME`, `lemma rename OLD NEW`, and `lemma kill NAME`. Omitted `attach` selects the most recently active detached session; explicit creation names are strict and duplicates fail. The complete Session, Tab, and Pane operation set lives symmetrically under `lemma action`. There are no public `lemma tab ...` or `lemma pane ...` command families.
 
 ## Launch context
 
-Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly. `lemma new` and `lemma start` may launch an exact bounded argv after `--`; no command launches the account login shell. The argv is executed directly without shell-string interpretation.
+Session creation captures a bounded, validated absolute working directory and environment snapshot. Attaching later does not mutate that launch context implicitly. `lemma start`, `lemma new`, and `lemma action session start` may launch an exact bounded argv after `--`; no command launches the account login shell. The argv is executed directly without shell-string interpretation.
 
 A new tab or split should use a documented deterministic cwd rule. Safely observed focused-pane cwd may be preferred; the session creation directory is the fallback. Missing or inaccessible directories produce an observable fallback rather than undefined process behavior.
 
@@ -50,13 +50,32 @@ The account login shell is the default process. Arbitrary commands use the same 
 
 Keyboard, mouse, CLI, Lua, and agents converge on typed commands, stable targets, typed results, and the same policy checks.
 
+```text
+Public CLI                   Machine API
+──────────                   ───────────
+lemma new/start/...          public per-user Unix endpoint
+lemma action ...                   ├── CONTROL: Action / Proc RPC
+lemma proc ...                     └── OBSERVE: Events
+lemma events ...
+lemma api schema
+```
+
+An Action is one fundamental immediate mutation or point-in-time query. Proc composes Actions and
+adds only sequencing, backward-only typed references, and whole-plan validation. Events are
+immutable asynchronous observations and never another mutation path. `lemma action` and `lemma
+proc` are human- and agent-friendly shell frontends; persistent agents normally use the same
+Action/Proc RPC directly. See
+[`control-api.md`](control-api.md).
+
 - Every core workflow is keyboard-complete.
 - Mouse is a first-class spatial input method, not accidental raw-byte forwarding.
 - Equivalent keyboard and mouse actions dispatch the same semantic command.
 - Application input is distinct from mux commands and is encoded from canonical terminal modes.
 - Paste is a bounded opaque input event and cannot become prefix commands.
-- Human-readable one-shot CLI output remains the default; machine surfaces use explicit typed/machine-readable contracts.
-- A bounded procedure is an ordered, non-atomic envelope over ordinary actions. Its complete schema and backward-only typed references are validated before side effects. It reports structured queries and one typed result per executed action, can require an exact process exit code or signal, and has explicit stop/continue runtime-failure behavior.
+- `lemma action` and `lemma proc` print canonical structured results suitable for both shell users and automation.
+- A bounded procedure is an ordered, non-atomic envelope over ordinary Actions. Its complete schema and backward-only typed references are validated before side effects. It reports one canonical typed result per Action and has explicit stop/continue runtime-failure behavior.
+- `lemma api schema` summarizes the contract for people; `lemma api schema --json` exposes the binary's complete machine-readable JSON Schema 2020-12 contract without contacting the daemon.
+- OBSERVE subscriptions begin with an authoritative snapshot and then emit bounded NDJSON updates; slow observers cannot block PTY progress.
 - Every supported human mutation has an automation equivalent or a documented exclusion.
 
 The default key vocabulary follows familiar tmux conventions, including `C-b` as prefix, while configuration may replace bindings without creating another mutation path. Prefixes and transient interaction contexts are compiled input policy rather than mux state: direct chords, one-shot prefix maps, and persistent contexts dispatch the same typed commands.

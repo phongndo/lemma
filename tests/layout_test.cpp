@@ -209,6 +209,25 @@ TEST(PaneLayoutTest, ResizeSelectsNearestMatchingStructuralAncestor) {
   EXPECT_EQ(target_after.columns, target_before.columns + 1U);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(PaneLayoutTest, BatchedResizeMatchesRepeatedCellResizes) {
+  PaneLayout batched(pane(0));
+  ASSERT_TRUE(batched.split(pane(0), pane(1), SplitAxis::left_right));
+  auto repeated = batched;
+  constexpr PaneRectangle viewport{.columns = 100, .rows = 24};
+
+  ASSERT_EQ(batched.resize(pane(0), ResizeDirection::right, viewport, 10),
+            LayoutResizeStatus::applied);
+  for (std::size_t step = 0; step < 10; ++step) {
+    ASSERT_EQ(repeated.resize(pane(0), ResizeDirection::right, viewport),
+              LayoutResizeStatus::applied);
+  }
+
+  EXPECT_EQ(batched, repeated);
+  EXPECT_EQ(rectangle(batched, pane(0), viewport).columns,
+            rectangle(repeated, pane(0), viewport).columns);
+}
+
 TEST(PaneLayoutTest, RemovePromotesSiblingWithoutInvalidatingRetainedTopology) {
   PaneLayout layout(pane(0));
   ASSERT_TRUE(layout.split(pane(0), pane(1), SplitAxis::left_right));

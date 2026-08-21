@@ -1,10 +1,12 @@
 #include "platform/pty.hpp"
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -24,6 +26,45 @@
 
 namespace lemma::platform {
 namespace {
+
+// GoogleTest assertions and explicit PTY child setup inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(PlatformPtyTest, LaunchWorkingDirectoryOverridesStalePwdEnvironment) {
+  std::string environment{"PWD=/stale"};
+  environment.push_back('\0');
+  std::string command{"/usr/bin/printenv"};
+  command.push_back('\0');
+  command += "PWD";
+  command.push_back('\0');
+  int descriptor = -1;
+
+  const auto child = spawn_process(
+      descriptor, "/", std::as_bytes(std::span(environment.data(), environment.size())),
+      EnvironmentMode::replace, std::as_bytes(std::span(command.data(), command.size())));
+  ASSERT_GT(child, 0);
+  ASSERT_GE(descriptor, 0);
+
+  std::string output;
+  std::array<char, 64> buffer{};
+  while (true) {
+    const auto received = ::read(descriptor, buffer.data(), buffer.size());
+    if (received > 0) {
+      output.append(buffer.data(), static_cast<std::size_t>(received));
+      continue;
+    }
+    if (received < 0 && errno == EINTR) {
+      continue;
+    }
+    break;
+  }
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  static_cast<void>(::close(descriptor));
+
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+  EXPECT_TRUE(output.starts_with("/\r\n")) << output;
+}
 
 // GoogleTest assertions and explicit PTY child setup inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

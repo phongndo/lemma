@@ -847,7 +847,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
   int connection = daemon::open_server_connection(endpoint);
   if (connection < 0) {
     static_cast<void>(
-        write_text_interruptibly(STDERR_FILENO, "no lemma daemon; run `lemma new`\n"));
+        write_text_interruptibly(STDERR_FILENO, "no lemma daemon; run `lemma` first\n"));
     return 1;
   }
   SignalWakeup termination_wakeup(SignalWakeupRole::termination);

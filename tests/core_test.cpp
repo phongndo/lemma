@@ -89,22 +89,22 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_EQ(std::get<CommandCoordinate>(capture.command.payload).value, 7U);
 }
 
-TEST(CommandDispatcherTest, DispatchesTypedOneCellResizeCommand) {
+TEST(CommandDispatcherTest, DispatchesTypedOneCellAndBatchedResizeCommands) {
   CommandCapture capture;
   const CommandDispatcher dispatcher(&capture_command, &capture);
 
-  const auto result =
+  const auto one_cell =
       dispatcher.dispatch({.kind = CommandKind::resize_left, .origin = CommandOrigin::keymap});
+  const auto batched =
+      dispatcher.dispatch({.kind = CommandKind::resize_right,
+                           .origin = CommandOrigin::cli,
+                           .payload = CommandCoordinate{.value = command_resize_amount_max}});
 
-  EXPECT_EQ(result.status, CommandStatus::applied);
-  EXPECT_EQ(capture.calls, 1U);
-  EXPECT_EQ(capture.command.kind, CommandKind::resize_left);
-  EXPECT_EQ(dispatcher
-                .dispatch({.kind = CommandKind::resize_right,
-                           .origin = CommandOrigin::keymap,
-                           .payload = CommandCoordinate{.value = 1}})
-                .status,
-            CommandStatus::invalid_command);
+  EXPECT_EQ(one_cell.status, CommandStatus::applied);
+  EXPECT_EQ(batched.status, CommandStatus::applied);
+  EXPECT_EQ(capture.calls, 2U);
+  EXPECT_EQ(capture.command.kind, CommandKind::resize_right);
+  EXPECT_EQ(std::get<CommandCoordinate>(capture.command.payload).value, command_resize_amount_max);
 }
 
 TEST(CommandDispatcherTest, DispatchesTypedAbsoluteZoomCommand) {
@@ -187,6 +187,19 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                 .status,
             CommandStatus::invalid_command);
   EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::resize_left,
+                           .origin = CommandOrigin::client,
+                           .payload = CommandCoordinate{.value = 0}})
+                .status,
+            CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
+                .dispatch({.kind = CommandKind::resize_right,
+                           .origin = CommandOrigin::client,
+                           .payload = CommandCoordinate{.value = static_cast<std::uint16_t>(
+                                                            command_resize_amount_max + 1U)}})
+                .status,
+            CommandStatus::invalid_command);
+  EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::close_pane,
                            .origin = CommandOrigin::client,
                            .target = {.session = {},
@@ -244,7 +257,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
                 .status,
             CommandStatus::invalid_target);
   EXPECT_EQ(capture.calls, 0U);
-  EXPECT_EQ(capture.observations, 8U);
+  EXPECT_EQ(capture.observations, 10U);
 
   const CommandDispatcher missing_executor(nullptr, nullptr);
   EXPECT_EQ(missing_executor

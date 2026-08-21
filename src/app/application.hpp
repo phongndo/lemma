@@ -10,6 +10,10 @@ namespace lemma::app {
 [[nodiscard]] auto run(const daemon::RuntimeEndpoint& endpoint, int argument_count,
                        char** argument_values) -> int;
 
+// Test-only harness for characterizing removed tab/pane commands and private development commands.
+[[nodiscard]] auto run_legacy(const daemon::RuntimeEndpoint& endpoint, int argument_count,
+                              char** argument_values) -> int;
+
 } // namespace lemma::app
 
 #endif // LEMMA_APP_APPLICATION_HPP

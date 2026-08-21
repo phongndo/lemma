@@ -1,6 +1,7 @@
 #ifndef LEMMA_DAEMON_SERVER_HPP
 #define LEMMA_DAEMON_SERVER_HPP
 
+#include "api/action.hpp"
 #include "lemma/id.hpp"
 
 #include <chrono>
@@ -49,6 +50,11 @@ struct ServeOptions final {
 // Connects to the selected daemon. Ownership of the returned descriptor transfers to the caller;
 // -1 means the daemon is unavailable.
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
+// Encodes one concrete Action onto the public lock-step control connection and prints its JSON
+// result. start_daemon is valid only for session.start bootstrap.
+[[nodiscard]] auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action,
+                              bool start_daemon = false) -> int;
+[[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, std::string_view document) -> int;
 
 struct LaunchOptions final {
   std::string_view working_directory;
@@ -192,6 +198,9 @@ struct PaneWaitResult final {
                                PaneId pane) -> PaneStatus;
 [[nodiscard]] auto wait_pane(const RuntimeEndpoint& endpoint, std::string_view session, PaneId pane,
                              PaneWaitOptions options) -> PaneWaitResult;
+// Streams NDJSON observations until the daemon closes the subscription or the output fails.
+[[nodiscard]] auto events(const RuntimeEndpoint& endpoint, std::optional<std::string_view> session,
+                          std::optional<PaneId> pane, bool screen) -> int;
 [[nodiscard]] auto rename_session_status(const RuntimeEndpoint& endpoint, std::string_view session,
                                          std::string_view new_name) -> OperationStatus;
 [[nodiscard]] auto rename_session(const RuntimeEndpoint& endpoint, std::string_view session,

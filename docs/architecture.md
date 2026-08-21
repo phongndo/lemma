@@ -101,7 +101,20 @@ Physical input that is not a mux command becomes typed application input. The da
 
 Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, and no-effect commands are explicit results. External failure never authorizes partial semantic mutation. Internal invariant failure is fail-fast.
 
-A CLI procedure is a bounded frontend sequence, not a Core transaction or workflow object. Before the first daemon request, the CLI validates the complete versioned document, action schemas, selectors, bounds, and backward-only typed result references. It then submits each ordinary action through the same control boundary as a one-shot command. Process and PTY effects are non-rollbackable, so procedure stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic action still commits through one Core transition; frontend sequencing cannot split one action into multiple partial mutations.
+The public machine boundary has two connection roles on the one per-user Unix endpoint:
+
+```text
+CONTROL: concrete Action -> typed Action result
+OBSERVE: subscription -> initial snapshot -> immutable Events
+```
+
+CLI grammar, Proc references, and JSON are frontend/protocol representations. They do not enter
+Core. Runtime owns each public descriptor, incremental decoder, retained output, deadline, and
+subscription filter. An observer is not an Attachment and cannot mutate state. Public Action,
+legacy control, keyboard, mouse, and extensions must converge on the same typed semantic transition
+rather than gaining transport-specific policy. See [`control-api.md`](control-api.md).
+
+A Proc is a bounded CONTROL request, not a Core transaction or workflow object. Before its first Action executes, the daemon validates the complete versioned document, Action schemas, selectors, bounds, and backward-only typed result references. It resolves each reference to a concrete Action and submits it through the same executor as one-Action RPC and `lemma action`. Process and PTY effects are non-rollbackable, so Proc stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic Action still commits through one Core transition; sequencing cannot split one Action into multiple partial mutations.
 
 ## Dependency direction
 
@@ -137,8 +150,9 @@ The current CMake target graph is transitional. Existing links do not define the
 12. Workflow concepts such as projects, workspaces, and agent runs remain outside the kernel unless correctness truly requires kernel ownership.
 13. Required input and terminal-response ordering is explicit and preserved.
 14. Visible state can be reconstructed from daemon authority without an unbounded event, PTY-byte, or render log.
-15. Capacity exhaustion and dependency failure degrade or reject boundedly; they never corrupt authority.
-16. Published input-policy generations contain only resolved, unambiguous bindings; context stacks are bounded, Attachment-scoped, and cannot outlive their generation.
+15. Action is the semantic primitive, Proc composes Actions, and Events only observe post-state.
+16. Capacity exhaustion and dependency failure degrade or reject boundedly; they never corrupt authority.
+17. Published input-policy generations contain only resolved, unambiguous bindings; context stacks are bounded, Attachment-scoped, and cannot outlive their generation.
 
 ## Runtime progress
 

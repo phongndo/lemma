@@ -1,22 +1,28 @@
 #include "app/application.hpp"
 
+#include "api/action.hpp"
+#include "api/schema.hpp"
 #include "app/procedure.hpp"
 #include "client/attached_client.hpp"
 #include "daemon/server.hpp"
+#include "lemma/command.hpp"
 #include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "lemma/version.hpp"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -111,86 +117,105 @@ template <typename Integer>
 
 [[nodiscard]] auto print_usage(std::FILE* const stream) noexcept -> int {
   constexpr std::string_view usage =
-      "Usage: lemma [command [arguments...]]\n\n"
-      "Commands:\n"
-      "  new [NAME] [--hold] [-c DIR] [-- COMMAND...]\n"
-      "  start [NAME] [--hold] [-c DIR] [-- COMMAND...]\n"
-      "  attach [NAME]\n"
-      "  list | ls | inspect NAME | rename OLD NEW | kill NAME\n"
-      "  tab list SESSION\n"
-      "  tab new SESSION [--title TITLE] [--hold] [-c DIR] [-- COMMAND...]\n"
-      "  tab select SESSION TAB | move SESSION TAB POSITION\n"
-      "  tab rename SESSION TAB [TITLE] | kill SESSION TAB\n"
-      "  pane list SESSION\n"
-      "  pane split SESSION PANE (--right|--down) [--hold] [-c DIR] [-- COMMAND...]\n"
-      "  pane focus SESSION PANE | swap SESSION PANE OTHER\n"
-      "  pane resize SESSION PANE (left|right|up|down) CELLS\n"
-      "  pane zoom SESSION PANE (--on|--off) | kill SESSION PANE\n"
-      "  pane send SESSION PANE --text TEXT\n"
-      "  pane capture SESSION PANE [--lines N]\n"
-      "  pane wait SESSION PANE (--contains TEXT|--exit|--exit-code CODE|--signal SIGNAL)\n"
-      "                         [--timeout DURATION]\n"
-      "  proc FILE|-            execute a bounded action procedure\n"
-      "  skill                  print the Lemma agent skill\n"
-      "  help                   show this help\n"
-      "  version                show build and protocol version\n\n"
-      "Without a command, Lemma creates a fresh numbered session and attaches.\n";
+      "Lemma terminal multiplexer\n\n"
+      "Usage:\n"
+      "  lemma                                  Create a numbered session and attach\n"
+      "  lemma COMMAND [ARGUMENTS...]\n\n"
+      "Sessions:\n"
+      "  new [NAME] [OPTIONS]                   Create a session and attach\n"
+      "  start [NAME] [OPTIONS]                 Create a detached session\n"
+      "  attach [NAME]                          Attach to a session\n"
+      "  list, ls                               List sessions\n"
+      "  inspect NAME                           Inspect a session\n"
+      "  rename OLD NEW                         Rename a session\n"
+      "  kill NAME                              Kill a session\n\n"
+      "Automation:\n"
+      "  action DOMAIN OP [ARGUMENTS...]        Execute one structured Action\n"
+      "  proc FILE|-                            Execute a bounded Action procedure\n"
+      "  events [OPTIONS]                       Stream machine-readable observations\n\n"
+      "Reference:\n"
+      "  api schema [--json]                    Inspect the public API contract\n"
+      "  skill                                  Print the Lemma agent skill\n"
+      "  version                                Show build and protocol versions\n"
+      "  help                                   Show this help\n\n"
+      "Creation options:\n"
+      "  --cwd DIR                              Set the initial working directory\n"
+      "  --hold                                 Keep the pane after its process exits\n"
+      "  -- COMMAND [ARGUMENTS...]              Execute directly, without a shell\n\n"
+      "Action domains: session, tab, pane\n"
+      "Action targets: --session NAME|ID, --tab ID|POSITION, --pane ID\n"
+      "Inside Lemma, omitted Action targets use the current pane context.\n\n"
+      "Event options: --session NAME|ID, --pane ID, --screen\n";
   return write_fragment(stream, usage) ? 0 : 1;
 }
 
 [[nodiscard]] auto print_version() noexcept -> int {
   return write_fragment(stdout, "lemma ") && write_fragment(stdout, lemma::version) &&
-                 write_fragment(stdout, " (private protocol ") &&
+                 write_fragment(stdout, " (api ") && write_fragment(stdout, api::action_schema) &&
+                 write_fragment(stdout, ", private protocol ") &&
                  write_fragment(stdout, lemma::private_protocol_version) &&
                  write_fragment(stdout, ")\n")
              ? 0
              : 1;
 }
 
+[[nodiscard]] auto print_api_schema_summary() noexcept -> int {
+  constexpr std::string_view summary =
+      "Lemma Control API\n"
+      "  Action  lemma.action/v1 -> lemma.action-result/v1\n"
+      "  Proc    lemma.proc/v1 -> lemma.proc-result/v1\n"
+      "  Events  lemma.events/v1 -> lemma.event/v1\n\n"
+      "Actions\n"
+      "  session  start list inspect rename kill\n"
+      "  tab      new list select move rename kill\n"
+      "  pane     split list focus swap resize zoom send capture kill\n\n"
+      "Use `lemma api schema --json` for JSON Schema 2020-12.\n";
+  return write_fragment(stdout, summary) ? 0 : 1;
+}
+
 [[nodiscard]] auto print_skill() noexcept -> int {
   constexpr std::string_view skill = R"SKILL(---
 name: lemma
-description: Operate and automate Lemma sessions, tabs, panes, processes, input, waits, and captures.
+description: Operate Lemma through Actions, bounded Procedures, and Events.
 ---
 
 # Lemma
 
-Use explicit Lemma CLI commands; do not emulate mux commands by sending prefix keys.
+Use Actions; do not emulate mux commands by sending prefix keys.
 
 ```sh
-lemma new [NAME] [--hold] [-c DIR] [-- COMMAND...]
-lemma start [NAME] [--hold] [-c DIR] [-- COMMAND...]
+lemma                              # create a numbered session and attach
+lemma new [NAME]                    # create and attach
+lemma start [NAME]                  # create detached
 lemma attach [NAME]
-lemma list  # alias: lemma ls
-lemma rename OLD NEW
-lemma kill NAME
-lemma tab list SESSION
-lemma tab new SESSION [--hold] [-- COMMAND...]
-lemma pane list SESSION
-lemma pane split SESSION PANE --right|--down [--hold] [-- COMMAND...]
-lemma pane send SESSION PANE --text TEXT
-lemma pane wait SESSION PANE --contains TEXT
-lemma pane wait SESSION PANE --exit-code CODE
-lemma pane capture SESSION PANE
+lemma list                          # list sessions (`lemma ls` also works)
+lemma inspect NAME                  # inspect a session
+lemma rename OLD NEW                # rename a session
+lemma kill NAME                     # kill a session
+lemma action tab new --session work --title tests
+lemma action pane split --session work --pane 0:1 --right
+lemma action pane capture --session work --pane 0:1
 lemma proc FILE|-
+lemma events [--session SESSION] [--pane PANE] [--screen]
+lemma api schema --json
 ```
 
-Session controls are top-level; tab and pane commands use explicit namespaces. Every command is a
-one-shot action. `new` creates and attaches; `start` creates detached. Omit `NAME` to receive a
-numeric session name. Arguments after `--` are
-executed directly without a shell. `--hold` retains an exited pane for status and capture. Use
-`proc` to execute a strictly prevalidated ordered JSON procedure containing the same actions. JSON
-action names remain resource-qualified (`session.*`, `tab.*`, and `pane.*`) even though CLI session controls are
-top-level. Procedure creation results can be referenced by a later typed selector:
+Inside a Lemma pane, `lemma action` may omit Session, Tab, and Pane targets; the CLI resolves the
+current stable IDs from the pane environment before sending the concrete Action. Explicit targets
+operate on other resources. Arguments after `--` are executed directly without a shell.
+
+Persistent agents should normally use the owner-only Unix control connection rather than spawning
+the CLI. It accepts the same `lemma.action/v1` Actions and `lemma.proc/v1` Procedures as lock-step
+NDJSON RPC records. A separate `lemma.events/v1` subscription streams observations. `lemma api
+schema --json` prints the exact version-matched contract.
+
+Proc adds only bounded sequencing, backward-only typed references, and whole-document validation:
 
 ```json
 {"schema":"lemma.proc/v1","actions":[
   {"id":"qa","action":"session.start","name":"qa"},
-  {"id":"tests","action":"tab.new","session":{"result":"qa"},"hold":true,
-   "argv":["just","test"]},
-  {"action":"pane.wait","pane":{"result":"tests"},"exit":{"code":0},
-   "timeout_ms":120000},
-  {"action":"pane.capture","pane":{"result":"tests"},"lines":100},
+  {"id":"tests","action":"tab.new","session":{"result":"qa"},"title":"tests"},
+  {"action":"pane.zoom","pane":{"result":"tests"},"enabled":true},
   {"action":"session.kill","session":{"result":"qa"}}
 ]}
 ```
@@ -335,6 +360,421 @@ template <typename Id>
   return parsed;
 }
 
+struct ActionCliArguments final {
+  std::vector<char*> values;
+  std::optional<api::SessionSelector> session;
+  std::optional<api::TabSelector> tab;
+  std::optional<api::PaneSelector> pane;
+  bool valid{true};
+};
+
+[[nodiscard]] auto session_selector(const std::string_view value)
+    -> std::optional<api::SessionSelector> {
+  if (const auto id = parse_id<SessionId>(value); id.has_value()) {
+    return api::SessionSelector{.id = *id, .name = {}};
+  }
+  return SessionNameValue::create(value).has_value()
+             ? std::optional{api::SessionSelector{.id = {}, .name = std::string(value)}}
+             : std::nullopt;
+}
+
+[[nodiscard]] auto tab_selector(const std::string_view value) -> std::optional<api::TabSelector> {
+  if (const auto id = parse_id<TabId>(value); id.has_value()) {
+    return api::TabSelector{.id = *id, .position = 0};
+  }
+  const auto position = parse_integer<std::uint16_t>(value);
+  return position.has_value() && *position > 0 && *position <= command_tab_slots_max
+             ? std::optional{api::TabSelector{.id = {}, .position = *position}}
+             : std::nullopt;
+}
+
+[[nodiscard]] auto pane_selector(const std::string_view value) -> std::optional<api::PaneSelector> {
+  const auto id = parse_id<PaneId>(value);
+  return id.has_value() ? std::optional{api::PaneSelector{.id = *id}} : std::nullopt;
+}
+
+[[nodiscard]] auto environment_value(const char* const name) noexcept
+    -> std::optional<std::string_view> {
+  const char* const value = std::getenv(name);
+  return value == nullptr || *value == '\0' ? std::nullopt : std::optional{std::string_view(value)};
+}
+
+[[nodiscard]] auto current_session_selector() -> std::optional<api::SessionSelector> {
+  if (const auto id = environment_value("LEMMA_SESSION_ID"); id.has_value()) {
+    if (const auto parsed = session_selector(*id); parsed.has_value()) {
+      return parsed;
+    }
+  }
+  const auto name = environment_value("LEMMA_SESSION_NAME");
+  return name.has_value() ? session_selector(*name) : std::nullopt;
+}
+
+[[nodiscard]] auto current_tab_selector() -> std::optional<api::TabSelector> {
+  const auto value = environment_value("LEMMA_TAB_ID");
+  return value.has_value() ? tab_selector(*value) : std::nullopt;
+}
+
+[[nodiscard]] auto current_pane_selector() -> std::optional<api::PaneSelector> {
+  const auto value = environment_value("LEMMA_PANE_ID");
+  return value.has_value() ? pane_selector(*value) : std::nullopt;
+}
+
+// Target options are frontend conveniences. They are removed before operation-specific parsing so
+// the Action crossing the socket contains only concrete selectors.
+[[nodiscard]] auto parse_action_cli_arguments(const std::span<char*> arguments)
+    -> ActionCliArguments {
+  ActionCliArguments parsed;
+  parsed.values.reserve(arguments.size());
+  bool launch_arguments = false;
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    char* const raw = arguments.subspan(index, 1).front();
+    const std::string_view argument(raw);
+    if (launch_arguments) {
+      parsed.values.push_back(raw);
+      continue;
+    }
+    if (argument == "--") {
+      launch_arguments = true;
+      parsed.values.push_back(raw);
+    } else if (argument == "--session" && !parsed.session.has_value() &&
+               index + 1U < arguments.size()) {
+      parsed.session = session_selector(arguments.subspan(++index, 1).front());
+      parsed.valid = parsed.valid && parsed.session.has_value();
+    } else if (argument == "--tab" && !parsed.tab.has_value() && index + 1U < arguments.size()) {
+      parsed.tab = tab_selector(arguments.subspan(++index, 1).front());
+      parsed.valid = parsed.valid && parsed.tab.has_value();
+    } else if (argument == "--pane" && !parsed.pane.has_value() && index + 1U < arguments.size()) {
+      parsed.pane = pane_selector(arguments.subspan(++index, 1).front());
+      parsed.valid = parsed.valid && parsed.pane.has_value();
+    } else {
+      parsed.values.push_back(raw);
+    }
+  }
+  return parsed;
+}
+
+[[nodiscard]] auto concrete_session(ActionCliArguments& arguments)
+    -> std::optional<api::SessionSelector> {
+  return arguments.session.has_value() ? arguments.session : current_session_selector();
+}
+
+[[nodiscard]] auto concrete_tab(ActionCliArguments& arguments) -> std::optional<api::TabSelector> {
+  return arguments.tab.has_value() ? arguments.tab : current_tab_selector();
+}
+
+[[nodiscard]] auto concrete_pane(ActionCliArguments& arguments)
+    -> std::optional<api::PaneSelector> {
+  return arguments.pane.has_value() ? arguments.pane : current_pane_selector();
+}
+
+[[nodiscard]] auto run_concrete_action(const daemon::RuntimeEndpoint& endpoint,
+                                       const api::Action& action) -> int {
+  return daemon::run_action(endpoint, action, action.kind == api::ActionKind::session_start);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_session_action(const daemon::RuntimeEndpoint& endpoint,
+                                      const std::string_view operation,
+                                      ActionCliArguments arguments) -> int {
+  if (!arguments.valid || arguments.tab.has_value() || arguments.pane.has_value()) {
+    return invalid_arguments("action session");
+  }
+  api::Action action;
+  if (operation == "list" && arguments.values.empty() && !arguments.session.has_value()) {
+    action.kind = api::ActionKind::session_list;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "start") {
+    const auto parsed = parse_creation(arguments.values);
+    if (!parsed.has_value() || arguments.session.has_value() || arguments.tab.has_value() ||
+        arguments.pane.has_value()) {
+      return invalid_arguments("action session start");
+    }
+    action.kind = api::ActionKind::session_start;
+    action.name = parsed->name.has_value() ? std::string(*parsed->name) : std::string{};
+    action.working_directory = parsed->working_directory;
+    action.hold = parsed->hold;
+    for (const auto value : parsed->command) {
+      action.arguments.emplace_back(value);
+    }
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "inspect" || operation == "kill") {
+    if (arguments.values.size() > 1U) {
+      return invalid_arguments("action session");
+    }
+    auto target = arguments.values.empty() ? concrete_session(arguments)
+                                           : session_selector(arguments.values.front());
+    if (!target.has_value()) {
+      return invalid_arguments("action session");
+    }
+    action.kind =
+        operation == "inspect" ? api::ActionKind::session_inspect : api::ActionKind::session_kill;
+    action.session = std::move(*target);
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "rename") {
+    std::optional<api::SessionSelector> target;
+    std::string_view name;
+    if (arguments.values.size() == 2U) {
+      target = session_selector(arguments.values.front());
+      name = arguments.values.back();
+    } else if (arguments.values.size() == 1U) {
+      target = concrete_session(arguments);
+      name = arguments.values.front();
+    }
+    if (!target.has_value() || !SessionNameValue::create(name).has_value()) {
+      return invalid_arguments("action session rename");
+    }
+    action.kind = api::ActionKind::session_rename;
+    action.session = std::move(*target);
+    action.name = name;
+    return run_concrete_action(endpoint, action);
+  }
+  return invalid_arguments("action session");
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_tab_action(const daemon::RuntimeEndpoint& endpoint,
+                                  const std::string_view operation, ActionCliArguments arguments)
+    -> int {
+  if (!arguments.valid || arguments.pane.has_value()) {
+    return invalid_arguments("action tab");
+  }
+  auto session = concrete_session(arguments);
+  if (!session.has_value()) {
+    return invalid_arguments("action tab; provide --session outside Lemma");
+  }
+  api::Action action;
+  action.session = std::move(*session);
+  if (operation == "list" && arguments.values.empty() && !arguments.tab.has_value()) {
+    action.kind = api::ActionKind::tab_list;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "new") {
+    const auto parsed = parse_surface(arguments.values, true);
+    if (!parsed.has_value() || arguments.tab.has_value()) {
+      return invalid_arguments("action tab new");
+    }
+    action.kind = api::ActionKind::tab_new;
+    action.title = parsed->title;
+    action.working_directory = parsed->working_directory;
+    action.hold = parsed->hold;
+    for (const auto value : parsed->command) {
+      action.arguments.emplace_back(value);
+    }
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "select" || operation == "kill") {
+    if (arguments.values.size() > 1U) {
+      return invalid_arguments("action tab");
+    }
+    auto target =
+        arguments.values.empty() ? concrete_tab(arguments) : tab_selector(arguments.values.front());
+    if (!target.has_value()) {
+      return invalid_arguments("action tab");
+    }
+    action.kind = operation == "select" ? api::ActionKind::tab_select : api::ActionKind::tab_kill;
+    action.tab = *target;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "move") {
+    std::optional<api::TabSelector> target;
+    std::optional<std::uint16_t> destination;
+    if (arguments.values.size() == 2U) {
+      target = tab_selector(arguments.values.front());
+      destination = parse_integer<std::uint16_t>(arguments.values.back());
+    } else if (arguments.values.size() == 1U) {
+      target = concrete_tab(arguments);
+      destination = parse_integer<std::uint16_t>(arguments.values.front());
+    }
+    if (!target.has_value() || !destination.has_value() || *destination == 0 ||
+        *destination > command_tab_slots_max) {
+      return invalid_arguments("action tab move");
+    }
+    action.kind = api::ActionKind::tab_move;
+    action.tab = *target;
+    action.to_position = *destination;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "rename") {
+    std::optional<api::TabSelector> target;
+    std::string_view title;
+    if (arguments.values.size() == 2U) {
+      target = tab_selector(arguments.values.front());
+      title = arguments.values.back();
+    } else if (arguments.values.size() <= 1U) {
+      target = concrete_tab(arguments);
+      title = arguments.values.empty() ? std::string_view{} : arguments.values.front();
+    }
+    if (!target.has_value() || !TabTitleValue::create(title).has_value()) {
+      return invalid_arguments("action tab rename");
+    }
+    action.kind = api::ActionKind::tab_rename;
+    action.tab = *target;
+    action.title = title;
+    return run_concrete_action(endpoint, action);
+  }
+  return invalid_arguments("action tab");
+}
+
+[[nodiscard]] auto parse_direction(const std::string_view value) noexcept
+    -> std::optional<api::Direction> {
+  if (value == "left" || value == "--left") {
+    return api::Direction::left;
+  }
+  if (value == "right" || value == "--right") {
+    return api::Direction::right;
+  }
+  if (value == "up" || value == "--up") {
+    return api::Direction::up;
+  }
+  if (value == "down" || value == "--down") {
+    return api::Direction::down;
+  }
+  return std::nullopt;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_pane_action(const daemon::RuntimeEndpoint& endpoint,
+                                   const std::string_view operation, ActionCliArguments arguments)
+    -> int {
+  if (!arguments.valid || arguments.tab.has_value()) {
+    return invalid_arguments("action pane");
+  }
+  auto session = concrete_session(arguments);
+  if (!session.has_value()) {
+    return invalid_arguments("action pane; provide --session outside Lemma");
+  }
+  api::Action action;
+  action.session = std::move(*session);
+  if (operation == "list" && arguments.values.empty() && !arguments.pane.has_value()) {
+    action.kind = api::ActionKind::pane_list;
+    return run_concrete_action(endpoint, action);
+  }
+
+  auto target = concrete_pane(arguments);
+  auto values = std::span(arguments.values);
+  if (!arguments.pane.has_value() && !values.empty()) {
+    if (const auto explicit_target = pane_selector(values.front()); explicit_target.has_value()) {
+      target = explicit_target;
+      values = values.subspan(1);
+    }
+  }
+  if (!target.has_value()) {
+    return invalid_arguments("action pane; provide --pane outside Lemma");
+  }
+  action.pane = *target;
+
+  if (operation == "focus" || operation == "kill") {
+    if (!values.empty()) {
+      return invalid_arguments("action pane");
+    }
+    action.kind = operation == "focus" ? api::ActionKind::pane_focus : api::ActionKind::pane_kill;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "split") {
+    if (values.empty()) {
+      return invalid_arguments("action pane split");
+    }
+    const auto direction = parse_direction(values.front());
+    const auto parsed =
+        direction.has_value() ? parse_surface(values.subspan(1), false) : std::nullopt;
+    if (!direction.has_value() || !parsed.has_value() ||
+        (*direction != api::Direction::right && *direction != api::Direction::down)) {
+      return invalid_arguments("action pane split");
+    }
+    action.kind = api::ActionKind::pane_split;
+    action.direction = *direction;
+    action.working_directory = parsed->working_directory;
+    action.hold = parsed->hold;
+    for (const auto value : parsed->command) {
+      action.arguments.emplace_back(value);
+    }
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "swap") {
+    if (values.size() != 1U) {
+      return invalid_arguments("action pane swap");
+    }
+    const auto other = pane_selector(values.front());
+    if (!other.has_value()) {
+      return invalid_arguments("action pane swap");
+    }
+    action.kind = api::ActionKind::pane_swap;
+    action.other = *other;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "resize") {
+    if (values.empty() || values.size() > 2U) {
+      return invalid_arguments("action pane resize");
+    }
+    const auto direction = parse_direction(values.front());
+    const auto amount = values.size() == 2U ? parse_integer<std::uint16_t>(values.back())
+                                            : std::optional<std::uint16_t>{1};
+    if (!direction.has_value() || !amount.has_value() || *amount == 0 ||
+        *amount > command_resize_amount_max) {
+      return invalid_arguments("action pane resize");
+    }
+    action.kind = api::ActionKind::pane_resize;
+    action.direction = *direction;
+    action.amount = *amount;
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "zoom") {
+    if (values.size() != 1U || (std::string_view(values.front()) != "--on" &&
+                                std::string_view(values.front()) != "--off")) {
+      return invalid_arguments("action pane zoom");
+    }
+    action.kind = api::ActionKind::pane_zoom;
+    action.enabled = std::string_view(values.front()) == "--on";
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "send") {
+    if (values.size() != 2U || std::string_view(values.front()) != "--text") {
+      return invalid_arguments("action pane send");
+    }
+    action.kind = api::ActionKind::pane_send;
+    action.text = values.back();
+    return run_concrete_action(endpoint, action);
+  }
+  if (operation == "capture") {
+    if (!values.empty()) {
+      if (values.size() != 2U || std::string_view(values.front()) != "--lines") {
+        return invalid_arguments("action pane capture");
+      }
+      const auto lines = parse_integer<std::uint16_t>(values.back());
+      if (!lines.has_value() || *lines == 0) {
+        return invalid_arguments("action pane capture");
+      }
+      action.lines = *lines;
+    }
+    action.kind = api::ActionKind::pane_capture;
+    return run_concrete_action(endpoint, action);
+  }
+  return invalid_arguments("action pane");
+}
+
+[[nodiscard]] auto run_action_command(const daemon::RuntimeEndpoint& endpoint,
+                                      const std::span<char*> arguments) -> int {
+  if (arguments.size() < 2U) {
+    return invalid_arguments("action");
+  }
+  const std::string_view domain(arguments.front());
+  const std::string_view operation(arguments.subspan(1, 1).front());
+  auto parsed = parse_action_cli_arguments(arguments.subspan(2));
+  if (domain == "session") {
+    return run_session_action(endpoint, operation, std::move(parsed));
+  }
+  if (domain == "tab") {
+    return run_tab_action(endpoint, operation, std::move(parsed));
+  }
+  if (domain == "pane") {
+    return run_pane_action(endpoint, operation, std::move(parsed));
+  }
+  return invalid_arguments("action");
+}
+
 [[nodiscard]] auto run_creation(const daemon::RuntimeEndpoint& endpoint,
                                 const std::span<char*> arguments, const bool attach_after_create)
     -> int {
@@ -343,7 +783,7 @@ template <typename Id>
     return invalid_arguments(attach_after_create ? "new" : "start");
   }
   if (attach_after_create && (::isatty(STDIN_FILENO) == 0 || ::isatty(STDOUT_FILENO) == 0)) {
-    static_cast<void>(write_fragment(stderr, "lemma new requires a terminal\n"));
+    static_cast<void>(write_fragment(stderr, "interactive lemma creation requires a terminal\n"));
     return 1;
   }
   const daemon::LaunchOptions options{.working_directory = parsed->working_directory,
@@ -446,9 +886,31 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   return std::chrono::milliseconds(*amount * multiplier);
 }
 
-[[nodiscard]] constexpr auto canonical_session_operation(const std::string_view operation) noexcept
-    -> std::string_view {
-  return operation == "ls" ? std::string_view{"list"} : operation;
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_events(const daemon::RuntimeEndpoint& endpoint,
+                              const std::span<char*> arguments) -> int {
+  std::optional<std::string_view> session;
+  std::optional<PaneId> pane;
+  bool screen = false;
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    const std::string_view argument(arguments.subspan(index, 1).front());
+    if (argument == "--session" && !session.has_value() && index + 1U < arguments.size()) {
+      session = arguments.subspan(++index, 1).front();
+    } else if (argument == "--pane" && !pane.has_value() && index + 1U < arguments.size()) {
+      pane = parse_id<PaneId>(arguments.subspan(++index, 1).front());
+      if (!pane.has_value()) {
+        return invalid_arguments("events");
+      }
+    } else if (argument == "--screen" && !screen) {
+      screen = true;
+    } else {
+      return invalid_arguments("events");
+    }
+  }
+  if ((pane.has_value() && !session.has_value()) || (screen && !pane.has_value())) {
+    return invalid_arguments("events");
+  }
+  return daemon::events(endpoint, session, pane, screen);
 }
 
 [[nodiscard]] auto run_session_control(const daemon::RuntimeEndpoint& endpoint,
@@ -457,14 +919,10 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
     return invalid_arguments("session control");
   }
   const std::string_view requested_operation(arguments.front());
-  const auto operation = canonical_session_operation(requested_operation);
+  const auto operation =
+      requested_operation == "ls" ? std::string_view{"list"} : requested_operation;
   if (operation == "new" || operation == "start") {
     return run_creation(endpoint, arguments.subspan(1), operation == "new");
-  }
-  if (operation == "attach" && arguments.size() <= 2) {
-    const auto target =
-        arguments.size() == 2 ? std::string_view(arguments.back()) : std::string_view{};
-    return client::attach(endpoint, target);
   }
   if (operation == "list" && arguments.size() == 1) {
     return daemon::list(endpoint);
@@ -755,27 +1213,64 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   if (command == "version" || command == "--version" || command == "-V") {
     return command_arguments.size() == 1 ? print_version() : invalid_arguments("version");
   }
-  if (help_flag(command_arguments.back())) {
+  const bool launch_separator = std::ranges::any_of(
+      command_arguments, [](const char* value) { return std::string_view(value) == "--"; });
+  if (!launch_separator && help_flag(command_arguments.back())) {
     return print_usage(stdout);
   }
-  if (command == "new" || command == "start" || command == "attach" || command == "list" ||
-      command == "ls" || command == "inspect" || command == "rename" || command == "kill") {
+  if (command == "attach" && command_arguments.size() <= 2) {
+    const auto target = command_arguments.size() == 2 ? std::string_view(command_arguments.back())
+                                                      : std::string_view{};
+    return client::attach(endpoint, target);
+  }
+  if (command == "new" || command == "start" || command == "list" || command == "ls" ||
+      command == "inspect" || command == "rename" || command == "kill") {
     return run_session_control(endpoint, command_arguments);
   }
+  if (command == "action") {
+    return run_action_command(endpoint, command_arguments.subspan(1));
+  }
+  if (command == "proc" && command_arguments.size() == 2) {
+    return run_procedure(endpoint, command_arguments.back());
+  }
+  if (command == "events") {
+    return run_events(endpoint, command_arguments.subspan(1));
+  }
+  if (command == "api" && command_arguments.size() >= 2 &&
+      std::string_view(command_arguments.subspan(1, 1).front()) == "schema") {
+    if (command_arguments.size() == 2) {
+      return print_api_schema_summary();
+    }
+    if (command_arguments.size() == 3 && std::string_view(command_arguments.back()) == "--json") {
+      return write_fragment(stdout, api::schema_document()) ? 0 : 1;
+    }
+    return invalid_arguments("api schema");
+  }
+  if (command == "skill" && command_arguments.size() == 1) {
+    return print_skill();
+  }
+
+  static_cast<void>(write_fragment(stderr, "invalid lemma command or arguments: "));
+  static_cast<void>(write_fragment(stderr, command));
+  static_cast<void>(write_fragment(stderr, "\n"));
+  static_cast<void>(print_usage(stderr));
+  return 2;
+}
+
+[[nodiscard]] auto run_legacy(const daemon::RuntimeEndpoint& endpoint, const int argument_count,
+                              char** argument_values) -> int {
+  const std::span arguments(argument_values, static_cast<std::size_t>(argument_count));
+  if (arguments.size() <= 1) {
+    return run(endpoint, argument_count, argument_values);
+  }
+  const auto command_arguments = arguments.subspan(1);
+  const std::string_view command(command_arguments.front());
   if (command == "tab") {
     return run_tab(endpoint, command_arguments.subspan(1));
   }
   if (command == "pane") {
     return run_pane(endpoint, command_arguments.subspan(1));
   }
-  if (command == "proc" && command_arguments.size() == 2) {
-    return run_procedure(endpoint, command_arguments.back());
-  }
-  if (command == "skill" && command_arguments.size() == 1) {
-    return print_skill();
-  }
-
-  // Development-only diagnostics remain intentionally absent from the public command hierarchy.
   if (command == "shutdown" && command_arguments.size() == 2 &&
       std::string_view(command_arguments.back()) == "--confirm") {
     constexpr std::string_view warning =
@@ -785,12 +1280,7 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   if (command == "demo" && command_arguments.size() == 1) {
     return run_demo();
   }
-
-  static_cast<void>(write_fragment(stderr, "invalid lemma command or arguments: "));
-  static_cast<void>(write_fragment(stderr, command));
-  static_cast<void>(write_fragment(stderr, "\n"));
-  static_cast<void>(print_usage(stderr));
-  return 2;
+  return run(endpoint, argument_count, argument_values);
 }
 
 } // namespace lemma::app

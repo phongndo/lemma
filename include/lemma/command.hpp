@@ -13,6 +13,7 @@
 namespace lemma {
 
 inline constexpr std::uint16_t command_tab_slots_max = 16;
+inline constexpr std::uint16_t command_resize_amount_max = 100;
 
 enum class CommandKind : std::uint8_t {
   none = 0,

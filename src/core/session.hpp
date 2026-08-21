@@ -292,6 +292,8 @@ struct Session {
   LaunchEnvironmentMode environment_mode{LaunchEnvironmentMode::inherit};
   // Core-owned ordering used only to resolve an omitted CLI attach target.
   std::uint64_t activity_order{0};
+  // Monotonic post-commit observation generation. It is metadata, not a second state authority.
+  std::uint64_t mutation_generation{1};
   std::array<PaneSlot, panes_per_session_max> panes{};
   std::array<TabSlot, tabs_per_session_max> tabs{};
   TabOrder tab_order;

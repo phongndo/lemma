@@ -55,11 +55,11 @@ run: build
 
 # Stop the running daemon so the next launch uses the current build.
 kill: build
-    {{ nix }} ./build/{{ profile }}/lemma shutdown --confirm
+    {{ nix }} python3 tools/lemma_shutdown.py
 
-# Run the scripted libghostty-vt demo.
+# Run the scripted libghostty-vt demo without adding a production CLI command.
 demo: build
-    {{ nix }} ./build/{{ profile }}/lemma demo
+    {{ nix }} ./build/{{ profile }}/lemma_test_cli /tmp/lemma-demo-unused.sock demo
 
 # Run the fast native and real-mux developer suite (stress/extended remain explicit).
 test:

@@ -24,6 +24,13 @@ int main(const int argc, char** argv) {
     for (char* const argument : arguments.subspan(2)) {
       app_arguments.push_back(argument);
     }
+    if (app_arguments.size() > 1U) {
+      const std::string_view command(std::span(app_arguments).subspan(1, 1).front());
+      if (command == "tab" || command == "pane" || command == "shutdown" || command == "demo") {
+        return lemma::app::run_legacy(*endpoint, static_cast<int>(app_arguments.size()),
+                                      app_arguments.data());
+      }
+    }
     return lemma::app::run(*endpoint, static_cast<int>(app_arguments.size()), app_arguments.data());
   } catch (...) {
     return 2;

@@ -139,6 +139,8 @@ Session::Session(const std::string_view session_name,
                  const LaunchEnvironmentMode initial_environment_mode) noexcept
     : working_directory_size(initial_working_directory.size()),
       environment_size(initial_environment.size()), environment_mode(initial_environment_mode) {
+  LEMMA_ASSERT(initial_working_directory.size() <= limits::working_directory_bytes_max);
+  LEMMA_ASSERT(initial_environment.size() <= environment.size());
   const bool named = rename(session_name);
   LEMMA_ASSERT(named);
   if (!initial_working_directory.empty()) {

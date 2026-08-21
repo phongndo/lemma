@@ -623,8 +623,9 @@ auto PaneLayout::resize_node(const std::size_t node_index, const PaneRectangle v
 }
 
 auto PaneLayout::resize(const PaneId pane, const ResizeDirection direction,
-                        const PaneRectangle viewport) noexcept -> LayoutResizeStatus {
-  if (!valid_resize_direction(direction)) {
+                        const PaneRectangle viewport, const std::uint16_t amount) noexcept
+    -> LayoutResizeStatus {
+  if (!valid_resize_direction(direction) || amount == 0) {
     return LayoutResizeStatus::invalid;
   }
   const auto leaf_index = node_for_pane(pane);
@@ -651,7 +652,8 @@ auto PaneLayout::resize(const PaneId pane, const ResizeDirection direction,
     return LayoutResizeStatus::no_effect;
   }
   const auto delta =
-      direction == ResizeDirection::left || direction == ResizeDirection::up ? -1 : 1;
+      static_cast<std::int32_t>(amount) *
+      (direction == ResizeDirection::left || direction == ResizeDirection::up ? -1 : 1);
   return resize_node(static_cast<std::size_t>(split_index), viewport, delta,
                      ResizeValueKind::extent_delta);
 }

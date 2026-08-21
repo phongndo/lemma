@@ -145,6 +145,21 @@ add_library(lemma_input STATIC src/input/input_router.cpp)
 lemma_internal_target(lemma_input)
 target_link_libraries(lemma_input PRIVATE lemma_base)
 
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/lemma-api-v1.schema.json" LEMMA_API_SCHEMA)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/api/schema.cpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/api_schema.cpp"
+  @ONLY
+)
+add_library(
+  lemma_api STATIC
+  src/api/action.cpp
+  src/api/json.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/api_schema.cpp"
+)
+lemma_internal_target(lemma_api)
+target_link_libraries(lemma_api PRIVATE lemma_base lemma_core)
+
 add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
@@ -160,6 +175,7 @@ lemma_internal_target(lemma_runtime)
 target_link_libraries(
   lemma_runtime
   PRIVATE
+    lemma_api
     lemma_base
     lemma_core
     lemma_diagnostic
@@ -181,7 +197,7 @@ add_library(lemma_daemon STATIC src/daemon/server.cpp)
 lemma_internal_target(lemma_daemon)
 target_link_libraries(
   lemma_daemon
-  PRIVATE lemma_base lemma_extension lemma_platform lemma_protocol lemma_runtime
+  PRIVATE lemma_api lemma_base lemma_extension lemma_platform lemma_protocol lemma_runtime
 )
 
 add_library(
@@ -198,7 +214,7 @@ target_link_libraries(
 
 add_library(lemma_app STATIC src/app/application.cpp src/app/procedure.cpp)
 lemma_internal_target(lemma_app)
-target_link_libraries(lemma_app PRIVATE lemma_client lemma_daemon lemma_terminal)
+target_link_libraries(lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_terminal)
 
 # Compatibility aggregate for existing tests and embedders. New internal code should depend on the
 # narrow component target it uses rather than this aggregate.
@@ -243,6 +259,7 @@ if(LEMMA_BUILD_TESTS)
   # discovers individual cases for filtering and CI reporting.
   add_executable(
     lemma_unit_tests
+    tests/api_test.cpp
     tests/connection_output_test.cpp
     tests/core_test.cpp
     tests/extension_protocol_test.cpp
@@ -258,6 +275,7 @@ if(LEMMA_BUILD_TESTS)
   target_link_libraries(
     lemma_unit_tests
     PRIVATE
+      lemma_api
       lemma_client
       lemma_core
       lemma_diagnostic

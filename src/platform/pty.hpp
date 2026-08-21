@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -15,6 +16,16 @@ enum class EnvironmentMode : std::uint8_t {
   replace,
 };
 
+struct EnvironmentVariable final {
+  std::string_view name;
+  std::string_view value;
+};
+
+// Captures deterministic process launch defaults into caller-owned bounded storage.
+[[nodiscard]] auto account_home_directory(std::span<char> output) noexcept -> std::size_t;
+[[nodiscard]] auto capture_process_environment(std::span<std::byte> output) noexcept
+    -> std::optional<std::size_t>;
+
 // Spawns an exact NUL-separated argv, or the account's login shell when launch_command is empty,
 // with a new controlling PTY. The parent receives the child PID and master descriptor; the child
 // replaces itself or exits with status 127. Replacement clears the inherited environment even when
@@ -22,7 +33,9 @@ enum class EnvironmentMode : std::uint8_t {
 [[nodiscard]] auto spawn_process(int& pty_descriptor, std::string_view working_directory = {},
                                  std::span<const std::byte> environment = {},
                                  EnvironmentMode environment_mode = EnvironmentMode::inherit,
-                                 std::span<const std::byte> launch_command = {}) noexcept -> pid_t;
+                                 std::span<const std::byte> launch_command = {},
+                                 std::span<const EnvironmentVariable> overlay = {}) noexcept
+    -> pid_t;
 
 [[nodiscard]] auto resize_pty(int pty_descriptor, std::uint16_t columns, std::uint16_t rows,
                               std::uint32_t cell_width_px, std::uint32_t cell_height_px) noexcept

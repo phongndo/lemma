@@ -13,6 +13,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -88,14 +89,82 @@ namespace {
   return true;
 }
 
+[[nodiscard]] auto process_environment() noexcept -> char** {
+#ifdef __APPLE__
+  return *_NSGetEnviron();
+#elifdef __linux__
+  return ::environ;
+#endif
+}
+
+[[nodiscard]] auto install_overlay(const std::span<const EnvironmentVariable> overlay) noexcept
+    -> bool {
+  for (const auto& variable : overlay) {
+    if (variable.name.empty() || variable.name.contains('=') || variable.name.contains('\0') ||
+        variable.value.contains('\0')) {
+      return false;
+    }
+    std::array<char, 64> name{};
+    std::array<char, 128> value{};
+    if (variable.name.size() >= name.size() || variable.value.size() >= value.size()) {
+      return false;
+    }
+    std::ranges::copy(variable.name, name.begin());
+    std::ranges::copy(variable.value, value.begin());
+    if (::setenv(name.data(), value.data(), 1) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
+
+auto account_home_directory(const std::span<char> output) noexcept -> std::size_t {
+  std::array<char, std::size_t{16} * 1'024U> account_buffer{};
+  struct passwd account{};
+  struct passwd* result = nullptr;
+  if (::getpwuid_r(::getuid(), &account, account_buffer.data(), account_buffer.size(), &result) !=
+          0 ||
+      result == nullptr || account.pw_dir == nullptr) {
+    return 0;
+  }
+  const std::string_view home(account.pw_dir);
+  if (home.empty() || home.front() != '/' || home.size() >= output.size() || home.contains('\0')) {
+    return 0;
+  }
+  std::ranges::copy(home, output.begin());
+  return home.size();
+}
+
+auto capture_process_environment(const std::span<std::byte> output) noexcept
+    -> std::optional<std::size_t> {
+  std::size_t size = 0;
+  std::size_t entries = 0;
+  // POSIX exposes the process environment as a null-terminated pointer vector.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  for (char** entry = process_environment(); entry != nullptr && *entry != nullptr; ++entry) {
+    const std::string_view value(*entry);
+    if (value.size() + 1U > output.size() - size || entries == limits::environment_entries_max) {
+      return std::nullopt;
+    }
+    std::ranges::copy(std::as_bytes(std::span(value.data(), value.size())),
+                      output.subspan(size).begin());
+    size += value.size();
+    output.subspan(size, 1).front() = std::byte{0};
+    ++size;
+    ++entries;
+  }
+  return size;
+}
 
 // Validation and child replacement outcomes are intentionally explicit at the platform boundary.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto spawn_process(int& pty_descriptor, const std::string_view working_directory,
                                  const std::span<const std::byte> environment,
                                  const EnvironmentMode environment_mode,
-                                 const std::span<const std::byte> launch_command) noexcept
+                                 const std::span<const std::byte> launch_command,
+                                 const std::span<const EnvironmentVariable> overlay) noexcept
     -> pid_t {
   std::array<char, limits::working_directory_bytes_max + 1U> directory{};
   if (working_directory.size() >= directory.size() || working_directory.contains('\0') ||
@@ -152,8 +221,9 @@ namespace {
   if ((!working_directory.empty() && ::chdir(directory.data()) != 0) ||
       !install_environment(std::span(environment_copy).first(environment.size()),
                            environment_mode) ||
-      ::setenv("TERM", "xterm-256color", 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
-      ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
+      (!working_directory.empty() && ::setenv("PWD", directory.data(), 1) != 0) ||
+      !install_overlay(overlay) || ::setenv("TERM", "xterm-256color", 1) != 0 ||
+      ::setenv("COLORTERM", "truecolor", 1) != 0 || ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
       // version is backed by a null-terminated string literal.
       // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
       ::setenv("TERM_PROGRAM_VERSION", lemma::version.data(), 1) != 0) {

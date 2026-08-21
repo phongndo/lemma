@@ -76,6 +76,11 @@ namespace {
          kind == CommandKind::resize_top_bottom_divider;
 }
 
+[[nodiscard]] constexpr auto directional_resize_command(const CommandKind kind) noexcept -> bool {
+  return kind == CommandKind::resize_left || kind == CommandKind::resize_right ||
+         kind == CommandKind::resize_up || kind == CommandKind::resize_down;
+}
+
 [[nodiscard]] auto valid_payload(const Command& command) noexcept -> bool {
   if (command.kind == CommandKind::select_tab) {
     const auto* const coordinate = std::get_if<CommandCoordinate>(&command.payload);
@@ -83,6 +88,11 @@ namespace {
   }
   if (divider_resize_command(command.kind)) {
     return std::holds_alternative<CommandCoordinate>(command.payload);
+  }
+  if (directional_resize_command(command.kind)) {
+    const auto* const amount = std::get_if<CommandCoordinate>(&command.payload);
+    return std::holds_alternative<std::monostate>(command.payload) ||
+           (amount != nullptr && amount->value > 0 && amount->value <= command_resize_amount_max);
   }
   if (command.kind == CommandKind::rename_session) {
     const auto* const name = std::get_if<SessionNameValue>(&command.payload);

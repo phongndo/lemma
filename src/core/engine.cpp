@@ -1,5 +1,7 @@
 #include "core/engine.hpp"
 
+#include "api/action.hpp"
+#include "api/json.hpp"
 #include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
 #include "core/copy_mode.hpp"
@@ -42,6 +44,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -736,6 +739,13 @@ struct SessionRecord final : Session {
 static_assert(sizeof(AttachmentRuntime) <= std::size_t{16} * 1'024U);
 static_assert(sizeof(SessionRecord) <= std::size_t{96} * 1'024U);
 
+void record_session_mutation(SessionRecord& session) noexcept {
+  session.mutation_generation =
+      session.mutation_generation == std::numeric_limits<std::uint64_t>::max()
+          ? std::uint64_t{1}
+          : session.mutation_generation + 1U;
+}
+
 void finish_live_divider_resize(SessionRecord& session, bool discard_release = false) noexcept;
 
 // Connection teardown resets only Attachment and AttachmentRuntime state. Session and PaneRuntime
@@ -867,11 +877,37 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   return true;
 }
 
+struct EncodedContextId final {
+  std::array<char, 32> bytes{};
+  std::size_t size{0};
+
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {bytes.data(), size}; }
+};
+
+[[nodiscard]] auto encode_context_id(const auto id) noexcept -> EncodedContextId {
+  EncodedContextId result;
+  const auto slot = std::to_chars(result.bytes.begin(), result.bytes.end(), id.slot());
+  if (slot.ec != std::errc{} || slot.ptr == result.bytes.end()) {
+    return {};
+  }
+  const auto used = static_cast<std::size_t>(std::distance(result.bytes.begin(), slot.ptr));
+  auto remaining = std::span(result.bytes).subspan(used);
+  remaining.front() = ':';
+  remaining = remaining.subspan(1);
+  const auto generation = std::to_chars(remaining.data(), result.bytes.end(), id.generation());
+  if (generation.ec != std::errc{}) {
+    return {};
+  }
+  result.size = static_cast<std::size_t>(std::distance(result.bytes.begin(), generation.ptr));
+  return result;
+}
+
 [[nodiscard]] auto create_pane_runtime(
     const std::uint16_t columns, const std::uint16_t rows, const std::string_view working_directory,
     const std::span<const std::byte> environment, const LaunchEnvironmentMode environment_mode,
-    const vt::TerminalTheme& theme, const std::span<const std::byte> launch_command = {}) noexcept
-    -> std::unique_ptr<PaneRuntime> {
+    const vt::TerminalTheme& theme, const SessionId session_id, const std::string_view session_name,
+    const TabId tab_id, const PaneId pane_id,
+    const std::span<const std::byte> launch_command = {}) noexcept -> std::unique_ptr<PaneRuntime> {
   vt::TerminalOptions options;
   options.size = {.columns = columns, .rows = rows};
   options.theme = theme;
@@ -886,9 +922,21 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
+  const auto encoded_session = encode_context_id(session_id);
+  const auto encoded_tab = encode_context_id(tab_id);
+  const auto encoded_pane = encode_context_id(pane_id);
+  if (encoded_session.size == 0 || encoded_tab.size == 0 || encoded_pane.size == 0) {
+    return nullptr;
+  }
+  const std::array overlay{
+      platform::EnvironmentVariable{.name = "LEMMA_SESSION_ID", .value = encoded_session.view()},
+      platform::EnvironmentVariable{.name = "LEMMA_SESSION_NAME", .value = session_name},
+      platform::EnvironmentVariable{.name = "LEMMA_TAB_ID", .value = encoded_tab.view()},
+      platform::EnvironmentVariable{.name = "LEMMA_PANE_ID", .value = encoded_pane.view()},
+  };
   runtime->child =
       platform::spawn_process(runtime->pty, working_directory, environment,
-                              platform_environment_mode(environment_mode), launch_command);
+                              platform_environment_mode(environment_mode), launch_command, overlay);
   if (runtime->child <= 0 || !set_nonblocking(runtime->pty) ||
       !platform::resize_pty(runtime->pty, columns, rows, options.size.cell_width_px,
                             options.size.cell_height_px)) {
@@ -1087,7 +1135,8 @@ refresh_process_name_if_due(PaneRuntime& runtime,
     const auto launch_directory = working_directory.empty() ? session.cwd() : working_directory;
     auto runtime = create_pane_runtime(
         session.attachment.columns, pane_rows(session.attachment.rows), launch_directory,
-        session.launch_environment(), session.environment_mode, session.theme, retained_launch);
+        session.launch_environment(), session.environment_mode, session.theme, session.id,
+        session.session_name(), tab_id, pane_id, retained_launch);
     if (runtime == nullptr) {
       return nullptr;
     }
@@ -2632,6 +2681,7 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   std::span(session.tabs).subspan(id.slot(), 1).front().tab.reset();
   const bool order_erased = session.tab_order.erase(id);
   LEMMA_ASSERT(order_erased);
+  record_session_mutation(session);
   if (tab_count(session) == 0) {
     session.active = false;
     return;
@@ -2685,6 +2735,7 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
     return nullptr;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
+  record_session_mutation(session);
   return created;
 }
 
@@ -2725,9 +2776,10 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   }
 
   const auto launch_directory = working_directory.empty() ? session.cwd() : working_directory;
-  auto runtime = create_pane_runtime(new_rectangle->columns, new_rectangle->rows, launch_directory,
-                                     session.launch_environment(), session.environment_mode,
-                                     session.theme, launch_command);
+  auto runtime =
+      create_pane_runtime(new_rectangle->columns, new_rectangle->rows, launch_directory,
+                          session.launch_environment(), session.environment_mode, session.theme,
+                          session.id, session.session_name(), tab.id, pane_id, launch_command);
   if (runtime == nullptr) {
     return nullptr;
   }
@@ -2775,6 +2827,7 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
     return nullptr;
   }
   schedule_frame(session, FrameUrgency::state_change, true);
+  record_session_mutation(session);
   return pane_slot.pane.get();
 }
 
@@ -2805,6 +2858,7 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
   const bool runtime_erased = runtimes.erase(pane_address(session, *pane));
   LEMMA_ASSERT(runtime_erased);
   std::span(session.panes).subspan(pane_index, 1).front().pane.reset();
+  record_session_mutation(session);
   if (was_focused) {
     tab.focused_pane = *focus_candidate;
   }
@@ -2972,8 +3026,8 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
 }
 
 [[nodiscard]] auto resize_split(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
-                                const PaneId pane, const ResizeDirection direction) noexcept
-    -> CommandResult {
+                                const PaneId pane, const ResizeDirection direction,
+                                const std::uint16_t amount = 1) noexcept -> CommandResult {
   if (tab.zoomed || tab.layout_suspended) {
     return {.status = CommandStatus::unavailable};
   }
@@ -2982,7 +3036,7 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
-  const auto edit = proposed_layout.resize(pane, direction, viewport);
+  const auto edit = proposed_layout.resize(pane, direction, viewport, amount);
   switch (edit) {
   case LayoutResizeStatus::no_effect:
     return {.status = CommandStatus::no_effect};
@@ -3486,13 +3540,24 @@ struct StatusHit final {
         {.first = targeted_pane->id, .second = peer_pane->id, .axis = SplitAxis::top_bottom},
         command_payload_value<CommandCoordinate>(command.payload).value);
   case CommandKind::resize_left:
-    return resize_split(session, *tab, runtimes, targeted_pane->id, ResizeDirection::left);
   case CommandKind::resize_right:
-    return resize_split(session, *tab, runtimes, targeted_pane->id, ResizeDirection::right);
   case CommandKind::resize_up:
-    return resize_split(session, *tab, runtimes, targeted_pane->id, ResizeDirection::up);
-  case CommandKind::resize_down:
-    return resize_split(session, *tab, runtimes, targeted_pane->id, ResizeDirection::down);
+  case CommandKind::resize_down: {
+    const auto* const requested = std::get_if<CommandCoordinate>(&command.payload);
+    const auto amount = requested == nullptr ? std::uint16_t{1} : requested->value;
+    if (amount == 0) {
+      return {.status = CommandStatus::invalid_command};
+    }
+    auto direction = ResizeDirection::left;
+    if (command.kind == CommandKind::resize_right) {
+      direction = ResizeDirection::right;
+    } else if (command.kind == CommandKind::resize_up) {
+      direction = ResizeDirection::up;
+    } else if (command.kind == CommandKind::resize_down) {
+      direction = ResizeDirection::down;
+    }
+    return resize_split(session, *tab, runtimes, targeted_pane->id, direction, amount);
+  }
   case CommandKind::focus_left: {
     const auto previous = tab->focused_pane;
     focus_direction(session, *tab, runtimes, targeted_pane->id, FocusDirection::left);
@@ -3771,7 +3836,11 @@ struct StatusHit final {
                                 .name_conflict = name_conflict,
                                 .name_conflict_context = name_conflict_context};
   const CommandDispatcher dispatcher(&execute_session_command, &context);
-  return dispatcher.dispatch(resolved);
+  const auto result = dispatcher.dispatch(resolved);
+  if (result.status == CommandStatus::applied) {
+    record_session_mutation(session);
+  }
+  return result;
 }
 
 void invalidate_rename_prompt(SessionRecord& session) noexcept {
@@ -6449,6 +6518,9 @@ void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes) n
   return listed > 0 || output.append_text("no lemma sessions\n");
 }
 
+constexpr auto setup_progress_timeout = std::chrono::seconds(5);
+constexpr auto setup_total_timeout = std::chrono::seconds(10);
+
 enum class PendingState : std::uint8_t {
   unused,
   read_command,
@@ -6467,16 +6539,30 @@ enum class PendingState : std::uint8_t {
   read_launch_command,
   read_control_payload_size,
   read_control_payload,
+  read_public_json,
+  execute_public_procedure,
+  prepare_public_observer,
+  observe,
   flush_response,
 };
 
 enum class PendingAction : std::uint8_t {
   close,
   attach,
+  keep_action,
+  keep_observe,
   shutdown,
 };
 
+struct ProcedureExecutionState;
+
 struct PendingConnection final {
+  PendingConnection() = default;
+  PendingConnection(const PendingConnection&) = delete;
+  auto operator=(const PendingConnection&) -> PendingConnection& = delete;
+  PendingConnection(PendingConnection&&) = delete;
+  auto operator=(PendingConnection&&) -> PendingConnection& = delete;
+  ~PendingConnection();
   [[nodiscard]] auto active() const noexcept -> bool { return state != PendingState::unused; }
 
   int descriptor{-1};
@@ -6498,6 +6584,18 @@ struct PendingConnection final {
   std::size_t field_size{0};
   std::size_t field_target{0};
   ConnectionOutput output;
+  std::string public_input;
+  std::string public_output;
+  std::size_t public_output_offset{0};
+  std::unique_ptr<ProcedureExecutionState> procedure;
+  api::EventSubscription subscription;
+  std::uint64_t event_sequence{0};
+  std::uint64_t observed_semantic_hash{0};
+  std::uint64_t observed_terminal_generation{0};
+  ProcessExit observed_process{};
+  bool observed_pane_present{false};
+  bool observed_process_exited{false};
+  bool public_connection{false};
   protocol::ClientDecoder attach_decoder;
   protocol::Dimensions attach_dimensions{};
   std::optional<protocol::HostTerminalTheme> attach_host_theme;
@@ -6512,11 +6610,1368 @@ using PendingConnections =
     std::array<std::unique_ptr<PendingConnection>, limits::pending_connections_hard_max>;
 using PendingConnectionGenerations =
     std::array<std::uint32_t, limits::pending_connections_hard_max>;
-static_assert(sizeof(PendingConnection) <= std::size_t{152} * 1'024U);
+using PublicScratchStorage = std::array<std::byte, api::json_bytes_max>;
+using PublicScratch = std::unique_ptr<PublicScratchStorage>;
+
+[[nodiscard]] auto acquire_public_scratch(PublicScratch& owner) noexcept -> std::span<std::byte> {
+  if (owner == nullptr) {
+    try {
+      owner = std::make_unique_for_overwrite<PublicScratchStorage>();
+    } catch (...) {
+      return {};
+    }
+  }
+  return *owner;
+}
+
+static_assert(sizeof(PendingConnection) <= std::size_t{160} * 1'024U);
 static_assert(sizeof(PendingConnections) ==
               limits::pending_connections_hard_max * sizeof(std::unique_ptr<PendingConnection>));
 static_assert(sizeof(PendingConnectionGenerations) ==
               limits::pending_connections_hard_max * sizeof(std::uint32_t));
+
+[[nodiscard]] auto tab_move_anchor(const SessionRecord& session, TabId moving,
+                                   std::size_t one_based_position) noexcept
+    -> std::optional<std::optional<TabId>>;
+
+struct PublicActionExecution final {
+  CommandStatus status{CommandStatus::failed};
+  std::string session_name;
+  SessionId session;
+  TabId tab;
+  PaneId pane;
+  std::string value_field;
+  std::string value_json;
+  std::string text;
+  bool has_text{false};
+};
+
+[[nodiscard]] auto append_public(std::string& output, const std::string_view text) -> bool {
+  if (text.size() > api::json_bytes_max - output.size()) {
+    return false;
+  }
+  output.append(text);
+  return true;
+}
+
+[[nodiscard]] auto append_public_number(std::string& output, const std::uint64_t value) -> bool {
+  std::array<char, 32> encoded{};
+  const auto result = std::to_chars(encoded.begin(), encoded.end(), value);
+  return result.ec == std::errc{} &&
+         append_public(output,
+                       {encoded.data(), static_cast<std::size_t>(result.ptr - encoded.data())});
+}
+
+[[nodiscard]] auto append_public_id(std::string& output, const auto id) -> bool {
+  return id.is_valid() && append_public(output, "\"") && append_public_number(output, id.slot()) &&
+         append_public(output, ":") && append_public_number(output, id.generation()) &&
+         append_public(output, "\"");
+}
+
+[[nodiscard]] constexpr auto public_status_name(const CommandStatus status) noexcept
+    -> std::string_view {
+  switch (status) {
+  case CommandStatus::applied:
+    return "applied";
+  case CommandStatus::no_effect:
+    return "no_effect";
+  case CommandStatus::stale_target:
+    return "stale";
+  case CommandStatus::wrong_owner:
+    return "wrong_owner";
+  case CommandStatus::conflict:
+    return "conflict";
+  case CommandStatus::capacity:
+    return "capacity";
+  case CommandStatus::unavailable:
+    return "unavailable";
+  case CommandStatus::detach_requested:
+  case CommandStatus::invalid_command:
+  case CommandStatus::invalid_target:
+  case CommandStatus::failed:
+    return "failed";
+  }
+  return "failed";
+}
+
+[[nodiscard]] auto public_session(Sessions& sessions, const api::SessionSelector& selector) noexcept
+    -> SessionRecord* {
+  return selector.id.is_valid() ? sessions.get(selector.id) : find_session(sessions, selector.name);
+}
+
+[[nodiscard]] auto public_tab(SessionRecord& session, const api::TabSelector& selector) noexcept
+    -> Tab* {
+  if (selector.id.is_valid()) {
+    return find_tab(session, selector.id);
+  }
+  return selector.position > 0 ? tab_at_position(session, selector.position - 1U) : nullptr;
+}
+
+[[nodiscard]] auto public_launch_command(const api::Action& action, std::vector<std::byte>& output)
+    -> bool {
+  std::size_t size = 0;
+  for (const auto& argument : action.arguments) {
+    if (argument.size() + 1U > protocol::command_bytes_max - size) {
+      return false;
+    }
+    size += argument.size() + 1U;
+  }
+  try {
+    output.resize(size);
+  } catch (...) {
+    return false;
+  }
+  std::size_t offset = 0;
+  for (const auto& argument : action.arguments) {
+    std::ranges::copy(std::as_bytes(std::span(argument.data(), argument.size())),
+                      std::span(output).subspan(offset).begin());
+    offset += argument.size();
+    std::span(output).subspan(offset, 1).front() = std::byte{0};
+    ++offset;
+  }
+  return valid_launch_command(output);
+}
+
+[[nodiscard]] auto public_environment(const api::Action& action, std::vector<std::byte>& output)
+    -> bool {
+  std::size_t size = 0;
+  for (const auto& entry : action.environment) {
+    if (entry.size() + 1U > protocol::environment_bytes_max - size) {
+      return false;
+    }
+    size += entry.size() + 1U;
+  }
+  try {
+    output.resize(size);
+  } catch (...) {
+    return false;
+  }
+  std::size_t offset = 0;
+  for (const auto& entry : action.environment) {
+    std::ranges::copy(std::as_bytes(std::span(entry.data(), entry.size())),
+                      std::span(output).subspan(offset).begin());
+    offset += entry.size();
+    std::span(output).subspan(offset, 1).front() = std::byte{0};
+    ++offset;
+  }
+  return valid_environment(output);
+}
+
+[[nodiscard]] auto copy_connection_json(const ConnectionOutput& source, std::string& output)
+    -> bool {
+  const auto bytes = source.readable();
+  if (bytes.size() > api::json_bytes_max) {
+    return false;
+  }
+  try {
+    // Byte payloads and character storage have the same object representation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    output.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+void retain_tail_lines(std::string& text, const std::uint16_t lines) {
+  if (lines == 0 || text.empty()) {
+    return;
+  }
+  std::size_t offset = text.size();
+  std::uint16_t found = 0;
+  if (text.back() == '\n') {
+    --offset;
+  }
+  while (offset > 0) {
+    --offset;
+    if (text.substr(offset, 1).front() == '\n' && ++found == lines) {
+      text.erase(0, offset + 1U);
+      return;
+    }
+  }
+}
+
+// Every public Action reaches the same semantic transitions and runtime helpers as keyboard and
+// the legacy control transport. The JSON envelope owns no mux policy.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto execute_public_action(const api::Action& action, Sessions& sessions,
+                                         PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                                         const std::span<std::byte> scratch)
+    -> PublicActionExecution {
+  PublicActionExecution result;
+  if (action.kind == api::ActionKind::session_list) {
+    ConnectionOutput encoded;
+    result.status = append_structured_sessions(encoded, sessions) &&
+                            copy_connection_json(encoded, result.value_json)
+                        ? CommandStatus::applied
+                        : CommandStatus::failed;
+    result.value_field = "sessions";
+    return result;
+  }
+  if (action.kind == api::ActionKind::session_start) {
+    SessionName allocated;
+    std::string_view name = action.name;
+    if (name.empty()) {
+      const auto candidate = allocate_numeric_session_name(sessions);
+      if (!candidate.has_value()) {
+        result.status = CommandStatus::capacity;
+        return result;
+      }
+      allocated = *candidate;
+      name = allocated.view();
+    }
+    if (find_session(sessions, name) != nullptr) {
+      result.status = CommandStatus::conflict;
+      return result;
+    }
+    if (sessions.size() == Sessions::capacity() ||
+        activity_order == std::numeric_limits<std::uint64_t>::max()) {
+      result.status = CommandStatus::capacity;
+      return result;
+    }
+    std::vector<std::byte> command;
+    if (!public_launch_command(action, command)) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    std::array<char, limits::working_directory_bytes_max + 1U> default_directory{};
+    std::string_view working_directory = action.working_directory;
+    if (working_directory.empty()) {
+      const auto size = platform::account_home_directory(default_directory);
+      if (size == 0) {
+        result.status = CommandStatus::failed;
+        return result;
+      }
+      working_directory = std::string_view(default_directory.data(), size);
+    }
+    std::vector<std::byte> environment;
+    if (action.environment_set) {
+      if (!public_environment(action, environment)) {
+        result.status = CommandStatus::failed;
+        return result;
+      }
+    } else {
+      try {
+        environment.resize(limits::environment_bytes_max);
+      } catch (...) {
+        result.status = CommandStatus::failed;
+        return result;
+      }
+      const auto captured = platform::capture_process_environment(environment);
+      if (!captured.has_value()) {
+        result.status = CommandStatus::failed;
+        return result;
+      }
+      environment.resize(*captured);
+    }
+    auto created =
+        create_session(name, working_directory, environment, LaunchEnvironmentMode::replace);
+    if (created == nullptr) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    const auto id = sessions.insert(std::move(created));
+    if (!id.has_value()) {
+      result.status = CommandStatus::capacity;
+      return result;
+    }
+    auto* const inserted = sessions.get(*id);
+    LEMMA_ASSERT(inserted != nullptr);
+    inserted->id = *id;
+    inserted->attachment.id = AttachmentId::from_parts(id->slot(), id->generation());
+    inserted->attachment.session = *id;
+    inserted->activity_order = ++activity_order;
+    const auto policy = action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
+    auto* const tab = allocate_tab(*inserted, runtimes, command, {}, policy);
+    if (tab == nullptr) {
+      const bool erased = sessions.erase(*id);
+      LEMMA_ASSERT(erased);
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    inserted->previous_tab = inserted->active_tab;
+    result.status = CommandStatus::applied;
+    result.session_name = std::string(inserted->session_name());
+    result.session = inserted->id;
+    result.tab = tab->id;
+    result.pane = tab->focused_pane;
+    return result;
+  }
+
+  auto* const session = public_session(sessions, action.session);
+  if (session == nullptr || !session->active) {
+    result.status = CommandStatus::stale_target;
+    return result;
+  }
+  result.session_name = std::string(session->session_name());
+  result.session = session->id;
+
+  if (action.kind == api::ActionKind::session_inspect || action.kind == api::ActionKind::tab_list ||
+      action.kind == api::ActionKind::pane_list) {
+    ConnectionOutput encoded;
+    bool appended = false;
+    if (action.kind == api::ActionKind::session_inspect) {
+      appended = encoded.append_text("[") && append_structured_session(encoded, *session) &&
+                 encoded.append_text("]");
+      result.value_field = "sessions";
+    } else if (action.kind == api::ActionKind::tab_list) {
+      appended = append_structured_tabs(encoded, *session);
+      result.value_field = "tabs";
+    } else {
+      appended = append_structured_panes(encoded, *session, runtimes);
+      result.value_field = "panes";
+    }
+    result.status = appended && copy_connection_json(encoded, result.value_json)
+                        ? CommandStatus::applied
+                        : CommandStatus::failed;
+    return result;
+  }
+  if (action.kind == api::ActionKind::session_rename) {
+    const auto name = SessionNameValue::create(action.name);
+    if (!name.has_value()) {
+      result.status = CommandStatus::invalid_command;
+      return result;
+    }
+    Command command{.kind = CommandKind::rename_session,
+                    .origin = CommandOrigin::cli,
+                    .target = {.session = session->id,
+                               .tab = {},
+                               .pane = {},
+                               .peer_pane = {},
+                               .attachment = {}},
+                    .payload = *name};
+    result.status =
+        dispatch_session_command(*session, runtimes, command, &session_name_conflict, &sessions)
+            .status;
+    if (result.status == CommandStatus::applied) {
+      result.session_name = action.name;
+    }
+    return result;
+  }
+  if (action.kind == api::ActionKind::session_kill) {
+    const Command command{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
+    result.status = dispatch_session_command(*session, runtimes, command).status;
+    return result;
+  }
+  if (action.kind == api::ActionKind::tab_new) {
+    if (tab_count(*session) >= session->tabs.size() ||
+        pane_count(*session) >= panes_per_session_max ||
+        runtimes.size() >= limits::panes_hard_max) {
+      result.status = CommandStatus::capacity;
+      return result;
+    }
+    std::vector<std::byte> command;
+    if (!public_launch_command(action, command)) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    auto* const created = create_tab(*session, runtimes, command, action.working_directory,
+                                     action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close);
+    if (created == nullptr) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    if (!created->set_title_override(action.title)) {
+      remove_tab(*session, runtimes, created->id);
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    result.status = CommandStatus::applied;
+    result.tab = created->id;
+    result.pane = created->focused_pane;
+    return result;
+  }
+  if (action.kind == api::ActionKind::tab_select || action.kind == api::ActionKind::tab_move ||
+      action.kind == api::ActionKind::tab_rename || action.kind == api::ActionKind::tab_kill) {
+    auto* const tab = public_tab(*session, action.tab);
+    if (tab == nullptr) {
+      result.status = CommandStatus::stale_target;
+      return result;
+    }
+    result.tab = tab->id;
+    Command command{
+        .origin = CommandOrigin::cli,
+        .target = {
+            .session = session->id, .tab = tab->id, .pane = {}, .peer_pane = {}, .attachment = {}}};
+    if (action.kind == api::ActionKind::tab_select) {
+      command.kind = CommandKind::select_tab;
+      command.payload =
+          CommandCoordinate{.value = static_cast<std::uint16_t>(
+                                action.tab.position == 0 ? 0 : action.tab.position - 1U)};
+    } else if (action.kind == api::ActionKind::tab_kill) {
+      command.kind = CommandKind::close_tab;
+    } else if (action.kind == api::ActionKind::tab_move) {
+      const auto anchor = tab_move_anchor(*session, tab->id, action.to_position);
+      if (!anchor.has_value()) {
+        result.status = CommandStatus::invalid_target;
+        return result;
+      }
+      command.kind = CommandKind::place_tab;
+      command.payload = TabPlacementCommand{.before = anchor->value_or(TabId{})};
+    } else {
+      const auto title = TabTitleValue::create(action.title);
+      if (!title.has_value()) {
+        result.status = CommandStatus::invalid_command;
+        return result;
+      }
+      command.kind = CommandKind::rename_tab;
+      command.payload = *title;
+    }
+    result.status =
+        dispatch_session_command(*session, runtimes, command, &session_name_conflict, &sessions)
+            .status;
+    return result;
+  }
+
+  auto* const pane = find_pane(*session, action.pane.id);
+  auto* const tab = pane == nullptr ? nullptr : find_tab(*session, pane->tab);
+  auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
+  if (pane == nullptr || tab == nullptr || runtime == nullptr) {
+    result.status = CommandStatus::stale_target;
+    return result;
+  }
+  result.tab = tab->id;
+  result.pane = pane->id;
+  if (action.kind == api::ActionKind::pane_split) {
+    if (pane_count(*session) >= panes_per_session_max ||
+        runtimes.size() >= limits::panes_hard_max) {
+      result.status = CommandStatus::capacity;
+      return result;
+    }
+    std::vector<std::byte> command;
+    if (!public_launch_command(action, command)) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    const auto axis =
+        action.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
+    auto* const created =
+        split_pane(*session, *tab, runtimes, pane->id, axis, command, action.working_directory,
+                   action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close);
+    result.status = created == nullptr ? CommandStatus::failed : CommandStatus::applied;
+    if (created != nullptr) {
+      result.pane = created->id;
+    }
+    return result;
+  }
+  if (action.kind == api::ActionKind::pane_send) {
+    result.status = queue_application_bytes_to(
+                        *session, runtimes, *runtime,
+                        std::as_bytes(std::span(action.text.data(), action.text.size()))) ==
+                            InputQueueResult::queued
+                        ? CommandStatus::applied
+                        : CommandStatus::unavailable;
+    return result;
+  }
+  if (action.kind == api::ActionKind::pane_capture) {
+    const auto formatted = runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
+    if (!formatted.has_value()) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    try {
+      // Byte payloads and character storage have the same object representation.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      result.text.assign(reinterpret_cast<const char*>(scratch.data()), *formatted);
+    } catch (...) {
+      result.status = CommandStatus::failed;
+      return result;
+    }
+    retain_tail_lines(result.text, action.lines);
+    result.has_text = true;
+    result.status = CommandStatus::applied;
+    return result;
+  }
+
+  Command command{.origin = CommandOrigin::cli,
+                  .target = {.session = session->id,
+                             .tab = tab->id,
+                             .pane = pane->id,
+                             .peer_pane = {},
+                             .attachment = {}}};
+  if (action.kind == api::ActionKind::pane_focus) {
+    command.kind = CommandKind::focus_pane;
+  } else if (action.kind == api::ActionKind::pane_kill) {
+    command.kind = CommandKind::close_pane;
+  } else if (action.kind == api::ActionKind::pane_swap) {
+    command.kind = CommandKind::swap_panes;
+    command.payload = PaneSwapCommand{.other = action.other.id};
+  } else if (action.kind == api::ActionKind::pane_zoom) {
+    command.kind = CommandKind::set_zoom;
+    command.payload = PaneZoomCommand{.enabled = action.enabled};
+  } else {
+    switch (action.direction) {
+    case api::Direction::left:
+      command.kind = CommandKind::resize_left;
+      break;
+    case api::Direction::right:
+      command.kind = CommandKind::resize_right;
+      break;
+    case api::Direction::up:
+      command.kind = CommandKind::resize_up;
+      break;
+    case api::Direction::down:
+      command.kind = CommandKind::resize_down;
+      break;
+    case api::Direction::none:
+      result.status = CommandStatus::invalid_command;
+      return result;
+    }
+  }
+  if (action.kind == api::ActionKind::pane_resize) {
+    command.payload = CommandCoordinate{.value = action.amount};
+  }
+  result.status = dispatch_session_command(*session, runtimes, command).status;
+  return result;
+}
+
+[[nodiscard]] auto encode_public_error(const api::ActionDecodeError error,
+                                       const std::optional<std::size_t> byte = std::nullopt)
+    -> std::string {
+  std::string output;
+  try {
+    output =
+        R"({"schema":"lemma.action-result/v1","action":"","status":"failed","error":{"reason":)";
+    if (!api::append_json_string(output, error.reason)) {
+      return {};
+    }
+    if (!error.field.empty() &&
+        (!append_public(output, ",\"field\":") || !api::append_json_string(output, error.field))) {
+      return {};
+    }
+    if (byte.has_value() &&
+        (!append_public(output, ",\"byte\":") || !append_public_number(output, *byte))) {
+      return {};
+    }
+    return append_public(output, "}}\n") ? output : std::string{};
+  } catch (...) {
+    return {};
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto encode_public_result(const api::Action& action,
+                                        const PublicActionExecution& result) -> std::string {
+  std::string output;
+  try {
+    output = R"({"schema":"lemma.action-result/v1","action":)";
+    if (!api::append_json_string(output, api::action_name(action.kind)) ||
+        !append_public(output, ",\"status\":") ||
+        !api::append_json_string(output, public_status_name(result.status))) {
+      return {};
+    }
+    if (result.session.is_valid()) {
+      if (!append_public(output, R"(,"session":{"id":)") ||
+          !append_public_id(output, result.session) || !append_public(output, ",\"name\":") ||
+          !api::append_json_string(output, result.session_name) || !append_public(output, "}")) {
+        return {};
+      }
+    }
+    if (result.tab.is_valid() &&
+        (!append_public(output, ",\"tab\":") || !append_public_id(output, result.tab))) {
+      return {};
+    }
+    if (result.pane.is_valid() &&
+        (!append_public(output, ",\"pane\":") || !append_public_id(output, result.pane))) {
+      return {};
+    }
+    if (!result.value_field.empty() &&
+        (!append_public(output, ",\"") || !append_public(output, result.value_field) ||
+         !append_public(output, "\":") || !append_public(output, result.value_json))) {
+      return {};
+    }
+    if (result.has_text &&
+        (!append_public(output, ",\"text\":") || !api::append_json_string(output, result.text))) {
+      return {};
+    }
+    return append_public(output, "}\n") ? output : std::string{};
+  } catch (...) {
+    return {};
+  }
+}
+
+struct ProcedureBinding final {
+  std::string id;
+  bool session{false};
+  bool tab{false};
+  bool pane{false};
+  PublicActionExecution output;
+};
+
+struct ProcedureExecutionState final {
+  std::vector<api::JsonValue> actions;
+  std::vector<ProcedureBinding> shapes;
+  std::vector<ProcedureBinding> bindings;
+  std::vector<std::string> results;
+  std::size_t retained_result_bytes{0};
+  std::size_t next_action{0};
+  bool continue_on_error{false};
+  bool ok{true};
+};
+
+PendingConnection::~PendingConnection() = default;
+
+[[nodiscard]] auto mutable_json_member(api::JsonValue& object, const std::string_view key) noexcept
+    -> api::JsonValue* {
+  const auto found = std::ranges::find_if(
+      object.object, [&](const api::JsonMember& entry) { return entry.key == key; });
+  return found == object.object.end() ? nullptr : &found->value;
+}
+
+void erase_json_member(api::JsonValue& object, const std::string_view key) {
+  std::erase_if(object.object, [&](const api::JsonMember& entry) { return entry.key == key; });
+}
+
+[[nodiscard]] auto procedure_id_valid(const std::string_view id) noexcept -> bool {
+  return !id.empty() && id.size() <= 32U && std::ranges::all_of(id, [](const char character) {
+    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') || character == '_' || character == '-';
+  });
+}
+
+[[nodiscard]] auto procedure_binding(const std::span<const ProcedureBinding> bindings,
+                                     const std::string_view id) noexcept
+    -> const ProcedureBinding* {
+  const auto found = std::ranges::find_if(
+      bindings, [&](const ProcedureBinding& binding) { return binding.id == id; });
+  return found == bindings.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] auto procedure_resource(const std::string_view key) noexcept -> std::string_view {
+  if (key == "session") {
+    return "session";
+  }
+  return key == "tab" ? std::string_view{"tab"} : std::string_view{"pane"};
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto procedure_json_string(std::string value) -> api::JsonValue {
+  return {.kind = api::JsonKind::string,
+          .boolean = false,
+          .number = 0,
+          .string = std::move(value),
+          .array = {},
+          .object = {}};
+}
+
+[[nodiscard]] auto procedure_json_object() -> api::JsonValue {
+  return {.kind = api::JsonKind::object,
+          .boolean = false,
+          .number = 0,
+          .string = {},
+          .array = {},
+          .object = {}};
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto replace_procedure_reference(api::JsonValue& action, const std::string_view key,
+                                               const std::span<const ProcedureBinding> bindings,
+                                               const bool placeholder) -> bool {
+  auto* const selector = mutable_json_member(action, key);
+  if (selector == nullptr || selector->kind != api::JsonKind::object) {
+    return true;
+  }
+  const auto reference = api::json_string(*selector, "result");
+  if (!reference.has_value()) {
+    return true;
+  }
+  if (selector->object.empty() || selector->object.size() > 2U ||
+      std::ranges::any_of(selector->object, [](const api::JsonMember& member) {
+        return member.key != "result" && member.key != "field";
+      })) {
+    return false;
+  }
+  const auto field = api::json_string(*selector, "field");
+  if (api::json_member(*selector, "field") != nullptr && !field.has_value()) {
+    return false;
+  }
+  const auto resource = procedure_resource(key);
+  if (field.has_value() && *field != resource) {
+    return false;
+  }
+  const auto* const binding = procedure_binding(bindings, *reference);
+  const bool supported = binding != nullptr && ((resource == "session" && binding->session) ||
+                                                (resource == "tab" && binding->tab) ||
+                                                (resource == "pane" && binding->pane));
+  if (!supported) {
+    return false;
+  }
+  std::optional<api::JsonValue> inferred_parent;
+  if (key != "session" && mutable_json_member(action, "session") == nullptr) {
+    auto parent = procedure_json_object();
+    if (placeholder) {
+      parent.object.push_back({.key = "name", .value = procedure_json_string("placeholder")});
+    } else if (binding->output.session.is_valid()) {
+      std::string id;
+      if (!append_public_id(id, binding->output.session)) {
+        return false;
+      }
+      id.erase(id.begin());
+      id.pop_back();
+      parent.object.push_back({.key = "id", .value = procedure_json_string(std::move(id))});
+    } else {
+      return false;
+    }
+    inferred_parent = std::move(parent);
+  }
+  selector->object.clear();
+  if (resource == "session") {
+    if (placeholder) {
+      selector->object.push_back({.key = "name", .value = procedure_json_string("placeholder")});
+    } else if (binding->output.session.is_valid()) {
+      std::string id;
+      if (!append_public_id(id, binding->output.session)) {
+        return false;
+      }
+      id.erase(id.begin());
+      id.pop_back();
+      selector->object.push_back({.key = "id", .value = procedure_json_string(std::move(id))});
+    } else {
+      return false;
+    }
+    return true;
+  }
+  std::string encoded = "0:1";
+  if (!placeholder) {
+    encoded.clear();
+    const bool appended = resource == "tab" ? append_public_id(encoded, binding->output.tab)
+                                            : append_public_id(encoded, binding->output.pane);
+    if (!appended) {
+      return false;
+    }
+    encoded.erase(encoded.begin());
+    encoded.pop_back();
+  }
+  selector->object.push_back({.key = "id", .value = procedure_json_string(std::move(encoded))});
+  if (inferred_parent.has_value()) {
+    action.object.push_back({.key = "session", .value = std::move(*inferred_parent)});
+  }
+  return true;
+}
+
+[[nodiscard]] auto concrete_procedure_action(const api::JsonValue& source,
+                                             const std::span<const ProcedureBinding> bindings,
+                                             const bool placeholder) -> std::optional<api::Action> {
+  if (source.kind != api::JsonKind::object) {
+    return std::nullopt;
+  }
+  auto document = source;
+  erase_json_member(document, "id");
+  document.object.push_back(
+      {.key = "schema", .value = procedure_json_string(std::string(api::action_schema))});
+  for (const std::string_view key : {"session", "tab", "pane", "other"}) {
+    if (!replace_procedure_reference(document, key, bindings, placeholder)) {
+      return std::nullopt;
+    }
+  }
+  auto decoded = api::decode_action(document);
+  return std::move(decoded.action);
+}
+
+[[nodiscard]] auto procedure_error(const std::string_view reason,
+                                   const std::optional<std::size_t> index = std::nullopt)
+    -> std::string {
+  std::string output = R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":)";
+  if (!api::append_json_string(output, reason)) {
+    return {};
+  }
+  if (index.has_value() &&
+      (!append_public(output, R"(,"action_index":)") || !append_public_number(output, *index))) {
+    return {};
+  }
+  return append_public(output, "},\"results\":[]}\n") ? output : std::string{};
+}
+
+struct ProcedurePrepareError final {
+  std::string_view reason;
+  std::optional<std::size_t> index;
+};
+
+// A Proc is validated completely with placeholder generational IDs before its first concrete
+// Action executes. References remain a composition concern and never enter the Action executor.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto prepare_public_procedure(api::JsonValue document)
+    -> std::expected<ProcedureExecutionState, ProcedurePrepareError> {
+  if (document.kind != api::JsonKind::object ||
+      api::json_string(document, "schema") != std::optional<std::string_view>{"lemma.proc/v1"}) {
+    return std::unexpected(
+        ProcedurePrepareError{.reason = "invalid_schema", .index = std::nullopt});
+  }
+  for (const auto& member : document.object) {
+    if (member.key != "schema" && member.key != "on_error" && member.key != "actions") {
+      return std::unexpected(
+          ProcedurePrepareError{.reason = "unknown_field", .index = std::nullopt});
+    }
+  }
+  auto* const actions = mutable_json_member(document, "actions");
+  const auto* const on_error_value = api::json_member(document, "on_error");
+  const auto on_error = api::json_string(document, "on_error").value_or("stop");
+  if (actions == nullptr || actions->kind != api::JsonKind::array || actions->array.size() > 64U ||
+      (on_error_value != nullptr && on_error_value->kind != api::JsonKind::string) ||
+      (on_error != "stop" && on_error != "continue")) {
+    return std::unexpected(
+        ProcedurePrepareError{.reason = "invalid_document", .index = std::nullopt});
+  }
+
+  ProcedureExecutionState state;
+  state.actions = std::move(actions->array);
+  state.continue_on_error = on_error == "continue";
+  state.shapes.reserve(state.actions.size());
+  state.bindings.reserve(state.actions.size());
+  state.results.reserve(state.actions.size());
+  for (std::size_t index = 0; index < state.actions.size(); ++index) {
+    const auto& source = std::span(state.actions).subspan(index, 1).front();
+    const auto action = concrete_procedure_action(source, state.shapes, true);
+    if (!action.has_value()) {
+      return std::unexpected(ProcedurePrepareError{.reason = "invalid_action", .index = index});
+    }
+    const auto* const id_value = api::json_member(source, "id");
+    const auto id = api::json_string(source, "id");
+    const bool creates = action->kind == api::ActionKind::session_start ||
+                         action->kind == api::ActionKind::tab_new ||
+                         action->kind == api::ActionKind::pane_split;
+    if ((id_value != nullptr && !id.has_value()) ||
+        (id.has_value() && (!creates || !procedure_id_valid(*id) ||
+                            procedure_binding(state.shapes, *id) != nullptr))) {
+      return std::unexpected(
+          ProcedurePrepareError{.reason = "invalid_or_duplicate_id", .index = index});
+    }
+    state.shapes.push_back({.id = id.has_value() ? std::string(*id) : std::string{},
+                            .session = creates,
+                            .tab = creates,
+                            .pane = creates,
+                            .output = {}});
+  }
+  return state;
+}
+
+[[nodiscard]] auto
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+encode_procedure_result(const ProcedureExecutionState& state,
+                        const std::optional<std::string_view> error = std::nullopt,
+                        const std::optional<std::size_t> error_index = std::nullopt,
+                        const bool action_completed = false) -> std::string {
+  std::string output = state.ok ? R"({"schema":"lemma.proc-result/v1","ok":true)"
+                                : R"({"schema":"lemma.proc-result/v1","ok":false)";
+  if (error.has_value()) {
+    if (!append_public(output, R"(,"partial":true,"error":{"reason":)") ||
+        !api::append_json_string(output, *error)) {
+      return {};
+    }
+    if (error_index.has_value() && (!append_public(output, R"(,"action_index":)") ||
+                                    !append_public_number(output, *error_index))) {
+      return {};
+    }
+    if (action_completed && !append_public(output, R"(,"action_completed":true)")) {
+      return {};
+    }
+    if (!append_public(output, "}")) {
+      return {};
+    }
+  }
+  if (!append_public(output, R"(,"results":[)")) {
+    return {};
+  }
+  for (std::size_t index = 0; index < state.results.size(); ++index) {
+    if ((index > 0 && !append_public(output, ",")) ||
+        !append_public(output, std::span(state.results).subspan(index, 1).front())) {
+      return {};
+    }
+  }
+  return append_public(output, "]}\n") ? output : std::string{};
+}
+
+// One call executes at most one already-validated Action. The reactor schedules later steps on
+// later turns so Proc bounds do not become one monolithic PTY-starving handling path.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto execute_public_procedure_step(ProcedureExecutionState& state, Sessions& sessions,
+                                                 PaneRuntimeStore& runtimes,
+                                                 std::uint64_t& activity_order,
+                                                 PublicScratch& scratch_owner)
+    -> std::optional<std::string> {
+  if (state.next_action >= state.actions.size()) {
+    return encode_procedure_result(state);
+  }
+  const auto index = state.next_action;
+  const auto& source = std::span(state.actions).subspan(index, 1).front();
+  auto action = concrete_procedure_action(source, state.bindings, false);
+  PublicActionExecution execution;
+  if (action.has_value()) {
+    auto scratch = std::span<std::byte>{};
+    if (action->kind == api::ActionKind::pane_capture) {
+      scratch = acquire_public_scratch(scratch_owner);
+    }
+    if (scratch.empty() && action->kind == api::ActionKind::pane_capture) {
+      execution.status = CommandStatus::failed;
+    } else {
+      execution = execute_public_action(*action, sessions, runtimes, activity_order, scratch);
+    }
+  }
+  const auto result_template = concrete_procedure_action(source, state.shapes, true);
+  if (!result_template.has_value()) {
+    state.ok = false;
+    return encode_procedure_result(state, "resource_failure", index, action.has_value());
+  }
+  const auto& result_action = action.has_value() ? *action : *result_template;
+  auto encoded = encode_public_result(result_action, execution);
+  if (encoded.empty()) {
+    state.ok = false;
+    return encode_procedure_result(state, "resource_failure", index, action.has_value());
+  }
+  if (encoded.back() == '\n') {
+    encoded.pop_back();
+  }
+  std::string wrapped = R"({"index":)" + std::to_string(index);
+  const auto id = api::json_string(source, "id");
+  if (id.has_value()) {
+    wrapped += R"(,"id":)";
+    if (!api::append_json_string(wrapped, *id)) {
+      state.ok = false;
+      return encode_procedure_result(state, "resource_failure", index, action.has_value());
+    }
+  }
+  wrapped += R"(,"result":)" + encoded + "}";
+  constexpr std::size_t procedure_result_envelope_reserve = 512;
+  static_assert(procedure_result_envelope_reserve < api::json_bytes_max);
+  const auto separator = state.results.empty() ? 0U : 1U;
+  if (state.retained_result_bytes > api::json_bytes_max - procedure_result_envelope_reserve ||
+      separator >
+          api::json_bytes_max - procedure_result_envelope_reserve - state.retained_result_bytes ||
+      wrapped.size() > api::json_bytes_max - procedure_result_envelope_reserve -
+                           state.retained_result_bytes - separator) {
+    state.ok = false;
+    return encode_procedure_result(state, "result_too_large", index, action.has_value());
+  }
+  state.retained_result_bytes += separator + wrapped.size();
+  state.results.push_back(std::move(wrapped));
+  const bool succeeded =
+      execution.status == CommandStatus::applied || execution.status == CommandStatus::no_effect;
+  state.ok = state.ok && succeeded;
+  const bool creates = action.has_value() && (action->kind == api::ActionKind::session_start ||
+                                              action->kind == api::ActionKind::tab_new ||
+                                              action->kind == api::ActionKind::pane_split);
+  state.bindings.push_back({.id = id.has_value() ? std::string(*id) : std::string{},
+                            .session = creates,
+                            .tab = creates,
+                            .pane = creates,
+                            .output = std::move(execution)});
+  ++state.next_action;
+  if ((!succeeded && !state.continue_on_error) || state.next_action == state.actions.size()) {
+    return encode_procedure_result(state);
+  }
+  return std::nullopt;
+}
+
+void finish_public_output(PendingConnection& pending, std::string output,
+                          const PendingAction action) noexcept {
+  if (output.empty()) {
+    pending.state = PendingState::unused;
+    return;
+  }
+  pending.public_output = std::move(output);
+  pending.public_output_offset = 0;
+  pending.action = action;
+  pending.state = PendingState::flush_response;
+  pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+}
+
+// NOLINTNEXTLINE(bugprone-exception-escape)
+void service_public_procedures(PendingConnections& connections, Sessions& sessions,
+                               PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                               PublicScratch& scratch, std::size_t& cursor) noexcept {
+  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
+    const auto slot = (cursor + visited) % connections.size();
+    auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+    if (pending == nullptr || pending->state != PendingState::execute_public_procedure ||
+        pending->procedure == nullptr) {
+      continue;
+    }
+    try {
+      auto output = execute_public_procedure_step(*pending->procedure, sessions, runtimes,
+                                                  activity_order, scratch);
+      if (output.has_value()) {
+        pending->procedure.reset();
+        finish_public_output(*pending, std::move(*output), PendingAction::keep_action);
+      }
+    } catch (...) {
+      try {
+        pending->procedure->ok = false;
+        auto output = encode_procedure_result(*pending->procedure, "resource_failure",
+                                              pending->procedure->next_action, false);
+        pending->procedure.reset();
+        finish_public_output(*pending, std::move(output), PendingAction::keep_action);
+      } catch (...) {
+        pending->procedure.reset();
+        pending->state = PendingState::unused;
+      }
+    }
+    cursor = (slot + 1U) % connections.size();
+    return;
+  }
+}
+
+[[nodiscard]] auto semantic_hash(const Sessions& sessions,
+                                 const std::optional<api::SessionSelector>& filter) noexcept
+    -> std::uint64_t {
+  std::uint64_t value = 1469598103934665603ULL;
+  const auto mix = [&value](const std::uint64_t part) {
+    value ^= part;
+    value *= 1099511628211ULL;
+  };
+  for (const auto& session : sessions) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    if (filter.has_value() &&
+        ((filter->id.is_valid() && filter->id != session->id) ||
+         (!filter->id.is_valid() && filter->name != session->session_name()))) {
+      continue;
+    }
+    mix(session->id.slot());
+    mix(session->id.generation());
+    for (const char character : session->session_name()) {
+      mix(static_cast<unsigned char>(character));
+    }
+    mix(session->mutation_generation);
+    mix(session->attachment_runtime.client >= 0 ? 1U : 0U);
+  }
+  return value;
+}
+
+struct ObservedPane final {
+  SessionRecord* session{nullptr};
+  Pane* pane{nullptr};
+  PaneRuntime* runtime{nullptr};
+};
+
+[[nodiscard]] auto observed_pane(PendingConnection& pending, Sessions& sessions,
+                                 PaneRuntimeStore& runtimes) noexcept -> ObservedPane {
+  if (!pending.subscription.session.has_value() || !pending.subscription.pane.has_value()) {
+    return {};
+  }
+  auto* const session = public_session(sessions, *pending.subscription.session);
+  auto* const pane =
+      session == nullptr ? nullptr : find_pane(*session, pending.subscription.pane->id);
+  auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
+  return {.session = session, .pane = pane, .runtime = runtime};
+}
+
+[[nodiscard]] auto append_public_process(std::string& output, const Pane& pane,
+                                         const PaneRuntime& runtime) -> bool {
+  if (!pane.process_exit.has_value()) {
+    return append_public(output,
+                         runtime.child > 0 ? R"({"state":"running"})" : R"({"state":"exiting"})");
+  }
+  switch (pane.process_exit->kind) {
+  case ProcessExitKind::unknown:
+    return append_public(output, R"({"state":"exited_unknown"})");
+  case ProcessExitKind::exited:
+    return append_public(output, R"({"state":"exited","code":)") &&
+           append_public_number(output, pane.process_exit->value) && append_public(output, "}");
+  case ProcessExitKind::signaled:
+    return append_public(output, R"({"state":"signaled","signal":)") &&
+           append_public_number(output, pane.process_exit->value) && append_public(output, "}");
+  }
+  return false;
+}
+
+[[nodiscard]] auto append_event_header(std::string& output, PendingConnection& pending,
+                                       const std::string_view event) -> bool {
+  return append_public(output, R"({"schema":"lemma.event/v1","sequence":)") &&
+         append_public_number(output, pending.event_sequence++) &&
+         append_public(output, R"(,"event":)") && api::append_json_string(output, event);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto append_sessions_snapshot(std::string& output, const Sessions& sessions,
+                                            const std::optional<api::SessionSelector>& filter)
+    -> bool {
+  ConnectionOutput encoded;
+  bool appended = false;
+  if (!filter.has_value()) {
+    appended = append_structured_sessions(encoded, sessions);
+  } else {
+    const SessionRecord* session = filter->id.is_valid() ? sessions.get(filter->id) : nullptr;
+    if (session == nullptr && !filter->id.is_valid()) {
+      for (const auto& candidate : sessions) {
+        if (candidate != nullptr && candidate->active &&
+            candidate->session_name() == filter->name) {
+          session = candidate.get();
+          break;
+        }
+      }
+    }
+    appended =
+        encoded.append_text("[") &&
+        (session == nullptr || !session->active || append_structured_session(encoded, *session)) &&
+        encoded.append_text("]");
+  }
+  std::string json;
+  return appended && copy_connection_json(encoded, json) && append_public(output, json);
+}
+
+[[nodiscard]] auto append_screen_event(std::string& output, PendingConnection& pending,
+                                       const ObservedPane target,
+                                       const std::span<std::byte> scratch,
+                                       const std::string_view event = "pane.screen") -> bool {
+  if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
+    return false;
+  }
+  const auto formatted = target.runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
+  if (!formatted.has_value() || !append_event_header(output, pending, event) ||
+      !append_public(output, R"(,"session":)") || !append_public_id(output, target.session->id) ||
+      !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
+      !append_public(output, R"(,"generation":)") ||
+      !append_public_number(output, target.runtime->mutation_generation) ||
+      !append_public(output, R"(,"text":)")) {
+    return false;
+  }
+  // Byte payloads and character storage have the same object representation.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted);
+  return api::append_json_string(output, text) && append_public(output, "}\n");
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto encode_initial_snapshot(PendingConnection& pending, Sessions& sessions,
+                                           PaneRuntimeStore& runtimes,
+                                           const std::span<std::byte> scratch) -> std::string {
+  std::string output;
+  try {
+    pending.event_sequence = 0;
+    if (!append_event_header(output, pending, "snapshot") ||
+        !append_public(output, R"(,"sessions":)") ||
+        !append_sessions_snapshot(output, sessions, pending.subscription.session)) {
+      return {};
+    }
+    const auto target = observed_pane(pending, sessions, runtimes);
+    if (target.pane != nullptr && target.runtime != nullptr) {
+      if (!append_public(output, R"(,"session":)") ||
+          !append_public_id(output, target.session->id) || !append_public(output, R"(,"pane":)") ||
+          !append_public_id(output, target.pane->id) || !append_public(output, R"(,"process":)") ||
+          !append_public_process(output, *target.pane, *target.runtime)) {
+        return {};
+      }
+      if (pending.subscription.screen) {
+        const auto formatted =
+            target.runtime->terminal.format_screen(vt::ScreenFormat::plain, scratch);
+        if (!formatted.has_value() || !append_public(output, R"(,"generation":)") ||
+            !append_public_number(output, target.runtime->mutation_generation) ||
+            !append_public(output, R"(,"text":)")) {
+          return {};
+        }
+        // Byte payloads and character storage have the same object representation.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted);
+        if (!api::append_json_string(output, text)) {
+          return {};
+        }
+      }
+      pending.observed_pane_present = true;
+      pending.observed_terminal_generation = target.runtime->mutation_generation;
+      pending.observed_process = target.pane->process_exit.value_or(ProcessExit{});
+      pending.observed_process_exited = target.pane->process_exit.has_value();
+    } else {
+      pending.observed_pane_present = false;
+      pending.observed_process_exited = false;
+      pending.observed_terminal_generation = 0;
+      pending.observed_process = {};
+    }
+    pending.observed_semantic_hash = semantic_hash(sessions, pending.subscription.session);
+    return append_public(output, "}\n") ? output : std::string{};
+  } catch (...) {
+    return {};
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void prepare_public_document(PendingConnection& pending, Sessions& sessions,
+                             PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                             PublicScratch& scratch_owner) noexcept {
+  try {
+    auto parsed = api::parse_json(pending.public_input);
+    if (!parsed.value.has_value()) {
+      finish_public_output(
+          pending,
+          encode_public_error({.reason = "invalid_json", .field = {}}, parsed.error_offset),
+          PendingAction::close);
+      return;
+    }
+    const auto schema = api::json_string(*parsed.value, "schema");
+    if (schema == std::optional<std::string_view>{api::action_schema}) {
+      const auto decoded = api::decode_action(*parsed.value);
+      if (!decoded.action.has_value()) {
+        finish_public_output(pending, encode_public_error(decoded.error),
+                             PendingAction::keep_action);
+        return;
+      }
+      auto scratch = std::span<std::byte>{};
+      if (decoded.action->kind == api::ActionKind::pane_capture) {
+        scratch = acquire_public_scratch(scratch_owner);
+      }
+      PublicActionExecution execution;
+      if (scratch.empty() && decoded.action->kind == api::ActionKind::pane_capture) {
+        execution.status = CommandStatus::failed;
+      } else {
+        execution =
+            execute_public_action(*decoded.action, sessions, runtimes, activity_order, scratch);
+      }
+      auto output = encode_public_result(*decoded.action, execution);
+      if (output.empty()) {
+        execution = {};
+        execution.status = CommandStatus::failed;
+        output = encode_public_result(*decoded.action, execution);
+      }
+      finish_public_output(pending, std::move(output), PendingAction::keep_action);
+      return;
+    }
+    if (schema == std::optional<std::string_view>{"lemma.proc/v1"}) {
+      auto prepared = prepare_public_procedure(std::move(*parsed.value));
+      if (!prepared.has_value()) {
+        finish_public_output(pending,
+                             procedure_error(prepared.error().reason, prepared.error().index),
+                             PendingAction::keep_action);
+        return;
+      }
+      pending.procedure = std::make_unique<ProcedureExecutionState>(std::move(prepared.value()));
+      std::string{}.swap(pending.public_input);
+      pending.state = PendingState::execute_public_procedure;
+      return;
+    }
+    if (schema == std::optional<std::string_view>{api::events_schema}) {
+      const auto decoded = api::decode_event_subscription(*parsed.value);
+      if (!decoded.subscription.has_value()) {
+        finish_public_output(pending, encode_public_error(decoded.error), PendingAction::close);
+        return;
+      }
+      pending.subscription = *decoded.subscription;
+      pending.state = PendingState::prepare_public_observer;
+      return;
+    }
+    finish_public_output(pending,
+                         encode_public_error({.reason = "invalid_schema", .field = "schema"}),
+                         PendingAction::close);
+  } catch (...) {
+    finish_public_output(pending, encode_public_error({.reason = "resource_failure", .field = {}}),
+                         PendingAction::close);
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto service_public_observers(PendingConnections& connections, Sessions& sessions,
+                                            PaneRuntimeStore& runtimes,
+                                            PublicScratch& scratch_owner,
+                                            std::size_t& cursor) noexcept -> bool {
+  bool formatted_screen = false;
+  bool screen_work_pending = false;
+  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
+    const auto slot = (cursor + visited) % connections.size();
+    auto* const owner = std::span(connections).subspan(slot, 1).front().get();
+    if (owner == nullptr ||
+        (owner->state != PendingState::prepare_public_observer &&
+         owner->state != PendingState::observe) ||
+        !owner->public_output.empty()) {
+      continue;
+    }
+    auto& pending = *owner;
+    std::string output;
+    try {
+      if (pending.state == PendingState::prepare_public_observer) {
+        if (pending.subscription.screen && formatted_screen) {
+          screen_work_pending = true;
+          continue;
+        }
+        auto scratch = std::span<std::byte>{};
+        if (pending.subscription.screen) {
+          scratch = acquire_public_scratch(scratch_owner);
+        }
+        if (pending.subscription.screen && scratch.empty()) {
+          finish_public_output(pending,
+                               encode_public_error({.reason = "resource_failure", .field = {}}),
+                               PendingAction::close);
+          continue;
+        }
+        auto snapshot = encode_initial_snapshot(pending, sessions, runtimes, scratch);
+        if (snapshot.empty()) {
+          finish_public_output(pending,
+                               encode_public_error({.reason = "resource_failure", .field = {}}),
+                               PendingAction::close);
+          continue;
+        }
+        finish_public_output(pending, std::move(snapshot), PendingAction::keep_observe);
+        if (pending.subscription.screen) {
+          formatted_screen = true;
+          cursor = (slot + 1U) % connections.size();
+        }
+        continue;
+      }
+      const auto hash = semantic_hash(sessions, pending.subscription.session);
+      if (hash != pending.observed_semantic_hash) {
+        if (!append_event_header(output, pending, "state.changed") ||
+            !append_public(output, R"(,"sessions":)") ||
+            !append_sessions_snapshot(output, sessions, pending.subscription.session) ||
+            !append_public(output, "}\n")) {
+          pending.state = PendingState::unused;
+          continue;
+        }
+        pending.observed_semantic_hash = hash;
+      }
+      const auto target = observed_pane(pending, sessions, runtimes);
+      const bool present = target.pane != nullptr && target.runtime != nullptr;
+      if (!present && pending.observed_pane_present) {
+        if (!append_event_header(output, pending, "pane.closed") || !append_public(output, "}\n")) {
+          pending.state = PendingState::unused;
+          continue;
+        }
+        pending.observed_pane_present = false;
+        pending.observed_process_exited = false;
+        pending.observed_terminal_generation = 0;
+        pending.observed_process = {};
+      } else if (present) {
+        const auto process = target.pane->process_exit.value_or(ProcessExit{});
+        const bool process_exited = target.pane->process_exit.has_value();
+        if (!pending.observed_pane_present || process_exited != pending.observed_process_exited ||
+            process.kind != pending.observed_process.kind ||
+            process.value != pending.observed_process.value) {
+          if (!append_event_header(output, pending, "pane.process") ||
+              !append_public(output, R"(,"session":)") ||
+              !append_public_id(output, target.session->id) ||
+              !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
+              !append_public(output, R"(,"process":)") ||
+              !append_public_process(output, *target.pane, *target.runtime) ||
+              !append_public(output, "}\n")) {
+            pending.state = PendingState::unused;
+            continue;
+          }
+          pending.observed_process = process;
+          pending.observed_process_exited = process_exited;
+        }
+        if (pending.subscription.screen &&
+            target.runtime->mutation_generation != pending.observed_terminal_generation) {
+          if (!output.empty() || formatted_screen) {
+            screen_work_pending = true;
+          } else {
+            const auto scratch = acquire_public_scratch(scratch_owner);
+            if (scratch.empty() || !append_screen_event(output, pending, target, scratch)) {
+              pending.state = PendingState::unused;
+              continue;
+            }
+            pending.observed_terminal_generation = target.runtime->mutation_generation;
+            formatted_screen = true;
+            cursor = (slot + 1U) % connections.size();
+          }
+        }
+        pending.observed_pane_present = true;
+      }
+      if (!output.empty()) {
+        finish_public_output(pending, std::move(output), PendingAction::keep_observe);
+      }
+    } catch (...) {
+      pending.state = PendingState::unused;
+    }
+  }
+  return screen_work_pending;
+}
 
 // Once setup capacity is occupied, a small independent pool reads only the protocol discriminator
 // needed to return a wire-compatible capacity response. These responders do not consume setup
@@ -6568,12 +8023,10 @@ using CapacityRejectionConnections =
     std::array<CapacityRejectionConnection, capacity_rejection_connections_max>;
 static_assert(sizeof(CapacityRejectionConnections) <= std::size_t{4} * 1'024U);
 
-constexpr auto setup_progress_timeout = std::chrono::seconds(5);
-constexpr auto setup_total_timeout = std::chrono::seconds(10);
-
 void record_pending_progress(PendingConnection& pending) noexcept {
+  const auto progress = std::chrono::steady_clock::now() + setup_progress_timeout;
   pending.deadline =
-      std::min(std::chrono::steady_clock::now() + setup_progress_timeout, pending.setup_deadline);
+      pending.public_connection ? progress : std::min(progress, pending.setup_deadline);
 }
 
 void begin_pending_field(PendingConnection& pending, const PendingState state,
@@ -6945,7 +8398,7 @@ void prepare_semantic_action(PendingConnection& pending, Sessions& sessions,
     command.kind = CommandKind::set_zoom;
     command.payload = PaneZoomCommand{.enabled = action == protocol::ControlAction::pane_zoom_on};
   } else {
-    if (value == 0 || value > 100U) {
+    if (value == 0 || value > command_resize_amount_max) {
       finish_pending_byte(pending, response_failed);
       return;
     }
@@ -6974,14 +8427,8 @@ void prepare_semantic_action(PendingConnection& pending, Sessions& sessions,
       finish_pending_byte(pending, response_failed);
       return;
     }
-    CommandResult result{.status = CommandStatus::no_effect};
-    for (std::uint16_t step = 0; step < value; ++step) {
-      result = dispatch_session_command(*session, runtimes, command);
-      if (!result.succeeded()) {
-        break;
-      }
-    }
-    finish_command_result(pending, result);
+    command.payload = CommandCoordinate{.value = value};
+    finish_command_result(pending, dispatch_session_command(*session, runtimes, command));
     return;
   }
   finish_command_result(pending, dispatch_session_command(*session, runtimes, command));
@@ -7362,14 +8809,20 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
   finish_pending_output(pending, PendingAction::attach);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
                             PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
                             std::uint64_t& activity_order) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
-    if (pending.command == protocol::attach_magic.front()) {
+    if (pending.command == std::byte{'{'}) {
+      pending.public_connection = true;
+      pending.public_input = "{";
+      pending.state = PendingState::read_public_json;
+      pending.field_size = 0;
+      pending.field_target = 0;
+    } else if (pending.command == protocol::attach_magic.front()) {
       if (!pending.attach_decoder.prepare().has_value()) {
         pending.state = PendingState::unused;
         break;
@@ -7577,6 +9030,10 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   case PendingState::read_control_payload:
     prepare_control_payload(pending, sessions, runtimes);
     break;
+  case PendingState::read_public_json:
+  case PendingState::execute_public_procedure:
+  case PendingState::prepare_public_observer:
+  case PendingState::observe:
   case PendingState::unused:
   case PendingState::flush_response:
     LEMMA_ASSERT(false);
@@ -7584,17 +9041,85 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
+void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
+                         std::uint64_t& activity_order, PublicScratch& scratch) noexcept {
+  if (pending.state == PendingState::observe) {
+    std::array<std::byte, 256> unexpected{};
+    const auto received = ::recv(pending.descriptor, unexpected.data(), unexpected.size(), 0);
+    if (received == 0 || received > 0 ||
+        (received < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)) {
+      pending.state = PendingState::unused;
+    }
+    return;
+  }
+  std::array<char, std::size_t{16} * 1'024U> input{};
+  const auto received = ::recv(pending.descriptor, input.data(), input.size(), 0);
+  if (received > 0) {
+    record_pending_progress(pending);
+    const auto size = static_cast<std::size_t>(received);
+    if (size > api::json_bytes_max - pending.public_input.size()) {
+      finish_public_output(pending,
+                           encode_public_error({.reason = "payload_too_large", .field = {}}),
+                           PendingAction::close);
+      return;
+    }
+    try {
+      pending.public_input.append(input.data(), size);
+    } catch (...) {
+      pending.state = PendingState::unused;
+      return;
+    }
+    const auto newline = pending.public_input.find('\n');
+    if (newline == std::string::npos) {
+      return;
+    }
+    const auto trailing = std::string_view(pending.public_input).substr(newline + 1U);
+    if (std::ranges::any_of(trailing, [](const char character) {
+          return character != ' ' && character != '\t' && character != '\r' && character != '\n';
+        })) {
+      finish_public_output(pending,
+                           encode_public_error({.reason = "pipelining_not_supported", .field = {}}),
+                           PendingAction::close);
+      return;
+    }
+    pending.public_input.resize(newline);
+    if (!pending.public_input.empty() && pending.public_input.back() == '\r') {
+      pending.public_input.pop_back();
+    }
+    prepare_public_document(pending, sessions, runtimes, activity_order, scratch);
+    return;
+  }
+  if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+    return;
+  }
+  pending.state = PendingState::unused;
+}
+
 // The branches are the bounded outcomes of one nonblocking setup read.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                            std::uint64_t& activity_order, const std::size_t slot) noexcept {
+                            std::uint64_t& activity_order, PublicScratch& scratch,
+                            const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
   for (std::size_t operation = 0; operation < operations_per_turn_max && pending->active() &&
                                   pending->state != PendingState::flush_response;
        ++operation) {
+    if (pending->state == PendingState::execute_public_procedure ||
+        pending->state == PendingState::prepare_public_observer) {
+      return;
+    }
+    if (pending->state == PendingState::read_public_json ||
+        pending->state == PendingState::observe) {
+      process_public_read(*pending, sessions, runtimes, activity_order, scratch);
+      if (pending->state == PendingState::unused) {
+        close_pending(connections, slot, sessions);
+      }
+      return;
+    }
     if (pending->state == PendingState::read_attach) {
       const auto decoded = pending->attach_decoder.next();
       if (!decoded.has_value()) {
@@ -7675,14 +9200,16 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                          std::uint64_t& activity_order, const std::size_t slot) noexcept {
+                          std::uint64_t& activity_order, PublicScratch& scratch,
+                          const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
-  if (std::chrono::steady_clock::now() >= pending->setup_deadline) {
+  if (!pending->public_connection && std::chrono::steady_clock::now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, runtimes, extensions, activity_order, slot);
+  process_pending_fields(connections, sessions, runtimes, extensions, activity_order, scratch,
+                         slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -7752,6 +9279,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   return {.bytes = sent, .error = sent < 0 ? errno : 0};
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 [[nodiscard]] auto flush_pending_output(PendingConnections& connections, const std::size_t slot,
                                         std::size_t& global_budget, Sessions& sessions,
                                         PaneRuntimeStore& runtimes,
@@ -7759,6 +9287,51 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   const auto action = pending->action;
+  if (pending->public_connection) {
+    while (pending->public_output_offset < pending->public_output.size() && global_budget > 0) {
+      const auto remaining =
+          std::string_view(pending->public_output)
+              .substr(pending->public_output_offset,
+                      std::min(pending->public_output.size() - pending->public_output_offset,
+                               global_budget));
+      const auto sent =
+          ::send(pending->descriptor, remaining.data(), remaining.size(), MSG_NOSIGNAL);
+      if (sent > 0) {
+        const auto size = static_cast<std::size_t>(sent);
+        pending->public_output_offset += size;
+        global_budget -= size;
+        record_pending_progress(*pending);
+        continue;
+      }
+      if (sent < 0 && errno == EINTR) {
+        continue;
+      }
+      if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return false;
+      }
+      close_pending(connections, slot, sessions);
+      return false;
+    }
+    if (pending->public_output_offset < pending->public_output.size()) {
+      return false;
+    }
+    pending->public_output.clear();
+    pending->public_output_offset = 0;
+    if (action == PendingAction::keep_action) {
+      pending->public_input.clear();
+      pending->state = PendingState::read_public_json;
+      pending->action = PendingAction::close;
+      return false;
+    }
+    if (action == PendingAction::keep_observe) {
+      pending->public_input.clear();
+      pending->state = PendingState::observe;
+      pending->action = PendingAction::close;
+      return false;
+    }
+    close_pending(connections, slot, sessions);
+    return false;
+  }
   const auto status =
       flush_connection_output(pending->output, global_budget, &write_pending_output, pending);
   if (status == ConnectionFlushStatus::hard_error) {
@@ -7776,6 +9349,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   return action == PendingAction::shutdown;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_capacity_rejection_read(CapacityRejectionConnections& connections,
                                      const std::size_t slot) noexcept {
   auto& connection = std::span(connections).subspan(slot, 1).front();
@@ -7788,6 +9362,12 @@ void process_capacity_rejection_read(CapacityRejectionConnections& connections,
       const auto rejection = protocol::encode_disconnect(
           protocol::DisconnectReason::capacity, "daemon pending connection capacity exhausted");
       const bool appended = connection.output.append(rejection.bytes());
+      LEMMA_ASSERT(appended);
+    } else if (discriminator == std::byte{'{'}) {
+      constexpr std::string_view rejection =
+          R"({"schema":"lemma.action-result/v1","action":"","status":"capacity"}
+)";
+      const bool appended = connection.output.append(std::as_bytes(std::span(rejection)));
       LEMMA_ASSERT(appended);
     } else {
       const bool appended = connection.output.append(std::span(&response_capacity, 1));
@@ -7873,12 +9453,22 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
   return timeout;
 }
 
+[[nodiscard]] auto public_deadline_applies(const PendingConnection& pending) noexcept -> bool {
+  return pending.state == PendingState::flush_response ||
+         (pending.state == PendingState::read_public_json && !pending.public_input.empty());
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
                                 const PendingConnections& pending,
                                 const CapacityRejectionConnections& capacity_rejections,
-                                const ExtensionRuntime* const extensions) noexcept -> int {
+                                const ExtensionRuntime* const extensions,
+                                const bool immediate_public_work) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
   auto timeout = extensions == nullptr ? -1 : extensions->poll_timeout(now);
+  if (immediate_public_work) {
+    timeout = 0;
+  }
   const auto tighten = [now, &timeout](const auto& connection) {
     if (now >= connection.deadline) {
       return true;
@@ -7890,7 +9480,14 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     return false;
   };
   for (const auto& connection : pending) {
-    if (connection != nullptr && connection->active() && tighten(*connection)) {
+    if (connection == nullptr || !connection->active()) {
+      continue;
+    }
+    if (connection->state == PendingState::execute_public_procedure) {
+      return 0;
+    }
+    if ((!connection->public_connection || public_deadline_applies(*connection)) &&
+        tighten(*connection)) {
       return 0;
     }
   }
@@ -8145,6 +9742,7 @@ void apply_pane_runtime_outcome(SessionRecord& session, Tab& tab, PaneRuntimeSto
     std::ranges::copy(exited_title, runtime->process_name.begin());
     runtime->process_name_size = exited_title.size();
     record_terminal_mutation(*runtime);
+    record_session_mutation(session);
     schedule_frame(session, FrameUrgency::state_change, true);
     return;
   }
@@ -8353,7 +9951,9 @@ void expire_pending_connections(PendingConnections& pending_connections,
   const auto now = std::chrono::steady_clock::now();
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
     const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-    if (pending != nullptr && pending->active() && now >= pending->deadline) {
+    if (pending != nullptr && pending->active() &&
+        (!pending->public_connection || public_deadline_applies(*pending)) &&
+        now >= pending->deadline) {
       close_pending(pending_connections, slot, sessions);
     }
   }
@@ -8467,7 +10067,7 @@ struct DescriptorOwner final {
 
 // The branches are the explicit bounded stages of the current single-owner reactor.
 [[nodiscard]] auto
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const release_context, const ExtensionAcquire acquire_extension,
                 void* const extension_context, const ExtensionErrorReporter report_extension_error,
@@ -8477,9 +10077,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
   std::unique_ptr<PaneRuntimeStore> pane_runtimes;
+  PublicScratch public_scratch;
   try {
     pane_runtimes = std::make_unique<PaneRuntimeStore>();
-  } catch (const std::bad_alloc&) {
+  } catch (...) {
     return 1;
   }
   auto& runtimes = *pane_runtimes;
@@ -8511,6 +10112,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
+  std::size_t procedure_cursor = 0;
+  std::size_t observer_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
 
@@ -8519,6 +10122,14 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       return 0;
     }
     reap_exited_children(sessions, runtimes, reap_child, reap_child_context);
+    const bool public_screen_work_pending = service_public_observers(
+        pending_connections, sessions, runtimes, public_scratch, observer_cursor);
+    for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+      const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+      if (pending != nullptr && !pending->active()) {
+        close_pending(pending_connections, slot, sessions);
+      }
+    }
     if (extensions != nullptr) {
       extensions->connect_if_due(std::chrono::steady_clock::now());
     }
@@ -8576,8 +10187,13 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       if (pending == nullptr || !pending->active()) {
         continue;
       }
-      const auto events =
-          static_cast<short>(pending->state == PendingState::flush_response ? POLLOUT : POLLIN);
+      short events = 0;
+      if (pending->state == PendingState::flush_response) {
+        events = POLLOUT;
+      } else if (pending->state != PendingState::execute_public_procedure &&
+                 pending->state != PendingState::prepare_public_observer) {
+        events = POLLIN;
+      }
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = pending->descriptor, .events = events, .revents = 0};
       std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
@@ -8617,9 +10233,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       ++descriptor_count;
     }
 
-    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(sessions, runtimes, pending_connections,
-                                                 capacity_rejections, extensions.get()));
+    const auto poll_result =
+        ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
+               poll_timeout(sessions, runtimes, pending_connections, capacity_rejections,
+                            extensions.get(), public_screen_work_pending));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -8723,9 +10340,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         if (pending->state != PendingState::flush_response &&
+            pending->state != PendingState::execute_public_procedure &&
+            pending->state != PendingState::prepare_public_observer &&
             (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, extensions.get(),
-                               activity_order, owner.auxiliary_slot);
+                               activity_order, public_scratch, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -8737,6 +10356,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
       }
     }
+    service_public_procedures(pending_connections, sessions, runtimes, activity_order,
+                              public_scratch, procedure_cursor);
 
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
@@ -8837,6 +10458,15 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     expire_capacity_rejections(capacity_rejections);
     owned_a_session = owned_a_session || sessions.size() > 0;
     reclaim_inactive_sessions(sessions, runtimes);
+    if (owned_a_session && sessions.size() == 0) {
+      for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+        const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
+        if (pending != nullptr && pending->public_connection &&
+            pending->state != PendingState::flush_response) {
+          close_pending(pending_connections, slot, sessions);
+        }
+      }
+    }
     const bool pending_control =
         std::ranges::any_of(pending_connections, [](const auto& connection) {
           return connection != nullptr && connection->active();
