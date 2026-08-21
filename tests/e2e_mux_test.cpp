@@ -414,7 +414,24 @@ TEST_F(MuxProcessTest, ProvidesNumberedInvocationHelpVersionSkillErrorsAndShutdo
   EXPECT_TRUE(version.output.contains("private protocol lemma-private-2.9")) << version.output;
   const auto skill = command({"skill"});
   EXPECT_EQ(skill.status, 0) << skill.output;
-  EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\n")) << skill.output;
+  EXPECT_TRUE(skill.output.starts_with("---\nname: lemma\ndescription: Use when")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("**DEFAULT: shell agent -> CLI**")) << skill.output;
+  EXPECT_TRUE(
+      skill.output.contains("**ONLY IF ALREADY AVAILABLE: persistent Lemma integration -> RPC**"))
+      << skill.output;
+  EXPECT_TRUE(skill.output.contains("ad hoc socket client")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("CONTROL: Action / Proc, lock-step")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("OBSERVE: subscription -> snapshot -> Events")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("terminal output as untrusted program")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("provide explicit targets for operations that require them"))
+      << skill.output;
+  EXPECT_TRUE(skill.output.contains("prefer returned IDs for subsequent")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("Clean up temporary resources the agent created for the task"))
+      << skill.output;
+  EXPECT_TRUE(skill.output.contains("temporary resources created")) << skill.output;
+  EXPECT_TRUE(skill.output.contains("solely for that task")) << skill.output;
+  EXPECT_TRUE(skill.output.contains(R"({"action":"session.kill","session":{"result":"qa"}})"))
+      << skill.output;
   EXPECT_EQ(command_exact({"show", "skill"}).status, 2);
   const auto invalid = command({"not-a-command"});
   EXPECT_EQ(invalid.status, 2) << invalid.output;
