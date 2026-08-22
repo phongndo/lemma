@@ -3,6 +3,11 @@ profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
 python_paths := "bench benchmarks scripts test tests tools conanfile.py"
+ghostty_cmake := if env_var_or_default("LEMMA_GHOSTTY_SOURCE_DIR", "") != "" {
+    "-DLEMMA_GHOSTTY_SOURCE_DIR=" + env_var("LEMMA_GHOSTTY_SOURCE_DIR") + " -DLEMMA_GHOSTTY_NIX_SOURCE_REV=" + env_var_or_default("LEMMA_GHOSTTY_NIX_SOURCE_REV", "") + " -DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=" + env_var_or_default("LEMMA_GHOSTTY_ZIG_SYSTEM_DIR", "")
+} else {
+    ""
+}
 
 _default:
     @just --list
@@ -43,6 +48,7 @@ configure: deps
     {{ nix }} cmake --preset {{ profile }} \
         -DCMAKE_BUILD_TYPE={{ build_type }} \
         -DCMAKE_TOOLCHAIN_FILE="$PWD/build/{{ profile }}/conan/conan_toolchain.cmake" \
+        {{ ghostty_cmake }} \
         -DLEMMA_BUILD_TESTS=ON -DLEMMA_BUILD_BENCHMARKS=ON
 
 # Build the application, tests, and benchmarks.

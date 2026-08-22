@@ -84,6 +84,14 @@ In the development shell, `just build`, `just test`, and `just run` default to r
 `just profile=debug build` (or `test`/`run`) for the in-tree debug build. Both variants use the same
 per-user daemon endpoint, so shut down the running daemon before switching between them.
 
+`nix develop` exports the flake-locked Ghostty source, so Linux and macOS do not need
+`third_party/ghostty` initialized for local Nix builds. Re-enter the shell after pulling flake
+changes. Without Nix, initialize the submodule first:
+
+```sh
+git submodule update --init --depth 1 third_party/ghostty
+```
+
 For selective feedback, use `./test unit`, `./test layout`, `./test terminal`, or
 `./test mux resize`; `./test stress` and `./test extended` are explicit. `./bench` runs the short
 native smoke, with `terminal`, `layout`, `protocol`, `mux`, and `extended` selectors. See

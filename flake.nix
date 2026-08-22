@@ -38,6 +38,27 @@
         "x86_64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      ghosttyPin =
+        let
+          pin = builtins.fromJSON (builtins.readFile ./third_party/ghostty-metadata/PIN.json);
+        in
+        if ghosttySource.rev == pin.commit then
+          pin.commit
+        else
+          throw "Ghostty flake input ${ghosttySource.rev} does not match PIN.json ${pin.commit}";
+      mkGhosttyDeps = pkgs: zigPackage:
+        pkgs.callPackage "${ghosttySource}/build.zig.zon.nix" {
+          zig_0_16 = zigPackage;
+          name = "lemma-ghostty-zig-dependencies-${builtins.substring 0 12 ghosttySource.rev}";
+          # Zig's build runner requires real dependency directories rather than symlinks.
+          linkFarm = name: entries:
+            pkgs.runCommand name { } ''
+              mkdir -p "$out"
+              ${pkgs.lib.concatMapStringsSep "\n" (entry: ''
+                cp -rL ${entry.path} "$out/${entry.name}"
+              '') entries}
+            '';
+        };
     in
     {
       packages = forAllSystems (
@@ -51,18 +72,7 @@
             buildContrib = false;
             doCheck = false;
           };
-          ghosttyDeps = pkgs.callPackage "${ghosttySource}/build.zig.zon.nix" {
-            zig_0_16 = zigPackage;
-            name = "lemma-ghostty-zig-dependencies-${builtins.substring 0 12 ghosttySource.rev}";
-            # Zig's build runner requires real dependency directories rather than symlinks.
-            linkFarm = name: entries:
-              pkgs.runCommand name { } ''
-                mkdir -p "$out"
-                ${pkgs.lib.concatMapStringsSep "\n" (entry: ''
-                  cp -rL ${entry.path} "$out/${entry.name}"
-                '') entries}
-              '';
-          };
+          ghosttyDeps = mkGhosttyDeps pkgs zigPackage;
           mkLemma =
             { buildType
             , binaryName
@@ -92,7 +102,7 @@
                 "-DLEMMA_BUILD_TESTS=OFF"
                 "-DLEMMA_BUILD_BENCHMARKS=OFF"
                 "-DLEMMA_GHOSTTY_SOURCE_DIR=${ghosttySource}"
-                "-DLEMMA_GHOSTTY_NIX_SOURCE_REV=${ghosttySource.rev}"
+                "-DLEMMA_GHOSTTY_NIX_SOURCE_REV=${ghosttyPin}"
                 "-DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=${ghosttyDeps}"
               ];
 
@@ -152,6 +162,7 @@
           isDarwin = pkgs.stdenv.isDarwin;
           darwinTools = llvm.clang-tools;
           zigPackage = zig.packages.${system}."0.16.0";
+          ghosttyDeps = mkGhosttyDeps pkgs zigPackage;
           ciHk =
             if isDarwin then
               hk.packages.${system}.default
@@ -246,6 +257,9 @@
           ];
           shellEnvironment = {
             CMAKE_GENERATOR = "Ninja";
+            LEMMA_GHOSTTY_SOURCE_DIR = "${ghosttySource}";
+            LEMMA_GHOSTTY_NIX_SOURCE_REV = ghosttyPin;
+            LEMMA_GHOSTTY_ZIG_SYSTEM_DIR = "${ghosttyDeps}";
             shellHook =
               if isDarwin then
                 ''

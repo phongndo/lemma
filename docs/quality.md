@@ -193,7 +193,7 @@ Measured results and reproduction commands live in [`performance.md`](performanc
 
 ## Dependency qualification: libghostty-vt
 
-Keep Ghostty's exact upstream commit, Zig version, build options, expected features, and optimization mapping pinned in `third_party/ghostty-metadata/PIN.json`. Configuration rejects a missing, mismatched, or dirty source tree.
+Keep Ghostty's exact upstream commit, Zig version, build options, expected features, and optimization mapping pinned in `third_party/ghostty-metadata/PIN.json`. Configuration rejects a missing, mismatched, or dirty source tree. `nix develop` and `nix build` use the flake-locked Ghostty input on Linux and macOS; that revision must match `PIN.json`. Non-Nix builds use the `third_party/ghostty` submodule.
 
 For every Ghostty upgrade:
 

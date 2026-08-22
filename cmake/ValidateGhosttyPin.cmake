@@ -19,11 +19,38 @@ if(DEFINED GHOSTTY_NIX_SOURCE_REV AND NOT GHOSTTY_NIX_SOURCE_REV STREQUAL "")
       "Ghostty flake input mismatch: PIN.json requires ${ghostty_pinned_commit}, found ${GHOSTTY_NIX_SOURCE_REV}"
     )
   endif()
+  if(NOT EXISTS "${GHOSTTY_SOURCE_DIR}/build.zig")
+    message(FATAL_ERROR "attested Ghostty source is missing build.zig: ${GHOSTTY_SOURCE_DIR}")
+  endif()
   return()
 endif()
 
 if(NOT DEFINED GHOSTTY_GIT_EXECUTABLE)
   message(FATAL_ERROR "a non-Nix Ghostty source requires Git validation")
+endif()
+# An uninitialized submodule is an empty directory. Git then walks up to Lemma and
+# reports the parent HEAD, which looks like a pin mismatch instead of a missing checkout.
+if(NOT EXISTS "${GHOSTTY_SOURCE_DIR}/.git" OR NOT EXISTS "${GHOSTTY_SOURCE_DIR}/build.zig")
+  message(FATAL_ERROR
+    "Ghostty submodule is not initialized at ${GHOSTTY_SOURCE_DIR}; run: git submodule update --init --depth 1 third_party/ghostty"
+  )
+endif()
+execute_process(
+  COMMAND "${GHOSTTY_GIT_EXECUTABLE}" rev-parse --show-toplevel
+  WORKING_DIRECTORY "${GHOSTTY_SOURCE_DIR}"
+  RESULT_VARIABLE ghostty_toplevel_result
+  OUTPUT_VARIABLE ghostty_toplevel
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+file(REAL_PATH "${GHOSTTY_SOURCE_DIR}" ghostty_source_real)
+if(NOT ghostty_toplevel_result EQUAL 0)
+  message(FATAL_ERROR "Ghostty source is not a Git checkout: ${GHOSTTY_SOURCE_DIR}")
+endif()
+file(REAL_PATH "${ghostty_toplevel}" ghostty_toplevel_real)
+if(NOT ghostty_source_real STREQUAL ghostty_toplevel_real)
+  message(FATAL_ERROR
+    "Ghostty submodule is not initialized at ${GHOSTTY_SOURCE_DIR}; run: git submodule update --init --depth 1 third_party/ghostty"
+  )
 endif()
 execute_process(
   COMMAND "${GHOSTTY_GIT_EXECUTABLE}" rev-parse HEAD
