@@ -10,7 +10,7 @@ readonly profile="$1"
 
 # Cheap native tests run in parallel. Real process tests intentionally run one at a time:
 # each creates PTYs, sockets, and subprocesses, and host contention can obscure the contract.
-# Stress, allocation, long resource sweeps, and the legacy characterization suite are explicit.
+# Stress, allocation, and long resource sweeps are explicit.
 ctest --preset "${profile}" --no-tests=error -LE 'integration|extended' \
   --parallel "${CTEST_PARALLEL_LEVEL:-4}"
 ctest --preset "${profile}" --no-tests=error -L integration -LE extended --parallel 1

@@ -1,186 +1,134 @@
-# Lemma architecture
+# Architecture
+
+Lemma is one C++23 executable with client, daemon, control, and extension-host roles. One per-user
+daemon owns all live mux and terminal state. Clients are replaceable input and presentation edges.
+
+```text
+physical input ─> input policy ─┐
+CLI / API / mouse ───────────────┴─> typed command ─> Core ─> Runtime
+                                                            ├─> PTY/process
+PTY output ─> Ghostty terminal ─> render/composition ───────┴─> client
+```
 
 ## Model
 
-```text
-physical keyboard       CLI / mouse / Lua / agent
-       |                         |
- daemon input policy       typed semantics
-       |                         |
-       +------ typed command ----+
-                    |
-                    v
-                  CORE
-                |
-        semantic intent
-                |
-                v
-            RUNTIME
-          /    |     \
-   terminal  render  platform/protocol
-       |
-       v
- libghostty-vt
-```
-
-```text
-CORE    = meaning / semantic state / policy
-RUNTIME = execution / external resources / reactor mechanics
-```
-
-Core answers what a command means and which semantic transition is valid. Runtime makes accepted intent happen using processes, PTYs, terminals, transports, clocks, and presentation resources. Runtime reports typed outcomes and observations back; it does not invent mux policy.
-
-The current tree does not yet need to match this split. Moving files alone does not improve the design.
-
-## Authoritative model
-
-One per-user daemon is authoritative. It owns the Core and Runtime stores and is the only process allowed to commit mux state or parse pane PTY output. Clients are replaceable views and input sources; their failure must not end pane processes.
-
-The fundamental mux hierarchy is:
+The kernel hierarchy is:
 
 ```text
 Session -> Tab -> Pane
 ```
 
-- **Session** is the durable-within-the-daemon naming, attachment, launch-policy, and process-lifecycle boundary.
-- **Tab** belongs to one session and owns pane layout, focus, zoom, and ordering semantics.
-- **Pane** belongs to one tab and identifies one process surface semantically.
+- A **Session** owns launch context, ordered Tabs, identity, lifecycle, and attachment policy.
+- A **Tab** owns a pane layout, focus, zoom, ordering, and title policy.
+- A **Pane** is the semantic identity of one process surface.
+- An **Attachment** is the current controller's view and interaction state for a Session.
 
-Workspaces, projects, worktrees, tasks, and agent runs compose stable IDs outside the kernel. They become kernel concepts only if correctness requires kernel ownership of state that cannot be represented by IDs, commands, snapshots, events, and extension policy.
+Projects, worktrees, tasks, and agent runs are not kernel objects. They can compose stable IDs
+through the public API.
 
-## Semantic and runtime counterparts
-
-Semantic identity is not resource lifetime:
+Semantic identity is separate from external-resource lifetime:
 
 ```text
 Session != Attachment != AttachmentRuntime
 Pane    != PaneRuntime
 ```
 
-- **Session** owns semantic mux state and attachment policy.
-- **Attachment** is a Core relationship between an actor/view and a session. It owns semantic view policy such as control, focus/view state, copy-mode policy, and stable identity.
-- **AttachmentRuntime** is the replaceable connection: descriptor, decoder, output progress, deadlines, transport queues, and outer-client lifecycle.
-- **Pane** owns semantic identity, membership, layout participation, and launch intent.
-- **PaneRuntime** owns the child process, PID, PTY, concrete `vt::Terminal`, ordered PTY writes, and runtime scheduling state.
+`PaneRuntime` owns the child process, PTY, terminal, write queue, and scheduling state for a Pane.
+`AttachmentRuntime` owns the replaceable client connection, decoder, retained output progress,
+presentation caches, and deadlines. Losing an AttachmentRuntime detaches the client; it does not
+destroy the Session.
 
-Disconnecting an `AttachmentRuntime` does not destroy its session. Losing a `PaneRuntime` produces a typed runtime outcome from which Core applies the pane-exit policy.
+## Components
 
-## Ownership
-
-Every mutable value has exactly one owner. References are borrowed and bounded in lifetime; stable IDs cross stages and trust boundaries.
-
-| State | Authoritative owner |
+| Component | Responsibility |
 | --- | --- |
-| Sessions, tabs, panes, layout, focus, zoom, stable IDs | Core store |
-| Attachments, controller/view/copy policy | Core store |
-| Compiled keymap generation and per-Attachment input contexts | Input policy |
-| PTYs, processes, PIDs, descriptors, polling, clocks | Runtime |
-| Concrete terminal lifetime and adapter queues | PaneRuntime / terminal component |
-| Canonical VT screen, history, modes, cursor, tracked terminal references | Ghostty behind `vt::Terminal` |
-| Protocol decoder and connection output progress | AttachmentRuntime |
-| Non-authoritative frame storage and physical presentation shadow | Runtime rendering owner |
-| Endpoint, lock, listener, daemonization | Daemon/platform runtime |
-| Validated extension registrations and semantic effects | Core |
-| Lua VM, extension process, extension transport | Extension runtime |
+| `lemma_app` | CLI grammar and executable role selection |
+| `lemma_daemon` | Endpoint ownership, connection admission, and the reactor |
+| `lemma_api` | Public Action, Procedure, Event, JSON, and schema values |
+| `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
+| `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
+| `lemma_runtime` | Processes, PTYs, scheduling, input execution, resizing, and frame progress |
+| `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
+| `lemma_render` | Non-authoritative pane and frame presentation |
+| `lemma_protocol` | Bounded private attachment and extension codecs |
+| `lemma_client` | Host input, outer-terminal presentation, and restoration |
+| `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
+| `lemma_extension` | Isolated Lua host process and bounded registration transport |
 
-A value may be projected into another component, but the projection must be immutable or explicitly non-authoritative. Two components must never believe they can independently mutate the same fact.
+Core links no PTY, socket, process, or terminal-emulator owner. Runtime executes accepted semantic
+intent using those mechanisms.
 
-## Commands and state transitions
+## Authority and ownership
 
-All semantic mutations converge on typed commands, regardless of origin:
+Every mutable fact has one authoritative owner:
 
-```text
-keyboard -> daemon input policy -+
-mouse / CLI / Lua / agent --------+-> typed command
-                                      -> validate actor, target ID, bounds, and policy
-                                      -> one Core transition
-                                      -> typed result + semantic intent
-```
+| State | Owner |
+| --- | --- |
+| Sessions, Tabs, Panes, layout, focus, zoom, stable IDs | Core |
+| Attachment view, copy, rename, and interaction policy | Core |
+| Compiled keymaps and transient input contexts | Input policy |
+| Processes, PTYs, descriptors, polling, clocks | Runtime |
+| Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
+| Connection decoding, output progress, deadlines | AttachmentRuntime |
+| Frame buffers and physical presentation shadow | Render/runtime presentation |
+| Lua VM and extension transport | Extension runtime |
 
-Physical input that is not a mux command becomes typed application input. The daemon input-policy component owns compiled keymaps and bounded transient input contexts; named contexts and physical bindings are not mux state. A compiled binding may translate a physical chord to another application key and must preserve the originating action through release; host-modifier meaning lives in the generation, not in the encoder. Runtime resolves application input to the target PaneRuntime and asks Ghostty to encode mode-dependent input. No frontend receives a private mutation path.
+A projection may be cached for presentation, but it remains bounded, invalidatable, and
+authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
+references remain owner-local.
 
-Malformed input, stale IDs, capacity exhaustion, unavailable runtime resources, and no-effect commands are explicit results. External failure never authorizes partial semantic mutation. Internal invariant failure is fail-fast.
+## Commands
 
-The public machine boundary has two connection roles on the one per-user Unix endpoint:
-
-```text
-CONTROL: concrete Action -> typed Action result
-OBSERVE: subscription -> initial snapshot -> immutable Events
-```
-
-CLI grammar, Proc references, and JSON are frontend/protocol representations. They do not enter
-Core. Runtime owns each public descriptor, incremental decoder, retained output, deadline, and
-subscription filter. An observer is not an Attachment and cannot mutate state. Public Action,
-legacy control, keyboard, mouse, and extensions must converge on the same typed semantic transition
-rather than gaining transport-specific policy. See [`control-api.md`](control-api.md).
-
-A Proc is a bounded CONTROL request, not a Core transaction or workflow object. Before its first Action executes, the daemon validates the complete versioned document, Action schemas, selectors, bounds, and backward-only typed result references. It resolves each reference to a concrete Action and submits it through the same executor as one-Action RPC and `lemma action`. Process and PTY effects are non-rollbackable, so Proc stop/continue behavior reports partial completion honestly rather than claiming atomicity. Each individual semantic Action still commits through one Core transition; sequencing cannot split one Action into multiple partial mutations. A finite `pane.wait` Action retains only its concrete target, condition, observed generation, and deadline while the reactor continues servicing PTYs, clients, and observers. Proc composes that same Action rather than gaining a separate synchronization mechanism.
-
-## Dependency direction
-
-Dependencies are explicit and acyclic:
+Keyboard, mouse, CLI, and Procedures converge on the same typed command path:
 
 ```text
-frontends ---------> typed physical input
-input policy ------> semantic values/commands ---------> Core
-Runtime -----------> Core contracts
-Runtime -----------> terminal / render / protocol / platform
-terminal ----------> libghostty-vt
+input -> validate actor, target, bounds, and policy
+      -> one semantic transition
+      -> typed result and runtime intent
 ```
 
-Core must be testable without PTYs, Ghostty, sockets, child processes, or a running reactor. It does not know CLI grammar, socket naming, Lua stack details, native handles, or Ghostty types.
+CLI syntax, JSON, and Procedure references are frontend representations rather than Core state. A
+Procedure resolves each reference to concrete IDs before submitting the ordinary Action. Events
+observe committed state and never provide another mutation path.
 
-Runtime may orchestrate mechanisms but may not bypass Core to mutate semantic state. Protocol owns bounded schemas and codecs, not sockets or dispatch. Platform owns OS mechanisms, not policy. Render owns presentation projection, not terminal or mux authority. Components should remain cohesive; one target per class is not a goal.
+Application input is distinct from mux commands. The daemon input policy resolves physical
+bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,
+paste, focus, and mouse input.
 
-The current CMake target graph is transitional. Existing links do not define the target dependency direction.
+## Terminal and presentation flow
+
+Ghostty owns VT semantics. Lemma owns process, mux, security, scheduling, and presentation policy.
+PTY bytes are parsed once into the Pane's canonical terminal:
+
+```text
+PTY -> Ghostty parse
+          ├─> terminal responses -> ordered PTY write queue
+          ├─> effects -> Lemma policy
+          └─> damage -> render -> pane composition -> attached client
+```
+
+Terminal responses enter the Pane's ordered write queue before later accepted application input.
+Attach, resize, tab changes, and lag recovery can rebuild a complete ANSI frame from daemon-owned
+state. The client does not own a second terminal grid or PTY replay log.
+
+Resize is coordinated in one direction:
+
+```text
+Attachment geometry -> Core layout -> Pane geometry -> PTY size -> Ghostty size
+```
+
+The child PTY receives the target dimensions before Ghostty parses output at those dimensions.
+Multi-pane resize publishes semantic geometry only after the dependent runtime work succeeds.
 
 ## Invariants
 
-1. One daemon is the sole authority for mux state and pane terminal truth.
-2. `Session -> Tab -> Pane` is the kernel hierarchy.
-3. `Session`, `Attachment`, and `AttachmentRuntime` are distinct concepts and lifetimes.
-4. Every mutable value has exactly one clear owner.
-5. Semantic state and policy are separated from OS/resource state and reactor mechanics.
-6. Every semantic mutation converges on a typed command and typed result.
-7. Dependencies remain explicit and acyclic; mechanisms do not mutate policy-owned state directly.
-8. Slow, malformed, blocked, or crashed clients and extensions cannot prevent PTY progress.
-9. Every queue, buffer, payload, batch, loop, timeout, allocation, and resource has a defensible bound.
-10. External dependency representations never leak through Lemma-owned boundaries.
-11. Architecture must not add abstraction, copying, allocation, dispatch, or pointer chasing to hot paths without evidence that the tradeoff is worthwhile.
-12. Workflow concepts such as projects, workspaces, and agent runs remain outside the kernel unless correctness truly requires kernel ownership.
-13. Required input and terminal-response ordering is explicit and preserved.
-14. Visible state can be reconstructed from daemon authority without an unbounded event, PTY-byte, or render log.
-15. Action is the bounded interaction primitive, including finite synchronization; Proc composes Actions, and Events stream immutable post-state observations.
-16. Capacity exhaustion and dependency failure degrade or reject boundedly; they never corrupt authority.
-17. Published input-policy generations contain only resolved, unambiguous bindings; context stacks are bounded, Attachment-scoped, and cannot outlive their generation.
-
-## Runtime progress
-
-A reactor iteration has bounded work in each class: PTY reads, terminal parsing, PTY writes, client input routing steps and routed commands, semantic commands, presentation, connection output, and extension work. Fair cursors prevent low-index resources from monopolizing repeated turns.
-
-Terminal responses generated while parsing PTY output enter the pane's ordered PTY queue before later accepted application input. Slow presentation retains at most bounded work; newer terminal damage stays canonical and is repaired by a full redraw or client disconnect.
-
-The exact scheduling algorithm is implementation policy, not an architectural phase sequence. The invariant is independent progress with preserved ordering and bounds.
-
-## Presentation
-
-The daemon uses server-rendered ANSI, but presentation remains downstream of canonical terminal and mux state. Each AttachmentRuntime uses one bounded framed socket transport for control and rendered output; the replaceable client alone owns and writes the outer-terminal descriptor. A presentation snapshot, delta, retained physical shadow, or frame buffer is replaceable and non-authoritative.
-
-Do not add a second normal presentation transport or transfer the outer-terminal descriptor without new evidence that the latency benefit justifies the additional protocol, descriptor-lifetime, polling, fallback, and failure-recovery paths.
-
-A native renderer may be added only as another bounded projection. It must not require client PTY replay, a second parser authority, or private Ghostty representation outside the terminal component.
-
-See [`terminal.md`](terminal.md) for the terminal boundary and [`quality.md`](quality.md) for proof and performance policy.
-
-## Review questions
-
-For any structural change, ask:
-
-1. Who owns every changed mutable value?
-2. Is it semantic state, runtime state, canonical terminal state, or presentation state?
-3. Which direction does each dependency point?
-4. Which typed command or outcome crosses the Core/Runtime boundary?
-5. What bounds work, storage, waiting, and failure?
-6. Can one slow resource delay unrelated PTYs?
-7. Did responsibility become less duplicated and the design easier to explain?
-8. Did the change add cost to a multiplicative path, and what evidence justifies it?
+1. The daemon is the sole authority for mux state and Pane terminal truth.
+2. `Session -> Tab -> Pane` is the only kernel hierarchy.
+3. Semantic objects and runtime resources have distinct identities and lifetimes.
+4. Every mutable fact has one owner; other representations are derived.
+5. Every semantic mutation uses a typed command and typed result.
+6. Ghostty representations remain private to `lemma_terminal`.
+7. Required PTY-response, application-input, and presentation ordering is explicit.
+8. Queues, payloads, loops, timeouts, and retained presentation work are bounded.
+9. Slow or malformed clients, observers, and extensions cannot prevent unrelated PTY progress.
+10. Visible state is reconstructible without retaining an unbounded event, frame, or PTY-byte log.

@@ -197,30 +197,6 @@
         "key_to_pty_ns",
         "key_to_visible_ns"
       ]
-    },
-    {
-      "id": "f5_compatibility",
-      "input": "isolated real bash, zsh, fish, Neovim, Vim, less, Python, and htop interactions through a fresh Lemma attachment",
-      "completion": "each program renders its category marker or full-screen state, exits normally, and leaves the client terminal restored",
-      "metrics": [
-        "marker_latency_ns",
-        "outer_bytes",
-        "terminal_state_restored"
-      ]
-    },
-    {
-      "id": "f5_mixed_soak",
-      "input": "continuous bounded same-pane output plus exact-token interaction, rotating dimensions, periodic detach, and reattach",
-      "completion": "the requested monotonic duration elapses, all tokens complete, every resource census succeeds, and every detach restores terminal state",
-      "metrics": [
-        "key_to_pty_ns",
-        "key_to_visible_ns",
-        "outer_bytes",
-        "daemon_and_client_cpu_time_ns",
-        "daemon_and_tree_rss_bytes",
-        "wakeups_when_supported",
-        "daemon_open_descriptors"
-      ]
     }
   ],
   "latency_trace": {

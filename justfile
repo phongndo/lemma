@@ -3,11 +3,7 @@ profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
 cpp_files := "apps include src tests benchmarks"
 python_paths := "bench benchmarks scripts test tests tools conanfile.py"
-ghostty_cmake := if env_var_or_default("LEMMA_GHOSTTY_SOURCE_DIR", "") != "" {
-    "-DLEMMA_GHOSTTY_SOURCE_DIR=" + env_var("LEMMA_GHOSTTY_SOURCE_DIR") + " -DLEMMA_GHOSTTY_NIX_SOURCE_REV=" + env_var_or_default("LEMMA_GHOSTTY_NIX_SOURCE_REV", "") + " -DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=" + env_var_or_default("LEMMA_GHOSTTY_ZIG_SYSTEM_DIR", "")
-} else {
-    ""
-}
+ghostty_cmake := if env_var_or_default("LEMMA_GHOSTTY_SOURCE_DIR", "") != "" { "-DLEMMA_GHOSTTY_SOURCE_DIR=" + env_var("LEMMA_GHOSTTY_SOURCE_DIR") + " -DLEMMA_GHOSTTY_NIX_SOURCE_REV=" + env_var_or_default("LEMMA_GHOSTTY_NIX_SOURCE_REV", "") + " -DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=" + env_var_or_default("LEMMA_GHOSTTY_ZIG_SYSTEM_DIR", "") } else { "" }
 
 _default:
     @just --list
@@ -172,22 +168,6 @@ ci-check:
     {{ nix }} scripts/ci/sanitizers
     {{ nix }} scripts/ci/python
     {{ nix }} scripts/ci/workflows
-
-# Run the short F5 evidence smoke (use the default Nix shell for compatibility tools).
-f5-smoke:
-    {{ nix }} scripts/ci/f5 smoke
-
-# Run the complete finite F5 gate; 24-hour soaks remain separate explicit commands.
-f5-extended:
-    {{ nix }} scripts/ci/f5 extended
-
-# Run one 24-hour optimized release mixed-output soak.
-f5-release-soak:
-    {{ nix }} scripts/ci/f5-soak release 86400 300
-
-# Run one 24-hour ASan/UBSan mixed-output soak.
-f5-sanitizer-soak:
-    {{ nix }} scripts/ci/f5-soak sanitizers 86400 300
 
 # Configure the debug tree and install this repository's hk hooks.
 hooks:

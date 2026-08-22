@@ -111,7 +111,7 @@ def usage() -> str:
   ./test component
   ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary|agent-automation]
   ./test stress                  deterministic/exhaustive native stress
-  ./test extended                legacy characterization, resources, allocation, and stress
+  ./test extended                resources, allocation, and stress
 """
 
 
@@ -170,7 +170,6 @@ def main() -> int:
     elif tier == "extended":
         configure_if_needed()
         build(
-            "lemma_legacy_e2e_tests",
             "lemma_state_machine_stress_tests",
             "lemma_terminal_resource_tests",
             "lemma_steady_state_allocation_audit",

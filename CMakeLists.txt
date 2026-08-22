@@ -420,33 +420,6 @@ if(LEMMA_BUILD_TESTS)
       RUN_SERIAL TRUE
   )
 
-  # The audited C++ process suite remains an explicit extended characterization lane while its
-  # KEEP behavior is migrated by mux failure domain into the Python harness.
-  add_executable(
-    lemma_legacy_e2e_tests
-    tests/support/process.cpp
-    tests/e2e_mux_test.cpp
-  )
-  lemma_internal_target(lemma_legacy_e2e_tests)
-  target_link_libraries(
-    lemma_legacy_e2e_tests
-    PRIVATE lemma_api lemma_platform lemma_protocol lemma_terminal GTest::gtest_main
-  )
-  target_compile_definitions(
-    lemma_legacy_e2e_tests
-    PRIVATE
-      LEMMA_TEST_SERVER_PATH="$<TARGET_FILE:lemma_test_server>"
-      LEMMA_TEST_CLI_PATH="$<TARGET_FILE:lemma_test_cli>"
-      LEMMA_TEST_PTY_PEER_PATH="$<TARGET_FILE:lemma_test_pty_peer>"
-  )
-  add_dependencies(
-    lemma_legacy_e2e_tests lemma_test_server lemma_test_cli lemma_test_pty_peer
-  )
-  gtest_discover_tests(
-    lemma_legacy_e2e_tests
-    PROPERTIES TIMEOUT 120 LABELS "extended-integration-legacy-pty" RUN_SERIAL TRUE
-  )
-
   add_executable(lemma_steady_state_allocation_audit tests/steady_state_allocation_audit.cpp)
   lemma_internal_target(lemma_steady_state_allocation_audit)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

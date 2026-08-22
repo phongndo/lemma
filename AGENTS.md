@@ -1,32 +1,30 @@
-# Guide
+# Lemma
 
-Inspect relevant code, tests, and docs before editing. Read only what the task needs.
+Read only the code, tests, and documentation relevant to the change. Public documentation defines
+the supported contract; code defines current implementation reality.
 
-Docs define intended contracts. Code defines current reality.
+Use:
 
-## Development
+- `docs/usage.md` for user behavior;
+- `docs/api.md` for automation contracts;
+- `docs/architecture.md` for ownership and data flow; and
+- `docs/development.md` for design quality and verification.
 
-* Understand ownership, callers, and data flow before changing code.
-* Make one cohesive change at a time.
-* Prefer simple ownership and direct code over abstraction.
-* Reuse existing concepts before adding new ones.
-* Do not duplicate authoritative state or dependency-owned semantics.
-* Preserve bounds, ordering, lifetimes, and failure behavior.
-* Treat per-byte, event, pane, frame, or client work as performance-sensitive.
-* Characterize broad refactors and measure performance-sensitive changes.
-* Do not create plans, roadmaps, or TODO docs unless requested.
+## Design
 
-## Conversation
+- Treat performance as a product property, especially on per-byte, event, pane, frame, and client
+  paths.
+- Encode invariants in types, construction, and ownership so invalid states are hard to represent.
+- Keep one authority per mutable fact; derive projections instead of duplicating state.
+- Prefer bounded, direct designs with fewer owners, transitions, copies, and abstractions.
+- Preserve ordering, lifetimes, failure behavior, and dependency-owned semantics.
+- Measure when added hot-path complexity or a performance claim depends on the result.
 
-* Be concise and technical.
-* Investigate before asking for context available in the repo.
-* Surface important findings and meaningful tradeoffs.
-* Recommend a solution when multiple options exist.
-* After substantial work, summarize what changed and what was verified.
+Do not create plans, roadmaps, TODO documents, or historical reports unless requested.
 
-## Commands
+## Verification
 
-Use repo commands:
+Use repository commands:
 
 ```sh
 just build
@@ -37,12 +35,5 @@ just check
 just ci-check
 ```
 
-Run focused checks while developing and `just check` before completion.
-
-Run relevant integration/adversarial tests for runtime or boundary changes, and benchmarks before/after performance-sensitive changes.
-
-Never ignore failing verification or claim success without stating what was verified.
-
-## Completion
-
-A change should be correct, tested, measured where needed, and no harder to reason about than before.
+Run focused checks while developing and `just check` before completion. Do not ignore failing
+verification or claim success without stating what was run.

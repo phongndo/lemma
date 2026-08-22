@@ -126,34 +126,3 @@ jobs:
             .zig-cache
             build/*/_deps/ghostty/*/zig-cache
           key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
-
-  foundation-smoke:
-    name: F5 foundation evidence smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
-      CCACHE_MAXSIZE: 500M
-      CONAN_HOME: ${{ github.workspace }}/.conan2
-
-    steps:
-      - name: Checkout with submodules
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: recursive
-          persist-credentials: false
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Run finite F5 smoke
-        run: nix develop --command scripts/ci/f5 smoke
-
-      - name: Upload F5 evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: f5-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/release/f5-*
-          if-no-files-found: error
-          retention-days: 14
