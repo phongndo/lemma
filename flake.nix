@@ -200,6 +200,11 @@
           darwinClangxx = pkgs.writeShellScriptBin "clang++" ''
             exec /usr/bin/clang++ "$@"
           '';
+          # Nix's xcbuild xcrun warns while parsing newer Xcode platform metadata.
+          # Zig treats any stderr from a successful build step as a failed-command diagnostic.
+          darwinXcrun = pkgs.writeShellScriptBin "xcrun" ''
+            exec /usr/bin/xcrun "$@"
+          '';
           darwinClangd = pkgs.writeShellScriptBin "clangd" ''
             resource_dir="$(/usr/bin/env -u SDKROOT DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun clang -print-resource-dir)" || exit 1
             exec "${darwinTools}/bin/clangd-unwrapped" \
@@ -223,6 +228,7 @@
             pkgs.lib.optionals isDarwin [
               darwinClang
               darwinClangxx
+              darwinXcrun
               darwinClangd
               darwinClangFormat
               darwinClangTidy
@@ -263,7 +269,7 @@
             shellHook =
               if isDarwin then
                 ''
-                  export PATH="$PWD/build/release:${darwinClang}/bin:${darwinClangxx}/bin:$PATH"
+                  export PATH="$PWD/build/release:${darwinClang}/bin:${darwinClangxx}/bin:${darwinXcrun}/bin:$PATH"
                   export CC=/usr/bin/clang
                   export CXX=/usr/bin/clang++
                   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
