@@ -591,7 +591,7 @@ TEST(PresentationSimulationTest, SameSeedAndConfigurationReachTheSameQuiescentSt
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(RuntimeSimulationTest, FaultedBoundaryHistoriesHealToCurrentCanonicalTerminalState) {
-  constexpr std::array seeds{
+  constexpr std::array<std::uint64_t, 6> seeds{
       0ULL,
       1ULL,
       0xC0FFEEULL,

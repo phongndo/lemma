@@ -1023,7 +1023,7 @@ TEST(TerminalExhaustiveTest, RenderExhaustionIsTransactionalAtTheExactCapacityBo
 // Generated histories intentionally combine parser, input, resize, effects, and composition paths.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(TerminalSimulationTest, GeneratedHistoriesPreserveFragmentationAndProjectionInvariants) {
-  constexpr std::array default_seeds{
+  constexpr std::array<std::uint64_t, 6> default_seeds{
       0ULL,
       1ULL,
       0xC0FFEEULL,

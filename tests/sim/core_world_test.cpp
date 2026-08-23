@@ -648,7 +648,7 @@ TEST(CoreSimulationTest, SameSeedAndConfigurationReachTheSameState) {
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(CoreSimulationTest, GeneratedOperationsPreserveModelAndProductionInvariants) {
-  constexpr std::array default_seeds{
+  constexpr std::array<std::uint64_t, 6> default_seeds{
       0ULL,
       1ULL,
       0xC0FFEEULL,

@@ -1418,12 +1418,12 @@ TEST(MuxSimulationTest, ReplaysCheckedInRegressionCorpus) {
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) {
-  constexpr std::array seeds{0ULL,
-                             1ULL,
-                             0xC0FFEEULL,
-                             0x51A7E123ULL,
-                             0xDEADBEEFCAFEBABEULL,
-                             std::numeric_limits<std::uint64_t>::max()};
+  constexpr std::array<std::uint64_t, 6> seeds{0ULL,
+                                               1ULL,
+                                               0xC0FFEEULL,
+                                               0x51A7E123ULL,
+                                               0xDEADBEEFCAFEBABEULL,
+                                               std::numeric_limits<std::uint64_t>::max()};
   if (const auto* const trace_path = std::getenv("LEMMA_MUX_SIM_TRACE"); trace_path != nullptr) {
     std::vector<MuxTraceEntry> entries;
     std::string error;
