@@ -77,7 +77,7 @@ Use the repository entry point:
 ./test sim
 ./test mux
 ./test mux resize
-./test mux agent-automation
+./test mux agent
 ./test stress
 ./test extended
 ```

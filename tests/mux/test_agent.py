@@ -10,7 +10,7 @@ from typing import Any
 from tests.support.mux_harness import LemmaServer
 
 
-class AgentAutomationMuxTest(unittest.TestCase):
+class AgentInterfaceMuxTest(unittest.TestCase):
     def setUp(self) -> None:
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)

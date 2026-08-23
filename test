@@ -56,7 +56,7 @@ def run_mux(domain: str | None = None) -> None:
         "detach-reattach": "tests.mux.test_session_lifecycle",
         "resize": "tests.mux.test_resize",
         "terminal-boundary": "tests.mux.test_terminal_boundary",
-        "agent-automation": "tests.mux.test_agent_automation",
+        "agent": "tests.mux.test_agent",
         "input": "tests.mux.test_terminal_boundary",
         "output": "tests.mux.test_terminal_boundary",
     }
@@ -116,7 +116,7 @@ def usage() -> str:
   ./test terminal
   ./test component
   ./test sim                     deterministic Core and Ghostty simulation
-  ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary|agent-automation]
+  ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary|agent]
   ./test stress                  simulation, real-mux state machine, and resource stress
   ./test extended                resources, allocation, and stress
 """

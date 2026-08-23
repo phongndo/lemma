@@ -398,7 +398,7 @@ if(LEMMA_BUILD_TESTS)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
   lemma_add_python_mux_test(resize tests.mux.test_resize)
   lemma_add_python_mux_test(terminal_boundary tests.mux.test_terminal_boundary)
-  lemma_add_python_mux_test(agent_automation tests.mux.test_agent_automation)
+  lemma_add_python_mux_test(agent tests.mux.test_agent)
 
   add_custom_target(
     lemma_fast_test_binaries
