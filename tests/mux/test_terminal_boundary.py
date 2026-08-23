@@ -15,11 +15,11 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
         session = self.server.create_session("application_cursor")
         pane = session.pane()
         pane.send(
-            "stty -echo -icanon min 1 time 0; "
-            "printf '\\033[?1h__APP_CURSOR_READY__\\n'; "
+            "stty -echo -icanon min 1 time 0; r='__APP_CURSOR_'; "
+            "printf '\\033[?1h%s\\n' \"${r}READY__\"; "
             "code=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
             "printf '\\033[?1l'; stty sane; "
-            "printf '__APP_CURSOR_%s__\\n' \"$code\"\r"
+            'printf \'%s%s__\\n\' "$r" "$code"\r'
         )
         pane.expect_output("__APP_CURSOR_READY__")
 
