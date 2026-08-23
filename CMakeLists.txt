@@ -356,12 +356,22 @@ if(LEMMA_BUILD_TESTS)
     PROPERTIES TIMEOUT 60 LABELS "extended-stress-terminal" RUN_SERIAL TRUE
   )
 
-  add_executable(lemma_state_machine_stress_tests tests/state_machine_stress_test.cpp)
-  lemma_internal_target(lemma_state_machine_stress_tests)
-  target_link_libraries(lemma_state_machine_stress_tests PRIVATE lemma_core GTest::gtest_main)
+  add_executable(lemma_core_sim_tests tests/sim/core_world_test.cpp)
+  lemma_internal_target(lemma_core_sim_tests)
+  target_link_libraries(lemma_core_sim_tests PRIVATE lemma_core GTest::gtest_main)
   gtest_discover_tests(
-    lemma_state_machine_stress_tests
-    PROPERTIES TIMEOUT 30 LABELS "extended-stress" RUN_SERIAL TRUE
+    lemma_core_sim_tests
+    PROPERTIES TIMEOUT 30 LABELS "extended-stress-sim" RUN_SERIAL TRUE
+  )
+
+  add_executable(lemma_terminal_sim_tests tests/sim/terminal_world_test.cpp)
+  lemma_internal_target(lemma_terminal_sim_tests)
+  target_link_libraries(
+    lemma_terminal_sim_tests PRIVATE lemma_render lemma_terminal GTest::gtest_main
+  )
+  gtest_discover_tests(
+    lemma_terminal_sim_tests
+    PROPERTIES TIMEOUT 30 LABELS "extended-stress-sim-terminal" RUN_SERIAL TRUE
   )
 
   function(lemma_add_python_mux_test name module)

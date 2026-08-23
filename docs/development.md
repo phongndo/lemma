@@ -61,7 +61,7 @@ The default suite separates deterministic component behavior from real process b
 | Terminal boundary | Ghostty adapter, rendering, input encoding, effects, resize, and selection |
 | Component integration | Process-opening extension and platform boundaries |
 | Python mux | Real daemon, client, PTY, child process, lifecycle, API, and terminal consequences |
-| Stress/resource | Deterministic state machines, large history, capacity, and allocation evidence |
+| Simulation/stress | Deterministic Core and Ghostty worlds, real-mux state machines, history, and allocation evidence |
 
 Use the repository entry point:
 
@@ -74,12 +74,24 @@ Use the repository entry point:
 ./test queues
 ./test terminal
 ./test component
+./test sim
 ./test mux
 ./test mux resize
 ./test mux agent-automation
 ./test stress
 ./test extended
 ```
+
+Core and Ghostty simulation failures print an exact replay command. The Ghostty world compares
+whole and fragmented writes, generated resize/input/effect histories, and composed output replay.
+A seed can also be selected directly:
+
+```sh
+LEMMA_SIM_SEED=0x1234 LEMMA_SIM_OPERATIONS=4096 ./test sim
+```
+
+Use `LEMMA_SIM_TRACE=1` with a replay command to stream completed operations before a dependency
+abort that cannot return through the normal failure trace.
 
 Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
 report enough state to diagnose a timeout. Use native tests for pure invariants and Python only when

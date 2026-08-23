@@ -98,6 +98,12 @@ def run_component() -> None:
     binary("lemma_component_integration_tests", "--gtest_brief=1")
 
 
+def run_sim() -> None:
+    build("lemma_core_sim_tests", "lemma_terminal_sim_tests")
+    binary("lemma_core_sim_tests", "--gtest_brief=1")
+    binary("lemma_terminal_sim_tests", "--gtest_brief=1")
+
+
 def usage() -> str:
     return """usage: ./test [tier [domain]]
 
@@ -109,8 +115,9 @@ def usage() -> str:
   ./test queues
   ./test terminal
   ./test component
+  ./test sim                     deterministic Core and Ghostty simulation
   ./test mux [pane-lifecycle|session-lifecycle|detach-reattach|resize|terminal-boundary|agent-automation]
-  ./test stress                  deterministic/exhaustive native stress
+  ./test stress                  simulation, real-mux state machine, and resource stress
   ./test extended                resources, allocation, and stress
 """
 
@@ -145,17 +152,21 @@ def main() -> int:
         run_terminal()
     elif tier == "component":
         run_component()
+    elif tier == "sim":
+        run_sim()
     elif tier == "mux":
         run_mux(extra[0] if extra else None)
     elif tier == "stress":
         build(
-            "lemma_state_machine_stress_tests",
+            "lemma_core_sim_tests",
+            "lemma_terminal_sim_tests",
             "lemma_terminal_resource_tests",
             "lemma_test_server",
             "lemma_test_cli",
             "lemma_test_pty_peer",
         )
-        binary("lemma_state_machine_stress_tests", "--gtest_brief=1")
+        binary("lemma_core_sim_tests", "--gtest_brief=1")
+        binary("lemma_terminal_sim_tests", "--gtest_brief=1")
         run(
             [
                 sys.executable,
@@ -170,7 +181,8 @@ def main() -> int:
     elif tier == "extended":
         configure_if_needed()
         build(
-            "lemma_state_machine_stress_tests",
+            "lemma_core_sim_tests",
+            "lemma_terminal_sim_tests",
             "lemma_terminal_resource_tests",
             "lemma_steady_state_allocation_audit",
         )

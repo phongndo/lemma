@@ -11,7 +11,8 @@ scripts/ci/configure sanitizers \
 cmake --build --preset sanitizers --target \
   lemma \
   lemma_fast_test_binaries \
-  lemma_state_machine_stress_tests \
+  lemma_core_sim_tests \
+  lemma_terminal_sim_tests \
   lemma_terminal_resource_tests \
   lemma_steady_state_allocation_audit
 
