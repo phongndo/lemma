@@ -444,7 +444,7 @@ struct PaneAddress final {
   SessionId session;
   PaneId pane;
 
-  [[nodiscard]] auto valid() const noexcept -> bool {
+  [[nodiscard]] constexpr auto valid() const noexcept -> bool {
     return session.is_valid() && pane.is_valid();
   }
 };
