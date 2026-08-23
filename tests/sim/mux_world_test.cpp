@@ -33,8 +33,12 @@
 namespace lemma::test::sim {
 
 // Generated commands intentionally use default values for irrelevant target and launch fields.
+#ifdef __clang__
+#if __has_warning("-Wmissing-designated-field-initializers")
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#endif
+#endif
 namespace {
 
 using core::CreateTabOptions;
@@ -1486,5 +1490,9 @@ TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) 
 }
 
 } // namespace
+#ifdef __clang__
+#if __has_warning("-Wmissing-designated-field-initializers")
 #pragma clang diagnostic pop
+#endif
+#endif
 } // namespace lemma::test::sim

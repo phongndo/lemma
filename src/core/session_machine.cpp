@@ -23,8 +23,12 @@ namespace lemma::core {
 
 // Transition values intentionally rely on default member values for effects and created IDs that
 // do not apply to a particular operation.
+#ifdef __clang__
+#if __has_warning("-Wmissing-designated-field-initializers")
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#endif
+#endif
 namespace {
 
 [[nodiscard]] constexpr auto content_rows(const std::uint16_t rows) noexcept -> std::uint16_t {
@@ -1342,6 +1346,10 @@ auto session_state_hash(const Session& session) noexcept -> std::uint64_t {
   return hash;
 }
 
+#ifdef __clang__
+#if __has_warning("-Wmissing-designated-field-initializers")
 #pragma clang diagnostic pop
+#endif
+#endif
 
 } // namespace lemma::core

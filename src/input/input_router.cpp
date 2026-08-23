@@ -801,7 +801,7 @@ auto default_input_map() noexcept -> const CompiledInputMap& {
         std::pair{'k', InputCommand::resize_up},
         std::pair{'l', InputCommand::resize_right},
     };
-    for (const auto [key, command] : directional) {
+    for (const auto& [key, command] : directional) {
       for (const auto modifiers : {
                key_modifier_control,
                static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift),
