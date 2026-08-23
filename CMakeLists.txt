@@ -356,7 +356,11 @@ if(LEMMA_BUILD_TESTS)
     PROPERTIES TIMEOUT 60 LABELS "extended-stress-terminal" RUN_SERIAL TRUE
   )
 
-  add_executable(lemma_core_sim_tests tests/sim/core_world_test.cpp)
+  add_executable(
+    lemma_core_sim_tests
+    tests/sim/core_world_test.cpp
+    tests/sim/reduce_test.cpp
+  )
   lemma_internal_target(lemma_core_sim_tests)
   target_link_libraries(lemma_core_sim_tests PRIVATE lemma_core GTest::gtest_main)
   gtest_discover_tests(
@@ -364,10 +368,26 @@ if(LEMMA_BUILD_TESTS)
     PROPERTIES TIMEOUT 30 LABELS "extended-stress-sim" RUN_SERIAL TRUE
   )
 
-  add_executable(lemma_terminal_sim_tests tests/sim/terminal_world_test.cpp)
+  add_executable(lemma_protocol_sim_tests tests/sim/protocol_world_test.cpp)
+  lemma_internal_target(lemma_protocol_sim_tests)
+  target_link_libraries(
+    lemma_protocol_sim_tests PRIVATE lemma_api lemma_protocol GTest::gtest_main
+  )
+  gtest_discover_tests(
+    lemma_protocol_sim_tests
+    PROPERTIES TIMEOUT 30 LABELS "extended-stress-sim-protocol" RUN_SERIAL TRUE
+  )
+
+  add_executable(
+    lemma_terminal_sim_tests
+    tests/sim/composition_world_test.cpp
+    tests/sim/presentation_world_test.cpp
+    tests/sim/terminal_world_test.cpp
+  )
   lemma_internal_target(lemma_terminal_sim_tests)
   target_link_libraries(
-    lemma_terminal_sim_tests PRIVATE lemma_render lemma_terminal GTest::gtest_main
+    lemma_terminal_sim_tests
+    PRIVATE lemma_protocol lemma_render lemma_runtime lemma_terminal GTest::gtest_main
   )
   gtest_discover_tests(
     lemma_terminal_sim_tests

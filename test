@@ -108,8 +108,11 @@ def run_component() -> None:
 
 
 def run_sim() -> None:
-    build("lemma_core_sim_tests", "lemma_terminal_sim_tests")
+    build(
+        "lemma_core_sim_tests", "lemma_protocol_sim_tests", "lemma_terminal_sim_tests"
+    )
     binary("lemma_core_sim_tests", "--gtest_brief=1")
+    binary("lemma_protocol_sim_tests", "--gtest_brief=1")
     binary("lemma_terminal_sim_tests", "--gtest_brief=1")
 
 
@@ -125,7 +128,7 @@ def usage() -> str:
   ./test queues
   ./test terminal
   ./test component
-  ./test sim                     deterministic Core and Ghostty simulation
+  ./test sim                     deterministic Core, protocol, Runtime, and Ghostty worlds
   ./test mux [{mux_domains}]
   ./test stress                  simulation, real-mux state machine, and resource stress
   ./test extended                resources, allocation, and stress
@@ -169,6 +172,7 @@ def main() -> int:
     elif tier == "stress":
         build(
             "lemma_core_sim_tests",
+            "lemma_protocol_sim_tests",
             "lemma_terminal_sim_tests",
             "lemma_terminal_resource_tests",
             "lemma_test_server",
@@ -176,6 +180,7 @@ def main() -> int:
             "lemma_test_pty_peer",
         )
         binary("lemma_core_sim_tests", "--gtest_brief=1")
+        binary("lemma_protocol_sim_tests", "--gtest_brief=1")
         binary("lemma_terminal_sim_tests", "--gtest_brief=1")
         run(
             [
@@ -192,6 +197,7 @@ def main() -> int:
         configure_if_needed()
         build(
             "lemma_core_sim_tests",
+            "lemma_protocol_sim_tests",
             "lemma_terminal_sim_tests",
             "lemma_terminal_resource_tests",
             "lemma_steady_state_allocation_audit",

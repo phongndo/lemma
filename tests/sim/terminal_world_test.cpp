@@ -920,6 +920,106 @@ TEST(TerminalSimulationTest, SameSeedAndConfigurationReachTheSameState) {
   EXPECT_EQ(first_hash, second_hash);
 }
 
+// Every single cut is cheap enough to exhaust; random histories then cover longer combinations.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalExhaustiveTest, StructuredPayloadsAreEquivalentAtEveryFragmentBoundary) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 32, .rows = 8};
+  options.scrollback_lines_max = 256;
+  for (std::size_t payload_index = 0; payload_index < terminal_payloads.size(); ++payload_index) {
+    const auto payload = terminal_payloads.at(payload_index);
+    for (std::size_t split = 0; split <= payload.size(); ++split) {
+      SCOPED_TRACE(testing::Message() << "payload=" << payload_index << " split=" << split);
+      auto whole = make_terminal(options);
+      auto fragmented = make_terminal(options);
+      const auto bytes = std::as_bytes(std::span(payload.data(), payload.size()));
+      whole.write(bytes);
+      fragmented.write(bytes.first(split));
+      fragmented.write(bytes.subspan(split));
+
+      const auto whole_inspection = whole.inspection();
+      const auto fragmented_inspection = fragmented.inspection();
+      ASSERT_TRUE(whole_inspection.has_value());
+      ASSERT_TRUE(fragmented_inspection.has_value());
+      EXPECT_TRUE(inspection_equal(*whole_inspection, *fragmented_inspection));
+      EXPECT_TRUE(effects_equal(whole.take_effects(), fragmented.take_effects()));
+      std::array<std::byte, snapshot_bytes_max> whole_screen{};
+      std::array<std::byte, snapshot_bytes_max> fragmented_screen{};
+      const auto whole_size = whole.format_screen(vt::ScreenFormat::vt_full, whole_screen);
+      const auto fragmented_size =
+          fragmented.format_screen(vt::ScreenFormat::vt_full, fragmented_screen);
+      ASSERT_TRUE(whole_size.has_value());
+      ASSERT_TRUE(fragmented_size.has_value());
+      EXPECT_TRUE(std::ranges::equal(std::span(whole_screen).first(*whole_size),
+                                     std::span(fragmented_screen).first(*fragmented_size)));
+      std::array<std::byte, input_bytes_max> whole_responses{};
+      std::array<std::byte, input_bytes_max> fragmented_responses{};
+      while (whole.pending_pty_response_bytes() > 0 ||
+             fragmented.pending_pty_response_bytes() > 0) {
+        const auto whole_read = whole.read_pty_responses(whole_responses);
+        const auto fragmented_read = fragmented.read_pty_responses(fragmented_responses);
+        ASSERT_EQ(whole_read, fragmented_read);
+        EXPECT_TRUE(std::ranges::equal(std::span(whole_responses).first(whole_read),
+                                       std::span(fragmented_responses).first(fragmented_read)));
+      }
+    }
+
+    auto whole = make_terminal(options);
+    auto bytewise = make_terminal(options);
+    const auto bytes = std::as_bytes(std::span(payload.data(), payload.size()));
+    whole.write(bytes);
+    for (const auto byte : bytes) {
+      bytewise.write(std::span(&byte, 1));
+    }
+    std::array<std::byte, snapshot_bytes_max> whole_screen{};
+    std::array<std::byte, snapshot_bytes_max> bytewise_screen{};
+    const auto whole_size = whole.format_screen(vt::ScreenFormat::vt_full, whole_screen);
+    const auto bytewise_size = bytewise.format_screen(vt::ScreenFormat::vt_full, bytewise_screen);
+    ASSERT_TRUE(whole_size.has_value());
+    ASSERT_TRUE(bytewise_size.has_value());
+    EXPECT_TRUE(std::ranges::equal(std::span(whole_screen).first(*whole_size),
+                                   std::span(bytewise_screen).first(*bytewise_size)))
+        << "payload=" << payload_index;
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalExhaustiveTest, RenderExhaustionIsTransactionalAtTheExactCapacityBoundary) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 12, .rows = 3};
+  constexpr std::string_view payload = "A\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"
+                                       "e\xCC\x81\x1B[1;31mred\x1B[0m";
+  auto reference = make_terminal(options);
+  reference.write(std::as_bytes(std::span(payload.data(), payload.size())));
+  std::array<std::byte, std::size_t{64} * 1'024U> expected{};
+  const auto rendered = reference.render_ansi(expected, true);
+  ASSERT_TRUE(rendered.has_value());
+  const auto required = rendered->bytes;
+  ASSERT_GT(required, 1U);
+
+  for (const auto capacity : {required - 1U, required, required + 1U}) {
+    SCOPED_TRACE(testing::Message() << "capacity=" << capacity << " required=" << required);
+    auto terminal = make_terminal(options);
+    terminal.write(std::as_bytes(std::span(payload.data(), payload.size())));
+    std::array<std::byte, std::size_t{64} * 1'024U> output{};
+    const auto first = terminal.render_ansi(std::span(output).first(capacity), true);
+    if (capacity < required) {
+      ASSERT_FALSE(first.has_value());
+      EXPECT_EQ(first.error(), vt::Error::out_of_space);
+      const auto retry = terminal.render_ansi(output, true);
+      ASSERT_TRUE(retry.has_value());
+      EXPECT_EQ(retry->bytes, required);
+      EXPECT_TRUE(std::ranges::equal(std::span(output).first(retry->bytes),
+                                     std::span(expected).first(required)));
+    } else {
+      ASSERT_TRUE(first.has_value());
+      EXPECT_EQ(first->bytes, required);
+      EXPECT_TRUE(std::ranges::equal(std::span(output).first(first->bytes),
+                                     std::span(expected).first(required)));
+    }
+  }
+}
+
 // Generated histories intentionally combine parser, input, resize, effects, and composition paths.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(TerminalSimulationTest, GeneratedHistoriesPreserveFragmentationAndProjectionInvariants) {

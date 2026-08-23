@@ -34,6 +34,7 @@ struct ScriptedClientWriter final {
 
 struct ScriptedFrameAllocator final {
   std::size_t calls{0};
+  std::size_t fail_on_call{0};
   bool fail{false};
 };
 
@@ -41,7 +42,7 @@ struct ScriptedFrameAllocator final {
     -> render::FrameStorage {
   auto& script = *static_cast<ScriptedFrameAllocator*>(context);
   ++script.calls;
-  if (script.fail) {
+  if (script.fail || script.calls == script.fail_on_call) {
     return nullptr;
   }
   try {
@@ -142,6 +143,48 @@ TEST(ClientFrameOutputTest, RejectsCapacityAndPreservesStorageAfterFailedLifecyc
   EXPECT_EQ(frame.writable().front(), std::byte{0x5A});
   EXPECT_EQ(allocator.calls, 3U);
   EXPECT_EQ(budget.used(), frame.capacity());
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ClientFrameOutputTest, EveryLifecycleAllocationFailurePreservesThePreviousFrameTransaction) {
+  constexpr std::array viewports{
+      render::Viewport{.columns = 20, .rows = 5},
+      render::Viewport{.columns = 80, .rows = 24},
+      render::Viewport{.columns = 160, .rows = 50},
+  };
+  for (std::size_t failed_call = 1; failed_call <= viewports.size(); ++failed_call) {
+    SCOPED_TRACE(testing::Message() << "failed allocation call=" << failed_call);
+    ScriptedFrameAllocator allocator{.fail_on_call = failed_call};
+    render::FrameCapacityBudget budget;
+    render::FrameBuffer frame(&allocate_test_frame, &allocator);
+    frame.bind_capacity_budget(budget);
+
+    for (const auto viewport : viewports) {
+      const auto previous_capacity = frame.capacity();
+      const auto previous_used = budget.used();
+      const auto* const previous_storage = frame.writable().data();
+      if (!frame.writable().empty()) {
+        frame.writable().front() = std::byte{0xA5};
+      }
+      const auto calls_before = allocator.calls;
+      const bool prepared = frame.prepare(viewport, previous_capacity > 0 ? 1U : 0U);
+      const bool injected = allocator.calls == failed_call && calls_before + 1U == failed_call;
+      if (injected) {
+        EXPECT_FALSE(prepared);
+        EXPECT_EQ(frame.capacity(), previous_capacity);
+        EXPECT_EQ(frame.writable().data(), previous_storage);
+        EXPECT_EQ(budget.used(), previous_used);
+        if (!frame.writable().empty()) {
+          EXPECT_EQ(frame.writable().front(), std::byte{0xA5});
+        }
+        ASSERT_TRUE(frame.prepare(viewport, previous_capacity > 0 ? 1U : 0U));
+      } else {
+        ASSERT_TRUE(prepared);
+      }
+      EXPECT_EQ(budget.used(), frame.capacity());
+    }
+    EXPECT_EQ(allocator.calls, viewports.size() + 1U);
+  }
 }
 
 TEST(ClientFrameOutputTest, BoundsAggregateRetainedFrameCapacity) {

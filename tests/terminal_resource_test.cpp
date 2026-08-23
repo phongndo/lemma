@@ -2,7 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -72,6 +75,31 @@ TEST(TerminalResourceTest, DefaultScrollbackRetainsMultipleGhosttyPages) {
   EXPECT_GT(*retained, 10'000U);
   EXPECT_GT(*retained, *small_rows * 10U);
 }
+TEST(TerminalResourceTest, AllocationQuotaRejectsCreationWithoutPublishingPartialState) {
+  TerminalOptions options;
+  options.size = {.columns = 20, .rows = 3};
+  auto probe = make_terminal(options);
+  const auto creation_peak = probe.allocation_stats().bytes_peak;
+  ASSERT_GT(creation_peak, 1U);
+
+  const std::array rejected_quotas{
+      std::size_t{1},
+      std::max(std::size_t{1}, creation_peak / 2U),
+      creation_peak - 1U,
+  };
+  for (const auto quota : rejected_quotas) {
+    SCOPED_TRACE(testing::Message() << "allocation quota=" << quota);
+    options.allocation_bytes_max = quota;
+    EXPECT_FALSE(Terminal::create(options).has_value());
+  }
+
+  options.allocation_bytes_max = creation_peak;
+  auto exact = Terminal::create(options);
+  ASSERT_TRUE(exact.has_value());
+  EXPECT_LE(exact->allocation_stats().bytes_peak, creation_peak);
+  EXPECT_FALSE(exact->integrity_failed());
+}
+
 TEST(TerminalResourceTest, CompressesScrollbackIncrementallyWithoutChangingLogicalContent) {
   TerminalOptions options;
   options.size = {.columns = 20, .rows = 3};

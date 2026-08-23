@@ -82,8 +82,9 @@ Use the repository entry point:
 ./test extended
 ```
 
-Core and Ghostty simulation failures print an exact replay command. The Ghostty world compares
-whole and fragmented writes, generated resize/input/effect histories, and composed output replay.
+Core, protocol, presentation, composition, and Ghostty simulation failures print an exact replay
+command. The worlds compare fragmented streams, generated resize/input/effect histories, composed
+output replay, blocked-client recovery, and multi-pane incremental/full convergence.
 A seed can also be selected directly:
 
 ```sh
