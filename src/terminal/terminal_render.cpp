@@ -317,6 +317,23 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
   return config.value;
 }
 
+[[nodiscard]] constexpr auto utf8_codepoint_bytes(const std::uint8_t first) noexcept
+    -> std::size_t {
+  if ((first & 0x80U) == 0) {
+    return 1;
+  }
+  if ((first & 0xE0U) == 0xC0U) {
+    return 2;
+  }
+  if ((first & 0xF0U) == 0xE0U) {
+    return 3;
+  }
+  if ((first & 0xF8U) == 0xF0U) {
+    return 4;
+  }
+  return 1;
+}
+
 [[nodiscard]] constexpr auto hash_byte(std::uint64_t hash, const std::uint8_t value) noexcept
     -> std::uint64_t {
   return (hash ^ value) * 1'099'511'628'211ULL;
@@ -700,9 +717,23 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
         if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && !writer.append(" ")) {
           return std::unexpected(Error::out_of_space);
         }
-      } else if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
-                 !writer.append(std::as_bytes(std::span(grapheme).first(grapheme_buffer.len)))) {
-        return std::unexpected(Error::out_of_space);
+      } else if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL) {
+        const auto base_bytes = utf8_codepoint_bytes(grapheme.front());
+        const bool last_column_with_suffix =
+            cell_count + 1U == options.size.columns && base_bytes < grapheme_bytes.size();
+        if (!last_column_with_suffix) {
+          if (!writer.append(std::as_bytes(grapheme_bytes))) {
+            return std::unexpected(Error::out_of_space);
+          }
+        } else {
+          // The compositor normally disables autowrap. At the final column, Ghostty needs pending
+          // wrap state while parsing suffix codepoints or it can attach them to the preceding wide
+          // cell. Bound the exception to this one complete grapheme, then restore frame policy.
+          if (!writer.append("\x1B[?7h") || !writer.append(std::as_bytes(grapheme_bytes)) ||
+              !writer.append("\x1B[?7l")) {
+            return std::unexpected(Error::out_of_space);
+          }
+        }
       }
       if (changed) {
         changed_end = writer.size();

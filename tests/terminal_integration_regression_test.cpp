@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -31,6 +32,105 @@ void write_terminal(vt::Terminal& terminal, const std::string_view text) {
   // Rendered bytes are borrowed as text only for matcher assertions.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+// Reduced from deterministic seed 0 after generation exposed a Ghostty PageList viewport-pin
+// panic. Row shrink, wrapped output, a historical viewport, and later row growth must not let
+// dependency-owned pin state abort the server.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalResizeRegressionTest, ResizesHistoricalViewportAfterRowShrinkAndWrappedOutput) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 24, .rows = 6};
+  options.scrollback_lines_max = 256;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\r\nline two\r\nline three");
+  ASSERT_TRUE(terminal.resize({.columns = 24, .rows = 4}).has_value());
+  write_terminal(terminal, "history-abcdefghijklmnopqrstuvwxyz-0123456789\r\n");
+  terminal.scroll_viewport(vt::ViewportScroll::top);
+  terminal.scroll_viewport(vt::ViewportScroll::delta, 1);
+  const auto before = terminal.viewport_state();
+  ASSERT_TRUE(before.has_value());
+  ASSERT_FALSE(before->follows_output);
+
+  ASSERT_TRUE(terminal.resize({.columns = 22, .rows = 9}).has_value());
+  const auto after = terminal.viewport_state();
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(after->follows_output);
+  EXPECT_EQ(after->offset, before->offset);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalResizeRegressionTest, ResizesAlternateScreenWithHistoricalPrimaryViewport) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 24, .rows = 6};
+  options.scrollback_lines_max = 256;
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\r\nline two\r\nline three");
+  ASSERT_TRUE(terminal.resize({.columns = 24, .rows = 4}).has_value());
+  write_terminal(terminal, "history-abcdefghijklmnopqrstuvwxyz-0123456789\r\n");
+  terminal.scroll_viewport(vt::ViewportScroll::top);
+  terminal.scroll_viewport(vt::ViewportScroll::delta, 1);
+  const auto primary_before = terminal.viewport_state();
+  ASSERT_TRUE(primary_before.has_value());
+  ASSERT_FALSE(primary_before->follows_output);
+
+  write_terminal(terminal, "\x1B[?1049h\x1B[2Jalternate");
+  auto alternate = terminal.inspection();
+  ASSERT_TRUE(alternate.has_value());
+  ASSERT_EQ(alternate->active_screen, vt::ActiveScreen::alternate);
+  ASSERT_TRUE(terminal.resize({.columns = 22, .rows = 9}).has_value());
+  alternate = terminal.inspection();
+  ASSERT_TRUE(alternate.has_value());
+  ASSERT_EQ(alternate->active_screen, vt::ActiveScreen::alternate);
+  write_terminal(terminal, "\x1B[?1049lprimary");
+
+  const auto primary_after = terminal.viewport_state();
+  ASSERT_TRUE(primary_after.has_value());
+  EXPECT_FALSE(primary_after->follows_output);
+  EXPECT_EQ(primary_after->offset, primary_before->offset);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalRenderRegressionTest, ComposedReflowPreservesCombiningMarkAfterWideGrapheme) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 24, .rows = 6};
+  auto source = make_terminal(options);
+  auto projected = make_terminal(options);
+  write_terminal(source, "A\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"
+                         "e\xCC\x81\xE7\x95\x8C"
+                         "Z released released");
+  ASSERT_TRUE(source.resize({.columns = 6, .rows = 4}).has_value());
+  ASSERT_TRUE(projected.resize({.columns = 6, .rows = 4}).has_value());
+  source.scroll_viewport(vt::ViewportScroll::top);
+
+  const render::PaneSurface surface{
+      .terminal = &source,
+      .rectangle = {.columns = 6, .rows = 4},
+      .focused = true,
+  };
+  std::array<std::byte, std::size_t{16} * 1'024U> frame{};
+  const auto composed =
+      render::compose_frame(std::span(&surface, 1), {.columns = 6, .rows = 4}, frame, true);
+  ASSERT_TRUE(composed.has_value());
+  projected.write(std::span(frame).first(composed->bytes));
+
+  std::array<std::byte, 1'024> source_text{};
+  std::array<std::byte, 1'024> projected_text{};
+  const auto source_size = source.format_visible_tail(vt::ScreenFormat::plain, 4, source_text);
+  const auto projected_size =
+      projected.format_visible_tail(vt::ScreenFormat::plain, 4, projected_text);
+  ASSERT_TRUE(source_size.has_value());
+  ASSERT_TRUE(projected_size.has_value());
+  // Formatted buffers are copied only into diagnostics on failure.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string source_diagnostic(reinterpret_cast<const char*>(source_text.data()),
+                                      *source_size);
+  const std::string projected_diagnostic(reinterpret_cast<const char*>(projected_text.data()),
+                                         *projected_size);
+  // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_TRUE(std::ranges::equal(std::span(source_text).first(*source_size),
+                                 std::span(projected_text).first(*projected_size)))
+      << "source=[" << source_diagnostic << "] projected=[" << projected_diagnostic << "]";
 }
 
 TEST(TerminalRenderRegressionTest, AnsiProjectionPreservesIndexedExplicitAndDefaultColors) {

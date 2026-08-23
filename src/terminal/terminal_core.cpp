@@ -141,6 +141,65 @@ namespace {
          options.allocation_bytes_max <= limits::terminal_allocation_bytes_hard_max;
 }
 
+struct ResizeViewportState final {
+  ViewportState active;
+  std::optional<ViewportState> primary;
+  bool active_alternate{false};
+};
+
+constexpr std::string_view enter_alternate_for_resize = "\x1B[?47h";
+constexpr std::string_view leave_alternate_for_resize = "\x1B[?47l";
+
+void write_terminal_control(Terminal& terminal, const std::string_view control) noexcept {
+  terminal.write(std::as_bytes(std::span(control.data(), control.size())));
+}
+
+[[nodiscard]] auto normalize_resize_viewports(Terminal& terminal) noexcept
+    -> std::expected<ResizeViewportState, Error> {
+  const auto inspected = terminal.inspection();
+  if (!inspected.has_value()) {
+    return std::unexpected(inspected.error());
+  }
+  ResizeViewportState state{
+      .active = inspected->viewport,
+      .primary = std::nullopt,
+      .active_alternate = inspected->active_screen == ActiveScreen::alternate,
+  };
+  if (state.active_alternate) {
+    write_terminal_control(terminal, leave_alternate_for_resize);
+    const auto primary = terminal.viewport_state();
+    if (!primary.has_value()) {
+      write_terminal_control(terminal, enter_alternate_for_resize);
+      return std::unexpected(primary.error());
+    }
+    state.primary = *primary;
+    terminal.scroll_viewport(ViewportScroll::bottom);
+    write_terminal_control(terminal, enter_alternate_for_resize);
+  }
+  // Normalize even an active viewport: Ghostty may retain an internal pin after a prior historical
+  // viewport returned to the bottom, and resize still validates that stale pin.
+  terminal.scroll_viewport(ViewportScroll::bottom);
+  return state;
+}
+
+void restore_viewport_row(Terminal& terminal, const ViewportState& viewport) noexcept {
+  if (!viewport.follows_output) {
+    terminal.scroll_viewport(ViewportScroll::row,
+                             static_cast<std::int64_t>(std::min<std::uint64_t>(
+                                 viewport.offset, std::numeric_limits<std::int64_t>::max())));
+  }
+}
+
+void restore_resize_viewports(Terminal& terminal, const ResizeViewportState& state) noexcept {
+  if (state.active_alternate) {
+    write_terminal_control(terminal, leave_alternate_for_resize);
+    LEMMA_ASSERT(state.primary.has_value());
+    restore_viewport_row(terminal, *state.primary);
+    write_terminal_control(terminal, enter_alternate_for_resize);
+  }
+  restore_viewport_row(terminal, state.active);
+}
+
 template <typename Function>
 [[nodiscard]] auto callback_pointer(const Function function) noexcept -> const void* {
   static_assert(sizeof(Function) == sizeof(const void*));
@@ -684,8 +743,16 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
     }
   }
 
+  // The pinned Ghostty PageList can violate its viewport-pin precondition when either screen keeps
+  // a historical viewport across row growth or reflow. Normalize both PageLists before resize,
+  // then restore their bounded absolute rows.
+  const auto viewports = normalize_resize_viewports(*this);
+  if (!viewports.has_value()) {
+    return std::unexpected(viewports.error());
+  }
   const auto result = ghostty_terminal_resize(impl_->terminal, size.columns, size.rows,
                                               size.cell_width_px, size.cell_height_px);
+  restore_resize_viewports(*this, *viewports);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }

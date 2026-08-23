@@ -133,10 +133,11 @@ struct AnsiRenderResult final {
 inline constexpr std::size_t pane_grapheme_codepoints_max = 65;
 inline constexpr std::size_t pane_ansi_grapheme_bytes_max = pane_grapheme_codepoints_max * 4U;
 // Per-cell allocation contract for a composed pane: one maximum grapheme, a 78-byte full SGR
-// transition, a conservatively per-cell 14-byte absolute position (normally once per row), and the
-// 4-byte reset emitted once per nonempty pane.
+// transition, a conservatively per-cell 14-byte absolute position (normally once per row), the
+// 10-byte autowrap boundary for a last-column grapheme, and the 4-byte reset emitted once per
+// nonempty pane.
 inline constexpr std::size_t pane_ansi_bytes_per_cell_max =
-    pane_ansi_grapheme_bytes_max + 78U + 14U + 4U;
+    pane_ansi_grapheme_bytes_max + 78U + 14U + 10U + 4U;
 
 // Placement and outer-terminal policy for one surface in a composed frame. Coordinates are
 // zero-based. The compositor, rather than the pane, owns synchronized-update framing and clearing.
