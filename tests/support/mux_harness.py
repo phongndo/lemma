@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 import os
-import re
 import select
 import signal
 import socket
@@ -23,11 +23,6 @@ LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l\x1b[?1016l"
     b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
 )
-_LISTING = re.compile(
-    r'^lemma session "(?P<name>[^"]+)": (?P<tabs>\d+) tab\(s\), '
-    r"(?P<panes>\d+) pane\(s\), focused pid (?P<pid>\d+), "
-    r"(?P<attached>attached|detached), (?P<columns>\d+)x(?P<rows>\d+),",
-)
 T = TypeVar("T")
 
 
@@ -43,15 +38,38 @@ class CommandResult:
 
 
 @dataclass(frozen=True)
+class PaneState:
+    id: str
+    tab: str
+    pid: int
+    process_state: str
+    focused: bool
+
+
+@dataclass(frozen=True)
 class SessionState:
+    id: str
     name: str
+    revision: int
+    active_tab: str
+    focused_pane: str
     tabs: int
     panes: int
-    focused_pid: int
     columns: int
     rows: int
     attached: bool
+    pane_states: tuple[PaneState, ...]
     raw: str
+
+    def pane(self, pane_id: str) -> PaneState:
+        for pane in self.pane_states:
+            if pane.id == pane_id:
+                return pane
+        raise KeyError(pane_id)
+
+    @property
+    def focused(self) -> PaneState:
+        return self.pane(self.focused_pane)
 
 
 def process_exists(process: int) -> bool:
@@ -303,22 +321,66 @@ class LemmaServer:
         for client in self.clients:
             if client.session == name and client.running:
                 client.drain(0.002)
-        result = self.command("inspect", name)
-        if result.status != 0:
+
+        inspected = self.command("action", "session", "inspect", "--session", name)
+        if inspected.status != 0:
             return None
-        match = _LISTING.match(result.output)
-        if match is None:
-            raise RuntimeError(f"could not parse session listing:\n{result.output}")
-        return SessionState(
-            name=match.group("name"),
-            tabs=int(match.group("tabs")),
-            panes=int(match.group("panes")),
-            focused_pid=int(match.group("pid")),
-            columns=int(match.group("columns")),
-            rows=int(match.group("rows")),
-            attached=match.group("attached") == "attached",
-            raw=result.output,
-        )
+        listed = self.command("action", "pane", "list", "--session", name)
+        if listed.status != 0:
+            raise RuntimeError(
+                f"structured pane listing failed for {name!r}:\n{listed.output}"
+            )
+        try:
+            inspected_document = json.loads(inspected.output)
+            listed_document = json.loads(listed.output)
+            session = inspected_document["session_state"]
+            panes = tuple(
+                PaneState(
+                    id=pane["id"],
+                    tab=pane["tab"],
+                    pid=int(pane["process"]["pid"]),
+                    process_state=pane["process"]["state"],
+                    focused=bool(pane["focused"]),
+                )
+                for pane in listed_document["panes"]
+            )
+            active_tab = session["active_tab"]
+            focused = [
+                pane for pane in panes if pane.tab == active_tab and pane.focused
+            ]
+            if len(focused) != 1:
+                raise ValueError(
+                    f"active tab {active_tab!r} has {len(focused)} focused panes"
+                )
+            geometry = session["geometry"]
+            attachments = session["attachments"]
+            state = SessionState(
+                id=session["id"],
+                name=session["name"],
+                revision=int(session["revision"]),
+                active_tab=active_tab,
+                focused_pane=focused[0].id,
+                tabs=int(session["tabs"]),
+                panes=int(session["panes"]),
+                columns=int(geometry["columns"]),
+                rows=int(geometry["rows"]),
+                attached=int(attachments["connected"]) > 0,
+                pane_states=panes,
+                raw=json.dumps(
+                    {"session": session, "panes": listed_document["panes"]},
+                    sort_keys=True,
+                ),
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"invalid structured state for {name!r}:\n"
+                f"session={inspected.output}\npanes={listed.output}"
+            ) from error
+        if state.name != name or len(state.pane_states) != state.panes:
+            raise RuntimeError(
+                f"inconsistent structured state for {name!r}: {state.raw}"
+            )
+        return state
 
     def wait_for_state(
         self,
@@ -340,9 +402,24 @@ class LemmaServer:
         )
 
     def create_session(
-        self, name: str, *, attach: bool = True, columns: int = 80, rows: int = 24
+        self,
+        name: str,
+        *,
+        attach: bool = True,
+        columns: int = 80,
+        rows: int = 24,
+        command: tuple[str, ...] = (),
+        hold: bool = False,
     ) -> Session:
-        self.require_command("start", name)
+        if command or hold:
+            arguments = ["action", "session", "start", name]
+            if hold:
+                arguments.append("--hold")
+            if command:
+                arguments.extend(("--", *command))
+            self.require_command(*arguments)
+        else:
+            self.require_command("start", name)
         session = Session(self, name)
         if attach:
             session.attach(columns=columns, rows=rows)
@@ -407,7 +484,9 @@ class Session:
             raise RuntimeError(
                 f"session {self.name!r} does not exist\n{self.server.diagnostics()}"
             )
-        self.observed_pids.add(state.focused_pid)
+        self.observed_pids.update(
+            pane.pid for pane in state.pane_states if pane.pid > 0
+        )
         return state
 
     def attach(self, *, columns: int = 80, rows: int = 24) -> Client:
@@ -419,7 +498,7 @@ class Session:
             lambda state: state.attached,
             f"session {self.name!r} to attach",
         )
-        self.observed_pids.add(self.state().focused_pid)
+        self.state()
         return self.client
 
     def require_client(self) -> Client:
@@ -428,23 +507,25 @@ class Session:
         return self.client
 
     def pane(self) -> Pane:
-        return Pane(self, self.state().focused_pid)
+        focused = self.state().focused
+        return Pane(self, focused.id, focused.pid)
 
-    def focus_pid(self, process: int) -> Pane:
+    def focus_pane(self, pane_id: str) -> Pane:
         client = self.require_client()
         for _ in range(self.state().panes):
             current = self.state()
-            if current.focused_pid == process:
-                return Pane(self, process)
-            previous = current.focused_pid
+            if current.focused_pane == pane_id:
+                pane = current.pane(pane_id)
+                return Pane(self, pane.id, pane.pid)
+            previous = current.focused_pane
             client.prefix("o")
             self.server.wait_for_state(
                 self.name,
-                lambda state: state.focused_pid != previous,
-                f"focus to leave pane pid {previous}",
+                lambda state: state.focused_pane != previous,
+                f"focus to leave pane {previous}",
             )
         raise RuntimeError(
-            f"pane pid {process} is not focusable\n{self.server.diagnostics(self.name)}"
+            f"pane {pane_id} is not focusable\n{self.server.diagnostics(self.name)}"
         )
 
     def split(self, axis: str = "right") -> Pane:
@@ -458,12 +539,18 @@ class Session:
             self.name,
             lambda value: (
                 value.panes == before.panes + 1
-                and value.focused_pid != before.focused_pid
+                and value.focused_pane != before.focused_pane
             ),
             f"{axis} split to create an independent pane",
         )
-        self.observed_pids.add(state.focused_pid)
-        return Pane(self, state.focused_pid)
+        created = state.focused
+        if created.id in {pane.id for pane in before.pane_states}:
+            raise RuntimeError(
+                f"split did not publish a fresh PaneId\n{self.server.diagnostics(self.name)}"
+            )
+        if created.pid > 0:
+            self.observed_pids.add(created.pid)
+        return Pane(self, created.id, created.pid)
 
     def detach(self) -> None:
         client = self.require_client()
@@ -488,12 +575,13 @@ class Session:
 
 
 class Pane:
-    def __init__(self, session: Session, process: int) -> None:
+    def __init__(self, session: Session, pane_id: str, process: int) -> None:
         self.session = session
+        self.id = pane_id
         self.process = process
 
     def focus(self) -> Pane:
-        return self.session.focus_pid(self.process)
+        return self.session.focus_pane(self.id)
 
     def split_right(self) -> Pane:
         self.focus()
@@ -526,9 +614,10 @@ class Pane:
         self.session.server.wait_for_state(
             self.session.name,
             lambda state: (
-                state.panes == before.panes - 1 and state.focused_pid != self.process
+                state.panes == before.panes - 1
+                and self.id not in {pane.id for pane in state.pane_states}
             ),
-            f"pane pid {self.process} to close without retargeting",
+            f"pane {self.id} to close without retargeting",
         )
         wait_for_process_exit(
             self.process,

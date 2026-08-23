@@ -94,8 +94,10 @@ Use `LEMMA_SIM_TRACE=1` with a replay command to stream completed operations bef
 abort that cannot return through the normal failure trace.
 
 Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
-report enough state to diagnose a timeout. Use native tests for pure invariants and Python only when
-the contract requires real descriptors, PTYs, processes, or the daemon.
+report enough state to diagnose a timeout. The mux harness uses structured Session/Pane inspection:
+stable PaneId and TabId values own semantic identity, while PID is observed only for real process
+lifetime assertions. Use native tests for pure invariants and Python only when the contract requires
+real descriptors, PTYs, processes, or the daemon.
 
 CTest remains the CI integration surface. Cheap tests run in parallel; process tests are serialized
 where host contention changes the behavior under test. Stress, resource, and allocation work stays

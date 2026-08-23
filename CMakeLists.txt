@@ -399,6 +399,7 @@ if(LEMMA_BUILD_TESTS)
   lemma_add_python_mux_test(resize tests.mux.test_resize)
   lemma_add_python_mux_test(terminal_boundary tests.mux.test_terminal_boundary)
   lemma_add_python_mux_test(agent tests.mux.test_agent)
+  lemma_add_python_mux_test(process_boundary tests.mux.test_process_boundary)
 
   add_custom_target(
     lemma_fast_test_binaries

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import unittest
@@ -13,8 +14,10 @@ from tests.support.mux_harness import (
 )
 
 
-class MuxStateMachineStressTest(unittest.TestCase):
-    def test_deterministic_real_mux_operations_preserve_ownership(self) -> None:
+class MuxCommandModelStressTest(unittest.TestCase):
+    def test_deterministic_commands_preserve_semantic_identity_and_process_ownership(
+        self,
+    ) -> None:
         seed = int(os.environ.get("LEMMA_STRESS_SEED", "1369964835"), 0)
         operation_count = int(os.environ.get("LEMMA_STRESS_OPERATIONS", "64"), 0)
         randomizer = random.Random(seed)
@@ -23,16 +26,30 @@ class MuxStateMachineStressTest(unittest.TestCase):
         self.addCleanup(server.close)
         session = server.create_session("state_machine")
         first = session.pane()
-        panes: dict[int, Pane] = {first.process: first}
+        panes: dict[str, Pane] = {first.id: first}
         all_processes = {first.process}
+        stale_panes: list[str] = []
+
+        def action(*arguments: str) -> dict[str, object]:
+            result = server.command("action", *arguments)
+            try:
+                document = json.loads(result.output)
+            except json.JSONDecodeError as error:
+                raise AssertionError(
+                    f"action {arguments!r} returned invalid JSON: {result.output}"
+                ) from error
+            document["_exit_status"] = result.status
+            return document
 
         try:
             for index in range(operation_count):
-                choices = ["focus", "input", "resize", "detach"]
+                choices = ["focus", "agent-focus", "zoom", "input", "resize", "detach"]
                 if len(panes) < 8:
                     choices.extend(("split-right", "split-down"))
                 if len(panes) > 1:
                     choices.extend(("close", "swap"))
+                if stale_panes:
+                    choices.append("stale-focus")
                 operation = randomizer.choice(choices)
 
                 if operation.startswith("split"):
@@ -42,7 +59,7 @@ class MuxStateMachineStressTest(unittest.TestCase):
                         if operation == "split-right"
                         else source.split_down()
                     )
-                    panes[created.process] = created
+                    panes[created.id] = created
                     all_processes.add(created.process)
                     operations.append(
                         f"{index}: {operation} {source.process}->{created.process}"
@@ -50,12 +67,78 @@ class MuxStateMachineStressTest(unittest.TestCase):
                 elif operation == "close":
                     closed = randomizer.choice(list(panes.values()))
                     closed.close()
-                    panes.pop(closed.process)
-                    operations.append(f"{index}: close {closed.process}")
+                    panes.pop(closed.id)
+                    stale_panes.append(closed.id)
+                    operations.append(
+                        f"{index}: close {closed.id} pid={closed.process}"
+                    )
                 elif operation == "focus":
                     target = randomizer.choice(list(panes.values()))
                     target.focus()
-                    operations.append(f"{index}: focus {target.process}")
+                    operations.append(f"{index}: focus {target.id}")
+                elif operation == "agent-focus":
+                    target = randomizer.choice(list(panes.values()))
+                    focused = action(
+                        "pane",
+                        "focus",
+                        "--session",
+                        session.name,
+                        "--pane",
+                        target.id,
+                    )
+                    if focused.get("status") not in {"applied", "no_effect"}:
+                        raise AssertionError(f"agent focus failed: {focused}")
+                    server.wait_for_state(
+                        session.name,
+                        lambda state, pane_id=target.id: state.focused_pane == pane_id,
+                        f"agent focus Pane {target.id}",
+                    )
+                    operations.append(f"{index}: agent-focus {target.id}")
+                elif operation == "zoom":
+                    target = randomizer.choice(list(panes.values()))
+                    before = session.state()
+                    enabled = randomizer.choice((True, False))
+                    zoomed = action(
+                        "pane",
+                        "zoom",
+                        "--session",
+                        session.name,
+                        "--pane",
+                        target.id,
+                        "--on" if enabled else "--off",
+                    )
+                    if zoomed.get("status") not in {"applied", "no_effect"}:
+                        raise AssertionError(f"agent zoom failed: {zoomed}")
+                    after = session.state()
+                    if (
+                        zoomed["status"] == "applied"
+                        and after.revision == before.revision
+                    ):
+                        raise AssertionError(
+                            "applied zoom did not advance Session revision"
+                        )
+                    operations.append(f"{index}: zoom {target.id} enabled={enabled}")
+                elif operation == "stale-focus":
+                    stale = randomizer.choice(stale_panes)
+                    before = session.state()
+                    rejected = action(
+                        "pane",
+                        "focus",
+                        "--session",
+                        session.name,
+                        "--pane",
+                        stale,
+                    )
+                    if rejected.get("status") != "stale":
+                        raise AssertionError(
+                            f"stale Pane focus was not rejected: {rejected}"
+                        )
+                    after = session.state()
+                    if after.revision != before.revision:
+                        raise AssertionError(
+                            "rejected stale focus mutated Session revision"
+                        )
+                    operations.append(f"{index}: stale-focus {stale}")
                 elif operation == "swap":
                     target = randomizer.choice(list(panes.values()))
                     target.focus()
@@ -75,9 +158,11 @@ class MuxStateMachineStressTest(unittest.TestCase):
                     operations.append(f"{index}: resize {columns}x{rows}")
                 elif operation == "detach":
                     session.detach()
-                    for process in panes:
-                        if not process_exists(process):
-                            raise AssertionError(f"pane {process} died while detached")
+                    for pane in panes.values():
+                        if not process_exists(pane.process):
+                            raise AssertionError(
+                                f"pane {pane.id} process {pane.process} died while detached"
+                            )
                     session.attach()
                     operations.append(f"{index}: detach/reattach")
                 else:
@@ -88,11 +173,21 @@ class MuxStateMachineStressTest(unittest.TestCase):
                     raise AssertionError(
                         f"listing has {state.panes} panes, model has {len(panes)}"
                     )
-                if state.focused_pid not in panes:
-                    raise AssertionError(f"focused pid {state.focused_pid} is not live")
-                for process in panes:
-                    if not process_exists(process):
-                        raise AssertionError(f"modeled live pane {process} exited")
+                if state.focused_pane not in panes:
+                    raise AssertionError(
+                        f"focused pane {state.focused_pane} is not modeled live"
+                    )
+                observed = {pane.id: pane.pid for pane in state.pane_states}
+                expected = {pane.id: pane.process for pane in panes.values()}
+                if observed != expected:
+                    raise AssertionError(
+                        f"structured Pane/PID projection {observed} differs from model {expected}"
+                    )
+                for pane in panes.values():
+                    if not process_exists(pane.process):
+                        raise AssertionError(
+                            f"modeled live pane {pane.id} process {pane.process} exited"
+                        )
                 # Tiny panes can scroll a transient marker out before the daemon presents a frame.
                 # Use a durable shell-side acknowledgement while keeping the outer client flowing.
                 acknowledgement = server.root / f"a{index}"

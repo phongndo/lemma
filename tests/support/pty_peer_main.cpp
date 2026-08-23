@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <charconv>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -812,6 +813,71 @@ enum class LatencyMode : std::uint8_t {
   return 1;
 }
 
+volatile std::sig_atomic_t winch_observed = 0;
+
+extern "C" void observe_winch(int signal_number) noexcept;
+
+extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept {
+  winch_observed = 1;
+}
+
+// The fixture explicitly handles each signal, readiness, and bounded I/O outcome.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_winch() noexcept -> int {
+  struct sigaction action{};
+  action.sa_handler = &observe_winch;
+  if (sigemptyset(&action.sa_mask) != 0 || ::sigaction(SIGWINCH, &action, nullptr) != 0 ||
+      !enter_raw_input() || !write_all("__LEMMA_WINCH_READY__\r\n")) {
+    return 1;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + 15s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (winch_observed != 0) {
+      winch_observed = 0;
+      winsize size{};
+      // ioctl is variadic because its third argument depends on the request.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+      if (::ioctl(STDIN_FILENO, TIOCGWINSZ, &size) != 0) {
+        return 1;
+      }
+      std::array<char, 16> rows{};
+      std::array<char, 16> columns{};
+      const auto encoded_rows =
+          std::to_chars(rows.data(), std::to_address(rows.end()), size.ws_row);
+      const auto encoded_columns =
+          std::to_chars(columns.data(), std::to_address(columns.end()), size.ws_col);
+      if (encoded_rows.ec != std::errc{} || encoded_columns.ec != std::errc{} ||
+          !write_all("__LEMMA_WINCH_") ||
+          !write_all({rows.data(), static_cast<std::size_t>(encoded_rows.ptr - rows.data())}) ||
+          !write_all("_") ||
+          !write_all(
+              {columns.data(), static_cast<std::size_t>(encoded_columns.ptr - columns.data())}) ||
+          !write_all("__\r\n")) {
+        return 1;
+      }
+    }
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 100);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0) {
+      return 1;
+    }
+    if (polled > 0) {
+      std::array<char, 16> input{};
+      const auto count = ::read(STDIN_FILENO, input.data(), input.size());
+      if (count <= 0) {
+        return count == 0 ? 0 : 1;
+      }
+      if (std::string_view(input.data(), static_cast<std::size_t>(count)).contains('q')) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
 [[nodiscard]] auto run_attach_visible(const std::string_view ready_path = {}) noexcept -> int {
   if (!write_all("__LEMMA_ATTACH_VISIBLE__\r\n")) {
     return 1;
@@ -869,6 +935,9 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
+  }
+  if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "winch") {
+    return run_winch();
   }
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "resize-flood") {

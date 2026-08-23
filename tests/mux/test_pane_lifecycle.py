@@ -33,15 +33,16 @@ class PaneLifecycleTest(unittest.TestCase):
         left = session.pane()
         right = left.split_right()
         right.focus()
-        focused_before = session.state().focused_pid
+        focused_before = session.state().focused_pane
 
         session.require_client().prefix("H")
         focused_after = self.server.wait_for_state(
             session.name,
-            lambda state: state.focused_pid == focused_before,
-            "focused child identity to survive pane swap",
+            lambda state: state.focused_pane == focused_before,
+            "focused Pane identity to survive pane swap",
         )
-        self.assertEqual(focused_after.focused_pid, right.process)
+        self.assertEqual(focused_after.focused_pane, right.id)
+        self.assertEqual(focused_after.focused.pid, right.process)
 
         left.send("printf '__LEFT_AFTER_SWAP__\\n'\r")
         left.expect_output("__LEFT_AFTER_SWAP__")

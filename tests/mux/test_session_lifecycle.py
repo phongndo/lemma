@@ -27,12 +27,15 @@ class SessionLifecycleTest(unittest.TestCase):
         self.assertTrue(process_exists(pane.process))
         detached = session.state()
         self.assertFalse(detached.attached)
-        self.assertEqual(detached.focused_pid, pane.process)
+        self.assertEqual(detached.focused_pane, pane.id)
+        self.assertEqual(detached.focused.pid, pane.process)
 
         gate.touch()
         client = session.attach()
         client.expect_output("__OUTPUT_WHILE_DETACHED__")
-        self.assertEqual(session.state().focused_pid, pane.process)
+        attached = session.state()
+        self.assertEqual(attached.focused_pane, pane.id)
+        self.assertEqual(attached.focused.pid, pane.process)
         pane.expect_alive()
 
     def test_destroyed_detached_session_reclaims_its_child(self) -> None:
