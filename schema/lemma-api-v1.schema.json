@@ -720,10 +720,11 @@
     },
     "paneProcess": {
       "type": "object",
-      "required": ["state"],
+      "required": ["state", "pid"],
       "properties": {
         "state": { "enum": ["running", "exiting", "exited_unknown", "exited", "signaled"] },
-        "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        "value": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "pid": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },

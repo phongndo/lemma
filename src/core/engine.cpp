@@ -6423,9 +6423,14 @@ template <typename Id>
 
 [[nodiscard]] auto append_structured_process(ConnectionOutput& output, const Pane& pane,
                                              const PaneRuntime& runtime) noexcept -> bool {
+  const auto append_pid = [&output, &runtime] {
+    return output.append_text(R"(,"pid":)") &&
+           output.append_number(runtime.child > 0 ? static_cast<std::uint64_t>(runtime.child) : 0U);
+  };
   if (!pane.process_exit.has_value()) {
-    return output.append_text(runtime.child > 0 ? R"({"state":"running"})"
-                                                : R"({"state":"exiting"})");
+    return output.append_text(runtime.child > 0 ? R"({"state":"running")"
+                                                : R"({"state":"exiting")") &&
+           append_pid() && output.append_text("}");
   }
   std::string_view state;
   switch (pane.process_exit->kind) {
@@ -6441,7 +6446,7 @@ template <typename Id>
   }
   return output.append_text(R"({"state":")") && output.append_text(state) &&
          output.append_text(R"(","value":)") && output.append_number(pane.process_exit->value) &&
-         output.append_text("}");
+         append_pid() && output.append_text("}");
 }
 
 // Structured pane queries traverse the bounded semantic hierarchy once and expose no title-based

@@ -49,7 +49,8 @@ Inside a Lemma pane, the CLI may infer omitted targets from `LEMMA_SESSION_ID`, 
 targets. Outside Lemma, provide the required Session and resource selectors.
 
 Session names and one-based Tab positions are discovery conveniences. Persistent automation should
-retain returned generational IDs. Tab and Pane IDs are Session-scoped.
+retain returned generational IDs. Tab and Pane IDs are Session-scoped. Pane listings expose PID
+inside process metadata for lifetime observation only; PID is not a Pane selector or identity.
 
 `lemma action` prints one canonical `lemma.action-result/v1` JSON value. Successful statuses are
 `applied` and `no_effect`. Other statuses include `stale`, `wrong_owner`, `conflict`, `capacity`,
