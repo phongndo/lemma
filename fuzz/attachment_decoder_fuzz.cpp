@@ -27,7 +27,10 @@ void fuzz_client_decoder(const std::span<const std::byte> input, const std::size
     offset += copied;
     while (true) {
       const auto decoded = decoder.next();
-      if (!decoded.has_value() || !decoded->has_value()) {
+      if (!decoded.has_value()) {
+        return;
+      }
+      if (!decoded->has_value()) {
         break;
       }
       decoder.consume();
@@ -56,7 +59,10 @@ void fuzz_server_decoder(const std::span<const std::byte> input, const std::size
     offset += copied;
     while (true) {
       const auto decoded = decoder.next();
-      if (!decoded.has_value() || !decoded->has_value()) {
+      if (!decoded.has_value()) {
+        return;
+      }
+      if (!decoded->has_value()) {
         break;
       }
       decoder.consume();
