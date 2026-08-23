@@ -138,6 +138,7 @@ add_library(
   src/core/copy_mode.cpp
   src/core/layout.cpp
   src/core/session.cpp
+  src/core/session_machine.cpp
 )
 lemma_internal_target(lemma_core)
 target_link_libraries(lemma_core PRIVATE lemma_base)
@@ -360,12 +361,15 @@ if(LEMMA_BUILD_TESTS)
   add_executable(
     lemma_core_sim_tests
     tests/sim/core_world_test.cpp
+    tests/sim/mux_trace.cpp
+    tests/sim/mux_world_test.cpp
     tests/sim/reduce_test.cpp
   )
   lemma_internal_target(lemma_core_sim_tests)
   target_link_libraries(lemma_core_sim_tests PRIVATE lemma_core GTest::gtest_main)
   gtest_discover_tests(
     lemma_core_sim_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     PROPERTIES TIMEOUT 30 LABELS "extended-stress-sim" RUN_SERIAL TRUE
   )
 

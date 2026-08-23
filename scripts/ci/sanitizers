@@ -31,7 +31,41 @@ export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 scripts/ci/test sanitizers
 ctest --preset sanitizers --no-tests=error -L extended --parallel 1
-./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
-./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
-./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
+if [[ "$(uname -s)" == Linux ]]; then
+  readonly fuzz_seconds="${LEMMA_FUZZ_SECONDS_PER_TARGET:-10}"
+  mkdir -p build/sanitizers/fuzz-work/{attachment,host-input,api} \
+    build/sanitizers/fuzz-artifacts/{attachment,host-input,api}
+  ./build/sanitizers/lemma_attachment_decoder_fuzz \
+    "-max_total_time=${fuzz_seconds}" \
+    -artifact_prefix=build/sanitizers/fuzz-artifacts/attachment/ \
+    build/sanitizers/fuzz-work/attachment fuzz/corpus/attachment
+  ./build/sanitizers/lemma_host_input_parser_fuzz \
+    "-max_total_time=${fuzz_seconds}" \
+    -artifact_prefix=build/sanitizers/fuzz-artifacts/host-input/ \
+    build/sanitizers/fuzz-work/host-input fuzz/corpus/host-input
+  ./build/sanitizers/lemma_api_json_fuzz \
+    "-max_total_time=${fuzz_seconds}" \
+    -artifact_prefix=build/sanitizers/fuzz-artifacts/api/ \
+    build/sanitizers/fuzz-work/api fuzz/corpus/api
+else
+  ./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
+  ./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
+  ./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
+fi
+
+# Generate the stress seed outside the test process so a sanitizer crash cannot lose its replay
+# identity. The operation count, rather than wall time, keeps this merge-blocking run bounded.
+mux_seed="$(od -An -N8 -tu8 /dev/urandom | tr -d '[:space:]')"
+readonly mux_seed
+readonly mux_artifact_dir="build/sanitizers/mux-sim-artifacts"
+readonly mux_trace="${mux_artifact_dir}/mux-${mux_seed}.trace"
+mkdir -p "${mux_artifact_dir}"
+printf 'deterministic mux stress seed: %s\n' "${mux_seed}"
+LEMMA_MUX_SIM_SEED="${mux_seed}" LEMMA_MUX_SIM_OPERATIONS=16384 \
+  LEMMA_MUX_SIM_TRACE_OUT="${mux_trace}" \
+  ./build/sanitizers/lemma_core_sim_tests \
+  --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
+  --gtest_brief=1
+rm -f "${mux_trace}"
+
 ./build/sanitizers/lemma --help >/dev/null

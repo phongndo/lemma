@@ -88,8 +88,13 @@ input -> validate actor, target, bounds, and policy
 ```
 
 CLI syntax, JSON, and Procedure references are frontend representations rather than Core state. A
-Procedure resolves each reference to concrete IDs before submitting the ordinary Action. Events
-observe committed state and never provide another mutation path.
+Procedure resolves each reference to concrete IDs before submitting the ordinary Action. Lifecycle
+commands run through the deterministic `SessionMachine`: Core stages fallible semantic owners,
+Runtime executes a bounded typed spawn/resize/retire effect batch, and Core publishes the transition
+only after required effects succeed. Events observe committed state and never provide another
+mutation path. The deterministic mux harness records concrete targets, arguments, and Runtime
+outcomes at this boundary. Versioned traces therefore replay without the generator, and recorded
+result/state checkpoints turn minimized failures into permanent regression corpus entries.
 
 Application input is distinct from mux commands. The daemon input policy resolves physical
 bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,
@@ -132,3 +137,5 @@ Multi-pane resize publishes semantic geometry only after the dependent runtime w
 8. Queues, payloads, loops, timeouts, and retained presentation work are bounded.
 9. Slow or malformed clients, observers, and extensions cannot prevent unrelated PTY progress.
 10. Visible state is reconstructible without retaining an unbounded event, frame, or PTY-byte log.
+11. Session lifecycle transitions preserve the complete semantic and Core/Runtime ownership
+    invariants after every atomic operation; rejected effects do not publish partial Core state.

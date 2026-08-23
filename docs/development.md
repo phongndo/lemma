@@ -84,15 +84,31 @@ Use the repository entry point:
 
 Core, protocol, presentation, composition, and Ghostty simulation failures print an exact replay
 command. The worlds compare fragmented streams, generated resize/input/effect histories, composed
-output replay, blocked-client recovery, and multi-pane incremental/full convergence.
-A seed can also be selected directly:
+output replay, blocked-client recovery, and multi-pane incremental/full convergence. The mux world
+runs the production `SessionMachine` against a simulated Runtime, injects spawn/resize/child faults,
+and checks all semantic and Core/Runtime ownership invariants after every operation. Generated mux
+histories are concrete, versioned operation/effect traces; replay does not invoke the generator.
+Seeds and traces can be selected directly:
 
 ```sh
 LEMMA_SIM_SEED=0x1234 LEMMA_SIM_OPERATIONS=4096 ./test sim
+LEMMA_MUX_SIM_SEED=0x1234 LEMMA_MUX_SIM_OPERATIONS=4096 ./test sim
+LEMMA_MUX_SIM_TRACE=path/to/failure.min.trace ./test sim
 ```
 
-Use `LEMMA_SIM_TRACE=1` with a replay command to stream completed operations before a dependency
-abort that cannot return through the normal failure trace.
+Set `LEMMA_MUX_SIM_TRACE_OUT=path/to/trace` with a configured mux seed to retain the concrete trace
+as it executes, including the operation that is in progress if a sanitizer aborts. Ordinary mux
+failures write the complete trace and a bounded deterministic reduction under
+`build/mux-sim-failures/`. After confirming a minimized failure is fixed, promote it with
+`scripts/promote-mux-trace path/to/failure.min.trace regression-name`. Promotion replays the
+concrete operations without stale failure checkpoints, records the fixed outcomes atomically, and
+publishes the trace under `tests/sim/corpus/mux/`. Every simulation run replays that permanent
+corpus and validates its recorded command outcomes and state checkpoints.
+
+Use `LEMMA_SIM_TRACE=1` with a non-mux replay command to stream completed operations before a
+dependency abort that cannot return through the normal failure trace. Scheduled CI runs
+`scripts/ci/mux-sim-campaign`; `LEMMA_MUX_CAMPAIGN_SEEDS` and
+`LEMMA_MUX_CAMPAIGN_OPERATIONS` bound the local equivalent.
 
 Parser fuzz targets are opt-in and retain checked-in seeds for the Lemma-owned attachment, host
 input, and public JSON boundaries:
@@ -105,8 +121,10 @@ cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host
 ./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
 ```
 
-Linux links libFuzzer for mutation runs. Darwin replays the same corpora under ASan/UBSan because
-Xcode Clang does not ship a libFuzzer runtime.
+Linux links libFuzzer for mutation runs. The sanitizer lane replays the checked-in seed corpora,
+runs each target for a bounded mutation interval, then runs a longer mux simulation with a seed
+generated outside the test process. Darwin replays the same corpora under ASan/UBSan because Xcode
+Clang does not ship a libFuzzer runtime.
 
 Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
 report enough state to diagnose a timeout. The mux harness uses structured Session/Pane inspection:

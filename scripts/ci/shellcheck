@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-find scripts/ci -maxdepth 1 -type f ! -name '*.py' -print0 |
+find scripts -maxdepth 2 -type f ! -name '*.py' -print0 |
   xargs -0 shellcheck

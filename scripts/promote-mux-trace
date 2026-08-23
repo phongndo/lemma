@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# < 1 || $# > 2)); then
+  printf 'usage: scripts/promote-mux-trace TRACE [CORPUS_NAME]\n' >&2
+  exit 2
+fi
+
+readonly source_trace="$1"
+if [[ ! -f "${source_trace}" ]]; then
+  printf 'mux trace does not exist: %s\n' "${source_trace}" >&2
+  exit 2
+fi
+
+name="${2:-$(basename "${source_trace}")}"
+name="${name%.min.trace}"
+name="${name%.trace}"
+if [[ ! "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  printf 'invalid corpus name: %s\n' "${name}" >&2
+  exit 2
+fi
+
+readonly profile="${LEMMA_TEST_PROFILE:-debug}"
+readonly binary="./build/${profile}/lemma_core_sim_tests"
+readonly destination="tests/sim/corpus/mux/${name}.trace"
+
+scripts/ci/configure "${profile}" \
+  -DLEMMA_BUILD_TESTS=ON \
+  -DLEMMA_BUILD_BENCHMARKS=OFF
+cmake --build "build/${profile}" --target lemma_core_sim_tests
+mkdir -p "build/${profile}" "$(dirname "${destination}")"
+temporary="$(mktemp "build/${profile}/mux-promote.XXXXXX")"
+readonly temporary
+trap 'rm -f "${temporary}"' EXIT
+
+LEMMA_MUX_SIM_TRACE="${source_trace}" \
+  LEMMA_MUX_SIM_TRACE_OUT="${temporary}" \
+  LEMMA_MUX_SIM_REFRESH_TRACE=1 \
+  "${binary}" \
+  --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
+  --gtest_brief=1
+mv "${temporary}" "${destination}"
+printf 'promoted mux regression trace: %s\n' "${destination}"

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly profile="${LEMMA_TEST_PROFILE:-debug}"
+readonly seed_count="${LEMMA_MUX_CAMPAIGN_SEEDS:-64}"
+readonly operations="${LEMMA_MUX_CAMPAIGN_OPERATIONS:-16384}"
+readonly artifact_dir="build/${profile}/mux-sim-artifacts"
+readonly binary="./build/${profile}/lemma_core_sim_tests"
+
+if [[ ! "${seed_count}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'LEMMA_MUX_CAMPAIGN_SEEDS must be a positive integer\n' >&2
+  exit 2
+fi
+if [[ ! "${operations}" =~ ^[1-9][0-9]*$ ]] || ((operations > 16384)); then
+  printf 'LEMMA_MUX_CAMPAIGN_OPERATIONS must be in [1, 16384]\n' >&2
+  exit 2
+fi
+
+scripts/ci/configure "${profile}" \
+  -DLEMMA_BUILD_TESTS=ON \
+  -DLEMMA_BUILD_BENCHMARKS=OFF
+cmake --build "build/${profile}" --target lemma_core_sim_tests
+rm -rf "${artifact_dir}"
+mkdir -p "${artifact_dir}"
+
+"${binary}" \
+  --gtest_filter=MuxSimulationTest.ReplaysCheckedInRegressionCorpus \
+  --gtest_brief=1
+
+for ((index = 0; index < seed_count; ++index)); do
+  seed="$(od -An -N8 -tu8 /dev/urandom | tr -d '[:space:]')"
+  trace="${artifact_dir}/mux-${seed}.trace"
+  printf 'mux simulation campaign %s/%s seed=%s operations=%s\n' \
+    "$((index + 1))" "${seed_count}" "${seed}" "${operations}"
+  if ! LEMMA_MUX_SIM_SEED="${seed}" \
+    LEMMA_MUX_SIM_OPERATIONS="${operations}" \
+    LEMMA_MUX_SIM_TRACE_OUT="${trace}" \
+    "${binary}" \
+    --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
+    --gtest_brief=1; then
+    printf 'replay artifact retained at %s\n' "${trace}" >&2
+    exit 1
+  fi
+  rm -f "${trace}"
+done

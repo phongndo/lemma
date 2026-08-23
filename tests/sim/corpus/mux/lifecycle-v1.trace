@@ -1,0 +1,257 @@
+lemma-mux-trace-v1
+op runtime-error - - - - 0 0 applied applied
+check failed 0 a840537e91416e25
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 a840537e91416e25
+op close-pane - - - - 0 0 applied applied
+check failed 0 a840537e91416e25
+op focus 0:1 - 0:1 - 0 0 applied applied
+check no-effect 0 a840537e91416e25
+op close-pane - - - - 0 0 applied applied
+check failed 0 a840537e91416e25
+op stale-focus 0:1 - 0:2 - 0 0 applied applied
+check stale-target 0 a840537e91416e25
+op swap - - - - 0 0 applied applied
+check failed 0 a840537e91416e25
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 a840537e91416e25
+op attachment-resize - - - - 154 54 applied applied
+check applied 1 18784612c1a02b98
+op close-pane - - - - 0 0 applied applied
+check failed 0 18784612c1a02b98
+op spawn-failure 0:1 - 0:1 - 0 0 rejected applied
+check unavailable 0 18784612c1a02b98
+op place-tab 0:1 0:1 - - 0 0 applied rejected
+check no-effect 0 18784612c1a02b98
+op stale-focus 0:1 - 0:2 - 0 0 applied applied
+check stale-target 0 18784612c1a02b98
+op swap - - - - 0 0 applied applied
+check failed 0 18784612c1a02b98
+op focus 0:1 - 0:1 - 0 0 applied applied
+check no-effect 0 18784612c1a02b98
+op create-tab - - - - 0 0 applied applied
+check applied 1 78552b93c5c7c67c
+op place-tab 1:1 0:1 - - 0 0 applied rejected
+check applied 1 0bfd714a1f47a881
+op close-tab 1:1 - - - 0 0 applied applied
+check applied 1 974fd85b8bfb4fe1
+op close-pane - - - - 0 0 applied applied
+check failed 0 974fd85b8bfb4fe1
+op resize-failure 0:1 - 0:1 - 0 0 applied rejected
+check unavailable 0 974fd85b8bfb4fe1
+op focus 0:1 - 0:1 - 0 0 applied applied
+check no-effect 0 974fd85b8bfb4fe1
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 974fd85b8bfb4fe1
+op resize 0:1 - 0:1 - 7 7 applied applied
+check no-effect 0 974fd85b8bfb4fe1
+op create-tab - - - - 0 0 applied applied
+check applied 1 828390dccb9f433d
+op split 0:1 - 0:1 - 1 0 applied applied
+check applied 1 45f3b604f53188e4
+op child-exit 0:1 - 0:1 - 12 0 applied applied
+check applied 1 442607e893211d8d
+op child-exit 1:2 - 1:2 - 63 0 applied applied
+check applied 1 20bbff3313d8a677
+op attachment-resize - - - - 65 37 applied applied
+check applied 1 a6e958d06eb9d122
+op close-tab - - - - 0 0 applied applied
+check failed 0 a6e958d06eb9d122
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 a6e958d06eb9d122
+op resize 0:1 - 2:1 - 10 1 applied rejected
+check no-effect 0 a6e958d06eb9d122
+op focus 0:1 - 2:1 - 0 0 applied applied
+check no-effect 0 a6e958d06eb9d122
+op child-exit - - - - 0 0 applied applied
+check failed 0 a6e958d06eb9d122
+op focus 0:1 - 2:1 - 0 0 applied applied
+check no-effect 0 a6e958d06eb9d122
+op stale-focus 0:1 - 1:2 - 0 0 applied applied
+check stale-target 0 a6e958d06eb9d122
+op zoom 0:1 - 2:1 - 0 0 applied applied
+check applied 1 4b3d0259ccb4524a
+op close-pane - - - - 0 0 applied applied
+check failed 0 4b3d0259ccb4524a
+op close-pane - - - - 0 0 applied applied
+check failed 0 4b3d0259ccb4524a
+op close-tab - - - - 0 0 applied applied
+check failed 0 4b3d0259ccb4524a
+op resize 0:1 - 2:1 - 8 3 applied applied
+check unavailable 0 4b3d0259ccb4524a
+op resize-failure 0:1 - 2:1 - 0 0 applied rejected
+check unavailable 0 4b3d0259ccb4524a
+op runtime-error - - - - 0 0 applied applied
+check failed 0 4b3d0259ccb4524a
+op resize 0:1 - 2:1 - 9 6 applied applied
+check unavailable 0 4b3d0259ccb4524a
+op attachment-resize - - - - 142 20 applied applied
+check applied 1 f1c2323330e15d0f
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 f1c2323330e15d0f
+op stale-focus 0:1 - 1:2 - 0 0 applied applied
+check stale-target 0 f1c2323330e15d0f
+op resize-failure 0:1 - 2:1 - 0 0 applied rejected
+check unavailable 0 f1c2323330e15d0f
+op split 0:1 - 2:1 - 0 0 applied applied
+check applied 1 486d74c28f514db9
+op zoom 0:1 - 0:2 - 0 0 applied applied
+check applied 1 5886d93c00b156f3
+op select-tab 0:1 - - - 0 0 applied rejected
+check no-effect 0 5886d93c00b156f3
+op close-pane 0:1 - 0:2 - 0 0 applied applied
+check applied 1 35131c6c8f00d285
+op runtime-error - - - - 0 0 applied applied
+check failed 0 35131c6c8f00d285
+op zoom 0:1 - 2:1 - 0 0 applied applied
+check applied 1 9f2212ca65cf3ccb
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 9f2212ca65cf3ccb
+op split 0:1 - 2:1 - 1 0 applied applied
+check applied 1 0b9f6a090501f1b8
+op child-exit 0:1 - 0:3 - 104 0 applied applied
+check applied 1 3b97a6ab1b0ab39e
+op child-exit - - - - 0 0 applied applied
+check failed 0 3b97a6ab1b0ab39e
+op close-tab - - - - 0 0 applied applied
+check failed 0 3b97a6ab1b0ab39e
+op zoom 0:1 - 2:1 - 0 0 applied applied
+check applied 1 57dcd7613b8651e6
+op split 0:1 - 2:1 - 1 0 applied applied
+check applied 1 f15450ae5978cabd
+op create-tab - - - - 0 0 applied applied
+check applied 1 1cafb36d2fb5605b
+op spawn-failure 1:3 - 1:3 - 0 0 rejected applied
+check unavailable 0 1cafb36d2fb5605b
+op zoom 0:1 - 2:1 - 0 0 applied applied
+check applied 1 2553826bbd097543
+op split 0:1 - 2:1 - 0 1 applied applied
+check applied 1 79665f9b9228b29c
+op create-tab - - - - 0 0 applied rejected
+check applied 1 e04f9be9871b5c85
+op zoom 2:1 - 4:1 - 0 0 applied applied
+check applied 1 cf1b821c85e794dd
+op select-tab 2:1 - - - 0 0 applied applied
+check no-effect 0 cf1b821c85e794dd
+op place-tab 2:1 1:3 - - 0 0 applied applied
+check applied 1 4809bc5e3933077a
+op close-pane 1:3 - 1:3 - 0 0 applied applied
+check applied 1 5c967c9c4e577f22
+op close-pane 0:1 - 0:4 - 0 0 applied applied
+check applied 1 f560c5a5a9023850
+op place-tab 0:1 0:1 - - 0 0 applied applied
+check no-effect 0 f560c5a5a9023850
+op attachment-resize - - - - 44 24 rejected applied
+check applied 1 2dd96d81cdd32407
+op close-pane 0:1 - 3:1 - 0 0 applied applied
+check applied 1 d8809a58273e7d87
+op focus 2:1 - 4:1 - 0 0 applied applied
+check no-effect 0 d8809a58273e7d87
+op split 0:1 - 2:1 - 0 0 applied applied
+check applied 1 8be5350c27fc9034
+op attachment-resize - - - - 118 37 applied applied
+check applied 1 ec5693e656534d25
+op create-tab - - - - 0 0 applied applied
+check applied 1 1a98af9beff0bc5b
+op place-tab 1:4 1:4 - - 0 0 rejected applied
+check no-effect 0 1a98af9beff0bc5b
+op zoom 1:4 - 1:4 - 0 0 applied applied
+check applied 1 f701694a95333057
+op select-tab 1:4 - - - 0 0 rejected applied
+check no-effect 0 f701694a95333057
+op select-tab 2:1 - - - 0 0 applied applied
+check applied 1 8b764f6ad66d65c8
+op child-exit 1:4 - 1:4 - 123 0 applied applied
+check applied 1 c7db93f25a34d489
+op close-pane 2:1 - 4:1 - 0 0 applied applied
+check applied 1 c91196d7cffc53bf
+op resize 0:1 - 0:5 - 10 7 applied applied
+check no-effect 0 c91196d7cffc53bf
+op create-tab - - - - 1 0 applied applied
+check applied 1 e91456bc10c0b0e8
+op place-tab 1:5 0:1 - - 0 0 rejected applied
+check applied 1 84e6198a0e91bcd9
+op resize-failure 1:5 - 1:5 - 0 0 applied rejected
+check unavailable 0 84e6198a0e91bcd9
+op resize 1:5 - 1:5 - 7 5 applied applied
+check no-effect 0 84e6198a0e91bcd9
+op close-tab 1:5 - - - 0 0 applied applied
+check applied 1 55dcfa15f7c4cb12
+op split 0:1 - 0:5 - 1 1 applied applied
+check applied 1 6f8c9abd1d8d1922
+op resize-failure 0:1 - 1:6 - 0 0 applied rejected
+check unavailable 0 6f8c9abd1d8d1922
+op resize-failure 0:1 - 0:5 - 0 0 applied rejected
+check unavailable 0 6f8c9abd1d8d1922
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 6f8c9abd1d8d1922
+op split 0:1 - 0:5 - 1 0 rejected applied
+check unavailable 0 6f8c9abd1d8d1922
+op spawn-failure 0:1 - 0:5 - 0 0 rejected applied
+check unavailable 0 6f8c9abd1d8d1922
+op runtime-error 0:1 - 2:1 - 0 0 applied applied
+check applied 1 0aff0cca4228bb0b
+op close-pane 0:1 - 0:5 - 0 0 applied applied
+check applied 1 14097660fc964345
+op runtime-error - - - - 0 0 applied applied
+check failed 0 14097660fc964345
+op spawn-failure 0:1 - 1:6 - 0 0 rejected applied
+check unavailable 0 14097660fc964345
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 14097660fc964345
+op spawn-failure 0:1 - 1:6 - 0 0 rejected applied
+check unavailable 0 14097660fc964345
+op resize-failure 0:1 - 1:6 - 0 0 applied rejected
+check unavailable 0 14097660fc964345
+op zoom 0:1 - 1:6 - 0 0 applied applied
+check applied 1 31ef646fb6f1d41f
+op spawn-failure 0:1 - 1:6 - 0 0 rejected applied
+check unavailable 0 31ef646fb6f1d41f
+op resize 0:1 - 1:6 - 8 1 applied applied
+check unavailable 0 31ef646fb6f1d41f
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 31ef646fb6f1d41f
+op attachment-resize - - - - 86 75 applied applied
+check applied 1 eb6be619c34eb9b4
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 eb6be619c34eb9b4
+op close-pane - - - - 0 0 applied applied
+check failed 0 eb6be619c34eb9b4
+op resize 0:1 - 1:6 - 10 7 applied applied
+check unavailable 0 eb6be619c34eb9b4
+op close-tab - - - - 0 0 applied applied
+check failed 0 eb6be619c34eb9b4
+op attachment-resize - - - - 95 51 applied applied
+check applied 1 3119d9a2acb991a9
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 3119d9a2acb991a9
+op resize-failure 0:1 - 1:6 - 0 0 applied rejected
+check unavailable 0 3119d9a2acb991a9
+op zoom 0:1 - 1:6 - 0 0 applied applied
+check applied 1 d8df5f398bcf4721
+op swap - - - - 0 0 applied applied
+check failed 0 d8df5f398bcf4721
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 d8df5f398bcf4721
+op split 0:1 - 1:6 - 0 0 applied applied
+check applied 1 fd7d7471e89e6671
+op place-tab 0:1 0:1 - - 0 0 applied rejected
+check no-effect 0 fd7d7471e89e6671
+op resize-failure 0:1 - 1:6 - 0 0 applied rejected
+check unavailable 0 fd7d7471e89e6671
+op attachment-resize - - - - 135 25 applied applied
+check applied 1 0c18340c13f3f06c
+op spawn-failure 0:1 - 0:6 - 0 0 rejected applied
+check unavailable 0 0c18340c13f3f06c
+op runtime-error 0:1 - 0:6 - 0 0 applied applied
+check applied 1 b45fccbe5f320eb2
+op select-tab 0:1 - - - 0 0 applied applied
+check no-effect 0 b45fccbe5f320eb2
+op close-tab - - - - 0 0 applied applied
+check failed 0 b45fccbe5f320eb2
+op zoom 0:1 - 1:6 - 0 0 applied applied
+check applied 1 8bc553f20485168a
+op close-tab - - - - 0 0 applied applied
+check failed 0 8bc553f20485168a
+op swap - - - - 0 0 applied applied
+check failed 0 8bc553f20485168a

@@ -301,6 +301,9 @@ struct Session {
   std::uint64_t mutation_generation{1};
   std::array<PaneSlot, panes_per_session_max> panes{};
   std::array<TabSlot, tabs_per_session_max> tabs{};
+  // Attachment interaction state is semantic Core state. Connection decoders, output queues, and
+  // presentation caches remain in AttachmentRuntime outside this model.
+  Attachment attachment;
   TabOrder tab_order;
   TabId active_tab;
   TabId previous_tab;

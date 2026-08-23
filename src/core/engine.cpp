@@ -12,6 +12,7 @@
 #include "core/presentation_gate.hpp"
 #include "core/pty_writer.hpp"
 #include "core/session.hpp"
+#include "core/session_machine.hpp"
 #include "core/terminal_resize.hpp"
 #include "diagnostic/latency_trace.hpp"
 #include "input/input_router.hpp"
@@ -744,7 +745,6 @@ struct SessionRecord final : Session {
   auto operator=(SessionRecord&&) -> SessionRecord& = delete;
   ~SessionRecord() = default;
 
-  Attachment attachment;
   input::InputRouter input_router;
   AttachmentRuntime attachment_runtime;
   vt::TerminalTheme theme;
@@ -1096,102 +1096,6 @@ refresh_process_name_if_due(PaneRuntime& runtime,
   return id.has_value() ? find_tab(session, *id) : nullptr;
 }
 
-[[nodiscard]] auto empty_pane_slot(const SessionRecord& session) noexcept
-    -> std::optional<std::size_t> {
-  for (std::size_t index = 0; index < session.panes.size(); ++index) {
-    const auto& slot = std::span(session.panes).subspan(index, 1).front();
-    if (slot.pane == nullptr && slot.generation < std::numeric_limits<std::uint32_t>::max()) {
-      return index;
-    }
-  }
-  return std::nullopt;
-}
-
-// Allocation stages all fallible owners before publishing the Session pane/tab/order relation.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto allocate_tab(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                const std::span<const std::byte> launch_command = {},
-                                const std::string_view working_directory = {},
-                                const PaneExitPolicy exit_policy = PaneExitPolicy::close,
-                                const bool activate = true) noexcept -> Tab* {
-  if (!session.id.is_valid() || tab_count(session) >= session.tabs.size() ||
-      pane_count(session) >= panes_per_session_max || runtimes.size() >= limits::panes_hard_max ||
-      !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
-    return nullptr;
-  }
-  const auto pane_index = empty_pane_slot(session);
-  if (!pane_index.has_value()) {
-    return nullptr;
-  }
-  auto& pane_slot = std::span(session.panes).subspan(*pane_index, 1).front();
-  const auto pane_generation = next_generation(pane_slot.generation);
-  const auto pane_id = PaneId::from_parts(static_cast<std::uint32_t>(*pane_index), pane_generation);
-
-  for (std::size_t index = 0; index < session.tabs.size(); ++index) {
-    auto& tab_slot = std::span(session.tabs).subspan(index, 1).front();
-    if (tab_slot.tab != nullptr ||
-        tab_slot.generation == std::numeric_limits<std::uint32_t>::max()) {
-      continue;
-    }
-    const auto tab_generation = next_generation(tab_slot.generation);
-    const auto tab_id = TabId::from_parts(static_cast<std::uint32_t>(index), tab_generation);
-    const auto launch_directory = working_directory.empty() ? session.cwd() : working_directory;
-    std::unique_ptr<PaneLaunchIntent> retained_launch_command;
-    try {
-      retained_launch_command = std::make_unique<PaneLaunchIntent>();
-      retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
-      retained_launch_command->working_directory = launch_directory;
-    } catch (...) {
-      return nullptr;
-    }
-    const auto retained_launch = std::span<const std::byte>(retained_launch_command->bytes);
-    const PaneAddress address{.session = session.id, .pane = pane_id};
-    auto runtime = create_pane_runtime(
-        session.attachment.columns, pane_rows(session.attachment.rows), launch_directory,
-        session.launch_environment(), session.environment_mode, session.theme, session.id,
-        session.session_name(), tab_id, pane_id, retained_launch);
-    if (runtime == nullptr) {
-      return nullptr;
-    }
-    std::unique_ptr<Pane> first_pane;
-    std::unique_ptr<Tab> created;
-    try {
-      first_pane = std::make_unique<Pane>(Pane{
-          .id = pane_id,
-          .tab = tab_id,
-          .rectangle = {.columns = session.attachment.columns,
-                        .rows = pane_rows(session.attachment.rows)},
-          .launch_intent = std::move(retained_launch_command),
-          .process_exit = std::nullopt,
-          .exit_policy = exit_policy,
-      });
-      created = std::make_unique<Tab>(tab_id, pane_id);
-    } catch (const std::bad_alloc&) {
-      return nullptr;
-    }
-    created->layout_columns = session.attachment.columns;
-    created->layout_rows = pane_rows(session.attachment.rows);
-    if (!runtimes.insert(address, std::move(runtime))) {
-      return nullptr;
-    }
-    if (!session.tab_order.append(tab_id)) {
-      const bool erased = runtimes.erase(address);
-      LEMMA_ASSERT(erased);
-      return nullptr;
-    }
-    pane_slot.generation = pane_generation;
-    pane_slot.pane = std::move(first_pane);
-    tab_slot.generation = tab_generation;
-    tab_slot.tab = std::move(created);
-    if (activate) {
-      session.previous_tab = session.active_tab;
-      session.active_tab = tab_id;
-    }
-    return tab_slot.tab.get();
-  }
-  return nullptr;
-}
-
 [[nodiscard]] auto create_session(
     const std::string_view name, const std::string_view working_directory = {},
     const std::span<const std::byte> environment = {},
@@ -1306,7 +1210,7 @@ void finish_resize_mutation(PaneResizePlanEntry& entry) noexcept {
     -> LayoutResolutionStatus {
   for (std::size_t index = 0; index < count; ++index) {
     auto& entry = std::span(plan).subspan(index, 1).front();
-    LEMMA_ASSERT(entry.pane != nullptr && entry.runtime != nullptr);
+    LEMMA_ASSERT(entry.runtime != nullptr);
     if (entry.previous.columns == entry.target.columns &&
         entry.previous.rows == entry.target.rows) {
       continue;
@@ -1454,6 +1358,130 @@ void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
                     const bool force_full) noexcept {
   session.attachment_runtime.frame_scheduler.request(
       urgency, force_full, std::chrono::steady_clock::now(), frame_sink_state(session));
+}
+
+struct ProductionSessionRuntimeContext final {
+  SessionRecord* session{nullptr};
+  PaneRuntimeStore* runtimes{nullptr};
+};
+
+[[nodiscard]] auto production_spawn_pane(void* const context,
+                                         const SpawnPaneEffect& effect) noexcept
+    -> RuntimeEffectStatus {
+  auto& owner = *static_cast<ProductionSessionRuntimeContext*>(context);
+  LEMMA_ASSERT(owner.session != nullptr && owner.runtimes != nullptr);
+  auto& session = *owner.session;
+  if (effect.session != session.id ||
+      !owner.runtimes->can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
+    return RuntimeEffectStatus::rejected;
+  }
+  auto runtime = create_pane_runtime(
+      effect.rectangle.columns, effect.rectangle.rows, effect.working_directory,
+      session.launch_environment(), session.environment_mode, session.theme, session.id,
+      session.session_name(), effect.tab, effect.pane, effect.command);
+  if (runtime == nullptr) {
+    return RuntimeEffectStatus::rejected;
+  }
+  return owner.runtimes->insert({.session = effect.session, .pane = effect.pane},
+                                std::move(runtime))
+             ? RuntimeEffectStatus::applied
+             : RuntimeEffectStatus::rejected;
+}
+
+[[nodiscard]] auto production_resize_panes(void* const context,
+                                           const std::span<const ResizePaneEffect> effects) noexcept
+    -> RuntimeEffectStatus {
+  auto& owner = *static_cast<ProductionSessionRuntimeContext*>(context);
+  LEMMA_ASSERT(owner.session != nullptr && owner.runtimes != nullptr);
+  if (effects.size() > panes_per_session_max) {
+    return RuntimeEffectStatus::consistency_lost;
+  }
+  PaneResizePlan plan{};
+  std::size_t count = 0;
+  for (const auto& effect : effects) {
+    if (effect.session != owner.session->id) {
+      return RuntimeEffectStatus::consistency_lost;
+    }
+    auto* const runtime = owner.runtimes->get({.session = effect.session, .pane = effect.pane});
+    if (runtime == nullptr) {
+      return RuntimeEffectStatus::consistency_lost;
+    }
+    std::span(plan).subspan(count, 1).front() = {
+        .pane = nullptr,
+        .runtime = runtime,
+        .previous = effect.previous,
+        .target = effect.target,
+    };
+    ++count;
+  }
+  const auto status = apply_layout_resize_plan(plan, count);
+  if (status == LayoutResolutionStatus::applied) {
+    for (auto& entry : std::span(plan).first(count)) {
+      finish_resize_mutation(entry);
+    }
+    return RuntimeEffectStatus::applied;
+  }
+  return status == LayoutResolutionStatus::rejected ? RuntimeEffectStatus::rejected
+                                                    : RuntimeEffectStatus::consistency_lost;
+}
+
+void production_retire_pane(void* const context, const SessionId session,
+                            const PaneId pane) noexcept {
+  auto& owner = *static_cast<ProductionSessionRuntimeContext*>(context);
+  LEMMA_ASSERT(owner.session != nullptr && owner.runtimes != nullptr &&
+               owner.session->id == session);
+  const bool erased = owner.runtimes->erase({.session = session, .pane = pane});
+  LEMMA_ASSERT(erased);
+}
+
+void production_hold_pane(void* const context, const SessionId session, const PaneId pane,
+                          [[maybe_unused]] const ProcessExit process) noexcept {
+  auto& owner = *static_cast<ProductionSessionRuntimeContext*>(context);
+  LEMMA_ASSERT(owner.session != nullptr && owner.runtimes != nullptr &&
+               owner.session->id == session);
+  auto* const runtime = owner.runtimes->get({.session = session, .pane = pane});
+  LEMMA_ASSERT(runtime != nullptr);
+  close_descriptor(runtime->pty);
+  runtime->pending_writes.clear();
+  runtime->failure.reset();
+  runtime->observed_exit.reset();
+  runtime->child = -1;
+  runtime->process_name = {};
+  constexpr std::string_view exited_title = "exited";
+  std::ranges::copy(exited_title, runtime->process_name.begin());
+  runtime->process_name_size = exited_title.size();
+  record_terminal_mutation(*runtime);
+}
+
+[[nodiscard]] auto production_session_options(ProductionSessionRuntimeContext& context,
+                                              const SessionNameConflict name_conflict = nullptr,
+                                              void* const name_conflict_context = nullptr) noexcept
+    -> SessionMachineOptions {
+  return {
+      .runtime = {.context = &context,
+                  .spawn = &production_spawn_pane,
+                  .resize = &production_resize_panes,
+                  .retire = &production_retire_pane,
+                  .hold = &production_hold_pane},
+      .name_conflict = name_conflict,
+      .name_conflict_context = name_conflict_context,
+  };
+}
+
+void apply_session_change(SessionRecord& session, PaneRuntimeStore& runtimes,
+                          const SessionChange change) noexcept {
+  if (change.status_changed) {
+    session.attachment_runtime.status_valid = false;
+  }
+  if (change.invalidate_terminal.is_valid()) {
+    auto* const runtime = runtimes.get({.session = session.id, .pane = change.invalidate_terminal});
+    if (runtime != nullptr) {
+      runtime->terminal.invalidate_ansi_render_state();
+    }
+  }
+  if (change.frame_requested && session.active) {
+    schedule_frame(session, FrameUrgency::state_change, change.force_full_frame);
+  }
 }
 
 void finish_live_divider_resize(SessionRecord& session, const bool discard_release) noexcept {
@@ -2737,119 +2765,36 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
                               const std::string_view working_directory = {},
                               const PaneExitPolicy exit_policy = PaneExitPolicy::close,
                               const bool activate = true) noexcept -> Tab* {
-  const auto previous_active = session.active_tab;
-  const auto previous_previous = session.previous_tab;
-  auto* const created =
-      allocate_tab(session, runtimes, launch_command, working_directory, exit_policy, activate);
-  if (created == nullptr) {
-    return nullptr;
-  }
-  if (!fit_tab_to_viewport(session, *created, runtimes)) {
-    if (session.active) {
-      const auto created_id = created->id;
-      erase_tab_panes(session, *created, runtimes);
-      std::span(session.tabs).subspan(created_id.slot(), 1).front().tab.reset();
-      const bool order_erased = session.tab_order.erase(created_id);
-      LEMMA_ASSERT(order_erased);
-      session.active_tab = previous_active;
-      session.previous_tab = previous_previous;
-    }
-    return nullptr;
-  }
-  schedule_frame(session, FrameUrgency::state_change, session.active_tab == created->id);
-  record_session_mutation(session);
-  return created;
+  ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
+  SessionMachine machine(session, production_session_options(runtime_context));
+  const auto transition = machine.create_tab({.command = launch_command,
+                                              .working_directory = working_directory,
+                                              .exit_policy = exit_policy,
+                                              .activate = activate});
+  apply_session_change(session, runtimes, transition.change);
+  return transition.result.status == CommandStatus::applied
+             ? find_tab(session, transition.created_tab)
+             : nullptr;
 }
 
-// Splitting stages topology, pane identity, runtime creation, and geometry before publishing the
-// candidate layout through the same bounded resize transaction used by interactive resize.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Runtime creation and all dependent resize effects complete before Core publishes the new Pane.
 [[nodiscard]] auto split_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
                               const PaneId source_pane, const SplitAxis axis,
                               const std::span<const std::byte> launch_command = {},
                               const std::string_view working_directory = {},
                               const PaneExitPolicy exit_policy = PaneExitPolicy::close,
                               const bool focus_created = true) noexcept -> Pane* {
-  if (pane_count(session) >= panes_per_session_max ||
-      find_pane(session, tab, source_pane) == nullptr ||
-      !runtimes.can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
-    return nullptr;
-  }
-  const auto pane_index = empty_pane_slot(session);
-  if (!pane_index.has_value()) {
-    return nullptr;
-  }
-  auto& pane_slot = std::span(session.panes).subspan(*pane_index, 1).front();
-  const auto pane_generation = next_generation(pane_slot.generation);
-  const auto pane_id = PaneId::from_parts(static_cast<std::uint32_t>(*pane_index), pane_generation);
-
-  auto proposed_layout = tab.layout;
-  if (!proposed_layout.split(source_pane, pane_id, axis)) {
-    return nullptr;
-  }
-  const render::PaneRectangle viewport{
-      .columns = tab.layout_columns,
-      .rows = tab.layout_rows,
-  };
-  const auto projection = proposed_layout.project(viewport);
-  const auto new_rectangle = projection.has_value() ? projection->rectangle(pane_id) : std::nullopt;
-  if (!new_rectangle.has_value()) {
-    return nullptr;
-  }
-
-  const auto launch_directory = working_directory.empty() ? session.cwd() : working_directory;
-  auto runtime =
-      create_pane_runtime(new_rectangle->columns, new_rectangle->rows, launch_directory,
-                          session.launch_environment(), session.environment_mode, session.theme,
-                          session.id, session.session_name(), tab.id, pane_id, launch_command);
-  if (runtime == nullptr) {
-    return nullptr;
-  }
-  std::unique_ptr<Pane> created;
-  try {
-    auto retained_launch_command = std::make_unique<PaneLaunchIntent>();
-    retained_launch_command->bytes.assign(launch_command.begin(), launch_command.end());
-    retained_launch_command->working_directory = launch_directory;
-    created = std::make_unique<Pane>(Pane{.id = pane_id,
-                                          .tab = tab.id,
-                                          .rectangle = *new_rectangle,
-                                          .launch_intent = std::move(retained_launch_command),
-                                          .process_exit = std::nullopt,
-                                          .exit_policy = exit_policy});
-  } catch (...) {
-    return nullptr;
-  }
-
-  const auto previous_zoomed = tab.zoomed;
-  const auto previous_focused = tab.focused_pane;
-  const auto previous_previous = tab.previous_pane;
-  const auto previous_generation = pane_slot.generation;
-  const PaneAddress address{.session = session.id, .pane = pane_id};
-  if (!runtimes.insert(address, std::move(runtime))) {
-    return nullptr;
-  }
-  pane_slot.generation = pane_generation;
-  pane_slot.pane = std::move(created);
-  tab.zoomed = false;
-  if (focus_created) {
-    tab.previous_pane = source_pane;
-    tab.focused_pane = pane_id;
-  }
-  if (!resolve_session_layout(session, tab, runtimes, &proposed_layout)) {
-    if (session.active) {
-      const bool erased = runtimes.erase(address);
-      LEMMA_ASSERT(erased);
-      pane_slot.pane.reset();
-      pane_slot.generation = previous_generation;
-      tab.zoomed = previous_zoomed;
-      tab.focused_pane = previous_focused;
-      tab.previous_pane = previous_previous;
-    }
-    return nullptr;
-  }
-  schedule_frame(session, FrameUrgency::state_change, true);
-  record_session_mutation(session);
-  return pane_slot.pane.get();
+  ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
+  SessionMachine machine(session, production_session_options(runtime_context));
+  const auto transition = machine.split_pane(tab.id, source_pane, axis,
+                                             {.command = launch_command,
+                                              .working_directory = working_directory,
+                                              .exit_policy = exit_policy,
+                                              .focus_created = focus_created});
+  apply_session_change(session, runtimes, transition.change);
+  return transition.result.status == CommandStatus::applied
+             ? find_pane(session, transition.created_pane)
+             : nullptr;
 }
 
 [[nodiscard]] auto close_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
@@ -3437,6 +3382,23 @@ struct StatusHit final {
                           ? CommandStatus::stale_target
                           : CommandStatus::wrong_owner};
   }
+  if (session_lifecycle_command(command.kind)) {
+    if (session.attachment.copy_mode.active() && command.kind != CommandKind::rename_session &&
+        command.kind != CommandKind::stop_session) {
+      leave_copy_mode(session, runtimes);
+    }
+    if (command.kind == CommandKind::swap_panes) {
+      finish_live_divider_resize(session);
+    }
+    ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
+    SessionMachine machine(
+        session, production_session_options(runtime_context, command_context.name_conflict,
+                                            command_context.name_conflict_context));
+    const auto transition = machine.dispatch(command);
+    LEMMA_ASSERT(transition.handled);
+    apply_session_change(session, runtimes, transition.change);
+    return transition.result;
+  }
   if (command.kind == CommandKind::detach_client) {
     return session.attachment_runtime.client >= 0
                ? CommandResult{.status = CommandStatus::detach_requested}
@@ -3858,7 +3820,7 @@ struct StatusHit final {
                                 .name_conflict_context = name_conflict_context};
   const CommandDispatcher dispatcher(&execute_session_command, &context);
   const auto result = dispatcher.dispatch(resolved);
-  if (result.status == CommandStatus::applied) {
+  if (result.status == CommandStatus::applied && !session_lifecycle_command(resolved.kind)) {
     record_session_mutation(session);
   }
   return result;
@@ -4362,8 +4324,6 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
   finish_live_divider_resize(session, true);
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
-  const auto previous_columns = session.attachment.columns;
-  const auto previous_rows = session.attachment.rows;
   // Frame capacity changes only at this lifecycle boundary. Allocation failure preserves the old
   // storage and all terminal geometry, so the caller can reject the resize without partial state.
   const auto retained_frame_bytes = session.attachment_runtime.output.busy()
@@ -4373,23 +4333,12 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
                                                 retained_frame_bytes)) {
     return false;
   }
-  // Record every physical resize and discard any unsent frame composed for the previous viewport.
-  // A transiently tiny outer terminal is valid, but pane geometry cannot represent the split tree
-  // until it fits again. Preserve that geometry and send a surface-free clear frame constrained to
-  // the physical viewport instead of rendering stale rectangles outside it. Checking the unzoomed
-  // tree also prevents an undersized viewport from becoming latent while zoomed.
-  session.attachment.columns = columns;
-  session.attachment.rows = rows;
-  auto* const tab = active_tab(session);
-  if (tab == nullptr || !fit_tab_to_viewport(session, *tab, runtimes)) {
-    if (session.active) {
-      session.attachment.columns = previous_columns;
-      session.attachment.rows = previous_rows;
-    }
-    return false;
-  }
-  schedule_frame(session, FrameUrgency::state_change, true);
-  return true;
+  ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
+  SessionMachine machine(session, production_session_options(runtime_context));
+  const auto transition = machine.resize_attachment(columns, rows);
+  apply_session_change(session, runtimes, transition.change);
+  return transition.result.status == CommandStatus::applied ||
+         transition.result.status == CommandStatus::no_effect;
 }
 
 [[nodiscard]] constexpr auto
@@ -7355,7 +7304,7 @@ struct PublicCaptureFormatting final {
     inserted->attachment.session = *id;
     inserted->activity_order = ++activity_order;
     const auto policy = action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
-    auto* const tab = allocate_tab(*inserted, runtimes, command, {}, policy);
+    auto* const tab = create_tab(*inserted, runtimes, command, {}, policy);
     if (tab == nullptr) {
       const bool erased = sessions.erase(*id);
       LEMMA_ASSERT(erased);
@@ -7471,7 +7420,14 @@ struct PublicCaptureFormatting final {
       return result;
     }
     if (!created->set_title_override(action.title)) {
-      remove_tab(*session, runtimes, created->id);
+      const Command rollback{.kind = CommandKind::close_tab,
+                             .origin = CommandOrigin::internal,
+                             .target = {.session = session->id,
+                                        .tab = created->id,
+                                        .pane = {},
+                                        .peer_pane = {},
+                                        .attachment = {}}};
+      static_cast<void>(dispatch_session_command(*session, runtimes, rollback));
       result.status = CommandStatus::failed;
       return result;
     }
@@ -9647,7 +9603,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     }
     inserted->activity_order = ++activity_order;
     const std::span<const std::byte> launch_command(pending.launch_command);
-    if (allocate_tab(*inserted, runtimes, launch_command, {}, pending.exit_policy) == nullptr) {
+    if (create_tab(*inserted, runtimes, launch_command, {}, pending.exit_policy) == nullptr) {
       const bool erased = sessions.erase(*id);
       LEMMA_ASSERT(erased);
       finish_pending_byte(pending, response_failed);
@@ -10712,34 +10668,16 @@ void apply_pane_runtime_outcome(SessionRecord& session, Tab& tab, PaneRuntimeSto
   auto* const pane = find_pane(session, tab, outcome.pane.pane);
   auto* const runtime = runtimes.get(outcome.pane);
   LEMMA_ASSERT(pane != nullptr && runtime != nullptr);
-  if (outcome.failure == PaneRuntimeFailure::child_exit &&
-      pane->commit_process_exit(outcome.process_exit.value_or(ProcessExit{}))) {
-    close_descriptor(runtime->pty);
-    runtime->pending_writes.clear();
-    runtime->failure.reset();
-    runtime->observed_exit.reset();
-    runtime->child = -1;
-    runtime->process_name = {};
-    constexpr std::string_view exited_title = "exited";
-    std::ranges::copy(exited_title, runtime->process_name.begin());
-    runtime->process_name_size = exited_title.size();
-    record_terminal_mutation(*runtime);
-    record_session_mutation(session);
-    schedule_frame(session, FrameUrgency::state_change, true);
-    return;
+  if (session.attachment.selection_target ==
+      std::optional{AttachmentPaneTarget{.tab = tab.id, .pane = pane->id}}) {
+    leave_copy_mode(session, runtimes);
   }
-  // Every non-held process or terminal failure closes the semantic pane. Runtime reports the
-  // typed reason; Core alone applies this lifecycle policy.
-  switch (outcome.failure) {
-  case PaneRuntimeFailure::child_exit:
-  case PaneRuntimeFailure::pty_read_error:
-  case PaneRuntimeFailure::pty_write_error:
-  case PaneRuntimeFailure::terminal_integrity_error:
-  case PaneRuntimeFailure::scrollback_compression_error:
-  case PaneRuntimeFailure::resize_consistency_lost:
-    static_cast<void>(close_pane(session, tab, runtimes, outcome.pane.pane));
-    return;
-  }
+  ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
+  SessionMachine machine(session, production_session_options(runtime_context));
+  const auto transition =
+      machine.runtime_failed(pane->id, outcome.process_exit.value_or(ProcessExit{}),
+                             outcome.failure == PaneRuntimeFailure::child_exit);
+  apply_session_change(session, runtimes, transition.change);
 }
 
 // Removal may rewrite tab and pane ownership while traversing fixed Session pane slots.
