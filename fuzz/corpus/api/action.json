@@ -1,0 +1,1 @@
+{"schema":"lemma.action/v1","action":"pane.wait","session":{"name":"world"},"pane":{"id":"0:1"},"contains":"ready","timeout_ms":2000}

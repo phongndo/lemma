@@ -7,14 +7,19 @@ set -euo pipefail
 rm -rf third_party/ghostty/zig-out
 scripts/ci/configure sanitizers \
   -DLEMMA_BUILD_TESTS=ON \
-  -DLEMMA_BUILD_BENCHMARKS=OFF
+  -DLEMMA_BUILD_BENCHMARKS=OFF \
+  -DLEMMA_BUILD_FUZZERS=ON
 cmake --build --preset sanitizers --target \
   lemma \
   lemma_fast_test_binaries \
   lemma_core_sim_tests \
+  lemma_protocol_sim_tests \
   lemma_terminal_sim_tests \
   lemma_terminal_resource_tests \
-  lemma_steady_state_allocation_audit
+  lemma_steady_state_allocation_audit \
+  lemma_attachment_decoder_fuzz \
+  lemma_host_input_parser_fuzz \
+  lemma_api_json_fuzz
 
 leak_detection=1
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -26,4 +31,7 @@ export ASAN_OPTIONS="detect_leaks=${leak_detection}:strict_string_checks=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 scripts/ci/test sanitizers
 ctest --preset sanitizers --no-tests=error -L extended --parallel 1
+./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
+./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
+./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
 ./build/sanitizers/lemma --help >/dev/null

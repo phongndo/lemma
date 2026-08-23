@@ -1,7 +1,7 @@
 nix := ""
 profile := "release"
 build_type := if profile == "release" { "Release" } else { "Debug" }
-cpp_files := "apps include src tests benchmarks"
+cpp_files := "apps include src tests benchmarks fuzz"
 python_paths := "bench benchmarks scripts test tests tools conanfile.py"
 ghostty_cmake := if env_var_or_default("LEMMA_GHOSTTY_SOURCE_DIR", "") != "" { "-DLEMMA_GHOSTTY_SOURCE_DIR=" + env_var("LEMMA_GHOSTTY_SOURCE_DIR") + " -DLEMMA_GHOSTTY_NIX_SOURCE_REV=" + env_var_or_default("LEMMA_GHOSTTY_NIX_SOURCE_REV", "") + " -DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=" + env_var_or_default("LEMMA_GHOSTTY_ZIG_SYSTEM_DIR", "") } else { "" }
 

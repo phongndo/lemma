@@ -1,0 +1,1 @@
+{"schema":"lemma.proc/v1","actions":[{"action":"session.inspect","session":{"name":"world"}},{"action":"pane.wait","pane":{"result":"root"},"contains":"ready"}]}

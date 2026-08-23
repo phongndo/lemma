@@ -94,6 +94,20 @@ LEMMA_SIM_SEED=0x1234 LEMMA_SIM_OPERATIONS=4096 ./test sim
 Use `LEMMA_SIM_TRACE=1` with a replay command to stream completed operations before a dependency
 abort that cannot return through the normal failure trace.
 
+Parser fuzz targets are opt-in and retain checked-in seeds for the Lemma-owned attachment, host
+input, and public JSON boundaries:
+
+```sh
+scripts/ci/configure sanitizers -DLEMMA_BUILD_TESTS=OFF -DLEMMA_BUILD_BENCHMARKS=OFF -DLEMMA_BUILD_FUZZERS=ON
+cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host_input_parser_fuzz lemma_api_json_fuzz
+./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
+./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
+./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
+```
+
+Linux links libFuzzer for mutation runs. Darwin replays the same corpora under ASan/UBSan because
+Xcode Clang does not ship a libFuzzer runtime.
+
 Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
 report enough state to diagnose a timeout. The mux harness uses structured Session/Pane inspection:
 stable PaneId and TabId values own semantic identity, while PID is observed only for real process

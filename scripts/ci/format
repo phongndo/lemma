@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly cpp_roots=(apps include src tests benchmarks)
+readonly cpp_roots=(apps include src tests benchmarks fuzz)
 
 find "${cpp_roots[@]}" -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 |
   xargs -0 -n 1 -P "${FORMAT_JOBS:-4}" clang-format --dry-run --Werror

@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LEMMA_BUILD_TESTS "Build the test suite" ON)
 option(LEMMA_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(LEMMA_BUILD_FUZZERS "Build sanitizer-backed parser fuzz targets" OFF)
 option(LEMMA_ENABLE_LATENCY_TRACE "Compile the opt-in key-to-visible diagnostic trace" OFF)
 
 if(LEMMA_ENABLE_LATENCY_TRACE)
@@ -472,6 +473,32 @@ if(LEMMA_BUILD_TESTS)
       LABELS "allocation;extended;performance"
       RUN_SERIAL TRUE
   )
+endif()
+
+if(LEMMA_BUILD_FUZZERS)
+  function(lemma_add_fuzzer target source)
+    if(APPLE)
+      # Xcode Clang does not ship libclang_rt.fuzzer_osx. Keep the same entry points and sanitizer
+      # instrumentation, but link a corpus replay driver so Darwin can verify every checked-in seed.
+      add_executable(${target} ${source} fuzz/corpus_driver.cpp)
+      set(fuzzer_sanitizers -fsanitize=address,undefined)
+    else()
+      add_executable(${target} ${source})
+      set(fuzzer_sanitizers -fsanitize=fuzzer,address,undefined)
+    endif()
+    lemma_internal_target(${target})
+    target_compile_options(${target} PRIVATE ${fuzzer_sanitizers} -fno-omit-frame-pointer)
+    target_link_options(${target} PRIVATE ${fuzzer_sanitizers} -fno-omit-frame-pointer)
+    target_link_libraries(${target} PRIVATE ${ARGN})
+  endfunction()
+
+  lemma_add_fuzzer(
+    lemma_attachment_decoder_fuzz fuzz/attachment_decoder_fuzz.cpp lemma_protocol
+  )
+  lemma_add_fuzzer(
+    lemma_host_input_parser_fuzz fuzz/host_input_parser_fuzz.cpp lemma_client
+  )
+  lemma_add_fuzzer(lemma_api_json_fuzz fuzz/api_json_fuzz.cpp lemma_api)
 endif()
 
 if(LEMMA_BUILD_BENCHMARKS)
