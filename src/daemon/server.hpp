@@ -33,7 +33,6 @@ private:
 using StopRequested = bool (*)() noexcept;
 
 struct ServeOptions final {
-  bool extensions_enabled{true};
   // Foreground/test owners may request a normal reactor unwind after waking its poll.
   StopRequested stop_requested{nullptr};
 };
@@ -42,7 +41,7 @@ struct ServeOptions final {
 [[nodiscard]] auto validate_session(std::string_view session) noexcept -> bool;
 
 // Runs the production listener/core path in the calling process. The endpoint is owned until the
-// core reactor exits. Tests use this entry point with extensions disabled.
+// core reactor exits.
 [[nodiscard]] auto serve(const RuntimeEndpoint& endpoint, ServeOptions options = {}) noexcept
     -> int;
 

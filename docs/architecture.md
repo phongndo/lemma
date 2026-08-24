@@ -1,7 +1,7 @@
 # Architecture
 
-Lemma is one C++23 executable with client, daemon, control, and extension-host roles. One per-user
-daemon owns all live mux and terminal state. Clients are replaceable input and presentation edges.
+Lemma is one C++23 executable with client, daemon, and control roles. One per-user daemon owns all
+live mux and terminal state. Clients are replaceable input and presentation edges.
 
 ```text
 physical input ─> input policy ─┐
@@ -50,10 +50,9 @@ destroy the Session.
 | `lemma_runtime` | Processes, PTYs, scheduling, input execution, resizing, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
-| `lemma_protocol` | Bounded private attachment and extension codecs |
+| `lemma_protocol` | Bounded private attachment codec |
 | `lemma_client` | Host input, outer-terminal presentation, and restoration |
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
-| `lemma_extension` | Isolated Lua host process and bounded registration transport |
 
 Core links no PTY, socket, process, or terminal-emulator owner. Runtime executes accepted semantic
 intent using those mechanisms.
@@ -71,7 +70,6 @@ Every mutable fact has one authoritative owner:
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
 | Connection decoding, output progress, deadlines | AttachmentRuntime |
 | Frame buffers and physical presentation shadow | Render/runtime presentation |
-| Lua VM and extension transport | Extension runtime |
 
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
 authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
@@ -135,7 +133,7 @@ Multi-pane resize publishes semantic geometry only after the dependent runtime w
 6. Ghostty representations remain private to `lemma_terminal`.
 7. Required PTY-response, application-input, and presentation ordering is explicit.
 8. Queues, payloads, loops, timeouts, and retained presentation work are bounded.
-9. Slow or malformed clients, observers, and extensions cannot prevent unrelated PTY progress.
+9. Slow or malformed clients and observers cannot prevent unrelated PTY progress.
 10. Visible state is reconstructible without retaining an unbounded event, frame, or PTY-byte log.
 11. Session lifecycle transitions preserve the complete semantic and Core/Runtime ownership
     invariants after every atomic operation; rejected effects do not publish partial Core state.

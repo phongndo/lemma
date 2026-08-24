@@ -28,6 +28,5 @@ int main(const int argc, char** argv) {
   if (sigemptyset(&action.sa_mask) != 0 || ::sigaction(SIGTERM, &action, nullptr) != 0) {
     return 2;
   }
-  return lemma::daemon::serve(*endpoint,
-                              {.extensions_enabled = false, .stop_requested = &should_stop});
+  return lemma::daemon::serve(*endpoint, {.stop_requested = &should_stop});
 }

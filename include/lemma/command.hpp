@@ -60,12 +60,11 @@ enum class CommandOrigin : std::uint8_t {
   client,
   cli,
   keymap,
-  extension,
   internal,
 };
 
-// Invalid IDs mean "the current object". Explicit IDs are retained in the command value so CLI,
-// remote, and extension transports can use the same dispatcher without exposing core pointers.
+// Invalid IDs mean "the current object". Explicit IDs are retained in the command value so CLI
+// and remote transports can use the same dispatcher without exposing core pointers.
 struct CommandTarget final {
   SessionId session;
   TabId tab;

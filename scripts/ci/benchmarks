@@ -165,7 +165,7 @@ for measurement in ("key_to_pty", "key_to_visible"):
         raise SystemExit(1)
 idle = workloads["idle_resources"]
 roles = idle.get("roles") if isinstance(idle, dict) else None
-if not isinstance(roles, dict) or not {"daemon", "attached_client", "extension_host"}.issubset(roles):
+if not isinstance(roles, dict) or not {"daemon", "attached_client"}.issubset(roles):
     print("mux benchmark workload idle_resources is missing direct process roles", file=sys.stderr)
     raise SystemExit(1)
 if (

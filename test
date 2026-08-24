@@ -155,7 +155,7 @@ def main() -> int:
     elif tier == "layout":
         run_unit("PaneLayoutTest.*")
     elif tier == "protocol":
-        run_unit("ProtocolTest.*:ExtensionProtocolTest.*")
+        run_unit("ProtocolTest.*")
     elif tier == "input":
         run_unit("InputMapTest.*:InputRouterTest.*:HostInputParserTest.*")
     elif tier == "queues":

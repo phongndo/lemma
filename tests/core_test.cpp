@@ -66,7 +66,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   const CommandDispatcher dispatcher(&capture_command, &capture, &observe_command, &capture);
   const Command command{
       .kind = CommandKind::select_tab,
-      .origin = CommandOrigin::extension,
+      .origin = CommandOrigin::cli,
       .target = {.session = SessionId::from_parts(2, 3),
                  .tab = TabId::from_parts(4, 5),
                  .pane = {},
@@ -83,7 +83,7 @@ TEST(CommandDispatcherTest, DispatchesValidatedBoundedValue) {
   EXPECT_EQ(capture.observations, 1U);
   EXPECT_EQ(capture.result.status, CommandStatus::applied);
   EXPECT_EQ(capture.command.kind, CommandKind::select_tab);
-  EXPECT_EQ(capture.command.origin, CommandOrigin::extension);
+  EXPECT_EQ(capture.command.origin, CommandOrigin::cli);
   EXPECT_EQ(capture.command.target.session, command.target.session);
   EXPECT_EQ(capture.command.target.tab, command.target.tab);
   EXPECT_EQ(std::get<CommandCoordinate>(capture.command.payload).value, 7U);
@@ -211,7 +211,7 @@ TEST(CommandDispatcherTest, RejectsInvalidValuesBeforeExecutor) {
             CommandStatus::invalid_target);
   EXPECT_EQ(dispatcher
                 .dispatch({.kind = CommandKind::close_tab,
-                           .origin = CommandOrigin::extension,
+                           .origin = CommandOrigin::cli,
                            .target = {.session = {},
                                       .tab = TabId::from_parts(1, 1),
                                       .pane = {},

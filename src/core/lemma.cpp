@@ -6,7 +6,6 @@
 #include <span>
 #include <string_view>
 
-#include <lua.h>
 #include <zstd.h>
 
 namespace lemma {
@@ -16,8 +15,6 @@ namespace lemma {
 [[nodiscard]] auto ghostty_version() noexcept -> std::span<const std::uint8_t> {
   return vt::library_version();
 }
-
-[[nodiscard]] auto lua_version() noexcept -> std::string_view { return LUA_VERSION; }
 
 [[nodiscard]] auto zstd_version() noexcept -> std::string_view { return ZSTD_versionString(); }
 

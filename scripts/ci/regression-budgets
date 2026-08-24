@@ -27,7 +27,7 @@ sleep 30
 
 rm -f "${micro_output}" "${process_output}" "${profile_output}" "${result_output}"
 ./build/release/lemma_benchmarks \
-  --benchmark_filter='benchmark_(command_dispatch|extension_registration_codec|terminal_large_writes|terminal_ansi_damage_frames|terminal_ansi_single_row|terminal_ansi_scroll_operations|terminal_full_frames)$' \
+  --benchmark_filter='benchmark_(command_dispatch|terminal_large_writes|terminal_ansi_damage_frames|terminal_ansi_single_row|terminal_ansi_scroll_operations|terminal_full_frames)$' \
   --benchmark_min_time=0.2s \
   --benchmark_repetitions=10 \
   --benchmark_out="${micro_output}" \

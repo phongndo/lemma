@@ -3,7 +3,6 @@
 #include "api/action.hpp"
 #include "api/json.hpp"
 #include "core/engine.hpp"
-#include "extension/host.hpp"
 #include "lemma/id.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
@@ -37,7 +36,6 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
-#include <syslog.h>
 #include <unistd.h>
 
 namespace lemma::daemon {
@@ -198,7 +196,6 @@ struct OwnedEndpoint final {
   const char* path;
   int listener;
   int server_lock;
-  std::string extension_config;
 };
 
 void release_owned_endpoint(void* const context) noexcept {
@@ -206,35 +203,6 @@ void release_owned_endpoint(void* const context) noexcept {
   close_descriptor(endpoint.listener);
   static_cast<void>(::unlink(endpoint.path));
   close_descriptor(endpoint.server_lock);
-}
-
-[[nodiscard]] auto extension_config_available(const std::string& path) noexcept -> bool {
-  if (path.empty()) {
-    return false;
-  }
-  struct stat info{};
-  if (::stat(path.c_str(), &info) == 0) {
-    return true;
-  }
-  // Missing configuration means the foundational path has no extension process. Other errors are
-  // handed to the host so its existing bounded diagnostic remains observable.
-  return errno != ENOENT;
-}
-
-[[nodiscard]] auto acquire_extension_host(void* const context) noexcept
-    -> core::ExtensionConnection {
-  const auto& endpoint = *static_cast<const OwnedEndpoint*>(context);
-  const std::array inherited{endpoint.listener, endpoint.server_lock};
-  const auto connection = extension::spawn_host(endpoint.extension_config, inherited);
-  return {.descriptor = connection.descriptor};
-}
-
-void report_extension_error(void* const /*context*/, const std::string_view error) noexcept {
-  // The detached daemon has no stderr. Keep load failures observable through the host's system log;
-  // control listings also expose the retained error directly to CLI users.
-  // syslog is variadic because the message arguments are determined by its format string.
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-  ::syslog(LOG_ERR, "configuration error: %.*s", static_cast<int>(error.size()), error.data());
 }
 
 [[nodiscard]] auto run_owned_server(const std::string& path, const ServeOptions options) noexcept
@@ -247,7 +215,6 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
     return 1;
   }
   child_exit_pending = 0;
-  ::openlog("lemma", LOG_PID | LOG_NDELAY, LOG_USER);
   const auto previous_mask = ::umask(0077);
   int server_lock = -1;
   int listener = create_listener(path, server_lock);
@@ -260,23 +227,9 @@ void report_extension_error(void* const /*context*/, const std::string_view erro
       .path = path.c_str(),
       .listener = listener,
       .server_lock = server_lock,
-      .extension_config = {},
   };
-  bool start_extension_host = false;
-  if (options.extensions_enabled) {
-    try {
-      endpoint.extension_config = extension::default_config_path();
-      start_extension_host = extension_config_available(endpoint.extension_config);
-    } catch (...) {
-      release_owned_endpoint(&endpoint);
-      return 1;
-    }
-  }
-  return core::run_server(listener, &release_owned_endpoint, &endpoint,
-                          start_extension_host ? &acquire_extension_host : nullptr,
-                          start_extension_host ? &endpoint : nullptr,
-                          start_extension_host ? &report_extension_error : nullptr, nullptr,
-                          options.stop_requested, &reap_child, nullptr);
+  return core::run_server(listener, &release_owned_endpoint, &endpoint, options.stop_requested,
+                          &reap_child, nullptr);
 }
 
 [[nodiscard]] auto server_available(const std::string& path) noexcept -> bool {

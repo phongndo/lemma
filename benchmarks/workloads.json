@@ -141,7 +141,6 @@
         "daemon_rss_bytes",
         "attached_client_cpu_time_ns",
         "attached_client_rss_bytes",
-        "extension_host_when_present",
         "process_tree_cpu_time_ns",
         "process_tree_rss_bytes",
         "wakeups_when_supported"

@@ -9,7 +9,6 @@ namespace lemma {
 
 [[nodiscard]] auto greeting() noexcept -> std::string_view;
 [[nodiscard]] auto ghostty_version() noexcept -> std::span<const std::uint8_t>;
-[[nodiscard]] auto lua_version() noexcept -> std::string_view;
 [[nodiscard]] auto zstd_version() noexcept -> std::string_view;
 
 } // namespace lemma

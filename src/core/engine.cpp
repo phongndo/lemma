@@ -5,7 +5,6 @@
 #include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
 #include "core/copy_mode.hpp"
-#include "core/extension_runtime.hpp"
 #include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
 #include "core/layout.hpp"
@@ -26,7 +25,6 @@
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
-#include "protocol/extension.hpp"
 #include "render/frame_buffer.hpp"
 #include "render/pane_composition.hpp"
 
@@ -6582,8 +6580,7 @@ void record_reaped_child(Sessions& sessions, PaneRuntimeStore& runtimes,
       }
     }
   }
-  // Extension hosts and already-closed panes are also daemon children. Reaping them has no Core
-  // transition here; their socket/runtime owners independently observe disconnection.
+  // Already-closed panes are also daemon children and require no Core transition.
 }
 
 void reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
@@ -6607,13 +6604,6 @@ void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes) n
       LEMMA_ASSERT(erased);
     }
   }
-}
-
-[[nodiscard]] auto append_extension_error(ConnectionOutput& output,
-                                          const std::string_view error) noexcept -> bool {
-  return error.empty() || (output.append_text("lemma configuration error: ") &&
-                           output.append_safe(error, protocol::extension::error_bytes_max) &&
-                           output.append_text("\n"));
 }
 
 [[nodiscard]] auto append_all_listings(ConnectionOutput& output, const Sessions& sessions,
@@ -9044,19 +9034,12 @@ void finish_pending_disconnect(PendingConnection& pending, const protocol::Disco
   finish_pending_output(pending);
 }
 
-[[nodiscard]] auto extension_error(const ExtensionRuntime* const extensions) noexcept
-    -> std::string_view {
-  return extensions == nullptr ? std::string_view{} : extensions->last_error();
-}
-
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
-                             PaneRuntimeStore& runtimes,
-                             const ExtensionRuntime* const extensions) noexcept {
+                             PaneRuntimeStore& runtimes) noexcept {
   bool prepared = true;
   if (pending.command == command_list) {
-    prepared = append_extension_error(pending.output, extension_error(extensions)) &&
-               append_all_listings(pending.output, sessions, runtimes);
+    prepared = append_all_listings(pending.output, sessions, runtimes);
   } else if (pending.command == command_query_sessions) {
     prepared = append_structured_sessions(pending.output, sessions);
   } else if (pending.command == command_kill_all || pending.command == command_shutdown) {
@@ -9551,8 +9534,7 @@ void prepare_control_payload(PendingConnection& pending, Sessions& sessions,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void prepare_named_command(PendingConnection& pending, Sessions& sessions,
-                           PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                           std::uint64_t& activity_order) noexcept {
+                           PaneRuntimeStore& runtimes, std::uint64_t& activity_order) noexcept {
   const bool create_command = pending.command == command_create ||
                               pending.command == command_create_with_context ||
                               pending.command == command_create_auto_with_context;
@@ -9618,8 +9600,7 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     return;
   }
   if (pending.command == command_list_session) {
-    if (!append_extension_error(pending.output, extension_error(extensions)) ||
-        !append_listing(pending.output, *session, runtimes)) {
+    if (!append_listing(pending.output, *session, runtimes)) {
       fail_pending_output(pending);
     } else {
       finish_pending_output(pending);
@@ -9646,12 +9627,9 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
     return;
   }
   if (pending.command == command_list_tabs || pending.command == command_list_panes) {
-    const bool extension_appended =
-        append_extension_error(pending.output, extension_error(extensions));
-    const bool appended =
-        extension_appended && (pending.command == command_list_tabs
-                                   ? append_tab_listings(pending.output, *session, runtimes)
-                                   : append_pane_listings(pending.output, *session, runtimes));
+    const bool appended = pending.command == command_list_tabs
+                              ? append_tab_listings(pending.output, *session, runtimes)
+                              : append_pane_listings(pending.output, *session, runtimes);
     if (!appended) {
       fail_pending_output(pending);
     } else {
@@ -9728,8 +9706,7 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 void complete_pending_field(PendingConnection& pending, Sessions& sessions,
-                            PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                            std::uint64_t& activity_order) noexcept {
+                            PaneRuntimeStore& runtimes, std::uint64_t& activity_order) noexcept {
   switch (pending.state) {
   case PendingState::read_command:
     pending.command = pending.field.front();
@@ -9752,7 +9729,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     } else if (pending.command == command_list || pending.command == command_query_sessions ||
                pending.command == command_kill_all || pending.command == command_shutdown) {
       pending.output.reset();
-      prepare_unnamed_command(pending, sessions, runtimes, extensions);
+      prepare_unnamed_command(pending, sessions, runtimes);
     } else if (pending.command == command_create_auto_with_context) {
       begin_pending_field(pending, PendingState::read_create_flags, 1);
     } else if (pending.command == command_create ||
@@ -9799,7 +9776,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       begin_pending_field(pending, PendingState::read_control_payload_size, 2);
     } else {
       pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
+      prepare_named_command(pending, sessions, runtimes, activity_order);
     }
     break;
   case PendingState::read_mutation_position:
@@ -9909,7 +9886,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       pending.launch_command.clear();
       pending.launch_command_size = 0;
       pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
+      prepare_named_command(pending, sessions, runtimes, activity_order);
     } else {
       try {
         pending.launch_command.resize(size);
@@ -9930,7 +9907,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       pending.state = PendingState::unused;
     } else {
       pending.output.reset();
-      prepare_named_command(pending, sessions, runtimes, extensions, activity_order);
+      prepare_named_command(pending, sessions, runtimes, activity_order);
     }
     break;
   }
@@ -10019,9 +9996,8 @@ void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRun
 // The branches are the bounded outcomes of one nonblocking setup read.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
-                            PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                            std::uint64_t& activity_order, PublicScratch& scratch,
-                            const std::size_t slot) noexcept {
+                            PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                            PublicScratch& scratch, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
@@ -10101,7 +10077,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
       pending->field_size += static_cast<std::size_t>(received);
       record_pending_progress(*pending);
       if (pending->field_size == pending->field_target) {
-        complete_pending_field(*pending, sessions, runtimes, extensions, activity_order);
+        complete_pending_field(*pending, sessions, runtimes, activity_order);
       }
       continue;
     }
@@ -10120,17 +10096,15 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 }
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
-                          PaneRuntimeStore& runtimes, const ExtensionRuntime* const extensions,
-                          std::uint64_t& activity_order, PublicScratch& scratch,
-                          const std::size_t slot) noexcept {
+                          PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                          PublicScratch& scratch, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   if (!pending->public_connection && std::chrono::steady_clock::now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, runtimes, extensions, activity_order, scratch,
-                         slot);
+  process_pending_fields(connections, sessions, runtimes, activity_order, scratch, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -10383,10 +10357,9 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 [[nodiscard]] auto poll_timeout(Sessions& sessions, PaneRuntimeStore& runtimes,
                                 const PendingConnections& pending,
                                 const CapacityRejectionConnections& capacity_rejections,
-                                const ExtensionRuntime* const extensions,
                                 const bool immediate_public_work) noexcept -> int {
   const auto now = std::chrono::steady_clock::now();
-  auto timeout = extensions == nullptr ? -1 : extensions->poll_timeout(now);
+  int timeout = -1;
   if (immediate_public_work) {
     timeout = 0;
   }
@@ -10973,7 +10946,6 @@ enum class DescriptorKind : std::uint8_t {
   client,
   pending,
   capacity_rejection,
-  extension,
 };
 
 struct DescriptorOwner final {
@@ -10989,9 +10961,7 @@ struct DescriptorOwner final {
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 run_server_impl(const int listener, const EndpointRelease release_endpoint,
-                void* const release_context, const ExtensionAcquire acquire_extension,
-                void* const extension_context, const ExtensionErrorReporter report_extension_error,
-                void* const extension_error_context, const StopRequested stop_requested,
+                void* const release_context, const StopRequested stop_requested,
                 const ReapChild reap_child, void* const reap_child_context) noexcept -> int {
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
@@ -11007,19 +10977,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
   CapacityRejectionConnections capacity_rejections{};
-  std::unique_ptr<ExtensionRuntime> extensions;
-  if (acquire_extension != nullptr) {
-    try {
-      extensions = std::make_unique<ExtensionRuntime>(
-          acquire_extension, extension_context, report_extension_error, extension_error_context);
-    } catch (const std::bad_alloc&) {
-      return 1;
-    }
-  }
   if (!set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
+  constexpr auto descriptor_count_max = std::size_t{1} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::sessions_hard_max) +
                                         limits::pending_connections_hard_max +
                                         capacity_rejection_connections_max;
@@ -11050,9 +11011,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       if (pending != nullptr && !pending->active()) {
         close_pending(pending_connections, slot, sessions);
       }
-    }
-    if (extensions != nullptr) {
-      extensions->connect_if_due(std::chrono::steady_clock::now());
     }
     std::size_t descriptor_count = 1;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
@@ -11141,22 +11099,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .kind = DescriptorKind::capacity_rejection};
       ++descriptor_count;
     }
-    if (extensions != nullptr && extensions->descriptor() >= 0) {
-      std::span(descriptors).subspan(descriptor_count, 1).front() = {
-          .fd = extensions->descriptor(), .events = POLLIN, .revents = 0};
-      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
-                                                                .tab = {},
-                                                                .pane = {},
-                                                                .connection = {},
-                                                                .auxiliary_slot = 0,
-                                                                .kind = DescriptorKind::extension};
-      ++descriptor_count;
-    }
-
-    const auto poll_result =
-        ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-               poll_timeout(sessions, runtimes, pending_connections, capacity_rejections,
-                            extensions.get(), public_screen_work_pending));
+    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
+                                    poll_timeout(sessions, runtimes, pending_connections,
+                                                 capacity_rejections, public_screen_work_pending));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -11269,8 +11214,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         } else if (pending->state != PendingState::flush_response &&
                    pending->state != PendingState::prepare_public_observer &&
                    (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-          process_pending_read(pending_connections, sessions, runtimes, extensions.get(),
-                               activity_order, public_scratch, owner.auxiliary_slot);
+          process_pending_read(pending_connections, sessions, runtimes, activity_order,
+                               public_scratch, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -11402,16 +11347,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       return 0;
     }
 
-    // Extension work is deliberately last: the reactor never waits for Lua before PTY progress,
-    // client input, queued writes, or due frame composition.
-    for (std::size_t index = 1; index < descriptor_count; ++index) {
-      const auto owner = std::span(owners).subspan(index, 1).front();
-      if (owner.kind == DescriptorKind::extension) {
-        LEMMA_ASSERT(extensions != nullptr);
-        extensions->process(std::span(descriptors).subspan(index, 1).front().revents);
-      }
-    }
-
     if ((descriptors.front().revents & POLLIN) != 0) {
       accept_pending_connections(listener, pending_connections, pending_generations,
                                  capacity_rejections);
@@ -11423,15 +11358,11 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
 } // namespace
 
 [[nodiscard]] auto run_server(const int listener, const EndpointRelease release_endpoint,
-                              void* const release_context, const ExtensionAcquire acquire_extension,
-                              void* const extension_context,
-                              const ExtensionErrorReporter report_extension_error,
-                              void* const extension_error_context,
-                              const StopRequested stop_requested, const ReapChild reap_child,
-                              void* const reap_child_context) noexcept -> int {
-  return run_server_impl(listener, release_endpoint, release_context, acquire_extension,
-                         extension_context, report_extension_error, extension_error_context,
-                         stop_requested, reap_child, reap_child_context);
+                              void* const release_context, const StopRequested stop_requested,
+                              const ReapChild reap_child, void* const reap_child_context) noexcept
+    -> int {
+  return run_server_impl(listener, release_endpoint, release_context, stop_requested, reap_child,
+                         reap_child_context);
 }
 
 } // namespace lemma::core

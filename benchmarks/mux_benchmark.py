@@ -517,7 +517,6 @@ def process_group_snapshot(
 def resource_snapshot(
     root_pids: list[int],
     role_pids: dict[str, list[int]] | None = None,
-    unavailable_roles: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Capture direct-role and complete process-tree RSS, CPU, and reviewed wakeup counters."""
     try:
@@ -566,8 +565,6 @@ def resource_snapshot(
         direct = {pid for pid in configured if pid in selected}
         roles[role] = process_group_snapshot(direct, processes)
         classified.update(direct)
-    for role, reason in (unavailable_roles or {}).items():
-        roles.setdefault(role, {"available": False, "reason": reason})
     unclassified = selected.difference(classified)
     if unclassified:
         roles["pane_or_mux_children"] = process_group_snapshot(unclassified, processes)
@@ -580,11 +577,7 @@ def resource_snapshot(
 
 
 def runtime_resource_snapshot(runtime: MuxRuntime) -> dict[str, Any]:
-    return resource_snapshot(
-        runtime.resource_roots(),
-        runtime.resource_role_pids(),
-        runtime.unavailable_resource_roles(),
-    )
+    return resource_snapshot(runtime.resource_roots(), runtime.resource_role_pids())
 
 
 def summarize_resource_samples(
@@ -853,8 +846,6 @@ class MuxRuntime(Protocol):
 
     def resource_role_pids(self) -> dict[str, list[int]]: ...
 
-    def unavailable_resource_roles(self) -> dict[str, str]: ...
-
     def binary_provenance(self) -> dict[str, str]: ...
 
     def close(self) -> None: ...
@@ -968,9 +959,6 @@ class LemmaRuntime:
                 client.pid for client in self.clients if client.pid > 0
             ],
         }
-
-    def unavailable_resource_roles(self) -> dict[str, str]:
-        return {"extension_host": "benchmark server explicitly disables extensions"}
 
     def binary_provenance(self) -> dict[str, str]:
         return {
@@ -1115,9 +1103,6 @@ class TmuxRuntime:
             ],
         }
 
-    def unavailable_resource_roles(self) -> dict[str, str]:
-        return {"extension_host": "tmux adapter has no Lemma extension host"}
-
     def binary_provenance(self) -> dict[str, str]:
         return {
             "multiplexer": str(self.executable_path),
@@ -1257,9 +1242,6 @@ class ZellijRuntime:
                 client.pid for client in self.clients if client.pid > 0
             ],
         }
-
-    def unavailable_resource_roles(self) -> dict[str, str]:
-        return {"extension_host": "Zellij adapter has no Lemma extension host"}
 
     def binary_provenance(self) -> dict[str, str]:
         return {
@@ -1436,9 +1418,6 @@ class HerdrRuntime:
                 client.pid for client in self.clients if client.pid > 0
             ],
         }
-
-    def unavailable_resource_roles(self) -> dict[str, str]:
-        return {"extension_host": "Herdr adapter has no Lemma extension host"}
 
     def binary_provenance(self) -> dict[str, str]:
         return {

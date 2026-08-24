@@ -59,7 +59,7 @@ The default suite separates deterministic component behavior from real process b
 | --- | --- |
 | Native unit | Core values, commands, layout, protocol, queues, and input policy |
 | Terminal boundary | Ghostty adapter, rendering, input encoding, effects, resize, and selection |
-| Component integration | Process-opening extension and platform boundaries |
+| Component integration | Process-opening platform boundaries |
 | Python mux | Real daemon, client, PTY, child process, lifecycle, API, and terminal consequences |
 | Simulation/stress | Deterministic Core and Ghostty worlds, real-mux state machines, history, and allocation evidence |
 

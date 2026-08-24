@@ -29,9 +29,6 @@ TARGETS = {
     "connection_output_inline": "class lemma::core::ConnectionOutput",
     "client_frame_output_inline": "class lemma::core::ClientFrameOutput",
     "frame_buffer_inline": "class lemma::render::FrameBuffer",
-    "extension_generation_inline": "struct lemma::core::ExtensionGeneration",
-    "extension_runtime_inline": "class lemma::core::ExtensionRuntime",
-    "extension_host_state_inline": "struct lemma::extension::(anonymous namespace)::HostState",
     "terminal_impl_inline": "struct lemma::vt::Terminal::Impl",
     "terminal_quota_allocator_inline": "class lemma::vt::detail::QuotaAllocator",
 }
@@ -94,14 +91,13 @@ def main() -> int:
         if str(entry.get("file", "")).endswith(
             (
                 "/src/core/engine.cpp",
-                "/src/extension/host.cpp",
                 "/src/terminal/terminal_core.cpp",
             )
         )
     ]
-    if len(selected) != 3:
+    if len(selected) != 2:
         raise RuntimeError(
-            "compile_commands must contain engine.cpp, extension/host.cpp, and terminal_core.cpp exactly once"
+            "compile_commands must contain engine.cpp and terminal_core.cpp exactly once"
         )
 
     chunks: list[str] = []

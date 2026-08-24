@@ -63,12 +63,6 @@ endif()
 include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
-find_package(lua CONFIG QUIET)
-if(NOT TARGET lua::lua)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(LUA REQUIRED IMPORTED_TARGET lua>=5.5)
-  add_library(lua::lua ALIAS PkgConfig::LUA)
-endif()
 find_package(zstd CONFIG REQUIRED)
 
 function(lemma_internal_target target)
@@ -108,11 +102,7 @@ add_library(
 )
 lemma_internal_target(lemma_platform)
 
-add_library(
-  lemma_protocol STATIC
-  src/protocol/extension.cpp
-  src/protocol/attachment.cpp
-)
+add_library(lemma_protocol STATIC src/protocol/attachment.cpp)
 lemma_internal_target(lemma_protocol)
 target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
@@ -124,12 +114,6 @@ add_library(
 lemma_internal_target(lemma_render)
 target_link_libraries(
   lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal
-)
-
-add_library(lemma_extension STATIC src/extension/host.cpp)
-lemma_internal_target(lemma_extension)
-target_link_libraries(
-  lemma_extension PRIVATE lemma_base lemma_platform lemma_protocol lua::lua
 )
 
 add_library(
@@ -166,7 +150,6 @@ add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
   src/core/engine.cpp
-  src/core/extension_runtime.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
@@ -191,15 +174,12 @@ target_link_libraries(
 # Public dependency-version helpers remain separate from semantic Core and Runtime ownership.
 add_library(lemma_metadata STATIC src/core/lemma.cpp)
 lemma_internal_target(lemma_metadata)
-target_link_libraries(
-  lemma_metadata PRIVATE lemma_terminal lua::lua zstd::libzstd_static
-)
+target_link_libraries(lemma_metadata PRIVATE lemma_terminal zstd::libzstd_static)
 
 add_library(lemma_daemon STATIC src/daemon/server.cpp)
 lemma_internal_target(lemma_daemon)
 target_link_libraries(
-  lemma_daemon
-  PRIVATE lemma_api lemma_base lemma_extension lemma_platform lemma_protocol lemma_runtime
+  lemma_daemon PRIVATE lemma_api lemma_base lemma_platform lemma_protocol lemma_runtime
 )
 
 add_library(
@@ -224,7 +204,7 @@ add_library(lemma_lib INTERFACE)
 add_library(lemma::lib ALIAS lemma_lib)
 target_link_libraries(
   lemma_lib
-  INTERFACE lemma_core lemma_extension lemma_input lemma_metadata lemma_runtime lemma_terminal
+  INTERFACE lemma_core lemma_input lemma_metadata lemma_runtime lemma_terminal
 )
 target_include_directories(
   lemma_lib
@@ -264,7 +244,6 @@ if(LEMMA_BUILD_TESTS)
     tests/api_test.cpp
     tests/connection_output_test.cpp
     tests/core_test.cpp
-    tests/extension_protocol_test.cpp
     tests/frame_scheduler_test.cpp
     tests/host_input_parser_test.cpp
     tests/host_terminal_theme_test.cpp
@@ -315,13 +294,8 @@ if(LEMMA_BUILD_TESTS)
   )
   gtest_discover_tests(lemma_terminal_boundary_tests PROPERTIES LABELS "terminal-unit")
 
-  # Real extension-host and platform-process contracts remain native but are never presented as
-  # pure unit tests.
-  add_executable(
-    lemma_component_integration_tests
-    tests/extension_test.cpp
-    tests/platform_test.cpp
-  )
+  # Real platform-process contracts remain native but are never presented as pure unit tests.
+  add_executable(lemma_component_integration_tests tests/platform_test.cpp)
   lemma_internal_target(lemma_component_integration_tests)
   target_link_libraries(
     lemma_component_integration_tests

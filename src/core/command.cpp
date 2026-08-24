@@ -64,7 +64,6 @@ namespace {
   case CommandOrigin::client:
   case CommandOrigin::cli:
   case CommandOrigin::keymap:
-  case CommandOrigin::extension:
   case CommandOrigin::internal:
     return true;
   }

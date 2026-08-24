@@ -2,7 +2,6 @@
     "version": "0.5",
     "requires": [
         "zstd/1.5.7#b68ca8e3de04ba5957761751d1d661f4%1760955092.069",
-        "lua/5.5.0#2bac82d0b9a1744cfaf436c5c1d01bee%1775664604.889",
         "gtest/1.17.0#5224b3b3ff3b4ce1133cbdd27d53ee7d%1755784855.585",
         "benchmark/1.9.5#b885dc73ad67b40a55d45684d1c88ad1%1774363287.434"
     ],

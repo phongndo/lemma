@@ -129,6 +129,4 @@ single-file guide intended for coding agents.
 - A Session accepts one attached controller at a time.
 - Session, process, terminal, and history state survive detach, not daemon death or reboot.
 - Kitty graphics and the Glyph Protocol are disabled.
-- Lua configuration infrastructure exists, but registered settings, callbacks, keymaps, and UI are
-  not connected to the user path.
 - Lemma uses `xterm-256color` and does not yet ship a dedicated terminfo entry.
