@@ -3,6 +3,7 @@
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "render/ui.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,12 +55,6 @@ constexpr std::size_t status_session_columns_max = 32;
 constexpr std::size_t status_label_bytes_max = status_session_columns_max + 4U;
 constexpr std::string_view status_group_separator = " | ";
 constexpr std::string_view status_create_button = "  +";
-constexpr std::string_view status_style = "\x1B[0m";
-constexpr std::string_view status_identity_style = "\x1B[0;1m";
-constexpr std::string_view status_session_style = "\x1B[0;1;7m";
-constexpr std::string_view status_context_style = "\x1B[0;7m";
-constexpr std::string_view status_prompt_edit_style = "\x1B[0;1;4m";
-constexpr std::string_view status_session_prompt_edit_style = "\x1B[0;1;4;7m";
 
 [[nodiscard]] constexpr auto status_leading_columns(const std::size_t session_columns) noexcept
     -> std::size_t {
@@ -168,40 +163,6 @@ status_label(const StatusTab& tab,
     width += 2U;
   }
   return width;
-}
-
-[[nodiscard]] auto append_spaces(const std::span<std::byte> output, std::size_t& used,
-                                 std::size_t count) noexcept -> bool {
-  constexpr std::string_view spaces =
-      "                                                                ";
-  while (count > 0) {
-    const auto chunk = std::min(count, spaces.size());
-    // The explicit length bounds this non-null-terminated view.
-    // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
-    if (!append(output, used, std::string_view(spaces.data(), chunk))) {
-      return false;
-    }
-    count -= chunk;
-  }
-  return true;
-}
-
-[[nodiscard]] auto append_status_range(const std::span<std::byte> output, std::size_t& used,
-                                       const std::span<const StatusLabel> labels,
-                                       const std::size_t begin, const std::size_t end) noexcept
-    -> bool {
-  if (begin > 0 && !append(output, used, "… ")) {
-    return false;
-  }
-  for (std::size_t index = begin; index <= end; ++index) {
-    const auto& label = std::span(labels).subspan(index, 1).front();
-    if (!append(output, used, label.active ? status_identity_style : status_style) ||
-        !append(output, used, std::string_view(label.text.data(), label.size)) ||
-        !append(output, used, status_style) || (index < end && !append(output, used, "  "))) {
-      return false;
-    }
-  }
-  return end + 1U >= labels.size() || append(output, used, " …");
 }
 
 struct PromptValueProjection final {
@@ -460,109 +421,6 @@ struct InlineStatusPromptProjection final {
   return projection;
 }
 
-[[nodiscard]] auto append_editable_label(
-    const std::span<std::byte> output, std::size_t& used, const PromptField& field,
-    const std::string_view base_style = status_identity_style,
-    const std::string_view edit_style = status_prompt_edit_style) noexcept -> bool {
-  const auto text = std::string_view(field.label.text.data(), field.label.size);
-  return append(output, used, base_style) &&
-         append(output, used, bounded_status_view(text, 0, field.edit_offset)) &&
-         append(output, used, edit_style) &&
-         append(output, used, bounded_status_view(text, field.edit_offset, field.edit_size)) &&
-         append(output, used, base_style) &&
-         append(output, used,
-                bounded_status_view(text, field.edit_offset + field.edit_size, text.size())) &&
-         append(output, used, status_style);
-}
-
-[[nodiscard]] auto append_inline_prompt_tabs(const std::span<std::byte> output, std::size_t& used,
-                                             const InlineStatusPromptProjection& projection,
-                                             const StatusLine status) noexcept -> bool {
-  const auto labels = std::span(projection.labels).first(projection.label_count);
-  if (!projection.bare_field && projection.begin > 0 && !append(output, used, "… ")) {
-    return false;
-  }
-  for (std::size_t index = projection.begin; index <= projection.end; ++index) {
-    const auto& label = labels.subspan(index, 1).front();
-    const bool editable =
-        status.prompt_target == StatusPromptTarget::active_tab && index == projection.active;
-    if ((editable && !append_editable_label(output, used, projection.field)) ||
-        (!editable && (!append(output, used, label.active ? status_identity_style : status_style) ||
-                       !append(output, used, std::string_view(label.text.data(), label.size)) ||
-                       !append(output, used, status_style))) ||
-        (index < projection.end && !append(output, used, "  "))) {
-      return false;
-    }
-  }
-  return projection.bare_field || projection.end + 1U >= labels.size() ||
-         append(output, used, " …");
-}
-
-[[nodiscard]] auto append_inline_prompt_session(const std::span<std::byte> output,
-                                                std::size_t& used,
-                                                const InlineStatusPromptProjection& projection,
-                                                const StatusLine status) noexcept -> bool {
-  if (projection.session.size == 0) {
-    return true;
-  }
-  if (status.prompt_target == StatusPromptTarget::session) {
-    return append_editable_label(output, used, projection.field, status_session_style,
-                                 status_session_prompt_edit_style);
-  }
-  return append(output, used, status_session_style) &&
-         append(output, used,
-                std::string_view(projection.session.text.data(), projection.session.size)) &&
-         append(output, used, status_style);
-}
-
-[[nodiscard]] auto
-append_inline_prompt_separator(const std::span<std::byte> output, std::size_t& used,
-                               const InlineStatusPromptProjection& projection) noexcept -> bool {
-  return projection.session.size == 0 || !projection.show_tabs ||
-         append(output, used, status_group_separator);
-}
-
-[[nodiscard]] auto append_inline_prompt_tab_group(const std::span<std::byte> output,
-                                                  std::size_t& used,
-                                                  const InlineStatusPromptProjection& projection,
-                                                  const StatusLine status) noexcept -> bool {
-  if (!projection.show_tabs) {
-    return true;
-  }
-  return append_position(output, used, 1, projection.tab_column) &&
-         append_inline_prompt_tabs(output, used, projection, status);
-}
-
-[[nodiscard]] auto append_inline_prompt_message(const std::span<std::byte> output,
-                                                std::size_t& used,
-                                                const InlineStatusPromptProjection& projection,
-                                                const Viewport viewport) noexcept -> bool {
-  if (!projection.show_message) {
-    return true;
-  }
-  constexpr std::uint16_t status_row = 1;
-  return append_position(
-             output, used, status_row,
-             static_cast<std::uint16_t>(viewport.columns - projection.message.size() + 1U)) &&
-         append(output, used, status_identity_style) && append(output, used, projection.message) &&
-         append(output, used, status_style);
-}
-
-[[nodiscard]] auto render_status_prompt(const StatusLine status, const Viewport viewport,
-                                        const std::span<std::byte> output,
-                                        std::size_t& used) noexcept -> bool {
-  const auto projection = inline_status_prompt_projection(status, viewport);
-  constexpr std::uint16_t status_row = 1;
-  return append_position(output, used, status_row, 1) && append(output, used, status_style) &&
-         append_spaces(output, used, viewport.columns) &&
-         append_position(output, used, status_row, 1) &&
-         append_inline_prompt_session(output, used, projection, status) &&
-         append_inline_prompt_separator(output, used, projection) &&
-         append_inline_prompt_tab_group(output, used, projection, status) &&
-         append_inline_prompt_message(output, used, projection, viewport) &&
-         append(output, used, "\x1B[0m");
-}
-
 struct StatusLineProjection final {
   std::array<StatusLabel, status_tabs_max> labels{};
   StatusLabel session;
@@ -668,61 +526,187 @@ struct StatusLineProjection final {
   return projection;
 }
 
-// Each branch preserves bounded output failure without altering the shared projection.
+constexpr ui::Style status_default_cell_style{};
+constexpr ui::Style status_identity_cell_style{.attributes = ui::attribute_bold};
+constexpr ui::Style status_context_cell_style{.attributes = ui::attribute_reverse};
+constexpr ui::Style status_prompt_cell_style{.attributes =
+                                                 ui::attribute_bold | ui::attribute_underline};
+
+[[nodiscard]] constexpr auto utf8_scalar_size(const std::uint8_t first) noexcept -> std::size_t {
+  if (first < 0x80U) {
+    return 1;
+  }
+  if (first < 0xE0U) {
+    return 2;
+  }
+  if (first < 0xF0U) {
+    return 3;
+  }
+  return 4;
+}
+
+[[nodiscard]] auto write_status_text(const std::span<ui::Cell> cells, std::size_t& column,
+                                     const std::string_view text, const ui::Style style) noexcept
+    -> bool {
+  const std::span text_bytes(text.data(), text.size());
+  std::size_t offset = 0;
+  while (offset < text_bytes.size()) {
+    if (column >= cells.size()) {
+      return false;
+    }
+    const auto first = static_cast<std::uint8_t>(text_bytes.subspan(offset, 1).front());
+    const auto size = utf8_scalar_size(first);
+    if (size > text_bytes.size() - offset || size > ui::cell_text_bytes_max) {
+      return false;
+    }
+    auto& cell = cells.subspan(column, 1).front();
+    std::memcpy(cell.text.data(), text_bytes.subspan(offset, size).data(), size);
+    cell.style = style;
+    cell.text_size = static_cast<std::uint8_t>(size);
+    cell.painted = true;
+    ++column;
+    offset += size;
+  }
+  return true;
+}
+
+[[nodiscard]] auto write_status_label(const std::span<ui::Cell> cells, std::size_t& column,
+                                      const StatusLabel& label, const ui::Style style) noexcept
+    -> bool {
+  return write_status_text(cells, column, std::string_view(label.text.data(), label.size), style);
+}
+
+[[nodiscard]] auto write_prompt_field(const std::span<ui::Cell> cells, std::size_t& column,
+                                      const PromptField& field, const ui::Style base,
+                                      const ui::Style edit) noexcept -> bool {
+  const auto text = std::string_view(field.label.text.data(), field.label.size);
+  return write_status_text(cells, column, bounded_status_view(text, 0, field.edit_offset), base) &&
+         write_status_text(cells, column,
+                           bounded_status_view(text, field.edit_offset, field.edit_size), edit) &&
+         write_status_text(
+             cells, column,
+             bounded_status_view(text, field.edit_offset + field.edit_size, text.size()), base);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto build_status_prompt_cells(const StatusLine status, const Viewport viewport,
+                                             const std::span<ui::Cell> cells) noexcept -> bool {
+  const auto projection = inline_status_prompt_projection(status, viewport);
+  std::size_t column = 0;
+  if (projection.session.size > 0) {
+    if (status.prompt_target == StatusPromptTarget::session) {
+      if (!write_prompt_field(cells, column, projection.field, status_identity_cell_style,
+                              status_prompt_cell_style)) {
+        return false;
+      }
+    } else if (!write_status_label(cells, column, projection.session, status_identity_cell_style)) {
+      return false;
+    }
+  }
+  if (projection.session.size > 0 && projection.show_tabs &&
+      !write_status_text(cells, column, status_group_separator, status_default_cell_style)) {
+    return false;
+  }
+  if (projection.show_tabs) {
+    column = projection.tab_column - 1U;
+    const auto labels = std::span(projection.labels).first(projection.label_count);
+    if (!projection.bare_field && projection.begin > 0 &&
+        !write_status_text(cells, column, "… ", status_default_cell_style)) {
+      return false;
+    }
+    for (std::size_t index = projection.begin; index <= projection.end; ++index) {
+      const auto& label = labels.subspan(index, 1).front();
+      const bool editable =
+          status.prompt_target == StatusPromptTarget::active_tab && index == projection.active;
+      if ((editable && !write_prompt_field(cells, column, projection.field,
+                                           status_identity_cell_style, status_prompt_cell_style)) ||
+          (!editable && !write_status_label(cells, column, label,
+                                            label.active ? status_identity_cell_style
+                                                         : status_default_cell_style)) ||
+          (index < projection.end &&
+           !write_status_text(cells, column, "  ", status_default_cell_style))) {
+        return false;
+      }
+    }
+    if (!projection.bare_field && projection.end + 1U < labels.size() &&
+        !write_status_text(cells, column, " …", status_default_cell_style)) {
+      return false;
+    }
+  }
+  if (projection.show_message) {
+    column = viewport.columns - projection.message.size();
+    if (!write_status_text(cells, column, projection.message, status_identity_cell_style)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto build_status_cells(const StatusLine status, const Viewport viewport,
+                                      const std::span<ui::Cell> cells) noexcept -> bool {
+  if (status.prompting()) {
+    return build_status_prompt_cells(status, viewport, cells);
+  }
+  const auto projection = status_line_projection(status, viewport);
+  const auto labels = std::span(projection.labels).first(projection.label_count);
+  std::size_t column = 0;
+  if (projection.session.size > 0 &&
+      (!write_status_label(cells, column, projection.session, status_identity_cell_style) ||
+       !write_status_text(cells, column, status_group_separator, status_default_cell_style))) {
+    return false;
+  }
+  column = projection.tab_column - 1U;
+  if (projection.show_range) {
+    if (projection.begin > 0 &&
+        !write_status_text(cells, column, "… ", status_default_cell_style)) {
+      return false;
+    }
+    for (std::size_t index = projection.begin; index <= projection.end; ++index) {
+      const auto& label = labels.subspan(index, 1).front();
+      if (!write_status_label(cells, column, label,
+                              label.active ? status_identity_cell_style
+                                           : status_default_cell_style) ||
+          (index < projection.end &&
+           !write_status_text(cells, column, "  ", status_default_cell_style))) {
+        return false;
+      }
+    }
+    if (projection.end + 1U < labels.size() &&
+        !write_status_text(cells, column, " …", status_default_cell_style)) {
+      return false;
+    }
+  } else if (!write_status_label(cells, column, labels.subspan(projection.begin, 1).front(),
+                                 status_identity_cell_style)) {
+    return false;
+  }
+  if (projection.show_create &&
+      !write_status_text(cells, column, status_create_button, status_default_cell_style)) {
+    return false;
+  }
+  if (projection.context_columns > 0U) {
+    column = viewport.columns - projection.context_columns;
+    if (!write_status_text(cells, column,
+                           bounded_status_view(status.input_context, 0, projection.context_columns),
+                           status_context_cell_style)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Default status and prompt content share one bounded cell projection and painter.
 [[nodiscard]] auto render_status_line(const StatusLine status, const Viewport viewport,
                                       const std::span<std::byte> output, std::size_t& used) noexcept
     -> bool {
   if (status.tabs.empty() || viewport.rows < 2) {
     return true;
   }
-  if (status.prompting()) {
-    return render_status_prompt(status, viewport, output, used);
-  }
-
-  const auto projection = status_line_projection(status, viewport);
-  const auto labels = std::span(projection.labels).first(projection.label_count);
-  constexpr std::uint16_t status_row = 1;
-  if (!append_position(output, used, status_row, 1) || !append(output, used, status_style) ||
-      !append_spaces(output, used, viewport.columns)) {
-    return false;
-  }
-  if (projection.session.size > 0 &&
-      (!append_position(output, used, status_row, 1) ||
-       !append(output, used, status_session_style) ||
-       !append(output, used,
-               std::string_view(projection.session.text.data(), projection.session.size)) ||
-       !append(output, used, status_style) || !append(output, used, status_group_separator))) {
-    return false;
-  }
-  if (!append_position(output, used, status_row, projection.tab_column)) {
-    return false;
-  }
-  if (projection.show_range) {
-    if (!append_status_range(output, used, labels, projection.begin, projection.end)) {
-      return false;
-    }
-  } else {
-    const auto& label = labels.subspan(projection.begin, 1).front();
-    if (!append(output, used, status_identity_style) ||
-        !append(output, used, std::string_view(label.text.data(), label.size)) ||
-        !append(output, used, status_style)) {
-      return false;
-    }
-  }
-  if (projection.show_create && !append(output, used, status_create_button)) {
-    return false;
-  }
-  if (projection.context_columns > 0U &&
-      (!append_position(
-           output, used, status_row,
-           static_cast<std::uint16_t>(viewport.columns - projection.context_columns + 1U)) ||
-       !append(output, used, status_context_style) ||
-       !append(output, used,
-               bounded_status_view(status.input_context, 0, projection.context_columns)))) {
-    return false;
-  }
-  return append(output, used, "\x1B[0m");
+  std::array<ui::Cell, limits::terminal_columns_hard_max> storage{};
+  const auto cells = std::span(storage).first(viewport.columns);
+  return build_status_cells(status, viewport, cells) &&
+         ui::paint_cells({.columns = viewport.columns, .rows = 1}, viewport.columns, 1, cells,
+                         output, used);
 }
 
 [[nodiscard]] auto valid_viewport(const Viewport viewport) noexcept -> bool {
@@ -846,20 +830,11 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   return !status.tabs.empty() && viewport.rows >= 2;
 }
 
-[[nodiscard]] auto pane_viewport(const Viewport viewport, const StatusLine status) noexcept
-    -> Viewport {
-  return {
-      .columns = viewport.columns,
-      .rows = static_cast<std::uint16_t>(viewport.rows -
-                                         (has_visible_status(viewport, status) ? 1U : 0U)),
-  };
-}
-
 // Composition validation deliberately keeps geometry, overlap, and focus checks in one pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto validate_composition(const std::span<const PaneSurface> panes,
-                                        const Viewport viewport, const StatusLine status,
-                                        const PaneOverlay overlay) noexcept
+                                        const Viewport viewport, const Viewport content_viewport,
+                                        const StatusLine status, const PaneOverlay overlay) noexcept
     -> std::expected<bool, CompositionError> {
   if (!valid_viewport(viewport)) {
     return std::unexpected(CompositionError::invalid_viewport);
@@ -879,7 +854,6 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   }
   bool has_focus = false;
   bool has_presented_focus = false;
-  const auto content_viewport = pane_viewport(viewport, status);
   for (auto current = panes.begin(); current != panes.end(); ++current) {
     if (!valid_pane(*current, content_viewport)) {
       return std::unexpected(CompositionError::invalid_pane);
@@ -914,11 +888,12 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 
 [[nodiscard]] auto render_surface(const PaneSurface& pane, const std::span<std::byte> output,
                                   std::size_t& used, const bool force_full,
-                                  const bool allow_terminal_scroll, const std::uint16_t row_offset,
+                                  const bool allow_terminal_scroll,
+                                  const std::uint16_t column_offset, const std::uint16_t row_offset,
                                   CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
   const vt::PaneRenderOptions options{
-      .column = pane.rectangle.column,
+      .column = static_cast<std::uint16_t>(pane.rectangle.column + column_offset),
       .row = static_cast<std::uint16_t>(pane.rectangle.row + row_offset),
       .cursor_override_column = pane.cursor_override_column,
       .cursor_override_row = pane.cursor_override_row,
@@ -941,14 +916,16 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 
 [[nodiscard]] auto render_panes(const std::span<const PaneSurface> panes, const Viewport viewport,
                                 const std::span<std::byte> output, std::size_t& used,
-                                const bool force_full, const std::uint16_t row_offset,
+                                const bool force_full, const std::uint16_t column_offset,
+                                const std::uint16_t row_offset,
                                 CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
-  const bool allow_terminal_scroll = row_offset == 0 && is_single_full_viewport(panes, viewport);
+  const bool allow_terminal_scroll =
+      column_offset == 0 && row_offset == 0 && is_single_full_viewport(panes, viewport);
   for (const auto& pane : panes) {
     if (!pane.focused && !pane.presentation_suppressed) {
       const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           row_offset, composition);
+                                           column_offset, row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;
@@ -958,7 +935,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   for (const auto& pane : panes) {
     if (pane.focused && !pane.presentation_suppressed) {
       const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           row_offset, composition);
+                                           column_offset, row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;
@@ -971,6 +948,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 [[nodiscard]] auto draw_top_right_overlay(const std::span<const PaneSurface> panes,
                                           const PaneOverlay overlay,
                                           const std::span<std::byte> output, std::size_t& used,
+                                          const std::uint16_t column_offset,
                                           const std::uint16_t row_offset) noexcept -> bool {
   if (overlay.top_right.empty()) {
     return true;
@@ -981,13 +959,14 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
     return true;
   }
   constexpr std::string_view overlay_style = "\x1B[0;7m";
-  const auto overlay_column = static_cast<std::uint16_t>(
-      pane->rectangle.column + pane->rectangle.columns - overlay.top_right.size() + 1U);
+  const auto overlay_column =
+      static_cast<std::uint16_t>(pane->rectangle.column + column_offset + pane->rectangle.columns -
+                                 overlay.top_right.size() + 1U);
   const auto overlay_row = static_cast<std::uint16_t>(pane->rectangle.row + row_offset + 1U);
   const auto cursor_row =
       static_cast<std::uint16_t>(pane->rectangle.row + row_offset + pane->cursor_override_row + 1U);
-  const auto cursor_column =
-      static_cast<std::uint16_t>(pane->rectangle.column + pane->cursor_override_column + 1U);
+  const auto cursor_column = static_cast<std::uint16_t>(pane->rectangle.column + column_offset +
+                                                        pane->cursor_override_column + 1U);
   return append_position(output, used, overlay_row, overlay_column) &&
          append(output, used, overlay_style) && append(output, used, overlay.top_right) &&
          append(output, used, "\x1B[0m") &&
@@ -1049,6 +1028,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 [[nodiscard]] auto draw_right_border(const PaneSurface& pane,
                                      const std::span<const PaneSurface> panes,
                                      const std::span<std::byte> output, std::size_t& used,
+                                     const std::uint16_t column_offset,
                                      const std::uint16_t row_offset) noexcept -> bool {
   if (!pane.border_right) {
     return true;
@@ -1057,7 +1037,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   const auto bottom = static_cast<std::uint16_t>(pane.rectangle.row + pane.rectangle.rows);
   for (std::uint16_t row = pane.rectangle.row; row < bottom; ++row) {
     if (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
-                         static_cast<std::uint16_t>(column + 1U)) ||
+                         static_cast<std::uint16_t>(column + column_offset + 1U)) ||
         !append(output, used, border_glyph(panes, row, column))) {
       return false;
     }
@@ -1068,6 +1048,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 [[nodiscard]] auto draw_bottom_border(const PaneSurface& pane,
                                       const std::span<const PaneSurface> panes,
                                       const std::span<std::byte> output, std::size_t& used,
+                                      const std::uint16_t column_offset,
                                       const std::uint16_t row_offset) noexcept -> bool {
   if (!pane.border_bottom) {
     return true;
@@ -1076,7 +1057,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   const auto right = static_cast<std::uint16_t>(pane.rectangle.column + pane.rectangle.columns);
   for (std::uint16_t column = pane.rectangle.column; column < right; ++column) {
     if (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
-                         static_cast<std::uint16_t>(column + 1U)) ||
+                         static_cast<std::uint16_t>(column + column_offset + 1U)) ||
         !append(output, used, border_glyph(panes, row, column))) {
       return false;
     }
@@ -1088,6 +1069,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto draw_junctions(const std::span<const PaneSurface> panes,
                                   const std::span<std::byte> output, std::size_t& used,
+                                  const std::uint16_t column_offset,
                                   const std::uint16_t row_offset) noexcept -> bool {
   for (const auto& vertical : panes) {
     if (vertical.border_right) {
@@ -1105,7 +1087,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
               border_cell(panes, static_cast<std::uint16_t>(row + 1U), column);
           if (horizontal_neighbor && vertical_neighbor &&
               (!append_position(output, used, static_cast<std::uint16_t>(row + row_offset + 1U),
-                                static_cast<std::uint16_t>(column + 1U)) ||
+                                static_cast<std::uint16_t>(column + column_offset + 1U)) ||
                !append(output, used, border_glyph(panes, row, column)))) {
             return false;
           }
@@ -1118,17 +1100,19 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 
 [[nodiscard]] auto draw_borders(const std::span<const PaneSurface> panes,
                                 const std::span<std::byte> output, std::size_t& used,
+                                const std::uint16_t column_offset,
                                 const std::uint16_t row_offset) noexcept -> bool {
   if (!append(output, used, "\x1B[90m")) {
     return false;
   }
   for (const auto& pane : panes) {
-    if (!draw_right_border(pane, panes, output, used, row_offset) ||
-        !draw_bottom_border(pane, panes, output, used, row_offset)) {
+    if (!draw_right_border(pane, panes, output, used, column_offset, row_offset) ||
+        !draw_bottom_border(pane, panes, output, used, column_offset, row_offset)) {
       return false;
     }
   }
-  return draw_junctions(panes, output, used, row_offset) && append(output, used, "\x1B[0m");
+  return draw_junctions(panes, output, used, column_offset, row_offset) &&
+         append(output, used, "\x1B[0m");
 }
 
 struct CompositionPolicy final {
@@ -1136,10 +1120,10 @@ struct CompositionPolicy final {
 };
 
 [[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
-                                      const Viewport viewport, const StatusLine status,
-                                      const PaneOverlay overlay) noexcept
+                                      const Viewport viewport, const Viewport content_viewport,
+                                      const StatusLine status, const PaneOverlay overlay) noexcept
     -> std::expected<CompositionPolicy, CompositionError> {
-  const auto validation = validate_composition(panes, viewport, status, overlay);
+  const auto validation = validate_composition(panes, viewport, content_viewport, status, overlay);
   if (!validation.has_value()) {
     return std::unexpected(validation.error());
   }
@@ -1167,9 +1151,9 @@ struct CompositionPolicy final {
     return true;
   }
   const auto projection = inline_status_prompt_projection(status, viewport);
-  // A steady bar marks the insertion point without reverse-highlighting the cursor cell.
+  // A steady block marks the insertion point without styling the cursor cell.
   return append_position(output, used, 1, projection.cursor_column) &&
-         append(output, used, "\x1B[6 q\x1B[?25h");
+         append(output, used, "\x1B[2 q\x1B[?25h");
 }
 
 [[nodiscard]] auto finish_frame(const std::span<std::byte> output, std::size_t& used,
@@ -1203,15 +1187,13 @@ struct CompositionPolicy final {
          (!project_outer_modes || projected()) && append(output, used, "\x1B[?2026l");
 }
 
-[[nodiscard]] auto finish_composition(const std::span<const PaneSurface> panes,
-                                      const PaneOverlay overlay, const StatusLine status,
-                                      const Viewport viewport, const std::span<std::byte> output,
-                                      std::size_t used, const std::uint16_t row_offset,
-                                      const bool force_full, const bool complete_frame,
-                                      const std::optional<OuterModeProjection> previous_outer_modes,
-                                      CompositionResult composition) noexcept
-    -> std::expected<CompositionResult, CompositionError> {
-  if (!draw_top_right_overlay(panes, overlay, output, used, row_offset) ||
+[[nodiscard]] auto finish_composition(
+    const std::span<const PaneSurface> panes, const PaneOverlay overlay, const StatusLine status,
+    const Viewport viewport, const std::span<std::byte> output, std::size_t used,
+    const std::uint16_t column_offset, const std::uint16_t row_offset, const bool force_full,
+    const bool complete_frame, const std::optional<OuterModeProjection> previous_outer_modes,
+    CompositionResult composition) noexcept -> std::expected<CompositionResult, CompositionError> {
+  if (!draw_top_right_overlay(panes, overlay, output, used, column_offset, row_offset) ||
       !render_status_prompt_cursor(status, viewport, output, used)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
@@ -1230,8 +1212,8 @@ struct CompositionPolicy final {
   if (project_outer_modes && composition.outer_modes == OuterModeProjection::neutral) {
     invalidate_pane_mode_projections(panes);
   }
-  // The status editor replaces the focused pane's cursor shape with a bar after pane rendering.
-  // The next frame must restore the canonical child shape even when no terminal damage occurred.
+  // The status editor projects a steady block after pane rendering. The next frame must restore
+  // the child's canonical blink mode even when no terminal damage occurred.
   if (status.prompting() && viewport.rows >= 2) {
     invalidate_focused_cursor_projection(panes);
   }
@@ -1279,7 +1261,15 @@ compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
               const PaneOverlay overlay,
               const std::optional<OuterModeProjection> previous_outer_modes) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  const auto policy = composition_policy(panes, viewport, status, overlay);
+  const auto status_rows =
+      has_visible_status(viewport, status) ? std::uint16_t{1} : std::uint16_t{0};
+  const PaneRectangle content{
+      .row = status_rows,
+      .columns = viewport.columns,
+      .rows = static_cast<std::uint16_t>(viewport.rows - status_rows),
+  };
+  const Viewport content_viewport{.columns = content.columns, .rows = content.rows};
+  const auto policy = composition_policy(panes, viewport, content_viewport, status, overlay);
   if (!policy.has_value()) {
     return std::unexpected(policy.error());
   }
@@ -1295,23 +1285,23 @@ compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
       .outer_modes = status.prompting() ? OuterModeProjection::button_mouse : policy->outer_modes,
       .full = complete_full,
   };
-  const std::uint16_t row_offset = has_visible_status(viewport, status) ? 1U : 0U;
   // Separators are outside every pane surface and can only change with a layout/full redraw.
   // Re-emitting them for ordinary pane damage wastes bytes and CPU without changing presentation.
-  if (force_full && !draw_borders(panes, output, used, row_offset)) {
+  if (force_full && !draw_borders(panes, output, used, content.column, content.row)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   composition.status = has_visible_status(viewport, status) && (force_full || status.dirty);
-  const auto rendered =
-      render_panes(panes, viewport, output, used, force_full, row_offset, composition);
+  const auto rendered = render_panes(panes, content_viewport, output, used, force_full,
+                                     content.column, content.row, composition);
   if (!rendered.has_value()) {
     return std::unexpected(rendered.error());
   }
-  return finish_composition(panes, overlay, status, viewport, output, used, row_offset, force_full,
-                            complete_frame, previous_outer_modes, composition);
+  return finish_composition(panes, overlay, status, viewport, output, used, content.column,
+                            content.row, force_full, complete_frame, previous_outer_modes,
+                            composition);
 }
 
 } // namespace lemma::render

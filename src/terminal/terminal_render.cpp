@@ -455,7 +455,6 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
   update.cursor_in_viewport = cursor.viewport_has_value;
   update.cursor_column = cursor.viewport_has_value ? cursor.viewport_x : std::uint16_t{0};
   update.cursor_row = cursor.viewport_has_value ? cursor.viewport_y : std::uint16_t{0};
-  render_cursor_style = cursor.visual_style;
   render_cursor_blinking = cursor.blinking;
   return {};
 }
@@ -996,23 +995,8 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
     return std::unexpected(Error::out_of_space);
   }
   if (!composed || focused) {
-    const auto cursor_style = cursor_override ? GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
-                                              : impl_->render_cursor_style;
-    const auto cursor_blinking = !cursor_override && impl_->render_cursor_blinking;
-    const auto cursor_code = [cursor_style, cursor_blinking]() noexcept -> std::uint8_t {
-      switch (cursor_style) {
-      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
-        return cursor_blinking ? 5 : 6;
-      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK:
-      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW:
-        return cursor_blinking ? 1 : 2;
-      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
-        return cursor_blinking ? 3 : 4;
-      case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_MAX_VALUE:
-        return 2;
-      }
-      return 2;
-    }();
+    const bool cursor_blinking = !cursor_override && impl_->render_cursor_blinking;
+    const auto cursor_code = static_cast<std::uint8_t>(cursor_blinking ? 1U : 2U);
     const auto cursor_color = impl_->render_colors.cursor_has_value
                                   ? impl_->render_colors.cursor
                                   : impl_->render_colors.foreground;

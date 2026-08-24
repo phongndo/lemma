@@ -129,8 +129,6 @@ struct Terminal::Impl final {
   std::size_t physical_cell_capacity{0};
   std::size_t row_hash_count{0};
   std::array<bool, 12> mirrored_mode_values{};
-  GhosttyRenderStateCursorVisualStyle render_cursor_style{
-      GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK};
   GhosttyColorRgb projected_cursor_color{};
   std::uint8_t projected_cursor_code{0};
   bool render_cursor_blinking{false};

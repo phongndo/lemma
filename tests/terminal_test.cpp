@@ -312,6 +312,37 @@ TEST(TerminalTest, RendersOnlyChangedAnsiRows) {
   EXPECT_EQ(terminal.allocation_stats().allocations_total, allocations_before);
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, ProjectsEveryCursorStyleAsABlock) {
+  struct CursorProjection final {
+    std::string_view canonical;
+    std::string_view projected;
+  };
+  constexpr std::array projections{
+      CursorProjection{.canonical = "\x1B[1 q", .projected = "\x1B[1 q"},
+      CursorProjection{.canonical = "\x1B[2 q", .projected = "\x1B[2 q"},
+      CursorProjection{.canonical = "\x1B[3 q", .projected = "\x1B[1 q"},
+      CursorProjection{.canonical = "\x1B[4 q", .projected = "\x1B[2 q"},
+      CursorProjection{.canonical = "\x1B[5 q", .projected = "\x1B[1 q"},
+      CursorProjection{.canonical = "\x1B[6 q", .projected = "\x1B[2 q"},
+  };
+  auto terminal = make_terminal();
+  std::array<std::byte, 8'192> output{};
+
+  for (const auto& projection : projections) {
+    write_text(terminal, projection.canonical);
+    const auto rendered = terminal.render_ansi(output, true);
+    ASSERT_TRUE(rendered.has_value());
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view ansi(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+    EXPECT_THAT(ansi, testing::HasSubstr(projection.projected));
+    if (projection.canonical != projection.projected) {
+      EXPECT_THAT(ansi, testing::Not(testing::HasSubstr(projection.canonical)));
+    }
+  }
+}
+
 TEST(TerminalTest, EncodesOnlyChangedCellSpan) {
   TerminalOptions options;
   options.size = {.columns = 40, .rows = 4};

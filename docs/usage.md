@@ -97,7 +97,8 @@ The default prefix is `C-b`.
 
 The mouse can focus panes, select tabs, create a tab from the status `+`, reorder tabs by dragging,
 resize split dividers, select terminal text, and scroll canonical history. Mouse reports are sent to
-the child when its active terminal modes request them.
+the child when its active terminal modes request them. Visible pane and built-in editor cursors use
+a block shape; pane-requested blinking is preserved.
 
 ## Copy mode
 

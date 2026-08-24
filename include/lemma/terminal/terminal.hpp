@@ -502,8 +502,9 @@ public:
 
   // Invalidates retained ANSI output state after a composed frame is discarded.
   void invalidate_ansi_render_state() noexcept;
-  // The compositor sometimes overrides child modes or cursor shape after pane rendering. These
-  // targeted invalidations repair only the affected outer-terminal projection on the next frame.
+  // The compositor sometimes overrides child modes or cursor presentation after pane rendering.
+  // These targeted invalidations repair only the affected outer-terminal projection on the next
+  // frame.
   void invalidate_ansi_mode_projection() noexcept;
   void invalidate_ansi_cursor_projection() noexcept;
 

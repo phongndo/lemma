@@ -110,6 +110,7 @@ add_library(
   lemma_render STATIC
   src/render/pane_composition.cpp
   src/render/frame_buffer.cpp
+  src/render/ui.cpp
 )
 lemma_internal_target(lemma_render)
 target_link_libraries(
