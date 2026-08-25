@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,7 +20,9 @@ from check_regression import (
 from latency_trace import input_paths
 from mux_benchmark import (
     INTERACTION_LABEL_CODES,
+    LATENCY_VISIBLE_ACK,
     LemmaRuntime,
+    PtyReceiptChannel,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
@@ -254,6 +257,20 @@ class LatencyTraceCorrelationTest(unittest.TestCase):
         self.assertEqual(paths, [])
         self.assertEqual(len(rejected), 2)
         self.assertTrue(all("reused" in rejection["reason"] for rejection in rejected))
+
+
+class LatencyReceiptTest(unittest.TestCase):
+    def test_acknowledges_visibility_over_the_peer_control_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = PtyReceiptChannel(Path(directory) / "receipt.sock")
+            peer = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                peer.bind(str(receipt.peer_path))
+                receipt.acknowledge_visible()
+                self.assertEqual(peer.recv(4 * 1024), LATENCY_VISIBLE_ACK)
+            finally:
+                peer.close()
+                receipt.close()
 
 
 class MuxFixtureTest(unittest.TestCase):

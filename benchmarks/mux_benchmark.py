@@ -44,6 +44,7 @@ BLOCK_READY = b"__LEMMA_PTY_READY__"
 BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
 LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
+LATENCY_VISIBLE_ACK = b"__LEMMA_LATENCY_VISIBLE__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
 TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
 TUI_WHEEL_READY = b"__LEMMA_TUI_WHEEL_READY__"
@@ -725,6 +726,7 @@ def idle_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
 class PtyReceiptChannel:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.peer_path = Path(f"{path}.peer")
         self.descriptor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         try:
             self.descriptor.bind(str(path))
@@ -791,6 +793,13 @@ class PtyReceiptChannel:
             f"receipt={receipt_latency is not None} visible={visible_latency is not None}"
         )
 
+    def acknowledge_visible(self) -> None:
+        sent = self.descriptor.sendto(LATENCY_VISIBLE_ACK, str(self.peer_path))
+        if sent != len(LATENCY_VISIBLE_ACK):
+            raise RuntimeError(
+                "incomplete autonomous-output visibility acknowledgement"
+            )
+
     def wait_for_receipt(self, expected: bytes, timeout: float) -> None:
         if self.pending_receipt is not None:
             received = self.pending_receipt
@@ -818,10 +827,16 @@ class PtyReceiptChannel:
 
     def close(self) -> None:
         self.descriptor.close()
-        try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
+        for path in (self.path, self.peer_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def release_autonomous_output(receipts: PtyReceiptChannel) -> None:
+    receipts.acknowledge_visible()
+    receipts.wait_for_receipt(LATENCY_NEXT_READY, 5.0)
 
 
 class MuxRuntime(Protocol):
@@ -1462,7 +1477,7 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     client = runtime.start_and_attach("warm_scroll")
     command = f"{shlex.quote(str(runtime.peer_path))} warm-scroll\r".encode()
     client.write_all(command, 2.0)
-    client.read_until(WARM_MARKER, 60.0)
+    client.read_until(WARM_MARKER, 60.0, visible_text=isinstance(runtime, HerdrRuntime))
     client.drain()
 
     latencies: list[int] = []
@@ -1471,7 +1486,10 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         started_ns = time.monotonic_ns()
         client.write_all(command, 2.0)
         latency, output_bytes = client.read_until(
-            WARM_MARKER, 60.0, started_ns=started_ns
+            WARM_MARKER,
+            60.0,
+            started_ns=started_ns,
+            visible_text=isinstance(runtime, HerdrRuntime),
         )
         latencies.append(latency)
         client_bytes.append(output_bytes)
@@ -1535,9 +1553,9 @@ def latency_samples(
         key_to_pty.append(pty_latency)
         key_to_visible.append(visible_latency)
         client_bytes.append(output_bytes)
-        client.drain(0.01)
         if wait_for_peer_ready:
-            receipts.wait_for_receipt(LATENCY_NEXT_READY, 1.0)
+            release_autonomous_output(receipts)
+        client.drain(0.01)
     return {
         "key_to_pty": summary(key_to_pty),
         "key_to_visible": summary(key_to_visible),
@@ -1560,6 +1578,7 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
             5.0,
             visible_text=isinstance(runtime, HerdrRuntime),
         )
+        release_autonomous_output(receipts)
         client.drain(0.06)
         return {
             "status": "completed",
@@ -1892,6 +1911,7 @@ def launch_latency_peer(
     runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
     client: PtyProcess,
     autonomous_output: bool,
+    receipts: PtyReceiptChannel | None = None,
 ) -> None:
     mode = "latency-output" if autonomous_output else "latency"
     ready = LATENCY_OUTPUT_READY if autonomous_output else LATENCY_READY
@@ -1901,6 +1921,10 @@ def launch_latency_peer(
     ).encode()
     client.write_all(command, 2.0)
     client.read_until(ready, 5.0, visible_text=isinstance(runtime, HerdrRuntime))
+    if autonomous_output:
+        if receipts is None:
+            raise ValueError("autonomous output requires a receipt channel")
+        release_autonomous_output(receipts)
     client.drain(0.06 if autonomous_output else 0.005)
 
 
@@ -1973,7 +1997,7 @@ def pane_profile(
             resources = sample_resources(runtime, repetitions, client)
             launch_latency_peer(runtime, client, False)
         else:
-            launch_latency_peer(runtime, client, True)
+            launch_latency_peer(runtime, client, True, receipts)
             resources = sample_resources(runtime, repetitions, client)
         interaction = latency_samples(
             client,

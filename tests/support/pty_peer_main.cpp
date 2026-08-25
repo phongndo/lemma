@@ -676,6 +676,61 @@ enum class LatencyMode : std::uint8_t {
   return {};
 }
 
+constexpr std::string_view latency_visible_ack = "__LEMMA_LATENCY_VISIBLE__";
+constexpr std::string_view latency_next_ready = "__LEMMA_LATENCY_NEXT__";
+constexpr std::string_view latency_peer_suffix = ".peer";
+
+[[nodiscard]] auto bind_latency_peer(const int receipt,
+                                     const std::string_view receipt_path) noexcept -> bool {
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  if (receipt_path.size() + latency_peer_suffix.size() >= sizeof(address.sun_path)) {
+    return false;
+  }
+  auto path = std::span(address.sun_path);
+  std::memcpy(path.data(), receipt_path.data(), receipt_path.size());
+  std::memcpy(path.subspan(receipt_path.size()).data(), latency_peer_suffix.data(),
+              latency_peer_suffix.size());
+  if (::unlink(path.data()) != 0 && errno != ENOENT) {
+    return false;
+  }
+  // The socket ABI intentionally erases the concrete address type.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* generic = reinterpret_cast<const sockaddr*>(&address);
+  return ::bind(receipt, generic, sizeof(address)) == 0;
+}
+
+[[nodiscard]] auto wait_for_latency_visible_ack(const int receipt) noexcept -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    pollfd event{.fd = receipt, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 100);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled <= 0) {
+      if (polled < 0) {
+        return false;
+      }
+      continue;
+    }
+    std::array<char, 64> input{};
+    const auto count = ::recv(receipt, input.data(), input.size(), 0);
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    return count >= 0 &&
+           std::string_view(input.data(), static_cast<std::size_t>(count)) == latency_visible_ack;
+  }
+  return false;
+}
+
+[[nodiscard]] auto send_latency_next_ready(const int receipt) noexcept -> bool {
+  const auto sent =
+      ::send(receipt, latency_next_ready.data(), latency_next_ready.size(), MSG_NOSIGNAL);
+  return sent >= 0 && static_cast<std::size_t>(sent) == latency_next_ready.size();
+}
+
 // This benchmark peer keeps each framed receipt and echo bounded and explicit.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_latency(const std::string_view receipt_path,
@@ -692,7 +747,10 @@ enum class LatencyMode : std::uint8_t {
   }
   std::memcpy(std::span(address.sun_path).data(), receipt_path.data(), receipt_path.size());
   const int receipt = ::socket(AF_UNIX, SOCK_DGRAM, 0);
-  if (receipt < 0) {
+  if (receipt < 0 || (autonomous_output && !bind_latency_peer(receipt, receipt_path))) {
+    if (receipt >= 0) {
+      static_cast<void>(::close(receipt));
+    }
     return 1;
   }
   // The socket ABI intentionally erases the concrete address type.
@@ -704,14 +762,12 @@ enum class LatencyMode : std::uint8_t {
     static_cast<void>(::close(receipt));
     return 1;
   }
-  // Readiness is setup, not a sample. Give delayed renderers one bounded opportunity to expose
-  // it before autonomous output can overwrite the row.
-  if (autonomous_output) {
-    std::this_thread::sleep_for(50ms);
-    if (!make_output_nonblocking()) {
-      static_cast<void>(::close(receipt));
-      return 1;
-    }
+  // Readiness is setup, not a sample. Do not begin autonomous output until the harness has
+  // observed the marker; a fixed delay can let a contended renderer lose it before its next frame.
+  if (autonomous_output && (!wait_for_latency_visible_ack(receipt) || !make_output_nonblocking() ||
+                            !send_latency_next_ready(receipt))) {
+    static_cast<void>(::close(receipt));
+    return 1;
   }
 
   std::array<char, 128> marker{};
@@ -793,14 +849,9 @@ enum class LatencyMode : std::uint8_t {
       marker_echo_written = true;
     }
     if (autonomous_output && marker_echo_written) {
-      // A single 81-byte background row can scroll a token out of a small split pane before the
-      // daemon's delayed frame is composed. Preserve the active load, but leave a bounded rendering
-      // opportunity after each controlled visibility checkpoint. The receipt lets the harness keep
-      // this pause outside the next measured interval.
-      std::this_thread::sleep_for(20ms);
-      constexpr std::string_view next = "__LEMMA_LATENCY_NEXT__";
-      const auto sent = ::send(receipt, next.data(), next.size(), MSG_NOSIGNAL);
-      if (sent < 0 || static_cast<std::size_t>(sent) != next.size()) {
+      // Keep output paused until the exact token is observable. This barrier is outside the
+      // measured interval and prevents a delayed renderer from losing the token to later rows.
+      if (!wait_for_latency_visible_ack(receipt) || !send_latency_next_ready(receipt)) {
         static_cast<void>(::close(receipt));
         return 1;
       }

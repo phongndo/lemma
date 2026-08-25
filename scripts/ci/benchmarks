@@ -275,6 +275,15 @@ if not isinstance(results, list) or [result.get("multiplexer") for result in res
 ]:
     print(f"comparison report {comparison_path} has invalid multiplexer results", file=sys.stderr)
     raise SystemExit(1)
+
+
+def failure_detail(workload):
+    if not isinstance(workload, dict):
+        return "result is missing"
+    error = workload.get("error")
+    return error if isinstance(error, str) and error else "no error was recorded"
+
+
 for result in results:
     workloads = result.get("workloads")
     warm = workloads.get("warm_scroll") if isinstance(workloads, dict) else None
@@ -283,16 +292,32 @@ for result in results:
     idle = workloads.get("idle_resources") if isinstance(workloads, dict) else None
     blocked = workloads.get("blocked_pty") if isinstance(workloads, dict) else None
     if not isinstance(warm, dict) or warm.get("status") != "completed":
-        print(f"{result.get('multiplexer')} did not complete warm_scroll", file=sys.stderr)
+        print(
+            f"{result.get('multiplexer')} did not complete warm_scroll: "
+            f"{failure_detail(warm)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     if not isinstance(attach, dict) or attach.get("status") != "completed":
-        print(f"{result.get('multiplexer')} did not complete attach_to_visible", file=sys.stderr)
+        print(
+            f"{result.get('multiplexer')} did not complete attach_to_visible: "
+            f"{failure_detail(attach)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     if not isinstance(interactive, dict) or interactive.get("status") != "completed":
-        print(f"{result.get('multiplexer')} did not complete interactive_under_output", file=sys.stderr)
+        print(
+            f"{result.get('multiplexer')} did not complete interactive_under_output: "
+            f"{failure_detail(interactive)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     if not isinstance(idle, dict) or idle.get("status") != "completed":
-        print(f"{result.get('multiplexer')} did not complete idle_resources", file=sys.stderr)
+        print(
+            f"{result.get('multiplexer')} did not complete idle_resources: "
+            f"{failure_detail(idle)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     if not isinstance(blocked, dict) or blocked.get("status") not in {"completed", "failed"}:
         print(f"{result.get('multiplexer')} has no explicit blocked_pty outcome", file=sys.stderr)
