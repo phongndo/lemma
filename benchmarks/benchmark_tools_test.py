@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import runpy
 import socket
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +28,7 @@ from mux_benchmark import (
     LemmaRuntime,
     PtyReceiptChannel,
     ZellijRuntime,
+    git_provenance,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
@@ -85,6 +88,45 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
                 "work",
             ],
         )
+
+
+class BenchEntrypointTest(unittest.TestCase):
+    def test_mux_forwards_the_selected_profile_probe(self) -> None:
+        entrypoint = runpy.run_path("bench", run_name="benchmark_entrypoint_test")
+        build = mock.Mock()
+        run = mock.Mock()
+        mux = entrypoint["mux"]
+        with mock.patch.dict(
+            mux.__globals__,
+            {
+                "BUILD": Path("/tmp/lemma-custom-profile"),
+                "build": build,
+                "run": run,
+            },
+        ):
+            mux()
+
+        arguments = run.call_args.args[0]
+        probe_index = arguments.index("--probe")
+        self.assertEqual(
+            arguments[probe_index + 1],
+            "/tmp/lemma-custom-profile/lemma_benchmark_probe",
+        )
+
+
+class BenchmarkProvenanceTest(unittest.TestCase):
+    def test_preserves_resolved_commit_when_dirty_diff_times_out(self) -> None:
+        with mock.patch(
+            "mux_benchmark.subprocess.run",
+            side_effect=[
+                mock.Mock(stdout="abc123\n"),
+                mock.Mock(stdout=" M benchmarks/mux_benchmark.py\n"),
+                subprocess.TimeoutExpired("git diff", 2.0),
+            ],
+        ):
+            provenance = git_provenance()
+
+        self.assertEqual(provenance, ("abc123", True, None))
 
 
 class BenchmarkStatisticsTest(unittest.TestCase):

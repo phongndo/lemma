@@ -44,6 +44,7 @@ constexpr std::size_t read_bytes_max = std::size_t{64} * 1'024U;
 constexpr std::size_t repetitions_max = 10'000;
 constexpr auto interaction_timeout = std::chrono::seconds(5);
 constexpr auto drain_duration = std::chrono::milliseconds(10);
+constexpr std::uint64_t open_loop_initial_delay_ns = 20'000'000U;
 
 struct InteractionResult final {
   std::uint64_t key_to_pty_ns{0};
@@ -55,6 +56,18 @@ struct InteractionResult final {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+}
+
+[[nodiscard]] constexpr auto open_loop_send_window(const std::size_t repetitions,
+                                                   const std::uint64_t interval_ns) noexcept
+    -> std::chrono::nanoseconds {
+  const auto jitter_span = std::max<std::uint64_t>(1U, interval_ns / 4U);
+  const auto maximum_interval_ns = interval_ns - (jitter_span / 2U) + jitter_span - 1U;
+  const auto scheduled_intervals = repetitions == 0 ? 0U : repetitions - 1U;
+  const auto maximum_window_ns =
+      open_loop_initial_delay_ns +
+      (maximum_interval_ns * static_cast<std::uint64_t>(scheduled_intervals));
+  return std::chrono::nanoseconds(static_cast<std::chrono::nanoseconds::rep>(maximum_window_ns));
 }
 
 [[nodiscard]] auto parse_integer(const std::string_view encoded, const int minimum,
@@ -683,8 +696,10 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
   std::size_t completed_pty = 0;
   std::size_t completed_outer = 0;
   std::uint64_t random_state = 0x9E37'79B9'7F4A'7C15ULL;
-  auto next_send_ns = monotonic_ns() + 20'000'000U;
-  auto final_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  const auto jitter_span = std::max<std::uint64_t>(1U, interval_ns / 4U);
+  auto next_send_ns = monotonic_ns() + open_loop_initial_delay_ns;
+  auto final_deadline = std::chrono::steady_clock::now() +
+                        open_loop_send_window(repetitions, interval_ns) + interaction_timeout;
 
   while ((completed_pty < repetitions || completed_outer < repetitions) &&
          std::chrono::steady_clock::now() < final_deadline) {
@@ -700,7 +715,6 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
       random_state ^= random_state << 13U;
       random_state ^= random_state >> 7U;
       random_state ^= random_state << 17U;
-      const auto jitter_span = std::max<std::uint64_t>(1U, interval_ns / 4U);
       const auto jitter = random_state % jitter_span;
       next_send_ns += interval_ns - (jitter_span / 2U) + jitter;
       now_ns = monotonic_ns();
@@ -848,8 +862,10 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     std::string decoded_outer;
     OuterTextDecoder decoder;
     decoder.append({encoded_outer.data(), encoded_outer.size()}, decoded_outer);
+    const auto maximum_repetition_window = open_loop_send_window(10'000U, 8'333'000U);
     return first == "__LEMMA_OUTPUT_0000_AAAAAA__" && last == "__LEMMA_OUTPUT_9999_YYYYJP__" &&
-                   decoded_outer == "__LEMMA_OUTPUT_DONE__"
+                   decoded_outer == "__LEMMA_OUTPUT_DONE__" &&
+                   maximum_repetition_window > std::chrono::seconds(80)
                ? 0
                : 1;
   }

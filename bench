@@ -82,6 +82,8 @@ def mux() -> None:
             str(BUILD / "lemma_test_cli"),
             "--peer",
             str(BUILD / "lemma_test_pty_peer"),
+            "--probe",
+            str(BUILD / "lemma_benchmark_probe"),
         ]
     )
 

@@ -2545,6 +2545,10 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
             text=True,
             timeout=2.0,
         ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown", None, None
+
+    try:
         status = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=normal"],
             check=True,
@@ -2552,9 +2556,12 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
             text=True,
             timeout=2.0,
         ).stdout
-        dirty = bool(status)
-        if not dirty:
-            return commit, False, None
+    except (OSError, subprocess.SubprocessError):
+        return commit, None, None
+
+    if not status:
+        return commit, False, None
+    try:
         tracked_diff = subprocess.run(
             ["git", "diff", "--binary", "HEAD"],
             check=True,
@@ -2570,9 +2577,9 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
         for name in untracked:
             digest.update(name.encode("utf-8"))
             digest.update(Path(name).read_bytes())
-        return commit, True, digest.hexdigest()
     except (OSError, subprocess.SubprocessError):
-        return "unknown", None, None
+        return commit, True, None
+    return commit, True, digest.hexdigest()
 
 
 def latency_trace_metadata(directory: Path | None) -> dict[str, Any]:
