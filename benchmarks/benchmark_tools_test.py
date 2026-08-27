@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import json
+import runpy
 import socket
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from benchmark_manifest import expected_failure, load_manifest, suite_workloads
 from check_regression import (
     BudgetError,
     checked_samples,
@@ -23,15 +27,49 @@ from mux_benchmark import (
     LATENCY_VISIBLE_ACK,
     LemmaRuntime,
     PtyReceiptChannel,
+    ZellijRuntime,
+    git_provenance,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
     open_descriptor_snapshot,
     percentile,
+    wait_for_profile_shell,
 )
+from mux_benchmark import (
+    summary as latency_summary,
+)
+from terminal_lab import validate_samples
 
 
 class LemmaBenchmarkAdapterTest(unittest.TestCase):
+    def test_profile_readiness_requires_shell_execution_not_input_echo(self) -> None:
+        runtime = object.__new__(LemmaRuntime)
+        client = mock.Mock()
+
+        wait_for_profile_shell(runtime, client, 17)
+
+        marker = b"__LEMMA_PROFILE_PANE_0017_READY__"
+        command = client.write_all.call_args.args[0]
+        self.assertNotIn(marker, command)
+        client.read_until.assert_called_once_with(marker, 5.0, visible_text=False)
+        client.drain.assert_called_once_with(0.005)
+
+    def test_zellij_attach_waits_for_session_publication(self) -> None:
+        runtime = object.__new__(ZellijRuntime)
+        runtime._command = mock.Mock(
+            side_effect=[
+                mock.Mock(returncode=1, stdout=""),
+                mock.Mock(returncode=0, stdout="another-session\n"),
+                mock.Mock(returncode=0, stdout="target-session\n"),
+            ]
+        )
+
+        with mock.patch("mux_benchmark.time.sleep"):
+            runtime._wait_for_session("target-session")
+
+        self.assertEqual(runtime._command.call_count, 3)
+
     def test_maps_generic_lifecycle_commands_to_the_canonical_cli(self) -> None:
         runtime = object.__new__(LemmaRuntime)
         runtime.cli_path = Path("/tmp/lemma-test-cli")
@@ -52,6 +90,45 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
         )
 
 
+class BenchEntrypointTest(unittest.TestCase):
+    def test_mux_forwards_the_selected_profile_probe(self) -> None:
+        entrypoint = runpy.run_path("bench", run_name="benchmark_entrypoint_test")
+        build = mock.Mock()
+        run = mock.Mock()
+        mux = entrypoint["mux"]
+        with mock.patch.dict(
+            mux.__globals__,
+            {
+                "BUILD": Path("/tmp/lemma-custom-profile"),
+                "build": build,
+                "run": run,
+            },
+        ):
+            mux()
+
+        arguments = run.call_args.args[0]
+        probe_index = arguments.index("--probe")
+        self.assertEqual(
+            arguments[probe_index + 1],
+            "/tmp/lemma-custom-profile/lemma_benchmark_probe",
+        )
+
+
+class BenchmarkProvenanceTest(unittest.TestCase):
+    def test_preserves_resolved_commit_when_dirty_diff_times_out(self) -> None:
+        with mock.patch(
+            "mux_benchmark.subprocess.run",
+            side_effect=[
+                mock.Mock(stdout="abc123\n"),
+                mock.Mock(stdout=" M benchmarks/mux_benchmark.py\n"),
+                subprocess.TimeoutExpired("git diff", 2.0),
+            ],
+        ):
+            provenance = git_provenance()
+
+        self.assertEqual(provenance, ("abc123", True, None))
+
+
 class BenchmarkStatisticsTest(unittest.TestCase):
     def test_uses_nearest_rank_percentiles(self) -> None:
         samples = list(range(1, 21))
@@ -62,6 +139,84 @@ class BenchmarkStatisticsTest(unittest.TestCase):
     def test_rejects_an_insufficient_distribution(self) -> None:
         with self.assertRaisesRegex(BudgetError, "needs at least 3 samples; found 2"):
             checked_samples([1, 2], "sample gate", 3)
+
+    def test_marks_sparse_tail_statistics_as_non_authoritative(self) -> None:
+        sparse = latency_summary(list(range(5)))
+        p95_ready = latency_summary(list(range(20)))
+        p99_ready = latency_summary(list(range(100)))
+
+        self.assertFalse(sparse["p95_valid"])
+        self.assertFalse(sparse["p99_valid"])
+        self.assertTrue(p95_ready["p95_valid"])
+        self.assertFalse(p95_ready["p99_valid"])
+        self.assertTrue(p99_ready["p99_valid"])
+
+
+class BenchmarkManifestTest(unittest.TestCase):
+    def test_comparison_suite_is_the_single_complete_workload_authority(self) -> None:
+        manifest = load_manifest()
+        workloads = suite_workloads(manifest, "comparison")
+
+        self.assertEqual(manifest["schema"], 4)
+        self.assertEqual(
+            [workload["id"] for workload in workloads],
+            manifest["suites"]["comparison"],
+        )
+        self.assertIn("direct", workloads[0]["subjects"])
+        self.assertEqual(
+            manifest["terminal_lab"]["terminals"],
+            ["ghostty", "kitty", "wezterm"],
+        )
+        self.assertTrue(
+            all(
+                "key_to_visible" not in metric
+                for workload in workloads
+                for metric in workload["metrics"]
+            )
+        )
+        schema = json.loads(
+            Path("benchmarks/terminal_lab.schema.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(schema["properties"]["schema"]["const"], 1)
+        self.assertIn("input_to_photon_ns", str(schema))
+
+    def test_only_reviewed_subject_failures_are_expected(self) -> None:
+        manifest = load_manifest()
+
+        reviewed = expected_failure(
+            manifest,
+            "herdr",
+            "blocked_pty",
+            "peer emitted __LEMMA_PTY_FAILED__ after input loss",
+        )
+        unreviewed = expected_failure(
+            manifest,
+            "herdr",
+            "tui_redraw",
+            "native probe failed",
+        )
+
+        self.assertEqual(
+            reviewed["classification"] if reviewed is not None else None,
+            "subject_input_loss_under_backpressure",
+        )
+        self.assertIsNone(unreviewed)
+
+
+class TerminalLabContractTest(unittest.TestCase):
+    def test_requires_capture_jitter_to_avoid_refresh_lockstep(self) -> None:
+        samples = [
+            {"sequence": 1, "input_jitter_ns": 0, "input_to_photon_ns": 10},
+            {"sequence": 2, "input_jitter_ns": 1, "input_to_photon_ns": 11},
+        ]
+        self.assertEqual(validate_samples(samples), samples)
+        with self.assertRaisesRegex(ValueError, "jitter"):
+            validate_samples(
+                [
+                    {"sequence": 1, "input_jitter_ns": 0, "input_to_photon_ns": 10},
+                    {"sequence": 2, "input_jitter_ns": 0, "input_to_photon_ns": 11},
+                ]
+            )
 
 
 class RegressionWorkloadTest(unittest.TestCase):
@@ -278,16 +433,16 @@ class MuxFixtureTest(unittest.TestCase):
         markers = [
             interaction_marker(label, index)
             for label in INTERACTION_LABEL_CODES
-            for index in range(1_000)
+            for index in range(10_000)
         ]
         visible_tokens = [
             interaction_visible_token(label, index)
             for label in INTERACTION_LABEL_CODES
-            for index in range(1_000)
+            for index in range(10_000)
         ]
         self.assertEqual(len(markers), len(set(markers)))
         self.assertEqual(len(visible_tokens), len(set(visible_tokens)))
-        self.assertTrue(all(len(token) == 8 for token in visible_tokens))
+        self.assertTrue(all(len(token) == 6 for token in visible_tokens))
 
     def test_installs_the_fixture_in_the_active_fish_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lemma.dev/schema/terminal-lab-report-v1.json",
+  "title": "Lemma terminal lab report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "suite",
+    "generated_at",
+    "host",
+    "system",
+    "terminal",
+    "subject",
+    "configuration_profile",
+    "capture_method",
+    "display",
+    "terminal_binary",
+    "subject_binary",
+    "manifest_sha256",
+    "terminal_config_sha256",
+    "samples",
+    "summary"
+  ],
+  "properties": {
+    "schema": {"const": 1},
+    "suite": {"const": "terminal-native-feel"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "host": {"type": "string", "minLength": 1},
+    "system": {"type": "string", "minLength": 1},
+    "terminal": {"enum": ["ghostty", "kitty", "wezterm"]},
+    "subject": {"enum": ["direct", "lemma", "tmux", "zellij", "herdr"]},
+    "configuration_profile": {"enum": ["stock", "normalized"]},
+    "capture_method": {"enum": ["hardware_photodiode", "software_pixel"]},
+    "terminal_binary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "subject_binary": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "bytes"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "bytes": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "terminal_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier", "refresh_hz", "variable_refresh", "sensor_position"],
+      "properties": {
+        "identifier": {"type": "string", "minLength": 1},
+        "refresh_hz": {"type": "number", "exclusiveMinimum": 0},
+        "variable_refresh": {"type": "boolean"},
+        "sensor_position": {"type": "string", "minLength": 1}
+      }
+    },
+    "summary": {"type": "object"},
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "input_jitter_ns", "input_to_photon_ns"],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1},
+          "input_jitter_ns": {"type": "integer", "minimum": 0},
+          "key_to_pty_ns": {"type": "integer", "minimum": 1},
+          "key_to_outer_bytes_ns": {"type": "integer", "minimum": 1},
+          "input_to_photon_ns": {"type": "integer", "minimum": 1},
+          "frame_interval_ns": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}
