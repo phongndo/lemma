@@ -55,8 +55,8 @@ build: configure
 run: build
     {{ nix }} ./build/{{ profile }}/lemma
 
-# Stop the running daemon so the next launch uses the current build.
-kill: build
+# Stop the running daemon.
+kill:
     {{ nix }} python3 tools/lemma_shutdown.py
 
 # Run the scripted libghostty-vt demo without adding a production CLI command.
