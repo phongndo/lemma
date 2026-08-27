@@ -412,6 +412,7 @@ if(LEMMA_BUILD_TESTS)
       lemma_terminal_boundary_tests
       lemma_component_integration_tests
       lemma_dependency_integrity_tests
+      lemma_benchmark_probe
       lemma_test_server
       lemma_test_cli
       lemma_test_pty_peer
