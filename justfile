@@ -71,9 +71,13 @@ test:
 bench:
     {{ nix }} LEMMA_BENCH_PROFILE={{ profile }} ./bench
 
-# Run release microbenchmarks and Lemma/tmux/Zellij/Herdr process baselines.
+# Run release native and direct/Lemma/tmux/Zellij/Herdr process baselines.
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
+
+# Enforce the reviewed performance budgets on the pinned dedicated host.
+regression-bench:
+    {{ nix }} scripts/ci/regression-budgets
 
 # Format C++, Nix, and Python files in place.
 fmt:

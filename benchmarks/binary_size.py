@@ -38,7 +38,13 @@ def main() -> int:
     arguments = parser.parse_args()
 
     binaries: dict[str, Any] = {}
-    for name in ("lemma", "lemma_test_server", "lemma_test_cli", "lemma_test_pty_peer"):
+    for name in (
+        "lemma",
+        "lemma_test_server",
+        "lemma_test_cli",
+        "lemma_test_pty_peer",
+        "lemma_benchmark_probe",
+    ):
         path = arguments.build_directory / name
         binaries[name] = binary_record(path)
     for name in ("tmux", "zellij"):

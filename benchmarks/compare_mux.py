@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Run the common process-level workload against pinned mux executables."""
+"""Run one manifest-defined workload suite against the complete mux subject matrix."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+import random
 import shutil
 import subprocess
 import sys
@@ -12,28 +15,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
-def load_report(path: Path, expected_mux: str) -> dict[str, Any]:
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"invalid {expected_mux} report {path}: {error}") from error
-    if not isinstance(report, dict) or report.get("schema") != 4:
-        raise RuntimeError(f"{expected_mux} report does not use process schema 4")
-    if report.get("multiplexer") != expected_mux:
-        raise RuntimeError(
-            f"expected {expected_mux} report, got {report.get('multiplexer')!r}"
-        )
-    workloads = report.get("workloads")
-    if not isinstance(workloads, dict) or not {
-        "warm_scroll",
-        "attach_to_visible",
-        "interactive_under_output",
-        "idle_resources",
-        "blocked_pty",
-    }.issubset(workloads):
-        raise RuntimeError(f"{expected_mux} report is missing common workloads")
-    return report
+from benchmark_manifest import load_manifest
+from validate_report import validate_process_report
 
 
 def resolve_executable(value: str) -> Path:
@@ -44,103 +27,357 @@ def resolve_executable(value: str) -> Path:
     return path.resolve()
 
 
-def run_competitor(
+def percentile(samples: list[int], quantile: float) -> int:
+    ordered = sorted(samples)
+    index = max(0, min(len(ordered) - 1, math.ceil(quantile * len(ordered)) - 1))
+    return ordered[index]
+
+
+def distributions(
+    value: Any, prefix: tuple[str, ...] = ()
+) -> dict[tuple[str, ...], list[int]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[tuple[str, ...], list[int]] = {}
+    for name, child in value.items():
+        path = (*prefix, name)
+        if (
+            (name.startswith("samples_") or name == "outer_bytes")
+            and isinstance(child, list)
+            and all(
+                isinstance(sample, int) and not isinstance(sample, bool)
+                for sample in child
+            )
+        ):
+            result[path] = child
+        elif isinstance(child, dict) and name != "resources_after_workload":
+            result.update(distributions(child, path))
+    return result
+
+
+def bootstrap_median_delta(
+    baseline: list[int], contender: list[int], seed: int, resamples: int = 2_000
+) -> tuple[int, int]:
+    generator = random.Random(seed)
+    deltas = []
+    for _ in range(resamples):
+        baseline_sample = [generator.choice(baseline) for _ in baseline]
+        contender_sample = [generator.choice(contender) for _ in contender]
+        deltas.append(
+            percentile(contender_sample, 0.50) - percentile(baseline_sample, 0.50)
+        )
+    return percentile(deltas, 0.025), percentile(deltas, 0.975)
+
+
+def direct_deltas(
+    reports: dict[str, dict[str, Any]], thresholds: dict[str, float]
+) -> list[dict[str, Any]]:
+    direct = reports["direct"].get("workloads", {})
+    analysis: list[dict[str, Any]] = []
+    for subject, report in reports.items():
+        if subject == "direct":
+            continue
+        for workload, result in report.get("workloads", {}).items():
+            baseline = direct.get(workload)
+            if (
+                not isinstance(result, dict)
+                or not isinstance(baseline, dict)
+                or result.get("status") != "completed"
+                or baseline.get("status") != "completed"
+            ):
+                continue
+            baseline_distributions = distributions(baseline)
+            for path, samples in distributions(result).items():
+                baseline_samples = baseline_distributions.get(path)
+                if not baseline_samples or not samples:
+                    continue
+                direct_p50 = percentile(baseline_samples, 0.50)
+                subject_p50 = percentile(samples, 0.50)
+                identity = f"{subject}:{workload}:{'.'.join(path)}"
+                seed = int.from_bytes(
+                    hashlib.sha256(identity.encode("utf-8")).digest()[:8], "big"
+                )
+                confidence_low, confidence_high = bootstrap_median_delta(
+                    baseline_samples, samples, seed
+                )
+                ratio = subject_p50 / direct_p50 if direct_p50 > 0 else None
+                practical_change = (
+                    abs(subject_p50 - direct_p50)
+                    >= thresholds["minimum_latency_change_ns"]
+                    and ratio is not None
+                    and abs(ratio - 1.0) >= thresholds["minimum_relative_change"]
+                    if path[-1] == "samples_ns"
+                    else None
+                )
+                analysis.append(
+                    {
+                        "subject": subject,
+                        "workload": workload,
+                        "metric_path": list(path),
+                        "direct_p50": direct_p50,
+                        "subject_p50": subject_p50,
+                        "added_p50": subject_p50 - direct_p50,
+                        "added_p50_confidence_95": [confidence_low, confidence_high],
+                        "p50_ratio": ratio,
+                        "practical_change": practical_change,
+                    }
+                )
+    return analysis
+
+
+def direct_control_drift(
+    direct_report: dict[str, Any], after_controls: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for workload, after in after_controls.items():
+        before = direct_report["workloads"].get(workload)
+        if (
+            not isinstance(before, dict)
+            or before.get("status") != "completed"
+            or after.get("status") != "completed"
+        ):
+            continue
+        before_distributions = distributions(before)
+        for path, after_samples in distributions(after).items():
+            before_samples = before_distributions.get(path)
+            if not before_samples or not after_samples:
+                continue
+            before_p50 = percentile(before_samples, 0.50)
+            after_p50 = percentile(after_samples, 0.50)
+            result.append(
+                {
+                    "workload": workload,
+                    "metric_path": list(path),
+                    "before_p50": before_p50,
+                    "after_p50": after_p50,
+                    "drift_p50": after_p50 - before_p50,
+                    "drift_ratio": after_p50 / before_p50 if before_p50 > 0 else None,
+                }
+            )
+    return result
+
+
+def run_subject_workload(
     harness: Path,
-    multiplexer: str,
-    executable: Path,
-    peer: Path,
-    repetitions: int,
+    subject: str,
+    workload: dict[str, Any],
+    arguments: argparse.Namespace,
+    executables: dict[str, Path],
     destination: Path,
 ) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(harness),
+        "--multiplexer",
+        subject,
+        "--mode",
+        workload["cli_mode"],
+        "--intent",
+        arguments.intent,
+        "--manifest",
+        str(arguments.manifest),
+        "--peer",
+        str(arguments.peer.resolve()),
+        "--probe",
+        str(arguments.probe.resolve()),
+        "--repetitions",
+        str(arguments.repetitions),
+        "--output",
+        str(destination),
+    ]
+    if subject == "lemma":
+        command.extend(
+            [
+                "--server",
+                str(arguments.server.resolve()),
+                "--cli",
+                str(arguments.cli.resolve()),
+            ]
+        )
+    elif subject != "direct":
+        command.extend([f"--{subject}", str(executables[subject])])
+    if subject not in {"direct", "lemma"}:
+        command.append("--allow-workload-failures")
     subprocess.run(
-        [
-            sys.executable,
-            str(harness),
-            "--multiplexer",
-            multiplexer,
-            f"--{multiplexer}",
-            str(executable),
-            "--peer",
-            str(peer),
-            "--mode",
-            "comparison",
-            "--repetitions",
-            str(repetitions),
-            "--allow-workload-failures",
-            "--output",
-            str(destination),
-        ],
+        command,
         check=True,
-        timeout=240.0,
+        timeout=1_200.0,
         stdout=subprocess.DEVNULL,
     )
-    return load_report(destination, multiplexer)
+    report = json.loads(destination.read_text(encoding="utf-8"))
+    validate_process_report(
+        report,
+        load_manifest(arguments.manifest),
+        allow_failures=subject not in {"direct", "lemma"},
+    )
+    return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lemma-report", type=Path, required=True)
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("benchmarks/workloads.json")
+    )
+    parser.add_argument(
+        "--server", type=Path, default=Path("build/release/lemma_test_server")
+    )
+    parser.add_argument(
+        "--cli", type=Path, default=Path("build/release/lemma_test_cli")
+    )
     parser.add_argument(
         "--peer", type=Path, default=Path("build/release/lemma_test_pty_peer")
+    )
+    parser.add_argument(
+        "--probe", type=Path, default=Path("build/release/lemma_benchmark_probe")
     )
     parser.add_argument("--tmux", default="tmux")
     parser.add_argument("--zellij", default="zellij")
     parser.add_argument("--herdr", default="herdr")
-    parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument("--repetitions", type=int)
+    parser.add_argument(
+        "--intent", choices=("smoke", "extended", "gate", "manual"), default="manual"
+    )
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
-    if arguments.repetitions < 1 or arguments.repetitions > 1_000:
-        parser.error("--repetitions must be between 1 and 1000")
-    if not arguments.peer.is_file():
-        parser.error(f"missing executable: {arguments.peer}")
+    for path in (arguments.server, arguments.cli, arguments.peer, arguments.probe):
+        if not path.is_file():
+            parser.error(f"missing executable: {path}")
 
     try:
-        lemma = load_report(arguments.lemma_report, "lemma")
-        tmux = resolve_executable(arguments.tmux)
-        zellij = resolve_executable(arguments.zellij)
-        herdr = resolve_executable(arguments.herdr)
+        manifest = load_manifest(arguments.manifest)
+        if arguments.repetitions is None:
+            policy_name = arguments.intent if arguments.intent != "manual" else "smoke"
+            arguments.repetitions = manifest["sample_policies"][policy_name][
+                "process_repetitions"
+            ]
+        if arguments.repetitions < 1 or arguments.repetitions > 10_000:
+            parser.error("--repetitions must be between 1 and 10000")
+        subjects = list(manifest["terminal_lab"]["subjects"])
+        workloads = [
+            workload
+            for workload in manifest["process_workloads"]
+            if workload["id"] in manifest["suites"]["comparison"]
+        ]
+        generator = random.Random(arguments.seed)
+        workload_order = list(workloads)
+        generator.shuffle(workload_order)
+        execution_order: list[dict[str, str]] = []
+        for workload in workload_order:
+            supported = [
+                subject
+                for subject in subjects
+                if subject != "direct" and subject in workload["subjects"]
+            ]
+            generator.shuffle(supported)
+            if "direct" in workload["subjects"]:
+                execution_order.append(
+                    {
+                        "subject": "direct",
+                        "workload": workload["id"],
+                        "phase": "before",
+                    }
+                )
+            execution_order.extend(
+                {
+                    "subject": subject,
+                    "workload": workload["id"],
+                    "phase": "subject",
+                }
+                for subject in supported
+            )
+            if "direct" in workload["subjects"]:
+                execution_order.append(
+                    {
+                        "subject": "direct",
+                        "workload": workload["id"],
+                        "phase": "after",
+                    }
+                )
+        executables = {
+            "tmux": resolve_executable(arguments.tmux),
+            "zellij": resolve_executable(arguments.zellij),
+            "herdr": resolve_executable(arguments.herdr),
+        }
         harness = Path(__file__).with_name("mux_benchmark.py").resolve()
+        reports: dict[str, dict[str, Any]] = {}
+        direct_after_controls: dict[str, dict[str, Any]] = {}
+        environment_valid = True
+        workload_by_id = {workload["id"]: workload for workload in workloads}
         with tempfile.TemporaryDirectory(prefix="mux-comparison-") as temporary:
             root = Path(temporary)
-            reports = [
-                lemma,
-                run_competitor(
+            for index, task in enumerate(execution_order):
+                subject = task["subject"]
+                workload = workload_by_id[task["workload"]]
+                fragment = run_subject_workload(
                     harness,
-                    "tmux",
-                    tmux,
-                    arguments.peer.resolve(),
-                    arguments.repetitions,
-                    root / "tmux.json",
-                ),
-                run_competitor(
-                    harness,
-                    "zellij",
-                    zellij,
-                    arguments.peer.resolve(),
-                    arguments.repetitions,
-                    root / "zellij.json",
-                ),
-                run_competitor(
-                    harness,
-                    "herdr",
-                    herdr,
-                    arguments.peer.resolve(),
-                    arguments.repetitions,
-                    root / "herdr.json",
-                ),
-            ]
-    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                    subject,
+                    workload,
+                    arguments,
+                    executables,
+                    root / f"{index:03d}-{subject}-{workload['id']}.json",
+                )
+                environment_valid = environment_valid and bool(
+                    fragment.get("environment_valid")
+                )
+                workload_result = fragment["workloads"][workload["id"]]
+                if subject == "direct" and task["phase"] == "after":
+                    direct_after_controls[workload["id"]] = workload_result
+                    continue
+                if subject not in reports:
+                    reports[subject] = {
+                        **fragment,
+                        "scenario_ids": [],
+                        "workloads": {},
+                    }
+                reports[subject]["scenario_ids"].append(workload["id"])
+                reports[subject]["workloads"][workload["id"]] = workload_result
+        scenario_order = [workload["id"] for workload in workloads]
+        for subject in subjects:
+            report = reports[subject]
+            for workload in workloads:
+                if subject not in workload["subjects"]:
+                    report["workloads"][workload["id"]] = {
+                        "status": "unsupported",
+                        "reason": (
+                            f"{workload['id']} is not defined for the {subject} subject"
+                        ),
+                    }
+            report["scenario_ids"] = scenario_order
+            report["workloads"] = {
+                identifier: report["workloads"][identifier]
+                for identifier in scenario_order
+            }
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
         parser.error(str(error))
 
     report = {
-        "schema": 2,
+        "schema": 3,
         "suite": "core-mux-comparison",
-        "contract": "docs/development.md",
+        "run_intent": arguments.intent,
+        "statistics_valid": {
+            "p50": True,
+            "p95": arguments.repetitions >= 20,
+            "p99": arguments.repetitions >= 100,
+        },
+        "environment_valid": environment_valid,
+        "manifest_sha256": hashlib.sha256(arguments.manifest.read_bytes()).hexdigest(),
+        "seed": arguments.seed,
+        "execution_order": execution_order,
         "policy": (
-            "Workloads share inputs and completion markers. A failed completion remains an "
-            "explicit result and is never converted into a latency sample."
+            "Workload blocks are randomized, non-direct subjects are randomized within "
+            "each block, and direct controls bracket every supported block; all use an "
+            "identical native probe, fixture, dimensions, and completion endpoint."
         ),
-        "results": reports,
+        "results": [reports[subject] for subject in subjects],
+        "direct_after_controls": direct_after_controls,
+        "direct_control_drift": direct_control_drift(
+            reports["direct"], direct_after_controls
+        ),
+        "direct_baseline_deltas": direct_deltas(
+            reports,
+            manifest["comparison_policy"]["practical_effect_thresholds"],
+        ),
     }
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

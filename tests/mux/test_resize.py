@@ -52,7 +52,8 @@ class ResizeMuxTest(unittest.TestCase):
             'buf="${buf}${c}"; '
             'case $buf in *"${esc}[48;"*t) break ;; esac; '
             "done; "
-            "printf '__2048_ARMED__\\n'; "
+            "armed='__2048_''ARMED__'; "
+            "printf '%s\\n' \"$armed\"; "
             "buf=; "
             "while :; do "
             "c=$(dd bs=1 count=1 2>/dev/null) || exit 1; "

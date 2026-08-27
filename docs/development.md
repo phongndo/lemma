@@ -148,18 +148,44 @@ Run short native benchmarks with:
 ./bench mux
 ```
 
-Use the benchmark shell for comparisons and the memory census:
+Use the benchmark shell for the complete subject comparison, dedicated-host budgets, and memory
+census:
 
 ```sh
 nix develop .#benchmarks --command ./bench extended
+nix develop .#benchmarks --command scripts/ci/regression-budgets
 nix develop .#benchmarks --command scripts/ci/memory smoke
 ```
 
-Reports are generated under `build/` and are not checked-in documentation.
+`benchmarks/workloads.json` is the sole scenario, suite, sample-policy, and terminal-lab authority.
+Native C++ owns microbenchmark and process timing loops. Python may select adapters, launch isolated
+subjects, verify completion, retain raw reports, and analyze them; it must not timestamp a measured
+interaction. The headless report orders a direct-PTY baseline before Lemma, tmux, Zellij, and Herdr.
+Execution randomizes workload blocks and subjects while direct controls bracket each supported block.
+
+Process latency endpoints are deliberately distinct:
+
+```text
+key_to_pty          injected outer-PTY input to fixture receipt
+key_to_outer_bytes  injected outer-PTY input to matching bytes emitted toward the host terminal
+input_to_photon     external terminal-lab HID event to measured display change
+```
+
+Only the final endpoint is user-visible latency. A smoke report explicitly marks sparse p95 and p99
+statistics invalid. Reports retain raw distributions, source and manifest identity, executable
+SHA-256 values, and failures or unsupported capabilities as outcomes rather than samples. Cross-
+subject validation permits only the subject/workload failure signatures reviewed in the manifest;
+new adapter or competitor failures fail validation. Generated reports live under `build/` and are
+not checked-in documentation.
 
 A performance comparison must use the same build profile, fixture, work, completion condition, and
-host. Retain raw distributions and distinguish CPU time, elapsed time, emitted bytes, memory,
-descriptors, and wakeups. Shared-runner timing is diagnostic evidence, not a stable regression gate.
+host. Distinguish CPU time, elapsed time, outer bytes, physical footprint, RSS, descriptors, and
+wakeups. Shared-runner timing is diagnostic evidence, not a stable regression gate.
+
+The GUI-ready lab contract is `benchmarks/terminal_lab.schema.json`. Hardware-photodiode and
+software-pixel captures remain separate methods and are ingested with `benchmarks/terminal_lab.py`;
+every run identifies the Ghostty, Kitty, or WezTerm executable and configuration, display refresh
+profile, sensor position, randomized input jitter, and direct or mux subject.
 
 Measure before and after changes to input routing, PTY parsing or writes, rendering, composition,
 layout projection, resize, scheduling, or client output. State which multiplier the change affects:

@@ -230,10 +230,14 @@ if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
 
   add_executable(lemma_test_pty_peer tests/support/pty_peer_main.cpp)
   target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
+
+  add_executable(lemma_benchmark_probe benchmarks/process_probe.cpp)
+  target_link_libraries(lemma_benchmark_probe PRIVATE lemma_warnings)
 endif()
 
 if(LEMMA_BUILD_TESTS)
   enable_testing()
+  add_test(NAME benchmark.probe COMMAND lemma_benchmark_probe --self-test)
   find_package(GTest CONFIG REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   include(GoogleTest)

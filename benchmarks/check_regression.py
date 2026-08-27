@@ -163,8 +163,8 @@ def validate_comparative_check(check: Any, label: str) -> dict[str, Any]:
 
 
 def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-    if manifest.get("schema") != 3:
-        raise BudgetError("workload manifest must use schema 3")
+    if manifest.get("schema") != 4:
+        raise BudgetError("workload manifest must use schema 4")
     budgets = manifest.get("regression_budgets")
     if not isinstance(budgets, dict) or budgets.get("schema") != 1:
         raise BudgetError("regression_budgets must use schema 1")
@@ -207,6 +207,11 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     require_int(
         approved_host.get("memory_bytes"), "scope.approved_host.memory_bytes", minimum=1
     )
+    maximum_load = require_number(
+        scope.get("maximum_load_average_1m"), "scope.maximum_load_average_1m"
+    )
+    if maximum_load <= 0:
+        raise BudgetError("scope.maximum_load_average_1m must be positive")
 
     micro = budgets.get("microbenchmarks")
     process = budgets.get("process_workloads")
@@ -258,8 +263,8 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     required_limits = {
         "maximum_p95_cpu_time_ns",
         "maximum_p95_key_to_pty_ns",
-        "maximum_p50_key_to_visible_ns",
-        "maximum_p95_key_to_visible_ns",
+        "maximum_p50_key_to_outer_bytes_ns",
+        "maximum_p95_key_to_outer_bytes_ns",
     }
     for condition, limits_for_condition in conditions.items():
         if not isinstance(limits_for_condition, dict) or not required_limits.issubset(
@@ -345,6 +350,25 @@ def require_scope(
         raise BudgetError(
             "microbenchmark report did not come from the approved pinned host"
         )
+    maximum_load = float(scope["maximum_load_average_1m"])
+    micro_load = context.get("load_avg")
+    if (
+        not isinstance(micro_load, list)
+        or not micro_load
+        or require_number(micro_load[0], "microbenchmark load average") > maximum_load
+    ):
+        raise BudgetError("native report was captured above the reviewed host load")
+    for report, label in ((process_report, "process"), (profile_report, "profile")):
+        load = report.get("host_load_average")
+        if (
+            not isinstance(load, list)
+            or not load
+            or require_number(load[0], f"{label} load average") > maximum_load
+        ):
+            raise BudgetError(
+                f"{label} report was captured above the reviewed host load"
+            )
+
     if process_report.get("host") != profile_report.get("host"):
         raise BudgetError("process and profile reports came from different hosts")
     if context.get("host_name") != process_report.get("host"):
@@ -353,6 +377,20 @@ def require_scope(
         )
     if process_report.get("commit") != profile_report.get("commit"):
         raise BudgetError("process and profile reports came from different commits")
+    if context.get("source_commit") != process_report.get("commit"):
+        raise BudgetError("native and process reports came from different commits")
+    executable_sha256 = context.get("executable_sha256")
+    if not isinstance(executable_sha256, str) or len(executable_sha256) != 64:
+        raise BudgetError("native report has no executable SHA-256 identity")
+    process_manifest = process_report.get("manifest")
+    profile_manifest = profile_report.get("manifest")
+    if (
+        not isinstance(process_manifest, dict)
+        or not isinstance(profile_manifest, dict)
+        or process_manifest.get("sha256") != profile_manifest.get("sha256")
+        or context.get("manifest_sha256") != process_manifest.get("sha256")
+    ):
+        raise BudgetError("benchmark reports used different workload manifests")
 
 
 def evaluate(
@@ -395,10 +433,10 @@ def evaluate(
     process_budget = budgets["process_workloads"]
     process_minimum = process_budget["minimum_repetitions"]
     if (
-        process_report.get("schema") != 4
+        process_report.get("schema") != 5
         or process_report.get("multiplexer") != "lemma"
     ):
-        raise BudgetError("process workload report must be a schema-4 Lemma report")
+        raise BudgetError("process workload report must be a schema-5 Lemma report")
     require_int(
         process_report.get("repetitions"),
         "process report repetitions",
@@ -454,10 +492,10 @@ def evaluate(
     profile_budget = budgets["pane_profiles"]
     profile_minimum = profile_budget["minimum_repetitions"]
     if (
-        profile_report.get("schema") != 4
+        profile_report.get("schema") != 5
         or profile_report.get("multiplexer") != "lemma"
     ):
-        raise BudgetError("profile report must be a schema-4 Lemma report")
+        raise BudgetError("profile report must be a schema-5 Lemma report")
     require_int(
         profile_report.get("repetitions"),
         "profile report repetitions",
@@ -502,17 +540,17 @@ def evaluate(
                     "ns",
                 ),
                 (
-                    "key_to_visible_p50",
-                    interaction.get("key_to_visible", {}).get("samples_ns"),
+                    "key_to_outer_bytes_p50",
+                    interaction.get("key_to_outer_bytes", {}).get("samples_ns"),
                     "p50",
-                    limits["maximum_p50_key_to_visible_ns"],
+                    limits["maximum_p50_key_to_outer_bytes_ns"],
                     "ns",
                 ),
                 (
-                    "key_to_visible_p95",
-                    interaction.get("key_to_visible", {}).get("samples_ns"),
+                    "key_to_outer_bytes_p95",
+                    interaction.get("key_to_outer_bytes", {}).get("samples_ns"),
                     "p95",
-                    limits["maximum_p95_key_to_visible_ns"],
+                    limits["maximum_p95_key_to_outer_bytes_ns"],
                     "ns",
                 ),
             )

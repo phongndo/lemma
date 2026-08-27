@@ -247,30 +247,51 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   return written >= 0 || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
-[[nodiscard]] auto write_tui_frame(const std::string_view marker,
-                                   const std::size_t sequence) noexcept -> bool {
-  constexpr std::size_t rows = 22;
-  constexpr std::size_t columns = 79;
-  constexpr std::size_t marker_row = rows / 2;
-  if (marker.empty() || marker.size() > columns) {
+struct TuiFrameGeometry final {
+  std::size_t rows{0};
+  std::size_t columns{0};
+};
+
+[[nodiscard]] auto tui_frame_geometry() noexcept -> std::optional<TuiFrameGeometry> {
+  winsize size{};
+  // ioctl is variadic because its third argument depends on the request.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row < 2 || size.ws_col < 2 ||
+      size.ws_row > 200 || size.ws_col > 500) {
+    return std::nullopt;
+  }
+  // Stay one row and column inside the child viewport. Writing its final cell would set the
+  // autowrap latch, and a following CRLF can scroll away the synchronized marker on muxes whose
+  // chrome reduces the child PTY below the 80x24 outer terminal.
+  return TuiFrameGeometry{.rows = static_cast<std::size_t>(size.ws_row - 1U),
+                          .columns = static_cast<std::size_t>(size.ws_col - 1U)};
+}
+
+[[nodiscard]] auto write_tui_frame(const std::string_view marker, const std::size_t sequence,
+                                   const TuiFrameGeometry geometry) noexcept -> bool {
+  if (marker.empty() || marker.size() > geometry.columns || geometry.rows == 0 ||
+      geometry.columns == 0 || geometry.columns > 500) {
     return false;
   }
   const auto deadline = std::chrono::steady_clock::now() + 1s;
-  std::array<char, columns> line{};
-  line.fill(static_cast<char>('a' + (sequence % 26U)));
+  std::array<char, 500> line{};
+  std::ranges::fill(std::span(line).first(geometry.columns),
+                    static_cast<char>('a' + (sequence % 26U)));
   if (!write_all_until("\x1B[?2026h\x1B[H", deadline)) {
     return false;
   }
-  for (std::size_t row = 0; row < rows; ++row) {
+  const auto marker_row = geometry.rows / 2U;
+  for (std::size_t row = 0; row < geometry.rows; ++row) {
     if (row == marker_row) {
       std::ranges::copy(marker, line.begin());
     }
-    if (!write_all_until({line.data(), line.size()}, deadline) ||
-        (row + 1U < rows && !write_all_until("\r\n", deadline))) {
+    if (!write_all_until({line.data(), geometry.columns}, deadline) ||
+        (row + 1U < geometry.rows && !write_all_until("\r\n", deadline))) {
       return false;
     }
     if (row == marker_row) {
-      line.fill(static_cast<char>('a' + (sequence % 26U)));
+      std::ranges::fill(std::span(line).first(geometry.columns),
+                        static_cast<char>('a' + (sequence % 26U)));
     }
   }
   return write_all_until("\x1B[?2026l", deadline);
@@ -298,8 +319,9 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
   const auto* generic = reinterpret_cast<const sockaddr*>(&address);
   constexpr std::string_view ready = "\x1B[?1049h\x1B[?1000h\x1B[?1006h\x1B[?2026h\x1B[2J\x1B[H"
                                      "__LEMMA_TUI_WHEEL_READY__\x1B[?2026l";
-  if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
-      !write_all(ready)) {
+  const auto frame_geometry = tui_frame_geometry();
+  if (!frame_geometry.has_value() || ::connect(receipt, generic, sizeof(address)) != 0 ||
+      !enter_raw_input() || !write_all(ready)) {
     static_cast<void>(::close(receipt));
     return 1;
   }
@@ -369,7 +391,7 @@ void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
       const auto frame = std::string_view(marker.data(), marker_size);
       const auto sent = ::send(receipt, frame.data(), frame.size(), MSG_NOSIGNAL);
       if (sent < 0 || static_cast<std::size_t>(sent) != frame.size() ||
-          !write_tui_frame(frame, sequence)) {
+          !write_tui_frame(frame, sequence, *frame_geometry)) {
         static_cast<void>(::close(receipt));
         return 1;
       }
@@ -757,7 +779,9 @@ constexpr std::string_view latency_peer_suffix = ".peer";
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* generic = reinterpret_cast<const sockaddr*>(&address);
   const auto ready = latency_ready_marker(mode);
-  if (::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
+  const auto frame_geometry = tui_redraw ? tui_frame_geometry() : std::nullopt;
+  if ((tui_redraw && !frame_geometry.has_value()) ||
+      ::connect(receipt, generic, sizeof(address)) != 0 || !enter_raw_input() ||
       !write_all(ready)) {
     static_cast<void>(::close(receipt));
     return 1;
@@ -836,7 +860,7 @@ constexpr std::string_view latency_peer_suffix = ".peer";
         output_written = write_all_until(frame, visibility_deadline) &&
                          write_all_until("\r\n", visibility_deadline);
       } else if (tui_redraw) {
-        output_written = write_tui_frame(frame, tui_sequence);
+        output_written = write_tui_frame(frame, tui_sequence, *frame_geometry);
         ++tui_sequence;
       } else {
         output_written = write_all(frame) && write_all("\r\n");
@@ -956,6 +980,35 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   return 0;
 }
 
+// The branches are the explicit bounded states of the quiescent peer.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_idle() noexcept -> int {
+  if (!enter_raw_input() || !write_all("__LEMMA_IDLE_READY__\r\n")) {
+    return 1;
+  }
+  while (true) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, -1);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0) {
+      return 1;
+    }
+    std::array<char, 256> input{};
+    const auto count = ::read(STDIN_FILENO, input.data(), input.size());
+    if (count == 0) {
+      return 0;
+    }
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      return errno == EIO ? 0 : 1;
+    }
+  }
+}
+
 [[nodiscard]] auto run_warm_scroll() noexcept -> int {
   std::array<char, 81> line{};
   line.fill('x');
@@ -986,6 +1039,9 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
+  }
+  if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "idle") {
+    return run_idle();
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "winch") {
     return run_winch();
