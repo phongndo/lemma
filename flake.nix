@@ -67,18 +67,18 @@
           pkgs = import nixpkgs { inherit system; };
           llvm = pkgs.llvmPackages_22;
           zigPackage = zig.packages.${system}."0.16.0";
+          zigTarget = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-${
+            if pkgs.stdenv.isDarwin then "macos" else "linux-gnu"
+          }";
           zstdStatic = pkgs.zstd.override {
             static = true;
             buildContrib = false;
             doCheck = false;
           };
           ghosttyDeps = mkGhosttyDeps pkgs zigPackage;
-          mkLemma =
-            { buildType
-            , binaryName
-            }:
+          mkLemma = buildType:
             llvm.stdenv.mkDerivation {
-              pname = binaryName;
+              pname = "lemma";
               version = "0.1.0";
               src = self;
 
@@ -101,36 +101,32 @@
                 "-DLEMMA_GHOSTTY_SOURCE_DIR=${ghosttySource}"
                 "-DLEMMA_GHOSTTY_NIX_SOURCE_REV=${ghosttyPin}"
                 "-DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=${ghosttyDeps}"
+                "-DLEMMA_GHOSTTY_ZIG_TARGET=${zigTarget}"
+              ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+                "-DLEMMA_GHOSTTY_ZIG_LIBC=../.lemma-zig-libc.txt"
               ];
 
-              postInstall = pkgs.lib.optionalString (binaryName != "lemma") ''
-                mv "$out/bin/lemma" "$out/bin/${binaryName}"
+              preConfigure = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+                mkdir -p "$TMPDIR/zig-global-cache"
+                ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache" zig libc > .lemma-zig-libc.txt
               '';
-              dontStrip = buildType == "Debug";
 
               doInstallCheck = true;
               installCheckPhase = ''
-                "$out/bin/${binaryName}" --version | grep -q '^lemma '
+                "$out/bin/lemma" --version | grep -q '^lemma '
               '';
 
               meta = {
                 description = "Self-hosted terminal multiplexer";
                 homepage = "https://github.com/phongndo/lemma";
                 license = pkgs.lib.licenses.mit;
-                mainProgram = binaryName;
+                mainProgram = "lemma";
                 platforms = systems;
               };
             };
         in
         rec {
-          lemma = mkLemma {
-            buildType = "Release";
-            binaryName = "lemma";
-          };
-          delemma = mkLemma {
-            buildType = "Debug";
-            binaryName = "delemma";
-          };
+          lemma = mkLemma "Release";
           default = lemma;
         }
       );
@@ -141,10 +137,6 @@
           lemma = {
             type = "app";
             program = "${self.packages.${system}.lemma}/bin/lemma";
-          };
-          delemma = {
-            type = "app";
-            program = "${self.packages.${system}.delemma}/bin/delemma";
           };
           default = lemma;
         }
@@ -160,6 +152,18 @@
           darwinTools = llvm.clang-tools;
           zigPackage = zig.packages.${system}."0.16.0";
           ghosttyDeps = mkGhosttyDeps pkgs zigPackage;
+          devLemma = pkgs.writeShellScriptBin "lemma" ''
+            root="$(${pkgs.git}/bin/git rev-parse --show-toplevel)" || {
+              echo "lemma: not inside a Lemma checkout" >&2
+              exit 1
+            }
+            runner="$root/scripts/dev-run"
+            if [[ ! -x "$runner" ]]; then
+              echo "lemma: $root does not contain scripts/dev-run" >&2
+              exit 1
+            fi
+            exec "$runner" "$@"
+          '';
           ciHk =
             if isDarwin then
               hk.packages.${system}.default
@@ -191,6 +195,23 @@
                   chmod +x "$out/bin/hk"
                 '';
               };
+          linuxClangd = pkgs.writeShellScriptBin "clangd" ''
+            exec "${llvm.clang-tools}/bin/clangd" \
+              --query-driver="${llvm.clang}/bin/clang++,${llvm.clang}/bin/clang" \
+              "$@"
+          '';
+          linuxClangTidy = pkgs.writeShellScriptBin "clang-tidy" ''
+            exec "${llvm.clang-tools}/bin/clang-tidy" \
+              --extra-arg-before=-resource-dir \
+              --extra-arg-before="${llvm.clang}/resource-root" \
+              --extra-arg-before=-isystem \
+              --extra-arg-before="${pkgs.gcc.cc}/include/c++/${pkgs.gcc.version}" \
+              --extra-arg-before=-isystem \
+              --extra-arg-before="${pkgs.gcc.cc}/include/c++/${pkgs.gcc.version}/${pkgs.stdenv.hostPlatform.config}" \
+              --extra-arg-before=-idirafter \
+              --extra-arg-before="${llvm.stdenv.cc.libc_dev}/include" \
+              "$@"
+          '';
           darwinClang = pkgs.writeShellScriptBin "clang" ''
             exec /usr/bin/clang "$@"
           '';
@@ -233,8 +254,11 @@
             ++ pkgs.lib.optionals (!isDarwin) [
               llvm.clang
               llvm.clang-tools
+              linuxClangd
+              linuxClangTidy
             ];
           projectPackages = compilerPackages ++ [
+            devLemma
             pkgs.ccache
             pkgs.cmake
             pkgs.conan
@@ -266,7 +290,7 @@
             shellHook =
               if isDarwin then
                 ''
-                  export PATH="$PWD/build/release:${darwinClang}/bin:${darwinClangxx}/bin:${darwinXcrun}/bin:$PATH"
+                  export PATH="${devLemma}/bin:${darwinClang}/bin:${darwinClangxx}/bin:${darwinXcrun}/bin:$PATH"
                   export CC=/usr/bin/clang
                   export CXX=/usr/bin/clang++
                   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -274,7 +298,7 @@
                 ''
               else
                 ''
-                  export PATH="$PWD/build/release:$PATH"
+                  export PATH="${devLemma}/bin:${linuxClangd}/bin:${linuxClangTidy}/bin:$PATH"
                   export CC="${llvm.clang}/bin/clang"
                   export CXX="${llvm.clang}/bin/clang++"
                 '';

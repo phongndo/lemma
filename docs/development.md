@@ -27,17 +27,31 @@ express the complete behavior.
 
 ## Workflow
 
-Enter the development environment and build:
+Enter the development environment and use the shared development runner:
 
 ```sh
 nix develop
-just profile=debug build
+just run --version
+just run pane split --right
+
+# The shell command is an ergonomic alias for the same runner.
+lemma --version
+lemma pane split --right
 ```
 
-Common commands:
+`just run [args...]` is the canonical explicit entry point. Both forms configure `build/dev` only
+when its toolchain or configuration inputs change, issue an incremental build of only the `lemma`
+target, and execute that checkout's exact binary with unchanged arguments. The `dev` profile uses
+`-O1`, debug symbols, enabled invariants, and frame pointers. A path-derived runtime namespace
+isolates every worktree, and the runner replaces a daemon whose executable predates the current
+build.
+
+Common verification commands:
 
 ```sh
-just build             # configure and build the selected profile
+./test unit
+./test mux resize
+./test mux pane-lifecycle
 just test              # fast native and real-mux tests
 just fmt               # format C++, Nix, and Python
 just fmt-check
@@ -48,8 +62,10 @@ just check             # build, formatting, analysis, tests, and Python checks
 just ci-check          # all merge-blocking CI lanes
 ```
 
-`profile` defaults to `release`; pass `profile=debug` when debugging. Run a focused check while
-working and `just check` before completing a substantial change.
+The verification profile defaults to `debug`. Release is explicit and remains the authority for
+production validation, packaging, and performance measurements (`just bench`, `just mux-bench`,
+`nix build .#lemma`). Run a focused check while working and `just check` before completing a
+substantial change.
 
 ## Tests
 

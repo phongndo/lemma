@@ -130,6 +130,7 @@ template <typename Integer>
       "  rename OLD NEW                         Rename a session\n"
       "  kill NAME                              Kill a session\n\n"
       "Automation:\n"
+      "  DOMAIN OP [ARGUMENTS...]               Execute a session, tab, or pane Action\n"
       "  action DOMAIN OP [ARGUMENTS...]        Execute one structured Action\n"
       "  proc FILE|-                            Execute a bounded Action procedure\n"
       "  events [OPTIONS]                       Stream machine-readable observations\n\n"
@@ -565,6 +566,9 @@ struct SurfaceArguments final {
   if (command == "action") {
     const auto target = arguments.subspan(1);
     return print_action_help(target.first(std::min(target.size(), std::size_t{2})));
+  }
+  if (command == "session" || command == "tab" || command == "pane") {
+    return print_action_help(arguments.first(std::min(arguments.size(), std::size_t{2})));
   }
   if (command == "proc" && arguments.size() == 1U) {
     constexpr std::string_view help =
@@ -1776,6 +1780,9 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   if (command == "new" || command == "start" || command == "list" || command == "ls" ||
       command == "inspect" || command == "rename" || command == "kill") {
     return run_session_control(endpoint, command_arguments);
+  }
+  if (command == "session" || command == "tab" || command == "pane") {
+    return run_action_command(endpoint, command_arguments);
   }
   if (command == "action") {
     return run_action_command(endpoint, command_arguments.subspan(1));

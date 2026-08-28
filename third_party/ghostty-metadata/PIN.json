@@ -17,6 +17,7 @@
     "tmux_control_mode": false
   },
   "optimization_by_cmake_build_type": {
+    "Dev": "ReleaseSafe",
     "Debug": "Debug",
     "Release": "ReleaseFast",
     "RelWithDebInfo": "ReleaseFast",

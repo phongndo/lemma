@@ -16,6 +16,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <expected>
@@ -109,7 +110,90 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
   return address;
 }
 
-[[nodiscard]] auto open_connection(const std::string& path) noexcept -> int {
+constexpr std::string_view development_build_id_extension = ".build-id";
+constexpr std::size_t development_build_id_bytes = 64;
+
+[[nodiscard]] constexpr auto valid_development_build_id(const std::string_view value) noexcept
+    -> bool {
+  return value.size() == development_build_id_bytes &&
+         std::ranges::all_of(value, [](const char character) {
+           return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+         });
+}
+
+[[nodiscard]] auto development_build_id() noexcept -> std::optional<std::string_view> {
+  const char* const value = std::getenv("LEMMA_DEV_BUILD_ID");
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  const std::string_view build_id(value);
+  return valid_development_build_id(build_id) ? std::optional{build_id} : std::nullopt;
+}
+
+[[nodiscard]] auto development_build_id_path(const std::string& socket_path,
+                                             const std::span<char> output) noexcept -> bool {
+  if (socket_path.size() + development_build_id_extension.size() + 1U > output.size()) {
+    return false;
+  }
+  std::ranges::copy(socket_path, output.begin());
+  const auto suffix = output.subspan(socket_path.size());
+  std::ranges::copy(development_build_id_extension, suffix.begin());
+  suffix.subspan(development_build_id_extension.size(), 1).front() = '\0';
+  return true;
+}
+
+[[nodiscard]] auto read_file_exact(const int descriptor, const std::span<char> output) noexcept
+    -> bool {
+  std::size_t offset = 0;
+  while (offset < output.size()) {
+    const auto available = output.subspan(offset);
+    const auto result = ::read(descriptor, available.data(), available.size());
+    if (result > 0) {
+      offset += static_cast<std::size_t>(result);
+      continue;
+    }
+    if (result < 0 && errno == EINTR) {
+      continue;
+    }
+    return false;
+  }
+  std::array<char, 1> trailing{};
+  while (true) {
+    const auto result = ::read(descriptor, trailing.data(), trailing.size());
+    if (result < 0 && errno == EINTR) {
+      continue;
+    }
+    return result == 0;
+  }
+}
+
+[[nodiscard]] auto development_build_matches(const std::string& path) noexcept -> bool {
+  const char* const configured = std::getenv("LEMMA_DEV_BUILD_ID");
+  if (configured == nullptr) {
+    return true;
+  }
+  const auto expected = development_build_id();
+  std::array<char, 256> marker_path{};
+  if (!expected.has_value() || !development_build_id_path(path, marker_path)) {
+    return false;
+  }
+  // open is variadic even when no creation mode argument is present.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  int descriptor = ::open(marker_path.data(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (descriptor < 0) {
+    return false;
+  }
+  struct stat details{};
+  std::array<char, development_build_id_bytes> recorded{};
+  const bool regular = ::fstat(descriptor, &details) == 0 && S_ISREG(details.st_mode) &&
+                       details.st_uid == ::getuid();
+  const bool matches =
+      regular && read_file_exact(descriptor, recorded) && std::ranges::equal(recorded, *expected);
+  close_descriptor(descriptor);
+  return matches;
+}
+
+[[nodiscard]] auto open_connection_unchecked(const std::string& path) noexcept -> int {
   int connection = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (connection < 0) {
     return -1;
@@ -127,6 +211,10 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
     return -1;
   }
   return connection;
+}
+
+[[nodiscard]] auto open_connection(const std::string& path) noexcept -> int {
+  return development_build_matches(path) ? open_connection_unchecked(path) : -1;
 }
 
 [[nodiscard]] auto acquire_server_lock(const std::string& path, int& lock_descriptor) noexcept
@@ -156,7 +244,7 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
   if (!S_ISSOCK(existing.st_mode) || existing.st_uid != ::getuid()) {
     return false;
   }
-  int existing_server = open_connection(path);
+  int existing_server = open_connection_unchecked(path);
   if (existing_server >= 0) {
     close_descriptor(existing_server);
     return false;
@@ -164,7 +252,48 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
   return ::unlink(path.c_str()) == 0;
 }
 
-[[nodiscard]] auto create_listener(const std::string& path, int& lock_descriptor) noexcept -> int {
+[[nodiscard]] auto publish_development_build_id(const std::string& path,
+                                                std::array<char, 256>& marker_path) noexcept
+    -> bool {
+  const char* const configured = std::getenv("LEMMA_DEV_BUILD_ID");
+  if (configured == nullptr) {
+    return true;
+  }
+  const auto build_id = development_build_id();
+  if (!build_id.has_value() || !development_build_id_path(path, marker_path)) {
+    return false;
+  }
+
+  std::array<char, 272> temporary_path{};
+  constexpr std::string_view extension = ".tmp";
+  const std::string_view marker(marker_path.data());
+  if (marker.size() + extension.size() + 1U > temporary_path.size()) {
+    return false;
+  }
+  std::ranges::copy(marker, temporary_path.begin());
+  const auto suffix = std::span(temporary_path).subspan(marker.size());
+  std::ranges::copy(extension, suffix.begin());
+  suffix.subspan(extension.size(), 1).front() = '\0';
+
+  // open is variadic because O_CREAT requires a file mode.
+  int descriptor =
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+      ::open(temporary_path.data(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (descriptor < 0) {
+    return false;
+  }
+  const bool written =
+      write_all(descriptor, std::as_bytes(std::span(build_id->data(), build_id->size())));
+  close_descriptor(descriptor);
+  if (!written || ::rename(temporary_path.data(), marker_path.data()) != 0) {
+    static_cast<void>(::unlink(temporary_path.data()));
+    return false;
+  }
+  return true;
+}
+
+[[nodiscard]] auto create_listener(const std::string& path, int& lock_descriptor,
+                                   std::array<char, 256>& marker_path) noexcept -> int {
   if (!acquire_server_lock(path, lock_descriptor) || !remove_stale_socket(path)) {
     return -1;
   }
@@ -184,9 +313,13 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
     close_descriptor(listener);
     return -1;
   }
-  if (::chmod(path.c_str(), 0600) != 0 || ::listen(listener, 16) != 0) {
+  if (::chmod(path.c_str(), 0600) != 0 || !publish_development_build_id(path, marker_path) ||
+      ::listen(listener, 16) != 0) {
     close_descriptor(listener);
     static_cast<void>(::unlink(path.c_str()));
+    if (marker_path.front() != '\0') {
+      static_cast<void>(::unlink(marker_path.data()));
+    }
     return -1;
   }
   return listener;
@@ -196,12 +329,16 @@ struct OwnedEndpoint final {
   const char* path;
   int listener;
   int server_lock;
+  std::array<char, 256> development_build_id_path;
 };
 
 void release_owned_endpoint(void* const context) noexcept {
   auto& endpoint = *static_cast<OwnedEndpoint*>(context);
   close_descriptor(endpoint.listener);
   static_cast<void>(::unlink(endpoint.path));
+  if (endpoint.development_build_id_path.front() != '\0') {
+    static_cast<void>(::unlink(endpoint.development_build_id_path.data()));
+  }
   close_descriptor(endpoint.server_lock);
 }
 
@@ -217,7 +354,8 @@ void release_owned_endpoint(void* const context) noexcept {
   child_exit_pending = 0;
   const auto previous_mask = ::umask(0077);
   int server_lock = -1;
-  int listener = create_listener(path, server_lock);
+  std::array<char, 256> development_marker{};
+  int listener = create_listener(path, server_lock, development_marker);
   static_cast<void>(::umask(previous_mask));
   if (listener < 0) {
     close_descriptor(server_lock);
@@ -227,6 +365,7 @@ void release_owned_endpoint(void* const context) noexcept {
       .path = path.c_str(),
       .listener = listener,
       .server_lock = server_lock,
+      .development_build_id_path = development_marker,
   };
   return core::run_server(listener, &release_owned_endpoint, &endpoint, options.stop_requested,
                           &reap_child, nullptr);
@@ -290,8 +429,84 @@ void redirect_standard_descriptors() noexcept {
   return false;
 }
 
+[[nodiscard]] auto endpoint_lock_available(const std::string& path) noexcept -> bool {
+  int descriptor = -1;
+  const bool available = acquire_server_lock(path, descriptor);
+  close_descriptor(descriptor);
+  return available;
+}
+
+enum class DevelopmentServerProbeStatus : std::uint8_t {
+  matching,
+  absent,
+  stale,
+  timed_out,
+};
+
+struct DevelopmentServerProbe final {
+  DevelopmentServerProbeStatus status{DevelopmentServerProbeStatus::timed_out};
+  int connection{-1};
+};
+
+[[nodiscard]] auto probe_development_server(const std::string& path) noexcept
+    -> DevelopmentServerProbe {
+  for (std::size_t attempt = 0; attempt < 200; ++attempt) {
+    if (development_build_matches(path)) {
+      return {.status = DevelopmentServerProbeStatus::matching};
+    }
+    int connection = open_connection_unchecked(path);
+    if (connection >= 0) {
+      return {.status = DevelopmentServerProbeStatus::stale, .connection = connection};
+    }
+    if (endpoint_lock_available(path)) {
+      return {.status = DevelopmentServerProbeStatus::absent};
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return {};
+}
+
+[[nodiscard]] auto wait_for_endpoint_release(const std::string& path) noexcept -> bool {
+  for (std::size_t attempt = 0; attempt < 200; ++attempt) {
+    int connection = open_connection_unchecked(path);
+    if (connection >= 0) {
+      close_descriptor(connection);
+    } else if (endpoint_lock_available(path)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+[[nodiscard]] auto stop_stale_development_server(const std::string& path) noexcept -> bool {
+  const char* const configured = std::getenv("LEMMA_DEV_BUILD_ID");
+  if (configured == nullptr || !valid_development_build_id(configured)) {
+    return configured == nullptr;
+  }
+  auto probe = probe_development_server(path);
+  if (probe.status == DevelopmentServerProbeStatus::matching ||
+      probe.status == DevelopmentServerProbeStatus::absent) {
+    return true;
+  }
+  if (probe.status != DevelopmentServerProbeStatus::stale) {
+    return false;
+  }
+  const std::array command{protocol::wire_byte(protocol::ControlCommand::shutdown)};
+  std::array<std::byte, protocol::shutdown_response.size()> response{};
+  const bool stopped =
+      send_all(probe.connection, command) && read_exact(probe.connection, response);
+  close_descriptor(probe.connection);
+  const auto expected = std::as_bytes(
+      std::span(protocol::shutdown_response.data(), protocol::shutdown_response.size()));
+  return stopped && std::ranges::equal(response, expected) && wait_for_endpoint_release(path);
+}
+
 [[nodiscard]] auto ensure_server(const std::string& path) noexcept -> bool {
-  return server_available(path) || launch_server(path);
+  if (server_available(path)) {
+    return true;
+  }
+  return stop_stale_development_server(path) && launch_server(path);
 }
 
 [[nodiscard]] auto send_session_request(const int connection,
@@ -857,6 +1072,21 @@ template <typename Id>
 }
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint {
+  const char* const development_runtime = std::getenv("LEMMA_DEV_RUNTIME_DIR");
+  if (development_runtime != nullptr) {
+    const std::string_view directory(development_runtime);
+    const char* const configured_build = std::getenv("LEMMA_DEV_BUILD_ID");
+    if (directory.empty() || directory.front() != '/' || directory.contains('\0') ||
+        configured_build == nullptr || !valid_development_build_id(configured_build)) {
+      std::abort();
+    }
+    auto endpoint = RuntimeEndpoint::create(std::string(directory) + "/daemon.sock");
+    if (!endpoint.has_value()) {
+      std::abort();
+    }
+    return std::move(*endpoint);
+  }
+
   auto endpoint = RuntimeEndpoint::create("/tmp/lemma-" + std::to_string(::getuid()) + ".sock");
   // The fixed production path is absolute and well below sockaddr_un::sun_path on supported hosts.
   if (!endpoint.has_value()) {

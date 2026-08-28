@@ -23,6 +23,18 @@
       }
     },
     {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Development",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Dev",
+        "CMAKE_C_FLAGS_DEV": "-O1 -g -fno-omit-frame-pointer -UNDEBUG",
+        "CMAKE_CXX_FLAGS_DEV": "-O1 -g -fno-omit-frame-pointer -UNDEBUG",
+        "CMAKE_MAP_IMPORTED_CONFIG_DEV": "Release",
+        "LEMMA_VALIDATE_GHOSTTY_EVERY_BUILD": "OFF"
+      }
+    },
+    {
       "name": "debug",
       "inherits": "base",
       "displayName": "Debug",
@@ -52,6 +64,13 @@
   ],
   "buildPresets": [
     {
+      "name": "dev",
+      "configurePreset": "dev",
+      "targets": [
+        "lemma"
+      ]
+    },
+    {
       "name": "debug",
       "configurePreset": "debug"
     },
@@ -65,6 +84,13 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
     {
       "name": "debug",
       "configurePreset": "debug",

@@ -980,6 +980,48 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   return 0;
 }
 
+// The branches are the explicit bounded states of the logical-key peer.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_logical_keys() noexcept -> int {
+  if (!enter_raw_input() || !write_all("__READY__")) {
+    return 1;
+  }
+  std::array<char, 2> input{};
+  std::size_t offset = 0;
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (offset < input.size() && std::chrono::steady_clock::now() < deadline) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 10);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled <= 0) {
+      continue;
+    }
+    auto available = std::span(input).subspan(offset);
+    const auto count = ::read(STDIN_FILENO, available.data(), available.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      return 1;
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+  constexpr std::array expected{'A', '\x01'};
+  const bool matched = offset == input.size() && std::ranges::equal(input, expected);
+  if (!write_all(matched ? "\r\n__BYTES_4101__\r\n" : "\r\n__BYTES_FAILED__\r\n")) {
+    return 1;
+  }
+  linger_for_render();
+  return matched ? 0 : 1;
+}
+
+[[nodiscard]] auto run_delayed_exit() noexcept -> int {
+  std::this_thread::sleep_for(250ms);
+  return 4;
+}
+
 // The branches are the explicit bounded states of the quiescent peer.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_idle() noexcept -> int {
@@ -1039,6 +1081,14 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "logical-keys") {
+    return run_logical_keys();
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "delayed-exit") {
+    return run_delayed_exit();
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "idle") {
     return run_idle();

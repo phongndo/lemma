@@ -32,9 +32,11 @@ namespace {
 TEST(PlatformPtyTest, LaunchWorkingDirectoryOverridesStalePwdEnvironment) {
   std::string environment{"PWD=/stale"};
   environment.push_back('\0');
-  std::string command{"/usr/bin/printenv"};
+  std::string command{"/bin/sh"};
   command.push_back('\0');
-  command += "PWD";
+  command += "-c";
+  command.push_back('\0');
+  command += "pwd";
   command.push_back('\0');
   int descriptor = -1;
 
@@ -90,7 +92,7 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
     }
     // execl is variadic and requires a null argument sentinel.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-    ::execl("/bin/sleep", "sleep", "5", static_cast<char*>(nullptr));
+    ::execl("/bin/sh", "sh", "-c", "read line", static_cast<char*>(nullptr));
     ::_exit(127);
   }
 
@@ -99,7 +101,7 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
   std::size_t size = 0;
   for (std::size_t attempt = 0; attempt < 100; ++attempt) {
     size = foreground_process_name(descriptors.front(), name);
-    if (std::string_view(name.data(), size) == "sleep") {
+    if (std::string_view(name.data(), size) == "sh") {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -110,7 +112,7 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
   static_cast<void>(::close(descriptors.front()));
 
   ASSERT_GT(size, 0U);
-  EXPECT_EQ(std::string_view(name.data(), size), "sleep");
+  EXPECT_EQ(std::string_view(name.data(), size), "sh");
 }
 
 } // namespace

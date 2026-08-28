@@ -33,7 +33,7 @@
 #include <cerrno>
 #include <charconv>
 #include <chrono>
-#include <csignal>
+#include <csignal> // IWYU pragma: keep -- owns SIGHUP on POSIX Clang
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

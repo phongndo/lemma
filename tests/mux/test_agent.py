@@ -135,11 +135,6 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(conflict["status"], "conflict")
 
     def test_atomic_logical_keys_preserve_order_and_modifier_semantics(self) -> None:
-        script = (
-            "stty -echo -icanon min 1 time 0; printf '__READY__'; "
-            "code=$(dd bs=1 count=2 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
-            "stty sane; printf '__BYTES_%s__\\n' \"$code\""
-        )
         status, started = self.json_command(
             "action",
             "session",
@@ -147,9 +142,8 @@ class AgentInterfaceMuxTest(unittest.TestCase):
             "logical-key",
             "--hold",
             "--",
-            "/bin/sh",
-            "-c",
-            script,
+            str(self.server.peer_path),
+            "logical-keys",
         )
         self.assertEqual(status, 0, started)
         status, ready = self.json_command(
@@ -497,9 +491,8 @@ class AgentInterfaceMuxTest(unittest.TestCase):
             "start",
             "wait-close",
             "--",
-            "/bin/sh",
-            "-c",
-            "sleep .1; exit 4",
+            str(self.server.peer_path),
+            "delayed-exit",
         )
         self.assertEqual(status, 0, started)
         status, closed = self.json_command(

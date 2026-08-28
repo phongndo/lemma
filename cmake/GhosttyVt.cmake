@@ -16,6 +16,14 @@ function(lemma_add_pinned_ghostty)
     LEMMA_GHOSTTY_ZIG_SYSTEM_DIR ""
     CACHE PATH "Offline Zig dependency directory"
   )
+  set(
+    LEMMA_GHOSTTY_ZIG_LIBC ""
+    CACHE FILEPATH "Zig libc installation description for sandboxed native builds"
+  )
+  set(
+    LEMMA_GHOSTTY_ZIG_TARGET ""
+    CACHE STRING "Explicit Zig target for sandboxed packaged builds"
+  )
   set(source_dir "${LEMMA_GHOSTTY_SOURCE_DIR}")
 
   if(NOT EXISTS "${pin_file}")
@@ -56,6 +64,14 @@ function(lemma_add_pinned_ghostty)
   set(zig_system_args)
   if(LEMMA_GHOSTTY_ZIG_SYSTEM_DIR)
     list(APPEND zig_system_args --system "${LEMMA_GHOSTTY_ZIG_SYSTEM_DIR}")
+  endif()
+  set(zig_libc_args)
+  if(LEMMA_GHOSTTY_ZIG_LIBC)
+    list(APPEND zig_libc_args --libc "${LEMMA_GHOSTTY_ZIG_LIBC}")
+  endif()
+  set(zig_target_args)
+  if(LEMMA_GHOSTTY_ZIG_TARGET)
+    list(APPEND zig_target_args "-Dtarget=${LEMMA_GHOSTTY_ZIG_TARGET}")
   endif()
   execute_process(
     COMMAND "${ZIG_EXECUTABLE}" version
@@ -138,12 +154,14 @@ function(lemma_add_pinned_ghostty)
     COMMAND
       "${ZIG_EXECUTABLE}" build
       ${zig_system_args}
+      ${zig_libc_args}
       --prefix "${prefix}"
       --cache-dir "${local_cache}"
       --global-cache-dir "${global_cache}"
       -Demit-lib-vt=true
       -Demit-xcframework=${xcframework_flag}
       -Dsimd=${simd_flag}
+      ${zig_target_args}
       -Doptimize=${optimize}
     WORKING_DIRECTORY "${source_dir}"
     DEPENDS
@@ -156,7 +174,9 @@ function(lemma_add_pinned_ghostty)
     USES_TERMINAL
   )
   add_custom_target(lemma_ghostty_vt_build DEPENDS "${static_library}")
-  add_dependencies(lemma_ghostty_vt_build lemma_ghostty_vt_validate)
+  if(LEMMA_VALIDATE_GHOSTTY_EVERY_BUILD)
+    add_dependencies(lemma_ghostty_vt_build lemma_ghostty_vt_validate)
+  endif()
   # Preserve the target name used by analysis scripts and existing embedders.
   add_custom_target(zig_build_lib_vt)
   add_dependencies(zig_build_lib_vt lemma_ghostty_vt_build)
@@ -166,6 +186,7 @@ function(lemma_add_pinned_ghostty)
     ghostty-vt-static
     PROPERTIES
       IMPORTED_LOCATION "${static_library}"
+      IMPORTED_LOCATION_RELEASE "${static_library}"
       INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
       INTERFACE_COMPILE_DEFINITIONS
         "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_VERSION=\"${expected_version}\";LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition}"
