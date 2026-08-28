@@ -9,13 +9,29 @@ The supported development environment is Nix:
 
 ```sh
 nix develop
-just build
 just run
+just run pane split --right
+
+# Equivalent convenience command inside the development shell:
+lemma
+lemma pane split --right
 ```
 
-`just build` and `just run` use the release profile. Use `just profile=debug build` and
-`just profile=debug run` for a debug build. Debug and release binaries share the same per-user
-daemon endpoint; run `just kill` before switching profiles.
+`just run [args...]` is the canonical development entry point. The development shell's `lemma`
+command delegates to the same runner: both configure only when required, incrementally build only
+the `lemma` target, and execute `build/dev/lemma` from the current checkout with unchanged
+arguments. The `dev` profile uses optimization, debug symbols, enabled invariants, and frame
+pointers.
+
+Each checkout or git worktree receives a stable private development runtime namespace. Rebuilding
+the binary automatically replaces an older daemon in that namespace, so development commands do
+not connect to an installed Lemma daemon or to another worktree. Release builds remain explicit for
+packaging and production behavior:
+
+```sh
+nix build .#lemma
+nix run .#lemma
+```
 
 The Nix shell supplies the pinned Ghostty source. A non-Nix build must initialize it first:
 

@@ -1,6 +1,9 @@
+set positional-arguments
+
 nix := ""
-profile := "release"
-build_type := if profile == "release" { "Release" } else { "Debug" }
+profile := "debug"
+build_type := if profile == "release" { "Release" } else if profile == "dev" { "Dev" } else { "Debug" }
+conan_build_type := if profile == "dev" { "Release" } else { build_type }
 cpp_files := "apps include src tests benchmarks fuzz"
 python_paths := "bench benchmarks scripts test tests tools conanfile.py"
 ghostty_cmake := if env_var_or_default("LEMMA_GHOSTTY_SOURCE_DIR", "") != "" { "-DLEMMA_GHOSTTY_SOURCE_DIR=" + env_var("LEMMA_GHOSTTY_SOURCE_DIR") + " -DLEMMA_GHOSTTY_NIX_SOURCE_REV=" + env_var_or_default("LEMMA_GHOSTTY_NIX_SOURCE_REV", "") + " -DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=" + env_var_or_default("LEMMA_GHOSTTY_ZIG_SYSTEM_DIR", "") } else { "" }
@@ -34,8 +37,9 @@ deps:
     rm -f CMakeUserPresets.json
     {{ nix }} conan install . \
         --output-folder=build/{{ profile }}/conan \
+        --lockfile=conan.lock \
         --profile:all=conan/profiles/llvm \
-        --settings=build_type={{ build_type }} \
+        --settings=build_type={{ conan_build_type }} \
         --conf=tools.cmake.cmaketoolchain:user_presets= \
         --build=missing
 
@@ -51,13 +55,9 @@ configure: deps
 build: configure
     {{ nix }} cmake --build --preset {{ profile }}
 
-# Run the application.
-run: build
-    {{ nix }} ./build/{{ profile }}/lemma
-
-# Stop the running daemon.
-kill:
-    {{ nix }} python3 tools/lemma_shutdown.py
+# Incrementally build and run the isolated current-checkout development application.
+run *args:
+    @exec ./scripts/dev-run "$@"
 
 # Run the scripted libghostty-vt demo without adding a production CLI command.
 demo: build
@@ -67,9 +67,9 @@ demo: build
 test:
     {{ nix }} LEMMA_TEST_PROFILE={{ profile }} ./test
 
-# Run the short native benchmark smoke (use ./bench <domain> for filtering).
+# Run the short Release native benchmark smoke (use ./bench <domain> for filtering).
 bench:
-    {{ nix }} LEMMA_BENCH_PROFILE={{ profile }} ./bench
+    {{ nix }} LEMMA_BENCH_PROFILE=release ./bench
 
 # Run release native and direct/Lemma/tmux/Zellij/Herdr process baselines.
 mux-bench:

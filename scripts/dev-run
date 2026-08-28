@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Build and execute the current checkout's isolated development Lemma."""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import os
+import socket
+import stat
+import subprocess
+import sys
+import time
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PROFILE = "dev"
+CONFIGURE_CONTRACT = "lemma-dev-configure-v1"
+CONFIGURE_INPUTS = (
+    "CMakePresets.json",
+    "conan.lock",
+    "conanfile.py",
+    "conan/profiles/llvm",
+    "scripts/ci/configure",
+)
+CONFIGURE_ENVIRONMENT = (
+    "CC",
+    "CXX",
+    "LEMMA_GHOSTTY_SOURCE_DIR",
+    "LEMMA_GHOSTTY_NIX_SOURCE_REV",
+    "LEMMA_GHOSTTY_ZIG_SYSTEM_DIR",
+)
+
+
+def worktree_id(root: Path) -> str:
+    canonical = os.fsencode(str(root.resolve()))
+    return hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def runtime_directory(root: Path, user_id: int | None = None) -> Path:
+    uid = os.getuid() if user_id is None else user_id
+    return Path("/tmp") / f"lemma-dev-{uid}-{worktree_id(root)}"
+
+
+def ensure_private_directory(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    details = path.lstat()
+    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
+        raise RuntimeError(f"development runtime path is not a directory: {path}")
+    if details.st_uid != os.getuid():
+        raise RuntimeError(f"development runtime path is owned by another user: {path}")
+    if stat.S_IMODE(details.st_mode) != 0o700:
+        path.chmod(0o700)
+
+
+def configuration_fingerprint(root: Path, environment: Mapping[str, str]) -> str:
+    digest = hashlib.sha256()
+    digest.update(CONFIGURE_CONTRACT.encode())
+    for relative in CONFIGURE_INPUTS:
+        path = root / relative
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    for name in CONFIGURE_ENVIRONMENT:
+        digest.update(name.encode())
+        digest.update(b"=")
+        digest.update(environment.get(name, "").encode())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def cache_is_development(cache: Path, root: Path) -> bool:
+    try:
+        configured = cache.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    required = (
+        "CMAKE_BUILD_TYPE:STRING=Dev",
+        "LEMMA_BUILD_TESTS:BOOL=OFF",
+        "LEMMA_BUILD_BENCHMARKS:BOOL=OFF",
+        "LEMMA_VALIDATE_GHOSTTY_EVERY_BUILD:BOOL=OFF",
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={root.resolve()}",
+    )
+    return all(value in configured for value in required)
+
+
+def configuration_is_current(build: Path, root: Path, fingerprint: str) -> bool:
+    try:
+        recorded = (build / ".lemma-configure-signature").read_text(encoding="ascii")
+    except OSError:
+        return False
+    return (
+        (build / "build.ninja").is_file()
+        and (build / "conan" / "conan_toolchain.cmake").is_file()
+        and cache_is_development(build / "CMakeCache.txt", root)
+        and recorded.strip() == fingerprint
+    )
+
+
+def write_signature(build: Path, fingerprint: str) -> None:
+    temporary = build / f".lemma-configure-signature.{os.getpid()}"
+    temporary.write_text(f"{fingerprint}\n", encoding="ascii")
+    temporary.replace(build / ".lemma-configure-signature")
+
+
+def run_checked(
+    arguments: Sequence[str], root: Path, environment: Mapping[str, str]
+) -> None:
+    subprocess.run(arguments, cwd=root, env=environment, check=True)
+
+
+def binary_build_id(binary: Path) -> str:
+    digest = hashlib.sha256()
+    with binary.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def socket_is_live(path: Path, timeout: float = 0.2) -> bool:
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(timeout)
+    try:
+        peer.connect(str(path))
+    except OSError:
+        return False
+    finally:
+        peer.close()
+    return True
+
+
+def daemon_lock_is_released(runtime: Path) -> bool:
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(runtime / "daemon.sock.lock", flags, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+    finally:
+        os.close(descriptor)
+
+
+def recorded_daemon_build(runtime: Path) -> str | None:
+    try:
+        value = (runtime / "daemon.sock.build-id").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        return None
+    value = value.strip()
+    return (
+        value
+        if len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+        else None
+    )
+
+
+def stop_stale_daemon(runtime: Path, build_id: str) -> None:
+    socket_path = runtime / "daemon.sock"
+    if not socket_is_live(socket_path):
+        return
+    if recorded_daemon_build(runtime) == build_id:
+        return
+
+    print("restarting stale development lemma daemon", file=sys.stderr, flush=True)
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(2.0)
+    try:
+        peer.connect(str(socket_path))
+        peer.sendall(b"S")
+        while peer.recv(4096):
+            pass
+    except OSError as error:
+        raise RuntimeError("failed to stop stale development lemma daemon") from error
+    finally:
+        peer.close()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not socket_is_live(socket_path) and daemon_lock_is_released(runtime):
+            return
+        time.sleep(0.01)
+    raise RuntimeError("stale development lemma daemon did not stop")
+
+
+def prepare(
+    root: Path, arguments: Sequence[str], environment: Mapping[str, str]
+) -> tuple[Path, list[str], dict[str, str]]:
+    build = root / "build" / PROFILE
+    runtime = runtime_directory(root)
+    ensure_private_directory(runtime)
+
+    lock_flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        lock_flags |= os.O_NOFOLLOW
+    lock_descriptor = os.open(runtime / "runner.lock", lock_flags, 0o600)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        fingerprint = configuration_fingerprint(root, environment)
+        if not configuration_is_current(build, root, fingerprint):
+            run_checked(
+                [
+                    str(root / "scripts" / "ci" / "configure"),
+                    PROFILE,
+                    "-DLEMMA_BUILD_TESTS=OFF",
+                    "-DLEMMA_BUILD_BENCHMARKS=OFF",
+                ],
+                root,
+                environment,
+            )
+            write_signature(build, fingerprint)
+
+        run_checked(
+            ["cmake", "--build", str(build), "--target", "lemma"],
+            root,
+            environment,
+        )
+        binary = build / "lemma"
+        if not binary.is_file():
+            raise RuntimeError(f"development build did not produce {binary}")
+        build_id = binary_build_id(binary)
+        stop_stale_daemon(runtime, build_id)
+    finally:
+        os.close(lock_descriptor)
+
+    execution_environment = dict(environment)
+    execution_environment["LEMMA_DEV_RUNTIME_DIR"] = str(runtime)
+    execution_environment["LEMMA_DEV_BUILD_ID"] = build_id
+    execution_arguments = [str(binary), *arguments]
+    return binary, execution_arguments, execution_environment
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
+    forwarded = list(sys.argv[1:] if arguments is None else arguments)
+    try:
+        binary, execution_arguments, environment = prepare(ROOT, forwarded, os.environ)
+        os.execve(binary, execution_arguments, environment)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"lemma development runner: {error}", file=sys.stderr)
+        return 1
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

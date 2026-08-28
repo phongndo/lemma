@@ -15,6 +15,7 @@ option(LEMMA_BUILD_TESTS "Build the test suite" ON)
 option(LEMMA_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(LEMMA_BUILD_FUZZERS "Build sanitizer-backed parser fuzz targets" OFF)
 option(LEMMA_ENABLE_LATENCY_TRACE "Compile the opt-in key-to-visible diagnostic trace" OFF)
+option(LEMMA_VALIDATE_GHOSTTY_EVERY_BUILD "Revalidate the Ghostty checkout on every build" ON)
 
 if(LEMMA_ENABLE_LATENCY_TRACE)
   add_compile_definitions(LEMMA_ENABLE_LATENCY_TRACE=1)
@@ -57,6 +58,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     lemma_warnings
     INTERFACE -Wno-unused-command-line-argument
   )
+  # Ghostty's Zig-produced archive contains assembly objects without GNU-stack notes. Make the
+  # intended non-executable stack explicit instead of relying on the linker's deprecated fallback.
+  add_link_options("LINKER:-z,noexecstack")
 endif()
 
 # libghostty-vt remains pinned, private, and built without generated output in the submodule.

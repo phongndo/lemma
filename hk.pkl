@@ -38,6 +38,7 @@ local pythonImpact = List(
   "bench",
   "benchmarks/**/*.py",
   "scripts/**/*.py",
+  "scripts/dev-run",
   "test",
   "tests/**/*.py",
   "tools/**/*.py",
