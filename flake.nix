@@ -312,6 +312,15 @@
             }
           );
 
+          # Platform validation needs project tools only. Keep formatting-only hk out so ephemeral
+          # runners never rebuild its Rust dependency graph from crates.io.
+          platform = pkgs.mkShell (
+            shellEnvironment
+            // {
+              packages = projectPackages;
+            }
+          );
+
           # tmux and Zellij are benchmark subjects, not general development tools.
           benchmarks = pkgs.mkShell (
             shellEnvironment

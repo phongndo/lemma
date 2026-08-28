@@ -864,6 +864,12 @@
         "workload": "blocked_pty",
         "classification": "subject_input_loss_under_backpressure",
         "error_contains": "__LEMMA_PTY_FAILED__"
+      },
+      {
+        "subject": "herdr",
+        "workload": "blocked_pty",
+        "classification": "subject_input_stall_under_backpressure",
+        "error_contains": "PTY write timed out"
       }
     ]
   },

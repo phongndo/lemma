@@ -57,7 +57,7 @@ jobs:
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
       - name: Build and test platform
-        run: nix develop --command scripts/ci/platform
+        run: nix develop .#platform --command scripts/ci/platform
 
       - name: Run deterministic mux seed campaign
         if: matrix.system == 'x86_64-linux'
