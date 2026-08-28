@@ -189,6 +189,12 @@ class BenchmarkManifestTest(unittest.TestCase):
             "blocked_pty",
             "peer emitted __LEMMA_PTY_FAILED__ after input loss",
         )
+        reviewed_stall = expected_failure(
+            manifest,
+            "herdr",
+            "blocked_pty",
+            "PTY write timed out after 1167360/1902592 bytes",
+        )
         unreviewed = expected_failure(
             manifest,
             "herdr",
@@ -199,6 +205,10 @@ class BenchmarkManifestTest(unittest.TestCase):
         self.assertEqual(
             reviewed["classification"] if reviewed is not None else None,
             "subject_input_loss_under_backpressure",
+        )
+        self.assertEqual(
+            reviewed_stall["classification"] if reviewed_stall is not None else None,
+            "subject_input_stall_under_backpressure",
         )
         self.assertIsNone(unreviewed)
 

@@ -147,7 +147,7 @@ def validate_manifest(manifest: Any) -> None:
     expected_failures = comparison_policy.get("expected_failures")
     if not isinstance(expected_failures, list):
         raise ManifestError("comparison_policy.expected_failures must be an array")
-    failure_pairs: list[tuple[str, str]] = []
+    failure_signatures: list[tuple[str, str, str]] = []
     workload_subjects = {
         workload["id"]: set(workload["subjects"]) for workload in workloads
     }
@@ -158,15 +158,17 @@ def validate_manifest(manifest: Any) -> None:
         subject = _nonempty_string(failure.get("subject"), f"{label}.subject")
         workload = _nonempty_string(failure.get("workload"), f"{label}.workload")
         _nonempty_string(failure.get("classification"), f"{label}.classification")
-        _nonempty_string(failure.get("error_contains"), f"{label}.error_contains")
+        error_contains = _nonempty_string(
+            failure.get("error_contains"), f"{label}.error_contains"
+        )
         if subject not in SUBJECTS or workload not in workload_subjects:
             raise ManifestError(f"{label} identifies an unknown subject or workload")
         if subject not in workload_subjects[workload]:
             raise ManifestError(f"{label} identifies an unsupported workload")
-        failure_pairs.append((subject, workload))
-    if len(failure_pairs) != len(set(failure_pairs)):
+        failure_signatures.append((subject, workload, error_contains))
+    if len(failure_signatures) != len(set(failure_signatures)):
         raise ManifestError(
-            "comparison_policy.expected_failures contains duplicate pairs"
+            "comparison_policy.expected_failures contains duplicate signatures"
         )
 
     budgets = manifest.get("regression_budgets")
