@@ -195,6 +195,12 @@ class BenchmarkManifestTest(unittest.TestCase):
             "blocked_pty",
             "PTY write timed out after 1167360/1902592 bytes",
         )
+        reviewed_disconnect = expected_failure(
+            manifest,
+            "herdr",
+            "blocked_pty",
+            "Received empty unknown from server",
+        )
         unreviewed = expected_failure(
             manifest,
             "herdr",
@@ -209,6 +215,12 @@ class BenchmarkManifestTest(unittest.TestCase):
         self.assertEqual(
             reviewed_stall["classification"] if reviewed_stall is not None else None,
             "subject_input_stall_under_backpressure",
+        )
+        self.assertEqual(
+            reviewed_disconnect["classification"]
+            if reviewed_disconnect is not None
+            else None,
+            "subject_backpressure_disconnect",
         )
         self.assertIsNone(unreviewed)
 

@@ -90,9 +90,9 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
     if (descriptors.back() > STDERR_FILENO) {
       static_cast<void>(::close(descriptors.back()));
     }
-    // execl is variadic and requires a null argument sentinel.
+    // execlp is variadic and requires a null argument sentinel.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-    ::execl("/bin/sh", "sh", "-c", "read line", static_cast<char*>(nullptr));
+    ::execlp("sleep", "sleep", "5", static_cast<char*>(nullptr));
     ::_exit(127);
   }
 
@@ -101,7 +101,7 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
   std::size_t size = 0;
   for (std::size_t attempt = 0; attempt < 100; ++attempt) {
     size = foreground_process_name(descriptors.front(), name);
-    if (std::string_view(name.data(), size) == "sh") {
+    if (std::string_view(name.data(), size) == "sleep") {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -112,7 +112,7 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
   static_cast<void>(::close(descriptors.front()));
 
   ASSERT_GT(size, 0U);
-  EXPECT_EQ(std::string_view(name.data(), size), "sh");
+  EXPECT_EQ(std::string_view(name.data(), size), "sleep");
 }
 
 } // namespace

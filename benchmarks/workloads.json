@@ -870,6 +870,12 @@
         "workload": "blocked_pty",
         "classification": "subject_input_stall_under_backpressure",
         "error_contains": "PTY write timed out"
+      },
+      {
+        "subject": "herdr",
+        "workload": "blocked_pty",
+        "classification": "subject_backpressure_disconnect",
+        "error_contains": "Received empty unknown from server"
       }
     ]
   },
