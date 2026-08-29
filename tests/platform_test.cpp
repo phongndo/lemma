@@ -90,9 +90,15 @@ TEST(PlatformPtyTest, ReadsForegroundProcessName) {
     if (descriptors.back() > STDERR_FILENO) {
       static_cast<void>(::close(descriptors.back()));
     }
-    // execlp is variadic and requires a null argument sentinel.
+    // execl and execlp are variadic and require a null argument sentinel.
+    // macOS reports the Nix coreutils multicall binary as "coreutils", so use its native sleep.
+#ifdef __APPLE__
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    ::execl("/bin/sleep", "sleep", "5", static_cast<char*>(nullptr));
+#else
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     ::execlp("sleep", "sleep", "5", static_cast<char*>(nullptr));
+#endif
     ::_exit(127);
   }
 

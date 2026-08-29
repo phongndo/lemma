@@ -129,7 +129,7 @@ def validate_process_report(
             )
             if reviewed is None:
                 raise ReportError(
-                    f"workload {identifier} has an unreviewed failure: {error}"
+                    f"{subject} workload {identifier} has an unreviewed failure: {error}"
                 )
             if (
                 result.get("failure_expected") is not True

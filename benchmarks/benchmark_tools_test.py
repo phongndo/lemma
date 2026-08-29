@@ -197,7 +197,7 @@ class BenchmarkManifestTest(unittest.TestCase):
         )
         reviewed_disconnect = expected_failure(
             manifest,
-            "herdr",
+            "zellij",
             "blocked_pty",
             "Received empty unknown from server",
         )

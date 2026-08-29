@@ -872,7 +872,7 @@
         "error_contains": "PTY write timed out"
       },
       {
-        "subject": "herdr",
+        "subject": "zellij",
         "workload": "blocked_pty",
         "classification": "subject_backpressure_disconnect",
         "error_contains": "Received empty unknown from server"
