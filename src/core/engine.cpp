@@ -6584,11 +6584,9 @@ void record_reaped_child(Sessions& sessions, PaneRuntimeStore& runtimes,
 }
 
 void reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
-                          const ReapChild reap_child, void* const context) noexcept {
-  if (reap_child == nullptr) {
-    return;
-  }
-  while (const auto exited = reap_child(context)) {
+                          const ChildReaper child_reaper) noexcept {
+  LEMMA_ASSERT(child_reaper.valid());
+  while (const auto exited = child_reaper.reap(child_reaper.context)) {
     record_reaped_child(sessions, runtimes, *exited);
   }
 }
@@ -10942,6 +10940,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
 }
 
 enum class DescriptorKind : std::uint8_t {
+  child_reaper,
   pane,
   client,
   pending,
@@ -10962,7 +10961,7 @@ struct DescriptorOwner final {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const release_context, const StopRequested stop_requested,
-                const ReapChild reap_child, void* const reap_child_context) noexcept -> int {
+                const ChildReaper child_reaper) noexcept -> int {
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
@@ -10977,10 +10976,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
   CapacityRejectionConnections capacity_rejections{};
-  if (!set_nonblocking(listener)) {
+  if (!child_reaper.valid() || !set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max = std::size_t{1} + limits::panes_hard_max +
+  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::sessions_hard_max) +
                                         limits::pending_connections_hard_max +
                                         capacity_rejection_connections_max;
@@ -11003,7 +11002,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    reap_exited_children(sessions, runtimes, reap_child, reap_child_context);
+    reap_exited_children(sessions, runtimes, child_reaper);
     const bool public_screen_work_pending = service_public_observers(
         pending_connections, sessions, runtimes, public_scratch, observer_cursor);
     for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
@@ -11012,8 +11011,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         close_pending(pending_connections, slot, sessions);
       }
     }
-    std::size_t descriptor_count = 1;
+    std::size_t descriptor_count = 2;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
+    std::span(descriptors).subspan(1, 1).front() = {
+        .fd = child_reaper.wake_descriptor, .events = POLLIN, .revents = 0};
+    std::span(owners).subspan(1, 1).front() = {.session = {},
+                                               .tab = {},
+                                               .pane = {},
+                                               .connection = {},
+                                               .auxiliary_slot = 0,
+                                               .kind = DescriptorKind::child_reaper};
     for (const auto& session : sessions) {
       if (session == nullptr || !session->active) {
         continue;
@@ -11108,6 +11115,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
       return 1;
     }
+    const auto child_reaper_events = std::span(descriptors).subspan(1, 1).front().revents;
+    if ((child_reaper_events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+      reap_exited_children(sessions, runtimes, child_reaper);
+    }
     expire_attached_client_frames(sessions, runtimes, std::chrono::steady_clock::now());
 
     // Drain every ready PTY before handling client input, then remove exited panes so input is
@@ -11116,12 +11127,12 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
         blocked_session_read_budgets{};
     blocked_session_read_budgets.fill(blocked_sink_pty_read_bytes_per_turn_max);
-    const auto ready_owner_count = descriptor_count - 1U;
+    const auto ready_owner_count = descriptor_count - 2U;
     if (ready_owner_count > 0) {
       pty_read_cursor %= ready_owner_count;
       std::size_t visited = 0;
       for (; visited < ready_owner_count && pty_read_budget > 0; ++visited) {
-        const auto index = 1U + ((pty_read_cursor + visited) % ready_owner_count);
+        const auto index = 2U + ((pty_read_cursor + visited) % ready_owner_count);
         const auto owner = std::span(owners).subspan(index, 1).front();
         if (owner.kind == DescriptorKind::pane) {
           auto* const session = sessions.get(owner.session);
@@ -11359,10 +11370,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
 
 [[nodiscard]] auto run_server(const int listener, const EndpointRelease release_endpoint,
                               void* const release_context, const StopRequested stop_requested,
-                              const ReapChild reap_child, void* const reap_child_context) noexcept
-    -> int {
-  return run_server_impl(listener, release_endpoint, release_context, stop_requested, reap_child,
-                         reap_child_context);
+                              const ChildReaper child_reaper) noexcept -> int {
+  return run_server_impl(listener, release_endpoint, release_context, stop_requested, child_reaper);
 }
 
 } // namespace lemma::core

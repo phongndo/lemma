@@ -611,6 +611,12 @@ class Pane:
         if before.panes <= 1:
             raise RuntimeError("use Session.destroy for the final pane")
         self.session.require_client().prefix("x")
+        # Retirement must wake child reaping on its own. Observing semantic state first would send
+        # unrelated control traffic that can hide a daemon blocked after recording SIGCHLD.
+        wait_for_process_exit(
+            self.process,
+            diagnostics=lambda: self.session.server.diagnostics(self.session.name),
+        )
         self.session.server.wait_for_state(
             self.session.name,
             lambda state: (
@@ -618,8 +624,4 @@ class Pane:
                 and self.id not in {pane.id for pane in state.pane_states}
             ),
             f"pane {self.id} to close without retargeting",
-        )
-        wait_for_process_exit(
-            self.process,
-            diagnostics=lambda: self.session.server.diagnostics(self.session.name),
         )

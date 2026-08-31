@@ -51,23 +51,96 @@ constexpr auto response_missing = protocol::wire_byte(protocol::ControlResponse:
 using platform::close_descriptor;
 using platform::read_exact;
 using platform::send_all;
+using platform::set_nonblocking;
 using platform::write_all;
 using platform::write_text;
 
 volatile sig_atomic_t child_exit_pending = 0;
+volatile sig_atomic_t child_exit_wakeup_descriptor = -1;
 
-void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
-  child_exit_pending = 1;
+[[nodiscard]] auto set_close_on_exec(const int descriptor) noexcept -> bool {
+  // fcntl is variadic because its final argument depends on the command.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const auto flags = ::fcntl(descriptor, F_GETFD, 0);
+  if (flags < 0) {
+    return false;
+  }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  return ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
-[[nodiscard]] auto reap_child([[maybe_unused]] void* const context) noexcept
-    -> std::optional<core::ChildExit> {
+class ChildExitReaper final {
+public:
+  ChildExitReaper() noexcept {
+    std::array<int, 2> created{};
+    if (::pipe(created.data()) != 0) {
+      return;
+    }
+    read_descriptor_ = created.front();
+    write_descriptor_ = created.back();
+    if (!set_nonblocking(read_descriptor_) || !set_nonblocking(write_descriptor_) ||
+        !set_close_on_exec(read_descriptor_) || !set_close_on_exec(write_descriptor_)) {
+      close_descriptor(read_descriptor_);
+      close_descriptor(write_descriptor_);
+    }
+  }
+
+  ChildExitReaper(const ChildExitReaper&) = delete;
+  auto operator=(const ChildExitReaper&) -> ChildExitReaper& = delete;
+  ChildExitReaper(ChildExitReaper&&) = delete;
+  auto operator=(ChildExitReaper&&) -> ChildExitReaper& = delete;
+
+  ~ChildExitReaper() {
+    close_descriptor(read_descriptor_);
+    close_descriptor(write_descriptor_);
+  }
+
+  [[nodiscard]] auto valid() const noexcept -> bool {
+    return read_descriptor_ >= 0 && write_descriptor_ >= 0;
+  }
+  [[nodiscard]] auto read_descriptor() const noexcept -> int { return read_descriptor_; }
+  [[nodiscard]] auto write_descriptor() const noexcept -> int { return write_descriptor_; }
+
+  void drain_wakeup() const noexcept {
+    std::array<std::byte, 64> bytes{};
+    while (true) {
+      const auto count = ::read(read_descriptor_, bytes.data(), bytes.size());
+      if (count > 0) {
+        continue;
+      }
+      if (count < 0 && errno == EINTR) {
+        continue;
+      }
+      return;
+    }
+  }
+
+private:
+  int read_descriptor_{-1};
+  int write_descriptor_{-1};
+};
+
+void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
+  const int preserved_errno = errno;
+  child_exit_pending = 1;
+  const auto descriptor = static_cast<int>(child_exit_wakeup_descriptor);
+  if (descriptor >= 0) {
+    constexpr std::byte wake{1};
+    while (::write(descriptor, &wake, sizeof(wake)) < 0 && errno == EINTR) {
+    }
+  }
+  errno = preserved_errno;
+}
+
+[[nodiscard]] auto reap_child(void* const context) noexcept -> std::optional<core::ChildExit> {
   if (child_exit_pending == 0) {
     return std::nullopt;
   }
-  // Clear before probing so a concurrent SIGCHLD publishes another pending pass rather than being
-  // lost between waitpid and the flag update.
+  auto& reaper = *static_cast<ChildExitReaper*>(context);
+  // Clear before draining and probing so a concurrent SIGCHLD leaves both a pending flag and a
+  // readable wake byte. Returning one child keeps the pass active until waitpid is exhausted.
   child_exit_pending = 0;
+  reaper.drain_wakeup();
   int status = 0;
   const auto process = ::waitpid(-1, &status, WNOHANG);
   if (process > 0) {
@@ -345,9 +418,10 @@ void release_owned_endpoint(void* const context) noexcept {
 [[nodiscard]] auto run_owned_server(const std::string& path, const ServeOptions options) noexcept
     -> int {
   static_cast<void>(::signal(SIGPIPE, SIG_IGN));
+  ChildExitReaper child_reaper;
   struct sigaction child_action{};
   child_action.sa_handler = &record_child_exit;
-  if (sigemptyset(&child_action.sa_mask) != 0 ||
+  if (!child_reaper.valid() || sigemptyset(&child_action.sa_mask) != 0 ||
       ::sigaction(SIGCHLD, &child_action, nullptr) != 0) {
     return 1;
   }
@@ -367,8 +441,14 @@ void release_owned_endpoint(void* const context) noexcept {
       .server_lock = server_lock,
       .development_build_id_path = development_marker,
   };
-  return core::run_server(listener, &release_owned_endpoint, &endpoint, options.stop_requested,
-                          &reap_child, nullptr);
+  child_exit_wakeup_descriptor = child_reaper.write_descriptor();
+  const auto result =
+      core::run_server(listener, &release_owned_endpoint, &endpoint, options.stop_requested,
+                       {.wake_descriptor = child_reaper.read_descriptor(),
+                        .reap = &reap_child,
+                        .context = &child_reaper});
+  child_exit_wakeup_descriptor = -1;
+  return result;
 }
 
 [[nodiscard]] auto server_available(const std::string& path) noexcept -> bool {
