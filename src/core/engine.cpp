@@ -4910,10 +4910,10 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     if (session.attachment.copy_mode.active()) {
       const auto consumed = process_copy_mode_input(session, runtimes, message.subspan(offset, 1));
-      if (consumed != 1U) {
+      if (consumed > 1U || (consumed == 0U && session.attachment.copy_mode.active())) {
         return ParseResult::error;
       }
-      ++offset;
+      offset += consumed;
       continue;
     }
     std::optional<input::InputRouter> router_before;

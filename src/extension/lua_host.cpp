@@ -344,15 +344,40 @@ command_binding_action(lua_State* const state, const int index,
       .kind = input::ConfiguredBindingKind::push_context, .target = *context, .defer_chord = defer};
 }
 
+[[nodiscard]] constexpr auto send_physical_key(const input::InputChord chord) noexcept
+    -> std::optional<input::PhysicalKey> {
+  if (chord.kind == input::ChordKind::key &&
+      chord.code < static_cast<std::uint16_t>(input::PhysicalKey::count)) {
+    return static_cast<input::PhysicalKey>(chord.code);
+  }
+  if (chord.kind != input::ChordKind::byte) {
+    return std::nullopt;
+  }
+  switch (chord.code) {
+  case 0x0DU:
+    return input::PhysicalKey::enter;
+  case 0x09U:
+    return input::PhysicalKey::tab;
+  case 0x7FU:
+    return input::PhysicalKey::backspace;
+  case 0x1BU:
+    return input::PhysicalKey::escape;
+  case 0x20U:
+    return input::PhysicalKey::space;
+  default:
+    return std::nullopt;
+  }
+}
+
 [[nodiscard]] auto send_binding_action(lua_State* const state, const int table) noexcept
     -> std::optional<input::ConfiguredBindingAction> {
   const auto key = config::parse_key(table_string_field(state, table, "key"));
-  if (!key.has_value() || key->kind != input::ChordKind::key ||
-      key->code >= static_cast<std::uint16_t>(input::PhysicalKey::count)) {
+  const auto physical = key.has_value() ? send_physical_key(*key) : std::nullopt;
+  if (!physical.has_value()) {
     return std::nullopt;
   }
   return input::ConfiguredBindingAction{.kind = input::ConfiguredBindingKind::send_key,
-                                        .encoded_key = static_cast<input::PhysicalKey>(key->code),
+                                        .encoded_key = *physical,
                                         .encoded_modifiers = key->modifiers};
 }
 
@@ -456,7 +481,7 @@ command_binding_action(lua_State* const state, const int index,
   std::size_t size = 0;
   const char* const value = luaL_checklstring(state, 1, &size);
   const auto key = config::parse_key({value, size});
-  if (!key.has_value() || key->kind != input::ChordKind::key) {
+  if (!key.has_value() || !send_physical_key(*key).has_value()) {
     return raise_lua_error(state, "keymap.send requires a named physical key");
   }
   static_cast<void>(push_action(state, "send"));

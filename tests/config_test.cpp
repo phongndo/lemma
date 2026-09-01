@@ -120,6 +120,9 @@ TEST(ConfigurationHostTest, LoadsLuaInASeparateResidentProcess) {
   TemporaryConfig file(R"(
 local lemma = require("lemma")
 assert(lemma.mode == nil)
+for _, key in ipairs({ "Space", "Enter", "Tab", "Backspace", "Escape" }) do
+  assert(lemma.keymap.send(key))
+end
 lemma.setup({
   input = { prefix = "C-a" },
   terminal = { scrollback_lines = 12345 },
@@ -129,7 +132,7 @@ lemma.setup({
 lemma.context.set("resize", { label = " RESIZE ", lifetime = "persistent", unbound = "consume" })
 lemma.keymap.set("prefix", "m", lemma.context.push("resize"))
 lemma.keymap.set("resize", "q", lemma.context.pop())
-lemma.keymap.set("normal", "Cmd-Left", lemma.keymap.send("Home"))
+lemma.keymap.set("normal", "Cmd-Left", lemma.keymap.send("Enter"))
 lemma.keymap.set("prefix", "C-a", lemma.keymap.replay())
 lemma.keymap.set("prefix", "s", "split_left_right")
 lemma.keymap.del("prefix", "%")
@@ -152,6 +155,16 @@ lemma.keymap.del("prefix", "%")
   ASSERT_NE(std::get_if<input::RoutedCommand>(&command.effect), nullptr);
   EXPECT_EQ(std::get<input::RoutedCommand>(command.effect).command,
             input::InputCommand::split_left_right);
+
+  router.reset();
+  const input::KeyEvent command_left{.action = input::KeyAction::press,
+                                     .key = input::PhysicalKey::arrow_left,
+                                     .modifiers = input::key_modifier_super,
+                                     .unshifted_codepoint = 0,
+                                     .text = {}};
+  const auto rewritten = router.route_key(command_left);
+  ASSERT_NE(std::get_if<input::EncodeAsKey>(&rewritten.effect), nullptr);
+  EXPECT_EQ(std::get<input::EncodeAsKey>(rewritten.effect).key, input::PhysicalKey::enter);
 }
 
 TEST(ConfigurationHostTest, RejectsTheWholeGenerationAfterALuaError) {

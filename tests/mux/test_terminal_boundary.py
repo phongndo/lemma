@@ -52,6 +52,24 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
         )
         pane.expect_alive()
 
+    def test_escape_then_plain_key_leaves_copy_and_forwards_the_key(self) -> None:
+        session = self.server.create_session("copy_escape_plain_key")
+        client = session.require_client()
+        pane = session.pane()
+        pane.send(
+            "stty -echo -icanon min 1 time 0; printf '__COPY_ESCAPE_READY__\\n'; "
+            "code=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+            "stty sane; printf '__COPY_ESCAPE_%s__\\n' \"$code\"\r"
+        )
+        pane.expect_output("__COPY_ESCAPE_READY__")
+
+        client.prefix("[")
+        client.expect_output("COPY")
+        client.send(b"\x1bx")
+
+        pane.expect_output("__COPY_ESCAPE_78__")
+        pane.expect_alive()
+
     def test_default_rename_editing_uses_the_compiled_policy(self) -> None:
         session = self.server.create_session("compiled_rename_policy")
         client = session.require_client()
