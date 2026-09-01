@@ -31,9 +31,12 @@ from mux_benchmark import (
     ALT_SCREEN,
     INTERACTION_LABEL_CODES,
     LATENCY_VISIBLE_ACK,
+    SHELL_READY_MARKER,
     LemmaRuntime,
     PtyReceiptChannel,
+    TmuxRuntime,
     ZellijRuntime,
+    benchmark_environment,
     git_provenance,
     install_attach_shell_startup,
     interaction_marker,
@@ -123,6 +126,23 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
 
         self.assertEqual(runtime._command.call_count, 3)
 
+    def test_start_and_attach_waits_for_the_inner_shell(self) -> None:
+        for runtime_type in (LemmaRuntime, TmuxRuntime):
+            with self.subTest(runtime=runtime_type.multiplexer):
+                runtime = object.__new__(runtime_type)
+                runtime.start_detached = mock.Mock()
+                client = mock.Mock()
+                runtime.attach = mock.Mock(return_value=client)
+
+                attached = runtime.start_and_attach("work")
+
+                self.assertIs(attached, client)
+                runtime.start_detached.assert_called_once_with("work")
+                client.read_until.assert_called_once_with(
+                    SHELL_READY_MARKER, 5.0, visible_text=False
+                )
+                client.drain.assert_called_once_with(0.005)
+
     def test_zellij_start_and_attach_owns_session_creation_lifetime(self) -> None:
         runtime = object.__new__(ZellijRuntime)
         runtime.session_prefix = "lb-7-"
@@ -142,7 +162,14 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
         process.assert_called_once_with(
             ["zellij", "attach", "target"], runtime.environment
         )
-        client.read_until.assert_called_once_with(ALT_SCREEN, 5.0, preserve_suffix=True)
+        self.assertEqual(
+            client.read_until.call_args_list,
+            [
+                mock.call(ALT_SCREEN, 5.0, preserve_suffix=True),
+                mock.call(SHELL_READY_MARKER, 5.0, visible_text=True),
+            ],
+        )
+        client.drain.assert_called_once_with(0.005)
         self.assertEqual(runtime.sessions, ["lb-7-tui-redraw"])
         self.assertEqual(runtime.clients, [client])
 
@@ -689,6 +716,19 @@ class LatencyReceiptTest(unittest.TestCase):
 
 
 class MuxFixtureTest(unittest.TestCase):
+    def test_benchmark_environment_installs_a_shell_readiness_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch(
+                "mux_benchmark.account_login_shell", return_value="/bin/bash"
+            ):
+                benchmark_environment(root)
+
+            startup = root / "home" / ".bashrc"
+            self.assertIn(
+                SHELL_READY_MARKER.decode(), startup.read_text(encoding="utf-8")
+            )
+
     def test_interaction_markers_are_unique_for_all_allowed_repetitions(self) -> None:
         markers = [
             interaction_marker(label, index)

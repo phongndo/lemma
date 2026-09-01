@@ -58,6 +58,7 @@ TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
 TUI_WHEEL_READY = b"__LEMMA_TUI_WHEEL_READY__"
 IDLE_READY = b"__LEMMA_IDLE_READY__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
+SHELL_READY_MARKER = b"__LEMMA_SHELL_READY__"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
 ATTACH_PROTOCOL_MINOR = 9
@@ -354,11 +355,40 @@ def account_login_shell() -> str:
     return account_shell
 
 
+def install_shell_startup(
+    environment: dict[str, str], command: str, *, nushell_command: str | None = None
+) -> None:
+    shell = Path(environment["SHELL"]).name
+    home = Path(environment["HOME"])
+    config = Path(environment["XDG_CONFIG_HOME"])
+    zdot = Path(environment["ZDOTDIR"])
+    if shell in {"sh", "dash", "ksh", "mksh"}:
+        interactive_startup = config / "lemma" / "shell-startup.sh"
+        environment["ENV"] = str(interactive_startup)
+        paths = (home / ".profile", interactive_startup)
+    elif shell == "bash":
+        paths = (home / ".bash_profile", home / ".bashrc")
+    elif shell == "zsh":
+        paths = (zdot / ".zprofile", zdot / ".zshrc")
+    elif shell == "fish":
+        paths = (config / "fish" / "config.fish",)
+    elif shell in {"nu", "nushell"}:
+        paths = (config / "nushell" / "config.nu",)
+        command = nushell_command if nushell_command is not None else command
+    else:
+        raise RuntimeError(
+            f"benchmark startup does not support account login shell {environment['SHELL']!r}"
+        )
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(command, encoding="utf-8")
+
+
 def benchmark_environment(root: Path) -> dict[str, str]:
     for name in ("home", "config", "zdot", "data"):
         (root / name).mkdir(mode=0o700)
     account_shell = account_login_shell()
-    return {
+    environment = {
         "HOME": str(root / "home"),
         "XDG_CONFIG_HOME": str(root / "config"),
         "ZDOTDIR": str(root / "zdot"),
@@ -370,34 +400,17 @@ def benchmark_environment(root: Path) -> dict[str, str]:
         "LC_ALL": "C",
         "TMPDIR": str(root),
     }
+    install_shell_startup(environment, "printf '__LEMMA_SHELL_READY__\\n'\n")
+    return environment
 
 
 def install_attach_shell_startup(environment: dict[str, str], peer: Path) -> None:
-    shell = Path(environment["SHELL"]).name
     command = f"exec {shlex.quote(str(peer))} attach-visible\n"
-    home = Path(environment["HOME"])
-    config = Path(environment["XDG_CONFIG_HOME"])
-    zdot = Path(environment["ZDOTDIR"])
-    if shell in {"sh", "dash", "ksh", "mksh"}:
-        interactive_startup = config / "lemma" / "attach-fixture.sh"
-        environment["ENV"] = str(interactive_startup)
-        paths = (home / ".profile", interactive_startup)
-    elif shell == "bash":
-        paths = (home / ".bash_profile", home / ".bashrc")
-    elif shell == "zsh":
-        paths = (zdot / ".zprofile", zdot / ".zshrc")
-    elif shell == "fish":
-        paths = (config / "fish" / "config.fish",)
-    elif shell in {"nu", "nushell"}:
-        paths = (config / "nushell" / "config.nu",)
-        command = f"exec {json.dumps(str(peer))} attach-visible\n"
-    else:
-        raise RuntimeError(
-            f"attach-to-visible does not support account login shell {environment['SHELL']!r}"
-        )
-    for path in paths:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(command, encoding="utf-8")
+    install_shell_startup(
+        environment,
+        command,
+        nushell_command=f"exec {json.dumps(str(peer))} attach-visible\n",
+    )
 
 
 def parse_cpu_time(value: str) -> int:
@@ -1033,6 +1046,17 @@ class MuxRuntime(Protocol):
     def close(self) -> None: ...
 
 
+def wait_for_startup_shell(runtime: MuxRuntime, client: PtyProcess) -> None:
+    # Alternate-screen setup only proves that the outer client initialized. The startup marker is
+    # emitted by the inner shell, so observing it proves that workload input can be routed safely.
+    client.read_until(
+        SHELL_READY_MARKER,
+        5.0,
+        visible_text=runtime.multiplexer in {"zellij", "herdr"},
+    )
+    client.drain(0.005)
+
+
 def retain_attach_marker(runtime: MuxRuntime, session: str) -> None:
     validation_client = runtime.attach(session)
     validation_client.read_until(ATTACH_VISIBLE_MARKER, 5.0)
@@ -1117,7 +1141,9 @@ class LemmaRuntime:
 
     def start_and_attach(self, session: str) -> PtyProcess:
         self.start_detached(session)
-        return self.attach(session)
+        client = self.attach(session)
+        wait_for_startup_shell(self, client)
+        return client
 
     def start_detached(self, session: str) -> None:
         self.command("start", session)
@@ -1318,7 +1344,9 @@ class TmuxRuntime:
 
     def start_and_attach(self, session: str) -> PtyProcess:
         self.start_detached(session)
-        return self.attach(session)
+        client = self.attach(session)
+        wait_for_startup_shell(self, client)
+        return client
 
     def start_detached(self, session: str) -> None:
         self._command("new-session", "-d", "-s", session, "-x", "80", "-y", "24")
@@ -1471,6 +1499,7 @@ class ZellijRuntime:
         )
         self.clients.append(client)
         client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)
+        wait_for_startup_shell(self, client)
         return client
 
     def _wait_for_session(self, mapped_session: str) -> None:
@@ -1664,7 +1693,9 @@ class HerdrRuntime:
         return client
 
     def start_and_attach(self, session: str) -> PtyProcess:
-        return self.attach(session)
+        client = self.attach(session)
+        wait_for_startup_shell(self, client)
+        return client
 
     def start_detached(self, session: str) -> None:
         self.sessions.add(session)
