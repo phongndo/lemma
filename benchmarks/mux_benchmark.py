@@ -58,7 +58,9 @@ TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
 TUI_WHEEL_READY = b"__LEMMA_TUI_WHEEL_READY__"
 IDLE_READY = b"__LEMMA_IDLE_READY__"
 ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
-SHELL_READY_MARKER = b"__LEMMA_SHELL_READY__"
+# Keep the first byte distinct from fixture markers. Differential terminal renderers can retain a
+# shared prefix on screen without retransmitting it to an attached outer client.
+SHELL_READY_MARKER = b"LEMMA-SHELL-READY"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
 ATTACH_PROTOCOL_MINOR = 9
@@ -400,7 +402,9 @@ def benchmark_environment(root: Path) -> dict[str, str]:
         "LC_ALL": "C",
         "TMPDIR": str(root),
     }
-    install_shell_startup(environment, "printf '__LEMMA_SHELL_READY__\\n'\n")
+    install_shell_startup(
+        environment, f"printf '{SHELL_READY_MARKER.decode('ascii')}\\n'\n"
+    )
     return environment
 
 

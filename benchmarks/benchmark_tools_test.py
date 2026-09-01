@@ -735,6 +735,9 @@ class LatencyReceiptTest(unittest.TestCase):
 
 
 class MuxFixtureTest(unittest.TestCase):
+    def test_shell_marker_does_not_share_the_rendered_fixture_prefix(self) -> None:
+        self.assertNotEqual(SHELL_READY_MARKER[:1], TUI_REDRAW_READY[:1])
+
     def test_benchmark_environment_installs_a_shell_readiness_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
