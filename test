@@ -15,6 +15,7 @@ BUILD = ROOT / "build" / PROFILE
 # One authoritative selector registry owns help, validation, focused domains, and the default mux
 # suite. Non-default entries are precise aliases for one test rather than broad module synonyms.
 MUX_DOMAINS: dict[str, tuple[str, bool]] = {
+    "configuration": ("tests.mux.test_configuration", True),
     "pane-lifecycle": ("tests.mux.test_pane_lifecycle", True),
     "session-lifecycle": ("tests.mux.test_session_lifecycle", True),
     "detach-reattach": (
@@ -157,7 +158,9 @@ def main() -> int:
     elif tier == "protocol":
         run_unit("ProtocolTest.*")
     elif tier == "input":
-        run_unit("InputMapTest.*:InputRouterTest.*:HostInputParserTest.*")
+        run_unit(
+            "ConfigurationTest.*:ConfigurationHostTest.*:InputMapTest.*:InputRouterTest.*:HostInputParserTest.*"
+        )
     elif tier == "queues":
         run_unit("BoundedByteQueueTest.*:ConnectionOutputTest.*")
         run_terminal("PtyWriterTest.*")

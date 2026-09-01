@@ -28,6 +28,57 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
 
         pane.expect_output("__APP_CURSOR_1b4f41__")
 
+    def test_default_copy_mode_keys_use_the_compiled_policy(self) -> None:
+        session = self.server.create_session("compiled_copy_policy")
+        client = session.require_client()
+        pane = session.pane()
+        pane.send("printf '__COPY_POLICY_LINE__\\n'\r")
+        pane.expect_output("__COPY_POLICY_LINE__")
+
+        def copy_mode_visible(expected: bool) -> bool | None:
+            client.drain()
+            return True if ("COPY\n" in client.screen_text()) == expected else None
+
+        client.prefix("[")
+        wait_until(
+            "compiled copy mode to become visible",
+            lambda: copy_mode_visible(True),
+        )
+        client.send(b"h")
+        client.send(b"\x07")
+        wait_until(
+            "compiled copy leave binding to restore normal input",
+            lambda: copy_mode_visible(False),
+        )
+        pane.expect_alive()
+
+    def test_escape_then_plain_key_leaves_copy_and_forwards_the_key(self) -> None:
+        session = self.server.create_session("copy_escape_plain_key")
+        client = session.require_client()
+        pane = session.pane()
+        pane.send(
+            "stty -echo -icanon min 1 time 0; printf '__COPY_ESCAPE_READY__\\n'; "
+            "code=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); "
+            "stty sane; printf '__COPY_ESCAPE_%s__\\n' \"$code\"\r"
+        )
+        pane.expect_output("__COPY_ESCAPE_READY__")
+
+        client.prefix("[")
+        client.expect_output("COPY")
+        client.send(b"\x1bx")
+
+        pane.expect_output("__COPY_ESCAPE_78__")
+        pane.expect_alive()
+
+    def test_default_rename_editing_uses_the_compiled_policy(self) -> None:
+        session = self.server.create_session("compiled_rename_policy")
+        client = session.require_client()
+
+        client.prefix("$")
+        client.send(b"\x15renamed-policy\r")
+        client.expect_output("renamed-policy")
+        session.pane().expect_alive()
+
     def test_styled_output_is_confined_to_its_composed_pane(self) -> None:
         session = self.server.create_session("styled_output")
         left = session.pane()

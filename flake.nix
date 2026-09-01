@@ -91,7 +91,10 @@
                 pkgs.darwin.cctools
                 pkgs.xcbuild
               ];
-              buildInputs = [ zstdStatic ];
+              buildInputs = [
+                pkgs.lua5_4
+                zstdStatic
+              ];
 
               cmakeFlags = [
                 "-DCMAKE_BUILD_TYPE=${buildType}"
@@ -264,6 +267,7 @@
             pkgs.conan
             pkgs.git
             pkgs.just
+            pkgs.lua5_4
             pkgs.ninja
             pkgs.nixd
             pkgs.nixpkgs-fmt

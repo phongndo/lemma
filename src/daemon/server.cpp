@@ -3,6 +3,7 @@
 #include "api/action.hpp"
 #include "api/json.hpp"
 #include "core/engine.hpp"
+#include "extension/lua_host.hpp"
 #include "lemma/id.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
@@ -418,6 +419,19 @@ void release_owned_endpoint(void* const context) noexcept {
 [[nodiscard]] auto run_owned_server(const std::string& path, const ServeOptions options) noexcept
     -> int {
   static_cast<void>(::signal(SIGPIPE, SIG_IGN));
+  auto configured_runtime = extension::load_configuration();
+  if (configured_runtime.status == extension::ConfigurationStatus::invalid) {
+    static_cast<void>(write_text(STDERR_FILENO, "lemma configuration rejected"));
+    if (!configured_runtime.path.empty()) {
+      static_cast<void>(write_text(STDERR_FILENO, ": "));
+      static_cast<void>(write_text(STDERR_FILENO, configured_runtime.path));
+    }
+    if (!configured_runtime.diagnostic.empty()) {
+      static_cast<void>(write_text(STDERR_FILENO, ": "));
+      static_cast<void>(write_text(STDERR_FILENO, configured_runtime.diagnostic));
+    }
+    static_cast<void>(write_text(STDERR_FILENO, "\n"));
+  }
   ChildExitReaper child_reaper;
   struct sigaction child_action{};
   child_action.sa_handler = &record_child_exit;
@@ -442,11 +456,20 @@ void release_owned_endpoint(void* const context) noexcept {
       .development_build_id_path = development_marker,
   };
   child_exit_wakeup_descriptor = child_reaper.write_descriptor();
-  const auto result =
-      core::run_server(listener, &release_owned_endpoint, &endpoint, options.stop_requested,
-                       {.wake_descriptor = child_reaper.read_descriptor(),
-                        .reap = &reap_child,
-                        .context = &child_reaper});
+  auto reactor_environment = core::production_reactor_environment();
+  if (configured_runtime.generation != nullptr) {
+    reactor_environment.input_map = &configured_runtime.generation->input_map();
+    reactor_environment.scrollback_lines = configured_runtime.generation->scrollback_lines();
+    reactor_environment.default_program = configured_runtime.generation->default_program();
+    reactor_environment.default_cwd = configured_runtime.generation->default_cwd();
+    reactor_environment.status_line = configured_runtime.generation->status_line();
+  }
+  const auto result = core::run_server_with_environment(
+      listener, &release_owned_endpoint, &endpoint, options.stop_requested,
+      {.wake_descriptor = child_reaper.read_descriptor(),
+       .reap = &reap_child,
+       .context = &child_reaper},
+      reactor_environment);
   child_exit_wakeup_descriptor = -1;
   return result;
 }
@@ -1206,10 +1229,6 @@ auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action, cons
                                 context)) {
       return 1;
     }
-    if (concrete.working_directory.empty()) {
-      concrete.working_directory.assign(context.working_directory.data(),
-                                        context.working_directory_size);
-    }
     if (!concrete.environment_set) {
       std::size_t offset = 0;
       while (offset < context.environment_size) {
@@ -1323,10 +1342,12 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
         return {};
       }
     }
-    request += R"(,"cwd":)";
-    if (!api::append_json_string(request, {launch_context.working_directory.data(),
-                                           launch_context.working_directory_size})) {
-      return {};
+    if (!options.working_directory.empty()) {
+      request += R"(,"cwd":)";
+      if (!api::append_json_string(request, {launch_context.working_directory.data(),
+                                             launch_context.working_directory_size})) {
+        return {};
+      }
     }
     if (launch_context.hold) {
       request += R"(,"hold":true)";

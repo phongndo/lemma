@@ -213,7 +213,14 @@ class Client:
 
 
 class LemmaServer:
-    def __init__(self, server: str | Path, cli: str | Path, peer: str | Path) -> None:
+    def __init__(
+        self,
+        server: str | Path,
+        cli: str | Path,
+        peer: str | Path,
+        *,
+        config_text: str | None = None,
+    ) -> None:
         self.server_path = Path(server).resolve()
         self.cli_path = Path(cli).resolve()
         self.peer_path = Path(peer).resolve()
@@ -229,6 +236,10 @@ class LemmaServer:
         zdot = self.root / "zdot"
         for directory in (home, config, zdot):
             directory.mkdir(mode=0o700)
+        if config_text is not None:
+            lemma_config = config / "lemma"
+            lemma_config.mkdir(mode=0o700)
+            (lemma_config / "init.lua").write_text(config_text)
         self.environment = {
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(config),
@@ -258,14 +269,14 @@ class LemmaServer:
             raise
 
     @classmethod
-    def from_environment(cls) -> LemmaServer:
+    def from_environment(cls, *, config_text: str | None = None) -> LemmaServer:
         required = ("LEMMA_TEST_SERVER", "LEMMA_TEST_CLI", "LEMMA_TEST_PTY_PEER")
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             raise RuntimeError(
                 f"missing mux test binary environment: {', '.join(missing)}"
             )
-        return cls(*(os.environ[name] for name in required))
+        return cls(*(os.environ[name] for name in required), config_text=config_text)
 
     def __enter__(self) -> LemmaServer:
         return self

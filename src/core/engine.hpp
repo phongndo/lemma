@@ -5,8 +5,13 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string_view>
 
 #include <poll.h>
+
+namespace lemma::input {
+class CompiledInputMap;
+}
 
 namespace lemma::core {
 
@@ -51,6 +56,13 @@ struct ReactorEnvironment final {
   ReactorPoll poll{nullptr};
   ReactorNow now{nullptr};
   ReactorSend send{nullptr};
+  // Immutable startup configuration. Null or empty values select built-in behavior. Every borrowed
+  // value must outlive run_server_with_environment and every Session created by it.
+  const input::CompiledInputMap* input_map{nullptr};
+  std::optional<std::size_t> scrollback_lines;
+  std::span<const std::byte> default_program;
+  std::string_view default_cwd;
+  bool status_line{true};
 
   [[nodiscard]] constexpr auto valid() const noexcept -> bool {
     return poll != nullptr && now != nullptr && send != nullptr;

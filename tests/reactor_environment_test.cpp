@@ -335,6 +335,11 @@ void release_listener(void* const context) noexcept {
       .poll = &scripted_poll,
       .now = &scripted_now,
       .send = &scripted_send,
+      .input_map = nullptr,
+      .scrollback_lines = std::nullopt,
+      .default_program = {},
+      .default_cwd = {},
+      .status_line = true,
   };
   const auto result = run_server_with_environment(
       script.listener, &release_listener, &script, &scripted_stop,
