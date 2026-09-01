@@ -32,6 +32,7 @@ from mux_benchmark import (
     INTERACTION_LABEL_CODES,
     LATENCY_VISIBLE_ACK,
     SHELL_READY_MARKER,
+    TUI_REDRAW_READY,
     LemmaRuntime,
     PtyReceiptChannel,
     TmuxRuntime,
@@ -46,6 +47,7 @@ from mux_benchmark import (
     open_descriptor_snapshot,
     parse_linux_schedstat,
     percentile,
+    tui_redraw,
     wait_for_profile_shell,
 )
 from mux_benchmark import (
@@ -142,6 +144,23 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
                     SHELL_READY_MARKER, 5.0, visible_text=False
                 )
                 client.drain.assert_called_once_with(0.005)
+
+    def test_zellij_readiness_uses_the_rendered_screen(self) -> None:
+        runtime = mock.Mock()
+        runtime.multiplexer = "zellij"
+        runtime.peer_path = Path("/fixture/peer")
+        client = mock.Mock()
+        runtime.start_and_attach.return_value = client
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime.receipt_path = Path(directory) / "receipt.sock"
+            with mock.patch("mux_benchmark.latency_samples", return_value={}):
+                result = tui_redraw(runtime, 1)
+
+        self.assertEqual(result["status"], "completed")
+        client.read_until.assert_called_once_with(
+            TUI_REDRAW_READY, 5.0, visible_text=True
+        )
 
     def test_zellij_start_and_attach_owns_session_creation_lifetime(self) -> None:
         runtime = object.__new__(ZellijRuntime)

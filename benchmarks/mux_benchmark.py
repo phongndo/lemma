@@ -943,6 +943,10 @@ def sample_resources(
     }
 
 
+def screen_renders_markers(runtime: MuxRuntime) -> bool:
+    return runtime.multiplexer in {"zellij", "herdr"}
+
+
 def wait_for_shell_execution(
     runtime: MuxRuntime,
     client: PtyProcess,
@@ -952,7 +956,7 @@ def wait_for_shell_execution(
     if marker in command:
         raise ValueError("shell readiness marker must not appear in echoed input")
     client.write_all(command, 2.0)
-    client.read_until(marker, 5.0, visible_text=isinstance(runtime, HerdrRuntime))
+    client.read_until(marker, 5.0, visible_text=screen_renders_markers(runtime))
     client.drain(0.005)
 
 
@@ -960,7 +964,7 @@ def idle_resources(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     client = runtime.start_and_attach("idle_resources")
     command = f"exec {shlex.quote(str(runtime.peer_path))} idle\r".encode()
     client.write_all(command, 2.0)
-    client.read_until(IDLE_READY, 5.0, visible_text=isinstance(runtime, HerdrRuntime))
+    client.read_until(IDLE_READY, 5.0, visible_text=screen_renders_markers(runtime))
     client.drain(0.01)
     return sample_resources(runtime, repetitions, client)
 
@@ -1052,14 +1056,18 @@ def wait_for_startup_shell(runtime: MuxRuntime, client: PtyProcess) -> None:
     client.read_until(
         SHELL_READY_MARKER,
         5.0,
-        visible_text=runtime.multiplexer in {"zellij", "herdr"},
+        visible_text=screen_renders_markers(runtime),
     )
     client.drain(0.005)
 
 
 def retain_attach_marker(runtime: MuxRuntime, session: str) -> None:
     validation_client = runtime.attach(session)
-    validation_client.read_until(ATTACH_VISIBLE_MARKER, 5.0)
+    validation_client.read_until(
+        ATTACH_VISIBLE_MARKER,
+        5.0,
+        visible_text=screen_renders_markers(runtime),
+    )
     runtime.detach(validation_client, session)
 
 
@@ -1793,7 +1801,7 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     ).encode()
     client.write_all(fixture_command, 2.0)
     client.read_until(
-        WARM_READY_MARKER, 60.0, visible_text=isinstance(runtime, HerdrRuntime)
+        WARM_READY_MARKER, 60.0, visible_text=screen_renders_markers(runtime)
     )
     client.drain()
 
@@ -1954,7 +1962,7 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
         client.read_until(
             LATENCY_OUTPUT_READY,
             5.0,
-            visible_text=isinstance(runtime, HerdrRuntime),
+            visible_text=screen_renders_markers(runtime),
         )
         release_autonomous_output(receipts)
         client.drain(0.06)
@@ -1983,7 +1991,7 @@ def interactive_open_loop(runtime: MuxRuntime, repetitions: int) -> dict[str, An
         ).encode()
         client.write_all(launch, 2.0)
         client.read_until(
-            LATENCY_READY, 5.0, visible_text=isinstance(runtime, HerdrRuntime)
+            LATENCY_READY, 5.0, visible_text=screen_renders_markers(runtime)
         )
         client.drain(0.01)
         completed = subprocess.run(
@@ -2041,7 +2049,7 @@ def tui_redraw(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         client.read_until(
             TUI_REDRAW_READY,
             5.0,
-            visible_text=isinstance(runtime, HerdrRuntime),
+            visible_text=screen_renders_markers(runtime),
         )
         client.drain(0.01)
         return {
@@ -2064,7 +2072,7 @@ def tui_wheel_burst(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         client.read_until(
             TUI_WHEEL_READY,
             5.0,
-            visible_text=isinstance(runtime, HerdrRuntime),
+            visible_text=screen_renders_markers(runtime),
         )
         client.drain(0.01)
 
@@ -2129,7 +2137,7 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         ).encode()
         responsive.write_all(receipt_launch, 2.0)
         responsive.read_until(
-            LATENCY_READY, 5.0, visible_text=isinstance(runtime, HerdrRuntime)
+            LATENCY_READY, 5.0, visible_text=screen_renders_markers(runtime)
         )
         responsive.drain(0.01)
         idle = latency_samples(
@@ -2141,7 +2149,9 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             f"{shlex.quote(str(runtime.gate_path))} {PAYLOAD_SIZE}\r"
         ).encode()
         blocked.write_all(launch, 2.0)
-        blocked.read_until(BLOCK_READY, 5.0)
+        blocked.read_until(
+            BLOCK_READY, 5.0, visible_text=screen_renders_markers(runtime)
+        )
         payload = b"q" * PAYLOAD_SIZE
         accepted = blocked.fill_until_stalled(payload)
         if accepted <= 0:
@@ -2166,6 +2176,7 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
                     b"server exited unexpectedly",
                     b"Received empty unknown from server",
                 ),
+                visible_text=screen_renders_markers(runtime),
             )
         except (RuntimeError, TimeoutError) as error:
             raise WorkloadFailure(
@@ -2440,7 +2451,7 @@ def launch_latency_peer(
         f"{shlex.quote(str(runtime.receipt_path))}\r"
     ).encode()
     client.write_all(command, 2.0)
-    client.read_until(ready, 5.0, visible_text=isinstance(runtime, HerdrRuntime))
+    client.read_until(ready, 5.0, visible_text=screen_renders_markers(runtime))
     if autonomous_output:
         if receipts is None:
             raise ValueError("autonomous output requires a receipt channel")
