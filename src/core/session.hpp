@@ -168,11 +168,6 @@ enum class CopyModePhase : std::uint8_t {
   searching,
 };
 
-enum class CopyPendingChord : std::uint8_t {
-  none,
-  go,
-};
-
 struct CopyModeState final {
   std::array<char, limits::search_query_bytes_max> query{};
   std::array<char, limits::search_query_bytes_max> draft_query{};
@@ -186,7 +181,6 @@ struct CopyModeState final {
   CopySearchDirection prompt_search_direction{CopySearchDirection::forward};
   CopyModePhase phase{CopyModePhase::inactive};
   CopyModePhase phase_before_search{CopyModePhase::navigation};
-  CopyPendingChord pending_chord{CopyPendingChord::none};
 
   [[nodiscard]] constexpr auto active() const noexcept -> bool {
     return phase != CopyModePhase::inactive;

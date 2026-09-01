@@ -1,8 +1,6 @@
 #ifndef LEMMA_CORE_COPY_MODE_HPP
 #define LEMMA_CORE_COPY_MODE_HPP
 
-#include "core/session.hpp"
-
 #include <cstdint>
 
 namespace lemma::core {
@@ -69,11 +67,6 @@ struct CopyKey final {
   CopyKeyKind kind{CopyKeyKind::byte};
   std::uint8_t byte{0};
 };
-
-// Maps one normalized copy-mode key to semantic intent. The only state consumed here is the
-// bounded multi-key grammar; terminal operations and their outcomes remain outside this pure Core
-// transition.
-[[nodiscard]] auto copy_action_for_key(CopyModeState& state, CopyKey key) noexcept -> CopyAction;
 
 // Keeps a search match stable while it remains in the middle half of the viewport, otherwise
 // returns an offset that centers it. Runtime applies the resulting offset through the terminal

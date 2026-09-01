@@ -68,6 +68,17 @@ include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
 find_package(zstd CONFIG REQUIRED)
+find_package(Lua 5.4 REQUIRED)
+if(TARGET lua::lua)
+  set(LEMMA_LUA_TARGET lua::lua)
+elseif(TARGET Lua::Lua)
+  set(LEMMA_LUA_TARGET Lua::Lua)
+else()
+  add_library(lemma_lua_external INTERFACE)
+  target_include_directories(lemma_lua_external SYSTEM INTERFACE "${LUA_INCLUDE_DIR}")
+  target_link_libraries(lemma_lua_external INTERFACE ${LUA_LIBRARIES})
+  set(LEMMA_LUA_TARGET lemma_lua_external)
+endif()
 
 function(lemma_internal_target target)
   target_include_directories(
@@ -151,6 +162,16 @@ add_library(
 lemma_internal_target(lemma_api)
 target_link_libraries(lemma_api PRIVATE lemma_base lemma_core)
 
+add_library(lemma_config STATIC src/config/config.cpp)
+lemma_internal_target(lemma_config)
+target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input)
+
+add_library(lemma_extension STATIC src/extension/lua_host.cpp)
+lemma_internal_target(lemma_extension)
+target_link_libraries(
+  lemma_extension PRIVATE lemma_base lemma_config lemma_input lemma_platform ${LEMMA_LUA_TARGET}
+)
+
 add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
@@ -184,7 +205,8 @@ target_link_libraries(lemma_metadata PRIVATE lemma_terminal zstd::libzstd_static
 add_library(lemma_daemon STATIC src/daemon/server.cpp)
 lemma_internal_target(lemma_daemon)
 target_link_libraries(
-  lemma_daemon PRIVATE lemma_api lemma_base lemma_platform lemma_protocol lemma_runtime
+  lemma_daemon
+  PRIVATE lemma_api lemma_base lemma_extension lemma_platform lemma_protocol lemma_runtime
 )
 
 add_library(
@@ -201,7 +223,9 @@ target_link_libraries(
 
 add_library(lemma_app STATIC src/app/application.cpp src/app/procedure.cpp)
 lemma_internal_target(lemma_app)
-target_link_libraries(lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_terminal)
+target_link_libraries(
+  lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_extension lemma_terminal
+)
 
 # Compatibility aggregate for existing tests and embedders. New internal code should depend on the
 # narrow component target it uses rather than this aggregate.
@@ -251,6 +275,7 @@ if(LEMMA_BUILD_TESTS)
   add_executable(
     lemma_unit_tests
     tests/api_test.cpp
+    tests/config_test.cpp
     tests/connection_output_test.cpp
     tests/core_test.cpp
     tests/frame_scheduler_test.cpp
@@ -268,8 +293,10 @@ if(LEMMA_BUILD_TESTS)
     PRIVATE
       lemma_api
       lemma_client
+      lemma_config
       lemma_core
       lemma_diagnostic
+      lemma_extension
       lemma_input
       lemma_protocol
       lemma_runtime
@@ -403,6 +430,7 @@ if(LEMMA_BUILD_TESTS)
     )
   endfunction()
 
+  lemma_add_python_mux_test(configuration tests.mux.test_configuration)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
   lemma_add_python_mux_test(resize tests.mux.test_resize)

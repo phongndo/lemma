@@ -21,9 +21,6 @@ namespace lemma {
 namespace {
 
 using core::Attachment;
-using core::CopyActionKind;
-using core::CopyKey;
-using core::CopyKeyKind;
 using core::CopyModePhase;
 using core::LaunchEnvironmentMode;
 using core::Pane;
@@ -428,57 +425,6 @@ TEST(SessionModelTest, RenameAndTabTitleValuesAreBoundedAndValidated) {
   EXPECT_FALSE(SessionNameValue::create("invalid name").has_value());
   EXPECT_TRUE(TabTitleValue::create("").has_value());
   EXPECT_FALSE(TabTitleValue::create(std::string_view{"bad\n", 4}).has_value());
-}
-
-TEST(CopyModeCoreTest, ReducesVimChordsAndPhaseSpecificEscapeWithoutTerminalState) {
-  core::CopyModeState state;
-  state.phase = CopyModePhase::navigation;
-
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('g')}).kind,
-            CopyActionKind::none);
-  EXPECT_EQ(state.pending_chord, core::CopyPendingChord::go);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('g')}).kind,
-            CopyActionKind::history_top);
-  EXPECT_EQ(state.pending_chord, core::CopyPendingChord::none);
-
-  state.phase = CopyModePhase::visual_line;
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::escape}).kind,
-            CopyActionKind::cancel_selection);
-  state.phase = CopyModePhase::navigation;
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::escape}).kind,
-            CopyActionKind::leave);
-}
-
-TEST(CopyModeCoreTest, ReducesSearchPromptEditingAndCoherentMotionSet) {
-  core::CopyModeState state;
-  state.phase = CopyModePhase::search_prompt;
-
-  const auto append =
-      core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('n')});
-  EXPECT_EQ(append.kind, CopyActionKind::query_append);
-  EXPECT_EQ(append.byte, static_cast<std::uint8_t>('n'));
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::backspace}).kind,
-            CopyActionKind::query_backspace);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::enter}).kind,
-            CopyActionKind::commit_search);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::arrow_up}).kind,
-            CopyActionKind::none);
-
-  state.phase = CopyModePhase::searching;
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('n')}).kind,
-            CopyActionKind::none);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.kind = CopyKeyKind::escape}).kind,
-            CopyActionKind::cancel_search);
-
-  state.phase = CopyModePhase::navigation;
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('e')}).kind,
-            CopyActionKind::word_end);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = static_cast<std::uint8_t>('H')}).kind,
-            CopyActionKind::viewport_top);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = 0x15}).kind,
-            CopyActionKind::half_page_up);
-  EXPECT_EQ(core::copy_action_for_key(state, CopyKey{.byte = 0x16}).kind,
-            CopyActionKind::visual_block);
 }
 
 TEST(CopyModeCoreTest, KeepsSearchMatchesInCentralSafeZoneAndCentersOutsideIt) {

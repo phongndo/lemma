@@ -38,7 +38,9 @@ namespace {
                               options.lifetime == ContextLifetime::one_shot;
   const bool unbound_valid = options.unbound == UnboundBehavior::forward ||
                              options.unbound == UnboundBehavior::replay_deferred ||
-                             options.unbound == UnboundBehavior::consume;
+                             options.unbound == UnboundBehavior::consume ||
+                             (options.unbound == UnboundBehavior::retry_base &&
+                              options.lifetime == ContextLifetime::one_shot);
   const bool label_valid = std::ranges::all_of(options.label, [](const char character) {
     const auto byte = static_cast<unsigned char>(character);
     return byte >= 0x20U && byte <= 0x7EU;
@@ -118,6 +120,18 @@ namespace {
 
 [[nodiscard]] auto key_chord(const KeyEvent& event) noexcept -> InputChord {
   const auto modifiers = command_modifiers(event.modifiers);
+  if (event.key == PhysicalKey::enter) {
+    return InputChord::byte(0x0DU, modifiers);
+  }
+  if (event.key == PhysicalKey::tab) {
+    return InputChord::byte(0x09U, modifiers);
+  }
+  if (event.key == PhysicalKey::backspace) {
+    return InputChord::byte(0x7FU, modifiers);
+  }
+  if (event.key == PhysicalKey::escape) {
+    return InputChord::byte(0x1BU, modifiers);
+  }
   const bool text_ascii =
       event.text.size() == 1U && std::to_integer<std::uint8_t>(event.text.front()) <= 0x7FU;
   const bool unshifted_ascii = event.unshifted_codepoint > 0U && event.unshifted_codepoint <= 0x7FU;
@@ -166,6 +180,33 @@ namespace {
   return index < 64U ? std::uint64_t{1} << index : 0U;
 }
 
+struct EncodedPrefix final {
+  std::array<std::byte, deferred_input_bytes_max> bytes{};
+  std::uint8_t size{0};
+};
+
+[[nodiscard]] constexpr auto encode_prefix(const InputChord prefix) noexcept
+    -> std::optional<EncodedPrefix> {
+  if (!chord_valid(prefix) || prefix.kind != ChordKind::byte ||
+      (prefix.modifiers & (key_modifier_shift | key_modifier_super | key_modifier_caps_lock |
+                           key_modifier_num_lock)) != 0U) {
+    return std::nullopt;
+  }
+  EncodedPrefix encoded;
+  if ((prefix.modifiers & key_modifier_alt) != 0U) {
+    encoded.bytes.at(encoded.size++) = std::byte{0x1B};
+  }
+  auto value = static_cast<std::uint8_t>(prefix.code);
+  if ((prefix.modifiers & key_modifier_control) != 0U) {
+    if (value < static_cast<std::uint8_t>('a') || value > static_cast<std::uint8_t>('z')) {
+      return std::nullopt;
+    }
+    value = static_cast<std::uint8_t>(value - static_cast<std::uint8_t>('a') + 1U);
+  }
+  encoded.bytes.at(encoded.size++) = static_cast<std::byte>(value);
+  return encoded;
+}
+
 } // namespace
 
 auto InputMapDraft::add_context(const ContextOptions options) noexcept
@@ -203,6 +244,41 @@ auto InputMapDraft::bind(const InputContextId context, const InputChord chord,
   auto& binding = std::span(bindings_).subspan(binding_count_, 1).front();
   binding = {.context = context, .chord = chord, .action = action};
   ++binding_count_;
+  return true;
+}
+
+// NOLINTNEXTLINE(bugprone-exception-escape)
+auto InputMapDraft::set(const InputContextId context, const InputChord chord,
+                        BindingAction action) noexcept -> bool {
+  if (!context.valid() || context.slot_ >= context_count_ || !chord_valid(chord)) {
+    return false;
+  }
+  for (std::size_t index = 0; index < binding_count_; ++index) {
+    auto& binding = std::span(bindings_).subspan(index, 1).front();
+    if (binding.context == context && binding.chord == chord) {
+      binding.action = action;
+      return true;
+    }
+  }
+  return bind(context, chord, action);
+}
+
+auto InputMapDraft::unbind(const InputContextId context, const InputChord chord) noexcept -> bool {
+  if (!context.valid() || context.slot_ >= context_count_ || !chord_valid(chord)) {
+    return false;
+  }
+  for (std::size_t index = 0; index < binding_count_; ++index) {
+    const auto& binding = std::span(bindings_).subspan(index, 1).front();
+    if (binding.context != context || binding.chord != chord) {
+      continue;
+    }
+    for (std::size_t shifted = index + 1U; shifted < binding_count_; ++shifted) {
+      std::span(bindings_).subspan(shifted - 1U, 1).front() =
+          std::span(bindings_).subspan(shifted, 1).front();
+    }
+    --binding_count_;
+    return true;
+  }
   return true;
 }
 
@@ -244,9 +320,9 @@ auto InputMapDraft::compile() const noexcept -> std::expected<CompiledInputMap, 
         (!encode_as_valid(*encoded) || !encode_as_chord_valid(source.chord))) {
       return std::unexpected(InputMapError::invalid_action);
     }
-    if (const auto* const enter = std::get_if<EnterContextBinding>(&source.action);
-        enter != nullptr && (!enter->context.valid() || enter->context.slot_ >= context_count_ ||
-                             enter->deferred_size > enter->deferred.size())) {
+    if (const auto* const pushed = std::get_if<PushContextBinding>(&source.action);
+        pushed != nullptr && (!pushed->context.valid() || pushed->context.slot_ >= context_count_ ||
+                              pushed->deferred_size > pushed->deferred.size())) {
       return std::unexpected(InputMapError::invalid_context);
     }
     std::span(result.bindings_).subspan(index, 1).front() = {
@@ -262,13 +338,13 @@ auto InputMapDraft::compile() const noexcept -> std::expected<CompiledInputMap, 
       if (candidate.context.slot_ != current) {
         continue;
       }
-      const auto* const enter = std::get_if<EnterContextBinding>(&candidate.action);
-      if (enter == nullptr) {
+      const auto* const pushed = std::get_if<PushContextBinding>(&candidate.action);
+      if (pushed == nullptr) {
         continue;
       }
-      const auto bit = static_cast<std::uint16_t>(std::uint16_t{1} << enter->context.slot_);
-      if ((visited & bit) == 0U &&
-          self(self, enter->context.slot_, static_cast<std::uint16_t>(visited | bit), depth + 1U)) {
+      const auto bit = static_cast<std::uint16_t>(std::uint16_t{1} << pushed->context.slot_);
+      if ((visited & bit) == 0U && self(self, pushed->context.slot_,
+                                        static_cast<std::uint16_t>(visited | bit), depth + 1U)) {
         return true;
       }
     }
@@ -317,13 +393,13 @@ auto InputMapDraft::compile() const noexcept -> std::expected<CompiledInputMap, 
   return result;
 }
 
-auto enter_context(const InputContextId context, const std::span<const std::byte> deferred) noexcept
+auto push_context(const InputContextId context, const std::span<const std::byte> deferred) noexcept
     -> std::expected<BindingAction, InputMapError> {
   if (!context.valid() || deferred.size() > deferred_input_bytes_max) {
     return std::unexpected(InputMapError::invalid_context);
   }
-  EnterContextBinding result{.context = context,
-                             .deferred_size = static_cast<std::uint8_t>(deferred.size())};
+  PushContextBinding result{.context = context,
+                            .deferred_size = static_cast<std::uint8_t>(deferred.size())};
   std::ranges::copy(deferred, result.deferred.begin());
   return BindingAction{result};
 }
@@ -341,6 +417,20 @@ void InputRouter::reset() noexcept {
   encoded_hold_modifiers_ = 0;
   captured_keys_ = 0;
   forwarded_keys_ = 0;
+}
+
+void InputRouter::select_base(const ConfiguredInputContext selected) noexcept {
+  const auto slot = static_cast<std::uint8_t>(selected);
+  LEMMA_ASSERT(selected < ConfiguredInputContext::count && slot < map_->context_count_);
+  const auto context_id = InputContextId(slot);
+  if (stack_.front().context == context_id) {
+    return;
+  }
+  stack_.front() = {.context = context_id};
+  for (std::size_t index = 1; index < depth_; ++index) {
+    std::span(stack_).subspan(index, 1).front() = {};
+  }
+  depth_ = 1;
 }
 
 auto InputRouter::active_frame() noexcept -> ContextFrame& {
@@ -513,6 +603,14 @@ auto InputRouter::route_legacy(const std::span<const std::byte> input,
     }
   }
 
+  if (matched == nullptr && metadata.unbound == UnboundBehavior::retry_base) {
+    LEMMA_ASSERT(metadata.lifetime == ContextLifetime::one_shot);
+    pop();
+    auto retried = route_legacy(input, forward_limit);
+    retried.presentation_changed = retried.presentation_changed || visible_context_changed(before);
+    return retried;
+  }
+
   if (matched == nullptr && metadata.unbound == UnboundBehavior::forward) {
     std::size_t bytes = 1;
     const auto limit = std::min(input.size(), forward_limit);
@@ -561,12 +659,12 @@ auto InputRouter::route_legacy(const std::span<const std::byte> input,
             return_to_base();
           }
           effect = RoutedCommand{.command = action.command};
-        } else if constexpr (std::is_same_v<Action, EnterContextBinding>) {
-          const auto entered =
+        } else if constexpr (std::is_same_v<Action, PushContextBinding>) {
+          const auto pushed =
               push(action.context, std::span(action.deferred).first(action.deferred_size));
-          LEMMA_ASSERT(entered);
+          LEMMA_ASSERT(pushed);
           preempt_interaction = context(action.context).preempts_interaction;
-        } else if constexpr (std::is_same_v<Action, LeaveContextBinding>) {
+        } else if constexpr (std::is_same_v<Action, PopContextBinding>) {
           pop();
         } else if constexpr (std::is_same_v<Action, ForwardDeferredBinding>) {
           if (deferred_size > 0U) {
@@ -615,6 +713,13 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
 
   const auto& metadata = context(before);
   const auto* const matched = binding(before, key_chord(event));
+  if (matched == nullptr && metadata.unbound == UnboundBehavior::retry_base) {
+    LEMMA_ASSERT(metadata.lifetime == ContextLifetime::one_shot);
+    pop();
+    auto retried = route_key(event);
+    retried.presentation_changed = retried.presentation_changed || visible_context_changed(before);
+    return retried;
+  }
   if (matched == nullptr && metadata.unbound == UnboundBehavior::forward) {
     if (key_captured) {
       return {.effect = ConsumedInput{}};
@@ -669,12 +774,12 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
             return_to_base();
           }
           effect = RoutedCommand{.command = action.command};
-        } else if constexpr (std::is_same_v<Action, EnterContextBinding>) {
-          const auto entered =
+        } else if constexpr (std::is_same_v<Action, PushContextBinding>) {
+          const auto pushed =
               push(action.context, std::span(action.deferred).first(action.deferred_size));
-          LEMMA_ASSERT(entered);
+          LEMMA_ASSERT(pushed);
           preempt_interaction = context(action.context).preempts_interaction;
-        } else if constexpr (std::is_same_v<Action, LeaveContextBinding>) {
+        } else if constexpr (std::is_same_v<Action, PopContextBinding>) {
           pop();
         } else if constexpr (std::is_same_v<Action, ForwardDeferredBinding>) {
           if (deferred_size > 0U) {
@@ -695,142 +800,502 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
           .interaction_preemption_requested = preempt_interaction};
 }
 
-// Built-in interaction policy is data compiled through the same validated representation intended
-// for future configuration generations. No named context or physical key reaches mux Core.
+InputMapConfiguration::InputMapConfiguration() noexcept { reset(InputMapPreset::defaults); }
+
+auto InputMapConfiguration::set_context(const ConfiguredInputContext selected,
+                                        const ContextOptions options) noexcept -> bool {
+  const auto index = static_cast<std::size_t>(selected);
+  if (selected >= ConfiguredInputContext::count || index >= contexts.size() ||
+      options.label.size() > input_context_label_bytes_max ||
+      (options.unbound == UnboundBehavior::retry_base &&
+       options.lifetime != ContextLifetime::one_shot)) {
+    return false;
+  }
+  auto& configured_context = contexts.at(index);
+  configured_context = {.label_size = static_cast<std::uint8_t>(options.label.size()),
+                        .lifetime = options.lifetime,
+                        .unbound = options.unbound,
+                        .preempts_interaction = options.preempts_interaction};
+  std::ranges::copy(options.label, configured_context.label.begin());
+  return true;
+}
+
+auto InputMapConfiguration::set_action(const ConfiguredInputContext context, const InputChord chord,
+                                       const ConfiguredBindingAction action) noexcept -> bool {
+  for (std::size_t index = 0; index < binding_count; ++index) {
+    auto& configured = std::span(bindings).subspan(index, 1).front();
+    if (configured.context == context && configured.chord == chord) {
+      configured.action = action;
+      return true;
+    }
+  }
+  if (binding_count >= bindings.size()) {
+    return false;
+  }
+  std::span(bindings).subspan(binding_count++, 1).front() = {
+      .context = context, .chord = chord, .action = action};
+  return true;
+}
+
+auto InputMapConfiguration::set(const ConfiguredInputContext context, const InputChord chord,
+                                const InputCommand command,
+                                const CommandContextDisposition disposition) noexcept -> bool {
+  return set_action(
+      context, chord,
+      {.kind = ConfiguredBindingKind::command, .command = command, .disposition = disposition});
+}
+
+auto InputMapConfiguration::push(const ConfiguredInputContext context, const InputChord chord,
+                                 const ConfiguredInputContext target,
+                                 const bool defer_chord) noexcept -> bool {
+  return set_action(
+      context, chord,
+      {.kind = ConfiguredBindingKind::push_context, .target = target, .defer_chord = defer_chord});
+}
+
+auto InputMapConfiguration::pop(const ConfiguredInputContext context,
+                                const InputChord chord) noexcept -> bool {
+  return set_action(context, chord, {.kind = ConfiguredBindingKind::pop_context});
+}
+
+auto InputMapConfiguration::replay(const ConfiguredInputContext context,
+                                   const InputChord chord) noexcept -> bool {
+  return set_action(context, chord, {.kind = ConfiguredBindingKind::replay_deferred});
+}
+
+auto InputMapConfiguration::send(const ConfiguredInputContext context, const InputChord chord,
+                                 const PhysicalKey key, const std::uint16_t modifiers) noexcept
+    -> bool {
+  return set_action(context, chord,
+                    {.kind = ConfiguredBindingKind::send_key,
+                     .encoded_key = key,
+                     .encoded_modifiers = modifiers});
+}
+
+auto InputMapConfiguration::unbind(const ConfiguredInputContext context,
+                                   const InputChord chord) noexcept -> bool {
+  for (std::size_t index = 0; index < binding_count; ++index) {
+    if (bindings.at(index).context != context || bindings.at(index).chord != chord) {
+      continue;
+    }
+    for (std::size_t moving = index + 1U; moving < binding_count; ++moving) {
+      bindings.at(moving - 1U) = bindings.at(moving);
+    }
+    --binding_count;
+    bindings.at(binding_count) = {};
+    return true;
+  }
+  return true;
+}
+
+auto InputMapConfiguration::set_prefix(const std::optional<InputChord> chord) noexcept -> bool {
+  const auto remove = [this](const InputChord value) noexcept {
+    static_cast<void>(unbind(ConfiguredInputContext::normal, value));
+    static_cast<void>(unbind(ConfiguredInputContext::resize, value));
+    static_cast<void>(unbind(ConfiguredInputContext::prefix, value));
+    if (value.kind == ChordKind::byte && (value.modifiers & key_modifier_control) != 0U) {
+      const auto shifted =
+          InputChord{.code = value.code,
+                     .modifiers = static_cast<std::uint16_t>(value.modifiers | key_modifier_shift),
+                     .kind = value.kind};
+      static_cast<void>(unbind(ConfiguredInputContext::normal, shifted));
+      static_cast<void>(unbind(ConfiguredInputContext::resize, shifted));
+      static_cast<void>(unbind(ConfiguredInputContext::prefix, shifted));
+    }
+  };
+  if (prefix.has_value()) {
+    remove(*prefix);
+  }
+  prefix = chord;
+  if (!prefix.has_value()) {
+    return true;
+  }
+  const auto add = [this](const InputChord value) noexcept {
+    return push(ConfiguredInputContext::normal, value, ConfiguredInputContext::prefix, true) &&
+           push(ConfiguredInputContext::resize, value, ConfiguredInputContext::prefix, true) &&
+           replay(ConfiguredInputContext::prefix, value);
+  };
+  if (!add(*prefix)) {
+    return false;
+  }
+  if (prefix->kind == ChordKind::byte && (prefix->modifiers & key_modifier_control) != 0U) {
+    const auto shifted =
+        InputChord{.code = prefix->code,
+                   .modifiers = static_cast<std::uint16_t>(prefix->modifiers | key_modifier_shift),
+                   .kind = prefix->kind};
+    return add(shifted);
+  }
+  return true;
+}
+
+// The shipped policy is ordinary bounded configuration data. The compiler below has no preset or
+// built-in binding branch, so an equivalent user draft produces the same native map.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto default_input_map() noexcept -> const CompiledInputMap& {
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  static const CompiledInputMap map = [] {
-    InputMapDraft draft;
-    const auto normal = draft.add_context({});
-    const auto prefix = draft.add_context({.label = {},
-                                           .lifetime = ContextLifetime::one_shot,
-                                           .unbound = UnboundBehavior::replay_deferred,
-                                           .preempts_interaction = false});
-    const auto resize = draft.add_context({.label = " RESIZE ",
-                                           .lifetime = ContextLifetime::persistent,
-                                           .unbound = UnboundBehavior::consume,
-                                           .preempts_interaction = true});
-    LEMMA_ASSERT(normal.has_value() && prefix.has_value() && resize.has_value());
+void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
+  bindings = {};
+  contexts = {};
+  prefix.reset();
+  binding_count = 0;
+  preset = selected;
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::normal, {}));
+  LEMMA_ASSERT(
+      set_context(ConfiguredInputContext::prefix, {.label = {},
+                                                   .lifetime = ContextLifetime::one_shot,
+                                                   .unbound = UnboundBehavior::replay_deferred,
+                                                   .preempts_interaction = false}));
+  LEMMA_ASSERT(set_context(
+      ConfiguredInputContext::resize,
+      {.label = " RESIZE ", .unbound = UnboundBehavior::consume, .preempts_interaction = true}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::copy,
+                           {.label = " COPY ", .unbound = UnboundBehavior::consume}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_go, {.label = {},
+                                                             .lifetime = ContextLifetime::one_shot,
+                                                             .unbound = UnboundBehavior::retry_base,
+                                                             .preempts_interaction = false}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_search,
+                           {.label = " SEARCH ", .unbound = UnboundBehavior::forward}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_searching,
+                           {.label = " SEARCH ", .unbound = UnboundBehavior::consume}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::rename,
+                           {.label = " RENAME ", .unbound = UnboundBehavior::forward}));
+  if (selected == InputMapPreset::none) {
+    return;
+  }
+  LEMMA_ASSERT(selected == InputMapPreset::defaults);
+  LEMMA_ASSERT(set_prefix(InputChord::byte('b', key_modifier_control)));
+  const auto is_prefix = [this](const InputChord chord) noexcept {
+    if (prefix == std::optional{chord}) {
+      return true;
+    }
+    return prefix.has_value() && prefix->kind == ChordKind::byte &&
+           (prefix->modifiers & key_modifier_control) != 0U &&
+           chord == InputChord{.code = prefix->code,
+                               .modifiers = static_cast<std::uint16_t>(prefix->modifiers |
+                                                                       key_modifier_shift),
+                               .kind = prefix->kind};
+  };
+  const auto bind_prefix = [this, &is_prefix](const InputChord chord, const InputCommand command,
+                                              const CommandContextDisposition disposition =
+                                                  CommandContextDisposition::retain) noexcept {
+    return is_prefix(chord) || set(ConfiguredInputContext::prefix, chord, command, disposition);
+  };
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('d'), InputCommand::detach));
+  if (!is_prefix(InputChord::byte('m'))) {
+    LEMMA_ASSERT(push(ConfiguredInputContext::prefix, InputChord::byte('m'),
+                      ConfiguredInputContext::resize));
+  }
+  for (const auto& [key, command] : std::array{
+           std::pair{'%', InputCommand::split_left_right},
+           std::pair{'"', InputCommand::split_top_bottom},
+           std::pair{'h', InputCommand::focus_left},
+           std::pair{'j', InputCommand::focus_down},
+           std::pair{'k', InputCommand::focus_up},
+           std::pair{'l', InputCommand::focus_right},
+           std::pair{'H', InputCommand::swap_pane_left},
+           std::pair{'J', InputCommand::swap_pane_down},
+           std::pair{'K', InputCommand::swap_pane_up},
+           std::pair{'L', InputCommand::swap_pane_right},
+           std::pair{'o', InputCommand::focus_next},
+           std::pair{';', InputCommand::focus_previous},
+           std::pair{'x', InputCommand::close_pane},
+           std::pair{'z', InputCommand::toggle_zoom},
+           std::pair{'c', InputCommand::create_tab},
+           std::pair{'n', InputCommand::next_tab},
+           std::pair{'p', InputCommand::previous_tab},
+           std::pair{'P', InputCommand::move_tab_left},
+           std::pair{'N', InputCommand::move_tab_right},
+           std::pair{'&', InputCommand::close_tab},
+       }) {
+    LEMMA_ASSERT(bind_prefix(InputChord::byte(static_cast<std::uint8_t>(key)), command));
+  }
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('['), InputCommand::enter_copy_mode,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('/'), InputCommand::enter_copy_search_forward,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('?'), InputCommand::enter_copy_search_backward,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('R'), InputCommand::begin_rename_session,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('r'), InputCommand::begin_rename_tab,
+                           CommandContextDisposition::base));
+  constexpr std::array selectors{InputCommand::select_tab_0, InputCommand::select_tab_1,
+                                 InputCommand::select_tab_2, InputCommand::select_tab_3,
+                                 InputCommand::select_tab_4, InputCommand::select_tab_5,
+                                 InputCommand::select_tab_6, InputCommand::select_tab_7,
+                                 InputCommand::select_tab_8, InputCommand::select_tab_9};
+  for (std::size_t index = 0; index < selectors.size(); ++index) {
+    LEMMA_ASSERT(
+        bind_prefix(InputChord::byte(static_cast<std::uint8_t>('0' + index)), selectors.at(index)));
+  }
+  for (const auto modifiers :
+       {key_modifier_super,
+        static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift)}) {
+    const auto chord = InputChord::byte('c', modifiers);
+    if (!is_prefix(chord)) {
+      LEMMA_ASSERT(set(ConfiguredInputContext::normal, chord, InputCommand::copy_selection));
+      LEMMA_ASSERT(set(ConfiguredInputContext::prefix, chord, InputCommand::copy_selection));
+      LEMMA_ASSERT(set(ConfiguredInputContext::resize, chord, InputCommand::copy_selection));
+    }
+  }
+  for (const auto modifiers :
+       {key_modifier_super, static_cast<std::uint16_t>(key_modifier_super | key_modifier_shift)}) {
+    const auto shift = static_cast<std::uint16_t>(modifiers & key_modifier_shift);
+    LEMMA_ASSERT(send(ConfiguredInputContext::normal,
+                      InputChord::key(PhysicalKey::arrow_left, modifiers), PhysicalKey::home,
+                      shift));
+    LEMMA_ASSERT(send(ConfiguredInputContext::prefix,
+                      InputChord::key(PhysicalKey::arrow_left, modifiers), PhysicalKey::home,
+                      shift));
+    LEMMA_ASSERT(send(ConfiguredInputContext::normal,
+                      InputChord::key(PhysicalKey::arrow_right, modifiers), PhysicalKey::end,
+                      shift));
+    LEMMA_ASSERT(send(ConfiguredInputContext::prefix,
+                      InputChord::key(PhysicalKey::arrow_right, modifiers), PhysicalKey::end,
+                      shift));
+  }
+  constexpr std::array directional{
+      std::pair{'h', InputCommand::resize_left}, std::pair{'j', InputCommand::resize_down},
+      std::pair{'k', InputCommand::resize_up}, std::pair{'l', InputCommand::resize_right}};
+  for (const auto& [key, command] : directional) {
+    for (const auto modifiers : {
+             key_modifier_control,
+             static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift),
+             key_modifier_alt,
+             static_cast<std::uint16_t>(key_modifier_alt | key_modifier_shift),
+         }) {
+      LEMMA_ASSERT(
+          bind_prefix(InputChord::byte(static_cast<std::uint8_t>(key), modifiers), command));
+    }
+    LEMMA_ASSERT(set(ConfiguredInputContext::resize,
+                     InputChord::byte(static_cast<std::uint8_t>(key)), command));
+  }
+  LEMMA_ASSERT(set(ConfiguredInputContext::resize, InputChord::key(PhysicalKey::arrow_left),
+                   InputCommand::resize_left));
+  LEMMA_ASSERT(set(ConfiguredInputContext::resize, InputChord::key(PhysicalKey::arrow_down),
+                   InputCommand::resize_down));
+  LEMMA_ASSERT(set(ConfiguredInputContext::resize, InputChord::key(PhysicalKey::arrow_up),
+                   InputCommand::resize_up));
+  LEMMA_ASSERT(set(ConfiguredInputContext::resize, InputChord::key(PhysicalKey::arrow_right),
+                   InputCommand::resize_right));
+  for (const auto chord :
+       {InputChord::byte('q'), InputChord::byte(0x0D), InputChord::byte(0x1B),
+        InputChord::key(PhysicalKey::escape), InputChord::key(PhysicalKey::enter),
+        InputChord::byte('c', key_modifier_control), InputChord::byte('g', key_modifier_control)}) {
+    if (!is_prefix(chord)) {
+      LEMMA_ASSERT(pop(ConfiguredInputContext::resize, chord));
+    }
+  }
 
-    const std::array prefix_byte{std::byte{0x02}};
-    const auto enter_prefix = enter_context(*prefix, prefix_byte);
-    const auto enter_resize = enter_context(*resize);
-    LEMMA_ASSERT(enter_prefix.has_value() && enter_resize.has_value());
-    for (const auto modifiers :
-         {key_modifier_control,
-          static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift)}) {
-      LEMMA_ASSERT(draft.bind(*normal, InputChord::byte('b', modifiers), *enter_prefix));
-      LEMMA_ASSERT(draft.bind(*resize, InputChord::byte('b', modifiers), *enter_prefix));
-    }
+  const auto copy = [this](const InputChord chord, const InputCommand command) noexcept {
+    return set(ConfiguredInputContext::copy, chord, command);
+  };
+  for (const auto chord : {InputChord::byte(0x1B), InputChord::key(PhysicalKey::escape)}) {
+    LEMMA_ASSERT(copy(chord, InputCommand::copy_cancel_or_leave));
+  }
+  for (const auto chord : {InputChord::byte('c', key_modifier_control),
+                           InputChord::byte('g', key_modifier_control), InputChord::byte('q')}) {
+    LEMMA_ASSERT(copy(chord, InputCommand::copy_leave));
+  }
+  for (const auto& [key, command] : std::array{
+           std::pair{'h', InputCommand::copy_move_left},
+           std::pair{'j', InputCommand::copy_move_down},
+           std::pair{'k', InputCommand::copy_move_up},
+           std::pair{'l', InputCommand::copy_move_right},
+           std::pair{'b', InputCommand::copy_word_left},
+           std::pair{'w', InputCommand::copy_word_right},
+           std::pair{'e', InputCommand::copy_word_end},
+           std::pair{'0', InputCommand::copy_line_start},
+           std::pair{'^', InputCommand::copy_line_first_nonblank},
+           std::pair{'$', InputCommand::copy_line_end},
+           std::pair{'G', InputCommand::copy_history_bottom},
+           std::pair{'H', InputCommand::copy_viewport_top},
+           std::pair{'M', InputCommand::copy_viewport_middle},
+           std::pair{'L', InputCommand::copy_viewport_bottom},
+           std::pair{' ', InputCommand::copy_visual_character},
+           std::pair{'v', InputCommand::copy_visual_character},
+           std::pair{'V', InputCommand::copy_visual_line},
+           std::pair{'o', InputCommand::copy_swap_endpoint},
+           std::pair{'y', InputCommand::copy_selection},
+           std::pair{'/', InputCommand::enter_copy_search_forward},
+           std::pair{'?', InputCommand::enter_copy_search_backward},
+           std::pair{'n', InputCommand::copy_repeat_search},
+           std::pair{'N', InputCommand::copy_reverse_search},
+       }) {
+    LEMMA_ASSERT(copy(InputChord::byte(static_cast<std::uint8_t>(key)), command));
+  }
+  LEMMA_ASSERT(
+      push(ConfiguredInputContext::copy, InputChord::byte('g'), ConfiguredInputContext::copy_go));
+  LEMMA_ASSERT(set(ConfiguredInputContext::copy_go, InputChord::byte('g'),
+                   InputCommand::copy_history_top, CommandContextDisposition::base));
+  for (const auto& [key, command] : std::array{
+           std::pair{'u', InputCommand::copy_half_page_up},
+           std::pair{'d', InputCommand::copy_half_page_down},
+           std::pair{'b', InputCommand::copy_page_up},
+           std::pair{'f', InputCommand::copy_page_down},
+           std::pair{'v', InputCommand::copy_visual_block},
+       }) {
+    LEMMA_ASSERT(
+        copy(InputChord::byte(static_cast<std::uint8_t>(key), key_modifier_control), command));
+  }
+  for (const auto chord : {InputChord::byte('\r'), InputChord::byte('j', key_modifier_control),
+                           InputChord::key(PhysicalKey::enter)}) {
+    LEMMA_ASSERT(copy(chord, InputCommand::copy_selection));
+  }
+  for (const auto& [key, command] : std::array{
+           std::pair{PhysicalKey::arrow_left, InputCommand::copy_move_left},
+           std::pair{PhysicalKey::arrow_down, InputCommand::copy_move_down},
+           std::pair{PhysicalKey::arrow_up, InputCommand::copy_move_up},
+           std::pair{PhysicalKey::arrow_right, InputCommand::copy_move_right},
+           std::pair{PhysicalKey::home, InputCommand::copy_line_start},
+           std::pair{PhysicalKey::end, InputCommand::copy_line_end},
+           std::pair{PhysicalKey::page_up, InputCommand::copy_page_up},
+           std::pair{PhysicalKey::page_down, InputCommand::copy_page_down},
+       }) {
+    LEMMA_ASSERT(copy(InputChord::key(key), command));
+  }
 
-    const auto bind_prefix = [&draft, prefix](const InputChord chord, const InputCommand command,
-                                              const CommandContextDisposition context =
-                                                  CommandContextDisposition::retain) {
-      LEMMA_ASSERT(draft.bind(*prefix, chord, invoke(command, context)));
-    };
-    bind_prefix(InputChord::byte('d'), InputCommand::detach);
-    for (const auto modifiers :
-         {key_modifier_control,
-          static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift)}) {
-      LEMMA_ASSERT(draft.bind(*prefix, InputChord::byte('b', modifiers), forward_deferred()));
-    }
-    LEMMA_ASSERT(draft.bind(*prefix, InputChord::byte('m'), *enter_resize));
-    bind_prefix(InputChord::byte('%'), InputCommand::split_left_right);
-    bind_prefix(InputChord::byte('"'), InputCommand::split_top_bottom);
-    bind_prefix(InputChord::byte('h'), InputCommand::focus_left);
-    bind_prefix(InputChord::byte('j'), InputCommand::focus_down);
-    bind_prefix(InputChord::byte('k'), InputCommand::focus_up);
-    bind_prefix(InputChord::byte('l'), InputCommand::focus_right);
-    bind_prefix(InputChord::byte('H'), InputCommand::swap_pane_left);
-    bind_prefix(InputChord::byte('J'), InputCommand::swap_pane_down);
-    bind_prefix(InputChord::byte('K'), InputCommand::swap_pane_up);
-    bind_prefix(InputChord::byte('L'), InputCommand::swap_pane_right);
-    bind_prefix(InputChord::byte('o'), InputCommand::focus_next);
-    bind_prefix(InputChord::byte(';'), InputCommand::focus_previous);
-    bind_prefix(InputChord::byte('x'), InputCommand::close_pane);
-    bind_prefix(InputChord::byte('z'), InputCommand::toggle_zoom);
-    bind_prefix(InputChord::byte('['), InputCommand::enter_copy_mode,
-                CommandContextDisposition::base);
-    bind_prefix(InputChord::byte('/'), InputCommand::enter_copy_search_forward,
-                CommandContextDisposition::base);
-    bind_prefix(InputChord::byte('?'), InputCommand::enter_copy_search_backward,
-                CommandContextDisposition::base);
-    for (const auto modifiers :
-         {key_modifier_super,
-          static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift)}) {
-      const auto chord = InputChord::byte('c', modifiers);
-      LEMMA_ASSERT(draft.bind(*normal, chord, invoke(InputCommand::copy_selection)));
-      LEMMA_ASSERT(draft.bind(*prefix, chord, invoke(InputCommand::copy_selection)));
-      LEMMA_ASSERT(draft.bind(*resize, chord, invoke(InputCommand::copy_selection)));
-    }
-    for (const auto super : {key_modifier_super,
-                             static_cast<std::uint16_t>(key_modifier_super | key_modifier_shift)}) {
-      const auto shift = static_cast<std::uint16_t>(super & key_modifier_shift);
-      const auto left = encode_as(PhysicalKey::home, shift);
-      const auto right = encode_as(PhysicalKey::end, shift);
-      LEMMA_ASSERT(draft.bind(*normal, InputChord::key(PhysicalKey::arrow_left, super), left));
-      LEMMA_ASSERT(draft.bind(*prefix, InputChord::key(PhysicalKey::arrow_left, super), left));
-      LEMMA_ASSERT(draft.bind(*normal, InputChord::key(PhysicalKey::arrow_right, super), right));
-      LEMMA_ASSERT(draft.bind(*prefix, InputChord::key(PhysicalKey::arrow_right, super), right));
-    }
-    bind_prefix(InputChord::byte('c'), InputCommand::create_tab);
-    bind_prefix(InputChord::byte('n'), InputCommand::next_tab);
-    bind_prefix(InputChord::byte('p'), InputCommand::previous_tab);
-    bind_prefix(InputChord::byte('R'), InputCommand::begin_rename_session,
-                CommandContextDisposition::base);
-    bind_prefix(InputChord::byte('r'), InputCommand::begin_rename_tab,
-                CommandContextDisposition::base);
-    bind_prefix(InputChord::byte('P'), InputCommand::move_tab_left);
-    bind_prefix(InputChord::byte('N'), InputCommand::move_tab_right);
-    bind_prefix(InputChord::byte('&'), InputCommand::close_tab);
-    bind_prefix(InputChord::byte('0'), InputCommand::select_tab_0);
-    bind_prefix(InputChord::byte('1'), InputCommand::select_tab_1);
-    bind_prefix(InputChord::byte('2'), InputCommand::select_tab_2);
-    bind_prefix(InputChord::byte('3'), InputCommand::select_tab_3);
-    bind_prefix(InputChord::byte('4'), InputCommand::select_tab_4);
-    bind_prefix(InputChord::byte('5'), InputCommand::select_tab_5);
-    bind_prefix(InputChord::byte('6'), InputCommand::select_tab_6);
-    bind_prefix(InputChord::byte('7'), InputCommand::select_tab_7);
-    bind_prefix(InputChord::byte('8'), InputCommand::select_tab_8);
-    bind_prefix(InputChord::byte('9'), InputCommand::select_tab_9);
+  const auto bind_search = [this](const ConfiguredInputContext context, const InputChord chord,
+                                  const InputCommand command) noexcept {
+    return set(context, chord, command);
+  };
+  for (const auto chord : {InputChord::byte(0x1B), InputChord::key(PhysicalKey::escape)}) {
+    LEMMA_ASSERT(
+        bind_search(ConfiguredInputContext::copy_search, chord, InputCommand::copy_cancel_search));
+    LEMMA_ASSERT(bind_search(ConfiguredInputContext::copy_searching, chord,
+                             InputCommand::copy_cancel_search));
+  }
+  for (const auto chord : {InputChord::byte(0x7F), InputChord::byte('h', key_modifier_control),
+                           InputChord::key(PhysicalKey::backspace)}) {
+    LEMMA_ASSERT(bind_search(ConfiguredInputContext::copy_search, chord,
+                             InputCommand::copy_query_backspace));
+  }
+  for (const auto chord : {InputChord::byte('\r'), InputChord::byte('j', key_modifier_control),
+                           InputChord::key(PhysicalKey::enter)}) {
+    LEMMA_ASSERT(
+        bind_search(ConfiguredInputContext::copy_search, chord, InputCommand::copy_commit_search));
+  }
+  for (const auto chord : {InputChord::byte('c', key_modifier_control),
+                           InputChord::byte('g', key_modifier_control), InputChord::byte('q')}) {
+    LEMMA_ASSERT(
+        bind_search(ConfiguredInputContext::copy_searching, chord, InputCommand::copy_leave));
+  }
 
-    constexpr std::array directional{
-        std::pair{'h', InputCommand::resize_left},
-        std::pair{'j', InputCommand::resize_down},
-        std::pair{'k', InputCommand::resize_up},
-        std::pair{'l', InputCommand::resize_right},
-    };
-    for (const auto& [key, command] : directional) {
-      for (const auto modifiers : {
-               key_modifier_control,
-               static_cast<std::uint16_t>(key_modifier_control | key_modifier_shift),
-               key_modifier_alt,
-               static_cast<std::uint16_t>(key_modifier_alt | key_modifier_shift),
-           }) {
-        bind_prefix(InputChord::byte(static_cast<std::uint8_t>(key), modifiers), command);
+  const auto rename = [this](const InputChord chord, const InputCommand command) noexcept {
+    return set(ConfiguredInputContext::rename, chord, command);
+  };
+  for (const auto chord :
+       {InputChord::byte(0x1B), InputChord::byte('c', key_modifier_control),
+        InputChord::byte('g', key_modifier_control), InputChord::key(PhysicalKey::escape)}) {
+    LEMMA_ASSERT(rename(chord, InputCommand::rename_cancel));
+  }
+  for (const auto chord : {InputChord::byte('\r'), InputChord::byte('j', key_modifier_control),
+                           InputChord::key(PhysicalKey::enter)}) {
+    LEMMA_ASSERT(rename(chord, InputCommand::rename_commit));
+  }
+  for (const auto chord : {InputChord::byte(0x7F), InputChord::byte('h', key_modifier_control),
+                           InputChord::key(PhysicalKey::backspace)}) {
+    LEMMA_ASSERT(rename(chord, InputCommand::rename_backspace));
+  }
+  LEMMA_ASSERT(rename(InputChord::key(PhysicalKey::delete_key), InputCommand::rename_delete));
+  LEMMA_ASSERT(rename(InputChord::key(PhysicalKey::arrow_left), InputCommand::rename_cursor_left));
+  LEMMA_ASSERT(
+      rename(InputChord::key(PhysicalKey::arrow_right), InputCommand::rename_cursor_right));
+  for (const auto chord :
+       {InputChord::byte('a', key_modifier_control), InputChord::key(PhysicalKey::home)}) {
+    LEMMA_ASSERT(rename(chord, InputCommand::rename_cursor_home));
+  }
+  for (const auto chord :
+       {InputChord::byte('e', key_modifier_control), InputChord::key(PhysicalKey::end)}) {
+    LEMMA_ASSERT(rename(chord, InputCommand::rename_cursor_end));
+  }
+  LEMMA_ASSERT(rename(InputChord::byte('u', key_modifier_control), InputCommand::rename_clear));
+  LEMMA_ASSERT(
+      rename(InputChord::byte('w', key_modifier_control), InputCommand::rename_delete_word));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto compile_input_map(const InputMapConfiguration& configuration) noexcept
+    -> std::expected<CompiledInputMap, InputMapError> {
+  if (configuration.binding_count > configuration.bindings.size() ||
+      (configuration.preset != InputMapPreset::defaults &&
+       configuration.preset != InputMapPreset::none)) {
+    return std::unexpected(InputMapError::invalid_options);
+  }
+  InputMapDraft draft;
+  std::array<InputContextId, static_cast<std::size_t>(ConfiguredInputContext::count)> contexts{};
+  for (std::size_t index = 0; index < contexts.size(); ++index) {
+    const auto& configured_context = configuration.contexts.at(index);
+    const auto added = draft.add_context(
+        {.label = std::string_view(configured_context.label.data(), configured_context.label_size),
+         .lifetime = configured_context.lifetime,
+         .unbound = configured_context.unbound,
+         .preempts_interaction = configured_context.preempts_interaction});
+    if (!added.has_value()) {
+      return std::unexpected(added.error());
+    }
+    contexts.at(index) = *added;
+  }
+  for (const auto& configured :
+       std::span(configuration.bindings).first(configuration.binding_count)) {
+    if (configured.context >= ConfiguredInputContext::count ||
+        configured.action.kind > ConfiguredBindingKind::send_key) {
+      return std::unexpected(InputMapError::invalid_options);
+    }
+    BindingAction action;
+    switch (configured.action.kind) {
+    case ConfiguredBindingKind::command:
+      if (configured.action.command >= InputCommand::count ||
+          (configured.action.disposition != CommandContextDisposition::retain &&
+           configured.action.disposition != CommandContextDisposition::base)) {
+        return std::unexpected(InputMapError::invalid_action);
       }
-      LEMMA_ASSERT(
-          draft.bind(*resize, InputChord::byte(static_cast<std::uint8_t>(key)), invoke(command)));
+      action = invoke(configured.action.command, configured.action.disposition);
+      break;
+    case ConfiguredBindingKind::push_context: {
+      if (configured.action.target >= ConfiguredInputContext::count) {
+        return std::unexpected(InputMapError::invalid_context);
+      }
+      std::span<const std::byte> deferred;
+      std::optional<EncodedPrefix> encoded;
+      if (configured.action.defer_chord) {
+        encoded = encode_prefix(configured.chord);
+        if (encoded.has_value()) {
+          deferred = std::span(encoded->bytes).first(encoded->size);
+        }
+      }
+      auto pushed =
+          push_context(contexts.at(static_cast<std::size_t>(configured.action.target)), deferred);
+      if (!pushed.has_value()) {
+        return std::unexpected(pushed.error());
+      }
+      action = *pushed;
+      break;
     }
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::arrow_left),
-                            invoke(InputCommand::resize_left)));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::arrow_down),
-                            invoke(InputCommand::resize_down)));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::arrow_up),
-                            invoke(InputCommand::resize_up)));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::arrow_right),
-                            invoke(InputCommand::resize_right)));
-    for (const auto key : {'q', static_cast<char>(0x0D), static_cast<char>(0x1B)}) {
-      LEMMA_ASSERT(
-          draft.bind(*resize, InputChord::byte(static_cast<std::uint8_t>(key)), leave_context()));
+    case ConfiguredBindingKind::pop_context:
+      action = pop_context();
+      break;
+    case ConfiguredBindingKind::replay_deferred:
+      action = forward_deferred();
+      break;
+    case ConfiguredBindingKind::send_key:
+      if (configured.action.encoded_key >= PhysicalKey::count ||
+          (configured.action.encoded_modifiers & ~key_modifiers_all) != 0U) {
+        return std::unexpected(InputMapError::invalid_action);
+      }
+      action = encode_as(configured.action.encoded_key, configured.action.encoded_modifiers);
+      break;
     }
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::byte('c', key_modifier_control), leave_context()));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::byte('g', key_modifier_control), leave_context()));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::escape), leave_context()));
-    LEMMA_ASSERT(draft.bind(*resize, InputChord::key(PhysicalKey::enter), leave_context()));
+    if (!draft.set(contexts.at(static_cast<std::size_t>(configured.context)), configured.chord,
+                   action)) {
+      return std::unexpected(InputMapError::capacity);
+    }
+  }
+  return draft.compile();
+}
 
-    auto compiled = draft.compile();
+auto default_input_map() noexcept -> const CompiledInputMap& {
+  static const CompiledInputMap map = [] {
+    auto compiled = compile_input_map(InputMapConfiguration{});
     LEMMA_ASSERT(compiled.has_value());
     return std::move(*compiled);
   }();

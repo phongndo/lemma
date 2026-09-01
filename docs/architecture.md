@@ -4,7 +4,9 @@ Lemma is one C++23 executable with client, daemon, and control roles. One per-us
 live mux and terminal state. Clients are replaceable input and presentation edges.
 
 ```text
-physical input ─> input policy ─┐
+Lua config ─> isolated host ─> validated draft ─> immutable native generation
+                                                  │
+physical input ─> input policy ─┐                  │
 CLI / API / mouse ───────────────┴─> typed command ─> Core ─> Runtime
                                                             ├─> PTY/process
 PTY output ─> Ghostty terminal ─> render/composition ───────┴─> client
@@ -47,6 +49,8 @@ destroy the Session.
 | `lemma_api` | Public Action, Procedure, Event, JSON, and schema values |
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
 | `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
+| `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
+| `lemma_extension` | Isolated Lua host lifecycle and transactional configuration admission |
 | `lemma_runtime` | Processes, PTYs, scheduling, input execution, resizing, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
@@ -54,8 +58,9 @@ destroy the Session.
 | `lemma_client` | Host input, outer-terminal presentation, and restoration |
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
 
-Core links no PTY, socket, process, or terminal-emulator owner. Runtime executes accepted semantic
-intent using those mechanisms.
+Core links no Lua VM, PTY, socket, process, or terminal-emulator owner. Runtime executes accepted
+semantic intent using those mechanisms. The daemon borrows one immutable compiled configuration
+generation; input routing and runtime operation never call into the host process.
 
 ## Authority and ownership
 
@@ -64,8 +69,9 @@ Every mutable fact has one authoritative owner:
 | State | Owner |
 | --- | --- |
 | Sessions, Tabs, Panes, layout, focus, zoom, stable IDs | Core |
-| Attachment view, copy, rename, and interaction policy | Core |
-| Compiled keymaps and transient input contexts | Input policy |
+| Attachment view plus copy and rename semantic state | Core |
+| All key bindings, context options, transitions, and transient routing state | Input policy |
+| Lua VM and uncommitted configuration draft | Extension host process |
 | Processes, PTYs, descriptors, polling, clocks | Runtime |
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
 | Connection decoding, output progress, deadlines | AttachmentRuntime |
@@ -74,6 +80,11 @@ Every mutable fact has one authoritative owner:
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
 authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
 references remain owner-local.
+
+The shipped interaction policy is configuration data, not a privileged routing path. The default
+preset and an equivalent explicit user policy compile into the same immutable representation. Core
+implements semantic operations such as resizing or moving a copy selection; configuration alone
+selects the keys and routing-context transitions that invoke them.
 
 ## Commands
 

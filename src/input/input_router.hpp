@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <variant>
@@ -12,7 +13,7 @@
 namespace lemma::input {
 
 inline constexpr std::size_t input_contexts_max = 16;
-inline constexpr std::size_t input_bindings_max = 128;
+inline constexpr std::size_t input_bindings_max = 240;
 inline constexpr std::size_t input_context_stack_max = 4;
 inline constexpr std::size_t input_context_label_bytes_max = 16;
 inline constexpr std::size_t deferred_input_bytes_max = 4;
@@ -141,6 +142,47 @@ enum class InputCommand : std::uint8_t {
   select_tab_7,
   select_tab_8,
   select_tab_9,
+  copy_cancel_or_leave,
+  copy_leave,
+  copy_cancel_selection,
+  copy_move_left,
+  copy_move_down,
+  copy_move_up,
+  copy_move_right,
+  copy_word_left,
+  copy_word_right,
+  copy_word_end,
+  copy_line_start,
+  copy_line_first_nonblank,
+  copy_line_end,
+  copy_history_top,
+  copy_history_bottom,
+  copy_viewport_top,
+  copy_viewport_middle,
+  copy_viewport_bottom,
+  copy_half_page_up,
+  copy_half_page_down,
+  copy_page_up,
+  copy_page_down,
+  copy_visual_character,
+  copy_visual_line,
+  copy_visual_block,
+  copy_swap_endpoint,
+  copy_repeat_search,
+  copy_reverse_search,
+  copy_cancel_search,
+  copy_commit_search,
+  copy_query_backspace,
+  rename_cancel,
+  rename_commit,
+  rename_backspace,
+  rename_delete,
+  rename_cursor_left,
+  rename_cursor_right,
+  rename_cursor_home,
+  rename_cursor_end,
+  rename_clear,
+  rename_delete_word,
   count,
 };
 
@@ -170,6 +212,7 @@ enum class UnboundBehavior : std::uint8_t {
   forward,
   replay_deferred,
   consume,
+  retry_base,
 };
 
 struct ContextOptions final {
@@ -214,20 +257,20 @@ struct CommandBinding final {
   CommandContextDisposition context{CommandContextDisposition::retain};
 };
 
-struct EnterContextBinding final {
+struct PushContextBinding final {
   InputContextId context;
   std::array<std::byte, deferred_input_bytes_max> deferred{};
   std::uint8_t deferred_size{0};
 };
 
-struct LeaveContextBinding final {};
+struct PopContextBinding final {};
 struct ForwardDeferredBinding final {};
 struct EncodeAsBinding final {
   PhysicalKey key{PhysicalKey::unidentified};
   std::uint16_t modifiers{0};
 };
 
-using BindingAction = std::variant<CommandBinding, EnterContextBinding, LeaveContextBinding,
+using BindingAction = std::variant<CommandBinding, PushContextBinding, PopContextBinding,
                                    ForwardDeferredBinding, EncodeAsBinding>;
 
 enum class InputMapError : std::uint8_t {
@@ -285,6 +328,11 @@ public:
       -> std::expected<InputContextId, InputMapError>;
   [[nodiscard]] auto bind(InputContextId context, InputChord chord, BindingAction action) noexcept
       -> bool;
+  // Configuration generations use replacement semantics explicitly. bind() remains append-only so
+  // duplicate declarations are rejected when a draft is compiled.
+  [[nodiscard]] auto set(InputContextId context, InputChord chord, BindingAction action) noexcept
+      -> bool;
+  [[nodiscard]] auto unbind(InputContextId context, InputChord chord) noexcept -> bool;
   [[nodiscard]] auto compile() const noexcept -> std::expected<CompiledInputMap, InputMapError>;
 
 private:
@@ -308,8 +356,8 @@ private:
   std::uint8_t binding_count_{0};
 };
 
-[[nodiscard]] auto enter_context(InputContextId context,
-                                 std::span<const std::byte> deferred = {}) noexcept
+[[nodiscard]] auto push_context(InputContextId context,
+                                std::span<const std::byte> deferred = {}) noexcept
     -> std::expected<BindingAction, InputMapError>;
 [[nodiscard]] constexpr auto
 invoke(const InputCommand command,
@@ -317,9 +365,7 @@ invoke(const InputCommand command,
     -> BindingAction {
   return CommandBinding{.command = command, .context = context};
 }
-[[nodiscard]] constexpr auto leave_context() noexcept -> BindingAction {
-  return LeaveContextBinding{};
-}
+[[nodiscard]] constexpr auto pop_context() noexcept -> BindingAction { return PopContextBinding{}; }
 [[nodiscard]] constexpr auto forward_deferred() noexcept -> BindingAction {
   return ForwardDeferredBinding{};
 }
@@ -371,11 +417,14 @@ struct KeyRouteResult final {
   bool interaction_preemption_requested{false};
 };
 
+enum class ConfiguredInputContext : std::uint8_t;
+
 class InputRouter final {
 public:
   explicit InputRouter(const CompiledInputMap& map) noexcept;
 
   void reset() noexcept;
+  void select_base(ConfiguredInputContext selected) noexcept;
   [[nodiscard]] auto active_label() const noexcept -> std::string_view;
   [[nodiscard]] auto unbound() const noexcept -> UnboundBehavior {
     return context(active_frame().context).unbound;
@@ -426,6 +475,87 @@ private:
   std::uint64_t forwarded_keys_{0};
 };
 
+enum class ConfiguredInputContext : std::uint8_t {
+  normal,
+  prefix,
+  resize,
+  copy,
+  copy_go,
+  copy_search,
+  copy_searching,
+  rename,
+  count,
+};
+
+enum class InputMapPreset : std::uint8_t {
+  defaults,
+  none,
+};
+
+enum class ConfiguredBindingKind : std::uint8_t {
+  command,
+  push_context,
+  pop_context,
+  replay_deferred,
+  send_key,
+};
+
+struct ConfiguredBindingAction final {
+  ConfiguredBindingKind kind{ConfiguredBindingKind::command};
+  InputCommand command{InputCommand::detach};
+  ConfiguredInputContext target{ConfiguredInputContext::normal};
+  CommandContextDisposition disposition{CommandContextDisposition::retain};
+  PhysicalKey encoded_key{PhysicalKey::unidentified};
+  std::uint16_t encoded_modifiers{0};
+  bool defer_chord{false};
+};
+
+struct ConfiguredBinding final {
+  ConfiguredInputContext context{ConfiguredInputContext::normal};
+  InputChord chord;
+  ConfiguredBindingAction action;
+};
+
+struct ContextConfiguration final {
+  std::array<char, input_context_label_bytes_max> label{};
+  std::uint8_t label_size{0};
+  ContextLifetime lifetime{ContextLifetime::persistent};
+  UnboundBehavior unbound{UnboundBehavior::forward};
+  bool preempts_interaction{false};
+};
+
+struct InputMapConfiguration final {
+  InputMapConfiguration() noexcept;
+
+  std::array<ConfiguredBinding, input_bindings_max> bindings{};
+  std::array<ContextConfiguration, static_cast<std::size_t>(ConfiguredInputContext::count)>
+      contexts{};
+  std::optional<InputChord> prefix;
+  InputMapPreset preset{InputMapPreset::defaults};
+  std::uint8_t binding_count{0};
+
+  void reset(InputMapPreset selected) noexcept;
+  [[nodiscard]] auto set_context(ConfiguredInputContext selected, ContextOptions options) noexcept
+      -> bool;
+  [[nodiscard]] auto set_prefix(std::optional<InputChord> chord) noexcept -> bool;
+  [[nodiscard]] auto set_action(ConfiguredInputContext context, InputChord chord,
+                                ConfiguredBindingAction action) noexcept -> bool;
+  [[nodiscard]] auto
+  set(ConfiguredInputContext context, InputChord chord, InputCommand command,
+      CommandContextDisposition disposition = CommandContextDisposition::retain) noexcept -> bool;
+  [[nodiscard]] auto push(ConfiguredInputContext context, InputChord chord,
+                          ConfiguredInputContext target, bool defer_chord = false) noexcept -> bool;
+  [[nodiscard]] auto pop(ConfiguredInputContext context, InputChord chord) noexcept -> bool;
+  [[nodiscard]] auto replay(ConfiguredInputContext context, InputChord chord) noexcept -> bool;
+  [[nodiscard]] auto send(ConfiguredInputContext context, InputChord chord, PhysicalKey key,
+                          std::uint16_t modifiers = 0) noexcept -> bool;
+  [[nodiscard]] auto unbind(ConfiguredInputContext context, InputChord chord) noexcept -> bool;
+};
+
+// Compiles one complete immutable input-policy generation. Publication owns the returned value for
+// longer than every InputRouter borrowing it.
+[[nodiscard]] auto compile_input_map(const InputMapConfiguration& configuration) noexcept
+    -> std::expected<CompiledInputMap, InputMapError>;
 [[nodiscard]] auto default_input_map() noexcept -> const CompiledInputMap&;
 
 } // namespace lemma::input

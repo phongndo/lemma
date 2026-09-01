@@ -5,6 +5,7 @@
 #include "app/procedure.hpp"
 #include "client/attached_client.hpp"
 #include "daemon/server.hpp"
+#include "extension/lua_host.hpp"
 #include "lemma/command.hpp"
 #include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
@@ -136,6 +137,7 @@ template <typename Integer>
       "  events [OPTIONS]                       Stream machine-readable observations\n\n"
       "Reference:\n"
       "  api schema [--json]                    Inspect the public API contract\n"
+      "  config check [FILE]                    Validate Lua configuration transactionally\n"
       "  skill                                  Print the Lemma agent skill\n"
       "  version                                Show build and protocol versions\n"
       "  help                                   Show this help\n\n"
@@ -558,6 +560,21 @@ struct SurfaceArguments final {
   return write_fragment(stdout, overview) ? 0 : 1;
 }
 
+[[nodiscard]] auto is_config_check_help(const std::span<char*> arguments) noexcept -> bool {
+  return arguments.size() == 2U && std::string_view(arguments.front()) == "config" &&
+         std::string_view(arguments.back()) == "check";
+}
+
+[[nodiscard]] auto print_config_check_help() noexcept -> int {
+  constexpr std::string_view help =
+      "Usage:\n"
+      "  lemma config check [FILE]\n\n"
+      "Load Lua configuration in an isolated bounded host, validate the complete native input "
+      "map, and publish nothing. FILE defaults to $XDG_CONFIG_HOME/lemma/init.lua or "
+      "~/.config/lemma/init.lua.\n";
+  return write_fragment(stdout, help) ? 0 : 1;
+}
+
 [[nodiscard]] auto print_contextual_help(const std::span<char*> arguments) noexcept -> int {
   if (arguments.empty()) {
     return print_usage(stdout);
@@ -588,7 +605,45 @@ struct SurfaceArguments final {
         "The stream is open-ended; bound it with the caller's timeout or cancellation mechanism.\n";
     return write_fragment(stdout, help) ? 0 : 1;
   }
+  if (is_config_check_help(arguments)) {
+    return print_config_check_help();
+  }
   return print_usage(stdout);
+}
+
+[[nodiscard]] auto run_configuration(const std::span<char*> arguments) noexcept -> int {
+  if (arguments.empty() || std::string_view(arguments.front()) != "check" ||
+      arguments.size() > 2U) {
+    return invalid_arguments("config");
+  }
+  const auto requested = arguments.size() == 2U ? std::optional<std::string_view>{arguments.back()}
+                                                : std::optional<std::string_view>{};
+  auto loaded = extension::load_configuration(requested);
+  if (loaded.status == extension::ConfigurationStatus::absent) {
+    static_cast<void>(write_fragment(stdout, "lemma config: no configuration file found"));
+    if (!loaded.path.empty()) {
+      static_cast<void>(write_fragment(stdout, " at "));
+      static_cast<void>(write_fragment(stdout, loaded.path));
+    }
+    return write_fragment(stdout, "\n") ? 0 : 1;
+  }
+  if (loaded.status == extension::ConfigurationStatus::invalid) {
+    static_cast<void>(write_fragment(stderr, "lemma config rejected"));
+    if (!loaded.path.empty()) {
+      static_cast<void>(write_fragment(stderr, ": "));
+      static_cast<void>(write_fragment(stderr, loaded.path));
+    }
+    if (!loaded.diagnostic.empty()) {
+      static_cast<void>(write_fragment(stderr, ": "));
+      static_cast<void>(write_fragment(stderr, loaded.diagnostic));
+    }
+    static_cast<void>(write_fragment(stderr, "\n"));
+    return 1;
+  }
+  return write_fragment(stdout, "lemma config ok: ") && write_fragment(stdout, loaded.path) &&
+                 write_fragment(stdout, "\n")
+             ? 0
+             : 1;
 }
 
 template <typename Integer>
@@ -1792,6 +1847,9 @@ action_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = 
   }
   if (command == "events") {
     return run_events(endpoint, command_arguments.subspan(1));
+  }
+  if (command == "config") {
+    return run_configuration(command_arguments.subspan(1));
   }
   if (command == "api" && command_arguments.size() >= 2 &&
       std::string_view(command_arguments.subspan(1, 1).front()) == "schema") {

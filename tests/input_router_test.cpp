@@ -27,7 +27,7 @@ TEST(InputMapTest, RejectsUnresolvedContextTransitionsBeforePublication) {
   InputMapDraft draft;
   const auto normal = draft.add_context({});
   ASSERT_TRUE(normal.has_value());
-  ASSERT_TRUE(draft.bind(*normal, InputChord::byte('m'), EnterContextBinding{}));
+  ASSERT_TRUE(draft.bind(*normal, InputChord::byte('m'), PushContextBinding{}));
 
   const auto compiled = draft.compile();
 
@@ -93,9 +93,9 @@ TEST(InputMapTest, RejectsContextGraphsThatCannotFitTheRuntimeStack) {
     stored = *context;
   }
   for (std::size_t index = 1; index < contexts.size(); ++index) {
-    const auto enter = enter_context(contexts.at(index));
-    ASSERT_TRUE(enter.has_value());
-    ASSERT_TRUE(draft.bind(contexts.at(index - 1U), InputChord::byte('a'), *enter));
+    const auto pushed = push_context(contexts.at(index));
+    ASSERT_TRUE(pushed.has_value());
+    ASSERT_TRUE(draft.bind(contexts.at(index - 1U), InputChord::byte('a'), *pushed));
   }
 
   const auto compiled = draft.compile();
@@ -193,9 +193,9 @@ TEST(InputRouterTest, OneShotForwardContextReturnsToItsParentBeforeTheNextByte) 
                                            .unbound = UnboundBehavior::forward,
                                            .preempts_interaction = false});
   ASSERT_TRUE(normal.has_value() && one_shot.has_value());
-  const auto enter = enter_context(*one_shot);
-  ASSERT_TRUE(enter.has_value());
-  ASSERT_TRUE(draft.bind(*normal, InputChord::byte('x'), *enter));
+  const auto pushed = push_context(*one_shot);
+  ASSERT_TRUE(pushed.has_value());
+  ASSERT_TRUE(draft.bind(*normal, InputChord::byte('x'), *pushed));
   const auto map = draft.compile();
   ASSERT_TRUE(map.has_value());
   InputRouter router(*map);
@@ -470,6 +470,143 @@ TEST(InputRouterTest, CustomGenerationCanReplaceOrForwardHostCopyChords) {
   ASSERT_TRUE(empty_map.has_value());
   InputRouter empty_router(*empty_map);
   EXPECT_TRUE(std::holds_alternative<ForwardCurrentKey>(empty_router.route_key(super_c).effect));
+}
+
+TEST(InputRouterTest, BlankPresetSupportsPrefixlessDirectBindings) {
+  InputMapConfiguration configuration;
+  configuration.reset(InputMapPreset::none);
+  ASSERT_TRUE(configuration.set(ConfiguredInputContext::normal,
+                                InputChord::byte('s', key_modifier_alt),
+                                InputCommand::split_left_right));
+  const auto map = compile_input_map(configuration);
+  ASSERT_TRUE(map.has_value());
+  InputRouter router(*map);
+  constexpr std::array ordinary{std::byte{0x02}};
+  const auto forwarded = router.route_legacy(ordinary, ordinary.size());
+  EXPECT_TRUE(std::holds_alternative<ForwardLegacyInput>(forwarded.effect));
+
+  constexpr std::array direct{std::byte{0x1B}, std::byte{'s'}};
+  const auto routed = router.route_legacy(direct, direct.size());
+  const auto* const command = std::get_if<RoutedCommand>(&routed.effect);
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->command, InputCommand::split_left_right);
+}
+
+TEST(InputRouterTest, CompilerDoesNotGivePresetMetadataRuntimePriority) {
+  InputMapConfiguration seeded;
+  auto explicit_policy = seeded;
+  explicit_policy.preset = InputMapPreset::none;
+  const auto seeded_map = compile_input_map(seeded);
+  const auto explicit_map = compile_input_map(explicit_policy);
+  ASSERT_TRUE(seeded_map.has_value());
+  ASSERT_TRUE(explicit_map.has_value());
+  InputRouter seeded_router(*seeded_map);
+  InputRouter explicit_router(*explicit_map);
+  constexpr std::array prefix{std::byte{0x02}};
+  constexpr std::array split{std::byte{'%'}};
+
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(
+      seeded_router.route_legacy(prefix, prefix.size()).effect));
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(
+      explicit_router.route_legacy(prefix, prefix.size()).effect));
+  const auto seeded_split = seeded_router.route_legacy(split, split.size());
+  const auto explicit_split = explicit_router.route_legacy(split, split.size());
+  ASSERT_NE(std::get_if<RoutedCommand>(&seeded_split.effect), nullptr);
+  ASSERT_NE(std::get_if<RoutedCommand>(&explicit_split.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(seeded_split.effect).command,
+            std::get<RoutedCommand>(explicit_split.effect).command);
+}
+
+TEST(InputRouterTest, CompiledDefaultPolicyRoutesCopyAndSearchModes) {
+  InputMapConfiguration configuration;
+  const auto map = compile_input_map(configuration);
+  ASSERT_TRUE(map.has_value());
+  InputRouter router(*map);
+  router.select_base(ConfiguredInputContext::copy);
+
+  constexpr std::array move{std::byte{'h'}};
+  const auto moved = router.route_legacy(move, move.size());
+  const auto* const move_command = std::get_if<RoutedCommand>(&moved.effect);
+  ASSERT_NE(move_command, nullptr);
+  EXPECT_EQ(move_command->command, InputCommand::copy_move_left);
+
+  constexpr std::array go{std::byte{'g'}};
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(go, go.size()).effect));
+  const auto top = router.route_legacy(go, go.size());
+  const auto* const top_command = std::get_if<RoutedCommand>(&top.effect);
+  ASSERT_NE(top_command, nullptr);
+  EXPECT_EQ(top_command->command, InputCommand::copy_history_top);
+
+  router.select_base(ConfiguredInputContext::copy_search);
+  constexpr std::array query{std::byte{'n'}};
+  EXPECT_TRUE(
+      std::holds_alternative<ForwardLegacyInput>(router.route_legacy(query, query.size()).effect));
+  constexpr std::array backspace{std::byte{0x7F}};
+  const auto erased = router.route_legacy(backspace, backspace.size());
+  const auto* const erase_command = std::get_if<RoutedCommand>(&erased.effect);
+  ASSERT_NE(erase_command, nullptr);
+  EXPECT_EQ(erase_command->command, InputCommand::copy_query_backspace);
+
+  router.select_base(ConfiguredInputContext::rename);
+  constexpr std::array home{std::byte{0x01}};
+  const auto renamed = router.route_legacy(home, home.size());
+  const auto* const rename_command = std::get_if<RoutedCommand>(&renamed.effect);
+  ASSERT_NE(rename_command, nullptr);
+  EXPECT_EQ(rename_command->command, InputCommand::rename_cursor_home);
+}
+
+TEST(InputRouterTest, BlankPolicyCanRecreateContextTransitionsWithoutNativeBindings) {
+  InputMapConfiguration configuration;
+  configuration.reset(InputMapPreset::none);
+  ASSERT_TRUE(configuration.set_context(ConfiguredInputContext::prefix,
+                                        {.label = " COMMAND ",
+                                         .lifetime = ContextLifetime::one_shot,
+                                         .unbound = UnboundBehavior::consume,
+                                         .preempts_interaction = false}));
+  ASSERT_TRUE(configuration.push(ConfiguredInputContext::normal, InputChord::byte('a'),
+                                 ConfiguredInputContext::prefix));
+  ASSERT_TRUE(configuration.set(ConfiguredInputContext::prefix, InputChord::byte('s'),
+                                InputCommand::split_left_right));
+  const auto map = compile_input_map(configuration);
+  ASSERT_TRUE(map.has_value());
+  InputRouter router(*map);
+  constexpr std::array enter{std::byte{'a'}};
+  constexpr std::array split{std::byte{'s'}};
+
+  EXPECT_TRUE(
+      std::holds_alternative<ConsumedInput>(router.route_legacy(enter, enter.size()).effect));
+  EXPECT_EQ(router.active_label(), " COMMAND ");
+  const auto routed = router.route_legacy(split, split.size());
+  const auto* const command = std::get_if<RoutedCommand>(&routed.effect);
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->command, InputCommand::split_left_right);
+  EXPECT_TRUE(router.active_label().empty());
+}
+
+TEST(InputRouterTest, StructuredSuperChordCanBeThePrefix) {
+  InputMapConfiguration configuration;
+  ASSERT_TRUE(configuration.set_prefix(InputChord::byte('b', key_modifier_super)));
+  ASSERT_TRUE(configuration.set(ConfiguredInputContext::prefix, InputChord::byte('s'),
+                                InputCommand::split_left_right));
+  const auto map = compile_input_map(configuration);
+  ASSERT_TRUE(map.has_value());
+  InputRouter router(*map);
+  const KeyEvent prefix{.action = KeyAction::press,
+                        .key = PhysicalKey::b,
+                        .modifiers = key_modifier_super,
+                        .unshifted_codepoint = 'b',
+                        .text = {}};
+  const KeyEvent split{.action = KeyAction::press,
+                       .key = PhysicalKey::s,
+                       .modifiers = 0,
+                       .unshifted_codepoint = 's',
+                       .text = {}};
+
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(prefix).effect));
+  const auto routed = router.route_key(split);
+  const auto* const command = std::get_if<RoutedCommand>(&routed.effect);
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->command, InputCommand::split_left_right);
 }
 
 TEST(InputRouterTest, ACompiledMapCanUseDirectBindingsWithoutAnyTransientContext) {

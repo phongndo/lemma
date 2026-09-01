@@ -73,7 +73,7 @@ The default suite separates deterministic component behavior from real process b
 
 | Tier | Responsibility |
 | --- | --- |
-| Native unit | Core values, commands, layout, protocol, queues, and input policy |
+| Native unit | Core values, commands, layout, protocol, queues, configuration, and input policy |
 | Terminal boundary | Ghostty adapter, rendering, input encoding, effects, resize, and selection |
 | Component integration | Process-opening platform boundaries |
 | Python mux | Real daemon, client, PTY, child process, lifecycle, API, and terminal consequences |
@@ -86,7 +86,7 @@ Use the repository entry point:
 ./test unit
 ./test layout
 ./test protocol
-./test input
+./test input            # Lua configuration generation and native settings/input policy
 ./test queues
 ./test terminal
 ./test component

@@ -142,6 +142,32 @@ private:
   return active_reactor_environment->now(active_reactor_environment->context);
 }
 
+[[nodiscard]] auto reactor_input_map() noexcept -> const input::CompiledInputMap& {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->input_map == nullptr ? input::default_input_map()
+                                                          : *active_reactor_environment->input_map;
+}
+
+[[nodiscard]] auto reactor_scrollback_lines() noexcept -> std::optional<std::size_t> {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->scrollback_lines;
+}
+
+[[nodiscard]] auto reactor_default_program() noexcept -> std::span<const std::byte> {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->default_program;
+}
+
+[[nodiscard]] auto reactor_default_cwd() noexcept -> std::string_view {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->default_cwd;
+}
+
+[[nodiscard]] auto reactor_status_line() noexcept -> bool {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->status_line;
+}
+
 [[nodiscard]] auto reactor_poll(const std::span<pollfd> descriptors,
                                 const int timeout_milliseconds) noexcept -> int {
   LEMMA_ASSERT(active_reactor_environment != nullptr);
@@ -792,7 +818,8 @@ struct SessionRecord final : Session {
                 const LaunchEnvironmentMode initial_environment_mode) noexcept
       : Session(session_name, initial_working_directory, initial_environment,
                 initial_environment_mode),
-        input_router(input::default_input_map()), theme(vt::default_theme()) {}
+        input_router(reactor_input_map()), interaction_router(reactor_input_map()),
+        theme(vt::default_theme()) {}
 
   SessionRecord(const SessionRecord&) = delete;
   auto operator=(const SessionRecord&) -> SessionRecord& = delete;
@@ -801,6 +828,7 @@ struct SessionRecord final : Session {
   ~SessionRecord() = default;
 
   input::InputRouter input_router;
+  input::InputRouter interaction_router;
   AttachmentRuntime attachment_runtime;
   vt::TerminalTheme theme;
   std::uint32_t connection_generation{0};
@@ -841,14 +869,16 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   session.attachment.copy_mode = {};
   session.attachment.rename_prompt = {};
   session.input_router.reset();
+  session.interaction_router.reset();
   session.attachment.selection_target.reset();
   session.attachment.mouse_capture.reset();
   session.attachment_runtime.reset_connection();
 }
 
-[[nodiscard]] constexpr auto pane_rows(const std::uint16_t viewport_rows) noexcept
-    -> std::uint16_t {
-  return viewport_rows >= 2 ? static_cast<std::uint16_t>(viewport_rows - 1U) : viewport_rows;
+[[nodiscard]] auto pane_rows(const std::uint16_t viewport_rows) noexcept -> std::uint16_t {
+  return reactor_status_line() && viewport_rows >= 2
+             ? static_cast<std::uint16_t>(viewport_rows - 1U)
+             : viewport_rows;
 }
 
 [[nodiscard]] constexpr auto terminal_color(const protocol::RgbColor color) noexcept
@@ -982,6 +1012,7 @@ struct EncodedContextId final {
   vt::TerminalOptions options;
   options.size = {.columns = columns, .rows = rows};
   options.theme = theme;
+  options.scrollback_lines_max = reactor_scrollback_lines();
   auto terminal_result = vt::Terminal::create(options);
   if (!terminal_result.has_value()) {
     return nullptr;
@@ -1707,6 +1738,7 @@ void reset_rename_prompt(SessionRecord& session, const bool redraw = true) noexc
   }
   prompt.cursor = prompt.size;
   session.attachment.rename_prompt = prompt;
+  session.interaction_router.select_base(input::ConfiguredInputContext::rename);
   schedule_frame(session, FrameUrgency::state_change, false);
   return true;
 }
@@ -1765,6 +1797,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   session.attachment.copy_mode = {};
   session.attachment.selection_target = AttachmentPaneTarget{.tab = tab.id, .pane = pane.id};
   session.attachment.copy_mode.phase = CopyModePhase::navigation;
+  session.interaction_router.select_base(input::ConfiguredInputContext::copy);
   if (!update_copy_viewport_offset(session, runtime)) {
     runtime.terminal.clear_selection();
     session.attachment.selection_target.reset();
@@ -2112,7 +2145,6 @@ void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& sea
   state.prompt_search_direction = direction;
   state.draft_query_size = 0;
   state.feedback = CopyModeFeedback::none;
-  state.pending_chord = CopyPendingChord::none;
   reset_copy_search_task(search);
   search.search_restore_viewport_offset = viewport->offset;
   invalidate_copy_presentation(session, runtime);
@@ -2469,7 +2501,187 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
   return true;
 }
 
-// Legacy byte input and structured keys converge on the same typed copy action table.
+[[nodiscard]] auto copy_action_from_input(const input::InputCommand command) noexcept
+    -> std::optional<CopyActionKind> {
+  if (command == input::InputCommand::copy_selection) {
+    return CopyActionKind::copy;
+  }
+  if (command == input::InputCommand::copy_cancel_or_leave) {
+    return std::nullopt;
+  }
+  if (command == input::InputCommand::enter_copy_search_forward) {
+    return CopyActionKind::begin_search_forward;
+  }
+  if (command == input::InputCommand::enter_copy_search_backward) {
+    return CopyActionKind::begin_search_backward;
+  }
+  constexpr std::array actions{
+      CopyActionKind::leave,
+      CopyActionKind::cancel_selection,
+      CopyActionKind::move_left,
+      CopyActionKind::move_down,
+      CopyActionKind::move_up,
+      CopyActionKind::move_right,
+      CopyActionKind::word_left,
+      CopyActionKind::word_right,
+      CopyActionKind::word_end,
+      CopyActionKind::line_start,
+      CopyActionKind::line_first_nonblank,
+      CopyActionKind::line_end,
+      CopyActionKind::history_top,
+      CopyActionKind::history_bottom,
+      CopyActionKind::viewport_top,
+      CopyActionKind::viewport_middle,
+      CopyActionKind::viewport_bottom,
+      CopyActionKind::half_page_up,
+      CopyActionKind::half_page_down,
+      CopyActionKind::page_up,
+      CopyActionKind::page_down,
+      CopyActionKind::visual_character,
+      CopyActionKind::visual_line,
+      CopyActionKind::visual_block,
+      CopyActionKind::swap_endpoint,
+      CopyActionKind::repeat_search,
+      CopyActionKind::reverse_search,
+      CopyActionKind::cancel_search,
+      CopyActionKind::commit_search,
+      CopyActionKind::query_backspace,
+  };
+  if (command < input::InputCommand::copy_leave ||
+      command > input::InputCommand::copy_query_backspace) {
+    return std::nullopt;
+  }
+  const auto index =
+      static_cast<std::size_t>(command) - static_cast<std::size_t>(input::InputCommand::copy_leave);
+  return actions.at(index);
+}
+
+[[nodiscard]] auto copy_action_for_state(const CopyModeState& state,
+                                         const input::InputCommand command) noexcept
+    -> std::optional<CopyActionKind> {
+  if (command != input::InputCommand::copy_cancel_or_leave) {
+    return copy_action_from_input(command);
+  }
+  return state.selecting() ? CopyActionKind::cancel_selection : CopyActionKind::leave;
+}
+
+[[nodiscard]] auto copy_input_context(const CopyModePhase phase) noexcept
+    -> input::ConfiguredInputContext {
+  if (phase == CopyModePhase::search_prompt) {
+    return input::ConfiguredInputContext::copy_search;
+  }
+  if (phase == CopyModePhase::searching) {
+    return input::ConfiguredInputContext::copy_searching;
+  }
+  return input::ConfiguredInputContext::copy;
+}
+
+[[nodiscard]] auto copy_key_event(const CopyKey key, std::array<std::byte, 1>& text) noexcept
+    -> input::KeyEvent {
+  input::KeyEvent event{.action = input::KeyAction::press,
+                        .key = input::PhysicalKey::unidentified,
+                        .modifiers = 0,
+                        .unshifted_codepoint = 0,
+                        .text = {}};
+  switch (key.kind) {
+  case CopyKeyKind::byte:
+    if (key.byte == 0x0DU) {
+      event.key = input::PhysicalKey::enter;
+    } else if (key.byte == 0x09U) {
+      event.key = input::PhysicalKey::tab;
+    } else if (key.byte >= 1U && key.byte <= 26U) {
+      event.modifiers = input::key_modifier_control;
+      event.unshifted_codepoint =
+          static_cast<std::uint32_t>('a') + static_cast<std::uint32_t>(key.byte - 1U);
+    } else {
+      text.front() = static_cast<std::byte>(key.byte);
+      event.unshifted_codepoint = key.byte;
+      event.text = text;
+    }
+    break;
+  case CopyKeyKind::escape:
+    event.key = input::PhysicalKey::escape;
+    break;
+  case CopyKeyKind::enter:
+    event.key = input::PhysicalKey::enter;
+    break;
+  case CopyKeyKind::backspace:
+    event.key = input::PhysicalKey::backspace;
+    break;
+  case CopyKeyKind::arrow_up:
+    event.key = input::PhysicalKey::arrow_up;
+    break;
+  case CopyKeyKind::arrow_down:
+    event.key = input::PhysicalKey::arrow_down;
+    break;
+  case CopyKeyKind::arrow_left:
+    event.key = input::PhysicalKey::arrow_left;
+    break;
+  case CopyKeyKind::arrow_right:
+    event.key = input::PhysicalKey::arrow_right;
+    break;
+  case CopyKeyKind::home:
+    event.key = input::PhysicalKey::home;
+    break;
+  case CopyKeyKind::end:
+    event.key = input::PhysicalKey::end;
+    break;
+  case CopyKeyKind::page_up:
+    event.key = input::PhysicalKey::page_up;
+    break;
+  case CopyKeyKind::page_down:
+    event.key = input::PhysicalKey::page_down;
+    break;
+  }
+  return event;
+}
+
+[[nodiscard]] auto route_copy_event(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                    input::KeyEvent event,
+                                    const std::optional<std::uint8_t> query_byte) noexcept -> bool {
+  auto* const runtime = copy_mode_runtime(session, runtimes);
+  if (runtime == nullptr) {
+    leave_copy_mode(session, runtimes);
+    return false;
+  }
+  session.interaction_router.select_base(copy_input_context(session.attachment.copy_mode.phase));
+  const auto routed = session.interaction_router.route_key(event);
+  event.action = input::KeyAction::release;
+  static_cast<void>(session.interaction_router.route_key(event));
+  if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+      command != nullptr) {
+    const auto action = copy_action_for_state(session.attachment.copy_mode, command->command);
+    const bool active =
+        !action.has_value() || apply_copy_action(session, *runtime, runtimes, {.kind = *action});
+    if (active && session.attachment.copy_mode.active()) {
+      session.interaction_router.select_base(
+          copy_input_context(session.attachment.copy_mode.phase));
+    }
+    return active;
+  }
+  if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect) &&
+      session.attachment.copy_mode.phase == CopyModePhase::search_prompt &&
+      query_byte.has_value() && *query_byte >= 0x20U) {
+    const bool active = apply_copy_action(
+        session, *runtime, runtimes, {.kind = CopyActionKind::query_append, .byte = *query_byte});
+    if (active && session.attachment.copy_mode.active()) {
+      session.interaction_router.select_base(
+          copy_input_context(session.attachment.copy_mode.phase));
+    }
+    return active;
+  }
+  return session.attachment.copy_mode.active();
+}
+
+[[nodiscard]] auto route_copy_key(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                  const CopyKey key) noexcept -> bool {
+  std::array<std::byte, 1> text{};
+  const auto event = copy_key_event(key, text);
+  const auto query_byte = key.kind == CopyKeyKind::byte ? std::optional{key.byte} : std::nullopt;
+  return route_copy_event(session, runtimes, event, query_byte);
+}
+
+// Legacy byte input and structured keys converge on the compiled interaction policy.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto process_copy_mode_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                            const std::span<const std::byte> input) noexcept
@@ -2503,9 +2715,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
       } else if (decoded.status == CopyEscapeStatus::unsupported) {
         continue;
       } else {
-        const auto escape =
-            copy_action_for_key(session.attachment.copy_mode, CopyKey{.kind = CopyKeyKind::escape});
-        if (!apply_copy_action(session, *runtime, runtimes, escape)) {
+        if (!route_copy_key(session, runtimes, CopyKey{.kind = CopyKeyKind::escape})) {
           return index;
         }
         key = CopyKey{.byte = std::to_integer<std::uint8_t>(byte)};
@@ -2517,8 +2727,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
           reactor_now() + copy_escape_flush_delay;
       continue;
     }
-    const auto action = copy_action_for_key(session.attachment.copy_mode, key);
-    if (!apply_copy_action(session, *runtime, runtimes, action)) {
+    if (!route_copy_key(session, runtimes, key)) {
       return index + 1U;
     }
     runtime = copy_mode_runtime(session, runtimes);
@@ -2530,139 +2739,22 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
   return input.size();
 }
 
-// Structured-key normalization is an exhaustive mapping, not product policy.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto routed_key_event(const protocol::KeyInput& key,
+                                    std::span<const std::byte> text) noexcept -> input::KeyEvent;
+
 void process_typed_copy_mode_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                    const protocol::KeyInput& key,
                                    const std::span<const std::byte> text) noexcept {
   if (key.action == protocol::KeyInputAction::release) {
     return;
   }
-  std::optional<CopyKey> copy_key;
-  const bool control = (key.modifiers & protocol::key_input_modifier_control) != 0;
-  const bool shift = (key.modifiers & protocol::key_input_modifier_shift) != 0;
-  switch (key.key) {
-  case protocol::KeyInputKey::arrow_up:
-    copy_key = CopyKey{.kind = CopyKeyKind::arrow_up};
-    break;
-  case protocol::KeyInputKey::arrow_down:
-    copy_key = CopyKey{.kind = CopyKeyKind::arrow_down};
-    break;
-  case protocol::KeyInputKey::arrow_left:
-    copy_key = CopyKey{.kind = CopyKeyKind::arrow_left};
-    break;
-  case protocol::KeyInputKey::arrow_right:
-    copy_key = CopyKey{.kind = CopyKeyKind::arrow_right};
-    break;
-  case protocol::KeyInputKey::home:
-    copy_key = CopyKey{.kind = CopyKeyKind::home};
-    break;
-  case protocol::KeyInputKey::end:
-    copy_key = CopyKey{.kind = CopyKeyKind::end};
-    break;
-  case protocol::KeyInputKey::page_up:
-    copy_key = CopyKey{.kind = CopyKeyKind::page_up};
-    break;
-  case protocol::KeyInputKey::page_down:
-    copy_key = CopyKey{.kind = CopyKeyKind::page_down};
-    break;
-  case protocol::KeyInputKey::enter:
-    copy_key = CopyKey{.kind = CopyKeyKind::enter};
-    break;
-  case protocol::KeyInputKey::backspace:
-    copy_key = CopyKey{.kind = CopyKeyKind::backspace};
-    break;
-  case protocol::KeyInputKey::escape:
-    copy_key = CopyKey{.kind = CopyKeyKind::escape};
-    break;
-  case protocol::KeyInputKey::space:
-    copy_key = CopyKey{.byte = static_cast<std::uint8_t>(' ')};
-    break;
-  case protocol::KeyInputKey::b:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x02};
-    }
-    break;
-  case protocol::KeyInputKey::c:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x03};
-    }
-    break;
-  case protocol::KeyInputKey::d:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x04};
-    }
-    break;
-  case protocol::KeyInputKey::f:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x06};
-    }
-    break;
-  case protocol::KeyInputKey::g:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x07};
-    }
-    break;
-  case protocol::KeyInputKey::u:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x15};
-    }
-    break;
-  case protocol::KeyInputKey::v:
-    if (control) {
-      copy_key = CopyKey{.byte = 0x16};
-    } else if (shift && text.empty()) {
-      copy_key = CopyKey{.byte = static_cast<std::uint8_t>('V')};
-    }
-    break;
-  case protocol::KeyInputKey::unidentified:
-  case protocol::KeyInputKey::a:
-  case protocol::KeyInputKey::e:
-  case protocol::KeyInputKey::h:
-  case protocol::KeyInputKey::i:
-  case protocol::KeyInputKey::j:
-  case protocol::KeyInputKey::k:
-  case protocol::KeyInputKey::l:
-  case protocol::KeyInputKey::m:
-  case protocol::KeyInputKey::n:
-  case protocol::KeyInputKey::o:
-  case protocol::KeyInputKey::p:
-  case protocol::KeyInputKey::q:
-  case protocol::KeyInputKey::r:
-  case protocol::KeyInputKey::s:
-  case protocol::KeyInputKey::t:
-  case protocol::KeyInputKey::w:
-  case protocol::KeyInputKey::x:
-  case protocol::KeyInputKey::y:
-  case protocol::KeyInputKey::z:
-  case protocol::KeyInputKey::tab:
-  case protocol::KeyInputKey::insert:
-  case protocol::KeyInputKey::delete_key:
-  case protocol::KeyInputKey::f1:
-  case protocol::KeyInputKey::f2:
-  case protocol::KeyInputKey::f3:
-  case protocol::KeyInputKey::f4:
-  case protocol::KeyInputKey::f5:
-  case protocol::KeyInputKey::f6:
-  case protocol::KeyInputKey::f7:
-  case protocol::KeyInputKey::f8:
-  case protocol::KeyInputKey::f9:
-  case protocol::KeyInputKey::f10:
-  case protocol::KeyInputKey::f11:
-  case protocol::KeyInputKey::f12:
-    break;
+  std::optional<std::uint8_t> query_byte;
+  if (text.size() == 1U) {
+    query_byte = std::to_integer<std::uint8_t>(text.front());
+  } else if (key.key == protocol::KeyInputKey::space) {
+    query_byte = static_cast<std::uint8_t>(' ');
   }
-  if (copy_key.has_value()) {
-    auto* const runtime = copy_mode_runtime(session, runtimes);
-    if (runtime == nullptr) {
-      leave_copy_mode(session, runtimes);
-      return;
-    }
-    static_cast<void>(apply_copy_action(
-        session, *runtime, runtimes, copy_action_for_key(session.attachment.copy_mode, *copy_key)));
-    return;
-  }
-  static_cast<void>(process_copy_mode_input(session, runtimes, text));
+  static_cast<void>(route_copy_event(session, runtimes, routed_key_event(key, text), query_byte));
 }
 
 void service_copy_input_timeout(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -2671,13 +2763,7 @@ void service_copy_input_timeout(SessionRecord& session, PaneRuntimeStore& runtim
       session.attachment_runtime.copy_mode.pending_escape_size > 0 &&
       now >= session.attachment_runtime.copy_mode.pending_escape_deadline) {
     session.attachment_runtime.copy_mode.pending_escape_size = 0;
-    auto* const runtime = copy_mode_runtime(session, runtimes);
-    if (runtime == nullptr ||
-        !apply_copy_action(session, *runtime, runtimes,
-                           copy_action_for_key(session.attachment.copy_mode,
-                                               CopyKey{.kind = CopyKeyKind::escape}))) {
-      return;
-    }
+    static_cast<void>(route_copy_key(session, runtimes, CopyKey{.kind = CopyKeyKind::escape}));
   }
 }
 
@@ -2820,8 +2906,10 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
                               const bool activate = true) noexcept -> Tab* {
   ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
   SessionMachine machine(session, production_session_options(runtime_context));
-  const auto transition = machine.create_tab({.command = launch_command,
-                                              .working_directory = working_directory,
+  const auto command = launch_command.empty() ? reactor_default_program() : launch_command;
+  const auto directory = working_directory.empty() ? reactor_default_cwd() : working_directory;
+  const auto transition = machine.create_tab({.command = command,
+                                              .working_directory = directory,
                                               .exit_policy = exit_policy,
                                               .activate = activate});
   apply_session_change(session, runtimes, transition.change);
@@ -2839,9 +2927,11 @@ void remove_tab(SessionRecord& session, PaneRuntimeStore& runtimes, const TabId 
                               const bool focus_created = true) noexcept -> Pane* {
   ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
   SessionMachine machine(session, production_session_options(runtime_context));
+  const auto command = launch_command.empty() ? reactor_default_program() : launch_command;
+  const auto directory = working_directory.empty() ? reactor_default_cwd() : working_directory;
   const auto transition = machine.split_pane(tab.id, source_pane, axis,
-                                             {.command = launch_command,
-                                              .working_directory = working_directory,
+                                             {.command = command,
+                                              .working_directory = directory,
                                               .exit_policy = exit_policy,
                                               .focus_created = focus_created});
   apply_session_change(session, runtimes, transition.change);
@@ -3283,6 +3373,47 @@ template <typename Value>
         .value = logical == 0U ? std::uint16_t{9} : static_cast<std::uint16_t>(logical - 1U)};
     break;
   }
+  case input::InputCommand::copy_cancel_or_leave:
+  case input::InputCommand::copy_leave:
+  case input::InputCommand::copy_cancel_selection:
+  case input::InputCommand::copy_move_left:
+  case input::InputCommand::copy_move_down:
+  case input::InputCommand::copy_move_up:
+  case input::InputCommand::copy_move_right:
+  case input::InputCommand::copy_word_left:
+  case input::InputCommand::copy_word_right:
+  case input::InputCommand::copy_word_end:
+  case input::InputCommand::copy_line_start:
+  case input::InputCommand::copy_line_first_nonblank:
+  case input::InputCommand::copy_line_end:
+  case input::InputCommand::copy_history_top:
+  case input::InputCommand::copy_history_bottom:
+  case input::InputCommand::copy_viewport_top:
+  case input::InputCommand::copy_viewport_middle:
+  case input::InputCommand::copy_viewport_bottom:
+  case input::InputCommand::copy_half_page_up:
+  case input::InputCommand::copy_half_page_down:
+  case input::InputCommand::copy_page_up:
+  case input::InputCommand::copy_page_down:
+  case input::InputCommand::copy_visual_character:
+  case input::InputCommand::copy_visual_line:
+  case input::InputCommand::copy_visual_block:
+  case input::InputCommand::copy_swap_endpoint:
+  case input::InputCommand::copy_repeat_search:
+  case input::InputCommand::copy_reverse_search:
+  case input::InputCommand::copy_cancel_search:
+  case input::InputCommand::copy_commit_search:
+  case input::InputCommand::copy_query_backspace:
+  case input::InputCommand::rename_cancel:
+  case input::InputCommand::rename_commit:
+  case input::InputCommand::rename_backspace:
+  case input::InputCommand::rename_delete:
+  case input::InputCommand::rename_cursor_left:
+  case input::InputCommand::rename_cursor_right:
+  case input::InputCommand::rename_cursor_home:
+  case input::InputCommand::rename_cursor_end:
+  case input::InputCommand::rename_clear:
+  case input::InputCommand::rename_delete_word:
   case input::InputCommand::count:
     return std::nullopt;
   }
@@ -4011,202 +4142,91 @@ void complete_rename_prompt(SessionRecord& session, PaneRuntimeStore& runtimes,
   invalidate_rename_prompt(session);
 }
 
-enum class RenamePromptByteResult : std::uint8_t {
-  unchanged,
-  changed,
-  finished,
-};
-
-[[nodiscard]] auto apply_rename_prompt_byte(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                            const std::byte encoded,
-                                            const SessionNameConflict name_conflict,
-                                            void* const name_conflict_context) noexcept
-    -> RenamePromptByteResult {
+[[nodiscard]] auto apply_rename_input_command(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                              const input::InputCommand command,
+                                              const SessionNameConflict name_conflict,
+                                              void* const name_conflict_context) noexcept -> bool {
   auto& prompt = session.attachment.rename_prompt;
-  const auto byte = std::to_integer<std::uint8_t>(encoded);
-  switch (byte) {
-  case 0x1B:
-  case 0x03:
-  case 0x07:
+  bool changed = false;
+  if (command == input::InputCommand::rename_cancel) {
     reset_rename_prompt(session, false);
     invalidate_rename_prompt(session);
-    return RenamePromptByteResult::finished;
-  case static_cast<std::uint8_t>('\r'):
-  case static_cast<std::uint8_t>('\n'):
+    return false;
+  }
+  if (command == input::InputCommand::rename_commit) {
     complete_rename_prompt(session, runtimes, name_conflict, name_conflict_context);
-    return RenamePromptByteResult::finished;
-  case 0x7F:
-  case 0x08:
-    return erase_rename_prompt_before_cursor(prompt) ? RenamePromptByteResult::changed
-                                                     : RenamePromptByteResult::unchanged;
-  case 0x01: {
-    const bool changed = prompt.cursor != 0;
-    prompt.cursor = 0;
-    return changed ? RenamePromptByteResult::changed : RenamePromptByteResult::unchanged;
+    return session.attachment.rename_prompt.active();
   }
-  case 0x05: {
-    const bool changed = prompt.cursor != prompt.size;
+  if (command == input::InputCommand::rename_backspace) {
+    changed = erase_rename_prompt_before_cursor(prompt);
+  } else if (command == input::InputCommand::rename_delete) {
+    changed = erase_rename_prompt_at_cursor(prompt);
+  } else if (command == input::InputCommand::rename_cursor_left) {
+    changed = prompt.cursor > 0U;
+    prompt.cursor -= changed ? 1U : 0U;
+  } else if (command == input::InputCommand::rename_cursor_right) {
+    changed = prompt.cursor < prompt.size;
+    prompt.cursor += changed ? 1U : 0U;
+  } else if (command == input::InputCommand::rename_cursor_home) {
+    changed = prompt.cursor != 0U;
+    prompt.cursor = 0U;
+  } else if (command == input::InputCommand::rename_cursor_end) {
+    changed = prompt.cursor != prompt.size;
     prompt.cursor = prompt.size;
-    return changed ? RenamePromptByteResult::changed : RenamePromptByteResult::unchanged;
-  }
-  case 0x15: {
-    const bool changed = prompt.size != 0;
+  } else if (command == input::InputCommand::rename_clear) {
+    changed = prompt.size != 0U;
     clear_rename_prompt(prompt);
-    return changed ? RenamePromptByteResult::changed : RenamePromptByteResult::unchanged;
-  }
-  case 0x17: {
+  } else if (command == input::InputCommand::rename_delete_word) {
     const auto before = prompt.size;
     erase_rename_prompt_word(prompt);
-    return prompt.size != before ? RenamePromptByteResult::changed
-                                 : RenamePromptByteResult::unchanged;
+    changed = prompt.size != before;
   }
-  default: {
-    const std::array value{encoded};
-    return insert_rename_prompt_text(session, value) ? RenamePromptByteResult::changed
-                                                     : RenamePromptByteResult::unchanged;
+  if (changed) {
+    invalidate_rename_prompt(session);
   }
-  }
+  return prompt.active();
 }
 
 void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                  const std::span<const std::byte> input,
                                  const SessionNameConflict name_conflict,
                                  void* const name_conflict_context) noexcept {
-  bool changed = false;
-  for (const auto encoded : input) {
-    const auto result =
-        apply_rename_prompt_byte(session, runtimes, encoded, name_conflict, name_conflict_context);
-    if (result == RenamePromptByteResult::finished) {
+  session.interaction_router.select_base(input::ConfiguredInputContext::rename);
+  std::size_t offset = 0;
+  while (offset < input.size() && session.attachment.rename_prompt.active()) {
+    const auto routed =
+        session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
+    if (routed.consumed == 0U || routed.consumed > input.size() - offset) {
       return;
     }
-    changed = result == RenamePromptByteResult::changed ? true : changed;
-  }
-  if (changed) {
-    invalidate_rename_prompt(session);
+    offset += routed.consumed;
+    if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+        command != nullptr) {
+      static_cast<void>(apply_rename_input_command(session, runtimes, command->command,
+                                                   name_conflict, name_conflict_context));
+      continue;
+    }
+    const auto* const forwarded = std::get_if<input::ForwardLegacyInput>(&routed.effect);
+    if (forwarded == nullptr) {
+      continue;
+    }
+    bool changed = false;
+    if (forwarded->prefix_size > 0U) {
+      changed = insert_rename_prompt_text(
+          session, std::span(forwarded->prefix).first(forwarded->prefix_size));
+    }
+    changed = insert_rename_prompt_text(session, forwarded->current) || changed;
+    if (changed) {
+      invalidate_rename_prompt(session);
+    }
   }
 }
 
-// Structured prompt editing remains Attachment-owned and never reaches the pane PTY.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void process_typed_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                       const protocol::KeyInput& key,
+// Key policy has already run through the compiled rename context; only forwarded text is edited.
+void process_typed_rename_prompt_input(SessionRecord& session,
                                        const std::span<const std::byte> text,
-                                       const SessionNameConflict name_conflict,
-                                       void* const name_conflict_context) noexcept {
-  if (key.action == protocol::KeyInputAction::release ||
-      !session.attachment.rename_prompt.active()) {
-    return;
-  }
-  auto& prompt = session.attachment.rename_prompt;
-  const bool control = (key.modifiers & protocol::key_input_modifier_control) != 0;
-  bool changed = false;
-  switch (key.key) {
-  case protocol::KeyInputKey::escape:
-    reset_rename_prompt(session);
-    return;
-  case protocol::KeyInputKey::enter:
-    complete_rename_prompt(session, runtimes, name_conflict, name_conflict_context);
-    return;
-  case protocol::KeyInputKey::backspace:
-    changed = erase_rename_prompt_before_cursor(prompt);
-    break;
-  case protocol::KeyInputKey::delete_key:
-    changed = erase_rename_prompt_at_cursor(prompt);
-    break;
-  case protocol::KeyInputKey::arrow_left:
-    changed = prompt.cursor > 0;
-    prompt.cursor -= changed ? 1U : 0U;
-    break;
-  case protocol::KeyInputKey::arrow_right:
-    changed = prompt.cursor < prompt.size;
-    prompt.cursor += changed ? 1U : 0U;
-    break;
-  case protocol::KeyInputKey::home:
-    changed = prompt.cursor != 0;
-    prompt.cursor = 0;
-    break;
-  case protocol::KeyInputKey::end:
-    changed = prompt.cursor != prompt.size;
-    prompt.cursor = prompt.size;
-    break;
-  case protocol::KeyInputKey::a:
-    if (control) {
-      changed = prompt.cursor != 0;
-      prompt.cursor = 0;
-    }
-    break;
-  case protocol::KeyInputKey::e:
-    if (control) {
-      changed = prompt.cursor != prompt.size;
-      prompt.cursor = prompt.size;
-    }
-    break;
-  case protocol::KeyInputKey::u:
-    if (control) {
-      changed = prompt.size != 0;
-      clear_rename_prompt(prompt);
-    }
-    break;
-  case protocol::KeyInputKey::w:
-    if (control) {
-      const auto before = prompt.size;
-      erase_rename_prompt_word(prompt);
-      changed = prompt.size != before;
-    }
-    break;
-  case protocol::KeyInputKey::c:
-  case protocol::KeyInputKey::g:
-    if (control) {
-      reset_rename_prompt(session);
-      return;
-    }
-    break;
-  case protocol::KeyInputKey::unidentified:
-  case protocol::KeyInputKey::b:
-  case protocol::KeyInputKey::d:
-  case protocol::KeyInputKey::f:
-  case protocol::KeyInputKey::h:
-  case protocol::KeyInputKey::i:
-  case protocol::KeyInputKey::j:
-  case protocol::KeyInputKey::k:
-  case protocol::KeyInputKey::l:
-  case protocol::KeyInputKey::m:
-  case protocol::KeyInputKey::n:
-  case protocol::KeyInputKey::o:
-  case protocol::KeyInputKey::p:
-  case protocol::KeyInputKey::q:
-  case protocol::KeyInputKey::r:
-  case protocol::KeyInputKey::s:
-  case protocol::KeyInputKey::t:
-  case protocol::KeyInputKey::v:
-  case protocol::KeyInputKey::x:
-  case protocol::KeyInputKey::y:
-  case protocol::KeyInputKey::z:
-  case protocol::KeyInputKey::tab:
-  case protocol::KeyInputKey::space:
-  case protocol::KeyInputKey::arrow_up:
-  case protocol::KeyInputKey::arrow_down:
-  case protocol::KeyInputKey::insert:
-  case protocol::KeyInputKey::page_up:
-  case protocol::KeyInputKey::page_down:
-  case protocol::KeyInputKey::f1:
-  case protocol::KeyInputKey::f2:
-  case protocol::KeyInputKey::f3:
-  case protocol::KeyInputKey::f4:
-  case protocol::KeyInputKey::f5:
-  case protocol::KeyInputKey::f6:
-  case protocol::KeyInputKey::f7:
-  case protocol::KeyInputKey::f8:
-  case protocol::KeyInputKey::f9:
-  case protocol::KeyInputKey::f10:
-  case protocol::KeyInputKey::f11:
-  case protocol::KeyInputKey::f12:
-    break;
-  }
-  if (!changed && !text.empty() && !control) {
-    changed = insert_rename_prompt_text(session, text);
-  }
-  if (changed) {
+                                       const bool control) noexcept {
+  if (!control && !text.empty() && insert_rename_prompt_text(session, text)) {
     invalidate_rename_prompt(session);
   }
 }
@@ -4882,6 +4902,20 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
       return ParseResult::yield;
     }
     --input_budget;
+    if (session.attachment.rename_prompt.active()) {
+      process_rename_prompt_input(session, runtimes, message.subspan(offset), name_conflict,
+                                  name_conflict_context);
+      offset = message.size();
+      continue;
+    }
+    if (session.attachment.copy_mode.active()) {
+      const auto consumed = process_copy_mode_input(session, runtimes, message.subspan(offset, 1));
+      if (consumed != 1U) {
+        return ParseResult::error;
+      }
+      ++offset;
+      continue;
+    }
     std::optional<input::InputRouter> router_before;
     if (session.input_router.legacy_route_requires_checkpoint()) {
       router_before.emplace(session.input_router);
@@ -4987,6 +5021,26 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     return ParseResult::yield;
   }
   --input_budget;
+  if (session.attachment.rename_prompt.active()) {
+    session.interaction_router.select_base(input::ConfiguredInputContext::rename);
+    auto event = routed_key_event(key, text);
+    const auto routed = session.interaction_router.route_key(event);
+    event.action = input::KeyAction::release;
+    static_cast<void>(session.interaction_router.route_key(event));
+    if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
+        command != nullptr) {
+      static_cast<void>(apply_rename_input_command(session, runtimes, command->command,
+                                                   name_conflict, name_conflict_context));
+    } else if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect)) {
+      process_typed_rename_prompt_input(
+          session, text, (key.modifiers & protocol::key_input_modifier_control) != 0U);
+    }
+    return ParseResult::keep;
+  }
+  if (session.attachment.copy_mode.active()) {
+    process_typed_copy_mode_input(session, runtimes, key, text);
+    return ParseResult::keep;
+  }
   auto router_before = session.input_router;
   const auto unbound_before = session.input_router.unbound();
   auto routed = session.input_router.route_key(routed_key_event(key, text));
@@ -5020,8 +5074,9 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     const auto application = encoded != nullptr ? encoded_application_key(key, *encoded) : key;
     const auto application_text = encoded != nullptr ? std::span<const std::byte>{} : text;
     if (session.attachment.rename_prompt.active()) {
-      process_typed_rename_prompt_input(session, runtimes, application, application_text,
-                                        name_conflict, name_conflict_context);
+      process_typed_rename_prompt_input(
+          session, application_text,
+          (application.modifiers & protocol::key_input_modifier_control) != 0U);
     } else if (session.attachment.copy_mode.active()) {
       process_typed_copy_mode_input(session, runtimes, application, application_text);
     } else {
@@ -5057,8 +5112,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     if (session.attachment.rename_prompt.active()) {
       process_rename_prompt_input(session, runtimes, prefix, name_conflict, name_conflict_context);
       if (forward_current && session.attachment.rename_prompt.active()) {
-        process_typed_rename_prompt_input(session, runtimes, key, text, name_conflict,
-                                          name_conflict_context);
+        process_typed_rename_prompt_input(
+            session, text, (key.modifiers & protocol::key_input_modifier_control) != 0U);
       }
     } else if (session.attachment.copy_mode.active()) {
       static_cast<void>(process_copy_mode_input(session, runtimes, prefix));
@@ -5233,7 +5288,9 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       if (tab == nullptr) {
         return ParseResult::error;
       }
-      const auto status_rows = session.attachment.rows >= 2 ? std::uint16_t{1} : std::uint16_t{0};
+      const auto status_rows = reactor_status_line() && session.attachment.rows >= 2
+                                   ? std::uint16_t{1}
+                                   : std::uint16_t{0};
       if (message.mouse.action == protocol::MouseInputAction::press &&
           session.attachment.mouse_capture.has_value()) {
         if (session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
@@ -5888,7 +5945,11 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   for (const char character : prompt.view()) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
-  for (const char character : session.input_router.active_label()) {
+  const auto input_context =
+      session.attachment.copy_mode.active() || session.attachment.rename_prompt.active()
+          ? session.interaction_router.active_label()
+          : session.input_router.active_label();
+  for (const char character : input_context) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
   const auto drag = status_tab_drag_signature(session);
@@ -6025,7 +6086,10 @@ collect_status_tabs(const SessionRecord& session, const PaneRuntimeStore& runtim
       .prompt_target = status_prompt_target(session.attachment.rename_prompt.kind),
       .prompt_feedback = status_prompt_feedback(session.attachment.rename_prompt.feedback),
       .prompt_value = session.attachment.rename_prompt.view(),
-      .input_context = session.input_router.active_label(),
+      .input_context =
+          session.attachment.copy_mode.active() || session.attachment.rename_prompt.active()
+              ? session.interaction_router.active_label()
+              : session.input_router.active_label(),
       .prompt_cursor = session.attachment.rename_prompt.cursor,
       .dirty = dirty,
   };
@@ -6035,6 +6099,9 @@ collect_status_tabs(const SessionRecord& session, const PaneRuntimeStore& runtim
 collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
                     std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
     -> render::StatusLine {
+  if (!reactor_status_line()) {
+    return {};
+  }
   if (!session.attachment_runtime.status_valid) {
     refresh_status_process_names(session, runtimes);
   }
@@ -7301,6 +7368,9 @@ struct PublicCaptureFormatting final {
     std::array<char, limits::working_directory_bytes_max + 1U> default_directory{};
     std::string_view working_directory = action.working_directory;
     if (working_directory.empty()) {
+      working_directory = reactor_default_cwd();
+    }
+    if (working_directory.empty()) {
       const auto size = platform::account_home_directory(default_directory);
       if (size == 0) {
         result.status = CommandStatus::failed;
@@ -7346,7 +7416,7 @@ struct PublicCaptureFormatting final {
     inserted->attachment.session = *id;
     inserted->activity_order = ++activity_order;
     const auto policy = action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
-    auto* const tab = create_tab(*inserted, runtimes, command, {}, policy);
+    auto* const tab = create_tab(*inserted, runtimes, command, working_directory, policy);
     if (tab == nullptr) {
       const bool erased = sessions.erase(*id);
       LEMMA_ASSERT(erased);
@@ -11429,7 +11499,12 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   return {.context = nullptr,
           .poll = &production_poll,
           .now = &production_now,
-          .send = &production_send};
+          .send = &production_send,
+          .input_map = nullptr,
+          .scrollback_lines = std::nullopt,
+          .default_program = {},
+          .default_cwd = {},
+          .status_line = true};
 }
 
 [[nodiscard]] auto

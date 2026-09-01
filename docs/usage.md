@@ -39,6 +39,38 @@ The Nix shell supplies the pinned Ghostty source. A non-Nix build must initializ
 git submodule update --init --depth 1 third_party/ghostty
 ```
 
+## Configuration
+
+Lemma loads `$XDG_CONFIG_HOME/lemma/init.lua` (or `~/.config/lemma/init.lua`) in an isolated Lua
+host. A valid file compiles into immutable native settings before the daemon accepts Sessions. An
+invalid file is rejected as one transaction and the daemon continues with built-in defaults.
+
+```lua
+local lemma = require("lemma")
+
+lemma.setup({
+  input = { preset = "none", prefix = false },
+  terminal = { scrollback_lines = 100000 },
+  ui = { status_line = false },
+  launch = {
+    default_cwd = "/work/project",
+    default_program = { "/bin/sh", "-l" },
+  },
+})
+lemma.keymap.set("normal", "Cmd-d", "split_left_right")
+lemma.keymap.del("normal", "Cmd-c")
+```
+
+Validate configuration without changing a daemon:
+
+```sh
+lemma config check
+lemma config check ./init.lua
+```
+
+See [Configuration runtime](extensions.md) for key syntax, commands, bounds, trust, and failure
+behavior.
+
 ## Sessions, tabs, and panes
 
 Lemma's hierarchy is:
@@ -71,8 +103,10 @@ lemma start tests -- just test
 lemma new report --hold -- ./produce-report
 ```
 
-Arguments after `--` execute directly without shell interpretation. Pane processes normally keep
-running without `--hold`; `--hold` retains the Pane and its terminal after the process exits.
+Arguments after `--` execute directly without shell interpretation. When `--cwd` or an exact
+command is omitted, the configured launch default applies; without configuration Lemma uses the
+account home and login shell. Pane processes normally keep running without `--hold`; `--hold`
+retains the Pane and its terminal after the process exits.
 
 The complete structured Session, Tab, and Pane interface is under `lemma action`:
 
