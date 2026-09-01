@@ -36,12 +36,10 @@ struct ConnectedListener final {
     static_cast<void>(::close(listener));
     return std::nullopt;
   }
-  sockaddr_in address{
-      .sin_family = AF_INET,
-      .sin_port = 0,
-      .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)},
-      .sin_zero = {},
-  };
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = 0;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   // POSIX socket APIs require the protocol-specific address through their generic address type.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   if (::bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
@@ -143,8 +141,8 @@ thread_local ScriptedReactor* active_script = nullptr;
 [[nodiscard]] auto poll_request_fragment(ScriptedReactor& script,
                                          const std::span<pollfd> descriptors) noexcept -> int {
   auto* const pending = pending_descriptor(script, descriptors);
-  if (pending == nullptr ||
-      !send_fragment(script, *pending, script.fragments.at(script.stage - 1U))) {
+  const auto fragment = std::span(script.fragments).subspan(script.stage - 1U, 1).front();
+  if (pending == nullptr || !send_fragment(script, *pending, fragment)) {
     script.failed = true;
     return -1;
   }
@@ -209,6 +207,15 @@ thread_local ScriptedReactor* active_script = nullptr;
   if (script.stage <= script.fragment_count) {
     return poll_request_fragment(script, descriptors);
   }
+  auto* const pending = pending_descriptor(script, descriptors);
+  if (script.stage == script.fragment_count + 1U && pending != nullptr &&
+      (pending->events & POLLIN) != 0) {
+    // A successful local send does not guarantee that every byte is visible to the next recv on
+    // every kernel. Keep reporting the production descriptor's requested read readiness until the
+    // parser has consumed the final fragment and asks to flush its response.
+    pending->revents = POLLIN;
+    return 1;
+  }
   if (script.stage <= script.fragment_count + 2U) {
     return poll_response_write(script, descriptors);
   }
@@ -238,11 +245,14 @@ thread_local ScriptedReactor* active_script = nullptr;
   }
   std::byte byte{};
   const auto received = ::recv(script.client, &byte, 1, MSG_DONTWAIT);
-  if (received == 0) {
+  if (received == 0 || (received < 0 && errno == ECONNRESET)) {
+    // A TCP peer may report an unread/incomplete request timeout as either EOF or reset depending
+    // on the host kernel. Both prove that the production connection was closed.
     script.timeout_closed_peer = true;
     script.stop = true;
   }
-  const bool receive_failed = received < 0 && errno != EAGAIN && errno != EWOULDBLOCK;
+  const bool receive_failed =
+      received < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != ECONNRESET;
   if (receive_failed || (!script.timeout_closed_peer && script.polls > 16U)) {
     script.failed = true;
     return -1;
@@ -256,7 +266,9 @@ thread_local ScriptedReactor* active_script = nullptr;
   ++script.polls;
   script.positive_timeout_seen = script.positive_timeout_seen || timeout_milliseconds > 0;
   if (descriptors.size() < 2U || descriptors.front().fd != script.listener ||
-      descriptors.subspan(1, 1).front().fd != script.wake_read) {
+      (descriptors.front().events & POLLIN) == 0 ||
+      descriptors.subspan(1, 1).front().fd != script.wake_read ||
+      (descriptors.subspan(1, 1).front().events & POLLIN) == 0) {
     script.failed = true;
     return -1;
   }

@@ -362,7 +362,7 @@ struct WorldCoverage final {
   std::array<std::size_t, mux_operation_kind_count> resize_faults{};
   std::uint64_t states{0};
 
-  void merge_operation(const WorldCoverage& other, const std::size_t operation) noexcept {
+  void merge_operation(const WorldCoverage& other, const std::size_t operation) {
     operations.at(operation) += other.operations.at(operation);
     spawn_faults.at(operation) += other.spawn_faults.at(operation);
     resize_faults.at(operation) += other.resize_faults.at(operation);
@@ -386,7 +386,7 @@ struct WorldCoverage final {
     }
   }
 
-  void merge(const WorldCoverage& other) noexcept {
+  void merge(const WorldCoverage& other) {
     applied += other.applied;
     no_effect += other.no_effect;
     rejected += other.rejected;
@@ -420,7 +420,7 @@ public:
   // Generation is state-aware, but its output is a complete operation value. Execution and replay
   // consume only that value and never depend on generator draw order.
   // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  [[nodiscard]] auto generate(Random& operations, Random& faults) noexcept -> MuxOperation {
+  [[nodiscard]] auto generate(Random& operations, Random& faults) -> MuxOperation {
     MuxOperation operation{
         .spawn_outcome =
             faults.index(32U) == 0 ? RuntimeEffectStatus::rejected : RuntimeEffectStatus::applied,
@@ -1075,7 +1075,7 @@ private:
     return states;
   }
 
-  void observe(const MuxOperation& operation, const core::SessionTransition& transition) noexcept {
+  void observe(const MuxOperation& operation, const core::SessionTransition& transition) {
     const auto operation_index = static_cast<std::size_t>(operation.kind);
     const auto operation_outcome = outcome_class(transition.result.status);
     ++coverage_.operations.at(operation_index);

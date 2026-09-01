@@ -1461,8 +1461,17 @@ class ZellijRuntime:
         return client
 
     def start_and_attach(self, session: str) -> PtyProcess:
-        self.start_detached(session)
-        return self.attach(session)
+        # Creating and attaching through one client is the only Zellij operation that owns both
+        # sides of the startup lifetime. A background session can be published by list-sessions and
+        # still disappear before a second attach process reaches it.
+        mapped_session = self.session_prefix + session.replace("_", "-")
+        self.sessions.append(mapped_session)
+        client = PtyProcess(
+            self._arguments("attach", "--create", mapped_session), self.environment
+        )
+        self.clients.append(client)
+        client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)
+        return client
 
     def _wait_for_session(self, mapped_session: str) -> None:
         deadline = time.monotonic() + 5.0

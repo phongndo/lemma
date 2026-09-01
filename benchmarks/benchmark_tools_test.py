@@ -28,6 +28,7 @@ from compare_regression import add_comparison, profile_values, require_manifest_
 from compare_regression import policy as paired_policy
 from latency_trace import input_paths
 from mux_benchmark import (
+    ALT_SCREEN,
     INTERACTION_LABEL_CODES,
     LATENCY_VISIBLE_ACK,
     LemmaRuntime,
@@ -121,6 +122,29 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
             runtime._wait_for_session("target-session")
 
         self.assertEqual(runtime._command.call_count, 3)
+
+    def test_zellij_start_and_attach_owns_session_creation_lifetime(self) -> None:
+        runtime = object.__new__(ZellijRuntime)
+        runtime.session_prefix = "lb-7-"
+        runtime.environment = {"TERM": "xterm-256color"}
+        runtime.sessions = []
+        runtime.clients = []
+        runtime._arguments = mock.Mock(return_value=["zellij", "attach", "target"])
+        client = mock.Mock()
+
+        with mock.patch("mux_benchmark.PtyProcess", return_value=client) as process:
+            attached = runtime.start_and_attach("tui_redraw")
+
+        self.assertIs(attached, client)
+        runtime._arguments.assert_called_once_with(
+            "attach", "--create", "lb-7-tui-redraw"
+        )
+        process.assert_called_once_with(
+            ["zellij", "attach", "target"], runtime.environment
+        )
+        client.read_until.assert_called_once_with(ALT_SCREEN, 5.0, preserve_suffix=True)
+        self.assertEqual(runtime.sessions, ["lb-7-tui-redraw"])
+        self.assertEqual(runtime.clients, [client])
 
     def test_maps_generic_lifecycle_commands_to_the_canonical_cli(self) -> None:
         runtime = object.__new__(LemmaRuntime)

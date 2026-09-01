@@ -122,12 +122,17 @@ struct InteractionResult final {
     -> std::size_t {
   constexpr std::size_t radix = 26U;
   constexpr std::size_t label_slots = radix * radix;
-  if (label_code.size() != 3U || label_code.front() != 'L' || label_code.at(1) < 'A' ||
-      label_code.at(1) > 'Z' || label_code.at(2) < 'A' || label_code.at(2) > 'Z') {
+  if (label_code.size() != 3U) {
     return label_slots;
   }
-  return (static_cast<std::size_t>(label_code.at(1) - 'A') * radix) +
-         static_cast<std::size_t>(label_code.at(2) - 'A');
+  auto suffix = label_code;
+  suffix.remove_prefix(1);
+  const auto middle = suffix.front();
+  const auto last = suffix.back();
+  if (label_code.front() != 'L' || middle < 'A' || middle > 'Z' || last < 'A' || last > 'Z') {
+    return label_slots;
+  }
+  return (static_cast<std::size_t>(middle - 'A') * radix) + static_cast<std::size_t>(last - 'A');
 }
 
 [[nodiscard]] auto encoded_index_token(const std::string_view label_code, const std::size_t index)
