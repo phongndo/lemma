@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# < 1 || $# > 3)); then
+  printf 'usage: %s gate [BASELINE [OUTPUT_DIRECTORY]]\n' "$0" >&2
+  printf '       %s calibrate [CAPTURES [OUTPUT_DIRECTORY]]\n' "$0" >&2
+  exit 2
+fi
+readonly command="$1"
+readonly argument="${2:-}"
+readonly requested_output="${3:-}"
+case "${command}" in
+  gate | calibrate) ;;
+  *)
+    printf 'performance command must be gate or calibrate\n' >&2
+    exit 2
+    ;;
+esac
+
+root="$(git rev-parse --show-toplevel)"
+readonly root
+if [[ "${PWD}" != "${root}" ]]; then
+  printf 'run %s from the repository root\n' "$0" >&2
+  exit 2
+fi
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+readonly timestamp
+if [[ -n "${requested_output}" ]]; then
+  output="${requested_output}"
+elif [[ "${command}" == gate ]]; then
+  output="build/performance/gate-${timestamp}"
+else
+  output="build/performance/calibration-${timestamp}"
+fi
+if [[ -e "${output}" ]]; then
+  printf 'performance output already exists: %s\n' "${output}" >&2
+  exit 2
+fi
+mkdir -p "${output}"
+output="$(cd "${output}" && pwd)"
+readonly output
+readonly policy="${root}/benchmarks/performance_hosts.json"
+readonly manifest="${root}/benchmarks/workloads.json"
+readonly shared_peer="${root}/build/release/lemma_test_pty_peer"
+readonly shared_probe="${root}/build/release/lemma_benchmark_probe"
+
+exec 9>"${TMPDIR:-/tmp}/lemma-performance.lock"
+if ! flock -n 9; then
+  printf 'another Lemma performance run owns this host\n' >&2
+  exit 2
+fi
+
+python3 benchmarks/performance_host.py --policy "${policy}" --output "${output}/host-before.json"
+affinity="$(python3 - "${output}/host-before.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    print(json.load(source)["cpu_affinity"])
+PY
+)"
+readonly affinity
+if [[ -z "${affinity}" ]]; then
+  printf 'approved host policy has no CPU affinity\n' >&2
+  exit 2
+fi
+
+baseline_tree=""
+cleanup() {
+  if [[ -n "${baseline_tree}" ]]; then
+    git worktree remove --force "${baseline_tree}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+capture() {
+  local source_root="$1"
+  local destination="$2"
+  mkdir -p "${destination}"
+  (
+    cd "${source_root}"
+    taskset -c "${affinity}" \
+      nix develop "${root}#benchmarks" --command \
+      env LEMMA_BENCHMARK_HARNESS_ROOT="${root}" \
+      LEMMA_BENCHMARK_MANIFEST="${manifest}" \
+      LEMMA_BENCHMARK_PEER="${shared_peer}" \
+      LEMMA_BENCHMARK_PROBE="${shared_probe}" \
+      LEMMA_BENCH_COOLDOWN_SECONDS="${LEMMA_BENCH_COOLDOWN_SECONDS:-30}" \
+      "${root}/scripts/ci/regression-capture" "${destination}"
+  )
+}
+
+if [[ "${command}" == gate ]]; then
+  readonly baseline="${argument:-HEAD}"
+  baseline_revision="$(git rev-parse --verify "${baseline}^{commit}")"
+  readonly baseline_revision
+  baseline_tree="$(mktemp -d "${TMPDIR:-/tmp}/lemma-performance-baseline.XXXXXX")"
+  rmdir "${baseline_tree}"
+  git worktree add --quiet --detach "${baseline_tree}" "${baseline_revision}"
+  taskset -c "${affinity}" nix develop "${root}#benchmarks" --command \
+    "${root}/scripts/ci/configure" release \
+    -DLEMMA_BUILD_TESTS=OFF \
+    -DLEMMA_BUILD_BENCHMARKS=ON \
+    -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+  taskset -c "${affinity}" nix develop "${root}#benchmarks" --command \
+    cmake --build --preset release --target lemma_test_pty_peer lemma_benchmark_probe
+  printf 'performance gate on %s CPUs=%s baseline=%s\n' \
+    "$(hostname)" "${affinity}" "${baseline_revision}"
+  capture "${baseline_tree}" "${output}/baseline"
+  capture "${root}" "${output}/candidate"
+else
+  readonly captures="${argument:-3}"
+  if [[ ! "${captures}" =~ ^[2-5]$ ]]; then
+    printf 'calibration CAPTURES must be in [2, 5]\n' >&2
+    exit 2
+  fi
+  printf 'performance calibration on %s CPUs=%s captures=%s\n' \
+    "$(hostname)" "${affinity}" "${captures}"
+  calibration_arguments=()
+  for ((index = 1; index <= captures; ++index)); do
+    destination="${output}/capture-${index}"
+    capture "${root}" "${destination}"
+    calibration_arguments+=(--capture "${destination}")
+  done
+fi
+
+python3 benchmarks/performance_host.py --policy "${policy}" --output "${output}/host-after.json"
+python3 - "${output}/host-before.json" "${output}/host-after.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+before, after = (json.loads(Path(path).read_text(encoding="utf-8")) for path in sys.argv[1:])
+for field in (
+    "fingerprint",
+    "system",
+    "architecture",
+    "logical_cpu_count",
+    "scaling_governors",
+    "energy_performance_preferences",
+):
+    if before[field] != after[field]:
+        raise SystemExit(f"performance host changed during capture: {field}")
+PY
+
+if [[ "${command}" == gate ]]; then
+  taskset -c "${affinity}" nix develop .#benchmarks --command \
+    python3 benchmarks/compare_regression.py \
+    --manifest "${manifest}" \
+    --baseline "${output}/baseline" \
+    --candidate "${output}/candidate" \
+    --output "${output}/paired-regression.json"
+  printf 'manual performance gate passed: %s\n' "${output}"
+else
+  taskset -c "${affinity}" nix develop .#benchmarks --command \
+    python3 benchmarks/calibrate_regression.py \
+    --manifest "${manifest}" \
+    "${calibration_arguments[@]}" \
+    --output "${output}/calibration.json"
+  printf 'manual performance calibration passed: %s\n' "${output}"
+fi

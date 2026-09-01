@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# < 1 || $# > 2)); then
-  printf 'usage: scripts/promote-mux-trace TRACE [CORPUS_NAME]\n' >&2
+if (($# != 3)); then
+  printf 'usage: scripts/promote-mux-trace TRACE CORPUS_NAME REGRESSION\n' >&2
   exit 2
 fi
 
@@ -12,13 +12,20 @@ if [[ ! -f "${source_trace}" ]]; then
   exit 2
 fi
 
-name="${2:-$(basename "${source_trace}")}"
+name="$2"
 name="${name%.min.trace}"
 name="${name%.trace}"
 if [[ ! "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   printf 'invalid corpus name: %s\n' "${name}" >&2
   exit 2
 fi
+readonly regression="$3"
+if [[ -z "${regression}" || "${regression}" == *$'\n'* || "${regression}" == *$'\r'* ]]; then
+  printf 'REGRESSION must be one non-empty line\n' >&2
+  exit 2
+fi
+source_revision="$(git rev-parse HEAD)"
+readonly source_revision
 
 readonly profile="${LEMMA_TEST_PROFILE:-debug}"
 readonly binary="./build/${profile}/lemma_core_sim_tests"
@@ -39,5 +46,26 @@ LEMMA_MUX_SIM_TRACE="${source_trace}" \
   "${binary}" \
   --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
   --gtest_brief=1
+python3 - "${temporary}" "${source_trace}" "${source_revision}" "${regression}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = sys.argv[2]
+revision = sys.argv[3]
+regression = sys.argv[4]
+lines = path.read_text(encoding="utf-8").splitlines()
+if not lines or lines[0] != "lemma-mux-trace-v1":
+    raise SystemExit("refreshed trace has no supported header")
+metadata = [
+    lines[0],
+    f"# regression: {regression}",
+    f"# source-trace: {source}",
+    f"# fixed-at: {revision}",
+]
+metadata_prefixes = ("# regression:", "# source-trace:", "# fixed-at:")
+body = [line for line in lines[1:] if not line.startswith(metadata_prefixes)]
+path.write_text("\n".join([*metadata, *body]) + "\n", encoding="utf-8")
+PY
 mv "${temporary}" "${destination}"
 printf 'promoted mux regression trace: %s\n' "${destination}"

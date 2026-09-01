@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,12 +34,60 @@ def _string_list(value: Any, label: str) -> list[str]:
     return result
 
 
-def load_manifest(path: Path = Path("benchmarks/workloads.json")) -> dict[str, Any]:
+def _scaling_profiles(
+    manifest: dict[str, Any],
+    profiles_key: str,
+    suites_key: str,
+    count_key: str,
+    maximum: int,
+) -> list[str]:
+    profiles = manifest.get(profiles_key)
+    if not isinstance(profiles, list) or not profiles:
+        raise ManifestError(f"{profiles_key} must be a non-empty array")
+    identifiers: list[str] = []
+    counts: list[int] = []
+    for index, profile in enumerate(profiles):
+        label = f"{profiles_key}[{index}]"
+        if not isinstance(profile, dict):
+            raise ManifestError(f"{label} must be an object")
+        identifiers.append(_nonempty_string(profile.get("id"), f"{label}.id"))
+        count = profile.get(count_key)
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or not 1 <= count <= maximum
+        ):
+            raise ManifestError(f"{label}.{count_key} is outside the supported bounds")
+        counts.append(count)
+        _nonempty_string(profile.get("purpose"), f"{label}.purpose")
+    if len(identifiers) != len(set(identifiers)) or counts != sorted(counts):
+        raise ManifestError(
+            f"{profiles_key} must have unique IDs and ascending {count_key} counts"
+        )
+    suites = manifest.get(suites_key)
+    if not isinstance(suites, dict) or set(suites) != {"smoke", "extended", "gate"}:
+        raise ManifestError(f"{suites_key} must contain smoke, extended, and gate")
+    for name, members in suites.items():
+        selected = _string_list(members, f"{suites_key}.{name}")
+        unknown = sorted(set(selected).difference(identifiers))
+        if unknown:
+            raise ManifestError(
+                f"{suites_key}.{name} contains unknown profiles: {unknown}"
+            )
+    if suites["extended"] != identifiers:
+        raise ManifestError(f"{suites_key}.extended must cover every profile in order")
+    return identifiers
+
+
+def load_manifest(path: Path | None = None) -> dict[str, Any]:
+    selected = path or Path(
+        os.environ.get("LEMMA_BENCHMARK_MANIFEST", "benchmarks/workloads.json")
+    )
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest = json.loads(selected.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ManifestError(
-            f"cannot read benchmark manifest {path}: {error}"
+            f"cannot read benchmark manifest {selected}: {error}"
         ) from error
     validate_manifest(manifest)
     return manifest
@@ -60,6 +109,22 @@ def validate_manifest(manifest: Any) -> None:
         ):
             raise ManifestError(f"terminal.{dimension} is outside the supported bounds")
     _nonempty_string(terminal.get("term"), "terminal.term")
+
+    _scaling_profiles(manifest, "pane_profiles", "profile_suites", "panes", 64)
+    _scaling_profiles(
+        manifest,
+        "session_profiles",
+        "session_profile_suites",
+        "sessions",
+        64,
+    )
+    _scaling_profiles(
+        manifest,
+        "workspace_profiles",
+        "workspace_profile_suites",
+        "workspaces",
+        64,
+    )
 
     workloads = manifest.get("process_workloads")
     if not isinstance(workloads, list) or not workloads:
@@ -131,6 +196,70 @@ def validate_manifest(manifest: Any) -> None:
                 or not 0 <= value <= 60
             ):
                 raise ManifestError(f"sample_policies.{name}.{field} is invalid")
+
+    deterministic = manifest.get("deterministic_budgets")
+    steady_state = (
+        deterministic.get("steady_state") if isinstance(deterministic, dict) else None
+    )
+    reactor = deterministic.get("reactor") if isinstance(deterministic, dict) else None
+    if (
+        not isinstance(deterministic, dict)
+        or deterministic.get("schema") != 1
+        or deterministic.get("status") != "reviewed"
+        or not isinstance(steady_state, dict)
+        or not isinstance(reactor, dict)
+    ):
+        raise ManifestError("deterministic_budgets must be a reviewed schema-1 policy")
+    deterministic_fields = {
+        "audited_iterations",
+        "maximum_general_allocation_calls",
+        "maximum_general_allocation_bytes",
+        "maximum_terminal_quota_allocation_calls",
+        "maximum_frame_bytes",
+        "maximum_queued_messages",
+        "maximum_frame_messages_per_frame",
+        "maximum_writer_attempts_per_frame",
+        "maximum_wire_overhead_bytes_per_frame",
+        "required_routed_input_bytes_per_iteration",
+        "required_frames_per_iteration",
+        "required_flush_calls_per_iteration",
+    }
+    if set(steady_state) != deterministic_fields:
+        raise ManifestError("deterministic_budgets.steady_state fields are incomplete")
+    for field, value in steady_state.items():
+        minimum = 1 if field == "audited_iterations" else 0
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not minimum <= value <= 1_000_000_000
+        ):
+            raise ManifestError(
+                f"deterministic_budgets.steady_state.{field} is invalid"
+            )
+    reactor_fields = {
+        "test",
+        "maximum_poll_calls",
+        "maximum_readiness_events",
+        "maximum_outbound_send_calls",
+        "required_blocked_sends",
+        "required_partial_sends",
+        "required_child_wakeups",
+    }
+    if set(reactor) != reactor_fields or not isinstance(reactor["test"], str):
+        raise ManifestError("deterministic_budgets.reactor fields are incomplete")
+    if reactor["test"] != (
+        "ReactorEnvironmentTest."
+        "ScriptedWorldControlsFragmentationBackpressureChildExitAndOrdering"
+    ):
+        raise ManifestError("deterministic_budgets.reactor.test is invalid")
+    for field in reactor_fields - {"test"}:
+        value = reactor[field]
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= 1_000_000
+        ):
+            raise ManifestError(f"deterministic_budgets.reactor.{field} is invalid")
 
     comparison_policy = manifest.get("comparison_policy")
     practical = (

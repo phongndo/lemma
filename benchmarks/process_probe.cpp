@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <ranges>
@@ -119,13 +120,14 @@ struct InteractionResult final {
 
 [[nodiscard]] auto interaction_label_index(const std::string_view label_code) noexcept
     -> std::size_t {
-  constexpr std::array<std::string_view, 16> labels{
-      "OUT", "OPN", "TUI", "WHE", "IDL", "BLK", "CID", "CBL",
-      "PAI", "PAA", "PBI", "PBA", "PCI", "PCA", "PDI", "PDA",
-  };
-  const auto* const found = std::ranges::find(labels, label_code);
-  return found == labels.end() ? labels.size()
-                               : static_cast<std::size_t>(std::distance(labels.begin(), found));
+  constexpr std::size_t radix = 26U;
+  constexpr std::size_t label_slots = radix * radix;
+  if (label_code.size() != 3U || label_code.front() != 'L' || label_code.at(1) < 'A' ||
+      label_code.at(1) > 'Z' || label_code.at(2) < 'A' || label_code.at(2) > 'Z') {
+    return label_slots;
+  }
+  return (static_cast<std::size_t>(label_code.at(1) - 'A') * radix) +
+         static_cast<std::size_t>(label_code.at(2) - 'A');
 }
 
 [[nodiscard]] auto encoded_index_token(const std::string_view label_code, const std::size_t index)
@@ -135,7 +137,7 @@ struct InteractionResult final {
   constexpr std::size_t token_space = 308'915'776U;
   constexpr std::size_t redraw_multiplier = 12'356'631U;
   const auto label_index = interaction_label_index(label_code);
-  if (index >= repetitions_max || label_index >= 16U) {
+  if (index >= repetitions_max || label_index >= radix * radix) {
     return {};
   }
   std::array<char, 6> encoded_index{};
@@ -359,6 +361,11 @@ void drain_outer(const int descriptor) noexcept {
       return {};
     }
   }
+  constexpr std::size_t diagnostic_bytes = 512U;
+  const auto tail =
+      retained.substr(retained.size() > diagnostic_bytes ? retained.size() - diagnostic_bytes : 0U);
+  std::cerr << "outer marker timeout: expected=" << std::quoted(std::string(marker))
+            << " outer_bytes=" << outer_bytes << " decoded_tail=" << std::quoted(tail) << '\n';
   return {};
 }
 
@@ -595,10 +602,14 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     const auto started_ns = monotonic_ns();
     if (!write_all(outer_descriptor, command,
                    std::chrono::steady_clock::now() + interaction_timeout)) {
+      std::cerr << "command probe write failed at iteration " << index << " errno=" << errno
+                << '\n';
       return 1;
     }
     const auto [latency, bytes] = read_outer_marker(outer_descriptor, marker, started_ns);
     if (latency == 0) {
+      std::cerr << "command probe marker failed at iteration " << index << " errno=" << errno
+                << '\n';
       return 1;
     }
     latencies.push_back(latency);
@@ -855,8 +866,9 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_main(const std::span<char*> arguments) -> int {
   if (arguments.size() == 2U && std::string_view(argument(arguments, 1)) == "--self-test") {
-    const auto first = interaction_marker("OUTPUT", "OUT", 0);
-    const auto last = interaction_marker("OUTPUT", "OUT", 9'999);
+    const auto first = interaction_marker("OUTPUT", "LAA", 0);
+    const auto last = interaction_marker("OUTPUT", "LAA", 9'999);
+    const auto generated_profile = interaction_marker("P2_IDLE", "LAK", 0);
     constexpr std::string_view encoded_outer =
         "__LEMMA_\x1B[23;1HOUTPUT\x1B]ignored title\x1B\\_DONE__";
     std::string decoded_outer;
@@ -864,6 +876,8 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     decoder.append({encoded_outer.data(), encoded_outer.size()}, decoded_outer);
     const auto maximum_repetition_window = open_loop_send_window(10'000U, 8'333'000U);
     return first == "__LEMMA_OUTPUT_0000_AAAAAA__" && last == "__LEMMA_OUTPUT_9999_YYYYJP__" &&
+                   generated_profile == "__LEMMA_P2_IDLE_0000_ZZZUCE__" &&
+                   interaction_marker("OUTPUT", "OUT", 0).empty() &&
                    decoded_outer == "__LEMMA_OUTPUT_DONE__" &&
                    maximum_repetition_window > std::chrono::seconds(80)
                ? 0

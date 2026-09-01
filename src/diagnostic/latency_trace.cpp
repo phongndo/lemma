@@ -122,7 +122,7 @@ namespace {
 
 constexpr std::uint64_t trace_magic = 0x3145'4341'5254'4D4CULL;
 constexpr std::uint32_t trace_version = 2;
-constexpr std::size_t trace_events_max = 32'768;
+constexpr std::size_t trace_events_max = 524'288;
 constexpr std::size_t trace_path_bytes_max = 1'024;
 
 struct TraceHeader final {

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 1)); then
+  printf 'usage: %s OUTPUT_DIRECTORY\n' "$0" >&2
+  exit 2
+fi
+
+output_directory="$(mkdir -p "$1" && cd "$1" && pwd)"
+readonly output_directory
+readonly manifest="${LEMMA_BENCHMARK_MANIFEST:-benchmarks/workloads.json}"
+readonly harness_root="${LEMMA_BENCHMARK_HARNESS_ROOT:-.}"
+readonly micro_output="${output_directory}/microbenchmarks.json"
+readonly process_output="${output_directory}/process-workloads.json"
+readonly profile_output="${output_directory}/pane-profiles.json"
+readonly benchmark_peer="${LEMMA_BENCHMARK_PEER:-./build/release/lemma_test_pty_peer}"
+readonly benchmark_probe="${LEMMA_BENCHMARK_PROBE:-./build/release/lemma_benchmark_probe}"
+
+read -r micro_repetitions process_repetitions profile_repetitions micro_time warmup_time micro_filter < <(
+  python3 - "${manifest}" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+policy = manifest["sample_policies"]["gate"]
+benchmarks = [check["benchmark"] for check in manifest["regression_budgets"]["microbenchmarks"]["checks"]]
+print(
+    policy["micro_repetitions"],
+    policy["process_repetitions"],
+    policy["profile_repetitions"],
+    f'{policy["micro_min_time_seconds"]}s',
+    policy["micro_warmup_seconds"],
+    '^(' + '|'.join(benchmarks) + ')$',
+)
+PY
+)
+
+cleanup_ghostty_output() {
+  rm -rf third_party/ghostty/zig-out
+}
+trap cleanup_ghostty_output EXIT
+
+python3 "${harness_root}/benchmarks/check_regression.py" \
+  --manifest "${manifest}" --validate-manifest
+python3 "${harness_root}/benchmarks/benchmark_tools_test.py" >/dev/null
+rm -rf third_party/ghostty/zig-out
+"${harness_root}/scripts/ci/configure" release \
+  -DLEMMA_BUILD_TESTS=OFF \
+  -DLEMMA_BUILD_BENCHMARKS=ON \
+  -DLEMMA_ENABLE_LATENCY_TRACE=OFF
+cmake --build --preset release --target \
+  lemma_benchmarks lemma_test_server lemma_test_cli lemma_test_pty_peer lemma_benchmark_probe
+./build/release/lemma_benchmark_probe --self-test
+sleep "${LEMMA_BENCH_COOLDOWN_SECONDS:-30}"
+
+./build/release/lemma_benchmarks \
+  --benchmark_filter="${micro_filter}" \
+  --benchmark_min_time="${micro_time}" \
+  --benchmark_min_warmup_time="${warmup_time}" \
+  --benchmark_repetitions="${micro_repetitions}" \
+  --benchmark_enable_random_interleaving=true \
+  --benchmark_display_aggregates_only=true \
+  --benchmark_out="${micro_output}" \
+  --benchmark_out_format=json >/dev/null
+python3 "${harness_root}/benchmarks/annotate_micro_report.py" \
+  --report "${micro_output}" \
+  --executable build/release/lemma_benchmarks \
+  --manifest "${manifest}"
+python3 "${harness_root}/benchmarks/validate_report.py" \
+  --manifest "${manifest}" --micro "${micro_output}"
+
+python3 "${harness_root}/benchmarks/mux_benchmark.py" \
+  --manifest "${manifest}" \
+  --mode comparison \
+  --intent gate \
+  --peer "${benchmark_peer}" \
+  --probe "${benchmark_probe}" \
+  --repetitions "${process_repetitions}" \
+  --output "${process_output}" >/dev/null
+python3 "${harness_root}/benchmarks/validate_report.py" \
+  --manifest "${manifest}" --process "${process_output}"
+
+python3 "${harness_root}/benchmarks/mux_benchmark.py" \
+  --manifest "${manifest}" \
+  --mode profiles \
+  --intent gate \
+  --peer "${benchmark_peer}" \
+  --probe "${benchmark_probe}" \
+  --repetitions "${profile_repetitions}" \
+  --output "${profile_output}" >/dev/null
+python3 "${harness_root}/benchmarks/validate_report.py" \
+  --manifest "${manifest}" --process "${profile_output}"
+
+printf 'regression capture:\n  %s\n  %s\n  %s\n' \
+  "${micro_output}" "${process_output}" "${profile_output}"

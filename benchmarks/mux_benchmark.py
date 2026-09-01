@@ -47,6 +47,7 @@ LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
 )
 WARM_MARKER = b"__LEMMA_WARM_SCROLL_DONE__"
+WARM_READY_MARKER = b"__LEMMA_WARM_SCROLL_READY__"
 BLOCK_READY = b"__LEMMA_PTY_READY__"
 BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
 LATENCY_READY = b"__LEMMA_LATENCY_READY__"
@@ -123,6 +124,38 @@ def darwin_sysctl(name: str) -> str | None:
     return value or None
 
 
+def linux_host_metadata(
+    cpuinfo: str, meminfo: str, model_identifier: str | None
+) -> dict[str, Any]:
+    cpu_model: str | None = None
+    physical_cores: set[tuple[str, str]] = set()
+    for record in cpuinfo.split("\n\n"):
+        fields = {
+            key.strip(): value.strip()
+            for line in record.splitlines()
+            if ":" in line
+            for key, value in (line.split(":", 1),)
+        }
+        cpu_model = cpu_model or fields.get("model name")
+        if "physical id" in fields and "core id" in fields:
+            physical_cores.add((fields["physical id"], fields["core id"]))
+    memory_bytes: int | None = None
+    for line in meminfo.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[0] == "MemTotal:" and fields[2] == "kB":
+            try:
+                memory_bytes = int(fields[1]) * 1024
+            except ValueError:
+                pass
+            break
+    return {
+        "model_identifier": model_identifier.strip() if model_identifier else None,
+        "cpu_model": cpu_model,
+        "physical_cpu_count": len(physical_cores) or None,
+        "memory_bytes": memory_bytes,
+    }
+
+
 def host_fingerprint() -> dict[str, Any]:
     def integer_sysctl(name: str) -> int | None:
         value = darwin_sysctl(name)
@@ -131,13 +164,29 @@ def host_fingerprint() -> dict[str, Any]:
         except ValueError:
             return None
 
-    return {
-        "host_name": platform.node(),
-        "model_identifier": darwin_sysctl("hw.model"),
-        "cpu_model": darwin_sysctl("machdep.cpu.brand_string"),
-        "physical_cpu_count": integer_sysctl("hw.physicalcpu"),
-        "memory_bytes": integer_sysctl("hw.memsize"),
-    }
+    metadata: dict[str, Any]
+    if platform.system() == "Linux":
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8")
+            meminfo = Path("/proc/meminfo").read_text(encoding="utf-8")
+        except OSError:
+            cpuinfo = ""
+            meminfo = ""
+        try:
+            model_identifier = Path("/sys/class/dmi/id/product_name").read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            model_identifier = None
+        metadata = linux_host_metadata(cpuinfo, meminfo, model_identifier)
+    else:
+        metadata = {
+            "model_identifier": darwin_sysctl("hw.model"),
+            "cpu_model": darwin_sysctl("machdep.cpu.brand_string"),
+            "physical_cpu_count": integer_sysctl("hw.physicalcpu"),
+            "memory_bytes": integer_sysctl("hw.memsize"),
+        }
+    return {"host_name": platform.node(), **metadata}
 
 
 def local_socket_peer_pid(path: Path) -> int:
@@ -247,24 +296,28 @@ def executable_provenance(path: Path) -> dict[str, Any]:
     }
 
 
-INTERACTION_LABEL_CODES = {
-    "OUTPUT": b"OUT",
-    "OPEN": b"OPN",
-    "TUI": b"TUI",
-    "WHEEL": b"WHE",
-    "IDLE": b"IDL",
-    "BLOCKED": b"BLK",
-    "CLIENT_IDLE": b"CID",
-    "CLIENT_BLOCKED": b"CBL",
-    "P1_IDLE": b"PAI",
-    "P1_ACTIVE": b"PAA",
-    "P4_IDLE": b"PBI",
-    "P4_ACTIVE": b"PBA",
-    "P16_IDLE": b"PCI",
-    "P16_ACTIVE": b"PCA",
-    "PMAX_IDLE": b"PDI",
-    "PMAX_ACTIVE": b"PDA",
-}
+def interaction_label_codes() -> dict[str, bytes]:
+    labels = [
+        "OUTPUT",
+        "OPEN",
+        "TUI",
+        "WHEEL",
+        "IDLE",
+        "BLOCKED",
+        "CLIENT_IDLE",
+        "CLIENT_BLOCKED",
+    ]
+    for profile in load_manifest()["pane_profiles"]:
+        labels.extend((f"{profile['id']}_IDLE", f"{profile['id']}_ACTIVE"))
+    if len(labels) > 26 * 26:
+        raise RuntimeError("interaction labels exceed the native probe token space")
+    return {
+        label: bytes((ord("L"), ord("A") + index // 26, ord("A") + index % 26))
+        for index, label in enumerate(labels)
+    }
+
+
+INTERACTION_LABEL_CODES = interaction_label_codes()
 
 
 def interaction_visible_token(label: str, index: int) -> bytes:
@@ -429,27 +482,34 @@ def darwin_resource_snapshot(pids: set[int]) -> dict[str, Any]:
     }
 
 
+def parse_linux_schedstat(value: str) -> int:
+    fields = value.split()
+    if len(fields) != 3 or any(
+        not field.isascii() or not field.isdecimal() for field in fields
+    ):
+        raise ValueError("invalid /proc/PID/schedstat record")
+    return int(fields[0])
+
+
 def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
     if platform.system() != "Linux":
         return {"available": False, "reason": "not Linux"}
     if not pids:
         return {"available": False, "reason": "no processes to sample"}
     try:
-        ticks_per_second = int(os.sysconf("SC_CLK_TCK"))
-        ticks = 0
+        cpu_time_ns = 0
         sampled = 0
         for pid in pids:
-            stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-            fields = stat[stat.rfind(")") + 2 :].split()
-            ticks += int(fields[11]) + int(fields[12])
+            schedstat = Path(f"/proc/{pid}/schedstat").read_text(encoding="ascii")
+            cpu_time_ns += parse_linux_schedstat(schedstat)
             sampled += 1
-    except (IndexError, OSError, ValueError) as error:
+    except (OSError, ValueError) as error:
         return {"available": False, "reason": str(error)}
     return {
         "available": sampled == len(pids),
-        "source": "/proc/PID/stat utime+stime",
+        "source": "/proc/PID/schedstat CPU runtime",
         "sampled_processes": sampled,
-        "cpu_time_ns": ticks * 1_000_000_000 // ticks_per_second,
+        "cpu_time_ns": cpu_time_ns,
     }
 
 
@@ -671,6 +731,41 @@ def resource_snapshot(
 
 def runtime_resource_snapshot(runtime: MuxRuntime) -> dict[str, Any]:
     return resource_snapshot(runtime.resource_roots(), runtime.resource_role_pids())
+
+
+def process_tree_diagnostic(root_pids: list[int]) -> str:
+    try:
+        output = subprocess.run(
+            [
+                "ps",
+                "-e",
+                "-o",
+                "pid=,ppid=,pgid=,sid=,tpgid=,stat=,wchan:24=,cmd=",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"process census failed: {error}"
+    records: list[tuple[int, int, str]] = []
+    for line in output.splitlines():
+        fields = line.split(maxsplit=2)
+        try:
+            if len(fields) == 3:
+                records.append((int(fields[0]), int(fields[1]), line))
+        except ValueError:
+            continue
+    selected = {process for process in root_pids if process > 0}
+    changed = True
+    while changed:
+        changed = False
+        for process, parent, _ in records:
+            if process not in selected and parent in selected:
+                selected.add(process)
+                changed = True
+    return "\n".join(line for process, _, line in records if process in selected)
 
 
 def summarize_resource_samples(
@@ -1653,26 +1748,37 @@ class HerdrRuntime:
 
 def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     client = runtime.start_and_attach("warm_scroll")
-    command = f"{shlex.quote(str(runtime.peer_path))} warm-scroll\r".encode()
-    client.write_all(command, 2.0)
-    client.read_until(WARM_MARKER, 60.0, visible_text=isinstance(runtime, HerdrRuntime))
+    fixture_command = (
+        f"{shlex.quote(str(runtime.peer_path))} warm-scroll-loop\r"
+    ).encode()
+    client.write_all(fixture_command, 2.0)
+    client.read_until(
+        WARM_READY_MARKER, 60.0, visible_text=isinstance(runtime, HerdrRuntime)
+    )
     client.drain()
 
-    completed = subprocess.run(
-        [
-            str(runtime.probe_path),
-            "command",
-            str(client.descriptor),
-            str(repetitions),
-            command.decode("ascii"),
-            WARM_MARKER.decode("ascii"),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        pass_fds=(client.descriptor,),
-        timeout=max(60.0, float(repetitions) * 60.0),
-    )
+    try:
+        completed = subprocess.run(
+            [
+                str(runtime.probe_path),
+                "command",
+                str(client.descriptor),
+                str(repetitions),
+                "\r",
+                WARM_MARKER.decode("ascii"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            pass_fds=(client.descriptor,),
+            timeout=max(60.0, float(repetitions) * 60.0),
+        )
+    except subprocess.CalledProcessError as error:
+        census = process_tree_diagnostic(runtime.resource_roots())
+        raise RuntimeError(
+            "native command probe failed: "
+            f"stdout={error.stdout!r} stderr={error.stderr!r} processes={census!r}"
+        ) from error
     try:
         measured = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -2395,13 +2501,19 @@ def pane_profile(
         receipts.close()
 
 
+def lifecycle_sentinel_arguments(peer_path: Path) -> tuple[str, ...]:
+    # Use the built fixture rather than a distribution-specific utility path. The idle peer also
+    # gives this measurement one explicit, quiescent process lifetime.
+    return ("start", "lifecycle_sentinel", "--", str(peer_path), "idle")
+
+
 def lifecycle_churn(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     if not isinstance(runtime, LemmaRuntime):
         raise TypeError("lifecycle churn requires Lemma")
     # Keep one ordinary session alive so deleting the churn target does not intentionally stop the
     # daemon whose descriptor and memory plateau this workload audits. Final-session auto-exit has
     # separate process coverage; the runtime process group reclaims this sentinel after sampling.
-    runtime.command("start", "lifecycle_sentinel", "--", "/bin/cat")
+    runtime.command(*lifecycle_sentinel_arguments(runtime.peer_path))
     baseline = runtime_resource_snapshot(runtime)
     if baseline.get("available") is not True:
         raise RuntimeError("lifecycle churn baseline resource snapshot is unavailable")
@@ -2608,7 +2720,7 @@ def latency_trace_metadata(directory: Path | None) -> dict[str, Any]:
             and role in (1, 2)
             and event_size == 40
             and process > 0
-            and count <= capacity == 32_768
+            and count <= capacity == 524_288
             and encoded[40 : header.size] == bytes(header.size - 40)
             and len(encoded) == header.size + (capacity * event_size)
         )
@@ -2629,7 +2741,7 @@ def latency_trace_metadata(directory: Path | None) -> dict[str, Any]:
         "requested": True,
         "available": bool(files) and all(item.get("valid") is True for item in files),
         "reason": None if files else "trace-enabled binaries produced no trace files",
-        "event_capacity_per_process": 32_768,
+        "event_capacity_per_process": 524_288,
         "events": total_events,
         "dropped": total_dropped,
         "files": files,
@@ -2905,7 +3017,13 @@ def main() -> int:
         "tmux",
         "herdr",
     }:
-        for profile, panes in (("P1", 1), ("P4", 4), ("P16", 16), ("PMAX", 64)):
+        profile_suite = manifest["profile_suites"][arguments.intent]
+        profile_definitions = {
+            profile["id"]: int(profile["panes"])
+            for profile in manifest["pane_profiles"]
+        }
+        for profile in profile_suite:
+            panes = profile_definitions[profile]
             pane_profiles[profile] = {}
             for activity in (False, True):
                 key = "active" if activity else "idle"
@@ -2934,7 +3052,13 @@ def main() -> int:
         arguments.mode in ("session-profiles", "all")
         and arguments.multiplexer != "direct"
     ):
-        for profile, sessions in (("S1", 1), ("S4", 4), ("S16", 16)):
+        session_suite = manifest["session_profile_suites"][arguments.intent]
+        session_definitions = {
+            profile["id"]: int(profile["sessions"])
+            for profile in manifest["session_profiles"]
+        }
+        for profile in session_suite:
+            sessions = session_definitions[profile]
 
             def session_profile_operation(
                 runtime: MuxRuntime,
@@ -2950,7 +3074,13 @@ def main() -> int:
         arguments.mode in ("workspace-profiles", "all")
         and arguments.multiplexer != "direct"
     ):
-        for profile, workspaces in (("W1", 1), ("W4", 4), ("W16", 16)):
+        workspace_suite = manifest["workspace_profile_suites"][arguments.intent]
+        workspace_definitions = {
+            profile["id"]: int(profile["workspaces"])
+            for profile in manifest["workspace_profiles"]
+        }
+        for profile in workspace_suite:
+            workspaces = workspace_definitions[profile]
 
             def workspace_profile_operation(
                 runtime: MuxRuntime,

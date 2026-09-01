@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "hosts": {
+    "box": {
+      "host_name": "box",
+      "system": "Linux",
+      "architecture": "x86_64",
+      "model_identifier": "MS-7E61",
+      "cpu_model": "AMD Ryzen 9 9950X 16-Core Processor",
+      "physical_cpu_count": 16,
+      "logical_cpu_count": 32,
+      "minimum_memory_bytes": 30000000000,
+      "cpu_affinity": "0-7",
+      "maximum_load_average_1m": 4.0,
+      "scaling_governors": [
+        "powersave"
+      ],
+      "energy_performance_preferences": [
+        "balance_performance"
+      ]
+    }
+  }
+}

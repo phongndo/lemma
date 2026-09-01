@@ -260,6 +260,7 @@ if(LEMMA_BUILD_TESTS)
     tests/latency_trace_test.cpp
     tests/layout_test.cpp
     tests/protocol_test.cpp
+    tests/reactor_environment_test.cpp
   )
   lemma_internal_target(lemma_unit_tests)
   target_link_libraries(
@@ -437,6 +438,42 @@ if(LEMMA_BUILD_TESTS)
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       TIMEOUT 180
       LABELS "extended;integration;mux;stress"
+      RUN_SERIAL TRUE
+  )
+
+  add_test(
+    NAME stress.mux_backpressure
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "LEMMA_TEST_SERVER=$<TARGET_FILE:lemma_test_server>"
+      "LEMMA_TEST_CLI=$<TARGET_FILE:lemma_test_cli>"
+      "LEMMA_TEST_PTY_PEER=$<TARGET_FILE:lemma_test_pty_peer>"
+      "${Python3_EXECUTABLE}" -m unittest -v tests.stress.test_backpressure
+  )
+  set_tests_properties(
+    stress.mux_backpressure
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 60
+      LABELS "extended;integration;mux;stress;backpressure"
+      RUN_SERIAL TRUE
+  )
+
+  add_test(
+    NAME stress.mux_trace_replay
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "LEMMA_TEST_SERVER=$<TARGET_FILE:lemma_test_server>"
+      "LEMMA_TEST_CLI=$<TARGET_FILE:lemma_test_cli>"
+      "LEMMA_TEST_PTY_PEER=$<TARGET_FILE:lemma_test_pty_peer>"
+      "${Python3_EXECUTABLE}" -m unittest -v tests.stress.test_mux_trace_replay
+  )
+  set_tests_properties(
+    stress.mux_trace_replay
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 180
+      LABELS "extended;integration;mux;stress;trace-replay"
       RUN_SERIAL TRUE
   )
 

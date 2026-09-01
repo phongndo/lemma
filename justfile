@@ -79,6 +79,14 @@ mux-bench:
 regression-bench:
     {{ nix }} scripts/ci/regression-budgets
 
+# Manually compare BASELINE with the current checkout on the approved local host.
+performance-gate baseline="HEAD" output="":
+    {{ nix }} scripts/performance gate "{{ baseline }}" "{{ output }}"
+
+# Measure repeated same-revision noise on the approved local host.
+performance-calibrate captures="3" output="":
+    {{ nix }} scripts/performance calibrate "{{ captures }}" "{{ output }}"
+
 # Format C++, Nix, and Python files in place.
 fmt:
     {{ nix }} bash -c "find {{ cpp_files }} -type f \

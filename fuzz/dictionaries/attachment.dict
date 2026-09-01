@@ -1,0 +1,8 @@
+lemma_magic="LEMMA"
+client_hello="\x4c\x45\x4d\x4d\x41\x01"
+server_frame="\x4c\x45\x4d\x4d\x41\x02"
+zero_length="\x00\x00\x00\x00"
+max_u32="\xff\xff\xff\xff"
+version_2_8="\x02\x08"
+disconnect="disconnect"
+protocol_error="protocol error"

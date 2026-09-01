@@ -1065,6 +1065,25 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   return written ? 0 : 1;
 }
 
+[[nodiscard]] auto run_warm_scroll_loop() noexcept -> int {
+  if (!write_all("__LEMMA_WARM_SCROLL_READY__\r\n")) {
+    return 1;
+  }
+  std::array<char, 1> trigger{};
+  while (true) {
+    const auto count = ::read(STDIN_FILENO, trigger.data(), trigger.size());
+    if (count > 0) {
+      if (run_warm_scroll() != 0) {
+        return 1;
+      }
+      continue;
+    }
+    if (count == 0 || errno != EINTR) {
+      return count == 0 || errno == EIO ? 0 : 1;
+    }
+  }
+}
+
 } // namespace
 
 // Command dispatch is deliberately explicit so invalid argument shapes remain rejected.
@@ -1081,6 +1100,10 @@ int main(const int argc, char** const argv) {
   }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll-loop") {
+    return run_warm_scroll_loop();
   }
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "logical-keys") {

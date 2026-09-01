@@ -9,6 +9,7 @@
 #include "lemma/command.hpp"
 #include "lemma/geometry.hpp"
 #include "lemma/id.hpp"
+#include "lemma/limits.hpp"
 
 #include <gtest/gtest.h>
 
@@ -294,6 +295,54 @@ private:
   bool integrity_failed_{false};
 };
 
+inline constexpr std::size_t mux_operation_kind_count =
+    static_cast<std::size_t>(MuxOperationKind::idle) + 1U;
+inline constexpr std::size_t mux_outcome_class_count = 4;
+inline constexpr std::size_t mux_fault_class_count = 4;
+inline constexpr std::size_t mux_state_class_count = 13;
+inline constexpr std::array<std::string_view, mux_outcome_class_count> mux_outcome_names{
+    "applied", "no_effect", "stale", "rejected"};
+inline constexpr std::array<std::string_view, mux_fault_class_count> mux_fault_names{
+    "none", "spawn", "resize", "spawn_and_resize"};
+inline constexpr std::array<std::string_view, mux_state_class_count> mux_state_names{
+    "single_pane",        "multiple_panes",    "pane_capacity", "single_tab",
+    "multiple_tabs",      "tab_capacity",      "zoomed",        "layout_suspended",
+    "stale_id_retained",  "generation_reused", "held_child",    "minimum_attachment",
+    "maximum_attachment",
+};
+
+inline constexpr std::size_t outcome_applied_index = 0;
+inline constexpr std::size_t outcome_stale_index = 2;
+inline constexpr std::size_t outcome_rejected_index = 3;
+inline constexpr std::size_t fault_none_index = 0;
+inline constexpr std::size_t fault_spawn_index = 1;
+inline constexpr std::size_t fault_resize_index = 2;
+inline constexpr std::size_t state_multiple_panes_index = 1;
+inline constexpr std::size_t state_pane_capacity_index = 2;
+inline constexpr std::size_t state_tab_capacity_index = 5;
+inline constexpr std::size_t state_stale_id_retained_index = 8;
+inline constexpr std::size_t state_held_child_index = 10;
+inline constexpr std::size_t state_minimum_attachment_index = 11;
+inline constexpr std::size_t state_maximum_attachment_index = 12;
+inline constexpr std::uint16_t state_single_pane = 1U << 0U;
+inline constexpr std::uint16_t state_multiple_panes = 1U << 1U;
+inline constexpr std::uint16_t state_pane_capacity = 1U << state_pane_capacity_index;
+inline constexpr std::uint16_t state_single_tab = 1U << 3U;
+inline constexpr std::uint16_t state_multiple_tabs = 1U << 4U;
+inline constexpr std::uint16_t state_tab_capacity = 1U << state_tab_capacity_index;
+inline constexpr std::uint16_t state_zoomed = 1U << 6U;
+inline constexpr std::uint16_t state_layout_suspended = 1U << 7U;
+inline constexpr std::uint16_t state_stale_id_retained = 1U << 8U;
+inline constexpr std::uint16_t state_generation_reused = 1U << 9U;
+inline constexpr std::uint16_t state_held_child = 1U << 10U;
+inline constexpr std::uint16_t state_minimum_attachment = 1U << 11U;
+inline constexpr std::uint16_t state_maximum_attachment = 1U << state_maximum_attachment_index;
+
+using MuxStateSignatureCounts = std::array<
+    std::array<std::array<std::array<std::size_t, mux_state_class_count>, mux_fault_class_count>,
+               mux_outcome_class_count>,
+    mux_operation_kind_count>;
+
 struct WorldCoverage final {
   std::size_t applied{0};
   std::size_t no_effect{0};
@@ -301,6 +350,54 @@ struct WorldCoverage final {
   std::size_t stale{0};
   std::size_t child_exits{0};
   std::size_t runtime_errors{0};
+  std::array<std::size_t, mux_operation_kind_count> operations{};
+  std::array<std::array<std::size_t, mux_outcome_class_count>, mux_operation_kind_count> outcomes{};
+  std::array<std::array<std::size_t, mux_operation_kind_count>, mux_operation_kind_count>
+      transitions{};
+  std::array<std::array<std::size_t, mux_fault_class_count>, mux_operation_kind_count> faults{};
+  std::array<std::array<std::size_t, mux_state_class_count>, mux_operation_kind_count>
+      operation_states{};
+  MuxStateSignatureCounts signatures{};
+  std::array<std::size_t, mux_operation_kind_count> spawn_faults{};
+  std::array<std::size_t, mux_operation_kind_count> resize_faults{};
+  std::uint64_t states{0};
+
+  void merge_operation(const WorldCoverage& other, const std::size_t operation) noexcept {
+    operations.at(operation) += other.operations.at(operation);
+    spawn_faults.at(operation) += other.spawn_faults.at(operation);
+    resize_faults.at(operation) += other.resize_faults.at(operation);
+    for (std::size_t outcome = 0; outcome < mux_outcome_class_count; ++outcome) {
+      outcomes.at(operation).at(outcome) += other.outcomes.at(operation).at(outcome);
+    }
+    for (std::size_t fault = 0; fault < mux_fault_class_count; ++fault) {
+      faults.at(operation).at(fault) += other.faults.at(operation).at(fault);
+      for (std::size_t outcome = 0; outcome < mux_outcome_class_count; ++outcome) {
+        for (std::size_t state = 0; state < mux_state_class_count; ++state) {
+          signatures.at(operation).at(outcome).at(fault).at(state) +=
+              other.signatures.at(operation).at(outcome).at(fault).at(state);
+        }
+      }
+    }
+    for (std::size_t state = 0; state < mux_state_class_count; ++state) {
+      operation_states.at(operation).at(state) += other.operation_states.at(operation).at(state);
+    }
+    for (std::size_t next = 0; next < mux_operation_kind_count; ++next) {
+      transitions.at(operation).at(next) += other.transitions.at(operation).at(next);
+    }
+  }
+
+  void merge(const WorldCoverage& other) noexcept {
+    applied += other.applied;
+    no_effect += other.no_effect;
+    rejected += other.rejected;
+    stale += other.stale;
+    child_exits += other.child_exits;
+    runtime_errors += other.runtime_errors;
+    states |= other.states;
+    for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+      merge_operation(other, operation);
+    }
+  }
 };
 
 class MuxWorld final {
@@ -330,7 +427,51 @@ public:
         .resize_outcome =
             faults.index(24U) == 0 ? RuntimeEffectStatus::rejected : RuntimeEffectStatus::applied,
     };
-    switch (operations.index(17)) {
+
+    // Every 256-operation epoch first drives the world through maximum geometry, Tab capacity,
+    // Pane capacity, and rejected-at-capacity transitions. Random histories then explore paths out
+    // of those states. This guarantees deep-state search without making replay depend on a model.
+    const auto directed_step = generated_operations_++ % 256U;
+    if (directed_step == 0U) {
+      operation.kind = MuxOperationKind::attachment_resize;
+      operation.argument_0 = limits::terminal_columns_hard_max;
+      operation.argument_1 = limits::terminal_rows_hard_max;
+      return operation;
+    }
+    if (directed_step <= core::tabs_per_session_max &&
+        session_.tab_order.size() < core::tabs_per_session_max) {
+      operation.kind = MuxOperationKind::create_tab;
+      operation.argument_0 = static_cast<std::uint16_t>(
+          directed_step % 4U == 0 ? PaneExitPolicy::hold : PaneExitPolicy::close);
+      operation.spawn_outcome = RuntimeEffectStatus::applied;
+      operation.resize_outcome = RuntimeEffectStatus::applied;
+      return operation;
+    }
+    if (directed_step <= core::tabs_per_session_max + core::panes_per_session_max &&
+        pane_count() < core::panes_per_session_max) {
+      operation.kind = MuxOperationKind::split;
+      select_tab_and_pane(operations, operation);
+      operation.argument_0 = static_cast<std::uint16_t>(
+          operations.boolean() ? SplitAxis::left_right : SplitAxis::top_bottom);
+      operation.argument_1 = static_cast<std::uint16_t>(
+          directed_step % 5U == 0 ? PaneExitPolicy::hold : PaneExitPolicy::close);
+      operation.spawn_outcome = RuntimeEffectStatus::applied;
+      operation.resize_outcome = RuntimeEffectStatus::applied;
+      return operation;
+    }
+    if (directed_step == core::tabs_per_session_max + core::panes_per_session_max + 1U) {
+      operation.kind = MuxOperationKind::create_tab;
+      operation.argument_0 = static_cast<std::uint16_t>(PaneExitPolicy::close);
+      operation.spawn_outcome = RuntimeEffectStatus::applied;
+      operation.resize_outcome = RuntimeEffectStatus::applied;
+      return operation;
+    }
+    if (directed_step == core::tabs_per_session_max + core::panes_per_session_max + 2U) {
+      operation.kind = MuxOperationKind::idle;
+      return operation;
+    }
+
+    switch (operations.index(mux_operation_kind_count)) {
     case 0:
     case 1: {
       operation.kind = MuxOperationKind::split;
@@ -425,7 +566,15 @@ public:
                                  CommandKind::resize_up, CommandKind::resize_down};
       operation.argument_0 = static_cast<std::uint16_t>(
           std::span(kinds).subspan(operations.index(kinds.size()), 1).front());
-      operation.argument_1 = operations.between(1, 8);
+      constexpr std::array<std::uint16_t, 4> resize_boundaries{
+          1,
+          2,
+          command_resize_amount_max - 1U,
+          command_resize_amount_max,
+      };
+      operation.argument_1 = operations.index(3U) == 0
+                                 ? operations.between(1, command_resize_amount_max)
+                                 : resize_boundaries.at(operations.index(resize_boundaries.size()));
       break;
     }
     case 11: {
@@ -465,11 +614,16 @@ public:
         select_tab_and_pane(operations, operation);
       }
       break;
-    case 16:
+    case 16: {
       operation.kind = MuxOperationKind::attachment_resize;
-      operation.argument_0 = operations.between(20, 180);
-      operation.argument_1 = operations.between(3, 80);
+      constexpr std::array<std::uint16_t, 6> column_boundaries{
+          1, 2, 20, 180, limits::terminal_columns_hard_max - 1U, limits::terminal_columns_hard_max};
+      constexpr std::array<std::uint16_t, 6> row_boundaries{
+          1, 2, 3, 80, limits::terminal_rows_hard_max - 1U, limits::terminal_rows_hard_max};
+      operation.argument_0 = column_boundaries.at(operations.index(column_boundaries.size()));
+      operation.argument_1 = row_boundaries.at(operations.index(row_boundaries.size()));
       break;
+    }
     default:
       operation.kind = MuxOperationKind::idle;
       break;
@@ -657,7 +811,7 @@ public:
     }
     runtime_.end_operation();
     last_transition_ = transition;
-    observe(transition);
+    observe(operation, transition);
     if (error.has_value()) {
       return error;
     }
@@ -858,7 +1012,98 @@ private:
                              .target = {.session = session_.id, .tab = tab, .pane = pane}});
   }
 
-  void observe(const core::SessionTransition& transition) noexcept {
+  [[nodiscard]] static constexpr auto outcome_class(const CommandStatus status) noexcept
+      -> std::size_t {
+    switch (status) {
+    case CommandStatus::applied:
+      return 0;
+    case CommandStatus::no_effect:
+      return 1;
+    case CommandStatus::stale_target:
+      return 2;
+    case CommandStatus::detach_requested:
+    case CommandStatus::invalid_command:
+    case CommandStatus::invalid_target:
+    case CommandStatus::wrong_owner:
+    case CommandStatus::conflict:
+    case CommandStatus::capacity:
+    case CommandStatus::unavailable:
+    case CommandStatus::failed:
+      return 3;
+    }
+    return 3;
+  }
+
+  // This test-only bitset deliberately states every independently accountable bucket.
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+  [[nodiscard]] auto state_coverage() const noexcept -> std::uint64_t {
+    std::uint64_t states = 0;
+    const auto panes = pane_count();
+    const auto tabs = session_.tab_order.size();
+    states |= panes == 1U ? state_single_pane : 0U;
+    states |= panes > 1U ? state_multiple_panes : 0U;
+    states |= panes == core::panes_per_session_max ? state_pane_capacity : 0U;
+    states |= tabs == 1U ? state_single_tab : 0U;
+    states |= tabs > 1U ? state_multiple_tabs : 0U;
+    states |= tabs == core::tabs_per_session_max ? state_tab_capacity : 0U;
+    states |= stale_count_ > 0 ? state_stale_id_retained : 0U;
+    states |= session_.attachment.columns == 1U || session_.attachment.rows == 1U
+                  ? state_minimum_attachment
+                  : 0U;
+    states |= session_.attachment.columns == limits::terminal_columns_hard_max &&
+                      session_.attachment.rows == limits::terminal_rows_hard_max
+                  ? state_maximum_attachment
+                  : 0U;
+    for (const auto& tab_slot : session_.tabs) {
+      if (tab_slot.tab != nullptr) {
+        states |= tab_slot.tab->zoomed ? state_zoomed : 0U;
+        states |= tab_slot.tab->layout_suspended ? state_layout_suspended : 0U;
+      }
+    }
+    for (const auto& pane_slot : session_.panes) {
+      if (pane_slot.pane == nullptr) {
+        continue;
+      }
+      states |= pane_slot.pane->process_exit.has_value() ? state_held_child : 0U;
+      for (const auto stale : std::span(stale_panes_).first(stale_count_)) {
+        if (stale.is_valid() && stale.slot() == pane_slot.pane->id.slot() &&
+            stale.generation() != pane_slot.pane->id.generation()) {
+          states |= state_generation_reused;
+        }
+      }
+    }
+    return states;
+  }
+
+  void observe(const MuxOperation& operation, const core::SessionTransition& transition) noexcept {
+    const auto operation_index = static_cast<std::size_t>(operation.kind);
+    const auto operation_outcome = outcome_class(transition.result.status);
+    ++coverage_.operations.at(operation_index);
+    ++coverage_.outcomes.at(operation_index).at(operation_outcome);
+    if (previous_operation_.has_value()) {
+      ++coverage_.transitions.at(static_cast<std::size_t>(*previous_operation_))
+            .at(operation_index);
+    }
+    previous_operation_ = operation.kind;
+    const bool spawn_fault = operation.spawn_outcome != RuntimeEffectStatus::applied;
+    const bool resize_fault = operation.resize_outcome != RuntimeEffectStatus::applied;
+    if (spawn_fault) {
+      ++coverage_.spawn_faults.at(operation_index);
+    }
+    if (resize_fault) {
+      ++coverage_.resize_faults.at(operation_index);
+    }
+    const auto fault_class =
+        static_cast<std::size_t>(spawn_fault) | (static_cast<std::size_t>(resize_fault) << 1U);
+    ++coverage_.faults.at(operation_index).at(fault_class);
+    const auto current_states = state_coverage();
+    coverage_.states |= current_states;
+    for (std::size_t state = 0; state < mux_state_class_count; ++state) {
+      if ((current_states & (std::uint64_t{1} << state)) != 0U) {
+        ++coverage_.operation_states.at(operation_index).at(state);
+        ++coverage_.signatures.at(operation_index).at(operation_outcome).at(fault_class).at(state);
+      }
+    }
     switch (transition.result.status) {
     case CommandStatus::applied:
       ++coverage_.applied;
@@ -888,6 +1133,8 @@ private:
   std::array<PaneId, 1'024> stale_panes_{};
   std::size_t stale_next_{0};
   std::size_t stale_count_{0};
+  std::size_t generated_operations_{0};
+  std::optional<MuxOperationKind> previous_operation_;
   WorldCoverage coverage_;
   core::SessionTransition last_transition_;
   std::string_view last_operation_{"bootstrap"};
@@ -1288,6 +1535,114 @@ struct FailureArtifacts final {
                                           : std::optional<std::filesystem::path>{path};
 }
 
+// JSON makes every search dimension inspectable without adding a second reporting model.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto write_coverage_report(const std::uint64_t seed,
+                                         const std::size_t operation_count,
+                                         const WorldCoverage& world,
+                                         const SimRuntimeCoverage& runtime, std::string& error)
+    -> bool {
+  const auto* const configured = std::getenv("LEMMA_MUX_SIM_COVERAGE_OUT");
+  if (configured == nullptr || *configured == '\0') {
+    return true;
+  }
+  const std::filesystem::path path{configured};
+  std::error_code directory_error;
+  if (!path.parent_path().empty()) {
+    std::filesystem::create_directories(path.parent_path(), directory_error);
+  }
+  if (directory_error) {
+    error = "could not create mux coverage directory: " + directory_error.message();
+    return false;
+  }
+  std::ofstream output(path, std::ios::trunc);
+  if (!output.is_open()) {
+    error = "could not create mux coverage report " + path.string();
+    return false;
+  }
+  output << "{\n  \"schema\": 3,\n  \"seed\": \"0x" << std::hex << seed << std::dec
+         << "\",\n  \"operations_requested\": " << operation_count << ",\n  \"state_mask\": \"0x"
+         << std::hex << world.states << std::dec << "\",\n  \"operation_counts\": {\n";
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    output << "    \"" << mux_operation_name(static_cast<MuxOperationKind>(operation))
+           << "\": " << world.operations.at(operation)
+           << (operation + 1U == mux_operation_kind_count ? "\n" : ",\n");
+  }
+  output << "  },\n  \"outcome_counts\": {\n";
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    output << "    \"" << mux_operation_name(static_cast<MuxOperationKind>(operation)) << "\": {";
+    for (std::size_t outcome = 0; outcome < mux_outcome_class_count; ++outcome) {
+      output << "\"" << mux_outcome_names.at(outcome)
+             << "\": " << world.outcomes.at(operation).at(outcome)
+             << (outcome + 1U == mux_outcome_class_count ? "" : ", ");
+    }
+    output << "}" << (operation + 1U == mux_operation_kind_count ? "\n" : ",\n");
+  }
+  output << "  },\n  \"fault_counts\": {\n";
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    output << "    \"" << mux_operation_name(static_cast<MuxOperationKind>(operation)) << "\": {";
+    for (std::size_t fault = 0; fault < mux_fault_class_count; ++fault) {
+      output << "\"" << mux_fault_names.at(fault) << "\": " << world.faults.at(operation).at(fault)
+             << (fault + 1U == mux_fault_class_count ? "" : ", ");
+    }
+    output << "}" << (operation + 1U == mux_operation_kind_count ? "\n" : ",\n");
+  }
+  output << "  },\n  \"operation_state_counts\": {\n";
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    output << "    \"" << mux_operation_name(static_cast<MuxOperationKind>(operation)) << "\": {";
+    for (std::size_t state = 0; state < mux_state_class_count; ++state) {
+      output << "\"" << mux_state_names.at(state)
+             << "\": " << world.operation_states.at(operation).at(state)
+             << (state + 1U == mux_state_class_count ? "" : ", ");
+    }
+    output << "}" << (operation + 1U == mux_operation_kind_count ? "\n" : ",\n");
+  }
+  output << "  },\n  \"joint_signatures\": [\n";
+  bool first_signature = true;
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    for (std::size_t outcome = 0; outcome < mux_outcome_class_count; ++outcome) {
+      for (std::size_t fault = 0; fault < mux_fault_class_count; ++fault) {
+        for (std::size_t state = 0; state < mux_state_class_count; ++state) {
+          const auto count = world.signatures.at(operation).at(outcome).at(fault).at(state);
+          if (count == 0U) {
+            continue;
+          }
+          output << (first_signature ? "" : ",\n") << R"(    {"operation": ")"
+                 << mux_operation_name(static_cast<MuxOperationKind>(operation))
+                 << R"(", "outcome": ")" << mux_outcome_names.at(outcome) << R"(", "fault": ")"
+                 << mux_fault_names.at(fault) << R"(", "state": ")" << mux_state_names.at(state)
+                 << R"(", "count": )" << count << "}";
+          first_signature = false;
+        }
+      }
+    }
+  }
+  output << "\n  ],\n  \"transition_counts\": {\n";
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    output << "    \"" << mux_operation_name(static_cast<MuxOperationKind>(operation)) << "\": {";
+    for (std::size_t next = 0; next < mux_operation_kind_count; ++next) {
+      output << "\"" << mux_operation_name(static_cast<MuxOperationKind>(next))
+             << "\": " << world.transitions.at(operation).at(next)
+             << (next + 1U == mux_operation_kind_count ? "" : ", ");
+    }
+    output << "}" << (operation + 1U == mux_operation_kind_count ? "\n" : ",\n");
+  }
+  output << "  },\n  \"runtime\": {\n"
+         << "    \"spawns\": " << runtime.spawns << ",\n"
+         << "    \"spawn_rejections\": " << runtime.spawn_rejections << ",\n"
+         << "    \"resize_batches\": " << runtime.resize_batches << ",\n"
+         << "    \"resize_rejections\": " << runtime.resize_rejections << ",\n"
+         << "    \"consistency_losses\": " << runtime.consistency_losses << ",\n"
+         << "    \"retired\": " << runtime.retired << ",\n"
+         << "    \"held\": " << runtime.held << "\n  }\n}\n";
+  output.flush();
+  if (!output.good()) {
+    error = "could not write mux coverage report " + path.string();
+    return false;
+  }
+  return true;
+}
+
 [[nodiscard]] auto
 run_mux_world(const std::uint64_t seed, const std::size_t operation_count,
               std::uint64_t* const final_hash = nullptr,
@@ -1309,6 +1664,20 @@ run_mux_world(const std::uint64_t seed, const std::size_t operation_count,
   replay << "LEMMA_MUX_SIM_SEED=0x" << std::hex << seed << std::dec
          << " LEMMA_MUX_SIM_OPERATIONS=" << operation_count << " ./test sim";
   return assertion_for_run(result, trace_output.value_or(default_failure_path(seed)), replay.str());
+}
+
+[[nodiscard]] auto trace_has_regression_metadata(const std::filesystem::path& path) -> bool {
+  std::ifstream input(path);
+  std::string line;
+  bool regression = false;
+  bool source = false;
+  bool fixed = false;
+  while (std::getline(input, line)) {
+    regression = regression || line.starts_with("# regression: ");
+    source = source || line.starts_with("# source-trace: ");
+    fixed = fixed || line.starts_with("# fixed-at: ");
+  }
+  return regression && source && fixed;
 }
 
 [[nodiscard]] auto
@@ -1412,6 +1781,8 @@ TEST(MuxSimulationTest, ReplaysCheckedInRegressionCorpus) {
   ASSERT_FALSE(traces.empty()) << "mux regression corpus must contain at least one trace";
   for (const auto& path : traces) {
     SCOPED_TRACE(path.string());
+    EXPECT_TRUE(trace_has_regression_metadata(path))
+        << "promoted traces must identify the regression, source trace, and fixing revision";
     std::vector<MuxTraceEntry> entries;
     std::string error;
     ASSERT_TRUE(read_mux_trace_file(path, entries, error)) << error;
@@ -1449,8 +1820,14 @@ TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) 
   ASSERT_GT(selected_operations, 0U);
   ASSERT_LE(selected_operations, mux_trace_operations_max);
   if (configured) {
-    ASSERT_TRUE(run_mux_world(selected_seed, selected_operations, nullptr, nullptr, nullptr,
-                              configured_trace_output()));
+    WorldCoverage configured_world;
+    SimRuntimeCoverage configured_runtime;
+    ASSERT_TRUE(run_mux_world(selected_seed, selected_operations, nullptr, &configured_world,
+                              &configured_runtime, configured_trace_output()));
+    std::string coverage_error;
+    ASSERT_TRUE(write_coverage_report(selected_seed, selected_operations, configured_world,
+                                      configured_runtime, coverage_error))
+        << coverage_error;
     return;
   }
 
@@ -1461,12 +1838,7 @@ TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) 
     SimRuntimeCoverage current_runtime;
     ASSERT_TRUE(
         run_mux_world(seed, selected_operations, nullptr, &current_world, &current_runtime));
-    world_coverage.applied += current_world.applied;
-    world_coverage.no_effect += current_world.no_effect;
-    world_coverage.rejected += current_world.rejected;
-    world_coverage.stale += current_world.stale;
-    world_coverage.child_exits += current_world.child_exits;
-    world_coverage.runtime_errors += current_world.runtime_errors;
+    world_coverage.merge(current_world);
     runtime_coverage.spawns += current_runtime.spawns;
     runtime_coverage.spawn_rejections += current_runtime.spawn_rejections;
     runtime_coverage.resize_batches += current_runtime.resize_batches;
@@ -1487,6 +1859,109 @@ TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) 
   EXPECT_GT(runtime_coverage.resize_rejections, 0U);
   EXPECT_GT(runtime_coverage.retired, 0U);
   EXPECT_GT(runtime_coverage.held, 0U);
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    EXPECT_GT(world_coverage.operations.at(operation), 0U)
+        << "uncovered operation " << mux_operation_name(static_cast<MuxOperationKind>(operation));
+  }
+  const auto operation_index = [](const MuxOperationKind operation) {
+    return static_cast<std::size_t>(operation);
+  };
+  EXPECT_GT(world_coverage.transitions.at(operation_index(MuxOperationKind::attachment_resize))
+                .at(operation_index(MuxOperationKind::create_tab)),
+            0U);
+  EXPECT_GT(world_coverage.transitions.at(operation_index(MuxOperationKind::create_tab))
+                .at(operation_index(MuxOperationKind::split)),
+            0U);
+  EXPECT_GT(world_coverage.transitions.at(operation_index(MuxOperationKind::split))
+                .at(operation_index(MuxOperationKind::split)),
+            0U);
+  EXPECT_GT(world_coverage.transitions.at(operation_index(MuxOperationKind::create_tab))
+                .at(operation_index(MuxOperationKind::idle)),
+            0U);
+  EXPECT_GT(world_coverage.operation_states.at(operation_index(MuxOperationKind::attachment_resize))
+                .at(state_maximum_attachment_index),
+            0U);
+  EXPECT_GT(world_coverage.operation_states.at(operation_index(MuxOperationKind::create_tab))
+                .at(state_tab_capacity_index),
+            0U);
+  EXPECT_GT(world_coverage.operation_states.at(operation_index(MuxOperationKind::split))
+                .at(state_pane_capacity_index),
+            0U);
+  std::array<std::size_t, mux_fault_class_count> fault_totals{};
+  for (const auto& operation_faults : world_coverage.faults) {
+    for (std::size_t fault = 0; fault < fault_totals.size(); ++fault) {
+      fault_totals.at(fault) += operation_faults.at(fault);
+    }
+  }
+  EXPECT_GT(fault_totals.at(0), 0U);
+  EXPECT_GT(fault_totals.at(1), 0U);
+  EXPECT_GT(fault_totals.at(2), 0U);
+  EXPECT_GT(fault_totals.at(3), 0U);
+  struct RequiredJointSignature final {
+    constexpr RequiredJointSignature(const MuxOperationKind operation_value,
+                                     const std::size_t outcome_value, const std::size_t fault_value,
+                                     const std::size_t state_value) noexcept
+        : operation(operation_value), outcome(outcome_value), fault(fault_value),
+          state(state_value) {}
+
+    MuxOperationKind operation;
+    std::size_t outcome;
+    std::size_t fault;
+    std::size_t state;
+  };
+  // These signatures are the reviewed cross-dimensional search obligations, not four independent
+  // coverage totals. They pin capacity rejection, generation safety, injected Runtime failures,
+  // child holding, and both attachment boundaries to their exact operation outcomes.
+  constexpr std::array required_signatures{
+      RequiredJointSignature{MuxOperationKind::split, outcome_rejected_index, fault_none_index,
+                             state_pane_capacity_index},
+      RequiredJointSignature{MuxOperationKind::create_tab, outcome_rejected_index, fault_none_index,
+                             state_tab_capacity_index},
+      RequiredJointSignature{MuxOperationKind::stale_focus, outcome_stale_index, fault_none_index,
+                             state_stale_id_retained_index},
+      RequiredJointSignature{MuxOperationKind::spawn_failure, outcome_rejected_index,
+                             fault_spawn_index, state_multiple_panes_index},
+      RequiredJointSignature{MuxOperationKind::resize_failure, outcome_rejected_index,
+                             fault_resize_index, state_multiple_panes_index},
+      RequiredJointSignature{MuxOperationKind::child_exit, outcome_applied_index, fault_none_index,
+                             state_held_child_index},
+      RequiredJointSignature{MuxOperationKind::runtime_error, outcome_applied_index,
+                             fault_none_index, state_multiple_panes_index},
+      RequiredJointSignature{MuxOperationKind::attachment_resize, outcome_applied_index,
+                             fault_none_index, state_minimum_attachment_index},
+      RequiredJointSignature{MuxOperationKind::attachment_resize, outcome_applied_index,
+                             fault_none_index, state_maximum_attachment_index},
+  };
+  for (const auto required : required_signatures) {
+    EXPECT_GT(world_coverage.signatures.at(operation_index(required.operation))
+                  .at(required.outcome)
+                  .at(required.fault)
+                  .at(required.state),
+              0U)
+        << "missing required joint signature operation=" << mux_operation_name(required.operation)
+        << " outcome=" << mux_outcome_names.at(required.outcome)
+        << " fault=" << mux_fault_names.at(required.fault)
+        << " state=" << mux_state_names.at(required.state);
+  }
+  for (std::size_t operation = 0; operation < mux_operation_kind_count; ++operation) {
+    std::size_t signature_count = 0;
+    for (const auto& outcome : world_coverage.signatures.at(operation)) {
+      for (const auto& fault : outcome) {
+        for (const auto count : fault) {
+          signature_count += count;
+        }
+      }
+    }
+    EXPECT_GT(signature_count, 0U) << "operation has no joint coverage signature: "
+                                   << mux_operation_name(static_cast<MuxOperationKind>(operation));
+  }
+  constexpr auto required_states = state_single_pane | state_multiple_panes | state_pane_capacity |
+                                   state_single_tab | state_multiple_tabs | state_tab_capacity |
+                                   state_zoomed | state_layout_suspended | state_stale_id_retained |
+                                   state_generation_reused | state_held_child |
+                                   state_minimum_attachment | state_maximum_attachment;
+  EXPECT_EQ(world_coverage.states & required_states, required_states)
+      << "generated histories did not visit every required deep-state bucket";
 }
 
 } // namespace

@@ -102,8 +102,12 @@ Core, protocol, presentation, composition, and Ghostty simulation failures print
 command. The worlds compare fragmented streams, generated resize/input/effect histories, composed
 output replay, blocked-client recovery, and multi-pane incremental/full convergence. The mux world
 runs the production `SessionMachine` against a simulated Runtime, injects spawn/resize/child faults,
-and checks all semantic and Core/Runtime ownership invariants after every operation. Generated mux
-histories are concrete, versioned operation/effect traces; replay does not invoke the generator.
+and records joint operation × outcome × fault × state signatures plus transition pairs. Curated
+seeds must cover every operation and required capacity, stale-generation, held-child, rollback, and
+geometry bucket. The scripted reactor world executes the production reactor while controlling
+readiness, request fragmentation, outbound `EAGAIN`, child wake ordering, and all monotonic time.
+Generated mux histories are concrete, versioned operation/effect traces; replay does not invoke the
+generator.
 Seeds and traces can be selected directly:
 
 ```sh
@@ -116,10 +120,11 @@ Set `LEMMA_MUX_SIM_TRACE_OUT=path/to/trace` with a configured mux seed to retain
 as it executes, including the operation that is in progress if a sanitizer aborts. Ordinary mux
 failures write the complete trace and a bounded deterministic reduction under
 `build/mux-sim-failures/`. After confirming a minimized failure is fixed, promote it with
-`scripts/promote-mux-trace path/to/failure.min.trace regression-name`. Promotion replays the
-concrete operations without stale failure checkpoints, records the fixed outcomes atomically, and
-publishes the trace under `tests/sim/corpus/mux/`. Every simulation run replays that permanent
-corpus and validates its recorded command outcomes and state checkpoints.
+`scripts/promote-mux-trace path/to/failure.min.trace regression-name 'one-line bug description'`.
+Promotion replays the concrete operations without stale failure checkpoints, records the fixed
+outcomes and discovery metadata atomically, and publishes the trace under
+`tests/sim/corpus/mux/`. Every simulation run replays that permanent corpus, requires its bug
+provenance, and validates its recorded command outcomes and state checkpoints.
 
 Use `LEMMA_SIM_TRACE=1` with a non-mux replay command to stream completed operations before a
 dependency abort that cannot return through the normal failure trace. Scheduled CI runs
@@ -138,9 +143,14 @@ cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host
 ```
 
 Linux links libFuzzer for mutation runs. The sanitizer lane replays the checked-in seed corpora,
-runs each target for a bounded mutation interval, then runs a longer mux simulation with a seed
-generated outside the test process. Darwin replays the same corpora under ASan/UBSan because Xcode
-Clang does not ship a libFuzzer runtime.
+runs each target for a bounded mutation interval with its protocol dictionary, then runs a longer
+mux simulation with a seed generated outside the test process. The scheduled
+`scripts/ci/fuzz-campaign` retains evolved corpora and minimized failure artifacts. After fixing a
+genuine finding, use
+`scripts/promote-fuzz-input TARGET INPUT CORPUS_NAME 'one-line bug description'`; promotion first
+replays the input, then records its SHA-256, source, fixing revision, and regression provenance in
+`fuzz/corpus/regressions.json`. Darwin replays the same corpora under ASan/UBSan because Xcode Clang
+does not ship a libFuzzer runtime.
 
 Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
 report enough state to diagnose a timeout. The mux harness uses structured Session/Pane inspection:
@@ -196,7 +206,40 @@ not checked-in documentation.
 
 A performance comparison must use the same build profile, fixture, work, completion condition, and
 host. Distinguish CPU time, elapsed time, outer bytes, physical footprint, RSS, descriptors, and
-wakeups. Shared-runner timing is diagnostic evidence, not a stable regression gate.
+wakeups. Shared-runner timing is diagnostic evidence, not a stable regression gate. Its scheduled
+diagnostic sweep covers pane counts 1, 2, 4, 8, 16, 32, and the supported maximum to expose scaling
+knees. Scheduled memory evidence also sweeps 1, 2, 4, 8, and 16 sessions and workspaces plus
+1, 10, and 100 lifecycle churn cycles. Merge-blocking `scripts/ci/deterministic-budgets` enforces
+zero steady-state allocations and reviewed exact bounds for routed bytes, composed frames, retained
+queue depth, wire amplification, flushes, writer attempts, reactor polls, readiness events, outbound
+sends, backpressure recovery, partial writes, and child wakeups.
+
+For now, `box` is the approved performance host and the paired gate is invoked manually:
+
+```sh
+just performance-calibrate 3
+just performance-gate main
+```
+
+`benchmarks/performance_hosts.json` pins its hardware identity, CPU policy, and `0-7` affinity.
+Calibration captures the unchanged checkout repeatedly and fails if the reviewed ratio and absolute
+noise floors do not contain the observed A/A spread; it never relaxes policy automatically. Linux
+process CPU evidence uses nanosecond runtime from `/proc/PID/schedstat`, not scheduler-tick-rounded
+`/proc/PID/stat` values. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
+diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
+make their rank unstable.
+
+The gate holds a host-wide lock, validates host state before and after capture, and builds the
+baseline and current checkout with the current checkout's manifest, harness, and Nix toolchain. The
+candidate-owned PTY fixture and native probe are built once and shared by both revisions so a harness
+improvement cannot make an older baseline inexpressible. All evidence remains under
+`build/performance/`. Paired regressions block independently of stricter absolute product targets, so
+an existing target miss cannot authorize further degradation.
+
+Host-dependent gates remain manual through `scripts/performance`; no GitHub workflow executes
+candidate code on a persistent self-hosted runner. Any future automation must preserve the same host
+lock, policy validation, CPU affinity, candidate-owned fixtures, and before/after state checks, while
+adding a base-controlled review boundary or a disposable runner before untrusted code can execute.
 
 The GUI-ready lab contract is `benchmarks/terminal_lab.schema.json`. Hardware-photodiode and
 software-pixel captures remain separate methods and are ingested with `benchmarks/terminal_lab.py`;
@@ -223,7 +266,7 @@ collect samples, and report distributions.
 
 `.github/workflows/quality.yml` contains merge-blocking formatting, build/test, clang-tidy, clangd,
 Python, sanitizer, and workflow checks selected by changed paths. `.github/workflows/extended.yml`
-runs the platform matrix and scheduled benchmark smoke.
+runs the platform matrix plus scheduled simulation, fuzz, and benchmark sweeps.
 
 The local equivalents live under `scripts/ci/`; `just ci-check` runs the merge-blocking set in a
 safe sequence.

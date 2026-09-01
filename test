@@ -189,6 +189,8 @@ def main() -> int:
                 "unittest",
                 "-v",
                 "tests.stress.test_mux_state_machine",
+                "tests.stress.test_mux_trace_replay",
+                "tests.stress.test_backpressure",
             ],
             environment=mux_environment(),
         )

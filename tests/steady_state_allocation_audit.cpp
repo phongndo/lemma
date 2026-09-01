@@ -3,6 +3,7 @@
 #include "lemma/terminal/terminal.hpp"
 #include "render/frame_buffer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -49,10 +50,19 @@ void record_allocation(const std::size_t bytes) noexcept {
   return storage;
 }
 
+struct WriteAudit final {
+  std::size_t bytes{0};
+  std::size_t attempts{0};
+  std::size_t maximum_attempt_bytes{0};
+};
+
 [[nodiscard]] auto audited_write(void* const context,
                                  const std::span<const std::byte> bytes) noexcept
     -> lemma::core::ClientFrameWriteAttempt {
-  *static_cast<std::size_t*>(context) += bytes.size();
+  auto& audit = *static_cast<WriteAudit*>(context);
+  audit.bytes += bytes.size();
+  ++audit.attempts;
+  audit.maximum_attempt_bytes = std::max(audit.maximum_attempt_bytes, bytes.size());
   return {.bytes = static_cast<std::ptrdiff_t>(bytes.size())};
 }
 
@@ -143,7 +153,14 @@ int main() {
   audited_bytes.store(0, std::memory_order_relaxed);
   audit_enabled.store(true, std::memory_order_release);
 
-  std::size_t flushed_bytes = 0;
+  WriteAudit write_audit;
+  std::size_t routed_input_bytes = 0;
+  std::size_t frames_composed = 0;
+  std::size_t composed_frame_bytes = 0;
+  std::size_t frame_messages_queued = 0;
+  std::size_t flush_calls = 0;
+  std::size_t maximum_frame_bytes = 0;
+  std::size_t maximum_queued_messages = 0;
   for (std::size_t iteration = 0; iteration < audited_iterations; ++iteration) {
     const auto routed = input_router.route_legacy(routed_input, routed_input.size());
     const auto frame_bytes =
@@ -156,20 +173,27 @@ int main() {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }
+    routed_input_bytes += routed.consumed;
+    ++frames_composed;
+    composed_frame_bytes += frame_bytes;
+    maximum_frame_bytes = std::max(maximum_frame_bytes, frame_bytes);
     lemma::core::ClientFrameOutput output;
     constexpr auto now = lemma::core::ClientFrameOutput::TimePoint{};
     if (!output.queue_frame(frame_bytes, 2, 1, false, now)) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }
+    frame_messages_queued += output.queued_message_count();
+    maximum_queued_messages = std::max(maximum_queued_messages, output.queued_message_count());
     lemma::core::ClientFrameFlushTarget target{
         .descriptor = 7,
         .frame = &frame,
         .output = &output,
         .write = &audited_write,
-        .context = &flushed_bytes,
+        .context = &write_audit,
     };
     std::size_t budget = lemma::core::attached_client_write_bytes_per_turn_max;
+    ++flush_calls;
     if (lemma::core::flush_client_frame(target, budget, now) !=
         lemma::core::ClientFrameFlushStatus::drained) {
       audit_enabled.store(false, std::memory_order_release);
@@ -185,9 +209,15 @@ int main() {
   const auto terminal_allocations =
       (terminal_after.allocations_total - terminal_before.allocations_total) +
       (resize_terminal_after.allocations_total - resize_terminal_before.allocations_total);
-  const bool passed = general_allocations == 0 && general_bytes == 0 && terminal_allocations == 0;
+  const bool work_bounded =
+      routed_input_bytes == audited_iterations && frames_composed == audited_iterations &&
+      flush_calls == audited_iterations && frame_messages_queued >= frames_composed &&
+      write_audit.attempts >= frame_messages_queued &&
+      write_audit.attempts <= frame_messages_queued * 3U;
+  const bool passed =
+      general_allocations == 0 && general_bytes == 0 && terminal_allocations == 0 && work_bounded;
   std::println(R"({{
-  "schema": 1,
+  "schema": 2,
   "suite": "steady-state-allocation-audit",
   "status": "{}",
   "warmup_iterations": {},
@@ -196,10 +226,21 @@ int main() {
   "general_allocation_calls": {},
   "general_allocation_bytes": {},
   "terminal_quota_allocation_calls": {},
+  "routed_input_bytes": {},
+  "frames_composed": {},
+  "composed_frame_bytes": {},
+  "frame_messages_queued": {},
+  "flush_calls": {},
+  "writer_attempts": {},
+  "maximum_frame_bytes": {},
+  "maximum_queued_messages": {},
+  "maximum_write_attempt_bytes": {},
   "flushed_wire_bytes": {}
 }})",
                passed ? "passed" : "failed", warmup_iterations, audited_iterations,
                audited_iterations, general_allocations, general_bytes, terminal_allocations,
-               flushed_bytes);
+               routed_input_bytes, frames_composed, composed_frame_bytes, frame_messages_queued,
+               flush_calls, write_audit.attempts, maximum_frame_bytes, maximum_queued_messages,
+               write_audit.maximum_attempt_bytes, write_audit.bytes);
   return passed ? 0 : 1;
 }
