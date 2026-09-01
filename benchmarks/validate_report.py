@@ -154,7 +154,14 @@ def validate_process_report(
 
     profiles = report.get("pane_profiles")
     if isinstance(profiles, dict) and profiles:
-        if set(profiles) != {"P1", "P4", "P16", "PMAX"}:
+        intent = report.get("run_intent")
+        profile_suites = manifest.get("profile_suites")
+        if not isinstance(intent, str) or not isinstance(profile_suites, dict):
+            raise ReportError("pane profile report has no manifest-owned profile suite")
+        expected_profiles = profile_suites.get(intent)
+        if not isinstance(expected_profiles, list) or set(profiles) != set(
+            expected_profiles
+        ):
             raise ReportError("pane profile report has invalid profile IDs")
         for profile, conditions in profiles.items():
             if not isinstance(conditions, dict) or set(conditions) != {
@@ -180,6 +187,35 @@ def validate_process_report(
                             f"pane profile {profile}.{condition}.{endpoint} "
                             "has an invalid distribution"
                         )
+
+    intent = report.get("run_intent")
+    for report_key, suites_key in (
+        ("session_profiles", "session_profile_suites"),
+        ("workspace_profiles", "workspace_profile_suites"),
+    ):
+        scaling_profiles = report.get(report_key)
+        if not isinstance(scaling_profiles, dict) or not scaling_profiles:
+            continue
+        suites = manifest.get(suites_key)
+        expected_profiles = suites.get(intent) if isinstance(suites, dict) else None
+        if not isinstance(expected_profiles, list) or set(scaling_profiles) != set(
+            expected_profiles
+        ):
+            raise ReportError(f"{report_key} report has invalid profile IDs")
+        for profile, result in scaling_profiles.items():
+            if not isinstance(result, dict) or result.get("status") != "completed":
+                raise ReportError(f"{report_key}.{profile} did not complete")
+            distributions = sample_distributions(result)
+            if not distributions:
+                raise ReportError(f"{report_key}.{profile} retained no distributions")
+            for label, samples in distributions:
+                if (
+                    label.endswith(("samples_ns", "samples_bytes"))
+                    and len(samples) != repetitions
+                ):
+                    raise ReportError(
+                        f"{report_key}.{profile}.{label} has an invalid distribution"
+                    )
 
 
 def validate_comparison_report(

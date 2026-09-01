@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 4)); then
+  printf 'usage: %s TARGET INPUT CORPUS_NAME REGRESSION\n' "$0" >&2
+  exit 2
+fi
+
+readonly target="$1"
+readonly source_input="$2"
+name="$3"
+readonly regression="$4"
+case "${target}" in
+  attachment) binary=lemma_attachment_decoder_fuzz ;;
+  host-input) binary=lemma_host_input_parser_fuzz ;;
+  api) binary=lemma_api_json_fuzz ;;
+  *)
+    printf 'TARGET must be attachment, host-input, or api\n' >&2
+    exit 2
+    ;;
+esac
+if [[ ! -f "${source_input}" ]]; then
+  printf 'fuzz input does not exist: %s\n' "${source_input}" >&2
+  exit 2
+fi
+if [[ ! "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [[ "${name}" == "regressions.json" ]]; then
+  printf 'invalid corpus name: %s\n' "${name}" >&2
+  exit 2
+fi
+if [[ -z "${regression}" || "${regression}" == *$'\n'* || "${regression}" == *$'\r'* ]]; then
+  printf 'REGRESSION must be one non-empty line\n' >&2
+  exit 2
+fi
+readonly destination="fuzz/corpus/${target}/${name}"
+if [[ -e "${destination}" ]]; then
+  printf 'fuzz corpus destination already exists: %s\n' "${destination}" >&2
+  exit 2
+fi
+
+rm -rf third_party/ghostty/zig-out
+scripts/ci/configure sanitizers \
+  -DLEMMA_BUILD_TESTS=OFF \
+  -DLEMMA_BUILD_BENCHMARKS=OFF \
+  -DLEMMA_BUILD_FUZZERS=ON
+cmake --build --preset sanitizers --target "${binary}"
+if [[ "$(uname -s)" == Linux ]]; then
+  "./build/sanitizers/${binary}" -runs=1 "${source_input}"
+else
+  "./build/sanitizers/${binary}" "${source_input}"
+fi
+
+mkdir -p "$(dirname "${destination}")"
+temporary="$(mktemp "$(dirname "${destination}")/.promote.XXXXXX")"
+readonly temporary
+trap 'rm -f "${temporary}"' EXIT
+cp "${source_input}" "${temporary}"
+source_revision="$(git rev-parse HEAD)"
+readonly source_revision
+python3 - "fuzz/corpus/regressions.json" "${target}" "${name}" "${temporary}" \
+  "${source_input}" "${source_revision}" "${regression}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+registry, target, name, promoted, source, revision, regression = sys.argv[1:]
+registry_path = Path(registry)
+document = json.loads(registry_path.read_text(encoding="utf-8"))
+records = document["regressions"]
+identity = (target, name)
+if any((record["target"], record["name"]) == identity for record in records):
+    raise SystemExit(f"fuzz regression already registered: {target}/{name}")
+path = Path(promoted)
+records.append(
+    {
+        "target": target,
+        "name": name,
+        "path": f"fuzz/corpus/{target}/{name}",
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "regression": regression,
+        "source_input": source,
+        "fixed_at": revision,
+    }
+)
+records.sort(key=lambda record: (record["target"], record["name"]))
+registry_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+PY
+mv "${temporary}" "${destination}"
+scripts/ci/validate-fuzz-corpus.py
+printf 'promoted fuzz regression: %s\n' "${destination}"

@@ -14,7 +14,7 @@ from typing import Any
 
 TRACE_MAGIC = 0x3145_4341_5254_4D4C
 TRACE_VERSION = 2
-EVENTS_MAX = 32_768
+EVENTS_MAX = 524_288
 HEADER = struct.Struct("<QIHHIIQQ24x")
 EVENT = struct.Struct("<QQQQIHH")
 ROLES = {1: "daemon", 2: "attached_client"}

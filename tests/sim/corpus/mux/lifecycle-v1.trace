@@ -1,4 +1,7 @@
 lemma-mux-trace-v1
+# regression: initial lifecycle, stale-identity, and Runtime-fault characterization corpus
+# source-trace: generated seed corpus introduced with deterministic mux simulation
+# fixed-at: d1985a5
 op runtime-error - - - - 0 0 applied applied
 check failed 0 a840537e91416e25
 op place-tab 0:1 0:1 - - 0 0 applied applied

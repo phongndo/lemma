@@ -1,0 +1,20 @@
+lemma-mux-trace-v1
+# regression: cross-runtime lifecycle, identity, geometry, and stale-target convergence
+# source-trace: curated from the deterministic mux operation grammar for real-daemon replay
+# fixed-at: e1374bf
+# real-replay: supported
+op attachment-resize - - - - 120 40 applied applied
+op split 0:1 - 0:1 - 0 0 applied applied
+op focus 0:1 - 0:1 - 0 0 applied applied
+op zoom 0:1 - 0:1 - 0 0 applied applied
+op zoom 0:1 - 0:1 - 0 0 applied applied
+op resize 0:1 - 0:1 - 8 2 applied applied
+op stale-focus 0:1 - 0:2 - 0 0 applied applied
+op create-tab - - - - 0 0 applied applied
+op select-tab 0:1 - - - 0 0 applied applied
+op place-tab 1:1 0:1 - - 0 0 applied applied
+op select-tab 1:1 - - - 0 0 applied applied
+op close-tab 1:1 - - - 0 0 applied applied
+op focus 0:1 - 1:1 - 0 0 applied applied
+op close-pane 0:1 - 0:1 - 0 0 applied applied
+op attachment-resize - - - - 80 24 applied applied

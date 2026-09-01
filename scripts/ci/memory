@@ -5,6 +5,8 @@ readonly mode="${1:-extended}"
 readonly output_directory="build/release"
 readonly lemma_profiles="${output_directory}/f3-memory-lemma-profiles.json"
 readonly tmux_profiles="${output_directory}/f3-memory-tmux-profiles.json"
+readonly session_profiles="${output_directory}/f3-memory-session-profiles.json"
+readonly workspace_profiles="${output_directory}/f3-memory-workspace-profiles.json"
 readonly components="${output_directory}/f3-memory-components.json"
 readonly history="${output_directory}/f3-memory-history.json"
 readonly lifecycle="${output_directory}/f3-memory-lifecycle.json"
@@ -19,13 +21,15 @@ readonly summary="${output_directory}/f3-memory-summary.json"
 case "${mode}" in
   smoke)
     repetitions=1
-    churn_cycles=5
+    lifecycle_cycles=(5)
+    summary_churn_cycles=5
     micro_time=0.01s
     micro_repetitions=1
     ;;
   extended)
     repetitions=5
-    churn_cycles=100
+    lifecycle_cycles=(1 10 100)
+    summary_churn_cycles=100
     micro_time=0.2s
     micro_repetitions=10
     ;;
@@ -73,12 +77,28 @@ python3 benchmarks/mux_benchmark.py \
   --multiplexer lemma \
   --repetitions "${repetitions}" \
   --output "${lemma_profiles}" >/dev/null
+python3 benchmarks/validate_report.py --process "${lemma_profiles}"
 python3 benchmarks/mux_benchmark.py \
   --mode profiles \
   --intent "${mode}" \
   --multiplexer tmux \
   --repetitions "${repetitions}" \
   --output "${tmux_profiles}" >/dev/null
+python3 benchmarks/validate_report.py --process "${tmux_profiles}"
+python3 benchmarks/mux_benchmark.py \
+  --mode session-profiles \
+  --intent "${mode}" \
+  --multiplexer lemma \
+  --repetitions "${repetitions}" \
+  --output "${session_profiles}" >/dev/null
+python3 benchmarks/validate_report.py --process "${session_profiles}"
+python3 benchmarks/mux_benchmark.py \
+  --mode workspace-profiles \
+  --intent "${mode}" \
+  --multiplexer lemma \
+  --repetitions "${repetitions}" \
+  --output "${workspace_profiles}" >/dev/null
+python3 benchmarks/validate_report.py --process "${workspace_profiles}"
 python3 benchmarks/mux_benchmark.py \
   --mode component-resources \
   --intent "${mode}" \
@@ -91,12 +111,19 @@ python3 benchmarks/mux_benchmark.py \
   --multiplexer lemma \
   --repetitions "${repetitions}" \
   --output "${history}" >/dev/null
-python3 benchmarks/mux_benchmark.py \
-  --mode lifecycle-churn \
-  --intent "${mode}" \
-  --multiplexer lemma \
-  --repetitions "${churn_cycles}" \
-  --output "${lifecycle}" >/dev/null
+for churn_cycles in "${lifecycle_cycles[@]}"; do
+  lifecycle_output="${output_directory}/f3-memory-lifecycle-${churn_cycles}.json"
+  if ((churn_cycles == summary_churn_cycles)); then
+    lifecycle_output="${lifecycle}"
+  fi
+  python3 benchmarks/mux_benchmark.py \
+    --mode lifecycle-churn \
+    --intent "${mode}" \
+    --multiplexer lemma \
+    --repetitions "${churn_cycles}" \
+    --output "${lifecycle_output}" >/dev/null
+  python3 benchmarks/validate_report.py --process "${lifecycle_output}"
+done
 python3 benchmarks/summarize_memory.py \
   --lemma-profiles "${lemma_profiles}" \
   --tmux-profiles "${tmux_profiles}" \

@@ -116,6 +116,64 @@ using platform::close_descriptor;
 using platform::set_nonblocking;
 using render::FrameBuffer;
 
+thread_local const ReactorEnvironment* active_reactor_environment = nullptr;
+
+class ReactorEnvironmentGuard final {
+public:
+  explicit ReactorEnvironmentGuard(const ReactorEnvironment& environment) noexcept
+      : previous_(active_reactor_environment) {
+    LEMMA_ASSERT(environment.valid());
+    active_reactor_environment = &environment;
+  }
+
+  ReactorEnvironmentGuard(const ReactorEnvironmentGuard&) = delete;
+  ReactorEnvironmentGuard(ReactorEnvironmentGuard&&) = delete;
+  auto operator=(const ReactorEnvironmentGuard&) -> ReactorEnvironmentGuard& = delete;
+  auto operator=(ReactorEnvironmentGuard&&) -> ReactorEnvironmentGuard& = delete;
+
+  ~ReactorEnvironmentGuard() { active_reactor_environment = previous_; }
+
+private:
+  const ReactorEnvironment* previous_;
+};
+
+[[nodiscard]] auto reactor_now() noexcept -> ReactorClock::time_point {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->now(active_reactor_environment->context);
+}
+
+[[nodiscard]] auto reactor_poll(const std::span<pollfd> descriptors,
+                                const int timeout_milliseconds) noexcept -> int {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->poll(active_reactor_environment->context, descriptors,
+                                          timeout_milliseconds);
+}
+
+[[nodiscard]] auto reactor_send(const int descriptor, const std::span<const std::byte> bytes,
+                                const int flags) noexcept -> ReactorIoResult {
+  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  return active_reactor_environment->send(active_reactor_environment->context, descriptor, bytes,
+                                          flags);
+}
+
+[[nodiscard]] auto production_poll([[maybe_unused]] void* context,
+                                   const std::span<pollfd> descriptors,
+                                   const int timeout_milliseconds) noexcept -> int {
+  return ::poll(descriptors.data(), static_cast<nfds_t>(descriptors.size()), timeout_milliseconds);
+}
+
+[[nodiscard]] auto production_now([[maybe_unused]] void* context) noexcept
+    -> ReactorClock::time_point {
+  return ReactorClock::now();
+}
+
+[[nodiscard]] auto production_send([[maybe_unused]] void* context, const int descriptor,
+                                   const std::span<const std::byte> bytes, const int flags) noexcept
+    -> ReactorIoResult {
+  const auto sent = ::send(descriptor, bytes.data(), bytes.size(), flags);
+  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+}
+
 class EndpointReleaseGuard final {
 public:
   EndpointReleaseGuard(const EndpointRelease release, void* const context) noexcept
@@ -230,8 +288,7 @@ void write_pty_output(vt::Terminal& terminal, PresentationGate& presentation_gat
     drain.damage_capture_failed = true;
     return;
   }
-  const auto gate =
-      presentation_gate.observe(*synchronized, damage_acquired, std::chrono::steady_clock::now());
+  const auto gate = presentation_gate.observe(*synchronized, damage_acquired, reactor_now());
   drain.render_damage = drain.render_damage || gate.visible_damage;
   drain.presentation_deferred = presentation_gate.presentation_suppressed();
   drain.presentation_released = drain.presentation_released || gate.urgent_render;
@@ -1168,8 +1225,7 @@ using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
     runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
     return TerminalResizeStatus::consistency_lost;
   }
-  static_cast<void>(
-      runtime.presentation_gate.observe(*synchronized, true, std::chrono::steady_clock::now()));
+  static_cast<void>(runtime.presentation_gate.observe(*synchronized, true, reactor_now()));
   return status;
 }
 
@@ -1354,8 +1410,8 @@ resolve_session_layout(SessionRecord& session, Tab& tab, PaneRuntimeStore& runti
 
 void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
                     const bool force_full) noexcept {
-  session.attachment_runtime.frame_scheduler.request(
-      urgency, force_full, std::chrono::steady_clock::now(), frame_sink_state(session));
+  session.attachment_runtime.frame_scheduler.request(urgency, force_full, reactor_now(),
+                                                     frame_sink_state(session));
 }
 
 struct ProductionSessionRuntimeContext final {
@@ -1536,8 +1592,7 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
     runtime.compression_activity = *activity;
   }
   runtime.compression_scheduled = true;
-  runtime.compression_deadline =
-      std::chrono::steady_clock::now() + limits::scrollback_compression_idle_delay;
+  runtime.compression_deadline = reactor_now() + limits::scrollback_compression_idle_delay;
 }
 
 [[nodiscard]] auto scroll_viewport_for_application_input(SessionRecord& session,
@@ -1838,7 +1893,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   search.search_task = CopySearchTask{
       .cursor = {.candidate = first},
       .stop_before = anchor,
-      .deadline = std::chrono::steady_clock::now(),
+      .deadline = reactor_now(),
       .direction = direction,
       .terminal_generation = runtime.mutation_generation,
       .wrapped = !has_first,
@@ -2439,7 +2494,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
                                  .first(session.attachment_runtime.copy_mode.pending_escape_size));
       if (decoded.status == CopyEscapeStatus::pending) {
         session.attachment_runtime.copy_mode.pending_escape_deadline =
-            std::chrono::steady_clock::now() + copy_escape_flush_delay;
+            reactor_now() + copy_escape_flush_delay;
         continue;
       }
       session.attachment_runtime.copy_mode.pending_escape_size = 0;
@@ -2459,7 +2514,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
       session.attachment_runtime.copy_mode.pending_escape.front() = byte;
       session.attachment_runtime.copy_mode.pending_escape_size = 1;
       session.attachment_runtime.copy_mode.pending_escape_deadline =
-          std::chrono::steady_clock::now() + copy_escape_flush_delay;
+          reactor_now() + copy_escape_flush_delay;
       continue;
     }
     const auto action = copy_action_for_key(session.attachment.copy_mode, key);
@@ -4385,7 +4440,7 @@ selection_gesture_phase(const protocol::MouseInputAction action) noexcept
     presentation_changed = *active;
     runtime.terminal.clear_selection();
   }
-  const auto now = std::chrono::steady_clock::now().time_since_epoch();
+  const auto now = reactor_now().time_since_epoch();
   const auto time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
   const vt::SelectionGestureEvent event{
       .phase = selection_gesture_phase(mouse.action),
@@ -5702,7 +5757,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     task.wrapped = true;
     task.cursor = vt::SearchCursor{.candidate = *boundary};
-    task.deadline = std::chrono::steady_clock::now();
+    task.deadline = reactor_now();
     return true;
   }
   search.search_task.reset();
@@ -5725,8 +5780,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   auto& state = session.attachment.copy_mode;
   auto& search = session.attachment_runtime.copy_mode;
   auto* const task = search.search_task.has_value() ? &*search.search_task : nullptr;
-  if (work_budget == 0 || !state.active() || task == nullptr ||
-      std::chrono::steady_clock::now() < task->deadline) {
+  if (work_budget == 0 || !state.active() || task == nullptr || reactor_now() < task->deadline) {
     return false;
   }
   auto* const runtime = copy_mode_runtime(session, runtimes);
@@ -5762,7 +5816,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     break;
   case vt::SearchStepStatus::pending:
     task->cursor = searched->next;
-    task->deadline = std::chrono::steady_clock::now() + copy_search_slice_delay;
+    task->deadline = reactor_now() + copy_search_slice_delay;
     break;
   case vt::SearchStepStatus::not_found:
     valid = finish_or_wrap_failed_copy_search(session, *runtime);
@@ -7633,7 +7687,7 @@ struct PublicCaptureFormatting final {
 [[nodiscard]] auto begin_public_wait(api::Action action) -> PublicActionWait {
   const auto timeout = std::chrono::milliseconds(action.wait_timeout_milliseconds);
   return {.action = std::move(action),
-          .deadline = std::chrono::steady_clock::now() + timeout,
+          .deadline = reactor_now() + timeout,
           .observed_terminal_generation = 0,
           .observed = false,
           .pane_was_present = false};
@@ -7793,7 +7847,7 @@ struct PublicCaptureFormatting final {
   if (target.pane->process_exit.has_value()) {
     return complete_process_wait(std::move(result), wait.action, *target.pane->process_exit);
   }
-  if (std::chrono::steady_clock::now() >= wait.deadline) {
+  if (reactor_now() >= wait.deadline) {
     result.status = CommandStatus::failed;
     result.error_reason = "timeout";
     result.retryable = true;
@@ -8249,7 +8303,7 @@ encode_procedure_result(const ProcedureExecutionState& state,
   std::optional<api::Action> action;
   PublicActionExecution execution;
   if (state.wait.has_value()) {
-    if (!public_wait_has_work(*state.wait, sessions, runtimes, std::chrono::steady_clock::now())) {
+    if (!public_wait_has_work(*state.wait, sessions, runtimes, reactor_now())) {
       return std::nullopt;
     }
     auto completed = poll_public_wait(*state.wait, sessions, runtimes, scratch_owner);
@@ -8342,14 +8396,14 @@ void finish_public_output(PendingConnection& pending, std::string output,
   pending.public_output_offset = 0;
   pending.action = action;
   pending.state = PendingState::flush_response;
-  pending.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+  pending.deadline = reactor_now() + setup_progress_timeout;
 }
 
 // NOLINTNEXTLINE(bugprone-exception-escape)
 void service_public_waits(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, PublicScratch& scratch_owner,
                           std::size_t& cursor) noexcept {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   for (std::size_t visited = 0; visited < connections.size(); ++visited) {
     const auto slot = (cursor + visited) % connections.size();
     auto* const pending = std::span(connections).subspan(slot, 1).front().get();
@@ -8929,7 +8983,7 @@ using CapacityRejectionConnections =
 static_assert(sizeof(CapacityRejectionConnections) <= std::size_t{4} * 1'024U);
 
 void record_pending_progress(PendingConnection& pending) noexcept {
-  const auto progress = std::chrono::steady_clock::now() + setup_progress_timeout;
+  const auto progress = reactor_now() + setup_progress_timeout;
   pending.deadline =
       pending.public_connection ? progress : std::min(progress, pending.setup_deadline);
 }
@@ -10098,7 +10152,7 @@ void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PublicScratch& scratch, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
-  if (!pending->public_connection && std::chrono::steady_clock::now() >= pending->setup_deadline) {
+  if (!pending->public_connection && reactor_now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
@@ -10148,7 +10202,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   session->attachment_runtime.frame_trace_correlation = 0;
 #endif
-  if (!compose_session_frame(*session, runtimes, true, std::chrono::steady_clock::now())) {
+  if (!compose_session_frame(*session, runtimes, true, reactor_now())) {
     detach_attachment(*session, runtimes);
     return;
   }
@@ -10165,11 +10219,11 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
                                         const std::span<const std::byte> bytes) noexcept
     -> ConnectionWriteAttempt {
   auto& pending = *static_cast<PendingConnection*>(context);
-  const auto sent = ::send(pending.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-  if (sent > 0) {
+  const auto sent = reactor_send(pending.descriptor, bytes, MSG_NOSIGNAL);
+  if (sent.bytes > 0) {
     record_pending_progress(pending);
   }
-  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+  return {.bytes = sent.bytes, .error = sent.error};
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
@@ -10188,18 +10242,18 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
                       std::min(pending->public_output.size() - pending->public_output_offset,
                                global_budget));
       const auto sent =
-          ::send(pending->descriptor, remaining.data(), remaining.size(), MSG_NOSIGNAL);
-      if (sent > 0) {
-        const auto size = static_cast<std::size_t>(sent);
+          reactor_send(pending->descriptor, std::as_bytes(std::span(remaining)), MSG_NOSIGNAL);
+      if (sent.bytes > 0) {
+        const auto size = static_cast<std::size_t>(sent.bytes);
         pending->public_output_offset += size;
         global_budget -= size;
         record_pending_progress(*pending);
         continue;
       }
-      if (sent < 0 && errno == EINTR) {
+      if (sent.bytes < 0 && sent.error == EINTR) {
         continue;
       }
-      if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (sent.bytes < 0 && (sent.error == EAGAIN || sent.error == EWOULDBLOCK)) {
         return false;
       }
       close_pending(connections, slot, sessions);
@@ -10267,7 +10321,7 @@ void process_capacity_rejection_read(CapacityRejectionConnections& connections,
       LEMMA_ASSERT(appended);
     }
     connection.flush_response = true;
-    connection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+    connection.deadline = reactor_now() + setup_progress_timeout;
     return;
   }
   if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -10280,11 +10334,11 @@ void process_capacity_rejection_read(CapacityRejectionConnections& connections,
                                                    const std::span<const std::byte> bytes) noexcept
     -> ConnectionWriteAttempt {
   auto& connection = *static_cast<CapacityRejectionConnection*>(context);
-  const auto sent = ::send(connection.descriptor, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-  if (sent > 0) {
-    connection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+  const auto sent = reactor_send(connection.descriptor, bytes, MSG_NOSIGNAL);
+  if (sent.bytes > 0) {
+    connection.deadline = reactor_now() + setup_progress_timeout;
   }
-  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+  return {.bytes = sent.bytes, .error = sent.error};
 }
 
 void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
@@ -10356,7 +10410,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
                                 const PendingConnections& pending,
                                 const CapacityRejectionConnections& capacity_rejections,
                                 const bool immediate_public_work) noexcept -> int {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   int timeout = -1;
   if (immediate_public_work) {
     timeout = 0;
@@ -10504,8 +10558,7 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
     preserve_copy_viewport_after_mutation(session, pane, runtime, runtimes);
     note_compression_activity(runtime);
   }
-  const bool process_changed =
-      refresh_process_name_if_due(runtime, std::chrono::steady_clock::now());
+  const bool process_changed = refresh_process_name_if_due(runtime, reactor_now());
   if (!pane_event_changed(session, drained, process_changed)) {
     return;
   }
@@ -10537,8 +10590,7 @@ void queue_client_disconnect_if_ready(SessionRecord& session, PaneRuntimeStore& 
   if (session.attachment_runtime.server_sequence == 0 ||
       session.attachment_runtime.server_sequence == std::numeric_limits<std::uint32_t>::max() ||
       !session.attachment_runtime.output.queue_disconnect(
-          reason, diagnostic, session.attachment_runtime.server_sequence,
-          std::chrono::steady_clock::now())) {
+          reason, diagnostic, session.attachment_runtime.server_sequence, reactor_now())) {
     detach_attachment(session, runtimes);
     return;
   }
@@ -10695,7 +10747,7 @@ void reclaim_dead_panes(SessionRecord& session, PaneRuntimeStore& runtimes) noex
 void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtimes,
                                     std::size_t& cursor) noexcept {
   constexpr std::size_t steps_per_turn_max = 8;
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> due{};
   std::size_t count = 0;
   for (auto& session : sessions) {
@@ -10740,7 +10792,7 @@ void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtim
 // Gate expiry visits the same fixed hierarchy and schedules only visible active-tab repairs.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active) {
       continue;
@@ -10760,7 +10812,7 @@ void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& ru
 }
 
 void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active ||
         session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
@@ -10779,9 +10831,8 @@ void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
                                          const std::span<const std::byte> bytes) noexcept
     -> ClientFrameWriteAttempt {
   auto& session = *static_cast<SessionRecord*>(context);
-  const auto sent =
-      ::send(session.attachment_runtime.client, bytes.data(), bytes.size(), MSG_NOSIGNAL);
-  return {.bytes = sent, .error = sent < 0 ? errno : 0};
+  const auto sent = reactor_send(session.attachment_runtime.client, bytes, MSG_NOSIGNAL);
+  return {.bytes = sent.bytes, .error = sent.error};
 }
 
 void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
@@ -10839,7 +10890,7 @@ void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes
 
 void expire_pending_connections(PendingConnections& pending_connections,
                                 Sessions& sessions) noexcept {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
     const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
     if (pending != nullptr && pending->active() &&
@@ -10851,7 +10902,7 @@ void expire_pending_connections(PendingConnections& pending_connections,
 }
 
 void expire_capacity_rejections(CapacityRejectionConnections& connections) noexcept {
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = reactor_now();
   for (std::size_t slot = 0; slot < connections.size(); ++slot) {
     const auto& connection = std::span(connections).subspan(slot, 1).front();
     if (connection.active() && now >= connection.deadline) {
@@ -10918,7 +10969,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
       rejection.descriptor = connection;
       rejection.output.reset();
       rejection.flush_response = false;
-      rejection.deadline = std::chrono::steady_clock::now() + setup_progress_timeout;
+      rejection.deadline = reactor_now() + setup_progress_timeout;
       continue;
     }
     auto& owner = std::span(pending_connections).subspan(*available, 1).front();
@@ -10932,7 +10983,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
     auto& generation = std::span(generations).subspan(*available, 1).front();
     generation = next_generation(generation);
     owner->generation = generation;
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = reactor_now();
     owner->deadline = now + setup_progress_timeout;
     owner->setup_deadline = now + setup_total_timeout;
     begin_pending_field(*owner, PendingState::read_command, 1);
@@ -10961,8 +11012,13 @@ struct DescriptorOwner final {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const release_context, const StopRequested stop_requested,
-                const ChildReaper child_reaper) noexcept -> int {
+                const ChildReaper child_reaper, const ReactorEnvironment environment) noexcept
+    -> int {
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
+  if (!environment.valid()) {
+    return 1;
+  }
+  const ReactorEnvironmentGuard environment_guard(environment);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
   std::unique_ptr<PaneRuntimeStore> pane_runtimes;
@@ -11106,9 +11162,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .kind = DescriptorKind::capacity_rejection};
       ++descriptor_count;
     }
-    const auto poll_result = ::poll(descriptors.data(), static_cast<nfds_t>(descriptor_count),
-                                    poll_timeout(sessions, runtimes, pending_connections,
-                                                 capacity_rejections, public_screen_work_pending));
+    const auto poll_result =
+        reactor_poll(std::span(descriptors).first(descriptor_count),
+                     poll_timeout(sessions, runtimes, pending_connections, capacity_rejections,
+                                  public_screen_work_pending));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -11119,7 +11176,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if ((child_reaper_events & (POLLIN | POLLHUP | POLLERR)) != 0) {
       reap_exited_children(sessions, runtimes, child_reaper);
     }
-    expire_attached_client_frames(sessions, runtimes, std::chrono::steady_clock::now());
+    expire_attached_client_frames(sessions, runtimes, reactor_now());
 
     // Drain every ready PTY before handling client input, then remove exited panes so input is
     // always routed to a live focused pane selected by close_pane.
@@ -11155,7 +11212,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     for (auto& session : sessions) {
       if (session != nullptr && session->active) {
         reclaim_dead_panes(*session, runtimes);
-        service_copy_input_timeout(*session, runtimes, std::chrono::steady_clock::now());
+        service_copy_input_timeout(*session, runtimes, reactor_now());
       }
     }
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
@@ -11333,7 +11390,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     // composed and newly handed-off attach frames get one immediate attempt; a blocked frame is
     // retried only after poll reports write readiness or its progress deadline expires.
     flush_attached_client_frames(sessions, runtimes, client_flush_targets, client_flush_cursor,
-                                 std::chrono::steady_clock::now());
+                                 reactor_now());
     if (shutdown_after_outputs) {
       return 0;
     }
@@ -11368,10 +11425,27 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
 
 } // namespace
 
+[[nodiscard]] auto production_reactor_environment() noexcept -> ReactorEnvironment {
+  return {.context = nullptr,
+          .poll = &production_poll,
+          .now = &production_now,
+          .send = &production_send};
+}
+
+[[nodiscard]] auto
+run_server_with_environment(const int listener, const EndpointRelease release_endpoint,
+                            void* const release_context, const StopRequested stop_requested,
+                            const ChildReaper child_reaper,
+                            const ReactorEnvironment environment) noexcept -> int {
+  return run_server_impl(listener, release_endpoint, release_context, stop_requested, child_reaper,
+                         environment);
+}
+
 [[nodiscard]] auto run_server(const int listener, const EndpointRelease release_endpoint,
                               void* const release_context, const StopRequested stop_requested,
                               const ChildReaper child_reaper) noexcept -> int {
-  return run_server_impl(listener, release_endpoint, release_context, stop_requested, child_reaper);
+  return run_server_with_environment(listener, release_endpoint, release_context, stop_requested,
+                                     child_reaper, production_reactor_environment());
 }
 
 } // namespace lemma::core

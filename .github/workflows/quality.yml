@@ -291,6 +291,8 @@ jobs:
           path: |
             build/sanitizers/fuzz-artifacts
             build/sanitizers/mux-sim-artifacts
+            build/sanitizers/steady-state-work-audit.json
+            build/sanitizers/deterministic-budget-results.json
             build/mux-sim-failures
           if-no-files-found: ignore
           retention-days: 14

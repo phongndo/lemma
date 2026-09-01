@@ -10,17 +10,22 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 from unittest import mock
 
 from benchmark_manifest import expected_failure, load_manifest, suite_workloads
+from calibrate_regression import calibration
 from check_regression import (
     BudgetError,
     checked_samples,
+    process_check_samples,
     require_completed_process_workloads,
     require_scope,
     statistic,
     validate_comparative_check,
 )
+from compare_regression import add_comparison, profile_values, require_manifest_identity
+from compare_regression import policy as paired_policy
 from latency_trace import input_paths
 from mux_benchmark import (
     INTERACTION_LABEL_CODES,
@@ -32,7 +37,10 @@ from mux_benchmark import (
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
+    lifecycle_sentinel_arguments,
+    linux_host_metadata,
     open_descriptor_snapshot,
+    parse_linux_schedstat,
     percentile,
     wait_for_profile_shell,
 )
@@ -42,7 +50,51 @@ from mux_benchmark import (
 from terminal_lab import validate_samples
 
 
+class LinuxResourceTest(unittest.TestCase):
+    def test_schedstat_uses_nanosecond_cpu_runtime(self) -> None:
+        self.assertEqual(parse_linux_schedstat("123456789 42 7\n"), 123456789)
+        with self.assertRaisesRegex(ValueError, "schedstat"):
+            parse_linux_schedstat("123 invalid 7\n")
+
+
+class HostFingerprintTest(unittest.TestCase):
+    def test_linux_metadata_identifies_physical_cores_and_memory(self) -> None:
+        cpuinfo = """processor: 0
+model name: Example CPU
+physical id: 0
+core id: 0
+
+processor: 1
+model name: Example CPU
+physical id: 0
+core id: 0
+
+processor: 2
+model name: Example CPU
+physical id: 0
+core id: 1
+"""
+
+        self.assertEqual(
+            linux_host_metadata(cpuinfo, "MemTotal: 1024 kB\n", " Test Host\n"),
+            {
+                "model_identifier": "Test Host",
+                "cpu_model": "Example CPU",
+                "physical_cpu_count": 2,
+                "memory_bytes": 1024 * 1024,
+            },
+        )
+
+
 class LemmaBenchmarkAdapterTest(unittest.TestCase):
+    def test_lifecycle_sentinel_uses_the_built_quiescent_peer(self) -> None:
+        peer = Path("/fixture/lemma_test_pty_peer")
+
+        self.assertEqual(
+            lifecycle_sentinel_arguments(peer),
+            ("start", "lifecycle_sentinel", "--", str(peer), "idle"),
+        )
+
     def test_profile_readiness_requires_shell_execution_not_input_echo(self) -> None:
         runtime = object.__new__(LemmaRuntime)
         client = mock.Mock()
@@ -129,6 +181,151 @@ class BenchmarkProvenanceTest(unittest.TestCase):
         self.assertEqual(provenance, ("abc123", True, None))
 
 
+class OptionalProcessMetricTest(unittest.TestCase):
+    CHECK: ClassVar[dict[str, Any]] = {
+        "id": "wakeups",
+        "samples_path": ["workloads", "idle", "wakeups", "samples_count"],
+        "availability": "when_supported",
+        "statistic": "max",
+    }
+
+    def test_accepts_explicitly_unsupported_metric(self) -> None:
+        report = {
+            "workloads": {
+                "idle": {
+                    "wakeups": {
+                        "available": False,
+                        "reason": "platform has no reviewed counter",
+                        "samples_count": [],
+                    }
+                }
+            }
+        }
+
+        self.assertIsNone(process_check_samples(report, self.CHECK, 10))
+
+    def test_requires_samples_when_metric_is_supported(self) -> None:
+        report = {
+            "workloads": {
+                "idle": {
+                    "wakeups": {
+                        "available": True,
+                        "samples_count": [],
+                    }
+                }
+            }
+        }
+
+        with self.assertRaisesRegex(BudgetError, "needs at least 10 samples"):
+            process_check_samples(report, self.CHECK, 10)
+
+
+class PerformanceCalibrationTest(unittest.TestCase):
+    def test_reports_unchanged_revision_noise_outside_reviewed_policy(self) -> None:
+        result = calibration(
+            "metric",
+            [100.0, 112.0],
+            "ns",
+            "microbenchmarks",
+            {"maximum_ratio": 1.1, "absolute_noise_floor": {"ns": 1}},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["minimum_floor_required_by_observations"], 2)
+
+
+class PairedRegressionTest(unittest.TestCase):
+    def test_rejects_reports_from_a_stale_manifest(self) -> None:
+        reports = (
+            {"context": {"manifest_sha256": "old"}},
+            {"manifest": {"sha256": "new"}},
+            {"manifest": {"sha256": "new"}},
+        )
+
+        with self.assertRaisesRegex(BudgetError, "selected workload manifest"):
+            require_manifest_identity(reports, "new")
+
+    def test_blocks_candidate_regression_but_keeps_absolute_target_separate(
+        self,
+    ) -> None:
+        results: list[dict[str, object]] = []
+        add_comparison(
+            results,
+            "latency",
+            1_000_000,
+            1_250_001,
+            "ns",
+            {"maximum_ratio": 1.1, "absolute_noise_floor": {"ns": 100_000}},
+        )
+        self.assertEqual(results[0]["status"], "failed")
+
+    def test_noisy_tail_metric_remains_diagnostic(self) -> None:
+        results: list[dict[str, object]] = []
+        add_comparison(
+            results,
+            "tail",
+            100.0,
+            1000.0,
+            "ns",
+            {"maximum_ratio": 1.1, "absolute_noise_floor": {"ns": 0}},
+            diagnostic=True,
+        )
+
+        self.assertEqual(results[0]["status"], "diagnostic")
+
+    def test_metric_noise_floor_overrides_the_unit_default(self) -> None:
+        results: list[dict[str, object]] = []
+        add_comparison(
+            results,
+            "quantized_cpu",
+            30_000_000,
+            40_000_000,
+            "ns",
+            {
+                "maximum_ratio": 1.1,
+                "absolute_noise_floor": {"ns": 100_000},
+                "absolute_noise_floor_by_id": {"quantized_cpu": 10_000_000},
+            },
+        )
+
+        self.assertEqual(results[0]["status"], "passed")
+        self.assertEqual(results[0]["absolute_noise_floor"], 10_000_000)
+
+    def test_manifest_defines_reviewed_paired_policy(self) -> None:
+        configured = paired_policy(load_manifest())
+        self.assertEqual(configured["status"], "reviewed")
+        self.assertGreaterEqual(configured["process_workloads"]["maximum_ratio"], 1.0)
+
+    def test_profile_comparison_uses_every_profile_present_in_the_report(self) -> None:
+        samples = list(range(1, 21))
+        measurement = {
+            "status": "completed",
+            "resources": {
+                "rss": {"samples_bytes": samples},
+                "cpu_time": {"samples_ns": samples},
+            },
+            "interaction": {
+                "key_to_pty": {"samples_ns": samples},
+                "key_to_outer_bytes": {"samples_ns": samples},
+            },
+        }
+        report = {
+            "pane_profiles": {
+                profile: {"idle": measurement, "active": measurement}
+                for profile in ("P2", "P8")
+            }
+        }
+
+        identifiers = {
+            identifier for identifier, _, _ in profile_values(report, len(samples))
+        }
+
+        self.assertEqual(
+            {value.split(".", 1)[0] for value in identifiers}, {"P2", "P8"}
+        )
+        self.assertEqual(len(identifiers), 20)
+
+
 class BenchmarkStatisticsTest(unittest.TestCase):
     def test_uses_nearest_rank_percentiles(self) -> None:
         samples = list(range(1, 21))
@@ -179,6 +376,23 @@ class BenchmarkManifestTest(unittest.TestCase):
         )
         self.assertEqual(schema["properties"]["schema"]["const"], 1)
         self.assertIn("input_to_photon_ns", str(schema))
+
+    def test_extended_profiles_cover_every_scaling_knee(self) -> None:
+        manifest = load_manifest()
+
+        self.assertEqual(
+            [profile["panes"] for profile in manifest["pane_profiles"]],
+            [1, 2, 4, 8, 16, 32, 64],
+        )
+        self.assertEqual(
+            [profile["sessions"] for profile in manifest["session_profiles"]],
+            [1, 2, 4, 8, 16],
+        )
+        self.assertEqual(
+            [profile["workspaces"] for profile in manifest["workspace_profiles"]],
+            [1, 2, 4, 8, 16],
+        )
+        self.assertEqual(manifest["deterministic_budgets"]["status"], "reviewed")
 
     def test_only_reviewed_subject_failures_are_expected(self) -> None:
         manifest = load_manifest()

@@ -63,13 +63,14 @@ jobs:
         if: matrix.system == 'x86_64-linux'
         run: nix develop .#ci --command scripts/ci/mux-sim-campaign
 
-      - name: Upload mux simulation failures
-        if: failure() && matrix.system == 'x86_64-linux'
+      - name: Upload mux simulation campaign evidence
+        if: always() && matrix.system == 'x86_64-linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mux-simulation-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          name: mux-simulation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            build/debug/mux-sim-artifacts
+            build/debug/mux-sim-artifacts/*.coverage.json
+            build/debug/mux-sim-artifacts/*.trace
             build/mux-sim-failures
           if-no-files-found: ignore
           retention-days: 14
@@ -85,10 +86,10 @@ jobs:
             build/*/_deps/ghostty/*/zig-cache
           key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
 
-  benchmark-smoke:
-    name: Scheduled benchmark smoke
+  benchmark-sweep:
+    name: Scheduled benchmark and memory parameter sweep
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 240
     env:
       CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
       CCACHE_MAXSIZE: 500M
@@ -116,19 +117,24 @@ jobs:
           restore-keys: |
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
-      - name: Run release benchmark smoke
-        run: nix develop .#benchmarks --command scripts/ci/benchmarks smoke
+      - name: Run release benchmark sweep
+        run: nix develop .#benchmarks --command scripts/ci/benchmarks extended
+
+      - name: Run release memory and lifecycle sweep
+        run: nix develop .#benchmarks --command scripts/ci/memory extended
 
       - name: Upload benchmark reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: benchmark-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          name: benchmark-sweep-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             build/release/benchmark-results.json
             build/release/mux-benchmark-results.json
             build/release/mux-comparison-results.json
             build/release/mux-profile-results.json
+            build/release/f3-memory-*.json
+            build/release/f3-memory-*.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -142,3 +148,57 @@ jobs:
             .zig-cache
             build/*/_deps/ghostty/*/zig-cache
           key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
+
+  fuzz-campaign:
+    name: Scheduled structured fuzz campaign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_MAXSIZE: 500M
+      CONAN_HOME: ${{ github.workspace }}/.conan2
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Restore trusted sanitizer cache
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-fuzz-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}
+          restore-keys: |
+            lemma-v1-${{ runner.os }}-${{ runner.arch }}-fuzz-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
+
+      - name: Run structured mutation campaign
+        run: nix develop .#ci --command scripts/ci/fuzz-campaign
+
+      - name: Upload fuzz corpus and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-campaign-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/sanitizers/fuzz-campaign
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Save trusted sanitizer cache
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ${{ env.CONAN_HOME }}
+            ${{ env.CCACHE_DIR }}
+            .zig-cache
+            build/*/_deps/ghostty/*/zig-cache
+          key: lemma-v1-${{ runner.os }}-${{ runner.arch }}-fuzz-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-${{ github.sha }}

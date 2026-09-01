@@ -24,14 +24,27 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* const data, const std:
     return 0;
   }
 
-  static_cast<void>(lemma::api::decode_action(*parsed.value));
-  static_cast<void>(lemma::api::decode_event_subscription(*parsed.value));
   std::string encoded;
   if (!lemma::api::append_json_value(encoded, *parsed.value)) {
     return 0;
   }
   const auto round_trip = lemma::api::parse_json(encoded);
   if (!round_trip.value.has_value()) {
+    __builtin_trap();
+  }
+  std::string canonical;
+  if (!lemma::api::append_json_value(canonical, *round_trip.value) || canonical != encoded) {
+    __builtin_trap();
+  }
+  const bool action_decoded = lemma::api::decode_action(*parsed.value).action.has_value();
+  const bool canonical_action_decoded =
+      lemma::api::decode_action(*round_trip.value).action.has_value();
+  const bool subscription_decoded =
+      lemma::api::decode_event_subscription(*parsed.value).subscription.has_value();
+  const bool canonical_subscription_decoded =
+      lemma::api::decode_event_subscription(*round_trip.value).subscription.has_value();
+  if (action_decoded != canonical_action_decoded ||
+      subscription_decoded != canonical_subscription_decoded) {
     __builtin_trap();
   }
   return 0;

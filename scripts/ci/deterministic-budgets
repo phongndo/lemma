@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly profile="${1:-debug}"
+readonly manifest="benchmarks/workloads.json"
+readonly binary="build/${profile}/lemma_steady_state_allocation_audit"
+readonly reactor_binary="build/${profile}/lemma_unit_tests"
+readonly raw="build/${profile}/steady-state-work-audit.json"
+readonly reactor_raw="build/${profile}/reactor-work-audit.json"
+readonly result="build/${profile}/deterministic-budget-results.json"
+
+for required in "${binary}" "${reactor_binary}"; do
+  if [[ ! -x "${required}" ]]; then
+    printf 'missing deterministic audit binary: %s\n' "${required}" >&2
+    exit 2
+  fi
+done
+reactor_test="$(python3 - "${manifest}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    print(json.load(source)["deterministic_budgets"]["reactor"]["test"])
+PY
+)"
+readonly reactor_test
+
+"${binary}" >"${raw}"
+"${reactor_binary}" --gtest_filter="${reactor_test}" --gtest_output="json:${reactor_raw}"
+python3 - "${manifest}" "${raw}" "${reactor_raw}" "${result}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+manifest_path, raw_path, reactor_path, result_path = map(Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+report = json.loads(raw_path.read_text(encoding="utf-8"))
+reactor_report = json.loads(reactor_path.read_text(encoding="utf-8"))
+policy = manifest["deterministic_budgets"]["steady_state"]
+reactor_policy = manifest["deterministic_budgets"]["reactor"]
+
+if report.get("schema") != 2 or report.get("suite") != "steady-state-allocation-audit":
+    raise SystemExit("deterministic work audit has an unsupported schema")
+
+checks: list[dict[str, object]] = []
+
+
+def maximum(identifier: str, observed: int, allowed: int) -> None:
+    checks.append(
+        {
+            "id": identifier,
+            "observed": observed,
+            "maximum": allowed,
+            "status": "passed" if observed <= allowed else "failed",
+        }
+    )
+
+
+def exact(identifier: str, observed: int, expected: int) -> None:
+    checks.append(
+        {
+            "id": identifier,
+            "observed": observed,
+            "expected": expected,
+            "status": "passed" if observed == expected else "failed",
+        }
+    )
+
+
+iterations = int(report["audited_iterations"])
+frames = int(report["frames_composed"])
+composed = int(report["composed_frame_bytes"])
+wire = int(report["flushed_wire_bytes"])
+exact("audited_iterations", iterations, int(policy["audited_iterations"]))
+maximum(
+    "general_allocation_calls",
+    int(report["general_allocation_calls"]),
+    int(policy["maximum_general_allocation_calls"]),
+)
+maximum(
+    "general_allocation_bytes",
+    int(report["general_allocation_bytes"]),
+    int(policy["maximum_general_allocation_bytes"]),
+)
+maximum(
+    "terminal_quota_allocation_calls",
+    int(report["terminal_quota_allocation_calls"]),
+    int(policy["maximum_terminal_quota_allocation_calls"]),
+)
+maximum(
+    "maximum_frame_bytes",
+    int(report["maximum_frame_bytes"]),
+    int(policy["maximum_frame_bytes"]),
+)
+maximum(
+    "maximum_queued_messages",
+    int(report["maximum_queued_messages"]),
+    int(policy["maximum_queued_messages"]),
+)
+maximum(
+    "frame_messages",
+    int(report["frame_messages_queued"]),
+    frames * int(policy["maximum_frame_messages_per_frame"]),
+)
+maximum(
+    "writer_attempts",
+    int(report["writer_attempts"]),
+    frames * int(policy["maximum_writer_attempts_per_frame"]),
+)
+maximum(
+    "wire_overhead_bytes",
+    max(wire - composed, 0),
+    frames * int(policy["maximum_wire_overhead_bytes_per_frame"]),
+)
+exact(
+    "routed_input_bytes",
+    int(report["routed_input_bytes"]),
+    iterations * int(policy["required_routed_input_bytes_per_iteration"]),
+)
+exact(
+    "frames_composed",
+    frames,
+    iterations * int(policy["required_frames_per_iteration"]),
+)
+exact(
+    "flush_calls",
+    int(report["flush_calls"]),
+    iterations * int(policy["required_flush_calls_per_iteration"]),
+)
+if reactor_report.get("failures") != 0 or reactor_report.get("errors") != 0:
+    raise SystemExit("deterministic reactor audit did not pass")
+suite_name, test_name = reactor_policy["test"].split(".", 1)
+reactor_case = next(
+    (
+        case
+        for suite in reactor_report.get("testsuites", [])
+        if suite.get("name") == suite_name
+        for case in suite.get("testsuite", [])
+        if case.get("name") == test_name
+    ),
+    None,
+)
+if not isinstance(reactor_case, dict):
+    raise SystemExit("deterministic reactor audit result is missing")
+maximum(
+    "reactor_poll_calls",
+    int(reactor_case["reactor_poll_calls"]),
+    int(reactor_policy["maximum_poll_calls"]),
+)
+maximum(
+    "reactor_readiness_events",
+    int(reactor_case["readiness_events"]),
+    int(reactor_policy["maximum_readiness_events"]),
+)
+maximum(
+    "reactor_outbound_send_calls",
+    int(reactor_case["outbound_send_calls"]),
+    int(reactor_policy["maximum_outbound_send_calls"]),
+)
+exact(
+    "reactor_blocked_sends",
+    int(reactor_case["blocked_sends"]),
+    int(reactor_policy["required_blocked_sends"]),
+)
+exact(
+    "reactor_partial_sends",
+    int(reactor_case["partial_sends"]),
+    int(reactor_policy["required_partial_sends"]),
+)
+exact(
+    "reactor_child_wakeups",
+    int(reactor_case["child_wakeups"]),
+    int(reactor_policy["required_child_wakeups"]),
+)
+failed = [check for check in checks if check["status"] == "failed"]
+result = {
+    "schema": 1,
+    "suite": "deterministic-resource-budgets",
+    "status": "failed" if failed else "passed",
+    "sources": [str(raw_path), str(reactor_path)],
+    "checks": checks,
+}
+result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+if failed:
+    for check in failed:
+        print(f"deterministic budget failed: {check}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"deterministic budgets passed; report: {result_path}")
+PY

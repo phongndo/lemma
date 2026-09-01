@@ -97,6 +97,25 @@ def checked_samples(value: Any, label: str, minimum_samples: int) -> list[float]
     return samples
 
 
+def process_check_samples(
+    report: dict[str, Any], check: dict[str, Any], minimum_samples: int
+) -> list[float] | None:
+    raw_samples = value_at_path(report, check["samples_path"], check["id"])
+    if check.get("availability", "required") == "when_supported":
+        capability = value_at_path(
+            report, check["samples_path"][:-1], f"{check['id']} capability"
+        )
+        if not isinstance(capability, dict) or not isinstance(
+            capability.get("available"), bool
+        ):
+            raise BudgetError(f"{check['id']} has no explicit availability status")
+        if capability["available"] is False:
+            if raw_samples != [] or not isinstance(capability.get("reason"), str):
+                raise BudgetError(f"{check['id']} has malformed unsupported evidence")
+            return None
+    return checked_samples(raw_samples, check["id"], minimum_samples)
+
+
 def require_completed_process_workloads(
     process_report: dict[str, Any],
     checks: list[dict[str, Any]],
@@ -126,6 +145,11 @@ def validate_check(check: Any, label: str, *, micro: bool) -> dict[str, Any]:
     if maximum < 0:
         raise BudgetError(f"{label}.maximum must be non-negative")
     require_string(check.get("unit"), f"{label}.unit")
+    availability = check.get("availability", "required")
+    if availability not in {"required", "when_supported"}:
+        raise BudgetError(f"{label}.availability is unsupported")
+    if micro and availability != "required":
+        raise BudgetError(f"{label}.availability is only valid for process checks")
     if micro:
         require_string(check.get("benchmark"), f"{label}.benchmark")
         if check.get("field") not in {"cpu_time", "real_time"}:
@@ -448,11 +472,20 @@ def evaluate(
         process_budget.get("comparative_checks", []),
     )
     for check in process_budget["checks"]:
-        samples = checked_samples(
-            value_at_path(process_report, check["samples_path"], check["id"]),
-            check["id"],
-            process_minimum,
-        )
+        samples = process_check_samples(process_report, check, process_minimum)
+        if samples is None:
+            results.append(
+                {
+                    "id": check["id"],
+                    "samples": 0,
+                    "statistic": check["statistic"],
+                    "observed": None,
+                    "maximum": float(check["maximum"]),
+                    "unit": check["unit"],
+                    "status": "unsupported",
+                }
+            )
+            continue
         add_result(
             results,
             check["id"],

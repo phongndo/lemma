@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mux_benchmark import host_fingerprint
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -53,10 +55,16 @@ def main() -> int:
     if not isinstance(context, dict):
         raise RuntimeError("Google Benchmark report has no context")
     executable = arguments.executable.resolve()
+    fingerprint = host_fingerprint()
     context.update(
         {
             **git_metadata(),
             "generated_at": datetime.now(UTC).isoformat(),
+            "host_name": fingerprint["host_name"],
+            "host_model_identifier": fingerprint["model_identifier"],
+            "host_cpu_model": fingerprint["cpu_model"],
+            "host_physical_cpu_count": fingerprint["physical_cpu_count"],
+            "host_memory_bytes": fingerprint["memory_bytes"],
             "executable": str(executable),
             "executable_sha256": sha256(executable),
             "executable_bytes": executable.stat().st_size,

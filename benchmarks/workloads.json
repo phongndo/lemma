@@ -13,9 +13,19 @@
       "purpose": "single interactive shell and steady-state overhead"
     },
     {
+      "id": "P2",
+      "panes": 2,
+      "purpose": "first multi-pane scaling point"
+    },
+    {
       "id": "P4",
       "panes": 4,
       "purpose": "ordinary development layout"
+    },
+    {
+      "id": "P8",
+      "panes": 8,
+      "purpose": "intermediate scaling-knee search point"
     },
     {
       "id": "P16",
@@ -23,11 +33,39 @@
       "purpose": "heavy local workspace"
     },
     {
+      "id": "P32",
+      "panes": 32,
+      "purpose": "high-density scaling-knee search point"
+    },
+    {
       "id": "PMAX",
       "panes": 64,
       "purpose": "per-session supported capacity"
     }
   ],
+  "profile_suites": {
+    "smoke": [
+      "P1",
+      "P4",
+      "P16",
+      "PMAX"
+    ],
+    "gate": [
+      "P1",
+      "P4",
+      "P16",
+      "PMAX"
+    ],
+    "extended": [
+      "P1",
+      "P2",
+      "P4",
+      "P8",
+      "P16",
+      "P32",
+      "PMAX"
+    ]
+  },
   "session_profiles": [
     {
       "id": "S1",
@@ -35,9 +73,19 @@
       "purpose": "one detached isolated workspace with one live shell"
     },
     {
+      "id": "S2",
+      "sessions": 2,
+      "purpose": "first concurrent-session scaling point"
+    },
+    {
       "id": "S4",
       "sessions": 4,
       "purpose": "ordinary concurrent isolated workspaces"
+    },
+    {
+      "id": "S8",
+      "sessions": 8,
+      "purpose": "intermediate concurrent-session scaling point"
     },
     {
       "id": "S16",
@@ -45,6 +93,25 @@
       "purpose": "heavy concurrent isolated workspace set"
     }
   ],
+  "session_profile_suites": {
+    "smoke": [
+      "S1",
+      "S4",
+      "S16"
+    ],
+    "gate": [
+      "S1",
+      "S4",
+      "S16"
+    ],
+    "extended": [
+      "S1",
+      "S2",
+      "S4",
+      "S8",
+      "S16"
+    ]
+  },
   "workspace_profiles": [
     {
       "id": "W1",
@@ -52,9 +119,19 @@
       "purpose": "one logical isolated workspace with one live shell"
     },
     {
+      "id": "W2",
+      "workspaces": 2,
+      "purpose": "first concurrent-workspace scaling point"
+    },
+    {
       "id": "W4",
       "workspaces": 4,
       "purpose": "ordinary concurrent logical workspaces"
+    },
+    {
+      "id": "W8",
+      "workspaces": 8,
+      "purpose": "intermediate concurrent-workspace scaling point"
     },
     {
       "id": "W16",
@@ -62,6 +139,25 @@
       "purpose": "heavy concurrent logical workspace set"
     }
   ],
+  "workspace_profile_suites": {
+    "smoke": [
+      "W1",
+      "W4",
+      "W16"
+    ],
+    "gate": [
+      "W1",
+      "W4",
+      "W16"
+    ],
+    "extended": [
+      "W1",
+      "W2",
+      "W4",
+      "W8",
+      "W16"
+    ]
+  },
   "session_profile_metrics": [
     "process_tree_cpu_time_ns",
     "process_tree_rss_bytes",
@@ -86,8 +182,8 @@
   "process_workloads": [
     {
       "id": "warm_scroll",
-      "input": "25000 79-column CRLF rows followed by a unique completion marker",
-      "completion": "the marker is observable in the attached client output",
+      "input": "one trigger to a persistent fixture that emits 25000 79-column CRLF rows followed by a unique completion marker",
+      "completion": "the completion marker is observable in the attached client output",
       "metrics": [
         "latency_ns",
         "outer_bytes"
@@ -315,7 +411,7 @@
     "build_option": "LEMMA_ENABLE_LATENCY_TRACE",
     "runtime_variable": "LEMMA_LATENCY_TRACE",
     "trace_version": 2,
-    "event_capacity_per_process": 32768,
+    "event_capacity_per_process": 524288,
     "event_bytes": 40,
     "overflow_policy": "retain the first bounded events and increment a dropped counter",
     "correlation_policy": "derive one bounded token from the exact _XXXXXXXX__ fixture suffix observed at client input, daemon input, PTY write, PTY output, frame, and outer-terminal boundaries; correlate client receive through the exact decoder-completing socket-read event",
@@ -325,22 +421,22 @@
     "schema": 1,
     "status": "reviewed",
     "scope": {
-      "label": "Apple M4 Max 16-core 64-GiB pinned development host",
-      "policy": "Dedicated-host gates use the nearest-rank statistic over raw samples. Shared CI validates the manifest and reports but does not enforce host-specific thresholds.",
+      "label": "AMD Ryzen 9 9950X 16-core 32-GiB box host",
+      "policy": "Manual local gates use the nearest-rank statistic over raw samples. Shared CI validates the manifest and reports but does not enforce host-specific thresholds.",
       "approved_host": {
-        "host_name": "Phongs-MacBook-Pro.local",
-        "model_identifier": "Mac16,5",
-        "cpu_model": "Apple M4 Max",
+        "host_name": "box",
+        "model_identifier": "MS-7E61",
+        "cpu_model": "AMD Ryzen 9 9950X 16-Core Processor",
         "physical_cpu_count": 16,
-        "memory_bytes": 68719476736
+        "memory_bytes": 32641343488
       },
       "process_report_requirements": {
-        "system": "Darwin",
-        "architecture": "arm64",
+        "system": "Linux",
+        "architecture": "x86_64",
         "build_profile": "release"
       },
       "micro_context_requirements": {
-        "num_cpus": 16,
+        "num_cpus": 32,
         "library_build_type": "release"
       },
       "maximum_load_average_1m": 4.0
@@ -583,7 +679,8 @@
           ],
           "statistic": "max",
           "maximum": 0,
-          "unit": "count"
+          "unit": "count",
+          "availability": "when_supported"
         },
         {
           "id": "idle_peer_key_to_pty_p95",
@@ -837,6 +934,77 @@
           "maximum_p50_key_to_outer_bytes_ns": 1600000,
           "maximum_p95_key_to_outer_bytes_ns": 1800000
         }
+      }
+    }
+  },
+  "deterministic_budgets": {
+    "schema": 1,
+    "status": "reviewed",
+    "steady_state": {
+      "audited_iterations": 10000,
+      "maximum_general_allocation_calls": 0,
+      "maximum_general_allocation_bytes": 0,
+      "maximum_terminal_quota_allocation_calls": 0,
+      "maximum_frame_bytes": 256,
+      "maximum_queued_messages": 1,
+      "maximum_frame_messages_per_frame": 1,
+      "maximum_writer_attempts_per_frame": 2,
+      "maximum_wire_overhead_bytes_per_frame": 24,
+      "required_routed_input_bytes_per_iteration": 1,
+      "required_frames_per_iteration": 1,
+      "required_flush_calls_per_iteration": 1
+    },
+    "reactor": {
+      "test": "ReactorEnvironmentTest.ScriptedWorldControlsFragmentationBackpressureChildExitAndOrdering",
+      "maximum_poll_calls": 12,
+      "maximum_readiness_events": 10,
+      "maximum_outbound_send_calls": 4,
+      "required_blocked_sends": 1,
+      "required_partial_sends": 1,
+      "required_child_wakeups": 1
+    }
+  },
+  "paired_regression": {
+    "schema": 1,
+    "status": "reviewed",
+    "policy": "Build baseline and candidate with one manifest and toolchain on the approved host. A paired regression blocks even while stricter absolute product targets remain unmet.",
+    "microbenchmarks": {
+      "maximum_ratio": 1.1,
+      "absolute_noise_floor": {
+        "ns": 1
+      }
+    },
+    "process_workloads": {
+      "maximum_ratio": 1.1,
+      "absolute_noise_floor": {
+        "ns": 100000,
+        "bytes": 32,
+        "count": 0
+      },
+      "absolute_noise_floor_by_id": {
+        "warm_scroll_latency_p50": 750000,
+        "warm_scroll_bytes_p50": 160,
+        "attach_to_visible_latency_p95": 150000,
+        "interactive_output_bytes_p95": 160
+      },
+      "diagnostic_ids": [
+        "interactive_output_key_to_outer_bytes_p99",
+        "idle_peer_key_to_outer_bytes_p99",
+        "blocked_peer_key_to_outer_bytes_p99",
+        "blocked_client_idle_key_to_outer_bytes_p99",
+        "blocked_client_peer_key_to_outer_bytes_p99"
+      ]
+    },
+    "pane_profiles": {
+      "maximum_ratio": 1.1,
+      "absolute_noise_floor": {
+        "ns": 100000,
+        "bytes": 1048576,
+        "count": 0
+      },
+      "absolute_noise_floor_by_id": {
+        "P1.idle.key_to_outer_bytes_p95": 175000,
+        "PMAX.active.key_to_outer_bytes_p95": 150000
       }
     }
   },
