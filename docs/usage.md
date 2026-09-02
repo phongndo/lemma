@@ -174,7 +174,9 @@ general information/error representation, although command-line failures are its
 
 Command history is separately limited to 16 entries. It is memory-only by default. Configure an
 absolute `history.file` path to load it when the daemon starts and save it atomically when the daemon
-exits cleanly; the parent directory must already exist. Loaded history seeds new Attachments.
+exits cleanly; the parent directory must already exist. Missing files may be created, while failed
+reads or malformed existing files are left untouched at shutdown. Loaded history seeds new
+Attachments.
 
 The grammar is the human, mutating subset of `lemma proc`: omit `proc` and omit selectors for the
 current Session, Tab, and Pane. Quotes and backslashes group literal text without shell expansion.

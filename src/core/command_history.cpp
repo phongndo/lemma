@@ -103,24 +103,24 @@ private:
 }
 
 [[nodiscard]] auto parse_history_file(const std::string_view contents) noexcept
-    -> CommandLineHistory {
+    -> std::optional<CommandLineHistory> {
   if (!contents.starts_with(history_header)) {
-    return {};
+    return std::nullopt;
   }
   CommandLineHistory history;
   auto remaining = contents.substr(history_header.size());
   std::size_t entries = 0;
   while (!remaining.empty()) {
     if (entries == limits::command_line_history_max) {
-      return {};
+      return std::nullopt;
     }
     const auto newline = remaining.find('\n');
     if (newline == std::string_view::npos) {
-      return {};
+      return std::nullopt;
     }
     const auto command = remaining.substr(0, newline);
     if (!command_valid(command)) {
-      return {};
+      return std::nullopt;
     }
     remember_command_line(history, command);
     ++entries;
@@ -147,17 +147,16 @@ void remember_command_line(CommandLineHistory& history, const std::string_view c
 }
 
 [[nodiscard]] auto load_command_line_history(const std::string_view path) noexcept
-    -> CommandLineHistory {
-  CommandLineHistory history;
+    -> CommandLineHistoryLoadResult {
   const auto owned_path = path_string(path);
   if (owned_path.empty()) {
-    return history;
+    return {};
   }
   // open is variadic even though an existing file needs no mode argument.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   const Descriptor descriptor(::open(owned_path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
   if (descriptor.get() < 0) {
-    return history;
+    return {.history = {}, .replace_on_shutdown = errno == ENOENT};
   }
   struct stat metadata{};
   if (::fstat(descriptor.get(), &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
@@ -169,7 +168,10 @@ void remember_command_line(CommandLineHistory& history, const std::string_view c
   if (!size.has_value() || *size > history_file_bytes_max) {
     return {};
   }
-  return parse_history_file(std::string_view(storage.data(), *size));
+  const auto history = parse_history_file(std::string_view(storage.data(), *size));
+  return history.has_value()
+             ? CommandLineHistoryLoadResult{.history = *history, .replace_on_shutdown = true}
+             : CommandLineHistoryLoadResult{};
 }
 
 [[nodiscard]] auto save_command_line_history(const std::string_view path,

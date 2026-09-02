@@ -23,12 +23,21 @@ struct CommandLineHistory final {
   std::uint8_t size{0};
 };
 
+struct CommandLineHistoryLoadResult final {
+  CommandLineHistory history;
+  // Missing files may be created and successfully parsed files may be replaced. Other failures
+  // leave the existing path untouched on shutdown.
+  bool replace_on_shutdown{false};
+};
+
 // Adds one nonempty command unless it duplicates the newest entry.
 void remember_command_line(CommandLineHistory& history, std::string_view command) noexcept;
 
 // Persistence is deliberately best effort. Missing, malformed, oversized, and inaccessible files
-// produce an empty history; saving uses a same-directory temporary file and atomic rename.
-[[nodiscard]] auto load_command_line_history(std::string_view path) noexcept -> CommandLineHistory;
+// produce an empty history. Only missing or successfully parsed paths are safe to replace; saving
+// uses a same-directory temporary file and atomic rename.
+[[nodiscard]] auto load_command_line_history(std::string_view path) noexcept
+    -> CommandLineHistoryLoadResult;
 [[nodiscard]] auto save_command_line_history(std::string_view path,
                                              const CommandLineHistory& history) noexcept -> bool;
 

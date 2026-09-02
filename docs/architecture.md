@@ -124,7 +124,8 @@ log remains available through a synthetic read-only full-pane projection. The st
 the sole owner of interaction chrome: active routing contexts and search prompts replace normal
 Session/Tab status, while pane composition contains no mode-overlay path. Command history remains a
 separate bounded fact. An optional configured file seeds the daemon-wide initial history and is
-atomically replaced on clean shutdown; live Attachment histories still diverge independently. A
+atomically replaced on clean shutdown only after a successful load or confirmed absence; live
+Attachment histories still diverge independently. A
 Session switch transfers one
 drained connection decoder and sequence to an existing detached Session, then forces a full redraw;
 it never creates a nested client or restarts the terminal process. The catalog is the sole

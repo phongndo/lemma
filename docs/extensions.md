@@ -99,6 +99,8 @@ All `lemma.setup()` groups and fields are optional:
 - `history.file` is empty by default, which keeps command history in memory only. An absolute path
   enables best-effort loading at daemon startup and atomic saving on clean shutdown. The parent
   directory must already exist; malformed, oversized, missing, or inaccessible files load as empty.
+  Missing files may be created, but failed reads and malformed existing files are not replaced on
+  shutdown.
 
 `lemma.keymap.set(CONTEXT, KEY, ACTION[, DISPOSITION])` replaces or adds one binding. `ACTION`
 may be a command string or one of these native-policy descriptors:

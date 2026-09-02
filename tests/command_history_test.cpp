@@ -72,22 +72,27 @@ TEST(CommandHistoryTest, RoundTripsTheBoundedHistoryFile) {
   ASSERT_TRUE(save_command_line_history(file.path(), history));
   const auto loaded = load_command_line_history(file.path());
 
-  ASSERT_EQ(loaded.size, 2U);
-  EXPECT_EQ(loaded.entries.front().view(), "tab new --title tests");
-  EXPECT_EQ(std::span(loaded.entries).subspan(1U, 1U).front().view(), "pane split --right");
+  EXPECT_TRUE(loaded.replace_on_shutdown);
+  ASSERT_EQ(loaded.history.size, 2U);
+  EXPECT_EQ(loaded.history.entries.front().view(), "tab new --title tests");
+  EXPECT_EQ(std::span(loaded.history.entries).subspan(1U, 1U).front().view(), "pane split --right");
 }
 
-TEST(CommandHistoryTest, TreatsMissingOrMalformedPersistenceAsEmpty) {
+TEST(CommandHistoryTest, ReplacesMissingOrValidPersistenceButPreservesMalformedFiles) {
   TemporaryHistoryPath file;
   ASSERT_FALSE(file.path().empty());
-  EXPECT_EQ(load_command_line_history(file.path()).size, 0U);
+  const auto missing = load_command_line_history(file.path());
+  EXPECT_EQ(missing.history.size, 0U);
+  EXPECT_TRUE(missing.replace_on_shutdown);
 
   std::ofstream output(std::string(file.path()), std::ios::binary | std::ios::trunc);
   ASSERT_TRUE(output.is_open());
   output << "not-lemma-history\ncommand\n";
   output.close();
   ASSERT_TRUE(output.good());
-  EXPECT_EQ(load_command_line_history(file.path()).size, 0U);
+  const auto malformed = load_command_line_history(file.path());
+  EXPECT_EQ(malformed.history.size, 0U);
+  EXPECT_FALSE(malformed.replace_on_shutdown);
 }
 
 } // namespace

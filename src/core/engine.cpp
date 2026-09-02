@@ -145,7 +145,10 @@ private:
 class CommandHistoryGuard final {
 public:
   explicit CommandHistoryGuard(const std::string_view path) noexcept
-      : previous_(active_command_history), path_(path), history_(load_command_line_history(path)) {
+      : previous_(active_command_history), path_(path) {
+    const auto loaded = load_command_line_history(path);
+    history_ = loaded.history;
+    replace_on_shutdown_ = loaded.replace_on_shutdown;
     active_command_history = path.empty() ? nullptr : &history_;
   }
 
@@ -155,7 +158,9 @@ public:
   auto operator=(CommandHistoryGuard&&) -> CommandHistoryGuard& = delete;
 
   ~CommandHistoryGuard() {
-    static_cast<void>(save_command_line_history(path_, history_));
+    if (replace_on_shutdown_) {
+      static_cast<void>(save_command_line_history(path_, history_));
+    }
     active_command_history = previous_;
   }
 
@@ -163,6 +168,7 @@ private:
   CommandLineHistory* previous_{nullptr};
   std::string_view path_;
   CommandLineHistory history_;
+  bool replace_on_shutdown_{false};
 };
 
 [[nodiscard]] auto reactor_now() noexcept -> ReactorClock::time_point {
