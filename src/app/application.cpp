@@ -121,35 +121,28 @@ template <typename Integer>
   constexpr std::string_view usage =
       "Lemma terminal multiplexer\n\n"
       "Usage:\n"
-      "  lemma                                  Create a numbered session and attach\n"
-      "  lemma COMMAND [ARGUMENTS...]\n\n"
-      "Sessions:\n"
-      "  new [NAME] [OPTIONS]                   Create a session and attach\n"
-      "  start [NAME] [OPTIONS]                 Create a detached session\n"
-      "  attach [NAME]                          Attach to a session\n"
-      "  list, ls                               List sessions\n"
-      "  inspect NAME                           Inspect a session\n"
-      "  rename OLD NEW                         Rename a session\n"
-      "  kill NAME                              Kill a session\n\n"
+      "  lemma                                  Create a numbered Session and attach\n"
+      "  lemma new [NAME] [OPTIONS]             Create a Session and attach\n"
+      "  lemma start [NAME] [OPTIONS]           Create a detached Session\n"
+      "  lemma attach [NAME]                    Attach to a Session\n"
+      "  lemma list | ls                        List Sessions and their status\n"
+      "  lemma rename OLD NEW                   Rename a Session\n"
+      "  lemma kill NAME                        Kill a Session\n\n"
       "Automation:\n"
-      "  proc DOMAIN COMMAND [ARGUMENTS...]          Execute a one-command Proc\n"
-      "  proc --file FILE                       Execute a bounded multi-command Proc\n"
-      "  proc --stdin                           Read a Proc document from standard input\n"
-      "  events [OPTIONS]                       Stream machine-readable observations\n\n"
-      "Reference:\n"
-      "  api schema [--json]                    Inspect the public API contract\n"
-      "  config check [FILE]                    Validate Lua configuration transactionally\n"
-      "  skill                                  Print the Lemma agent skill\n"
-      "  version                                Show build and protocol versions\n"
-      "  help                                   Show this help\n\n"
-      "Creation options:\n"
+      "  lemma proc ...                         Execute structured commands\n"
+      "  lemma events [OPTIONS]                 Stream structured observations\n\n"
+      "Other commands:\n"
+      "  lemma config check [FILE]              Validate configuration\n"
+      "  lemma api schema [--json]              Show the automation contract\n"
+      "  lemma skill                            Print the coding-agent guide\n"
+      "  lemma version                          Show version information\n"
+      "  lemma help                             Show this help\n\n"
+      "Options for new and start:\n"
       "  --cwd DIR                              Set the initial working directory\n"
-      "  --hold                                 Retain an exited pane and its final output\n"
-      "  -- COMMAND [ARGUMENTS...]              Execute directly, without a shell\n\n"
-      "Proc domains: daemon, session, tab, pane\n"
-      "Command targets: --session NAME|ID, --tab ID|POSITION, --pane ID\n"
-      "Inside Lemma, omitted command targets use the current pane context.\n\n"
-      "Event options: --session NAME|ID, --pane ID, --screen\n";
+      "  --hold                                 Keep the Pane after its process exits\n"
+      "  -- COMMAND [ARGUMENTS...]              Execute directly without a shell\n\n"
+      "Use `lemma proc --help` to explore automation commands.\n"
+      "Use `lemma proc DOMAIN COMMAND --help` for exact grammar.\n";
   return write_fragment(stream, usage) ? 0 : 1;
 }
 
@@ -1560,9 +1553,6 @@ command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer =
   if (operation == "list" && arguments.size() == 1) {
     return daemon::list(endpoint);
   }
-  if (operation == "inspect" && arguments.size() == 2) {
-    return daemon::list(endpoint, arguments.back());
-  }
   if (operation == "rename" && arguments.size() == 3) {
     return daemon::rename_session(endpoint, arguments.subspan(1, 1).front(), arguments.back());
   }
@@ -1851,7 +1841,7 @@ command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer =
     return client::attach(endpoint, target);
   }
   if (command == "new" || command == "start" || command == "list" || command == "ls" ||
-      command == "inspect" || command == "rename" || command == "kill") {
+      command == "rename" || command == "kill") {
     return run_session_control(endpoint, command_arguments);
   }
   if (command == "session" || command == "tab" || command == "pane") {

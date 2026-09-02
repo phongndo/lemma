@@ -89,7 +89,6 @@ lemma new [NAME]                   # create a Session and attach
 lemma start [NAME]                 # create a detached Session
 lemma attach [NAME]
 lemma list                         # alias: lemma ls
-lemma inspect NAME
 lemma rename OLD NEW
 lemma kill NAME
 ```
