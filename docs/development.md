@@ -40,11 +40,12 @@ lemma pane split --right
 ```
 
 `just run [args...]` is the canonical explicit entry point. Both forms configure `build/dev` only
-when its toolchain or configuration inputs change, issue an incremental build of only the `lemma`
-target, and execute that checkout's exact binary with unchanged arguments. The `dev` profile uses
-`-O1`, debug symbols, enabled invariants, and frame pointers. A path-derived runtime namespace
-isolates every worktree, and the runner replaces a daemon whose executable predates the current
-build.
+when its toolchain or configuration inputs change and issue an incremental build of only the
+`lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies the directory
+where it was invoked when `--cwd` is omitted; it otherwise executes that checkout's exact binary
+with unchanged arguments. The `dev` profile uses `-O1`, debug symbols, enabled invariants, and frame
+pointers. A path-derived runtime namespace isolates every worktree, and the runner replaces a daemon
+whose executable predates the current build.
 
 Common verification commands:
 

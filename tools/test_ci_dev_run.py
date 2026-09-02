@@ -23,6 +23,46 @@ class DevelopmentRunnerContractTest(unittest.TestCase):
         self.assertIn('exec ./scripts/dev-run "$@"', justfile)
         self.assertIn('exec "$runner" "$@"', flake)
 
+    def test_session_creation_defaults_to_the_invocation_directory(self) -> None:
+        runner = load_runner()
+        development_arguments = runner["development_arguments"]
+        invocation_directory = Path("/work/lemma")
+
+        self.assertEqual(
+            development_arguments([], invocation_directory),
+            ["new", "--cwd", "/work/lemma"],
+        )
+        self.assertEqual(
+            development_arguments(["new", "work"], invocation_directory),
+            ["new", "work", "--cwd", "/work/lemma"],
+        )
+        self.assertEqual(
+            development_arguments(
+                ["start", "tests", "--", "just", "test"], invocation_directory
+            ),
+            [
+                "start",
+                "tests",
+                "--cwd",
+                "/work/lemma",
+                "--",
+                "just",
+                "test",
+            ],
+        )
+
+    def test_explicit_cwd_and_non_creation_arguments_are_unchanged(self) -> None:
+        runner = load_runner()
+        development_arguments = runner["development_arguments"]
+        invocation_directory = Path("/work/lemma")
+
+        explicit = ["new", "work", "--cwd", "/tmp"]
+        command = ["proc", "session", "start"]
+        self.assertEqual(
+            development_arguments(explicit, invocation_directory), explicit
+        )
+        self.assertEqual(development_arguments(command, invocation_directory), command)
+
     def test_worktree_namespaces_are_stable_and_distinct(self) -> None:
         runner = load_runner()
         runtime_directory = runner["runtime_directory"]

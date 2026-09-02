@@ -191,6 +191,26 @@ def stop_stale_daemon(runtime: Path, build_id: str) -> None:
     raise RuntimeError("stale development lemma daemon did not stop")
 
 
+def development_arguments(
+    arguments: Sequence[str], invocation_directory: Path
+) -> list[str]:
+    forwarded = list(arguments)
+    if not forwarded:
+        return ["new", "--cwd", str(invocation_directory)]
+    if forwarded[0] not in {"new", "start"}:
+        return forwarded
+
+    command_separator = forwarded.index("--") if "--" in forwarded else len(forwarded)
+    if any(argument in {"-c", "--cwd"} for argument in forwarded[1:command_separator]):
+        return forwarded
+    return [
+        *forwarded[:command_separator],
+        "--cwd",
+        str(invocation_directory),
+        *forwarded[command_separator:],
+    ]
+
+
 def prepare(
     root: Path, arguments: Sequence[str], environment: Mapping[str, str]
 ) -> tuple[Path, list[str], dict[str, str]]:
@@ -239,8 +259,9 @@ def prepare(
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    forwarded = list(sys.argv[1:] if arguments is None else arguments)
+    requested = list(sys.argv[1:] if arguments is None else arguments)
     try:
+        forwarded = development_arguments(requested, Path.cwd())
         binary, execution_arguments, environment = prepare(ROOT, forwarded, os.environ)
         os.execve(binary, execution_arguments, environment)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:

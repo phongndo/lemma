@@ -18,10 +18,10 @@ lemma pane split --right
 ```
 
 `just run [args...]` is the canonical development entry point. The development shell's `lemma`
-command delegates to the same runner: both configure only when required, incrementally build only
-the `lemma` target, and execute `build/dev/lemma` from the current checkout with unchanged
-arguments. The `dev` profile uses optimization, debug symbols, enabled invariants, and frame
-pointers.
+command delegates to the same runner: both configure only when required and incrementally build
+only the `lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies its
+invocation directory when `--cwd` is omitted; other arguments reach `build/dev/lemma` unchanged.
+The `dev` profile uses optimization, debug symbols, enabled invariants, and frame pointers.
 
 Each checkout or git worktree receives a stable private development runtime namespace. Rebuilding
 the binary automatically replaces an older daemon in that namespace, so development commands do
