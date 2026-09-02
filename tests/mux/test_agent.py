@@ -666,6 +666,50 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(waited["op"], "pane.wait")
         self.assertIn("__PROC_INPUT__", waited["capture"]["text"])
 
+    def test_proc_reports_unresolved_dependencies_without_placeholder_ids(self) -> None:
+        self.server.require_command(
+            "proc", "session", "start", "dependency-source", "--hold", "--", "/bin/sh"
+        )
+        proc = self.server.root / "unresolved-proc.json"
+        proc.write_text(
+            json.dumps(
+                {
+                    "schema": "lemma.proc/v1",
+                    "on_error": "continue",
+                    "ops": [
+                        {
+                            "id": "failed",
+                            "op": "session.start",
+                            "name": "dependency-source",
+                            "hold": True,
+                            "argv": ["/bin/sh"],
+                        },
+                        {
+                            "op": "pane.wait",
+                            "pane": {"result": "failed"},
+                            "timeout_ms": 100,
+                        },
+                        {
+                            "op": "session.inspect",
+                            "session": {"name": "dependency-source"},
+                        },
+                    ],
+                },
+                separators=(",", ":"),
+            )
+        )
+        status, result = self.json_command("proc", "--file", str(proc), unwrap=False)
+        self.assertEqual(status, 1, result)
+        self.assertFalse(result["ok"])
+        nested = [entry["result"] for entry in result["results"]]
+        self.assertEqual(
+            [entry["status"] for entry in nested], ["conflict", "failed", "applied"]
+        )
+        self.assertEqual(
+            nested[1]["error"], {"reason": "unresolved_reference", "retryable": False}
+        )
+        self.assertNotIn("pane", nested[1])
+
     def test_multi_pane_snapshot_is_authoritative_before_staged_screens(self) -> None:
         self.server.require_command(
             "proc", "session", "start", "event-baseline", "--", "/bin/sh"

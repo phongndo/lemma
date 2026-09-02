@@ -7987,7 +7987,8 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto encode_op_result(const api::Op& op, const OpExecution& result) -> std::string {
+[[nodiscard]] auto encode_op_result(const api::Op& op, const OpExecution& result,
+                                    const bool target_resolved) -> std::string {
   std::string output;
   try {
     output = R"({"schema":"lemma.op-result/v1","op":)";
@@ -8017,7 +8018,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       return {};
     }
     auto result_pane = result.pane;
-    if (!result_pane.is_valid() && op.kind == api::OpKind::pane_wait) {
+    if (!result_pane.is_valid() && target_resolved && op.kind == api::OpKind::pane_wait) {
       result_pane = op.pane.id;
     }
     if (result_pane.is_valid() &&
@@ -8486,10 +8487,12 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
       } else {
         execution = OpExecutor::execute(*op, sessions, runtimes, activity_order, scratch);
       }
+    } else {
+      execution.error_reason = "unresolved_reference";
     }
   }
   const auto& result_op = op.has_value() ? *op : step.op;
-  auto encoded = encode_op_result(result_op, execution);
+  auto encoded = encode_op_result(result_op, execution, op.has_value());
   if (encoded.empty()) {
     state.ok = false;
     return encode_proc_result(state, "resource_failure", index, op.has_value());

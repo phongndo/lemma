@@ -1434,9 +1434,9 @@ struct OpCliArguments final {
       std::string_view{"lemma object conflicts with existing state\n"},
       std::string_view{"lemma capacity reached\n"},
       std::string_view{"lemma object is unavailable\n"},
-      std::string_view{"lemma proceration timed out\n"},
+      std::string_view{"lemma operation timed out\n"},
       std::string_view{"lemma pane exited unexpectedly\n"},
-      std::string_view{"lemma proceration failed\n"},
+      std::string_view{"lemma operation failed\n"},
   };
   const auto index = static_cast<std::size_t>(status);
   const auto message =
