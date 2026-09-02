@@ -62,6 +62,9 @@ lemma.setup({
     default_cwd = "/work/project",
     default_program = { "/bin/sh", "-l" },
   },
+  history = {
+    file = "/home/me/.local/state/lemma/command-history",
+  },
 })
 
 ctx.set("resize", {
@@ -87,12 +90,15 @@ All `lemma.setup()` groups and fields are optional:
 - `terminal.scrollback_lines` is a nonnegative integer up to 10,000,000, or `false` for the native
   memory-bounded default.
 - `ui.status_line` enables or disables the native one-row status line. Disabling it gives the full
-  viewport to panes.
+  viewport to panes and makes the status-hosted command-line binding inert.
 - `launch.default_cwd` is empty or an absolute path. It applies when creation does not specify
   `--cwd`.
 - `launch.default_program` is an exact argv array, not a shell command. It is bounded to 64
   arguments and 4 KiB including terminators. An empty array selects the account login shell.
   Explicit creation arguments after `--` take precedence.
+- `history.file` is empty by default, which keeps command history in memory only. An absolute path
+  enables best-effort loading at daemon startup and atomic saving on clean shutdown. The parent
+  directory must already exist; malformed, oversized, missing, or inaccessible files load as empty.
 
 `lemma.keymap.set(CONTEXT, KEY, ACTION[, DISPOSITION])` replaces or adds one binding. `ACTION`
 may be a command string or one of these native-policy descriptors:
@@ -110,8 +116,9 @@ transient contexts before invocation. `lemma.keymap.del(CONTEXT, KEY)` removes o
 previously configured binding. Repeated declarations use the last declaration.
 
 `lemma.context.push()` and `lemma.context.pop()` change routing state only. Semantic interactions
-still use commands such as `enter_copy_mode`, `copy_leave`, `begin_rename_tab`, and
-`rename_cancel` so Core remains authoritative for their state and invariants.
+still use commands such as `enter_copy_mode`, `copy_leave`, `begin_rename_tab`,
+`begin_command_line`, and `command_line_cancel` so Core remains authoritative for their state and
+invariants.
 
 `lemma.context.set(CONTEXT, OPTIONS)` configures `label`, `lifetime` (`"persistent"` or
 `"one_shot"`), unbound behavior (`"forward"`, `"consume"`, `"replay"`, or `"retry"`), and whether
@@ -127,7 +134,9 @@ The bounded routing contexts are:
 - `copy_go`: the default `g` one-shot grammar;
 - `copy_search`: editable search query input;
 - `copy_searching`: an in-progress bounded search;
-- `rename`: session and tab prompt editing.
+- `rename`: session and tab prompt editing;
+- `command_line`: interactive command-line editing, completion, and history;
+- `messages`: read-only navigation of the bounded Attachment message log.
 
 Core owns the commands and interaction state, but not their keys. Resize transitions, copy
 navigation/search, rename editing, prefix replay, and pane key rewrites all come from the compiled
@@ -162,7 +171,13 @@ rename_cancel rename_commit rename_backspace rename_delete
 rename_cursor_left rename_cursor_right rename_cursor_home rename_cursor_end
 rename_clear rename_delete_word
 create_tab next_tab previous_tab close_tab
-begin_rename_session begin_rename_tab move_tab_left move_tab_right
+begin_rename_session begin_rename_tab begin_command_line move_tab_left move_tab_right
+show_messages message_view_leave message_view_previous message_view_next
+message_view_page_previous message_view_page_next message_view_history_start message_view_history_end
+command_line_cancel command_line_commit command_line_complete
+command_line_history_previous command_line_history_next
+command_line_backspace command_line_delete command_line_cursor_left command_line_cursor_right
+command_line_cursor_home command_line_cursor_end command_line_clear command_line_delete_word
 swap_pane_left swap_pane_right swap_pane_up swap_pane_down
 select_tab_0 select_tab_1 select_tab_2 select_tab_3 select_tab_4
 select_tab_5 select_tab_6 select_tab_7 select_tab_8 select_tab_9

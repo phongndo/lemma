@@ -443,6 +443,22 @@ class LemmaServer:
         self.clients.append(client)
         return client
 
+    def restart(self) -> None:
+        for client in self.clients:
+            client.close()
+        self.clients.clear()
+        if self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGTERM)
+            self.process.wait(timeout=2.0)
+        self.process = subprocess.Popen(
+            [str(self.server_path), str(self.socket_path)],
+            env=self.environment,
+            stdout=self._log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        self._wait_ready()
+
     def logs(self) -> str:
         self._log.flush()
         try:

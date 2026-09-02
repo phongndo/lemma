@@ -37,7 +37,7 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
 
         def copy_mode_visible(expected: bool) -> bool | None:
             client.drain()
-            return True if ("COPY\n" in client.screen_text()) == expected else None
+            return True if ("COPY [0/0]" in client.screen_text()) == expected else None
 
         client.prefix("[")
         wait_until(

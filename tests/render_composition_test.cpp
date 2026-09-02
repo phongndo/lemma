@@ -223,6 +223,96 @@ TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
 }
 
+TEST(PaneCompositionTest, CommandLineUsesTheWholeStatusRowWithoutAnnotations) {
+  auto terminal = make_terminal(64, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 64, .rows = 2},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 64, .rows = 3}, output, true,
+                                    {.session_name = "work",
+                                     .tabs = tabs,
+                                     .prompt_target = StatusPromptTarget::command_line,
+                                     .prompt_feedback = StatusPromptFeedback::none,
+                                     .prompt_value = "pane split --right",
+                                     .input_context = {},
+                                     .prompt_cursor = 18,
+                                     .dirty = true});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr(":pane split --right"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;1;4m")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("Split the current pane")));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;20H\x1B[2 q\x1B[?25h"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
+}
+
+TEST(PaneCompositionTest, CommandFailureReplacesTheStatusRowWithALeftAlignedMessage) {
+  auto terminal = make_terminal(40, 2);
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 40, .rows = 2},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 40, .rows = 3}, output, true,
+                                    {.session_name = "work",
+                                     .tabs = tabs,
+                                     .prompt_target = StatusPromptTarget::message,
+                                     .prompt_feedback = StatusPromptFeedback::none,
+                                     .prompt_value = {},
+                                     .input_context = "Error: Unknown command",
+                                     .prompt_cursor = 0,
+                                     .dirty = true});
+
+  ASSERT_TRUE(result.has_value());
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1mError: Unknown command"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
+}
+
+TEST(PaneCompositionTest, MessageViewReplacesPaneContentWithAnOpaqueBoundedLog) {
+  auto terminal = make_terminal(40, 3);
+  write_text(terminal, "underlying pane content");
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 40, .rows = 3},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  const std::array lines{
+      MessageViewLine{.text = "[2026-03-01 10:00:00] Information", .error = false},
+      MessageViewLine{.text = "[2026-03-01 10:00:01] Error: Unknown command", .error = true},
+  };
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+
+  const auto result = compose_frame(std::span(&pane, 1), {.columns = 40, .rows = 4}, output, true,
+                                    {.session_name = "work",
+                                     .tabs = tabs,
+                                     .prompt_target = StatusPromptTarget::none,
+                                     .prompt_feedback = StatusPromptFeedback::none,
+                                     .prompt_value = {},
+                                     .input_context = " LOG ",
+                                     .prompt_cursor = 0,
+                                     .dirty = true},
+                                    {}, std::nullopt, {.lines = lines, .active = true});
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->panes, 0U);
+  const auto encoded = as_text(std::span(output).first(result->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("[2026-03-01 10:00:00] Information"));
+  EXPECT_THAT(encoded, testing::HasSubstr("[2026-03-01 10:00:01] Error: Unknown "));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;36H\x1B[0;7m LOG "));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("underlying pane content")));
+}
+
 TEST(PaneCompositionTest, LeavingStatusPromptRestoresFocusedPaneCursorBlinking) {
   auto terminal = make_terminal(20, 2);
   write_text(terminal, "\x1B[1 qcontent");

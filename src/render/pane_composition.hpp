@@ -2,6 +2,7 @@
 #define LEMMA_RENDER_PANE_COMPOSITION_HPP
 
 #include "lemma/geometry.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -14,6 +15,8 @@
 namespace lemma::render {
 
 inline constexpr std::size_t status_tabs_max = 16;
+inline constexpr std::size_t status_context_bytes_max = 64;
+inline constexpr std::size_t message_view_line_bytes_max = limits::status_message_bytes_max + 32U;
 
 struct Viewport final {
   std::uint16_t columns{0};
@@ -44,6 +47,8 @@ enum class StatusPromptTarget : std::uint8_t {
   none,
   session,
   active_tab,
+  command_line,
+  message,
 };
 
 enum class StatusPromptFeedback : std::uint8_t {
@@ -63,13 +68,24 @@ struct StatusLine final {
   bool dirty{false};
 
   [[nodiscard]] constexpr auto prompting() const noexcept -> bool {
-    return prompt_target != StatusPromptTarget::none;
+    return prompt_target != StatusPromptTarget::none &&
+           prompt_target != StatusPromptTarget::message;
   }
 };
 
 struct PaneOverlay final {
   vt::Terminal* terminal{nullptr};
   std::string_view top_right;
+};
+
+struct MessageViewLine final {
+  std::string_view text;
+  bool error{false};
+};
+
+struct MessageView final {
+  std::span<const MessageViewLine> lines;
+  bool active{false};
 };
 
 enum class OuterModeProjection : std::uint8_t {
@@ -124,7 +140,8 @@ struct StatusTarget final {
 [[nodiscard]] auto
 compose_frame(std::span<const PaneSurface> panes, Viewport viewport, std::span<std::byte> output,
               bool force_full, StatusLine status = {}, PaneOverlay overlay = {},
-              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt) noexcept
+              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
+              MessageView message_view = {}) noexcept
     -> std::expected<CompositionResult, CompositionError>;
 
 } // namespace lemma::render

@@ -463,6 +463,7 @@ void release_owned_endpoint(void* const context) noexcept {
     reactor_environment.scrollback_lines = configured_runtime.generation->scrollback_lines();
     reactor_environment.default_program = configured_runtime.generation->default_program();
     reactor_environment.default_cwd = configured_runtime.generation->default_cwd();
+    reactor_environment.command_history_file = configured_runtime.generation->history_file();
     reactor_environment.status_line = configured_runtime.generation->status_line();
   }
   const auto result = core::run_server_with_environment(

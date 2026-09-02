@@ -184,7 +184,10 @@ using input::PhysicalKey;
        configuration.launch.default_cwd.front() != '/') ||
       configuration.launch.default_cwd.size() > limits::working_directory_bytes_max ||
       configuration.launch.default_cwd.contains('\0') ||
-      configuration.launch.default_program.size() > default_program_arguments_max) {
+      configuration.launch.default_program.size() > default_program_arguments_max ||
+      (!configuration.history.file.empty() && configuration.history.file.front() != '/') ||
+      configuration.history.file.size() > configuration_path_bytes_max ||
+      configuration.history.file.contains('\0')) {
     return false;
   }
   std::size_t program_bytes = 0;
@@ -285,6 +288,15 @@ constexpr std::array command_names{
     "previous_tab",
     "begin_rename_session",
     "begin_rename_tab",
+    "begin_command_line",
+    "show_messages",
+    "message_view_leave",
+    "message_view_previous",
+    "message_view_next",
+    "message_view_page_previous",
+    "message_view_page_next",
+    "message_view_history_start",
+    "message_view_history_end",
     "move_tab_left",
     "move_tab_right",
     "swap_pane_left",
@@ -343,11 +355,25 @@ constexpr std::array command_names{
     "rename_cursor_end",
     "rename_clear",
     "rename_delete_word",
+    "command_line_cancel",
+    "command_line_commit",
+    "command_line_complete",
+    "command_line_history_previous",
+    "command_line_history_next",
+    "command_line_backspace",
+    "command_line_delete",
+    "command_line_cursor_left",
+    "command_line_cursor_right",
+    "command_line_cursor_home",
+    "command_line_cursor_end",
+    "command_line_clear",
+    "command_line_delete_word",
 };
 static_assert(command_names.size() == static_cast<std::size_t>(InputCommand::count));
 
-constexpr std::array context_names{"normal",  "prefix",      "resize",         "copy",
-                                   "copy_go", "copy_search", "copy_searching", "rename"};
+constexpr std::array context_names{"normal",       "prefix",      "resize",         "copy",
+                                   "copy_go",      "copy_search", "copy_searching", "rename",
+                                   "command_line", "messages"};
 static_assert(context_names.size() == static_cast<std::size_t>(ConfiguredInputContext::count));
 
 } // namespace
@@ -689,6 +715,11 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
                                  configuration_document_bytes_max)) {
       return std::nullopt;
     }
+    output += R"(,"history_file":)";
+    if (!api::append_json_string(output, configuration.history.file,
+                                 configuration_document_bytes_max)) {
+      return std::nullopt;
+    }
     output += R"(,"default_program":[)";
     for (std::size_t index = 0; index < configuration.launch.default_program.size(); ++index) {
       if (index > 0U) {
@@ -711,8 +742,8 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
 auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
   if (!known_members(document,
                      {"schema", "preset", "prefix", "contexts", "bindings", "scrollback_lines",
-                      "status_line", "default_cwd", "default_program"}) ||
-      document.object.size() != 9U) {
+                      "status_line", "default_cwd", "history_file", "default_program"}) ||
+      document.object.size() != 10U) {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::invalid_document, .field = {}}};
   }
@@ -826,9 +857,10 @@ auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
   }
   const auto status_line = api::json_boolean(document, "status_line");
   const auto default_cwd = api::json_string(document, "default_cwd");
+  const auto history_file = api::json_string(document, "history_file");
   const auto* const default_program = api::json_member(document, "default_program");
-  if (!status_line.has_value() || !default_cwd.has_value() || default_program == nullptr ||
-      default_program->kind != api::JsonKind::array ||
+  if (!status_line.has_value() || !default_cwd.has_value() || !history_file.has_value() ||
+      default_program == nullptr || default_program->kind != api::JsonKind::array ||
       default_program->array.size() > default_program_arguments_max) {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::invalid_field, .field = "runtime"}};
@@ -836,6 +868,7 @@ auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
   try {
     result.ui.status_line = *status_line;
     result.launch.default_cwd = *default_cwd;
+    result.history.file = *history_file;
     result.launch.default_program.reserve(default_program->array.size());
     for (const auto& argument : default_program->array) {
       if (argument.kind != api::JsonKind::string) {
@@ -887,9 +920,10 @@ auto compile(const Configuration& configuration) noexcept -> std::expected<Gener
       default_program.push_back(std::byte{0});
     }
     auto default_cwd = configuration.launch.default_cwd;
+    auto history_file = configuration.history.file;
     return Generation(std::move(*compiled), configuration.terminal.scrollback_lines,
                       configuration.ui.status_line, std::move(default_cwd),
-                      std::move(default_program));
+                      std::move(default_program), std::move(history_file));
   } catch (...) {
     return std::unexpected(Error::capacity);
   }

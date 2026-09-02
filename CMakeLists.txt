@@ -179,6 +179,8 @@ target_link_libraries(
 add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
+  src/core/command_history.cpp
+  src/core/command_line.cpp
   src/core/engine.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
@@ -280,6 +282,8 @@ if(LEMMA_BUILD_TESTS)
     lemma_unit_tests
     tests/api_test.cpp
     tests/config_test.cpp
+    tests/command_history_test.cpp
+    tests/command_line_test.cpp
     tests/connection_output_test.cpp
     tests/core_test.cpp
     tests/frame_scheduler_test.cpp
@@ -435,6 +439,7 @@ if(LEMMA_BUILD_TESTS)
   endfunction()
 
   lemma_add_python_mux_test(configuration tests.mux.test_configuration)
+  lemma_add_python_mux_test(command_line tests.mux.test_command_line)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
   lemma_add_python_mux_test(resize tests.mux.test_resize)

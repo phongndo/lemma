@@ -147,6 +147,47 @@ TEST(InputRouterTest, PreservesUnboundRunsAndRoutesOneShotPrefixCommands) {
   EXPECT_FALSE(router.legacy_route_requires_checkpoint());
 }
 
+TEST(InputRouterTest, DefaultPrefixEntersCommandLineAndItsEditorOwnsCompletionAndHistory) {
+  InputRouter router(default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{':'}};
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(enter, 2).effect));
+  const auto entered = router.route_legacy(std::span(enter).subspan(1), 1);
+  const auto* const begin = std::get_if<RoutedCommand>(&entered.effect);
+  ASSERT_NE(begin, nullptr);
+  EXPECT_EQ(begin->command, InputCommand::begin_command_line);
+
+  router.select_base(ConfiguredInputContext::command_line);
+  constexpr std::array tab{std::byte{'\t'}};
+  const auto completed = router.route_legacy(tab, 1);
+  ASSERT_NE(std::get_if<RoutedCommand>(&completed.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(completed.effect).command, InputCommand::command_line_complete);
+
+  const auto up = router.route_key({.action = KeyAction::press,
+                                    .key = PhysicalKey::arrow_up,
+                                    .modifiers = 0,
+                                    .unshifted_codepoint = 0,
+                                    .text = {}});
+  ASSERT_NE(std::get_if<RoutedCommand>(&up.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(up.effect).command,
+            InputCommand::command_line_history_previous);
+}
+
+TEST(InputRouterTest, DefaultPrefixOpensTheBoundedMessageViewer) {
+  InputRouter router(default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{'~'}};
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(enter, 2).effect));
+  const auto entered = router.route_legacy(std::span(enter).subspan(1), 1);
+  const auto* const begin = std::get_if<RoutedCommand>(&entered.effect);
+  ASSERT_NE(begin, nullptr);
+  EXPECT_EQ(begin->command, InputCommand::show_messages);
+
+  router.select_base(ConfiguredInputContext::messages);
+  constexpr std::array up{std::byte{'k'}};
+  const auto previous = router.route_legacy(up, 1);
+  ASSERT_NE(std::get_if<RoutedCommand>(&previous.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(previous.effect).command, InputCommand::message_view_previous);
+}
+
 TEST(InputRouterTest, ReplaysAnUnboundPrefixWithoutLosingInput) {
   InputRouter router(default_input_map());
   constexpr std::array prefix{std::byte{0x02}};

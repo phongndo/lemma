@@ -1,6 +1,7 @@
 #ifndef LEMMA_CORE_SESSION_HPP
 #define LEMMA_CORE_SESSION_HPP
 
+#include "core/command_history.hpp"
 #include "core/layout.hpp"
 #include "lemma/geometry.hpp"
 #include "lemma/id.hpp"
@@ -225,6 +226,44 @@ struct RenamePromptState final {
   [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
 };
 
+enum class StatusMessageKind : std::uint8_t {
+  information,
+  error,
+};
+
+struct StatusMessageEntry final {
+  std::array<char, limits::status_message_bytes_max> text{};
+  std::uint16_t size{0};
+  std::int64_t unix_seconds{0};
+  StatusMessageKind kind{StatusMessageKind::information};
+
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+};
+
+struct StatusMessageLog final {
+  // The log is attachment-owned and newest-first. Messages remain available after their transient
+  // status projection expires without introducing an unbounded diagnostic sink.
+  std::array<StatusMessageEntry, limits::status_message_history_max> entries{};
+  std::uint8_t size{0};
+};
+
+struct MessageViewState final {
+  std::uint8_t offset{0};
+  bool active{false};
+};
+
+struct CommandLineState final {
+  std::array<char, limits::command_line_bytes_max> text{};
+  std::size_t size{0};
+  std::size_t cursor{0};
+  std::uint8_t history_index{0};
+  bool active{false};
+  bool submit_requested{false};
+  bool completion_requested{false};
+
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+};
+
 struct AttachmentPaneTarget final {
   TabId tab;
   PaneId pane;
@@ -263,6 +302,11 @@ struct Attachment final {
   std::optional<MouseCapture> mouse_capture;
   CopyModeState copy_mode;
   RenamePromptState rename_prompt;
+  CommandLineState command_line;
+  CommandLineHistory command_history;
+  StatusMessageLog status_messages;
+  MessageViewState message_view;
+  bool status_message_visible{false};
 };
 
 struct Session {

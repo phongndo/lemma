@@ -69,12 +69,12 @@ Every mutable fact has one authoritative owner:
 | State | Owner |
 | --- | --- |
 | Sessions, Tabs, Panes, layout, focus, zoom, stable IDs | Core |
-| Attachment view plus copy and rename semantic state | Core |
+| Attachment view plus copy, rename, command-line editor, bounded command history, and message log | Core |
 | All key bindings, context options, transitions, and transient routing state | Input policy |
 | Lua VM and uncommitted configuration draft | Extension host process |
 | Processes, PTYs, descriptors, polling, clocks | Runtime |
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
-| Attachment connection decoding, output progress, deadlines | AttachmentRuntime |
+| Attachment connection decoding, output progress, and transient message/frame deadlines | AttachmentRuntime |
 | Admitted Proc execution, waits, and owner-generation cancellation | Reactor Proc table |
 | Frame buffers and physical presentation shadow | Render/runtime presentation |
 
@@ -112,6 +112,22 @@ transition only after required effects succeed. Events observe committed state a
 another mutation path. The deterministic mux harness records concrete targets, arguments, and
 Runtime outcomes at this boundary. Versioned traces therefore replay without the generator, and
 recorded result/state checkpoints turn minimized failures into permanent regression corpus entries.
+
+The interactive command line is another typed frontend, not another command executor. One native
+catalog owns command paths and completion metadata. The attachment-owned editor parses its bounded
+human grammar, fills omitted targets with current stable IDs, and dispatches the resulting typed
+commands through the same executor used by Proc. While editing, the status row contains only the
+command prompt. A failed submission closes the prompt and projects its typed result as a left-aligned
+status message rather than exposing JSON. One monotonic AttachmentRuntime deadline expires that
+projection after 1.5 seconds, while input can dismiss it immediately; the bounded Attachment message
+log remains available through a synthetic read-only full-pane projection. Command history remains a
+separate bounded fact. An optional configured file seeds the daemon-wide initial history and is
+atomically replaced on clean shutdown; live Attachment histories still diverge independently. A
+Session switch transfers one
+drained connection decoder and sequence to an existing detached Session, then forces a full redraw;
+it never creates a nested client or restarts the terminal process. The catalog is the sole
+projection boundary for command descriptors, and handlers at that boundary compile to bounded typed
+Lemma commands rather than introducing another execution path.
 
 Application input is distinct from mux commands. The daemon input policy resolves physical
 bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,

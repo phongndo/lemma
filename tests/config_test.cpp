@@ -72,6 +72,7 @@ TEST(ConfigurationTest, RoundTripsAndCompilesOneCompleteGeneration) {
   source.ui.status_line = false;
   source.launch.default_cwd = "/tmp";
   source.launch.default_program = {"/bin/sh", "-l"};
+  source.history.file = "/tmp/lemma-history";
   ASSERT_TRUE(source.input.set(input::ConfiguredInputContext::prefix,
                                split_chord.value_or(input::InputChord{}),
                                input::InputCommand::split_left_right));
@@ -92,6 +93,7 @@ TEST(ConfigurationTest, RoundTripsAndCompilesOneCompleteGeneration) {
   EXPECT_FALSE(compiled->status_line());
   EXPECT_EQ(compiled->default_cwd(), "/tmp");
   EXPECT_FALSE(compiled->default_program().empty());
+  EXPECT_EQ(compiled->history_file(), "/tmp/lemma-history");
 
   input::InputRouter router(compiled->input_map());
   constexpr std::array prefix{std::byte{0x01}};
@@ -114,6 +116,12 @@ TEST(ConfigurationTest, RejectsMalformedOrUnpublishableDocuments) {
   const auto compiled = compile(invalid_prefix);
   ASSERT_FALSE(compiled.has_value());
   EXPECT_EQ(compiled.error(), Error::input_map);
+
+  Configuration relative_history;
+  relative_history.history.file = "relative/history";
+  const auto invalid_history = compile(relative_history);
+  ASSERT_FALSE(invalid_history.has_value());
+  EXPECT_EQ(invalid_history.error(), Error::invalid_field);
 }
 
 TEST(ConfigurationHostTest, LoadsLuaInASeparateResidentProcess) {
@@ -128,6 +136,7 @@ lemma.setup({
   terminal = { scrollback_lines = 12345 },
   ui = { status_line = false },
   launch = { default_cwd = "/tmp", default_program = { "/bin/sh", "-l" } },
+  history = { file = "/tmp/lemma-history" },
 })
 lemma.context.set("resize", { label = " RESIZE ", lifetime = "persistent", unbound = "consume" })
 lemma.keymap.set("prefix", "m", lemma.context.push("resize"))
@@ -147,6 +156,7 @@ lemma.keymap.del("prefix", "%")
   EXPECT_EQ(loaded.generation->scrollback_lines(), 12'345U);
   EXPECT_FALSE(loaded.generation->status_line());
   EXPECT_EQ(loaded.generation->default_cwd(), "/tmp");
+  EXPECT_EQ(loaded.generation->history_file(), "/tmp/lemma-history");
   input::InputRouter router(loaded.generation->input_map());
   constexpr std::array input_bytes{std::byte{0x01}, std::byte{'s'}};
   EXPECT_TRUE(std::holds_alternative<input::ConsumedInput>(

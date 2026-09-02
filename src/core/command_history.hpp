@@ -1,0 +1,37 @@
+#ifndef LEMMA_CORE_COMMAND_HISTORY_HPP
+#define LEMMA_CORE_COMMAND_HISTORY_HPP
+
+#include "lemma/limits.hpp"
+
+#include <array>
+#include <cstdint>
+#include <string_view>
+
+namespace lemma::core {
+
+struct CommandLineHistoryEntry final {
+  std::array<char, limits::command_line_bytes_max> text{};
+  std::uint16_t size{0};
+
+  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+};
+
+struct CommandLineHistory final {
+  // Newest-first storage makes bounded Up/Down navigation direct. Submission is cold and may shift
+  // fixed entries; input and rendering never allocate history storage.
+  std::array<CommandLineHistoryEntry, limits::command_line_history_max> entries{};
+  std::uint8_t size{0};
+};
+
+// Adds one nonempty command unless it duplicates the newest entry.
+void remember_command_line(CommandLineHistory& history, std::string_view command) noexcept;
+
+// Persistence is deliberately best effort. Missing, malformed, oversized, and inaccessible files
+// produce an empty history; saving uses a same-directory temporary file and atomic rename.
+[[nodiscard]] auto load_command_line_history(std::string_view path) noexcept -> CommandLineHistory;
+[[nodiscard]] auto save_command_line_history(std::string_view path,
+                                             const CommandLineHistory& history) noexcept -> bool;
+
+} // namespace lemma::core
+
+#endif // LEMMA_CORE_COMMAND_HISTORY_HPP

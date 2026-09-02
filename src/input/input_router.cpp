@@ -958,6 +958,10 @@ void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
                            {.label = " SEARCH ", .unbound = UnboundBehavior::consume}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::rename,
                            {.label = " RENAME ", .unbound = UnboundBehavior::forward}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::command_line,
+                           {.label = " COMMAND ", .unbound = UnboundBehavior::forward}));
+  LEMMA_ASSERT(set_context(ConfiguredInputContext::messages,
+                           {.label = " LOG ", .unbound = UnboundBehavior::consume}));
   if (selected == InputMapPreset::none) {
     return;
   }
@@ -1017,6 +1021,10 @@ void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
   LEMMA_ASSERT(bind_prefix(InputChord::byte('R'), InputCommand::begin_rename_session,
                            CommandContextDisposition::base));
   LEMMA_ASSERT(bind_prefix(InputChord::byte('r'), InputCommand::begin_rename_tab,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte(':'), InputCommand::begin_command_line,
+                           CommandContextDisposition::base));
+  LEMMA_ASSERT(bind_prefix(InputChord::byte('~'), InputCommand::show_messages,
                            CommandContextDisposition::base));
   constexpr std::array selectors{InputCommand::select_tab_0, InputCommand::select_tab_1,
                                  InputCommand::select_tab_2, InputCommand::select_tab_3,
@@ -1211,6 +1219,78 @@ void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
   LEMMA_ASSERT(rename(InputChord::byte('u', key_modifier_control), InputCommand::rename_clear));
   LEMMA_ASSERT(
       rename(InputChord::byte('w', key_modifier_control), InputCommand::rename_delete_word));
+
+  const auto command_line = [this](const InputChord chord, const InputCommand command) noexcept {
+    return set(ConfiguredInputContext::command_line, chord, command);
+  };
+  for (const auto chord :
+       {InputChord::byte(0x1B), InputChord::byte('c', key_modifier_control),
+        InputChord::byte('g', key_modifier_control), InputChord::key(PhysicalKey::escape)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_cancel));
+  }
+  for (const auto chord : {InputChord::byte('\r'), InputChord::byte('j', key_modifier_control),
+                           InputChord::key(PhysicalKey::enter)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_commit));
+  }
+  for (const auto chord : {InputChord::byte('\t'), InputChord::key(PhysicalKey::tab)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_complete));
+  }
+  for (const auto chord : {InputChord::byte(0x7F), InputChord::byte('h', key_modifier_control),
+                           InputChord::key(PhysicalKey::backspace)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_backspace));
+  }
+  LEMMA_ASSERT(
+      command_line(InputChord::key(PhysicalKey::delete_key), InputCommand::command_line_delete));
+  LEMMA_ASSERT(command_line(InputChord::key(PhysicalKey::arrow_left),
+                            InputCommand::command_line_cursor_left));
+  LEMMA_ASSERT(command_line(InputChord::key(PhysicalKey::arrow_right),
+                            InputCommand::command_line_cursor_right));
+  LEMMA_ASSERT(command_line(InputChord::key(PhysicalKey::arrow_up),
+                            InputCommand::command_line_history_previous));
+  LEMMA_ASSERT(command_line(InputChord::key(PhysicalKey::arrow_down),
+                            InputCommand::command_line_history_next));
+  for (const auto chord :
+       {InputChord::byte('a', key_modifier_control), InputChord::key(PhysicalKey::home)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_cursor_home));
+  }
+  for (const auto chord :
+       {InputChord::byte('e', key_modifier_control), InputChord::key(PhysicalKey::end)}) {
+    LEMMA_ASSERT(command_line(chord, InputCommand::command_line_cursor_end));
+  }
+  LEMMA_ASSERT(
+      command_line(InputChord::byte('u', key_modifier_control), InputCommand::command_line_clear));
+  LEMMA_ASSERT(command_line(InputChord::byte('w', key_modifier_control),
+                            InputCommand::command_line_delete_word));
+
+  const auto messages = [this](const InputChord chord, const InputCommand command) noexcept {
+    return set(ConfiguredInputContext::messages, chord, command);
+  };
+  for (const auto chord :
+       {InputChord::byte(0x1B), InputChord::byte('c', key_modifier_control),
+        InputChord::byte('g', key_modifier_control), InputChord::byte('q'), InputChord::byte('\r'),
+        InputChord::key(PhysicalKey::escape), InputChord::key(PhysicalKey::enter)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_leave));
+  }
+  for (const auto chord : {InputChord::byte('k'), InputChord::key(PhysicalKey::arrow_up)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_previous));
+  }
+  for (const auto chord : {InputChord::byte('j'), InputChord::key(PhysicalKey::arrow_down)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_next));
+  }
+  for (const auto chord :
+       {InputChord::byte('b', key_modifier_control), InputChord::key(PhysicalKey::page_up)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_page_previous));
+  }
+  for (const auto chord :
+       {InputChord::byte('f', key_modifier_control), InputChord::key(PhysicalKey::page_down)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_page_next));
+  }
+  for (const auto chord : {InputChord::byte('g'), InputChord::key(PhysicalKey::home)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_history_start));
+  }
+  for (const auto chord : {InputChord::byte('G'), InputChord::key(PhysicalKey::end)}) {
+    LEMMA_ASSERT(messages(chord, InputCommand::message_view_history_end));
+  }
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
