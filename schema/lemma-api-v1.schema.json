@@ -115,7 +115,7 @@
               "maxItems": 4,
               "items": { "enum": ["shift", "control", "alt", "super"] }
             },
-            "action": { "enum": ["press", "repeat", "release"], "default": "press" }
+            "phase": { "enum": ["press", "repeat", "release"], "default": "press" }
           },
           "additionalProperties": false
         }
@@ -457,13 +457,13 @@
     "status": {
       "enum": ["applied", "no_effect", "stale", "wrong_owner", "conflict", "capacity", "unavailable", "failed"]
     },
-    "opResult": {
-      "title": "Lemma Op result v1",
+    "commandResult": {
+      "title": "Lemma Command result v1",
       "type": "object",
-      "required": ["schema", "op", "status"],
+      "required": ["schema", "command", "status"],
       "properties": {
-        "schema": { "const": "lemma.op-result/v1" },
-        "op": { "type": "string" },
+        "schema": { "const": "lemma.command-result/v1" },
+        "command": { "type": "string" },
         "status": { "$ref": "#/$defs/status" },
         "session": {
           "type": "object",
@@ -517,20 +517,20 @@
       },
       "additionalProperties": false
     },
-    "op": {
-      "title": "Lemma Op v1",
+    "command": {
+      "title": "Lemma Command v1",
       "oneOf": [
         {
           "type": "object",
-          "required": ["op"],
-          "properties": { "op": { "enum": ["daemon.inspect", "session.list"] } },
+          "required": ["command"],
+          "properties": { "command": { "enum": ["daemon.inspect", "session.list"] } },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["op", "session"],
+          "required": ["command", "session"],
           "properties": {
-            "op": { "enum": ["session.inspect", "session.kill", "tab.list", "pane.list"] },
+            "command": { "enum": ["session.inspect", "session.kill", "tab.list", "pane.list"] },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 }
           },
@@ -538,13 +538,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "tab"],
+          "required": ["command", "tab"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "tab": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "tab.inspect" },
+            "command": { "const": "tab.inspect" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procTabSelector" }
@@ -553,13 +553,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane"],
+          "required": ["command", "pane"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.inspect" },
+            "command": { "const": "pane.inspect" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" }
@@ -568,10 +568,10 @@
         },
         {
           "type": "object",
-          "required": ["op"],
+          "required": ["command"],
           "properties": {
             "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
-            "op": { "const": "session.start" },
+            "command": { "const": "session.start" },
             "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
             "hold": { "type": "boolean", "default": false },
@@ -586,9 +586,9 @@
         },
         {
           "type": "object",
-          "required": ["op", "session", "name"],
+          "required": ["command", "session", "name"],
           "properties": {
-            "op": { "const": "session.rename" },
+            "command": { "const": "session.rename" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "name": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$" }
@@ -597,10 +597,10 @@
         },
         {
           "type": "object",
-          "required": ["op", "session"],
+          "required": ["command", "session"],
           "properties": {
             "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
-            "op": { "const": "tab.new" },
+            "command": { "const": "tab.new" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "title": { "type": "string", "maxLength": 64, "pattern": "^[ -~]*$" },
@@ -613,13 +613,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "tab"],
+          "required": ["command", "tab"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "tab": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "enum": ["tab.select", "tab.kill"] },
+            "command": { "enum": ["tab.select", "tab.kill"] },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procTabSelector" }
@@ -628,13 +628,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "tab", "to_position"],
+          "required": ["command", "tab", "to_position"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "tab": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "tab.move" },
+            "command": { "const": "tab.move" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procTabSelector" },
@@ -644,13 +644,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "tab"],
+          "required": ["command", "tab"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "tab": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "tab.rename" },
+            "command": { "const": "tab.rename" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "tab": { "$ref": "#/$defs/procTabSelector" },
@@ -660,14 +660,14 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "direction"],
+          "required": ["command", "pane", "direction"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
             "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
-            "op": { "const": "pane.split" },
+            "command": { "const": "pane.split" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -681,13 +681,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane"],
+          "required": ["command", "pane"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "enum": ["pane.focus", "pane.kill"] },
+            "command": { "enum": ["pane.focus", "pane.kill"] },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" }
@@ -696,14 +696,14 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "other"],
+          "required": ["command", "pane", "other"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } },
             { "properties": { "other": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.swap" },
+            "command": { "const": "pane.swap" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -713,13 +713,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "direction"],
+          "required": ["command", "pane", "direction"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.resize" },
+            "command": { "const": "pane.resize" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -730,13 +730,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "enabled"],
+          "required": ["command", "pane", "enabled"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.zoom" },
+            "command": { "const": "pane.zoom" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -746,13 +746,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "text"],
+          "required": ["command", "pane", "text"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.send" },
+            "command": { "const": "pane.send" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -762,13 +762,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane", "events"],
+          "required": ["command", "pane", "events"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.input" },
+            "command": { "const": "pane.input" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -783,13 +783,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane"],
+          "required": ["command", "pane"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.capture" },
+            "command": { "const": "pane.capture" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
@@ -808,13 +808,13 @@
         },
         {
           "type": "object",
-          "required": ["op", "pane"],
+          "required": ["command", "pane"],
           "anyOf": [
             { "required": ["session"] },
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "op": { "const": "pane.wait" },
+            "command": { "const": "pane.wait" },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "pane": { "$ref": "#/$defs/procPaneSelector" },
             "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
@@ -849,15 +849,15 @@
     "proc": {
       "title": "Lemma Proc v1",
       "type": "object",
-      "required": ["schema", "ops"],
+      "required": ["schema", "commands"],
       "properties": {
         "schema": { "const": "lemma.proc/v1" },
         "on_error": { "enum": ["stop", "continue"], "default": "stop" },
-        "ops": {
+        "commands": {
           "type": "array",
           "minItems": 1,
           "maxItems": 64,
-          "items": { "$ref": "#/$defs/op" }
+          "items": { "$ref": "#/$defs/command" }
         }
       },
       "additionalProperties": false
@@ -879,7 +879,7 @@
             "properties": {
               "index": { "type": "integer", "minimum": 0, "maximum": 63 },
               "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" },
-              "result": { "$ref": "#/$defs/opResult" }
+              "result": { "$ref": "#/$defs/commandResult" }
             },
             "additionalProperties": false
           }
@@ -891,8 +891,8 @@
             "reason": { "type": "string" },
             "field": { "type": "string" },
             "byte": { "type": "integer", "minimum": 0 },
-            "op_index": { "type": "integer", "minimum": 0, "maximum": 63 },
-            "op_completed": { "type": "boolean" }
+            "command_index": { "type": "integer", "minimum": 0, "maximum": 63 },
+            "command_completed": { "type": "boolean" }
           },
           "additionalProperties": false
         }

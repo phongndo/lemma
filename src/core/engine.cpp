@@ -1,7 +1,7 @@
 #include "core/engine.hpp"
 
+#include "api/command.hpp"
 #include "api/json.hpp"
-#include "api/op.hpp"
 #include "api/proc.hpp"
 #include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
@@ -4692,9 +4692,9 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   static_assert(static_cast<std::uint8_t>(api::InputKey::f12) + 1U ==
                 static_cast<std::uint8_t>(protocol::KeyInputKey::f12));
   auto action = protocol::KeyInputAction::press;
-  if (event.action == api::InputKeyAction::repeat) {
+  if (event.phase == api::InputKeyPhase::repeat) {
     action = protocol::KeyInputAction::repeat;
-  } else if (event.action == api::InputKeyAction::release) {
+  } else if (event.phase == api::InputKeyPhase::release) {
     action = protocol::KeyInputAction::release;
   }
   const auto key = static_cast<protocol::KeyInputKey>(
@@ -4743,7 +4743,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
       const auto key = public_input_key(event);
       std::array<std::byte, 1> text{};
       auto key_text = std::span<const std::byte>{};
-      if (event.action != api::InputKeyAction::release &&
+      if (event.phase != api::InputKeyPhase::release &&
           ((event.key >= api::InputKey::a && event.key <= api::InputKey::z) ||
            event.key == api::InputKey::space)) {
         char character = ' ';
@@ -6786,8 +6786,8 @@ struct PublicProcId final {
   [[nodiscard]] auto operator==(const PublicProcId&) const noexcept -> bool = default;
 };
 
-struct ProcOpWait final {
-  api::Op op;
+struct ProcCommandWait final {
+  api::Command request;
   std::chrono::steady_clock::time_point deadline;
   std::uint64_t observed_terminal_generation{0};
   bool observed{false};
@@ -6888,7 +6888,7 @@ struct ObservedPane final {
   PaneRuntime* runtime{nullptr};
 };
 
-struct OpExecution final {
+struct PublicCommandExecution final {
   CommandStatus status{CommandStatus::failed};
   std::string session_name;
   SessionId session;
@@ -6971,10 +6971,10 @@ struct OpExecution final {
   return selector.position > 0 ? tab_at_position(session, selector.position - 1U) : nullptr;
 }
 
-[[nodiscard]] auto public_launch_command(const api::Op& op, std::vector<std::byte>& output)
-    -> bool {
+[[nodiscard]] auto public_launch_command(const api::Command& request,
+                                         std::vector<std::byte>& output) -> bool {
   std::size_t size = 0;
-  for (const auto& argument : op.arguments) {
+  for (const auto& argument : request.arguments) {
     if (argument.size() + 1U > protocol::command_bytes_max - size) {
       return false;
     }
@@ -6986,7 +6986,7 @@ struct OpExecution final {
     return false;
   }
   std::size_t offset = 0;
-  for (const auto& argument : op.arguments) {
+  for (const auto& argument : request.arguments) {
     std::ranges::copy(std::as_bytes(std::span(argument.data(), argument.size())),
                       std::span(output).subspan(offset).begin());
     offset += argument.size();
@@ -6996,9 +6996,10 @@ struct OpExecution final {
   return valid_launch_command(output);
 }
 
-[[nodiscard]] auto public_environment(const api::Op& op, std::vector<std::byte>& output) -> bool {
+[[nodiscard]] auto public_environment(const api::Command& request, std::vector<std::byte>& output)
+    -> bool {
   std::size_t size = 0;
-  for (const auto& entry : op.environment) {
+  for (const auto& entry : request.environment) {
     if (entry.size() + 1U > protocol::environment_bytes_max - size) {
       return false;
     }
@@ -7010,7 +7011,7 @@ struct OpExecution final {
     return false;
   }
   std::size_t offset = 0;
-  for (const auto& entry : op.environment) {
+  for (const auto& entry : request.environment) {
     std::ranges::copy(std::as_bytes(std::span(entry.data(), entry.size())),
                       std::span(output).subspan(offset).begin());
     offset += entry.size();
@@ -7323,27 +7324,27 @@ struct PublicCaptureFormatting final {
   return output;
 }
 
-// Every admitted Op reaches the same semantic transitions and Runtime helpers as native input.
+// Every admitted Command reaches the same semantic transitions and Runtime helpers as native input.
 // The JSON envelope owns no mux policy.
-class OpExecutor final {
+class PublicCommandExecutor final {
 public:
-  [[nodiscard]] static auto execute(const api::Op& op, Sessions& sessions,
+  [[nodiscard]] static auto execute(const api::Command& request, Sessions& sessions,
                                     PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                                    std::span<std::byte> scratch) -> OpExecution;
+                                    std::span<std::byte> scratch) -> PublicCommandExecution;
 };
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore& runtimes,
-                         std::uint64_t& activity_order, const std::span<std::byte> scratch)
-    -> OpExecution {
-  OpExecution result;
-  if (op.kind == api::OpKind::daemon_inspect) {
+auto PublicCommandExecutor::execute(const api::Command& request, Sessions& sessions,
+                                    PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                                    const std::span<std::byte> scratch) -> PublicCommandExecution {
+  PublicCommandExecution result;
+  if (request.kind == api::CommandKind::daemon_inspect) {
     result.value_json = daemon_inspection(sessions, runtimes);
     result.value_field = "daemon";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (op.kind == api::OpKind::session_list) {
+  if (request.kind == api::CommandKind::session_list) {
     ConnectionOutput encoded;
     result.status = append_structured_sessions(encoded, sessions) &&
                             copy_connection_json(encoded, result.value_json)
@@ -7352,9 +7353,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     result.value_field = "sessions";
     return result;
   }
-  if (op.kind == api::OpKind::session_start) {
+  if (request.kind == api::CommandKind::session_start) {
     SessionName allocated;
-    std::string_view name = op.name;
+    std::string_view name = request.name;
     if (name.empty()) {
       const auto candidate = allocate_numeric_session_name(sessions);
       if (!candidate.has_value()) {
@@ -7374,12 +7375,12 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(op, command)) {
+    if (!public_launch_command(request, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
     std::array<char, limits::working_directory_bytes_max + 1U> default_directory{};
-    std::string_view working_directory = op.working_directory;
+    std::string_view working_directory = request.working_directory;
     if (working_directory.empty()) {
       working_directory = reactor_default_cwd();
     }
@@ -7392,8 +7393,8 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       working_directory = std::string_view(default_directory.data(), size);
     }
     std::vector<std::byte> environment;
-    if (op.environment_set) {
-      if (!public_environment(op, environment)) {
+    if (request.environment_set) {
+      if (!public_environment(request, environment)) {
         result.status = CommandStatus::failed;
         return result;
       }
@@ -7428,7 +7429,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     inserted->attachment.id = AttachmentId::from_parts(id->slot(), id->generation());
     inserted->attachment.session = *id;
     inserted->activity_order = ++activity_order;
-    const auto policy = op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
+    const auto policy = request.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
     auto* const tab = create_tab(*inserted, runtimes, command, working_directory, policy);
     if (tab == nullptr) {
       const bool erased = sessions.erase(*id);
@@ -7446,7 +7447,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     return result;
   }
 
-  auto* const session = public_session(sessions, op.session);
+  auto* const session = public_session(sessions, request.session);
   if (session == nullptr || !session->active) {
     result.status = CommandStatus::stale_target;
     return result;
@@ -7454,22 +7455,22 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   result.session_name = std::string(session->session_name());
   result.session = session->id;
   result.session_revision = session->mutation_generation;
-  if (op.expected_session_revision.has_value() &&
-      *op.expected_session_revision != session->mutation_generation) {
+  if (request.expected_session_revision.has_value() &&
+      *request.expected_session_revision != session->mutation_generation) {
     result.status = CommandStatus::conflict;
     result.error_reason = "revision_mismatch";
     result.retryable = true;
     return result;
   }
 
-  if (op.kind == api::OpKind::session_inspect) {
+  if (request.kind == api::CommandKind::session_inspect) {
     result.value_json = session_inspection(*session);
     result.value_field = "session_state";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (op.kind == api::OpKind::tab_inspect) {
-    auto* const tab = public_tab(*session, op.tab);
+  if (request.kind == api::CommandKind::tab_inspect) {
+    auto* const tab = public_tab(*session, request.tab);
     if (tab == nullptr) {
       result.status = CommandStatus::stale_target;
       return result;
@@ -7481,10 +7482,10 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     return result;
   }
 
-  if (op.kind == api::OpKind::tab_list || op.kind == api::OpKind::pane_list) {
+  if (request.kind == api::CommandKind::tab_list || request.kind == api::CommandKind::pane_list) {
     ConnectionOutput encoded;
     bool appended = false;
-    if (op.kind == api::OpKind::tab_list) {
+    if (request.kind == api::CommandKind::tab_list) {
       appended = append_structured_tabs(encoded, *session, runtimes);
       result.value_field = "tabs";
     } else {
@@ -7496,8 +7497,8 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
                         : CommandStatus::failed;
     return result;
   }
-  if (op.kind == api::OpKind::session_rename) {
-    const auto name = SessionNameValue::create(op.name);
+  if (request.kind == api::CommandKind::session_rename) {
+    const auto name = SessionNameValue::create(request.name);
     if (!name.has_value()) {
       result.status = CommandStatus::invalid_command;
       return result;
@@ -7514,18 +7515,18 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
         dispatch_session_command(*session, runtimes, command, &session_name_conflict, &sessions)
             .status;
     if (result.status == CommandStatus::applied) {
-      result.session_name = op.name;
+      result.session_name = request.name;
     }
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (op.kind == api::OpKind::session_kill) {
+  if (request.kind == api::CommandKind::session_kill) {
     const Command command{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
     result.status = dispatch_session_command(*session, runtimes, command).status;
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (op.kind == api::OpKind::tab_new) {
+  if (request.kind == api::CommandKind::tab_new) {
     if (tab_count(*session) >= session->tabs.size() ||
         pane_count(*session) >= panes_per_session_max ||
         runtimes.size() >= limits::panes_hard_max) {
@@ -7533,18 +7534,18 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(op, command)) {
+    if (!public_launch_command(request, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
-    auto* const created = create_tab(*session, runtimes, command, op.working_directory,
-                                     op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
-                                     op.focus == api::FocusPolicy::created);
+    auto* const created = create_tab(*session, runtimes, command, request.working_directory,
+                                     request.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                                     request.focus == api::FocusPolicy::created);
     if (created == nullptr) {
       result.status = CommandStatus::failed;
       return result;
     }
-    if (!created->set_title_override(op.title)) {
+    if (!created->set_title_override(request.title)) {
       const Command rollback{.kind = CommandKind::close_tab,
                              .origin = CommandOrigin::internal,
                              .target = {.session = session->id,
@@ -7567,9 +7568,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
         created_runtime == nullptr ? 0 : created_runtime->observation_generation;
     return result;
   }
-  if (op.kind == api::OpKind::tab_select || op.kind == api::OpKind::tab_move ||
-      op.kind == api::OpKind::tab_rename || op.kind == api::OpKind::tab_kill) {
-    auto* const tab = public_tab(*session, op.tab);
+  if (request.kind == api::CommandKind::tab_select || request.kind == api::CommandKind::tab_move ||
+      request.kind == api::CommandKind::tab_rename || request.kind == api::CommandKind::tab_kill) {
+    auto* const tab = public_tab(*session, request.tab);
     if (tab == nullptr) {
       result.status = CommandStatus::stale_target;
       return result;
@@ -7579,14 +7580,15 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
         .origin = CommandOrigin::cli,
         .target = {
             .session = session->id, .tab = tab->id, .pane = {}, .peer_pane = {}, .attachment = {}}};
-    if (op.kind == api::OpKind::tab_select) {
+    if (request.kind == api::CommandKind::tab_select) {
       command.kind = CommandKind::select_tab;
-      command.payload = CommandCoordinate{
-          .value = static_cast<std::uint16_t>(op.tab.position == 0 ? 0 : op.tab.position - 1U)};
-    } else if (op.kind == api::OpKind::tab_kill) {
+      command.payload =
+          CommandCoordinate{.value = static_cast<std::uint16_t>(
+                                request.tab.position == 0 ? 0 : request.tab.position - 1U)};
+    } else if (request.kind == api::CommandKind::tab_kill) {
       command.kind = CommandKind::close_tab;
-    } else if (op.kind == api::OpKind::tab_move) {
-      const auto anchor = tab_move_anchor(*session, tab->id, op.to_position);
+    } else if (request.kind == api::CommandKind::tab_move) {
+      const auto anchor = tab_move_anchor(*session, tab->id, request.to_position);
       if (!anchor.has_value()) {
         result.status = CommandStatus::invalid_target;
         return result;
@@ -7594,7 +7596,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       command.kind = CommandKind::place_tab;
       command.payload = TabPlacementCommand{.before = anchor->value_or(TabId{})};
     } else {
-      const auto title = TabTitleValue::create(op.title);
+      const auto title = TabTitleValue::create(request.title);
       if (!title.has_value()) {
         result.status = CommandStatus::invalid_command;
         return result;
@@ -7609,7 +7611,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     return result;
   }
 
-  auto* const pane = find_pane(*session, op.pane.id);
+  auto* const pane = find_pane(*session, request.pane.id);
   auto* const tab = pane == nullptr ? nullptr : find_tab(*session, pane->tab);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   if (pane == nullptr || tab == nullptr || runtime == nullptr) {
@@ -7619,29 +7621,29 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   result.tab = tab->id;
   result.pane = pane->id;
   result.terminal_generation = runtime->observation_generation;
-  if (op.kind == api::OpKind::pane_inspect) {
+  if (request.kind == api::CommandKind::pane_inspect) {
     result.value_json = pane_inspection(*tab, *pane, *runtime);
     result.value_field = "pane_state";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (op.kind == api::OpKind::pane_split) {
+  if (request.kind == api::CommandKind::pane_split) {
     if (pane_count(*session) >= panes_per_session_max ||
         runtimes.size() >= limits::panes_hard_max) {
       result.status = CommandStatus::capacity;
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(op, command)) {
+    if (!public_launch_command(request, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
     const auto axis =
-        op.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
+        request.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
     auto* const created =
-        split_pane(*session, *tab, runtimes, pane->id, axis, command, op.working_directory,
-                   op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
-                   op.focus == api::FocusPolicy::created);
+        split_pane(*session, *tab, runtimes, pane->id, axis, command, request.working_directory,
+                   request.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                   request.focus == api::FocusPolicy::created);
     result.status = created == nullptr ? CommandStatus::failed : CommandStatus::applied;
     if (created != nullptr) {
       result.pane = created->id;
@@ -7652,9 +7654,10 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (op.kind == api::OpKind::pane_send) {
+  if (request.kind == api::CommandKind::pane_send) {
     const auto queued = queue_application_bytes_to(
-        *session, runtimes, *runtime, std::as_bytes(std::span(op.text.data(), op.text.size())));
+        *session, runtimes, *runtime,
+        std::as_bytes(std::span(request.text.data(), request.text.size())));
     result.status =
         queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
     if (queued != InputQueueResult::queued) {
@@ -7664,8 +7667,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     }
     return result;
   }
-  if (op.kind == api::OpKind::pane_input) {
-    const auto queued = queue_public_input_batch(*session, runtimes, *runtime, op.input_events);
+  if (request.kind == api::CommandKind::pane_input) {
+    const auto queued =
+        queue_public_input_batch(*session, runtimes, *runtime, request.input_events);
     result.status =
         queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
     if (queued != InputQueueResult::queued) {
@@ -7675,18 +7679,19 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     }
     return result;
   }
-  if (op.kind == api::OpKind::pane_capture) {
-    const auto format = op.capture_format == api::CaptureFormat::plain ? vt::ScreenFormat::plain
-                                                                       : vt::ScreenFormat::vt;
-    const bool unwrap = op.capture_wrap == api::CaptureWrap::logical;
+  if (request.kind == api::CommandKind::pane_capture) {
+    const auto format = request.capture_format == api::CaptureFormat::plain
+                            ? vt::ScreenFormat::plain
+                            : vt::ScreenFormat::vt;
+    const bool unwrap = request.capture_wrap == api::CaptureWrap::logical;
     std::expected<std::size_t, vt::Error> formatted = std::unexpected(vt::Error::invalid_state);
-    if (op.capture_source == api::CaptureSource::visible) {
-      auto visible =
-          format_public_visible(runtime->terminal, format, op.capture_wrap, op.lines, scratch);
+    if (request.capture_source == api::CaptureSource::visible) {
+      auto visible = format_public_visible(runtime->terminal, format, request.capture_wrap,
+                                           request.lines, scratch);
       formatted = std::move(visible.result);
       result.capture_truncated = visible.truncated;
-    } else if (op.capture_source == api::CaptureSource::recent) {
-      auto rows = static_cast<std::size_t>(op.lines == 0 ? 80U : op.lines);
+    } else if (request.capture_source == api::CaptureSource::recent) {
+      auto rows = static_cast<std::size_t>(request.lines == 0 ? 80U : request.lines);
       formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
       while (!formatted.has_value() && formatted.error() == vt::Error::out_of_space && rows > 1U) {
         rows /= 2U;
@@ -7697,7 +7702,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       formatted = runtime->terminal.format_last_command(format, scratch, unwrap);
     }
     if (!formatted.has_value()) {
-      result.status = op.capture_source == api::CaptureSource::last_command
+      result.status = request.capture_source == api::CaptureSource::last_command
                           ? CommandStatus::unavailable
                           : CommandStatus::failed;
       result.error_reason = formatted.error() == vt::Error::out_of_space ? "capture_too_large"
@@ -7714,9 +7719,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
     }
     result.has_text = true;
     result.has_capture = true;
-    result.capture_source = op.capture_source;
-    result.capture_format = op.capture_format;
-    result.capture_wrap = op.capture_wrap;
+    result.capture_source = request.capture_source;
+    result.capture_format = request.capture_format;
+    result.capture_wrap = request.capture_wrap;
     result.terminal_generation = runtime->observation_generation;
     result.status = CommandStatus::applied;
     return result;
@@ -7728,18 +7733,18 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
                              .pane = pane->id,
                              .peer_pane = {},
                              .attachment = {}}};
-  if (op.kind == api::OpKind::pane_focus) {
+  if (request.kind == api::CommandKind::pane_focus) {
     command.kind = CommandKind::focus_pane;
-  } else if (op.kind == api::OpKind::pane_kill) {
+  } else if (request.kind == api::CommandKind::pane_kill) {
     command.kind = CommandKind::close_pane;
-  } else if (op.kind == api::OpKind::pane_swap) {
+  } else if (request.kind == api::CommandKind::pane_swap) {
     command.kind = CommandKind::swap_panes;
-    command.payload = PaneSwapCommand{.other = op.other.id};
-  } else if (op.kind == api::OpKind::pane_zoom) {
+    command.payload = PaneSwapCommand{.other = request.other.id};
+  } else if (request.kind == api::CommandKind::pane_zoom) {
     command.kind = CommandKind::set_zoom;
-    command.payload = PaneZoomCommand{.enabled = op.enabled};
+    command.payload = PaneZoomCommand{.enabled = request.enabled};
   } else {
-    switch (op.direction) {
+    switch (request.direction) {
     case api::Direction::left:
       command.kind = CommandKind::resize_left;
       break;
@@ -7757,37 +7762,37 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       return result;
     }
   }
-  if (op.kind == api::OpKind::pane_resize) {
-    command.payload = CommandCoordinate{.value = op.amount};
+  if (request.kind == api::CommandKind::pane_resize) {
+    command.payload = CommandCoordinate{.value = request.amount};
   }
   result.status = dispatch_session_command(*session, runtimes, command).status;
   result.session_revision = session->mutation_generation;
   return result;
 }
 
-[[nodiscard]] auto begin_public_wait(api::Op op) -> ProcOpWait {
-  const auto timeout = std::chrono::milliseconds(op.wait_timeout_milliseconds);
-  return {.op = std::move(op),
+[[nodiscard]] auto begin_public_wait(api::Command request) -> ProcCommandWait {
+  const auto timeout = std::chrono::milliseconds(request.wait_timeout_milliseconds);
+  return {.request = std::move(request),
           .deadline = reactor_now() + timeout,
           .observed_terminal_generation = 0,
           .observed = false,
           .pane_was_present = false};
 }
 
-[[nodiscard]] auto public_wait_target(const ProcOpWait& wait, Sessions& sessions,
+[[nodiscard]] auto public_wait_target(const ProcCommandWait& wait, Sessions& sessions,
                                       PaneRuntimeStore& runtimes) noexcept -> ObservedPane {
-  auto* const session = public_session(sessions, wait.op.session);
-  auto* const pane = session == nullptr ? nullptr : find_pane(*session, wait.op.pane.id);
+  auto* const session = public_session(sessions, wait.request.session);
+  auto* const pane = session == nullptr ? nullptr : find_pane(*session, wait.request.pane.id);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   return {.session = session, .pane = pane, .runtime = runtime};
 }
 
-[[nodiscard]] constexpr auto is_terminal_wait(const api::Op& op) noexcept -> bool {
-  return op.wait_condition == api::WaitCondition::contains ||
-         op.wait_condition == api::WaitCondition::prompt;
+[[nodiscard]] constexpr auto is_terminal_wait(const api::Command& request) noexcept -> bool {
+  return request.wait_condition == api::WaitCondition::contains ||
+         request.wait_condition == api::WaitCondition::prompt;
 }
 
-[[nodiscard]] auto public_wait_has_work(const ProcOpWait& wait, Sessions& sessions,
+[[nodiscard]] auto public_wait_has_work(const ProcCommandWait& wait, Sessions& sessions,
                                         PaneRuntimeStore& runtimes,
                                         const std::chrono::steady_clock::time_point now) noexcept
     -> bool {
@@ -7801,20 +7806,20 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   if (target.pane->process_exit.has_value()) {
     return true;
   }
-  return is_terminal_wait(wait.op) &&
-         target.runtime->observation_generation > wait.op.after_terminal_generation &&
+  return is_terminal_wait(wait.request) &&
+         target.runtime->observation_generation > wait.request.after_terminal_generation &&
          target.runtime->observation_generation != wait.observed_terminal_generation;
 }
 
-[[nodiscard]] auto wait_process_matches(const api::Op& op, const ProcessExit process) noexcept
-    -> bool {
-  switch (op.wait_condition) {
+[[nodiscard]] auto wait_process_matches(const api::Command& request,
+                                        const ProcessExit process) noexcept -> bool {
+  switch (request.wait_condition) {
   case api::WaitCondition::process_exit:
     return true;
   case api::WaitCondition::exit_code:
-    return process.kind == ProcessExitKind::exited && process.value == op.wait_value;
+    return process.kind == ProcessExitKind::exited && process.value == request.wait_value;
   case api::WaitCondition::signal:
-    return process.kind == ProcessExitKind::signaled && process.value == op.wait_value;
+    return process.kind == ProcessExitKind::signaled && process.value == request.wait_value;
   case api::WaitCondition::contains:
   case api::WaitCondition::prompt:
     return false;
@@ -7822,19 +7827,19 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return false;
 }
 
-[[nodiscard]] auto op_failure(const std::string_view reason, const bool retryable = false)
-    -> OpExecution {
-  OpExecution result;
+[[nodiscard]] auto command_failure(const std::string_view reason, const bool retryable = false)
+    -> PublicCommandExecution {
+  PublicCommandExecution result;
   result.status = CommandStatus::failed;
   result.error_reason = reason;
   result.retryable = retryable;
   return result;
 }
 
-[[nodiscard]] auto complete_process_wait(OpExecution result, const api::Op& op,
-                                         const ProcessExit process) -> OpExecution {
+[[nodiscard]] auto complete_process_wait(PublicCommandExecution result, const api::Command& request,
+                                         const ProcessExit process) -> PublicCommandExecution {
   result.process = process;
-  if (wait_process_matches(op, process)) {
+  if (wait_process_matches(request, process)) {
     result.status = CommandStatus::applied;
   } else {
     result.status = CommandStatus::failed;
@@ -7843,17 +7848,17 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return result;
 }
 
-[[nodiscard]] auto missing_public_wait(const ProcOpWait& wait) -> OpExecution {
-  OpExecution result;
+[[nodiscard]] auto missing_public_wait(const ProcCommandWait& wait) -> PublicCommandExecution {
+  PublicCommandExecution result;
   if (!wait.observed || !wait.pane_was_present) {
     result.status = CommandStatus::stale_target;
     return result;
   }
-  return complete_process_wait(std::move(result), wait.op, ProcessExit{});
+  return complete_process_wait(std::move(result), wait.request, ProcessExit{});
 }
 
-[[nodiscard]] auto public_wait_result(const ObservedPane target) -> OpExecution {
-  OpExecution result;
+[[nodiscard]] auto public_wait_result(const ObservedPane target) -> PublicCommandExecution {
+  PublicCommandExecution result;
   result.session_name = std::string(target.session->session_name());
   result.session = target.session->id;
   result.session_revision = target.session->mutation_generation;
@@ -7863,11 +7868,12 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return result;
 }
 
-[[nodiscard]] auto complete_terminal_wait(ProcOpWait& wait, const ObservedPane target,
-                                          const std::span<std::byte> scratch, OpExecution result)
-    -> std::optional<OpExecution> {
+[[nodiscard]] auto complete_terminal_wait(ProcCommandWait& wait, const ObservedPane target,
+                                          const std::span<std::byte> scratch,
+                                          PublicCommandExecution result)
+    -> std::optional<PublicCommandExecution> {
   const auto generation = target.runtime->observation_generation;
-  if (generation <= wait.op.after_terminal_generation ||
+  if (generation <= wait.request.after_terminal_generation ||
       generation == wait.observed_terminal_generation) {
     return std::nullopt;
   }
@@ -7883,9 +7889,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   // Byte payloads and character storage have the same object representation.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
-  const bool matched = wait.op.wait_condition == api::WaitCondition::prompt
+  const bool matched = wait.request.wait_condition == api::WaitCondition::prompt
                            ? *at_prompt
-                           : text.contains(wait.op.contains);
+                           : text.contains(wait.request.contains);
   if (!matched) {
     return std::nullopt;
   }
@@ -7905,27 +7911,27 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return result;
 }
 
-[[nodiscard]] auto completed_public_wait(ProcOpWait& wait, Sessions& sessions,
+[[nodiscard]] auto completed_public_wait(ProcCommandWait& wait, Sessions& sessions,
                                          PaneRuntimeStore& runtimes,
                                          const std::span<std::byte> scratch)
-    -> std::optional<OpExecution> {
+    -> std::optional<PublicCommandExecution> {
   const auto target = public_wait_target(wait, sessions, runtimes);
   if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
     return missing_public_wait(wait);
   }
   wait.observed = true;
   wait.pane_was_present = true;
-  wait.op.session.id = target.session->id;
-  wait.op.session.name.clear();
+  wait.request.session.id = target.session->id;
+  wait.request.session.name.clear();
   auto result = public_wait_result(target);
-  if (is_terminal_wait(wait.op)) {
+  if (is_terminal_wait(wait.request)) {
     auto completed = complete_terminal_wait(wait, target, scratch, result);
     if (completed.has_value()) {
       return completed;
     }
   }
   if (target.pane->process_exit.has_value()) {
-    return complete_process_wait(std::move(result), wait.op, *target.pane->process_exit);
+    return complete_process_wait(std::move(result), wait.request, *target.pane->process_exit);
   }
   if (reactor_now() >= wait.deadline) {
     result.status = CommandStatus::failed;
@@ -7936,14 +7942,14 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return std::nullopt;
 }
 
-[[nodiscard]] auto poll_public_wait(ProcOpWait& wait, Sessions& sessions,
+[[nodiscard]] auto poll_public_wait(ProcCommandWait& wait, Sessions& sessions,
                                     PaneRuntimeStore& runtimes, PublicScratch& scratch_owner)
-    -> std::optional<OpExecution> {
+    -> std::optional<PublicCommandExecution> {
   auto scratch = std::span<std::byte>{};
-  if (is_terminal_wait(wait.op)) {
+  if (is_terminal_wait(wait.request)) {
     scratch = acquire_public_scratch(scratch_owner);
     if (scratch.empty()) {
-      return op_failure("resource_failure");
+      return command_failure("resource_failure");
     }
   }
   return completed_public_wait(wait, sessions, runtimes, scratch);
@@ -7963,7 +7969,7 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
   return false;
 }
 
-[[nodiscard]] auto encode_public_error(const api::OpDecodeError error,
+[[nodiscard]] auto encode_public_error(const api::CommandDecodeError error,
                                        const std::optional<std::size_t> byte = std::nullopt)
     -> std::string {
   std::string output;
@@ -7987,19 +7993,20 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto encode_op_result(const api::Op& op, const OpExecution& result,
-                                    const bool target_resolved) -> std::string {
+[[nodiscard]] auto encode_command_result(const api::Command& request,
+                                         const PublicCommandExecution& result,
+                                         const bool target_resolved) -> std::string {
   std::string output;
   try {
-    output = R"({"schema":"lemma.op-result/v1","op":)";
-    if (!api::append_json_string(output, api::op_name(op.kind)) ||
+    output = R"({"schema":"lemma.command-result/v1","command":)";
+    if (!api::append_json_string(output, api::command_name(request.kind)) ||
         !append_public(output, ",\"status\":") ||
         !api::append_json_string(output, public_status_name(result.status))) {
       return {};
     }
-    if (op.kind == api::OpKind::pane_wait &&
+    if (request.kind == api::CommandKind::pane_wait &&
         (!append_public(output, R"(,"condition":)") ||
-         !api::append_json_string(output, api::wait_condition_name(op.wait_condition)))) {
+         !api::append_json_string(output, api::wait_condition_name(request.wait_condition)))) {
       return {};
     }
     if (result.session.is_valid()) {
@@ -8018,8 +8025,8 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
       return {};
     }
     auto result_pane = result.pane;
-    if (!result_pane.is_valid() && target_resolved && op.kind == api::OpKind::pane_wait) {
-      result_pane = op.pane.id;
+    if (!result_pane.is_valid() && target_resolved && request.kind == api::CommandKind::pane_wait) {
+      result_pane = request.pane.id;
     }
     if (result_pane.is_valid() &&
         (!append_public(output, ",\"pane\":") || !append_public_id(output, result_pane))) {
@@ -8050,9 +8057,9 @@ auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore
           !append_public(output, result.retryable ? "true" : "false")) {
         return {};
       }
-      if (op.expected_session_revision.has_value() &&
+      if (request.expected_session_revision.has_value() &&
           (!append_public(output, R"(,"expected":)") ||
-           !append_public_number(output, *op.expected_session_revision) ||
+           !append_public_number(output, *request.expected_session_revision) ||
            !append_public(output, R"(,"current":)") ||
            !append_public_number(output, result.session_revision))) {
         return {};
@@ -8094,7 +8101,7 @@ struct ProcReference final {
 };
 
 struct CompiledProcStep final {
-  api::Op op;
+  api::Command request;
   std::string id;
   std::array<ProcReference, 4> references{};
   std::size_t reference_count{0};
@@ -8111,12 +8118,12 @@ struct ProcExecutionState final {
   std::vector<CompiledProcStep> steps;
   std::vector<ProcOutputIds> outputs;
   std::vector<std::string> results;
-  std::optional<ProcOpWait> wait;
+  std::optional<ProcCommandWait> wait;
   PublicProcId id;
   std::size_t owner_slot{limits::pending_connections_hard_max};
   std::uint32_t owner_generation{0};
   std::size_t retained_result_bytes{0};
-  std::size_t next_op{0};
+  std::size_t next_command{0};
   bool continue_on_error{false};
   bool ok{true};
 };
@@ -8180,9 +8187,9 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto replace_proc_reference(api::JsonValue& op, const std::string_view key,
+[[nodiscard]] auto replace_proc_reference(api::JsonValue& request, const std::string_view key,
                                           const std::span<const ProcBinding> bindings) -> bool {
-  auto* const selector = mutable_json_member(op, key);
+  auto* const selector = mutable_json_member(request, key);
   if (selector == nullptr || selector->kind != api::JsonKind::object) {
     return true;
   }
@@ -8212,7 +8219,7 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
     return false;
   }
   std::optional<api::JsonValue> inferred_parent;
-  if (key != "session" && mutable_json_member(op, "session") == nullptr) {
+  if (key != "session" && mutable_json_member(request, "session") == nullptr) {
     auto parent = proc_json_object();
     parent.object.push_back({.key = "name", .value = proc_json_string("placeholder")});
     inferred_parent = std::move(parent);
@@ -8224,14 +8231,14 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
   }
   selector->object.push_back({.key = "id", .value = proc_json_string("0:1")});
   if (inferred_parent.has_value()) {
-    op.object.push_back({.key = "session", .value = std::move(*inferred_parent)});
+    request.object.push_back({.key = "session", .value = std::move(*inferred_parent)});
   }
   return true;
 }
 
-[[nodiscard]] auto compile_proc_op(const api::JsonValue& source,
-                                   const std::span<const ProcBinding> bindings)
-    -> std::optional<api::Op> {
+[[nodiscard]] auto compile_proc_command(const api::JsonValue& source,
+                                        const std::span<const ProcBinding> bindings)
+    -> std::optional<api::Command> {
   if (source.kind != api::JsonKind::object) {
     return std::nullopt;
   }
@@ -8242,8 +8249,8 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
       return std::nullopt;
     }
   }
-  auto decoded = api::decode_op(document);
-  return std::move(decoded.op);
+  auto decoded = api::decode_command(document);
+  return std::move(decoded.command);
 }
 
 [[nodiscard]] auto proc_reference_field(const std::string_view key) noexcept -> ProcReferenceField {
@@ -8282,10 +8289,10 @@ void compile_proc_references(const api::JsonValue& source,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto concrete_proc_op(const CompiledProcStep& step,
-                                    const std::span<const ProcOutputIds> outputs)
-    -> std::optional<api::Op> {
-  auto op = step.op;
+[[nodiscard]] auto concrete_proc_command(const CompiledProcStep& step,
+                                         const std::span<const ProcOutputIds> outputs)
+    -> std::optional<api::Command> {
+  auto request = step.request;
   for (const auto& reference : std::span(step.references).first(step.reference_count)) {
     if (reference.step >= outputs.size()) {
       return std::nullopt;
@@ -8296,27 +8303,27 @@ void compile_proc_references(const api::JsonValue& source,
       if (!output.session.is_valid()) {
         return std::nullopt;
       }
-      op.session.id = output.session;
-      op.session.name.clear();
+      request.session.id = output.session;
+      request.session.name.clear();
       break;
     case ProcReferenceField::tab:
       if (!output.tab.is_valid()) {
         return std::nullopt;
       }
-      op.tab.id = output.tab;
-      op.tab.position = 0;
+      request.tab.id = output.tab;
+      request.tab.position = 0;
       break;
     case ProcReferenceField::pane:
       if (!output.pane.is_valid()) {
         return std::nullopt;
       }
-      op.pane.id = output.pane;
+      request.pane.id = output.pane;
       break;
     case ProcReferenceField::other:
       if (!output.pane.is_valid()) {
         return std::nullopt;
       }
-      op.other.id = output.pane;
+      request.other.id = output.pane;
       break;
     }
   }
@@ -8325,10 +8332,10 @@ void compile_proc_references(const api::JsonValue& source,
     if (index >= outputs.size() || !outputs.subspan(index, 1).front().session.is_valid()) {
       return std::nullopt;
     }
-    op.session.id = outputs.subspan(index, 1).front().session;
-    op.session.name.clear();
+    request.session.id = outputs.subspan(index, 1).front().session;
+    request.session.name.clear();
   }
-  return op;
+  return request;
 }
 
 [[nodiscard]] auto proc_error(const std::string_view reason,
@@ -8339,7 +8346,7 @@ void compile_proc_references(const api::JsonValue& source,
     return {};
   }
   if (index.has_value() &&
-      (!append_public(output, R"(,"op_index":)") || !append_public_number(output, *index))) {
+      (!append_public(output, R"(,"command_index":)") || !append_public_number(output, *index))) {
     return {};
   }
   return append_public(output, "},\"results\":[]}\n") ? output : std::string{};
@@ -8351,7 +8358,7 @@ struct ProcPrepareError final {
 };
 
 // A Proc is validated completely with placeholder generational IDs before its first concrete
-// Op executes. References remain a composition concern and never enter the Op executor.
+// Command executes. References remain a composition concern and never enter the Command executor.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto prepare_public_proc(api::JsonValue document)
     -> std::expected<ProcExecutionState, ProcPrepareError> {
@@ -8360,21 +8367,21 @@ struct ProcPrepareError final {
     return std::unexpected(ProcPrepareError{.reason = "invalid_schema", .index = std::nullopt});
   }
   for (const auto& member : document.object) {
-    if (member.key != "schema" && member.key != "on_error" && member.key != "ops") {
+    if (member.key != "schema" && member.key != "on_error" && member.key != "commands") {
       return std::unexpected(ProcPrepareError{.reason = "unknown_field", .index = std::nullopt});
     }
   }
-  auto* const ops = mutable_json_member(document, "ops");
+  auto* const commands = mutable_json_member(document, "commands");
   const auto* const on_error_value = api::json_member(document, "on_error");
   const auto on_error = api::json_string(document, "on_error").value_or("stop");
-  if (ops == nullptr || ops->kind != api::JsonKind::array || ops->array.empty() ||
-      ops->array.size() > api::proc_operations_max ||
+  if (commands == nullptr || commands->kind != api::JsonKind::array || commands->array.empty() ||
+      commands->array.size() > api::proc_commands_max ||
       (on_error_value != nullptr && on_error_value->kind != api::JsonKind::string) ||
       (on_error != "stop" && on_error != "continue")) {
     return std::unexpected(ProcPrepareError{.reason = "invalid_document", .index = std::nullopt});
   }
 
-  auto sources = std::move(ops->array);
+  auto sources = std::move(commands->array);
   ProcExecutionState state;
   std::vector<ProcBinding> shapes;
   state.continue_on_error = on_error == "continue";
@@ -8384,21 +8391,22 @@ struct ProcPrepareError final {
   shapes.reserve(sources.size());
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const auto& source = std::span(sources).subspan(index, 1).front();
-    auto op = compile_proc_op(source, shapes);
-    if (!op.has_value()) {
-      return std::unexpected(ProcPrepareError{.reason = "invalid_op", .index = index});
+    auto request = compile_proc_command(source, shapes);
+    if (!request.has_value()) {
+      return std::unexpected(ProcPrepareError{.reason = "invalid_command", .index = index});
     }
     const auto* const id_value = api::json_member(source, "id");
     const auto id = api::json_string(source, "id");
-    const bool creates = op->kind == api::OpKind::session_start ||
-                         op->kind == api::OpKind::tab_new || op->kind == api::OpKind::pane_split;
+    const bool creates = request->kind == api::CommandKind::session_start ||
+                         request->kind == api::CommandKind::tab_new ||
+                         request->kind == api::CommandKind::pane_split;
     if ((id_value != nullptr && !id.has_value()) ||
         (id.has_value() &&
          (!creates || !proc_id_valid(*id) || proc_binding(shapes, *id) != nullptr))) {
       return std::unexpected(ProcPrepareError{.reason = "invalid_or_duplicate_id", .index = index});
     }
     CompiledProcStep step;
-    step.op = std::move(*op);
+    step.request = std::move(*request);
     step.id = id.has_value() ? std::string(*id) : std::string{};
     compile_proc_references(source, shapes, step);
     state.steps.push_back(std::move(step));
@@ -8415,7 +8423,7 @@ struct ProcPrepareError final {
 encode_proc_result(const ProcExecutionState& state,
                    const std::optional<std::string_view> error = std::nullopt,
                    const std::optional<std::size_t> error_index = std::nullopt,
-                   const bool op_completed = false) -> std::string {
+                   const bool command_completed = false) -> std::string {
   std::string output = state.ok ? R"({"schema":"lemma.proc-result/v1","ok":true)"
                                 : R"({"schema":"lemma.proc-result/v1","ok":false)";
   if (error.has_value()) {
@@ -8423,11 +8431,11 @@ encode_proc_result(const ProcExecutionState& state,
         !api::append_json_string(output, *error)) {
       return {};
     }
-    if (error_index.has_value() && (!append_public(output, R"(,"op_index":)") ||
+    if (error_index.has_value() && (!append_public(output, R"(,"command_index":)") ||
                                     !append_public_number(output, *error_index))) {
       return {};
     }
-    if (op_completed && !append_public(output, R"(,"op_completed":true)")) {
+    if (command_completed && !append_public(output, R"(,"command_completed":true)")) {
       return {};
     }
     if (!append_public(output, "}")) {
@@ -8446,20 +8454,20 @@ encode_proc_result(const ProcExecutionState& state,
   return append_public(output, "]}\n") ? output : std::string{};
 }
 
-// One call executes at most one already-validated Op from one admitted Proc.
+// One call executes at most one already-validated Command from one admitted Proc.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRuntimeStore& runtimes,
                          std::uint64_t& activity_order, PublicScratch& scratch_owner)
     -> std::optional<std::string> {
-  const auto op_count = state.steps.size();
-  if (state.next_op >= op_count) {
+  const auto command_count = state.steps.size();
+  if (state.next_command >= command_count) {
     return encode_proc_result(state);
   }
-  const auto index = state.next_op;
+  const auto index = state.next_command;
   const auto& step = std::span(state.steps).subspan(index, 1).front();
-  std::optional<api::Op> op;
-  OpExecution execution;
+  std::optional<api::Command> request;
+  PublicCommandExecution execution;
   if (state.wait.has_value()) {
     if (!public_wait_has_work(*state.wait, sessions, runtimes, reactor_now())) {
       return std::nullopt;
@@ -8468,34 +8476,35 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
     if (!completed.has_value()) {
       return std::nullopt;
     }
-    op = std::move(state.wait->op);
+    request = std::move(state.wait->request);
     state.wait.reset();
     execution = std::move(*completed);
   } else {
-    op = concrete_proc_op(step, state.outputs);
-    if (op.has_value() && op->kind == api::OpKind::pane_wait) {
-      state.wait = begin_public_wait(std::move(*op));
+    request = concrete_proc_command(step, state.outputs);
+    if (request.has_value() && request->kind == api::CommandKind::pane_wait) {
+      state.wait = begin_public_wait(std::move(*request));
       return std::nullopt;
     }
-    if (op.has_value()) {
+    if (request.has_value()) {
       auto scratch = std::span<std::byte>{};
-      if (op->kind == api::OpKind::pane_capture) {
+      if (request->kind == api::CommandKind::pane_capture) {
         scratch = acquire_public_scratch(scratch_owner);
       }
-      if (scratch.empty() && op->kind == api::OpKind::pane_capture) {
+      if (scratch.empty() && request->kind == api::CommandKind::pane_capture) {
         execution.status = CommandStatus::failed;
       } else {
-        execution = OpExecutor::execute(*op, sessions, runtimes, activity_order, scratch);
+        execution =
+            PublicCommandExecutor::execute(*request, sessions, runtimes, activity_order, scratch);
       }
     } else {
       execution.error_reason = "unresolved_reference";
     }
   }
-  const auto& result_op = op.has_value() ? *op : step.op;
-  auto encoded = encode_op_result(result_op, execution, op.has_value());
+  const auto& result_command = request.has_value() ? *request : step.request;
+  auto encoded = encode_command_result(result_command, execution, request.has_value());
   if (encoded.empty()) {
     state.ok = false;
-    return encode_proc_result(state, "resource_failure", index, op.has_value());
+    return encode_proc_result(state, "resource_failure", index, request.has_value());
   }
   if (encoded.back() == '\n') {
     encoded.pop_back();
@@ -8505,7 +8514,7 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
     wrapped += R"(,"id":)";
     if (!api::append_json_string(wrapped, step.id)) {
       state.ok = false;
-      return encode_proc_result(state, "resource_failure", index, op.has_value());
+      return encode_proc_result(state, "resource_failure", index, request.has_value());
     }
   }
   wrapped += R"(,"result":)" + encoded + "}";
@@ -8518,7 +8527,7 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
       wrapped.size() > api::json_bytes_max - proc_result_envelope_reserve -
                            state.retained_result_bytes - separator) {
     state.ok = false;
-    return encode_proc_result(state, "result_too_large", index, op.has_value());
+    return encode_proc_result(state, "result_too_large", index, request.has_value());
   }
   state.retained_result_bytes += separator + wrapped.size();
   state.results.push_back(std::move(wrapped));
@@ -8527,8 +8536,8 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
   state.ok = state.ok && succeeded;
   state.outputs.push_back(
       {.session = execution.session, .tab = execution.tab, .pane = execution.pane});
-  ++state.next_op;
-  if ((!succeeded && !state.continue_on_error) || state.next_op == op_count) {
+  ++state.next_command;
+  if ((!succeeded && !state.continue_on_error) || state.next_command == command_count) {
     return encode_proc_result(state);
   }
   return std::nullopt;
@@ -8563,7 +8572,7 @@ void finish_public_output(PendingConnection& pending, std::string output,
 
 [[nodiscard]] auto public_proc_failure(ProcExecutionState& execution) -> std::string {
   execution.ok = false;
-  return encode_proc_result(execution, "resource_failure", execution.next_op, false);
+  return encode_proc_result(execution, "resource_failure", execution.next_command, false);
 }
 
 // The reactor owns admitted Procs independently of transports. The connection slot and generation

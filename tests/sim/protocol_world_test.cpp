@@ -2,8 +2,8 @@
 #include "random.hpp"
 #include "trace.hpp"
 
+#include "api/command.hpp"
 #include "api/json.hpp"
-#include "api/op.hpp"
 #include "protocol/attachment.hpp"
 
 #include <gtest/gtest.h>
@@ -383,72 +383,74 @@ TEST(ProtocolExhaustiveTest, ServerFramesDecodeAtEveryHeaderAndPayloadBoundary) 
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(AgentSchemaSimulationTest, ConcreteOpsRoundTripThroughThePublicJsonBoundary) {
-  std::vector<api::Op> ops;
-  api::Op start;
-  start.kind = api::OpKind::session_start;
+TEST(AgentSchemaSimulationTest, ConcreteCommandsRoundTripThroughThePublicJsonBoundary) {
+  std::vector<api::Command> commands;
+  api::Command start;
+  start.kind = api::CommandKind::session_start;
   start.name = "agent-world";
   start.working_directory = "/tmp";
   start.arguments = {"/bin/sh"};
   start.environment = {"A=B"};
   start.hold = true;
   start.environment_set = true;
-  ops.emplace_back(std::move(start));
+  commands.emplace_back(std::move(start));
 
-  api::Op resize;
-  resize.kind = api::OpKind::pane_resize;
+  api::Command resize;
+  resize.kind = api::CommandKind::pane_resize;
   resize.session.name = "agent-world";
   resize.pane.id = PaneId::from_parts(0, 1);
   resize.direction = api::Direction::right;
   resize.amount = 3;
-  ops.emplace_back(std::move(resize));
+  commands.emplace_back(std::move(resize));
 
-  api::Op wait;
-  wait.kind = api::OpKind::pane_wait;
+  api::Command wait;
+  wait.kind = api::CommandKind::pane_wait;
   wait.session.name = "agent-world";
   wait.pane.id = PaneId::from_parts(0, 1);
   wait.contains = "prompt";
   wait.wait_condition = api::WaitCondition::contains;
   wait.wait_timeout_milliseconds = 2'000;
-  ops.emplace_back(std::move(wait));
+  commands.emplace_back(std::move(wait));
 
-  api::Op capture;
-  capture.kind = api::OpKind::pane_capture;
+  api::Command capture;
+  capture.kind = api::CommandKind::pane_capture;
   capture.session.name = "agent-world";
   capture.pane.id = PaneId::from_parts(0, 1);
   capture.capture_source = api::CaptureSource::recent;
   capture.capture_wrap = api::CaptureWrap::logical;
   capture.lines = 20;
-  ops.emplace_back(std::move(capture));
+  commands.emplace_back(std::move(capture));
 
-  for (const auto& op : ops) {
-    const auto encoded = api::encode_op(op);
-    ASSERT_TRUE(encoded.has_value()) << api::op_name(op.kind);
+  for (const auto& command : commands) {
+    const auto encoded = api::encode_command(command);
+    ASSERT_TRUE(encoded.has_value()) << api::command_name(command.kind);
     const auto parsed = api::parse_json(*encoded);
     ASSERT_TRUE(parsed.value.has_value()) << *encoded;
-    const auto decoded = api::decode_op(*parsed.value);
-    ASSERT_TRUE(decoded.op.has_value()) << decoded.error.reason << " field=" << decoded.error.field;
-    const auto reencoded = api::encode_op(*decoded.op);
+    const auto decoded = api::decode_command(*parsed.value);
+    ASSERT_TRUE(decoded.command.has_value())
+        << decoded.error.reason << " field=" << decoded.error.field;
+    const auto reencoded = api::encode_command(*decoded.command);
     ASSERT_TRUE(reencoded.has_value());
     EXPECT_EQ(*reencoded, *encoded);
   }
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(AgentSchemaSimulationTest, ProcShapeRemainsBoundedAndItsOpsDecode) {
+TEST(AgentSchemaSimulationTest, ProcShapeRemainsBoundedAndItsCommandsDecode) {
   constexpr std::string_view proc =
-      R"({"schema":"lemma.proc/v1","ops":[{"op":"session.inspect","session":{"name":"world"}},{"op":"pane.wait","session":{"name":"world"},"pane":{"id":"0:1"},"contains":"ready","timeout_ms":2000}]})";
+      R"({"schema":"lemma.proc/v1","commands":[{"command":"session.inspect","session":{"name":"world"}},{"command":"pane.wait","session":{"name":"world"},"pane":{"id":"0:1"},"contains":"ready","timeout_ms":2000}]})";
   const auto parsed = api::parse_json(proc);
   ASSERT_TRUE(parsed.value.has_value());
   EXPECT_EQ(api::json_string(*parsed.value, "schema"),
             std::optional<std::string_view>{"lemma.proc/v1"});
-  const auto* const ops = api::json_member(*parsed.value, "ops");
-  ASSERT_NE(ops, nullptr);
-  ASSERT_EQ(ops->kind, api::JsonKind::array);
-  ASSERT_LE(ops->array.size(), api::json_nodes_max);
-  for (const auto& document : ops->array) {
-    const auto decoded = api::decode_op(document);
-    ASSERT_TRUE(decoded.op.has_value()) << decoded.error.reason << " field=" << decoded.error.field;
+  const auto* const commands = api::json_member(*parsed.value, "commands");
+  ASSERT_NE(commands, nullptr);
+  ASSERT_EQ(commands->kind, api::JsonKind::array);
+  ASSERT_LE(commands->array.size(), api::json_nodes_max);
+  for (const auto& document : commands->array) {
+    const auto decoded = api::decode_command(document);
+    ASSERT_TRUE(decoded.command.has_value())
+        << decoded.error.reason << " field=" << decoded.error.field;
   }
 }
 // NOLINTEND(bugprone-unchecked-optional-access)

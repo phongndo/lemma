@@ -1,5 +1,5 @@
-#ifndef LEMMA_API_OP_HPP
-#define LEMMA_API_OP_HPP
+#ifndef LEMMA_API_COMMAND_HPP
+#define LEMMA_API_COMMAND_HPP
 
 #include "api/json.hpp"
 #include "lemma/id.hpp"
@@ -13,11 +13,11 @@
 
 namespace lemma::api {
 
-inline constexpr std::string_view op_result_schema = "lemma.op-result/v1";
+inline constexpr std::string_view command_result_schema = "lemma.command-result/v1";
 inline constexpr std::string_view events_schema = "lemma.events/v1";
 inline constexpr std::string_view event_schema = "lemma.event/v1";
 
-enum class OpKind : std::uint8_t {
+enum class CommandKind : std::uint8_t {
   daemon_inspect,
   session_list,
   session_inspect,
@@ -93,7 +93,7 @@ enum class InputEventKind : std::uint8_t {
   key,
 };
 
-enum class InputKeyAction : std::uint8_t {
+enum class InputKeyPhase : std::uint8_t {
   press,
   repeat,
   release,
@@ -166,7 +166,7 @@ struct InputEvent final {
   std::string text;
   InputKey key{InputKey::a};
   std::uint16_t modifiers{0};
-  InputKeyAction action{InputKeyAction::press};
+  InputKeyPhase phase{InputKeyPhase::press};
 };
 
 struct SessionSelector final {
@@ -189,10 +189,10 @@ struct PaneSelector final {
   [[nodiscard]] auto valid() const noexcept -> bool { return id.is_valid(); }
 };
 
-// One concrete public Op. Op-specific decoding guarantees that only the fields belonging to
-// kind are populated before this value crosses the daemon trust boundary.
-struct Op final {
-  OpKind kind{OpKind::session_list};
+// One concrete public Command. Command-specific decoding guarantees that only the fields belonging
+// to kind are populated before this value crosses the daemon trust boundary.
+struct Command final {
+  CommandKind kind{CommandKind::session_list};
   SessionSelector session;
   TabSelector tab;
   PaneSelector pane;
@@ -229,19 +229,19 @@ struct Op final {
                                   CaptureWrap wrap, std::uint64_t terminal_generation,
                                   bool truncated, std::string_view text) -> bool;
 
-struct OpDecodeError final {
+struct CommandDecodeError final {
   std::string_view reason;
   std::string_view field;
 };
 
-struct OpDecodeResult final {
-  std::optional<Op> op;
-  OpDecodeError error;
+struct CommandDecodeResult final {
+  std::optional<Command> command;
+  CommandDecodeError error;
 };
 
-[[nodiscard]] auto decode_op(const JsonValue& document) -> OpDecodeResult;
-[[nodiscard]] auto encode_op(const Op& op) -> std::optional<std::string>;
-[[nodiscard]] auto op_name(OpKind kind) noexcept -> std::string_view;
+[[nodiscard]] auto decode_command(const JsonValue& document) -> CommandDecodeResult;
+[[nodiscard]] auto encode_command(const Command& command) -> std::optional<std::string>;
+[[nodiscard]] auto command_name(CommandKind kind) noexcept -> std::string_view;
 
 inline constexpr std::size_t event_panes_max = 8;
 
@@ -253,7 +253,7 @@ struct EventSubscription final {
 
 struct EventSubscriptionDecodeResult final {
   std::optional<EventSubscription> subscription;
-  OpDecodeError error;
+  CommandDecodeError error;
 };
 
 [[nodiscard]] auto decode_event_subscription(const JsonValue& document)
@@ -261,4 +261,4 @@ struct EventSubscriptionDecodeResult final {
 
 } // namespace lemma::api
 
-#endif // LEMMA_API_OP_HPP
+#endif // LEMMA_API_COMMAND_HPP

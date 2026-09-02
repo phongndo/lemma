@@ -46,7 +46,7 @@ destroy the Session.
 | --- | --- |
 | `lemma_app` | CLI grammar and executable role selection |
 | `lemma_daemon` | Endpoint ownership, connection admission, and the reactor |
-| `lemma_api` | Public Proc, nested Op, Event, JSON, and schema values |
+| `lemma_api` | Public Proc, nested Command, Event, JSON, and schema values |
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
 | `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
 | `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
@@ -84,27 +84,27 @@ references remain owner-local.
 
 The shipped interaction policy is configuration data, not a privileged routing path. The default
 preset and an equivalent explicit user policy compile into the same immutable representation. Core
-implements semantic operations such as resizing or moving a copy selection; configuration alone
+implements semantic commands such as resizing or moving a copy selection; configuration alone
 selects the keys and routing-context transitions that invoke them.
 
 ## Commands
 
 Keyboard and mouse interaction use direct typed input commands. Agent execution enters through a
-Proc containing one to 64 ordered Ops:
+Proc containing one to 64 ordered Commands:
 
 ```text
-CLI / CONTROL -> Proc admission -> ordered compiled Op -> Op executor -> Core command / Runtime intent
+CLI / CONTROL -> Proc admission -> compiled Command -> Command executor -> Core command / Runtime intent
                      │                    │                   │
-                     │                    │                   └─> lemma.op-result/v1
+                     │                    │                   └─> lemma.command-result/v1
                      │                    └─> at most one per reactor turn
-                     └─> validate all Ops and backward references once
+                     └─> validate all Commands and backward references once
 ```
 
 `lemma.proc/v1` is the sole public execution request. CLI syntax and backward result references are
-frontend representations rather than Core state. Before admission, Proc validation checks every Op
-and reference. Execution resolves references to concrete generational IDs and performs authoritative
-lifetime and ownership checks immediately before each Op. Closing an owning connection invalidates
-its generation and cancels the Proc before another Op.
+frontend representations rather than Core state. Before admission, Proc validation checks every
+Command and reference. Execution resolves references to concrete generational IDs and performs
+authoritative lifetime and ownership checks immediately before each Command. Closing an owning
+connection invalidates its generation and cancels the Proc before another Command.
 
 Lifecycle commands run through the deterministic `SessionMachine`: Core stages fallible semantic
 owners, Runtime executes a bounded typed spawn/resize/retire effect batch, and Core publishes the

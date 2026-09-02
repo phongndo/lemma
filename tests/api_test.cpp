@@ -1,5 +1,5 @@
+#include "api/command.hpp"
 #include "api/json.hpp"
-#include "api/op.hpp"
 #include "api/schema.hpp"
 
 #include <gtest/gtest.h>
@@ -28,8 +28,8 @@ TEST(ApiTest, EmbedsParseableVersionedSchema) {
   EXPECT_EQ(json_member(*definitions, "action"), nullptr);
   EXPECT_EQ(json_member(*definitions, "actionResult"), nullptr);
   EXPECT_NE(json_member(*definitions, "proc"), nullptr);
-  EXPECT_NE(json_member(*definitions, "op"), nullptr);
-  EXPECT_NE(json_member(*definitions, "opResult"), nullptr);
+  EXPECT_NE(json_member(*definitions, "command"), nullptr);
+  EXPECT_NE(json_member(*definitions, "commandResult"), nullptr);
 }
 
 // GoogleTest assertions and nested schema traversal inflate the measured branch count.
@@ -54,9 +54,9 @@ TEST(ApiTest, DefinesStructuredPaneListingGeometry) {
   EXPECT_TRUE(has_required("columns"));
   EXPECT_TRUE(has_required("rows"));
 
-  const auto* const op_result = json_member(*definitions, "opResult");
-  ASSERT_NE(op_result, nullptr);
-  const auto* const properties = json_member(*op_result, "properties");
+  const auto* const command_result = json_member(*definitions, "commandResult");
+  ASSERT_NE(command_result, nullptr);
+  const auto* const properties = json_member(*command_result, "properties");
   ASSERT_NE(properties, nullptr);
   const auto* const panes = json_member(*properties, "panes");
   ASSERT_NE(panes, nullptr);
@@ -65,9 +65,9 @@ TEST(ApiTest, DefinesStructuredPaneListingGeometry) {
   EXPECT_EQ(json_string(*items, "$ref"), std::optional<std::string_view>{"#/$defs/paneListing"});
 }
 
-TEST(ApiTest, DecodesConcreteOpAndRejectsUnknownFields) {
+TEST(ApiTest, DecodesConcreteCommandAndRejectsUnknownFields) {
   constexpr std::string_view valid = R"({
-        "op":"pane.resize",
+        "command":"pane.resize",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "direction":"left",
@@ -75,34 +75,34 @@ TEST(ApiTest, DecodesConcreteOpAndRejectsUnknownFields) {
   })";
   const auto document = parse_json(valid);
   ASSERT_TRUE(document.value.has_value());
-  const auto decoded = decode_op(*document.value);
-  ASSERT_TRUE(decoded.op.has_value()) << decoded.error.reason;
-  EXPECT_EQ(decoded.op->kind, OpKind::pane_resize);
-  EXPECT_EQ(decoded.op->session.id, SessionId::from_parts(2, 7));
-  EXPECT_EQ(decoded.op->pane.id, PaneId::from_parts(4, 9));
-  EXPECT_EQ(decoded.op->amount, 3);
-  const auto encoded = encode_op(*decoded.op);
+  const auto decoded = decode_command(*document.value);
+  ASSERT_TRUE(decoded.command.has_value()) << decoded.error.reason;
+  EXPECT_EQ(decoded.command->kind, CommandKind::pane_resize);
+  EXPECT_EQ(decoded.command->session.id, SessionId::from_parts(2, 7));
+  EXPECT_EQ(decoded.command->pane.id, PaneId::from_parts(4, 9));
+  EXPECT_EQ(decoded.command->amount, 3);
+  const auto encoded = encode_command(*decoded.command);
   ASSERT_TRUE(encoded.has_value());
   const auto round_trip_document = parse_json(*encoded);
   ASSERT_TRUE(round_trip_document.value.has_value());
-  const auto round_trip = decode_op(*round_trip_document.value);
-  ASSERT_TRUE(round_trip.op.has_value());
-  EXPECT_EQ(round_trip.op->kind, OpKind::pane_resize);
-  EXPECT_EQ(round_trip.op->session.id, SessionId::from_parts(2, 7));
-  EXPECT_EQ(round_trip.op->pane.id, PaneId::from_parts(4, 9));
+  const auto round_trip = decode_command(*round_trip_document.value);
+  ASSERT_TRUE(round_trip.command.has_value());
+  EXPECT_EQ(round_trip.command->kind, CommandKind::pane_resize);
+  EXPECT_EQ(round_trip.command->session.id, SessionId::from_parts(2, 7));
+  EXPECT_EQ(round_trip.command->pane.id, PaneId::from_parts(4, 9));
 
-  constexpr std::string_view invalid = R"({"op":"session.list","typo":true})";
+  constexpr std::string_view invalid = R"({"command":"session.list","typo":true})";
   const auto invalid_document = parse_json(invalid);
   ASSERT_TRUE(invalid_document.value.has_value());
-  const auto rejected = decode_op(*invalid_document.value);
-  EXPECT_FALSE(rejected.op.has_value());
+  const auto rejected = decode_command(*invalid_document.value);
+  EXPECT_FALSE(rejected.command.has_value());
   EXPECT_EQ(rejected.error.reason, "unknown_field");
   EXPECT_EQ(rejected.error.field, "typo");
 }
 
-TEST(ApiTest, DecodesBoundedWaitOpAndRejectsConflictingConditions) {
+TEST(ApiTest, DecodesBoundedWaitCommandAndRejectsConflictingConditions) {
   constexpr std::string_view valid = R"({
-        "op":"pane.wait",
+        "command":"pane.wait",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "contains":"ready",
@@ -111,24 +111,24 @@ TEST(ApiTest, DecodesBoundedWaitOpAndRejectsConflictingConditions) {
   })";
   const auto document = parse_json(valid);
   ASSERT_TRUE(document.value.has_value());
-  const auto decoded = decode_op(*document.value);
-  ASSERT_TRUE(decoded.op.has_value()) << decoded.error.reason;
-  EXPECT_EQ(decoded.op->kind, OpKind::pane_wait);
-  EXPECT_EQ(decoded.op->wait_condition, WaitCondition::contains);
-  EXPECT_EQ(decoded.op->contains, "ready");
-  EXPECT_EQ(decoded.op->after_terminal_generation, 12U);
-  EXPECT_EQ(decoded.op->wait_timeout_milliseconds, 2000U);
-  const auto encoded = encode_op(*decoded.op);
+  const auto decoded = decode_command(*document.value);
+  ASSERT_TRUE(decoded.command.has_value()) << decoded.error.reason;
+  EXPECT_EQ(decoded.command->kind, CommandKind::pane_wait);
+  EXPECT_EQ(decoded.command->wait_condition, WaitCondition::contains);
+  EXPECT_EQ(decoded.command->contains, "ready");
+  EXPECT_EQ(decoded.command->after_terminal_generation, 12U);
+  EXPECT_EQ(decoded.command->wait_timeout_milliseconds, 2000U);
+  const auto encoded = encode_command(*decoded.command);
   ASSERT_TRUE(encoded.has_value());
   const auto round_trip_document = parse_json(*encoded);
   ASSERT_TRUE(round_trip_document.value.has_value());
-  const auto round_trip = decode_op(*round_trip_document.value);
-  ASSERT_TRUE(round_trip.op.has_value());
-  EXPECT_EQ(round_trip.op->wait_condition, WaitCondition::contains);
-  EXPECT_EQ(round_trip.op->contains, "ready");
+  const auto round_trip = decode_command(*round_trip_document.value);
+  ASSERT_TRUE(round_trip.command.has_value());
+  EXPECT_EQ(round_trip.command->wait_condition, WaitCondition::contains);
+  EXPECT_EQ(round_trip.command->contains, "ready");
 
   constexpr std::string_view conflicting = R"({
-        "op":"pane.wait",
+        "command":"pane.wait",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "exit_code":0,
@@ -136,19 +136,19 @@ TEST(ApiTest, DecodesBoundedWaitOpAndRejectsConflictingConditions) {
   })";
   const auto conflicting_document = parse_json(conflicting);
   ASSERT_TRUE(conflicting_document.value.has_value());
-  const auto rejected = decode_op(*conflicting_document.value);
-  EXPECT_FALSE(rejected.op.has_value());
+  const auto rejected = decode_command(*conflicting_document.value);
+  EXPECT_FALSE(rejected.command.has_value());
   EXPECT_EQ(rejected.error.reason, "conflicting_fields");
 
   constexpr std::string_view invalid_generation = R"({
-        "op":"pane.wait",
+        "command":"pane.wait",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "after_generation":12
   })";
   const auto generation_document = parse_json(invalid_generation);
   ASSERT_TRUE(generation_document.value.has_value());
-  EXPECT_FALSE(decode_op(*generation_document.value).op.has_value());
+  EXPECT_FALSE(decode_command(*generation_document.value).command.has_value());
 }
 
 TEST(ApiTest, DecodesBoundedMultiPaneObservation) {
@@ -177,14 +177,15 @@ TEST(ApiTest, DecodesBoundedMultiPaneObservation) {
 }
 
 TEST(ApiTest, RejectsAgentInputBatchCapacityOverflow) {
-  std::string input = R"({"op":"pane.input","session":{"id":"0:1"},"pane":{"id":"0:1"},"events":[)";
+  std::string input =
+      R"({"command":"pane.input","session":{"id":"0:1"},"pane":{"id":"0:1"},"events":[)";
   for (std::size_t index = 0; index <= input_events_max; ++index) {
     input += index == 0 ? R"({"kind":"key","key":"a"})" : R"(,{"kind":"key","key":"a"})";
   }
   input += "]}";
   const auto input_document = parse_json(input);
   ASSERT_TRUE(input_document.value.has_value());
-  EXPECT_FALSE(decode_op(*input_document.value).op.has_value());
+  EXPECT_FALSE(decode_command(*input_document.value).command.has_value());
 }
 
 TEST(ApiTest, RejectsObservationPaneCapacityOverflow) {
@@ -212,33 +213,44 @@ TEST(ApiTest, RequiresPaneFilterForScreenObservation) {
 
 TEST(ApiTest, DecodesIntrospectionInputCaptureAndFocusPolicies) {
   constexpr std::string_view input = R"({
-        "op":"pane.input",
+        "command":"pane.input",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "events":[
       {"kind":"paste","text":"just test"},
-      {"kind":"key","key":"c","modifiers":["control"]},
+      {"kind":"key","key":"c","modifiers":["control"],"phase":"repeat"},
       {"kind":"key","key":"enter"}
     ]
   })";
   const auto input_document = parse_json(input);
   ASSERT_TRUE(input_document.value.has_value());
-  const auto decoded_input = decode_op(*input_document.value);
-  ASSERT_TRUE(decoded_input.op.has_value()) << decoded_input.error.reason;
-  ASSERT_EQ(decoded_input.op->input_events.size(), 3U);
-  EXPECT_EQ(decoded_input.op->input_events.at(0).kind, InputEventKind::paste);
-  EXPECT_EQ(decoded_input.op->input_events.at(1).modifiers, input_modifier_control);
-  EXPECT_EQ(decoded_input.op->input_events.at(2).key, InputKey::enter);
-  const auto encoded_input = encode_op(*decoded_input.op);
+  const auto decoded_input = decode_command(*input_document.value);
+  ASSERT_TRUE(decoded_input.command.has_value()) << decoded_input.error.reason;
+  ASSERT_EQ(decoded_input.command->input_events.size(), 3U);
+  EXPECT_EQ(decoded_input.command->input_events.at(0).kind, InputEventKind::paste);
+  EXPECT_EQ(decoded_input.command->input_events.at(1).modifiers, input_modifier_control);
+  EXPECT_EQ(decoded_input.command->input_events.at(1).phase, InputKeyPhase::repeat);
+  EXPECT_EQ(decoded_input.command->input_events.at(2).key, InputKey::enter);
+  const auto encoded_input = encode_command(*decoded_input.command);
   ASSERT_TRUE(encoded_input.has_value());
   const auto round_trip_document = parse_json(*encoded_input);
   ASSERT_TRUE(round_trip_document.value.has_value());
-  const auto round_trip = decode_op(*round_trip_document.value);
-  ASSERT_TRUE(round_trip.op.has_value());
-  EXPECT_EQ(round_trip.op->input_events.size(), 3U);
+  const auto round_trip = decode_command(*round_trip_document.value);
+  ASSERT_TRUE(round_trip.command.has_value());
+  EXPECT_EQ(round_trip.command->input_events.size(), 3U);
+
+  constexpr std::string_view legacy_key_action = R"({
+    "command":"pane.input",
+    "session":{"id":"2:7"},
+    "pane":{"id":"4:9"},
+    "events":[{"kind":"key","key":"enter","action":"release"}]
+  })";
+  const auto legacy_key_action_document = parse_json(legacy_key_action);
+  ASSERT_TRUE(legacy_key_action_document.value.has_value());
+  EXPECT_FALSE(decode_command(*legacy_key_action_document.value).command.has_value());
 
   constexpr std::string_view split = R"({
-        "op":"pane.split",
+        "command":"pane.split",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "direction":"right",
@@ -247,13 +259,13 @@ TEST(ApiTest, DecodesIntrospectionInputCaptureAndFocusPolicies) {
   })";
   const auto split_document = parse_json(split);
   ASSERT_TRUE(split_document.value.has_value());
-  const auto decoded_split = decode_op(*split_document.value);
-  ASSERT_TRUE(decoded_split.op.has_value()) << decoded_split.error.reason;
-  EXPECT_EQ(decoded_split.op->focus, FocusPolicy::preserve);
-  EXPECT_EQ(decoded_split.op->expected_session_revision, 12U);
+  const auto decoded_split = decode_command(*split_document.value);
+  ASSERT_TRUE(decoded_split.command.has_value()) << decoded_split.error.reason;
+  EXPECT_EQ(decoded_split.command->focus, FocusPolicy::preserve);
+  EXPECT_EQ(decoded_split.command->expected_session_revision, 12U);
 
   constexpr std::string_view capture = R"({
-        "op":"pane.capture",
+        "command":"pane.capture",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "source":"recent",
@@ -263,49 +275,49 @@ TEST(ApiTest, DecodesIntrospectionInputCaptureAndFocusPolicies) {
   })";
   const auto capture_document = parse_json(capture);
   ASSERT_TRUE(capture_document.value.has_value());
-  const auto decoded_capture = decode_op(*capture_document.value);
-  ASSERT_TRUE(decoded_capture.op.has_value()) << decoded_capture.error.reason;
-  EXPECT_EQ(decoded_capture.op->capture_source, CaptureSource::recent);
-  EXPECT_EQ(decoded_capture.op->capture_format, CaptureFormat::ansi);
-  EXPECT_EQ(decoded_capture.op->capture_wrap, CaptureWrap::logical);
+  const auto decoded_capture = decode_command(*capture_document.value);
+  ASSERT_TRUE(decoded_capture.command.has_value()) << decoded_capture.error.reason;
+  EXPECT_EQ(decoded_capture.command->capture_source, CaptureSource::recent);
+  EXPECT_EQ(decoded_capture.command->capture_format, CaptureFormat::ansi);
+  EXPECT_EQ(decoded_capture.command->capture_wrap, CaptureWrap::logical);
 
   const auto invalid_capture = parse_json(R"({
-        "op":"pane.capture",
+        "command":"pane.capture",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "source":7
   })");
   ASSERT_TRUE(invalid_capture.value.has_value());
-  const auto rejected_capture = decode_op(*invalid_capture.value);
-  EXPECT_FALSE(rejected_capture.op.has_value());
+  const auto rejected_capture = decode_command(*invalid_capture.value);
+  EXPECT_FALSE(rejected_capture.command.has_value());
   EXPECT_EQ(rejected_capture.error.field, "source");
 
   const auto ignored_lines = parse_json(R"({
-        "op":"pane.capture",
+        "command":"pane.capture",
     "session":{"id":"2:7"},
     "pane":{"id":"4:9"},
     "source":"last-command",
     "lines":10
   })");
   ASSERT_TRUE(ignored_lines.value.has_value());
-  const auto rejected_lines = decode_op(*ignored_lines.value);
-  EXPECT_FALSE(rejected_lines.op.has_value());
+  const auto rejected_lines = decode_command(*ignored_lines.value);
+  EXPECT_FALSE(rejected_lines.command.has_value());
   EXPECT_EQ(rejected_lines.error.field, "lines");
 
-  const auto daemon_document = parse_json(R"({"op":"daemon.inspect"})");
+  const auto daemon_document = parse_json(R"({"command":"daemon.inspect"})");
   ASSERT_TRUE(daemon_document.value.has_value());
-  const auto daemon = decode_op(*daemon_document.value);
-  ASSERT_TRUE(daemon.op.has_value());
-  EXPECT_EQ(daemon.op->kind, OpKind::daemon_inspect);
+  const auto daemon = decode_command(*daemon_document.value);
+  ASSERT_TRUE(daemon.command.has_value());
+  EXPECT_EQ(daemon.command->kind, CommandKind::daemon_inspect);
 }
 
 TEST(ApiTest, RejectsExplicitZeroCaptureLines) {
   constexpr std::string_view invalid =
-      R"({"op":"pane.capture","session":{"id":"0:1"},"pane":{"id":"0:1"},"lines":0})";
+      R"({"command":"pane.capture","session":{"id":"0:1"},"pane":{"id":"0:1"},"lines":0})";
   const auto document = parse_json(invalid);
   ASSERT_TRUE(document.value.has_value());
-  const auto rejected = decode_op(*document.value);
-  EXPECT_FALSE(rejected.op.has_value());
+  const auto rejected = decode_command(*document.value);
+  EXPECT_FALSE(rejected.command.has_value());
   EXPECT_EQ(rejected.error.field, "lines");
 }
 

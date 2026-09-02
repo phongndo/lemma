@@ -117,9 +117,9 @@ lemma proc pane capture --session work --pane 0:1
 lemma proc pane split --help
 ```
 
-Inside a Lemma pane, omitted operation targets resolve from the current Session, Tab, and Pane IDs.
-Explicit selectors can address another resource. Use `lemma proc DOMAIN OP --help` for the exact
-installed grammar. Every invocation returns a Proc envelope containing one nested Op result.
+Inside a Lemma pane, omitted command targets resolve from the current Session, Tab, and Pane IDs.
+Explicit selectors can address another resource. Use `lemma proc DOMAIN COMMAND --help` for the exact
+installed grammar. Every invocation returns a Proc envelope containing one nested Command result.
 
 ## Interactive controls
 
@@ -161,7 +161,7 @@ bounded OSC 52 output for user-authorized clipboard writes; it has no native cli
 
 ## Automation
 
-Use one Proc for one or more ordered operations and Events for an observation stream:
+Use one Proc for one or more ordered Commands and Events for an observation stream:
 
 ```sh
 lemma proc pane input --session work --pane 0:1 --paste 'just test' --key enter

@@ -155,7 +155,7 @@ configure_file(
 )
 add_library(
   lemma_api STATIC
-  src/api/op.cpp
+  src/api/command.cpp
   src/api/json.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/generated/api_schema.cpp"
 )

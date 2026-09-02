@@ -1,7 +1,7 @@
 #include "daemon/server.hpp"
 
+#include "api/command.hpp"
 #include "api/json.hpp"
-#include "api/op.hpp"
 #include "api/proc.hpp"
 #include "core/engine.hpp"
 #include "extension/lua_host.hpp"
@@ -1079,12 +1079,12 @@ invoke_public_request(const RuntimeEndpoint& endpoint, std::string request,
 }
 
 [[nodiscard]] auto
-invoke_public_op(const RuntimeEndpoint& endpoint, const std::string_view op,
-                 const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
+invoke_public_command(const RuntimeEndpoint& endpoint, const std::string_view command,
+                      const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
     -> std::optional<api::JsonValue> {
   try {
-    std::string request = R"({"schema":"lemma.proc/v1","ops":[)";
-    request += op;
+    std::string request = R"({"schema":"lemma.proc/v1","commands":[)";
+    request += command;
     request += "]}";
     auto proc_result = invoke_public_request(endpoint, std::move(request), response_timeout);
     if (!proc_result.has_value()) {
@@ -1111,19 +1111,19 @@ struct ProcRequestPolicy final {
 [[nodiscard]] auto proc_request_policy(const api::JsonValue& document) noexcept
     -> ProcRequestPolicy {
   ProcRequestPolicy policy;
-  const auto* const ops = api::json_member(document, "ops");
-  if (ops == nullptr || ops->kind != api::JsonKind::array) {
+  const auto* const commands = api::json_member(document, "commands");
+  if (commands == nullptr || commands->kind != api::JsonKind::array) {
     return policy;
   }
-  for (const auto& op : ops->array) {
-    const auto name = api::json_string(op, "op");
+  for (const auto& command : commands->array) {
+    const auto name = api::json_string(command, "command");
     policy.starts_session =
         policy.starts_session || name == std::optional<std::string_view>{"session.start"};
     if (name != std::optional<std::string_view>{"pane.wait"}) {
       continue;
     }
     const auto timeout = std::min(
-        api::json_unsigned(op, "timeout_ms").value_or(api::wait_timeout_default_milliseconds),
+        api::json_unsigned(command, "timeout_ms").value_or(api::wait_timeout_default_milliseconds),
         static_cast<std::uint64_t>(api::wait_timeout_max_milliseconds));
     policy.response_timeout += std::chrono::milliseconds(static_cast<std::int64_t>(timeout));
   }
@@ -1179,27 +1179,28 @@ template <typename Id>
   }
 }
 
-[[nodiscard]] auto add_op_launch_context(api::Op& op) -> bool {
-  if (op.kind != api::OpKind::session_start ||
-      (!op.working_directory.empty() && op.environment_set)) {
+[[nodiscard]] auto add_command_launch_context(api::Command& command) -> bool {
+  if (command.kind != api::CommandKind::session_start ||
+      (!command.working_directory.empty() && command.environment_set)) {
     return true;
   }
   std::vector<std::string_view> arguments;
   try {
-    arguments.reserve(op.arguments.size());
-    for (const auto& argument : op.arguments) {
+    arguments.reserve(command.arguments.size());
+    for (const auto& argument : command.arguments) {
       arguments.emplace_back(argument);
     }
   } catch (...) {
     return false;
   }
   CapturedLaunchContext context;
-  if (!capture_launch_context(
-          {.working_directory = op.working_directory, .command = arguments, .hold = op.hold},
-          context)) {
+  if (!capture_launch_context({.working_directory = command.working_directory,
+                               .command = arguments,
+                               .hold = command.hold},
+                              context)) {
     return false;
   }
-  if (!op.environment_set) {
+  if (!command.environment_set) {
     std::size_t offset = 0;
     while (offset < context.environment_size) {
       const auto remaining =
@@ -1210,16 +1211,17 @@ template <typename Id>
       }
       const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-      op.environment.emplace_back(reinterpret_cast<const char*>(remaining.data()), size);
+      command.environment.emplace_back(reinterpret_cast<const char*>(remaining.data()), size);
       offset += size + 1U;
     }
-    op.environment_set = true;
+    command.environment_set = true;
   }
   return true;
 }
 
-[[nodiscard]] auto encode_single_op_proc(const api::Op& op) -> std::optional<std::string> {
-  const auto encoded = api::encode_op(op);
+[[nodiscard]] auto encode_single_command_proc(const api::Command& command)
+    -> std::optional<std::string> {
+  const auto encoded = api::encode_command(command);
   if (!encoded.has_value()) {
     return std::nullopt;
   }
@@ -1227,7 +1229,7 @@ template <typename Id>
   if (!api::append_json_string(document, api::proc_schema)) {
     return std::nullopt;
   }
-  document += R"(,"ops":[)";
+  document += R"(,"commands":[)";
   document += *encoded;
   document += "]}";
   return document;
@@ -1326,12 +1328,12 @@ auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) 
   return ok.has_value() && *ok ? 0 : 1;
 }
 
-auto run_proc(const RuntimeEndpoint& endpoint, const api::Op& op) -> int {
-  auto concrete = op;
-  if (!add_op_launch_context(concrete)) {
+auto run_proc(const RuntimeEndpoint& endpoint, const api::Command& command) -> int {
+  auto concrete = command;
+  if (!add_command_launch_context(concrete)) {
     return 1;
   }
-  const auto document = encode_single_op_proc(concrete);
+  const auto document = encode_single_command_proc(concrete);
   return document.has_value() ? run_proc(endpoint, *document) : 2;
 }
 
@@ -1352,7 +1354,7 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
     return {};
   }
   try {
-    std::string request = R"({"op":"session.start")";
+    std::string request = R"({"command":"session.start")";
     if (session.has_value()) {
       request += R"(,"name":)";
       if (!api::append_json_string(request, *session)) {
@@ -1406,7 +1408,7 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
       environment_offset += size + 1U;
     }
     request += "]}";
-    auto public_result = invoke_public_op(endpoint, request);
+    auto public_result = invoke_public_command(endpoint, request);
     if (public_result.has_value()) {
       const auto status = public_operation_status(*public_result);
       if (status != OperationStatus::applied) {
@@ -1459,34 +1461,34 @@ auto query(const RuntimeEndpoint& endpoint, const QueryKind kind, const std::str
     }
     close_descriptor(connection);
   }
-  std::string_view op;
+  std::string_view command;
   std::string_view field;
   switch (kind) {
   case QueryKind::sessions:
-    op = "session.list";
+    command = "session.list";
     field = "sessions";
     break;
   case QueryKind::session:
-    op = "session.inspect";
+    command = "session.inspect";
     field = "sessions";
     break;
   case QueryKind::tabs:
-    op = "tab.list";
+    command = "tab.list";
     field = "tabs";
     break;
   case QueryKind::panes:
-    op = "pane.list";
+    command = "pane.list";
     field = "panes";
     break;
   }
   try {
-    std::string request = R"({"op":)";
-    if (!api::append_json_string(request, op) ||
+    std::string request = R"({"command":)";
+    if (!api::append_json_string(request, command) ||
         (kind != QueryKind::sessions && !append_public_session_selector(request, session))) {
       return {};
     }
     request += "}";
-    auto result = invoke_public_op(endpoint, request);
+    auto result = invoke_public_command(endpoint, request);
     if (!result.has_value()) {
       return {};
     }
@@ -1561,7 +1563,7 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
     return {};
   }
   try {
-    std::string request = R"({"op":)";
+    std::string request = R"({"command":)";
     if (!api::append_json_string(request,
                                  kind == SurfaceCreateKind::tab ? "tab.new" : "pane.split") ||
         !append_public_session_selector(request, session)) {
@@ -1603,7 +1605,7 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
       request += "]";
     }
     request += "}";
-    auto public_result = invoke_public_op(endpoint, request);
+    auto public_result = invoke_public_command(endpoint, request);
     if (public_result.has_value()) {
       const auto status = public_operation_status(*public_result);
       const auto tab_text = api::json_string(*public_result, "tab");
@@ -1622,52 +1624,53 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-branch-clone)
-auto perform_op(const RuntimeEndpoint& endpoint, const std::string_view session,
-                const SemanticOp op, const OpTarget target) -> OperationStatus {
+auto perform_command(const RuntimeEndpoint& endpoint, const std::string_view session,
+                     const SemanticCommand command, const CommandTarget target) -> OperationStatus {
   if (!validate_session(session)) {
     return OperationStatus::failed;
   }
   try {
     std::string_view name;
-    switch (op) {
-    case SemanticOp::tab_select:
+    switch (command) {
+    case SemanticCommand::tab_select:
       name = "tab.select";
       break;
-    case SemanticOp::tab_move:
+    case SemanticCommand::tab_move:
       name = "tab.move";
       break;
-    case SemanticOp::tab_kill:
+    case SemanticCommand::tab_kill:
       name = "tab.kill";
       break;
-    case SemanticOp::pane_focus:
+    case SemanticCommand::pane_focus:
       name = "pane.focus";
       break;
-    case SemanticOp::pane_swap:
+    case SemanticCommand::pane_swap:
       name = "pane.swap";
       break;
-    case SemanticOp::pane_resize_left:
-    case SemanticOp::pane_resize_right:
-    case SemanticOp::pane_resize_up:
-    case SemanticOp::pane_resize_down:
+    case SemanticCommand::pane_resize_left:
+    case SemanticCommand::pane_resize_right:
+    case SemanticCommand::pane_resize_up:
+    case SemanticCommand::pane_resize_down:
       name = "pane.resize";
       break;
-    case SemanticOp::pane_zoom_on:
-    case SemanticOp::pane_zoom_off:
+    case SemanticCommand::pane_zoom_on:
+    case SemanticCommand::pane_zoom_off:
       name = "pane.zoom";
       break;
-    case SemanticOp::pane_kill:
+    case SemanticCommand::pane_kill:
       name = "pane.kill";
       break;
-    case SemanticOp::session_kill:
+    case SemanticCommand::session_kill:
       name = "session.kill";
       break;
     }
-    std::string request = R"({"op":)";
+    std::string request = R"({"command":)";
     if (!api::append_json_string(request, name) ||
         !append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
-    if (op == SemanticOp::tab_select || op == SemanticOp::tab_move || op == SemanticOp::tab_kill) {
+    if (command == SemanticCommand::tab_select || command == SemanticCommand::tab_move ||
+        command == SemanticCommand::tab_kill) {
       request += R"(,"tab":{)";
       if (target.tab.is_valid()) {
         request += R"("id":")" + std::to_string(target.tab.slot()) + ":" +
@@ -1675,36 +1678,40 @@ auto perform_op(const RuntimeEndpoint& endpoint, const std::string_view session,
       } else {
         request += R"("position":)" + std::to_string(target.tab_position) + "}";
       }
-      if (op == SemanticOp::tab_move) {
+      if (command == SemanticCommand::tab_move) {
         request += R"(,"to_position":)" + std::to_string(target.value);
       }
-    } else if (op != SemanticOp::session_kill) {
+    } else if (command != SemanticCommand::session_kill) {
       if (!append_public_id_selector(request, "pane", target.pane)) {
         return OperationStatus::failed;
       }
-      if (op == SemanticOp::pane_swap &&
+      if (command == SemanticCommand::pane_swap &&
           !append_public_id_selector(request, "other", target.peer_pane)) {
         return OperationStatus::failed;
       }
-      if (op == SemanticOp::pane_resize_left || op == SemanticOp::pane_resize_right ||
-          op == SemanticOp::pane_resize_up || op == SemanticOp::pane_resize_down) {
+      if (command == SemanticCommand::pane_resize_left ||
+          command == SemanticCommand::pane_resize_right ||
+          command == SemanticCommand::pane_resize_up ||
+          command == SemanticCommand::pane_resize_down) {
         std::string_view direction = "left";
-        if (op == SemanticOp::pane_resize_right) {
+        if (command == SemanticCommand::pane_resize_right) {
           direction = "right";
-        } else if (op == SemanticOp::pane_resize_up) {
+        } else if (command == SemanticCommand::pane_resize_up) {
           direction = "up";
-        } else if (op == SemanticOp::pane_resize_down) {
+        } else if (command == SemanticCommand::pane_resize_down) {
           direction = "down";
         }
         request += R"(,"direction":")";
         request += direction;
         request += R"(","amount":)" + std::to_string(target.value);
-      } else if (op == SemanticOp::pane_zoom_on || op == SemanticOp::pane_zoom_off) {
-        request += op == SemanticOp::pane_zoom_on ? R"(,"enabled":true)" : R"(,"enabled":false)";
+      } else if (command == SemanticCommand::pane_zoom_on ||
+                 command == SemanticCommand::pane_zoom_off) {
+        request +=
+            command == SemanticCommand::pane_zoom_on ? R"(,"enabled":true)" : R"(,"enabled":false)";
       }
     }
     request += "}";
-    const auto result = invoke_public_op(endpoint, request);
+    const auto result = invoke_public_command(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1718,7 +1725,7 @@ auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"op":"pane.send")";
+    std::string request = R"({"command":"pane.send")";
     if (!append_public_session_selector(request, session) ||
         !append_public_id_selector(request, "pane", pane)) {
       return OperationStatus::failed;
@@ -1728,7 +1735,7 @@ auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_op(endpoint, request);
+    const auto result = invoke_public_command(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1741,13 +1748,13 @@ auto capture_pane(const RuntimeEndpoint& endpoint, const std::string_view sessio
     return {OperationStatus::failed, {}};
   }
   try {
-    std::string request = R"({"op":"pane.capture")";
+    std::string request = R"({"command":"pane.capture")";
     if (!append_public_session_selector(request, session) ||
         !append_public_id_selector(request, "pane", pane)) {
       return {OperationStatus::failed, {}};
     }
     request += "}";
-    auto result = invoke_public_op(endpoint, request);
+    auto result = invoke_public_command(endpoint, request);
     if (!result.has_value()) {
       return {OperationStatus::failed, {}};
     }
@@ -1832,7 +1839,7 @@ auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_vi
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"op":"session.rename")";
+    std::string request = R"({"command":"session.rename")";
     if (!append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
@@ -1841,7 +1848,7 @@ auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_vi
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_op(endpoint, request);
+    const auto result = invoke_public_command(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1864,7 +1871,7 @@ auto rename_tab_status(const RuntimeEndpoint& endpoint, const std::string_view s
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"op":"tab.rename")";
+    std::string request = R"({"command":"tab.rename")";
     if (!append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
@@ -1873,7 +1880,7 @@ auto rename_tab_status(const RuntimeEndpoint& endpoint, const std::string_view s
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_op(endpoint, request);
+    const auto result = invoke_public_command(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1895,7 +1902,7 @@ auto kill(const RuntimeEndpoint& endpoint, const std::string_view session) -> in
   if (!validate_session(session)) {
     return 1;
   }
-  const auto status = perform_op(endpoint, session, SemanticOp::session_kill, {});
+  const auto status = perform_command(endpoint, session, SemanticCommand::session_kill, {});
   if (status == OperationStatus::applied || status == OperationStatus::no_effect) {
     const auto message = "lemma session \"" + std::string(session) + "\" stopped\n";
     return write_text(STDOUT_FILENO, message) ? 0 : 1;

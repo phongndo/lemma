@@ -369,8 +369,8 @@ TEST(ReactorEnvironmentTest, ScriptedWorldControlsFragmentationBackpressureChild
       .listener = connected.listener,
       .client = connected.client,
       .wake_read = wake.front(),
-      .fragments = {"{", R"("schema":"lemma.proc/v1",)", R"("ops":[{"op":"daemon.inspect"})",
-                    "]}\n"},
+      .fragments = {"{", R"("schema":"lemma.proc/v1",)",
+                    R"("commands":[{"command":"daemon.inspect"})", "]}\n"},
       .fragment_count = 4,
   };
 
@@ -415,8 +415,8 @@ TEST(ReactorEnvironmentTest, ChildWakeCanPrecedeAcceptAndFragmentedRequest) {
       .listener = connected.listener,
       .client = connected.client,
       .wake_read = wake.front(),
-      .fragments = {"{", R"("schema":"lemma.proc/v1",)", R"("ops":[{"op":"daemon.inspect"})",
-                    "]}\n"},
+      .fragments = {"{", R"("schema":"lemma.proc/v1",)",
+                    R"("commands":[{"command":"daemon.inspect"})", "]}\n"},
       .fragment_count = 4,
       .wake_before_accept = true,
   };

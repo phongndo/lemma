@@ -369,7 +369,7 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(waited["condition"], "process-exit")
         self.assertEqual(waited["process"], {"state": "exited", "code": 6})
 
-    def test_wait_op_preserves_persistent_control_lockstep(self) -> None:
+    def test_wait_command_preserves_persistent_control_lockstep(self) -> None:
         status, started = self.json_command(
             "proc",
             "session",
@@ -392,9 +392,9 @@ class AgentInterfaceMuxTest(unittest.TestCase):
             json.dumps(
                 {
                     "schema": "lemma.proc/v1",
-                    "ops": [
+                    "commands": [
                         {
-                            "op": "pane.wait",
+                            "command": "pane.wait",
                             "session": {"name": "persistent-wait"},
                             "pane": {"id": "0:1"},
                             "timeout_ms": 2000,
@@ -408,7 +408,7 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         waited = json.loads(stream.readline())
         self.assertEqual(waited["results"][0]["result"]["status"], "applied")
         connection.sendall(
-            b'{"schema":"lemma.proc/v1","ops":[{"op":"session.inspect",'
+            b'{"schema":"lemma.proc/v1","commands":[{"command":"session.inspect",'
             b'"session":{"name":"persistent-wait"}}]}\n'
         )
         inspected = json.loads(stream.readline())
@@ -519,7 +519,7 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(closed["status"], "applied")
         self.assertEqual(closed["process"], {"state": "exited_unknown"})
 
-    def test_legacy_action_interfaces_are_rejected(self) -> None:
+    def test_legacy_action_and_op_interfaces_are_rejected(self) -> None:
         cli = self.server.command("action", "daemon", "inspect")
         self.assertEqual(cli.status, 2, cli.output)
 
@@ -533,15 +533,23 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(response["schema"], "lemma.proc-result/v1")
         self.assertEqual(response["error"]["reason"], "invalid_schema")
 
-        legacy = self.server.root / "legacy-proc.json"
-        legacy.write_text(
-            '{"schema":"lemma.proc/v1","actions":[{"action":"daemon.inspect"}]}'
-        )
-        status, rejected = self.json_command("proc", "--file", str(legacy))
-        self.assertEqual(status, 2, rejected)
-        self.assertEqual(rejected["error"]["reason"], "unknown_field")
+        for name, document in (
+            (
+                "legacy-action-proc.json",
+                '{"schema":"lemma.proc/v1","actions":[{"action":"daemon.inspect"}]}',
+            ),
+            (
+                "legacy-op-proc.json",
+                '{"schema":"lemma.proc/v1","ops":[{"op":"daemon.inspect"}]}',
+            ),
+        ):
+            legacy = self.server.root / name
+            legacy.write_text(document)
+            status, rejected = self.json_command("proc", "--file", str(legacy))
+            self.assertEqual(status, 2, rejected)
+            self.assertEqual(rejected["error"]["reason"], "unknown_field")
 
-    def test_direct_proc_cli_wraps_one_operation_in_a_proc_result(self) -> None:
+    def test_direct_proc_cli_wraps_one_command_in_a_proc_result(self) -> None:
         status, started = self.json_command(
             "proc",
             "session",
@@ -557,24 +565,24 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertTrue(started["ok"])
         self.assertEqual(len(started["results"]), 1)
         nested = started["results"][0]["result"]
-        self.assertEqual(nested["schema"], "lemma.op-result/v1")
-        self.assertEqual(nested["op"], "session.start")
+        self.assertEqual(nested["schema"], "lemma.command-result/v1")
+        self.assertEqual(nested["command"], "session.start")
         self.assertEqual(nested["status"], "applied")
 
         status, inspected = self.json_command(
             "proc", "session", "inspect", "--session", "direct-proc"
         )
         self.assertEqual(status, 0, inspected)
-        self.assertEqual(inspected["schema"], "lemma.op-result/v1")
+        self.assertEqual(inspected["schema"], "lemma.command-result/v1")
         self.assertEqual(inspected["session"]["name"], "direct-proc")
 
         empty = self.server.root / "empty-proc.json"
-        empty.write_text('{"schema":"lemma.proc/v1","ops":[]}')
+        empty.write_text('{"schema":"lemma.proc/v1","commands":[]}')
         status, rejected = self.json_command("proc", "--file", str(empty))
         self.assertEqual(status, 2, rejected)
         self.assertEqual(rejected["error"]["reason"], "invalid_document")
 
-    def test_closing_control_owner_cancels_proc_before_later_operations(self) -> None:
+    def test_closing_control_owner_cancels_proc_before_later_commands(self) -> None:
         self.server.require_command(
             "proc", "session", "start", "cancel-proc", "--hold", "--", "/bin/sh"
         )
@@ -582,21 +590,21 @@ class AgentInterfaceMuxTest(unittest.TestCase):
             {
                 "schema": "lemma.proc/v1",
                 "on_error": "continue",
-                "ops": [
+                "commands": [
                     {
-                        "op": "session.rename",
+                        "command": "session.rename",
                         "session": {"name": "cancel-proc"},
                         "name": "cancel-proc-running",
                     },
                     {
-                        "op": "pane.wait",
+                        "command": "pane.wait",
                         "session": {"name": "cancel-proc-running"},
                         "pane": {"id": "0:1"},
                         "contains": "__NEVER__",
                         "timeout_ms": 200,
                     },
                     {
-                        "op": "session.kill",
+                        "command": "session.kill",
                         "session": {"name": "cancel-proc-running"},
                     },
                 ],
@@ -622,22 +630,22 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(status, 0, inspected)
         self.assertEqual(inspected["status"], "applied")
 
-    def test_proc_composes_input_wait_and_inspection_operations(self) -> None:
+    def test_proc_composes_input_wait_and_inspection_commands(self) -> None:
         proc = self.server.root / "agent-proc.json"
         proc.write_text(
             json.dumps(
                 {
                     "schema": "lemma.proc/v1",
-                    "ops": [
+                    "commands": [
                         {
                             "id": "root",
-                            "op": "session.start",
+                            "command": "session.start",
                             "name": "agent-proc",
                             "hold": True,
                             "argv": ["/bin/sh"],
                         },
                         {
-                            "op": "pane.input",
+                            "command": "pane.input",
                             "pane": {"result": "root"},
                             "events": [
                                 {"kind": "text", "text": "printf '__PROC_INPUT__\\n'"},
@@ -645,12 +653,12 @@ class AgentInterfaceMuxTest(unittest.TestCase):
                             ],
                         },
                         {
-                            "op": "pane.wait",
+                            "command": "pane.wait",
                             "pane": {"result": "root"},
                             "contains": "__PROC_INPUT__",
                             "timeout_ms": 2000,
                         },
-                        {"op": "pane.inspect", "pane": {"result": "root"}},
+                        {"command": "pane.inspect", "pane": {"result": "root"}},
                     ],
                 },
                 separators=(",", ":"),
@@ -663,7 +671,7 @@ class AgentInterfaceMuxTest(unittest.TestCase):
             [entry["result"]["status"] for entry in result["results"]], ["applied"] * 4
         )
         waited = result["results"][2]["result"]
-        self.assertEqual(waited["op"], "pane.wait")
+        self.assertEqual(waited["command"], "pane.wait")
         self.assertIn("__PROC_INPUT__", waited["capture"]["text"])
 
     def test_proc_reports_unresolved_dependencies_without_placeholder_ids(self) -> None:
@@ -676,21 +684,21 @@ class AgentInterfaceMuxTest(unittest.TestCase):
                 {
                     "schema": "lemma.proc/v1",
                     "on_error": "continue",
-                    "ops": [
+                    "commands": [
                         {
                             "id": "failed",
-                            "op": "session.start",
+                            "command": "session.start",
                             "name": "dependency-source",
                             "hold": True,
                             "argv": ["/bin/sh"],
                         },
                         {
-                            "op": "pane.wait",
+                            "command": "pane.wait",
                             "pane": {"result": "failed"},
                             "timeout_ms": 100,
                         },
                         {
-                            "op": "session.inspect",
+                            "command": "session.inspect",
                             "session": {"name": "dependency-source"},
                         },
                     ],
