@@ -193,8 +193,11 @@ hooks-check:
 hooks-fix:
     {{ nix }} hk fix --all
 
-# Remove generated build and vendored Zig output.
+# Remove generated build and vendored Zig output while preserving the shared compiler cache.
 clean:
     rm -rf build CMakeUserPresets.json .zig-cache \
         third_party/ghostty/.zig-cache third_party/ghostty/zig-out third_party/ghostty/zig-pkg
+
+# Explicitly clear the compiler cache shared by every worktree.
+clean-cache:
     {{ nix }} ccache --clear

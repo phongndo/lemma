@@ -44,8 +44,10 @@ when its toolchain or configuration inputs change and issue an incremental build
 `lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies the directory
 where it was invoked when `--cwd` is omitted; it otherwise executes that checkout's exact binary
 with unchanged arguments. The `dev` profile uses `-O1`, debug symbols, enabled invariants, and frame
-pointers. A path-derived runtime namespace isolates every worktree, and the runner replaces a daemon
-whose executable predates the current build.
+pointers. C and C++ outputs are path-normalized into the user's shared ccache, so matching
+compilations are reusable across worktrees even after removing `build/`; `just clean` preserves that
+cache, while `just clean-cache` explicitly clears it. A path-derived runtime namespace isolates every
+worktree, and the runner replaces a daemon whose executable predates the current build.
 
 Common verification commands:
 

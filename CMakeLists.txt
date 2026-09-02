@@ -11,6 +11,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Keep compiler output independent of the checkout path so ccache entries can be reused by
+# worktrees. CMakePresets.json supplies the matching per-worktree CCACHE_BASEDIR.
+add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
+
 option(LEMMA_BUILD_TESTS "Build the test suite" ON)
 option(LEMMA_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(LEMMA_BUILD_FUZZERS "Build sanitizer-backed parser fuzz targets" OFF)
