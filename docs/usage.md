@@ -195,8 +195,9 @@ creates a nested Session. Session names are completed from the daemon's live Ses
 Commands and options come from one native discovery catalog. Lua custom command registration is not
 exposed; the palette currently contains native commands only.
 
-The command line is hosted by the native status row. With `ui.status_line = false`, `C-b :` is
-intentionally inert rather than capturing invisible input.
+Command and copy-search prompts are hosted by the native status row. With
+`ui.status_line = false`, their bindings are intentionally inert rather than capturing invisible
+input.
 
 ## Copy mode
 

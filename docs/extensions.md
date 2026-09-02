@@ -90,7 +90,7 @@ All `lemma.setup()` groups and fields are optional:
 - `terminal.scrollback_lines` is a nonnegative integer up to 10,000,000, or `false` for the native
   memory-bounded default.
 - `ui.status_line` enables or disables the native one-row status line. Disabling it gives the full
-  viewport to panes and makes the status-hosted command-line binding inert.
+  viewport to panes and makes status-hosted command-line and copy-search bindings inert.
 - `launch.default_cwd` is empty or an absolute path. It applies when creation does not specify
   `--cwd`.
 - `launch.default_program` is an exact argv array, not a shell command. It is bounded to 64

@@ -2293,6 +2293,9 @@ void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& sea
 
 [[nodiscard]] auto begin_copy_search_prompt(SessionRecord& session, PaneRuntime& runtime,
                                             const CopySearchDirection direction) noexcept -> bool {
+  if (!reactor_status_line()) {
+    return false;
+  }
   const auto endpoint = runtime.terminal.selection_endpoint(vt::PointSpace::screen);
   const auto viewport = runtime.terminal.viewport_state();
   const auto checkpointed = runtime.terminal.checkpoint_selection();
@@ -2591,6 +2594,9 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
            CopySelectionResult::applied;
   case CopyActionKind::begin_search_forward:
   case CopyActionKind::begin_search_backward:
+    if (!reactor_status_line()) {
+      return true;
+    }
     if (!begin_copy_search_prompt(session, runtime,
                                   action.kind == CopyActionKind::begin_search_forward
                                       ? CopySearchDirection::forward
@@ -3996,6 +4002,9 @@ struct StatusHit final {
     return {.status = CommandStatus::unavailable};
   case CommandKind::enter_copy_search_forward:
   case CommandKind::enter_copy_search_backward: {
+    if (!reactor_status_line()) {
+      return {.status = CommandStatus::unavailable};
+    }
     auto* runtime = find_pane_runtime(runtimes, session, *tab, *targeted_pane);
     if (runtime == nullptr) {
       return {.status = CommandStatus::unavailable};
