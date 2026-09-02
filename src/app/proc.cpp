@@ -1,4 +1,4 @@
-#include "app/procedure.hpp"
+#include "app/proc.hpp"
 
 #include "api/json.hpp"
 #include "daemon/server.hpp"
@@ -33,7 +33,7 @@ namespace {
   return std::nullopt;
 }
 
-[[nodiscard]] auto read_procedure(const std::string_view source) -> std::optional<std::string> {
+[[nodiscard]] auto read_proc(const std::string_view source) -> std::optional<std::string> {
   if (source == "-") {
     return read_bounded_stream(std::cin);
   }
@@ -43,9 +43,10 @@ namespace {
 
 } // namespace
 
-auto run_procedure(const daemon::RuntimeEndpoint& endpoint, const std::string_view source) -> int {
+auto run_proc_document(const daemon::RuntimeEndpoint& endpoint, const std::string_view source)
+    -> int {
   try {
-    const auto document = read_procedure(source);
+    const auto document = read_proc(source);
     if (!document.has_value()) {
       constexpr std::string_view error =
           R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"read_failed"},"results":[]}

@@ -30,13 +30,14 @@ class MuxCommandModelStressTest(unittest.TestCase):
         all_processes = {first.process}
         stale_panes: list[str] = []
 
-        def action(*arguments: str) -> dict[str, object]:
-            result = server.command("action", *arguments)
+        def op(*arguments: str) -> dict[str, object]:
+            result = server.command("proc", *arguments)
             try:
-                document = json.loads(result.output)
-            except json.JSONDecodeError as error:
+                proc = json.loads(result.output)
+                document = proc["results"][0]["result"]
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
                 raise AssertionError(
-                    f"action {arguments!r} returned invalid JSON: {result.output}"
+                    f"op {arguments!r} returned invalid JSON: {result.output}"
                 ) from error
             document["_exit_status"] = result.status
             return document
@@ -78,7 +79,7 @@ class MuxCommandModelStressTest(unittest.TestCase):
                     operations.append(f"{index}: focus {target.id}")
                 elif operation == "agent-focus":
                     target = randomizer.choice(list(panes.values()))
-                    focused = action(
+                    focused = op(
                         "pane",
                         "focus",
                         "--session",
@@ -98,7 +99,7 @@ class MuxCommandModelStressTest(unittest.TestCase):
                     target = randomizer.choice(list(panes.values()))
                     before = session.state()
                     enabled = randomizer.choice((True, False))
-                    zoomed = action(
+                    zoomed = op(
                         "pane",
                         "zoom",
                         "--session",
@@ -121,7 +122,7 @@ class MuxCommandModelStressTest(unittest.TestCase):
                 elif operation == "stale-focus":
                     stale = randomizer.choice(stale_panes)
                     before = session.state()
-                    rejected = action(
+                    rejected = op(
                         "pane",
                         "focus",
                         "--session",

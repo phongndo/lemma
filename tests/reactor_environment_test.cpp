@@ -181,7 +181,7 @@ thread_local ScriptedReactor* active_script = nullptr;
     return -1;
   }
   const std::string_view response(script.response.data(), script.response_size);
-  if (response.contains(R"("schema":"lemma.action-result/v1")") &&
+  if (response.contains(R"("schema":"lemma.proc-result/v1")") &&
       response.contains(R"("status":"applied")")) {
     script.stop = true;
   } else if (script.polls > 32U) {
@@ -369,7 +369,8 @@ TEST(ReactorEnvironmentTest, ScriptedWorldControlsFragmentationBackpressureChild
       .listener = connected.listener,
       .client = connected.client,
       .wake_read = wake.front(),
-      .fragments = {"{", R"("schema":"lemma.action/v1",)", R"("action":"daemon.inspect")", "}\n"},
+      .fragments = {"{", R"("schema":"lemma.proc/v1",)", R"("ops":[{"op":"daemon.inspect"})",
+                    "]}\n"},
       .fragment_count = 4,
   };
 
@@ -414,7 +415,8 @@ TEST(ReactorEnvironmentTest, ChildWakeCanPrecedeAcceptAndFragmentedRequest) {
       .listener = connected.listener,
       .client = connected.client,
       .wake_read = wake.front(),
-      .fragments = {"{", R"("schema":"lemma.action/v1",)", R"("action":"daemon.inspect")", "}\n"},
+      .fragments = {"{", R"("schema":"lemma.proc/v1",)", R"("ops":[{"op":"daemon.inspect"})",
+                    "]}\n"},
       .fragment_count = 4,
       .wake_before_accept = true,
   };

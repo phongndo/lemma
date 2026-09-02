@@ -108,24 +108,24 @@ command is omitted, the configured launch default applies; without configuration
 account home and login shell. Pane processes normally keep running without `--hold`; `--hold`
 retains the Pane and its terminal after the process exits.
 
-The complete structured Session, Tab, and Pane interface is under `lemma action`:
+The complete structured Session, Tab, and Pane interface is under `lemma proc`:
 
 ```sh
-lemma action tab new --session work --title tests -- just test
-lemma action pane split --session work --pane 0:1 --right
-lemma action pane capture --session work --pane 0:1
-lemma action pane split --help
+lemma proc tab new --session work --title tests -- just test
+lemma proc pane split --session work --pane 0:1 --right
+lemma proc pane capture --session work --pane 0:1
+lemma proc pane split --help
 ```
 
-Inside a Lemma pane, omitted Action targets resolve from the current Session, Tab, and Pane IDs.
-Explicit selectors can address another resource. Use `lemma action DOMAIN OP --help` for the exact
-installed grammar.
+Inside a Lemma pane, omitted operation targets resolve from the current Session, Tab, and Pane IDs.
+Explicit selectors can address another resource. Use `lemma proc DOMAIN OP --help` for the exact
+installed grammar. Every invocation returns a Proc envelope containing one nested Op result.
 
 ## Interactive controls
 
 The default prefix is `C-b`.
 
-| Binding | Action |
+| Binding | Effect |
 | --- | --- |
 | `C-b C-b` | Send a literal `C-b` |
 | `C-b d` | Detach |
@@ -161,13 +161,12 @@ bounded OSC 52 output for user-authorized clipboard writes; it has no native cli
 
 ## Automation
 
-Use one Action for one operation, a Procedure for a bounded dependent sequence, and Events for an
-observation stream:
+Use one Proc for one or more ordered operations and Events for an observation stream:
 
 ```sh
-lemma action pane input --session work --pane 0:1 --paste 'just test' --key enter
-lemma action pane wait --session work --pane 0:1 --until-prompt --timeout 2m
-lemma proc procedure.json
+lemma proc pane input --session work --pane 0:1 --paste 'just test' --key enter
+lemma proc pane wait --session work --pane 0:1 --until-prompt --timeout 2m
+lemma proc --file proc.json
 lemma events --session work --pane 0:1 --screen
 lemma api schema --json
 ```

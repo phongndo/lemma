@@ -1,5 +1,5 @@
-#include "api/action.hpp"
 #include "api/json.hpp"
+#include "api/op.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,14 +36,13 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* const data, const std:
   if (!lemma::api::append_json_value(canonical, *round_trip.value) || canonical != encoded) {
     __builtin_trap();
   }
-  const bool action_decoded = lemma::api::decode_action(*parsed.value).action.has_value();
-  const bool canonical_action_decoded =
-      lemma::api::decode_action(*round_trip.value).action.has_value();
+  const bool op_decoded = lemma::api::decode_op(*parsed.value).op.has_value();
+  const bool canonical_op_decoded = lemma::api::decode_op(*round_trip.value).op.has_value();
   const bool subscription_decoded =
       lemma::api::decode_event_subscription(*parsed.value).subscription.has_value();
   const bool canonical_subscription_decoded =
       lemma::api::decode_event_subscription(*round_trip.value).subscription.has_value();
-  if (action_decoded != canonical_action_decoded ||
+  if (op_decoded != canonical_op_decoded ||
       subscription_decoded != canonical_subscription_decoded) {
     __builtin_trap();
   }

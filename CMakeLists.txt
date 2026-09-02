@@ -155,7 +155,7 @@ configure_file(
 )
 add_library(
   lemma_api STATIC
-  src/api/action.cpp
+  src/api/op.cpp
   src/api/json.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/generated/api_schema.cpp"
 )
@@ -221,7 +221,7 @@ target_link_libraries(
   PRIVATE lemma_daemon lemma_diagnostic lemma_platform lemma_protocol
 )
 
-add_library(lemma_app STATIC src/app/application.cpp src/app/procedure.cpp)
+add_library(lemma_app STATIC src/app/application.cpp src/app/proc.cpp)
 lemma_internal_target(lemma_app)
 target_link_libraries(
   lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_extension lemma_terminal

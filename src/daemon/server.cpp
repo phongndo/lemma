@@ -1,7 +1,8 @@
 #include "daemon/server.hpp"
 
-#include "api/action.hpp"
 #include "api/json.hpp"
+#include "api/op.hpp"
+#include "api/proc.hpp"
 #include "core/engine.hpp"
 #include "extension/lua_host.hpp"
 #include "lemma/id.hpp"
@@ -1051,8 +1052,8 @@ private:
 }
 
 [[nodiscard]] auto
-invoke_public_action(const RuntimeEndpoint& endpoint, std::string request,
-                     const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
+invoke_public_request(const RuntimeEndpoint& endpoint, std::string request,
+                      const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
     -> std::optional<api::JsonValue> {
   try {
     if (!request.ends_with('\n')) {
@@ -1077,27 +1078,52 @@ invoke_public_action(const RuntimeEndpoint& endpoint, std::string request,
   return parsed.value.has_value() ? std::move(parsed.value) : std::nullopt;
 }
 
-struct ProcedureRequestPolicy final {
+[[nodiscard]] auto
+invoke_public_op(const RuntimeEndpoint& endpoint, const std::string_view op,
+                 const std::chrono::milliseconds response_timeout = std::chrono::seconds(10))
+    -> std::optional<api::JsonValue> {
+  try {
+    std::string request = R"({"schema":"lemma.proc/v1","ops":[)";
+    request += op;
+    request += "]}";
+    auto proc_result = invoke_public_request(endpoint, std::move(request), response_timeout);
+    if (!proc_result.has_value()) {
+      return std::nullopt;
+    }
+    const auto* const results = api::json_member(*proc_result, "results");
+    if (results != nullptr && results->kind == api::JsonKind::array && !results->array.empty()) {
+      const auto* const result = api::json_member(results->array.front(), "result");
+      if (result != nullptr) {
+        return *result;
+      }
+    }
+    return proc_result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+struct ProcRequestPolicy final {
   std::chrono::milliseconds response_timeout{std::chrono::seconds(10)};
   bool starts_session{false};
 };
 
-[[nodiscard]] auto procedure_request_policy(const api::JsonValue& document) noexcept
-    -> ProcedureRequestPolicy {
-  ProcedureRequestPolicy policy;
-  const auto* const actions = api::json_member(document, "actions");
-  if (actions == nullptr || actions->kind != api::JsonKind::array) {
+[[nodiscard]] auto proc_request_policy(const api::JsonValue& document) noexcept
+    -> ProcRequestPolicy {
+  ProcRequestPolicy policy;
+  const auto* const ops = api::json_member(document, "ops");
+  if (ops == nullptr || ops->kind != api::JsonKind::array) {
     return policy;
   }
-  for (const auto& action : actions->array) {
-    const auto name = api::json_string(action, "action");
+  for (const auto& op : ops->array) {
+    const auto name = api::json_string(op, "op");
     policy.starts_session =
         policy.starts_session || name == std::optional<std::string_view>{"session.start"};
     if (name != std::optional<std::string_view>{"pane.wait"}) {
       continue;
     }
     const auto timeout = std::min(
-        api::json_unsigned(action, "timeout_ms").value_or(api::wait_timeout_default_milliseconds),
+        api::json_unsigned(op, "timeout_ms").value_or(api::wait_timeout_default_milliseconds),
         static_cast<std::uint64_t>(api::wait_timeout_max_milliseconds));
     policy.response_timeout += std::chrono::milliseconds(static_cast<std::int64_t>(timeout));
   }
@@ -1151,6 +1177,60 @@ template <typename Id>
   } catch (...) {
     return false;
   }
+}
+
+[[nodiscard]] auto add_op_launch_context(api::Op& op) -> bool {
+  if (op.kind != api::OpKind::session_start ||
+      (!op.working_directory.empty() && op.environment_set)) {
+    return true;
+  }
+  std::vector<std::string_view> arguments;
+  try {
+    arguments.reserve(op.arguments.size());
+    for (const auto& argument : op.arguments) {
+      arguments.emplace_back(argument);
+    }
+  } catch (...) {
+    return false;
+  }
+  CapturedLaunchContext context;
+  if (!capture_launch_context(
+          {.working_directory = op.working_directory, .command = arguments, .hold = op.hold},
+          context)) {
+    return false;
+  }
+  if (!op.environment_set) {
+    std::size_t offset = 0;
+    while (offset < context.environment_size) {
+      const auto remaining =
+          std::span(context.environment).first(context.environment_size).subspan(offset);
+      const auto terminator = std::ranges::find(remaining, std::byte{0});
+      if (terminator == remaining.end()) {
+        return false;
+      }
+      const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      op.environment.emplace_back(reinterpret_cast<const char*>(remaining.data()), size);
+      offset += size + 1U;
+    }
+    op.environment_set = true;
+  }
+  return true;
+}
+
+[[nodiscard]] auto encode_single_op_proc(const api::Op& op) -> std::optional<std::string> {
+  const auto encoded = api::encode_op(op);
+  if (!encoded.has_value()) {
+    return std::nullopt;
+  }
+  std::string document = R"({"schema":)";
+  if (!api::append_json_string(document, api::proc_schema)) {
+    return std::nullopt;
+  }
+  document += R"(,"ops":[)";
+  document += *encoded;
+  document += "]}";
+  return document;
 }
 
 } // namespace
@@ -1207,78 +1287,6 @@ template <typename Id>
   return open_connection(std::string(endpoint.socket_path()));
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action, const bool start_daemon)
-    -> int {
-  auto concrete = action;
-  if (concrete.kind == api::ActionKind::session_start &&
-      (concrete.working_directory.empty() || !concrete.environment_set)) {
-    std::vector<std::string_view> arguments;
-    try {
-      arguments.reserve(concrete.arguments.size());
-      for (const auto& argument : concrete.arguments) {
-        arguments.emplace_back(argument);
-      }
-    } catch (...) {
-      return 1;
-    }
-    CapturedLaunchContext context;
-    if (!capture_launch_context({.working_directory = concrete.working_directory,
-                                 .command = arguments,
-                                 .hold = concrete.hold},
-                                context)) {
-      return 1;
-    }
-    if (!concrete.environment_set) {
-      std::size_t offset = 0;
-      while (offset < context.environment_size) {
-        const auto remaining =
-            std::span(context.environment).first(context.environment_size).subspan(offset);
-        const auto terminator = std::ranges::find(remaining, std::byte{0});
-        if (terminator == remaining.end()) {
-          return 1;
-        }
-        const auto size = static_cast<std::size_t>(std::distance(remaining.begin(), terminator));
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        concrete.environment.emplace_back(reinterpret_cast<const char*>(remaining.data()), size);
-        offset += size + 1U;
-      }
-      concrete.environment_set = true;
-    }
-  }
-  const auto document = api::encode_action(concrete);
-  if (!document.has_value()) {
-    return 2;
-  }
-  if (start_daemon && !ensure_server(std::string(endpoint.socket_path()))) {
-    static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
-    return 1;
-  }
-  const auto response_timeout =
-      concrete.kind == api::ActionKind::pane_wait
-          ? std::chrono::milliseconds(concrete.wait_timeout_milliseconds) +
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10))
-          : std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10));
-  auto result = invoke_public_action(endpoint, *document, response_timeout);
-  if (!result.has_value()) {
-    std::string unavailable = R"({"schema":"lemma.action-result/v1","action":)";
-    if (!api::append_json_string(unavailable, api::action_name(concrete.kind))) {
-      return 1;
-    }
-    unavailable += R"(,"status":"unavailable"}
-)";
-    static_cast<void>(write_text(STDOUT_FILENO, unavailable));
-    return 1;
-  }
-  std::string encoded;
-  if (!api::append_json_value(encoded, *result) || !write_text(STDOUT_FILENO, encoded) ||
-      !write_text(STDOUT_FILENO, "\n")) {
-    return 1;
-  }
-  const auto status = public_operation_status(*result);
-  return status == OperationStatus::applied || status == OperationStatus::no_effect ? 0 : 1;
-}
-
 auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) -> int {
   auto parsed = api::parse_json(document);
   if (!parsed.value.has_value()) {
@@ -1292,12 +1300,12 @@ auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) 
   if (!api::append_json_value(compact, *parsed.value)) {
     return 2;
   }
-  const auto policy = procedure_request_policy(*parsed.value);
+  const auto policy = proc_request_policy(*parsed.value);
   if (policy.starts_session && !ensure_server(std::string(endpoint.socket_path()))) {
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
     return 1;
   }
-  auto result = invoke_public_action(endpoint, std::move(compact), policy.response_timeout);
+  auto result = invoke_public_request(endpoint, std::move(compact), policy.response_timeout);
   if (!result.has_value()) {
     constexpr std::string_view unavailable =
         R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"unavailable"},"results":[]}
@@ -1318,6 +1326,15 @@ auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) 
   return ok.has_value() && *ok ? 0 : 1;
 }
 
+auto run_proc(const RuntimeEndpoint& endpoint, const api::Op& op) -> int {
+  auto concrete = op;
+  if (!add_op_launch_context(concrete)) {
+    return 1;
+  }
+  const auto document = encode_single_op_proc(concrete);
+  return document.has_value() ? run_proc(endpoint, *document) : 2;
+}
+
 // Creation reports each bounded setup and daemon outcome without publishing partial client state.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::string_view> session,
@@ -1335,7 +1352,7 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
     return {};
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":"session.start")";
+    std::string request = R"({"op":"session.start")";
     if (session.has_value()) {
       request += R"(,"name":)";
       if (!api::append_json_string(request, *session)) {
@@ -1389,7 +1406,7 @@ auto create_detailed(const RuntimeEndpoint& endpoint, const std::optional<std::s
       environment_offset += size + 1U;
     }
     request += "]}";
-    auto public_result = invoke_public_action(endpoint, std::move(request));
+    auto public_result = invoke_public_op(endpoint, request);
     if (public_result.has_value()) {
       const auto status = public_operation_status(*public_result);
       if (status != OperationStatus::applied) {
@@ -1442,34 +1459,34 @@ auto query(const RuntimeEndpoint& endpoint, const QueryKind kind, const std::str
     }
     close_descriptor(connection);
   }
-  std::string_view action;
+  std::string_view op;
   std::string_view field;
   switch (kind) {
   case QueryKind::sessions:
-    action = "session.list";
+    op = "session.list";
     field = "sessions";
     break;
   case QueryKind::session:
-    action = "session.inspect";
+    op = "session.inspect";
     field = "sessions";
     break;
   case QueryKind::tabs:
-    action = "tab.list";
+    op = "tab.list";
     field = "tabs";
     break;
   case QueryKind::panes:
-    action = "pane.list";
+    op = "pane.list";
     field = "panes";
     break;
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":)";
-    if (!api::append_json_string(request, action) ||
+    std::string request = R"({"op":)";
+    if (!api::append_json_string(request, op) ||
         (kind != QueryKind::sessions && !append_public_session_selector(request, session))) {
       return {};
     }
     request += "}";
-    auto result = invoke_public_action(endpoint, std::move(request));
+    auto result = invoke_public_op(endpoint, request);
     if (!result.has_value()) {
       return {};
     }
@@ -1544,7 +1561,7 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
     return {};
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":)";
+    std::string request = R"({"op":)";
     if (!api::append_json_string(request,
                                  kind == SurfaceCreateKind::tab ? "tab.new" : "pane.split") ||
         !append_public_session_selector(request, session)) {
@@ -1586,7 +1603,7 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
       request += "]";
     }
     request += "}";
-    auto public_result = invoke_public_action(endpoint, std::move(request));
+    auto public_result = invoke_public_op(endpoint, request);
     if (public_result.has_value()) {
       const auto status = public_operation_status(*public_result);
       const auto tab_text = api::json_string(*public_result, "tab");
@@ -1605,53 +1622,52 @@ auto create_surface(const RuntimeEndpoint& endpoint, const std::string_view sess
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-branch-clone)
-auto perform_action(const RuntimeEndpoint& endpoint, const std::string_view session,
-                    const SemanticAction action, const ActionTarget target) -> OperationStatus {
+auto perform_op(const RuntimeEndpoint& endpoint, const std::string_view session,
+                const SemanticOp op, const OpTarget target) -> OperationStatus {
   if (!validate_session(session)) {
     return OperationStatus::failed;
   }
   try {
     std::string_view name;
-    switch (action) {
-    case SemanticAction::tab_select:
+    switch (op) {
+    case SemanticOp::tab_select:
       name = "tab.select";
       break;
-    case SemanticAction::tab_move:
+    case SemanticOp::tab_move:
       name = "tab.move";
       break;
-    case SemanticAction::tab_kill:
+    case SemanticOp::tab_kill:
       name = "tab.kill";
       break;
-    case SemanticAction::pane_focus:
+    case SemanticOp::pane_focus:
       name = "pane.focus";
       break;
-    case SemanticAction::pane_swap:
+    case SemanticOp::pane_swap:
       name = "pane.swap";
       break;
-    case SemanticAction::pane_resize_left:
-    case SemanticAction::pane_resize_right:
-    case SemanticAction::pane_resize_up:
-    case SemanticAction::pane_resize_down:
+    case SemanticOp::pane_resize_left:
+    case SemanticOp::pane_resize_right:
+    case SemanticOp::pane_resize_up:
+    case SemanticOp::pane_resize_down:
       name = "pane.resize";
       break;
-    case SemanticAction::pane_zoom_on:
-    case SemanticAction::pane_zoom_off:
+    case SemanticOp::pane_zoom_on:
+    case SemanticOp::pane_zoom_off:
       name = "pane.zoom";
       break;
-    case SemanticAction::pane_kill:
+    case SemanticOp::pane_kill:
       name = "pane.kill";
       break;
-    case SemanticAction::session_kill:
+    case SemanticOp::session_kill:
       name = "session.kill";
       break;
     }
-    std::string request = R"({"schema":"lemma.action/v1","action":)";
+    std::string request = R"({"op":)";
     if (!api::append_json_string(request, name) ||
         !append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
-    if (action == SemanticAction::tab_select || action == SemanticAction::tab_move ||
-        action == SemanticAction::tab_kill) {
+    if (op == SemanticOp::tab_select || op == SemanticOp::tab_move || op == SemanticOp::tab_kill) {
       request += R"(,"tab":{)";
       if (target.tab.is_valid()) {
         request += R"("id":")" + std::to_string(target.tab.slot()) + ":" +
@@ -1659,39 +1675,36 @@ auto perform_action(const RuntimeEndpoint& endpoint, const std::string_view sess
       } else {
         request += R"("position":)" + std::to_string(target.tab_position) + "}";
       }
-      if (action == SemanticAction::tab_move) {
+      if (op == SemanticOp::tab_move) {
         request += R"(,"to_position":)" + std::to_string(target.value);
       }
-    } else if (action != SemanticAction::session_kill) {
+    } else if (op != SemanticOp::session_kill) {
       if (!append_public_id_selector(request, "pane", target.pane)) {
         return OperationStatus::failed;
       }
-      if (action == SemanticAction::pane_swap &&
+      if (op == SemanticOp::pane_swap &&
           !append_public_id_selector(request, "other", target.peer_pane)) {
         return OperationStatus::failed;
       }
-      if (action == SemanticAction::pane_resize_left ||
-          action == SemanticAction::pane_resize_right || action == SemanticAction::pane_resize_up ||
-          action == SemanticAction::pane_resize_down) {
+      if (op == SemanticOp::pane_resize_left || op == SemanticOp::pane_resize_right ||
+          op == SemanticOp::pane_resize_up || op == SemanticOp::pane_resize_down) {
         std::string_view direction = "left";
-        if (action == SemanticAction::pane_resize_right) {
+        if (op == SemanticOp::pane_resize_right) {
           direction = "right";
-        } else if (action == SemanticAction::pane_resize_up) {
+        } else if (op == SemanticOp::pane_resize_up) {
           direction = "up";
-        } else if (action == SemanticAction::pane_resize_down) {
+        } else if (op == SemanticOp::pane_resize_down) {
           direction = "down";
         }
         request += R"(,"direction":")";
         request += direction;
         request += R"(","amount":)" + std::to_string(target.value);
-      } else if (action == SemanticAction::pane_zoom_on ||
-                 action == SemanticAction::pane_zoom_off) {
-        request +=
-            action == SemanticAction::pane_zoom_on ? R"(,"enabled":true)" : R"(,"enabled":false)";
+      } else if (op == SemanticOp::pane_zoom_on || op == SemanticOp::pane_zoom_off) {
+        request += op == SemanticOp::pane_zoom_on ? R"(,"enabled":true)" : R"(,"enabled":false)";
       }
     }
     request += "}";
-    const auto result = invoke_public_action(endpoint, std::move(request));
+    const auto result = invoke_public_op(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1705,7 +1718,7 @@ auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":"pane.send")";
+    std::string request = R"({"op":"pane.send")";
     if (!append_public_session_selector(request, session) ||
         !append_public_id_selector(request, "pane", pane)) {
       return OperationStatus::failed;
@@ -1715,7 +1728,7 @@ auto send_pane(const RuntimeEndpoint& endpoint, const std::string_view session, 
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_action(endpoint, std::move(request));
+    const auto result = invoke_public_op(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1728,13 +1741,13 @@ auto capture_pane(const RuntimeEndpoint& endpoint, const std::string_view sessio
     return {OperationStatus::failed, {}};
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":"pane.capture")";
+    std::string request = R"({"op":"pane.capture")";
     if (!append_public_session_selector(request, session) ||
         !append_public_id_selector(request, "pane", pane)) {
       return {OperationStatus::failed, {}};
     }
     request += "}";
-    auto result = invoke_public_action(endpoint, std::move(request));
+    auto result = invoke_public_op(endpoint, request);
     if (!result.has_value()) {
       return {OperationStatus::failed, {}};
     }
@@ -1819,7 +1832,7 @@ auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_vi
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":"session.rename")";
+    std::string request = R"({"op":"session.rename")";
     if (!append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
@@ -1828,7 +1841,7 @@ auto rename_session_status(const RuntimeEndpoint& endpoint, const std::string_vi
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_action(endpoint, std::move(request));
+    const auto result = invoke_public_op(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1851,7 +1864,7 @@ auto rename_tab_status(const RuntimeEndpoint& endpoint, const std::string_view s
     return OperationStatus::failed;
   }
   try {
-    std::string request = R"({"schema":"lemma.action/v1","action":"tab.rename")";
+    std::string request = R"({"op":"tab.rename")";
     if (!append_public_session_selector(request, session)) {
       return OperationStatus::failed;
     }
@@ -1860,7 +1873,7 @@ auto rename_tab_status(const RuntimeEndpoint& endpoint, const std::string_view s
       return OperationStatus::failed;
     }
     request += "}";
-    const auto result = invoke_public_action(endpoint, std::move(request));
+    const auto result = invoke_public_op(endpoint, request);
     return result.has_value() ? public_operation_status(*result) : OperationStatus::failed;
   } catch (...) {
     return OperationStatus::failed;
@@ -1882,7 +1895,7 @@ auto kill(const RuntimeEndpoint& endpoint, const std::string_view session) -> in
   if (!validate_session(session)) {
     return 1;
   }
-  const auto status = perform_action(endpoint, session, SemanticAction::session_kill, {});
+  const auto status = perform_op(endpoint, session, SemanticOp::session_kill, {});
   if (status == OperationStatus::applied || status == OperationStatus::no_effect) {
     const auto message = "lemma session \"" + std::string(session) + "\" stopped\n";
     return write_text(STDOUT_FILENO, message) ? 0 : 1;

@@ -1,5 +1,5 @@
-#ifndef LEMMA_API_ACTION_HPP
-#define LEMMA_API_ACTION_HPP
+#ifndef LEMMA_API_OP_HPP
+#define LEMMA_API_OP_HPP
 
 #include "api/json.hpp"
 #include "lemma/id.hpp"
@@ -13,12 +13,11 @@
 
 namespace lemma::api {
 
-inline constexpr std::string_view action_schema = "lemma.action/v1";
-inline constexpr std::string_view action_result_schema = "lemma.action-result/v1";
+inline constexpr std::string_view op_result_schema = "lemma.op-result/v1";
 inline constexpr std::string_view events_schema = "lemma.events/v1";
 inline constexpr std::string_view event_schema = "lemma.event/v1";
 
-enum class ActionKind : std::uint8_t {
+enum class OpKind : std::uint8_t {
   daemon_inspect,
   session_list,
   session_inspect,
@@ -190,10 +189,10 @@ struct PaneSelector final {
   [[nodiscard]] auto valid() const noexcept -> bool { return id.is_valid(); }
 };
 
-// One concrete public Action. Action-specific decoding guarantees that only the fields belonging to
+// One concrete public Op. Op-specific decoding guarantees that only the fields belonging to
 // kind are populated before this value crosses the daemon trust boundary.
-struct Action final {
-  ActionKind kind{ActionKind::session_list};
+struct Op final {
+  OpKind kind{OpKind::session_list};
   SessionSelector session;
   TabSelector tab;
   PaneSelector pane;
@@ -230,19 +229,19 @@ struct Action final {
                                   CaptureWrap wrap, std::uint64_t terminal_generation,
                                   bool truncated, std::string_view text) -> bool;
 
-struct ActionDecodeError final {
+struct OpDecodeError final {
   std::string_view reason;
   std::string_view field;
 };
 
-struct ActionDecodeResult final {
-  std::optional<Action> action;
-  ActionDecodeError error;
+struct OpDecodeResult final {
+  std::optional<Op> op;
+  OpDecodeError error;
 };
 
-[[nodiscard]] auto decode_action(const JsonValue& document) -> ActionDecodeResult;
-[[nodiscard]] auto encode_action(const Action& action) -> std::optional<std::string>;
-[[nodiscard]] auto action_name(ActionKind kind) noexcept -> std::string_view;
+[[nodiscard]] auto decode_op(const JsonValue& document) -> OpDecodeResult;
+[[nodiscard]] auto encode_op(const Op& op) -> std::optional<std::string>;
+[[nodiscard]] auto op_name(OpKind kind) noexcept -> std::string_view;
 
 inline constexpr std::size_t event_panes_max = 8;
 
@@ -254,7 +253,7 @@ struct EventSubscription final {
 
 struct EventSubscriptionDecodeResult final {
   std::optional<EventSubscription> subscription;
-  ActionDecodeError error;
+  OpDecodeError error;
 };
 
 [[nodiscard]] auto decode_event_subscription(const JsonValue& document)
@@ -262,4 +261,4 @@ struct EventSubscriptionDecodeResult final {
 
 } // namespace lemma::api
 
-#endif // LEMMA_API_ACTION_HPP
+#endif // LEMMA_API_OP_HPP

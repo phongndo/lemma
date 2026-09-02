@@ -1,4 +1,4 @@
-#include "api/action.hpp"
+#include "api/op.hpp"
 
 #include "api/json.hpp"
 #include "lemma/command.hpp"
@@ -107,7 +107,7 @@ template <typename Id>
   return id.has_value() ? std::optional{PaneSelector{.id = *id}} : std::nullopt;
 }
 
-[[nodiscard]] auto decode_arguments(const JsonValue& document, Action& action) -> bool {
+[[nodiscard]] auto decode_arguments(const JsonValue& document, Op& op) -> bool {
   const auto* const value = json_member(document, "argv");
   if (value == nullptr) {
     return true;
@@ -119,17 +119,17 @@ template <typename Id>
   std::size_t bytes = 0;
   for (const auto& argument : value->array) {
     if (argument.kind != JsonKind::string || argument.string.contains('\0') ||
-        (action.arguments.empty() && argument.string.empty()) ||
+        (op.arguments.empty() && argument.string.empty()) ||
         argument.string.size() + 1U > limits::command_bytes_hard_max - bytes) {
       return false;
     }
     bytes += argument.string.size() + 1U;
-    action.arguments.push_back(argument.string);
+    op.arguments.push_back(argument.string);
   }
   return true;
 }
 
-[[nodiscard]] auto decode_environment(const JsonValue& document, Action& action) -> bool {
+[[nodiscard]] auto decode_environment(const JsonValue& document, Op& op) -> bool {
   const auto* const value = json_member(document, "environment");
   if (value == nullptr) {
     return true;
@@ -148,50 +148,49 @@ template <typename Id>
       return false;
     }
     bytes += entry.string.size() + 1U;
-    action.environment.push_back(entry.string);
+    op.environment.push_back(entry.string);
   }
-  action.environment_set = true;
+  op.environment_set = true;
   return true;
 }
 
-[[nodiscard]] auto decode_launch(const JsonValue& document, Action& action,
-                                 const bool title_allowed) -> std::optional<std::string_view> {
+[[nodiscard]] auto decode_launch(const JsonValue& document, Op& op, const bool title_allowed)
+    -> std::optional<std::string_view> {
   if (const auto* const cwd = json_member(document, "cwd"); cwd != nullptr) {
     if (cwd->kind != JsonKind::string || cwd->string.empty() || cwd->string.front() != '/' ||
         cwd->string.contains('\0') || cwd->string.size() > limits::working_directory_bytes_max) {
       return "cwd";
     }
-    action.working_directory = cwd->string;
+    op.working_directory = cwd->string;
   }
   if (const auto* const hold = json_member(document, "hold"); hold != nullptr) {
     if (hold->kind != JsonKind::boolean) {
       return "hold";
     }
-    action.hold = hold->boolean;
+    op.hold = hold->boolean;
   }
   if (const auto* const title = json_member(document, "title"); title != nullptr) {
     if (!title_allowed || title->kind != JsonKind::string ||
         !TabTitleValue::create(title->string).has_value()) {
       return "title";
     }
-    action.title = title->string;
+    op.title = title->string;
   }
-  return decode_arguments(document, action) ? std::nullopt
-                                            : std::optional<std::string_view>{"argv"};
+  return decode_arguments(document, op) ? std::nullopt : std::optional<std::string_view>{"argv"};
 }
 
-[[nodiscard]] auto decode_focus_policy(const JsonValue& document, Action& action) noexcept -> bool {
+[[nodiscard]] auto decode_focus_policy(const JsonValue& document, Op& op) noexcept -> bool {
   const auto* const value = json_member(document, "focus");
   if (value == nullptr) {
     return true;
   }
   const auto name = json_string(document, "focus");
   if (name == std::optional<std::string_view>{"created"}) {
-    action.focus = FocusPolicy::created;
+    op.focus = FocusPolicy::created;
     return true;
   }
   if (name == std::optional<std::string_view>{"preserve"}) {
-    action.focus = FocusPolicy::preserve;
+    op.focus = FocusPolicy::preserve;
     return true;
   }
   return false;
@@ -221,7 +220,7 @@ static_assert(input_key_names.size() == static_cast<std::size_t>(InputKey::f12) 
 
 // Branches mirror the closed text, paste, and logical-key event schemas.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto decode_input_events(const JsonValue& document, Action& action) -> bool {
+[[nodiscard]] auto decode_input_events(const JsonValue& document, Op& op) -> bool {
   const auto* const value = json_member(document, "events");
   if (value == nullptr || value->kind != JsonKind::array || value->array.empty() ||
       value->array.size() > input_events_max) {
@@ -244,7 +243,7 @@ static_assert(input_key_names.size() == static_cast<std::size_t>(InputKey::f12) 
         return false;
       }
       text_bytes += text->size();
-      action.input_events.push_back(
+      op.input_events.push_back(
           {.kind = *kind == "text" ? InputEventKind::text : InputEventKind::paste,
            .text = std::string(*text)});
       continue;
@@ -297,47 +296,46 @@ static_assert(input_key_names.size() == static_cast<std::size_t>(InputKey::f12) 
         return false;
       }
     }
-    action.input_events.push_back(std::move(event));
+    op.input_events.push_back(std::move(event));
   }
   return true;
 }
 
 [[nodiscard]] auto failure(const std::string_view reason, const std::string_view field = {})
-    -> ActionDecodeResult {
-  return {.action = std::nullopt, .error = {.reason = reason, .field = field}};
+    -> OpDecodeResult {
+  return {.op = std::nullopt, .error = {.reason = reason, .field = field}};
 }
 
-[[nodiscard]] auto require_session(const JsonValue& document, Action& action)
-    -> std::optional<ActionDecodeResult> {
+[[nodiscard]] auto require_session(const JsonValue& document, Op& op)
+    -> std::optional<OpDecodeResult> {
   const auto selector = decode_session_selector(document);
   if (!selector.has_value()) {
     return failure("invalid_selector", "session");
   }
-  action.session = *selector;
+  op.session = *selector;
   return std::nullopt;
 }
 
-[[nodiscard]] auto require_tab(const JsonValue& document, Action& action)
-    -> std::optional<ActionDecodeResult> {
+[[nodiscard]] auto require_tab(const JsonValue& document, Op& op) -> std::optional<OpDecodeResult> {
   const auto selector = decode_tab_selector(document);
   if (!selector.has_value()) {
     return failure("invalid_selector", "tab");
   }
-  action.tab = *selector;
+  op.tab = *selector;
   return std::nullopt;
 }
 
-[[nodiscard]] auto require_pane(const JsonValue& document, Action& action,
+[[nodiscard]] auto require_pane(const JsonValue& document, Op& op,
                                 const std::string_view field = "pane")
-    -> std::optional<ActionDecodeResult> {
+    -> std::optional<OpDecodeResult> {
   const auto selector = decode_pane_selector(document, field);
   if (!selector.has_value()) {
     return failure("invalid_selector", field);
   }
   if (field == "pane") {
-    action.pane = *selector;
+    op.pane = *selector;
   } else {
-    action.other = *selector;
+    op.other = *selector;
   }
   return std::nullopt;
 }
@@ -374,57 +372,57 @@ auto wait_condition_name(const WaitCondition condition) noexcept -> std::string_
   return {};
 }
 
-auto action_name(const ActionKind kind) noexcept -> std::string_view {
+auto op_name(const OpKind kind) noexcept -> std::string_view {
   switch (kind) {
-  case ActionKind::daemon_inspect:
+  case OpKind::daemon_inspect:
     return "daemon.inspect";
-  case ActionKind::session_list:
+  case OpKind::session_list:
     return "session.list";
-  case ActionKind::session_inspect:
+  case OpKind::session_inspect:
     return "session.inspect";
-  case ActionKind::session_start:
+  case OpKind::session_start:
     return "session.start";
-  case ActionKind::session_rename:
+  case OpKind::session_rename:
     return "session.rename";
-  case ActionKind::session_kill:
+  case OpKind::session_kill:
     return "session.kill";
-  case ActionKind::tab_list:
+  case OpKind::tab_list:
     return "tab.list";
-  case ActionKind::tab_inspect:
+  case OpKind::tab_inspect:
     return "tab.inspect";
-  case ActionKind::tab_new:
+  case OpKind::tab_new:
     return "tab.new";
-  case ActionKind::tab_select:
+  case OpKind::tab_select:
     return "tab.select";
-  case ActionKind::tab_move:
+  case OpKind::tab_move:
     return "tab.move";
-  case ActionKind::tab_rename:
+  case OpKind::tab_rename:
     return "tab.rename";
-  case ActionKind::tab_kill:
+  case OpKind::tab_kill:
     return "tab.kill";
-  case ActionKind::pane_list:
+  case OpKind::pane_list:
     return "pane.list";
-  case ActionKind::pane_inspect:
+  case OpKind::pane_inspect:
     return "pane.inspect";
-  case ActionKind::pane_split:
+  case OpKind::pane_split:
     return "pane.split";
-  case ActionKind::pane_focus:
+  case OpKind::pane_focus:
     return "pane.focus";
-  case ActionKind::pane_swap:
+  case OpKind::pane_swap:
     return "pane.swap";
-  case ActionKind::pane_resize:
+  case OpKind::pane_resize:
     return "pane.resize";
-  case ActionKind::pane_zoom:
+  case OpKind::pane_zoom:
     return "pane.zoom";
-  case ActionKind::pane_send:
+  case OpKind::pane_send:
     return "pane.send";
-  case ActionKind::pane_input:
+  case OpKind::pane_input:
     return "pane.input";
-  case ActionKind::pane_capture:
+  case OpKind::pane_capture:
     return "pane.capture";
-  case ActionKind::pane_wait:
+  case OpKind::pane_wait:
     return "pane.wait";
-  case ActionKind::pane_kill:
+  case OpKind::pane_kill:
     return "pane.kill";
   }
   return {};
@@ -651,140 +649,136 @@ auto append_capture(std::string& output, const CaptureSource source, const Captu
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto encode_action(const Action& action) -> std::optional<std::string> {
+auto encode_op(const Op& op) -> std::optional<std::string> {
   try {
-    std::string output = R"({"schema":"lemma.action/v1","action":)";
-    if (!append_json_string(output, action_name(action.kind))) {
+    std::string output = R"({"op":)";
+    if (!append_json_string(output, op_name(op.kind))) {
       return std::nullopt;
     }
-    const bool has_session = action.kind != ActionKind::daemon_inspect &&
-                             action.kind != ActionKind::session_list &&
-                             action.kind != ActionKind::session_start;
-    if (has_session && !append_selector(output, "session", action.session)) {
+    const bool has_session = op.kind != OpKind::daemon_inspect && op.kind != OpKind::session_list &&
+                             op.kind != OpKind::session_start;
+    if (has_session && !append_selector(output, "session", op.session)) {
       return std::nullopt;
     }
-    if (action.expected_session_revision.has_value()) {
-      if (action.kind == ActionKind::pane_wait) {
+    if (op.expected_session_revision.has_value()) {
+      if (op.kind == OpKind::pane_wait) {
         return std::nullopt;
       }
-      output += R"(,"if_session_revision":)" + std::to_string(*action.expected_session_revision);
+      output += R"(,"if_session_revision":)" + std::to_string(*op.expected_session_revision);
     }
-    if (action.kind == ActionKind::session_start && !action.name.empty() &&
-        !append_string_field(output, "name", action.name)) {
+    if (op.kind == OpKind::session_start && !op.name.empty() &&
+        !append_string_field(output, "name", op.name)) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::session_rename &&
-        !append_string_field(output, "name", action.name)) {
+    if (op.kind == OpKind::session_rename && !append_string_field(output, "name", op.name)) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::tab_inspect || action.kind == ActionKind::tab_select ||
-        action.kind == ActionKind::tab_move || action.kind == ActionKind::tab_rename ||
-        action.kind == ActionKind::tab_kill) {
-      if (!append_selector(output, "tab", action.tab)) {
-        return std::nullopt;
-      }
-    }
-    if (action.kind == ActionKind::pane_inspect || action.kind == ActionKind::pane_split ||
-        action.kind == ActionKind::pane_focus || action.kind == ActionKind::pane_swap ||
-        action.kind == ActionKind::pane_resize || action.kind == ActionKind::pane_zoom ||
-        action.kind == ActionKind::pane_send || action.kind == ActionKind::pane_input ||
-        action.kind == ActionKind::pane_capture || action.kind == ActionKind::pane_wait ||
-        action.kind == ActionKind::pane_kill) {
-      if (!append_selector(output, "pane", action.pane)) {
+    if (op.kind == OpKind::tab_inspect || op.kind == OpKind::tab_select ||
+        op.kind == OpKind::tab_move || op.kind == OpKind::tab_rename ||
+        op.kind == OpKind::tab_kill) {
+      if (!append_selector(output, "tab", op.tab)) {
         return std::nullopt;
       }
     }
-    if (action.kind == ActionKind::pane_swap && !append_selector(output, "other", action.other)) {
-      return std::nullopt;
-    }
-    if (action.kind == ActionKind::session_start || action.kind == ActionKind::tab_new ||
-        action.kind == ActionKind::pane_split) {
-      if (!action.working_directory.empty() &&
-          !append_string_field(output, "cwd", action.working_directory)) {
+    if (op.kind == OpKind::pane_inspect || op.kind == OpKind::pane_split ||
+        op.kind == OpKind::pane_focus || op.kind == OpKind::pane_swap ||
+        op.kind == OpKind::pane_resize || op.kind == OpKind::pane_zoom ||
+        op.kind == OpKind::pane_send || op.kind == OpKind::pane_input ||
+        op.kind == OpKind::pane_capture || op.kind == OpKind::pane_wait ||
+        op.kind == OpKind::pane_kill) {
+      if (!append_selector(output, "pane", op.pane)) {
         return std::nullopt;
       }
-      if (action.hold) {
+    }
+    if (op.kind == OpKind::pane_swap && !append_selector(output, "other", op.other)) {
+      return std::nullopt;
+    }
+    if (op.kind == OpKind::session_start || op.kind == OpKind::tab_new ||
+        op.kind == OpKind::pane_split) {
+      if (!op.working_directory.empty() &&
+          !append_string_field(output, "cwd", op.working_directory)) {
+        return std::nullopt;
+      }
+      if (op.hold) {
         output += R"(,"hold":true)";
       }
-      if (!append_string_array(output, "argv", action.arguments)) {
+      if (!append_string_array(output, "argv", op.arguments)) {
         return std::nullopt;
       }
     }
-    if (action.kind == ActionKind::session_start && action.environment_set) {
-      if (action.environment.empty()) {
+    if (op.kind == OpKind::session_start && op.environment_set) {
+      if (op.environment.empty()) {
         output += R"(,"environment":[])";
-      } else if (!append_string_array(output, "environment", action.environment)) {
+      } else if (!append_string_array(output, "environment", op.environment)) {
         return std::nullopt;
       }
     }
-    if (action.kind == ActionKind::tab_new && !action.title.empty() &&
-        !append_string_field(output, "title", action.title)) {
+    if (op.kind == OpKind::tab_new && !op.title.empty() &&
+        !append_string_field(output, "title", op.title)) {
       return std::nullopt;
     }
-    if ((action.kind == ActionKind::tab_new || action.kind == ActionKind::pane_split) &&
-        action.focus != FocusPolicy::created &&
-        !append_string_field(output, "focus", focus_name(action.focus))) {
+    if ((op.kind == OpKind::tab_new || op.kind == OpKind::pane_split) &&
+        op.focus != FocusPolicy::created &&
+        !append_string_field(output, "focus", focus_name(op.focus))) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::tab_move) {
-      output += R"(,"to_position":)" + std::to_string(action.to_position);
+    if (op.kind == OpKind::tab_move) {
+      output += R"(,"to_position":)" + std::to_string(op.to_position);
     }
-    if (action.kind == ActionKind::tab_rename &&
-        !append_string_field(output, "title", action.title)) {
+    if (op.kind == OpKind::tab_rename && !append_string_field(output, "title", op.title)) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::pane_split || action.kind == ActionKind::pane_resize) {
-      if (!append_string_field(output, "direction", direction_name(action.direction))) {
+    if (op.kind == OpKind::pane_split || op.kind == OpKind::pane_resize) {
+      if (!append_string_field(output, "direction", direction_name(op.direction))) {
         return std::nullopt;
       }
     }
-    if (action.kind == ActionKind::pane_resize) {
-      output += R"(,"amount":)" + std::to_string(action.amount);
+    if (op.kind == OpKind::pane_resize) {
+      output += R"(,"amount":)" + std::to_string(op.amount);
     }
-    if (action.kind == ActionKind::pane_zoom) {
-      output += action.enabled ? R"(,"enabled":true)" : R"(,"enabled":false)";
+    if (op.kind == OpKind::pane_zoom) {
+      output += op.enabled ? R"(,"enabled":true)" : R"(,"enabled":false)";
     }
-    if (action.kind == ActionKind::pane_send && !append_string_field(output, "text", action.text)) {
+    if (op.kind == OpKind::pane_send && !append_string_field(output, "text", op.text)) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::pane_input &&
-        !append_input_events(output, action.input_events)) {
+    if (op.kind == OpKind::pane_input && !append_input_events(output, op.input_events)) {
       return std::nullopt;
     }
-    if (action.kind == ActionKind::pane_capture) {
-      if (action.lines > 0) {
-        output += R"(,"lines":)" + std::to_string(action.lines);
+    if (op.kind == OpKind::pane_capture) {
+      if (op.lines > 0) {
+        output += R"(,"lines":)" + std::to_string(op.lines);
       }
-      if (action.capture_source != CaptureSource::visible &&
-          !append_string_field(output, "source", capture_source_name(action.capture_source))) {
+      if (op.capture_source != CaptureSource::visible &&
+          !append_string_field(output, "source", capture_source_name(op.capture_source))) {
         return std::nullopt;
       }
-      if (action.capture_format == CaptureFormat::ansi &&
+      if (op.capture_format == CaptureFormat::ansi &&
           !append_string_field(output, "format", "ansi")) {
         return std::nullopt;
       }
-      if (action.capture_wrap == CaptureWrap::logical &&
+      if (op.capture_wrap == CaptureWrap::logical &&
           !append_string_field(output, "wrap", "logical")) {
         return std::nullopt;
       }
     }
-    if (action.kind == ActionKind::pane_wait) {
-      if (action.wait_condition == WaitCondition::exit_code) {
-        output += R"(,"exit_code":)" + std::to_string(action.wait_value);
-      } else if (action.wait_condition == WaitCondition::signal) {
-        output += R"(,"signal":)" + std::to_string(action.wait_value);
-      } else if (action.wait_condition == WaitCondition::contains) {
-        if (!append_string_field(output, "contains", action.contains)) {
+    if (op.kind == OpKind::pane_wait) {
+      if (op.wait_condition == WaitCondition::exit_code) {
+        output += R"(,"exit_code":)" + std::to_string(op.wait_value);
+      } else if (op.wait_condition == WaitCondition::signal) {
+        output += R"(,"signal":)" + std::to_string(op.wait_value);
+      } else if (op.wait_condition == WaitCondition::contains) {
+        if (!append_string_field(output, "contains", op.contains)) {
           return std::nullopt;
         }
-      } else if (action.wait_condition == WaitCondition::prompt) {
+      } else if (op.wait_condition == WaitCondition::prompt) {
         output += R"(,"until_prompt":true)";
       }
-      if (action.after_terminal_generation > 0) {
-        output += R"(,"after_generation":)" + std::to_string(action.after_terminal_generation);
+      if (op.after_terminal_generation > 0) {
+        output += R"(,"after_generation":)" + std::to_string(op.after_terminal_generation);
       }
-      if (action.wait_timeout_milliseconds != wait_timeout_default_milliseconds) {
-        output += R"(,"timeout_ms":)" + std::to_string(action.wait_timeout_milliseconds);
+      if (op.wait_timeout_milliseconds != wait_timeout_default_milliseconds) {
+        output += R"(,"timeout_ms":)" + std::to_string(op.wait_timeout_milliseconds);
       }
     }
     output += "}";
@@ -794,277 +788,264 @@ auto encode_action(const Action& action) -> std::optional<std::string> {
   }
 }
 
-// The public Action schema is closed and action-specific. This decoder is the daemon trust
-// boundary; frontend parsers construct the same value directly.
+// A Proc Op is closed and kind-specific. Admission decodes it once before execution.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto decode_action(const JsonValue& document) -> ActionDecodeResult {
+auto decode_op(const JsonValue& document) -> OpDecodeResult {
   if (document.kind != JsonKind::object) {
     return failure("invalid_document");
   }
-  const auto schema = json_string(document, "schema");
-  const auto name = json_string(document, "action");
-  if (schema != std::optional<std::string_view>{action_schema}) {
-    return failure("invalid_schema", "schema");
-  }
+  const auto name = json_string(document, "op");
   if (!name.has_value()) {
-    return failure("missing_or_invalid_field", "action");
+    return failure("missing_or_invalid_field", "op");
   }
-  Action action;
+  Op op;
   if (const auto* const revision = json_member(document, "if_session_revision");
       revision != nullptr) {
     const auto value = json_unsigned(document, "if_session_revision");
     if (!value.has_value() || *value == 0) {
       return failure("invalid_field", "if_session_revision");
     }
-    action.expected_session_revision = value;
+    op.expected_session_revision = value;
   }
-  const auto reject_unknown = [&](const std::initializer_list<std::string_view> fields)
-      -> std::optional<ActionDecodeResult> {
+  const auto reject_unknown =
+      [&](const std::initializer_list<std::string_view> fields) -> std::optional<OpDecodeResult> {
     const auto field = unknown_field(document, fields);
     return field.has_value() ? std::optional{failure("unknown_field", *field)} : std::nullopt;
   };
 
   if (*name == "daemon.inspect") {
-    if (auto rejected = reject_unknown({"schema", "action"}); rejected.has_value()) {
+    if (auto rejected = reject_unknown({"op"}); rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::daemon_inspect;
+    op.kind = OpKind::daemon_inspect;
   } else if (*name == "session.list") {
-    if (auto rejected = reject_unknown({"schema", "action"}); rejected.has_value()) {
+    if (auto rejected = reject_unknown({"op"}); rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::session_list;
+    op.kind = OpKind::session_list;
   } else if (*name == "session.inspect") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::session_inspect;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::session_inspect;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "session.start") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "name", "cwd", "hold", "argv", "environment"});
+    if (auto rejected = reject_unknown({"op", "name", "cwd", "hold", "argv", "environment"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::session_start;
+    op.kind = OpKind::session_start;
     if (const auto* const candidate = json_member(document, "name"); candidate != nullptr) {
       if (candidate->kind != JsonKind::string ||
           !SessionNameValue::create(candidate->string).has_value()) {
         return failure("invalid_field", "name");
       }
-      action.name = candidate->string;
+      op.name = candidate->string;
     }
-    if (const auto field = decode_launch(document, action, false); field.has_value()) {
+    if (const auto field = decode_launch(document, op, false); field.has_value()) {
       return failure("invalid_field", *field);
     }
-    if (!decode_environment(document, action)) {
+    if (!decode_environment(document, op)) {
       return failure("invalid_field", "environment");
     }
   } else if (*name == "session.rename") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "name", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "name", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::session_rename;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::session_rename;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto candidate = json_string(document, "name");
     if (!candidate.has_value() || !SessionNameValue::create(*candidate).has_value()) {
       return failure("invalid_field", "name");
     }
-    action.name = *candidate;
+    op.name = *candidate;
   } else if (*name == "session.kill") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::session_kill;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::session_kill;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "tab.list" || *name == "pane.list") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = *name == "tab.list" ? ActionKind::tab_list : ActionKind::pane_list;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = *name == "tab.list" ? OpKind::tab_list : OpKind::pane_list;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "tab.inspect") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "tab", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "tab", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::tab_inspect;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::tab_inspect;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_tab(document, action); invalid.has_value()) {
+    if (auto invalid = require_tab(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "pane.inspect") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "pane", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_inspect;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_inspect;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "tab.new") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "title", "cwd", "hold",
-                                        "argv", "focus", "if_session_revision"});
+    if (auto rejected = reject_unknown(
+            {"op", "session", "title", "cwd", "hold", "argv", "focus", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::tab_new;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::tab_new;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (const auto field = decode_launch(document, action, true); field.has_value()) {
+    if (const auto field = decode_launch(document, op, true); field.has_value()) {
       return failure("invalid_field", *field);
     }
-    if (!decode_focus_policy(document, action)) {
+    if (!decode_focus_policy(document, op)) {
       return failure("invalid_field", "focus");
     }
   } else if (*name == "tab.select" || *name == "tab.kill") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "tab", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "tab", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = *name == "tab.select" ? ActionKind::tab_select : ActionKind::tab_kill;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = *name == "tab.select" ? OpKind::tab_select : OpKind::tab_kill;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_tab(document, action); invalid.has_value()) {
+    if (auto invalid = require_tab(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "tab.move") {
-    if (auto rejected = reject_unknown(
-            {"schema", "action", "session", "tab", "to_position", "if_session_revision"});
+    if (auto rejected =
+            reject_unknown({"op", "session", "tab", "to_position", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::tab_move;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::tab_move;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_tab(document, action); invalid.has_value()) {
+    if (auto invalid = require_tab(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto destination = json_unsigned(document, "to_position");
     if (!destination.has_value() || *destination == 0 || *destination > command_tab_slots_max) {
       return failure("invalid_field", "to_position");
     }
-    action.to_position = static_cast<std::uint16_t>(*destination);
+    op.to_position = static_cast<std::uint16_t>(*destination);
   } else if (*name == "tab.rename") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "tab", "title", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "tab", "title", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::tab_rename;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::tab_rename;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_tab(document, action); invalid.has_value()) {
+    if (auto invalid = require_tab(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto title = json_string(document, "title").value_or(std::string_view{});
     if (!TabTitleValue::create(title).has_value()) {
       return failure("invalid_field", "title");
     }
-    action.title = title;
+    op.title = title;
   } else if (*name == "pane.split") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "pane", "direction", "cwd",
-                                        "hold", "argv", "focus", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "direction", "cwd", "hold", "argv",
+                                        "focus", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_split;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_split;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto direction = json_string(document, "direction");
     if (direction == std::optional<std::string_view>{"right"}) {
-      action.direction = Direction::right;
+      op.direction = Direction::right;
     } else if (direction == std::optional<std::string_view>{"down"}) {
-      action.direction = Direction::down;
+      op.direction = Direction::down;
     } else {
       return failure("invalid_field", "direction");
     }
-    if (const auto field = decode_launch(document, action, false); field.has_value()) {
+    if (const auto field = decode_launch(document, op, false); field.has_value()) {
       return failure("invalid_field", *field);
     }
-    if (!decode_focus_policy(document, action)) {
+    if (!decode_focus_policy(document, op)) {
       return failure("invalid_field", "focus");
     }
   } else if (*name == "pane.focus" || *name == "pane.kill") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "pane", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = *name == "pane.focus" ? ActionKind::pane_focus : ActionKind::pane_kill;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = *name == "pane.focus" ? OpKind::pane_focus : OpKind::pane_kill;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "pane.swap") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "pane", "other", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "other", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_swap;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_swap;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action, "other"); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op, "other"); invalid.has_value()) {
       return *invalid;
     }
   } else if (*name == "pane.resize") {
-    if (auto rejected = reject_unknown(
-            {"schema", "action", "session", "pane", "direction", "amount", "if_session_revision"});
+    if (auto rejected =
+            reject_unknown({"op", "session", "pane", "direction", "amount", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_resize;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_resize;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto direction = json_string(document, "direction");
     if (direction == std::optional<std::string_view>{"left"}) {
-      action.direction = Direction::left;
+      op.direction = Direction::left;
     } else if (direction == std::optional<std::string_view>{"right"}) {
-      action.direction = Direction::right;
+      op.direction = Direction::right;
     } else if (direction == std::optional<std::string_view>{"up"}) {
-      action.direction = Direction::up;
+      op.direction = Direction::up;
     } else if (direction == std::optional<std::string_view>{"down"}) {
-      action.direction = Direction::down;
+      op.direction = Direction::down;
     } else {
       return failure("invalid_field", "direction");
     }
@@ -1072,70 +1053,67 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
     if (amount == 0 || amount > command_resize_amount_max) {
       return failure("invalid_field", "amount");
     }
-    action.amount = static_cast<std::uint16_t>(amount);
+    op.amount = static_cast<std::uint16_t>(amount);
   } else if (*name == "pane.zoom") {
-    if (auto rejected = reject_unknown(
-            {"schema", "action", "session", "pane", "enabled", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "enabled", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_zoom;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_zoom;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto enabled = json_boolean(document, "enabled");
     if (!enabled.has_value()) {
       return failure("invalid_field", "enabled");
     }
-    action.enabled = *enabled;
+    op.enabled = *enabled;
   } else if (*name == "pane.send") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "pane", "text", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "text", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_send;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_send;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto text = json_string(document, "text");
     if (!text.has_value() || text->empty() || text->size() > limits::environment_bytes_max - 8U) {
       return failure("invalid_field", "text");
     }
-    action.text = *text;
+    op.text = *text;
   } else if (*name == "pane.input") {
-    if (auto rejected = reject_unknown(
-            {"schema", "action", "session", "pane", "events", "if_session_revision"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "events", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_input;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_input;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (!decode_input_events(document, action)) {
+    if (!decode_input_events(document, op)) {
       return failure("invalid_field", "events");
     }
   } else if (*name == "pane.capture") {
-    if (auto rejected = reject_unknown({"schema", "action", "session", "pane", "lines", "source",
-                                        "format", "wrap", "if_session_revision"});
+    if (auto rejected = reject_unknown(
+            {"op", "session", "pane", "lines", "source", "format", "wrap", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_capture;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_capture;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     const auto* const lines_value = json_member(document, "lines");
@@ -1144,7 +1122,7 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
       if (!lines.has_value() || *lines == 0 || *lines > std::numeric_limits<std::uint16_t>::max()) {
         return failure("invalid_field", "lines");
       }
-      action.lines = static_cast<std::uint16_t>(*lines);
+      op.lines = static_cast<std::uint16_t>(*lines);
     }
     const auto source_value = json_string(document, "source");
     if (json_member(document, "source") != nullptr && !source_value.has_value()) {
@@ -1152,11 +1130,11 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
     }
     const auto source = source_value.value_or("visible");
     if (source == "visible") {
-      action.capture_source = CaptureSource::visible;
+      op.capture_source = CaptureSource::visible;
     } else if (source == "recent") {
-      action.capture_source = CaptureSource::recent;
+      op.capture_source = CaptureSource::recent;
     } else if (source == "last-command") {
-      action.capture_source = CaptureSource::last_command;
+      op.capture_source = CaptureSource::last_command;
     } else {
       return failure("invalid_field", "source");
     }
@@ -1166,9 +1144,9 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
     }
     const auto format = format_value.value_or("plain");
     if (format == "plain") {
-      action.capture_format = CaptureFormat::plain;
+      op.capture_format = CaptureFormat::plain;
     } else if (format == "ansi") {
-      action.capture_format = CaptureFormat::ansi;
+      op.capture_format = CaptureFormat::ansi;
     } else {
       return failure("invalid_field", "format");
     }
@@ -1178,27 +1156,26 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
     }
     const auto wrap = wrap_value.value_or("rendered");
     if (wrap == "rendered") {
-      action.capture_wrap = CaptureWrap::rendered;
+      op.capture_wrap = CaptureWrap::rendered;
     } else if (wrap == "logical") {
-      action.capture_wrap = CaptureWrap::logical;
+      op.capture_wrap = CaptureWrap::logical;
     } else {
       return failure("invalid_field", "wrap");
     }
-    if (action.capture_source == CaptureSource::last_command && action.lines > 0) {
+    if (op.capture_source == CaptureSource::last_command && op.lines > 0) {
       return failure("invalid_field", "lines");
     }
   } else if (*name == "pane.wait") {
-    if (auto rejected =
-            reject_unknown({"schema", "action", "session", "pane", "exit_code", "signal",
-                            "contains", "until_prompt", "after_generation", "timeout_ms"});
+    if (auto rejected = reject_unknown({"op", "session", "pane", "exit_code", "signal", "contains",
+                                        "until_prompt", "after_generation", "timeout_ms"});
         rejected.has_value()) {
       return *rejected;
     }
-    action.kind = ActionKind::pane_wait;
-    if (auto invalid = require_session(document, action); invalid.has_value()) {
+    op.kind = OpKind::pane_wait;
+    if (auto invalid = require_session(document, op); invalid.has_value()) {
       return *invalid;
     }
-    if (auto invalid = require_pane(document, action); invalid.has_value()) {
+    if (auto invalid = require_pane(document, op); invalid.has_value()) {
       return *invalid;
     }
     std::size_t condition_count = 0;
@@ -1207,8 +1184,8 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
       if (!value.has_value() || *value > 255U) {
         return failure("invalid_field", "exit_code");
       }
-      action.wait_condition = WaitCondition::exit_code;
-      action.wait_value = static_cast<std::uint32_t>(*value);
+      op.wait_condition = WaitCondition::exit_code;
+      op.wait_value = static_cast<std::uint32_t>(*value);
       ++condition_count;
     }
     if (const auto* const signal = json_member(document, "signal"); signal != nullptr) {
@@ -1216,8 +1193,8 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
       if (!value.has_value() || *value == 0 || *value > 127U) {
         return failure("invalid_field", "signal");
       }
-      action.wait_condition = WaitCondition::signal;
-      action.wait_value = static_cast<std::uint32_t>(*value);
+      op.wait_condition = WaitCondition::signal;
+      op.wait_value = static_cast<std::uint32_t>(*value);
       ++condition_count;
     }
     if (const auto* const contains = json_member(document, "contains"); contains != nullptr) {
@@ -1226,8 +1203,8 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
           value->size() > std::numeric_limits<std::uint16_t>::max()) {
         return failure("invalid_field", "contains");
       }
-      action.wait_condition = WaitCondition::contains;
-      action.contains = *value;
+      op.wait_condition = WaitCondition::contains;
+      op.contains = *value;
       ++condition_count;
     }
     if (const auto* const prompt = json_member(document, "until_prompt"); prompt != nullptr) {
@@ -1235,7 +1212,7 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
       if (value != std::optional{true}) {
         return failure("invalid_field", "until_prompt");
       }
-      action.wait_condition = WaitCondition::prompt;
+      op.wait_condition = WaitCondition::prompt;
       ++condition_count;
     }
     if (condition_count > 1U) {
@@ -1244,23 +1221,23 @@ auto decode_action(const JsonValue& document) -> ActionDecodeResult {
     if (const auto* const generation = json_member(document, "after_generation");
         generation != nullptr) {
       const auto value = json_unsigned(document, "after_generation");
-      if (!value.has_value() || (action.wait_condition != WaitCondition::contains &&
-                                 action.wait_condition != WaitCondition::prompt)) {
+      if (!value.has_value() || (op.wait_condition != WaitCondition::contains &&
+                                 op.wait_condition != WaitCondition::prompt)) {
         return failure("invalid_field", "after_generation");
       }
-      action.after_terminal_generation = *value;
+      op.after_terminal_generation = *value;
     }
     if (const auto* const timeout = json_member(document, "timeout_ms"); timeout != nullptr) {
       const auto value = json_unsigned(document, "timeout_ms");
       if (!value.has_value() || *value == 0 || *value > wait_timeout_max_milliseconds) {
         return failure("invalid_field", "timeout_ms");
       }
-      action.wait_timeout_milliseconds = static_cast<std::uint32_t>(*value);
+      op.wait_timeout_milliseconds = static_cast<std::uint32_t>(*value);
     }
   } else {
-    return failure("unknown_action", "action");
+    return failure("unknown_op", "op");
   }
-  return {.action = std::move(action), .error = {}};
+  return {.op = std::move(op), .error = {}};
 }
 
 // Legacy one-Pane and bounded multi-Pane selectors share one closed subscription grammar.

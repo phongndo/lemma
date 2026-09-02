@@ -46,7 +46,7 @@ destroy the Session.
 | --- | --- |
 | `lemma_app` | CLI grammar and executable role selection |
 | `lemma_daemon` | Endpoint ownership, connection admission, and the reactor |
-| `lemma_api` | Public Action, Procedure, Event, JSON, and schema values |
+| `lemma_api` | Public Proc, nested Op, Event, JSON, and schema values |
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
 | `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
 | `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
@@ -74,7 +74,8 @@ Every mutable fact has one authoritative owner:
 | Lua VM and uncommitted configuration draft | Extension host process |
 | Processes, PTYs, descriptors, polling, clocks | Runtime |
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
-| Connection decoding, output progress, deadlines | AttachmentRuntime |
+| Attachment connection decoding, output progress, deadlines | AttachmentRuntime |
+| Admitted Proc execution, waits, and owner-generation cancellation | Reactor Proc table |
 | Frame buffers and physical presentation shadow | Render/runtime presentation |
 
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
@@ -88,22 +89,29 @@ selects the keys and routing-context transitions that invoke them.
 
 ## Commands
 
-Keyboard, mouse, CLI, and Procedures converge on the same typed command path:
+Keyboard and mouse interaction use direct typed input commands. Agent execution enters through a
+Proc containing one to 64 ordered Ops:
 
 ```text
-input -> validate actor, target, bounds, and policy
-      -> one semantic transition
-      -> typed result and runtime intent
+CLI / CONTROL -> Proc admission -> ordered compiled Op -> Op executor -> Core command / Runtime intent
+                     │                    │                   │
+                     │                    │                   └─> lemma.op-result/v1
+                     │                    └─> at most one per reactor turn
+                     └─> validate all Ops and backward references once
 ```
 
-CLI syntax, JSON, and Procedure references are frontend representations rather than Core state. A
-Procedure resolves each reference to concrete IDs before submitting the ordinary Action. Lifecycle
-commands run through the deterministic `SessionMachine`: Core stages fallible semantic owners,
-Runtime executes a bounded typed spawn/resize/retire effect batch, and Core publishes the transition
-only after required effects succeed. Events observe committed state and never provide another
-mutation path. The deterministic mux harness records concrete targets, arguments, and Runtime
-outcomes at this boundary. Versioned traces therefore replay without the generator, and recorded
-result/state checkpoints turn minimized failures into permanent regression corpus entries.
+`lemma.proc/v1` is the sole public execution request. CLI syntax and backward result references are
+frontend representations rather than Core state. Before admission, Proc validation checks every Op
+and reference. Execution resolves references to concrete generational IDs and performs authoritative
+lifetime and ownership checks immediately before each Op. Closing an owning connection invalidates
+its generation and cancels the Proc before another Op.
+
+Lifecycle commands run through the deterministic `SessionMachine`: Core stages fallible semantic
+owners, Runtime executes a bounded typed spawn/resize/retire effect batch, and Core publishes the
+transition only after required effects succeed. Events observe committed state and never provide
+another mutation path. The deterministic mux harness records concrete targets, arguments, and
+Runtime outcomes at this boundary. Versioned traces therefore replay without the generator, and
+recorded result/state checkpoints turn minimized failures into permanent regression corpus entries.
 
 Application input is distinct from mux commands. The daemon input policy resolves physical
 bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,
