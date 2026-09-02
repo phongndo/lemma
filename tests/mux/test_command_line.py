@@ -93,7 +93,7 @@ class CommandLineTest(unittest.TestCase):
         wait_until("mouse input to dismiss command error", normal_status)
 
         client.prefix("~")
-        client.expect_output(" LOG ")
+        client.expect_output("LOG")
         self.assertIn("Error: Unknown command", client.screen_text())
         client.send("q")
         wait_until("message viewer to restore the pane", normal_status)

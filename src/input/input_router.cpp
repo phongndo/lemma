@@ -945,23 +945,23 @@ void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
                                                    .preempts_interaction = false}));
   LEMMA_ASSERT(set_context(
       ConfiguredInputContext::resize,
-      {.label = " RESIZE ", .unbound = UnboundBehavior::consume, .preempts_interaction = true}));
+      {.label = "RESIZE", .unbound = UnboundBehavior::consume, .preempts_interaction = true}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::copy,
-                           {.label = " COPY ", .unbound = UnboundBehavior::consume}));
+                           {.label = "COPY", .unbound = UnboundBehavior::consume}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_go, {.label = {},
                                                              .lifetime = ContextLifetime::one_shot,
                                                              .unbound = UnboundBehavior::retry_base,
                                                              .preempts_interaction = false}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_search,
-                           {.label = " SEARCH ", .unbound = UnboundBehavior::forward}));
+                           {.label = "SEARCH", .unbound = UnboundBehavior::forward}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::copy_searching,
-                           {.label = " SEARCH ", .unbound = UnboundBehavior::consume}));
+                           {.label = "SEARCH", .unbound = UnboundBehavior::consume}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::rename,
-                           {.label = " RENAME ", .unbound = UnboundBehavior::forward}));
+                           {.label = "RENAME", .unbound = UnboundBehavior::forward}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::command_line,
-                           {.label = " COMMAND ", .unbound = UnboundBehavior::forward}));
+                           {.label = "COMMAND", .unbound = UnboundBehavior::forward}));
   LEMMA_ASSERT(set_context(ConfiguredInputContext::messages,
-                           {.label = " LOG ", .unbound = UnboundBehavior::consume}));
+                           {.label = "LOG", .unbound = UnboundBehavior::consume}));
   if (selected == InputMapPreset::none) {
     return;
   }

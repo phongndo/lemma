@@ -68,7 +68,7 @@ lemma.setup({
 })
 
 ctx.set("resize", {
-  label = " RESIZE ",
+  label = "RESIZE",
   lifetime = "persistent",
   unbound = "consume",
 })
@@ -122,8 +122,9 @@ invariants.
 
 `lemma.context.set(CONTEXT, OPTIONS)` configures `label`, `lifetime` (`"persistent"` or
 `"one_shot"`), unbound behavior (`"forward"`, `"consume"`, `"replay"`, or `"retry"`), and whether
-the context `preempts` another Attachment interaction. `retry` leaves a one-shot context and routes
-the unmatched key through its base context.
+the context `preempts` another Attachment interaction. A nonempty active label replaces the normal
+Session/Tab status row as flat text; callers need not add badge padding. `retry` leaves a one-shot
+context and routes the unmatched key through its base context.
 
 The bounded routing contexts are:
 

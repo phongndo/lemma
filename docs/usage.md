@@ -152,6 +152,10 @@ resize split dividers, select terminal text, and scroll canonical history. Mouse
 the child when its active terminal modes request them. Visible pane and built-in editor cursors use
 a block shape; pane-requested blinking is preserved.
 
+The status row is the only interaction chrome. An active resize, copy, search, log, or command mode
+replaces normal Session and Tab status with one flat, left-aligned mode row; mode labels and prompts
+never cover pane content. Normal status returns immediately when the interaction ends.
+
 ## Command line
 
 `C-b :` replaces the status row with an empty `:` prompt. Up recalls the most recently submitted
@@ -163,8 +167,8 @@ left-aligned error message. The message clears after 1.5 seconds or on the next 
 input, immediately restoring Session and Tab status. Repeated failures restart the timeout.
 
 Each Attachment retains the latest 16 status messages. `C-b ~` opens a timestamped, read-only
-full-pane view with the newest messages at the bottom. A compact reverse-video `LOG` mode appears at
-the right of the status row alongside other input modes. Use `k`/Up and `j`/Down, PageUp/PageDown,
+full-pane view with the newest messages at the bottom while the status row reads `LOG`. Use `k`/Up
+and `j`/Down, PageUp/PageDown,
 `g`/Home, and `G`/End to navigate; use `q`, Escape, Enter, `C-c`, or `C-g` to leave. The log has a
 general information/error representation, although command-line failures are its first producer.
 
@@ -194,10 +198,11 @@ intentionally inert rather than capturing invisible input.
 
 ## Copy mode
 
-Copy mode uses Vim-shaped movement over Ghostty-owned history. Its status mode includes the current
+Copy mode uses Vim-shaped movement over Ghostty-owned history. Its status row includes the current
 history position as `COPY [current/total]`. `h/j/k/l`, arrows, word movement, line movement, and page
 movement update the copy cursor. `v`, `V`, and `C-v` start character, line, and block selection. `y`
-or Enter copies the selection and leaves copy mode.
+or Enter copies the selection and leaves copy mode. Search replaces that row with the editable
+`/query` or `?query` prompt; progress and feedback return to the same row without covering the pane.
 
 `Super-c` and `Ctrl-Shift-c` copy the current copy-mode or mouse selection. Lemma currently uses
 bounded OSC 52 output for user-authorized clipboard writes; it has no native clipboard provider.

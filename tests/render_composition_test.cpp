@@ -165,9 +165,13 @@ TEST(PaneCompositionTest, StatusControlHitTestMatchesRenderedLabelsAndOverflow) 
   prompting.prompt_value = "nvim";
   prompting.prompt_cursor = prompting.prompt_value.size();
   EXPECT_EQ(status_target_at_column(prompting, {.columns = 40, .rows = 3}, 17), std::nullopt);
+
+  auto modal = status;
+  modal.input_context = "RESIZE";
+  EXPECT_EQ(status_target_at_column(modal, {.columns = 40, .rows = 3}, 17), std::nullopt);
 }
 
-TEST(PaneCompositionTest, ReservesRightStatusColumnsForActiveInputContext) {
+TEST(PaneCompositionTest, ActiveInputContextReplacesStatusRowWithoutABadge) {
   auto terminal = make_terminal(40, 2);
   const PaneSurface pane{
       .terminal = &terminal,
@@ -183,14 +187,15 @@ TEST(PaneCompositionTest, ReservesRightStatusColumnsForActiveInputContext) {
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
-                                     .input_context = " RESIZE ",
+                                     .input_context = "RESIZE",
                                      .prompt_cursor = 0,
                                      .dirty = true});
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;33H\x1B[0;7m RESIZE "));
-  EXPECT_THAT(encoded, testing::HasSubstr("[ 1:shell ]"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1mRESIZE"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;7m")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:shell ]")));
 }
 
 TEST(PaneCompositionTest, EditsActiveTabInlineAndOwnsTheVisibleCursor) {
@@ -299,17 +304,19 @@ TEST(PaneCompositionTest, MessageViewReplacesPaneContentWithAnOpaqueBoundedLog) 
                                      .prompt_target = StatusPromptTarget::none,
                                      .prompt_feedback = StatusPromptFeedback::none,
                                      .prompt_value = {},
-                                     .input_context = " LOG ",
+                                     .input_context = "LOG",
                                      .prompt_cursor = 0,
                                      .dirty = true},
-                                    {}, std::nullopt, {.lines = lines, .active = true});
+                                    std::nullopt, {.lines = lines, .active = true});
 
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->panes, 0U);
   const auto encoded = as_text(std::span(output).first(result->bytes));
   EXPECT_THAT(encoded, testing::HasSubstr("[2026-03-01 10:00:00] Information"));
   EXPECT_THAT(encoded, testing::HasSubstr("[2026-03-01 10:00:01] Error: Unknown "));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;36H\x1B[0;7m LOG "));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1mLOG"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;7m")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("underlying pane content")));
 }
 
@@ -351,12 +358,12 @@ TEST(PaneCompositionTest, LeavingStatusPromptRestoresFocusedPaneCursorBlinking) 
       .dirty = true,
   };
   const auto prompt = compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output, false,
-                                    prompt_status, {}, initial->outer_modes);
+                                    prompt_status, initial->outer_modes);
   ASSERT_TRUE(prompt.has_value());
   outer.write(std::span(output).first(prompt->bytes));
 
   const auto restored = compose_frame(std::span(&pane, 1), {.columns = 20, .rows = 3}, output,
-                                      false, normal_status, {}, prompt->outer_modes);
+                                      false, normal_status, prompt->outer_modes);
   ASSERT_TRUE(restored.has_value());
   outer.write(std::span(output).first(restored->bytes));
 
@@ -457,7 +464,7 @@ TEST(PaneCompositionTest, EditsSessionInlineWithActiveTabContextAndConflictFeedb
   EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;2m")));
 }
 
-TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatus) {
+TEST(PaneCompositionTest, CopySearchUsesTheWholeStatusRowAndOwnsTheCursor) {
   auto terminal = make_terminal(12, 2);
   write_text(terminal, "underlay");
   const PaneSurface pane{
@@ -474,19 +481,19 @@ TEST(PaneCompositionTest, DrawsCopyPositionAtPaneTopRightWithoutChangingTabStatu
   const auto result = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 3}, output, true,
                                     {.session_name = {},
                                      .tabs = tabs,
-                                     .prompt_target = StatusPromptTarget::none,
+                                     .prompt_target = StatusPromptTarget::copy_search_forward,
                                      .prompt_feedback = StatusPromptFeedback::none,
-                                     .prompt_value = {},
+                                     .prompt_value = "ls",
                                      .input_context = {},
-                                     .prompt_cursor = 0,
-                                     .dirty = true},
-                                    {.terminal = &terminal, .top_right = "[2/9]"});
+                                     .prompt_cursor = 2,
+                                     .dirty = true});
 
   ASSERT_TRUE(result.has_value());
   const auto encoded = as_text(std::span(output).first(result->bytes));
-  EXPECT_THAT(encoded, testing::HasSubstr("[ 1:zsh ]"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;8H\x1B[0;7m[2/9]"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[3;2H\x1B[?25h"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;1H\x1B[0;1m/ls"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[1;4H\x1B[2 q\x1B[?25h"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("[ 1:zsh ]")));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[0;7m")));
 }
 
 TEST(PaneCompositionTest, DrawsBoldSessionBeforeLeftAlignedTabs) {
@@ -653,7 +660,7 @@ TEST(PaneCompositionTest, ProjectsOuterMouseModesOnlyWhenTheyChange) {
 
   write_text(terminal, "ordinary damage");
   const auto retained = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output,
-                                      false, {}, {}, initial->outer_modes);
+                                      false, {}, initial->outer_modes);
   ASSERT_TRUE(retained.has_value());
   const auto retained_text = as_text(std::span(output).first(retained->bytes));
   EXPECT_THAT(retained_text, testing::Not(testing::HasSubstr("\x1B[?1002h")));
@@ -665,7 +672,7 @@ TEST(PaneCompositionTest, ProjectsOuterMouseModesOnlyWhenTheyChange) {
 
   write_text(terminal, "\x1B[?1003h\x1B[?2004h\x1B[5 qmode change");
   const auto changed = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 2}, output, false,
-                                     {}, {}, retained->outer_modes);
+                                     {}, retained->outer_modes);
   ASSERT_TRUE(changed.has_value());
   EXPECT_EQ(changed->outer_modes, OuterModeProjection::any_mouse);
   const auto changed_text = as_text(std::span(output).first(changed->bytes));

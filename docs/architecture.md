@@ -120,7 +120,9 @@ commands through the same executor used by Proc. While editing, the status row c
 command prompt. A failed submission closes the prompt and projects its typed result as a left-aligned
 status message rather than exposing JSON. One monotonic AttachmentRuntime deadline expires that
 projection after 1.5 seconds, while input can dismiss it immediately; the bounded Attachment message
-log remains available through a synthetic read-only full-pane projection. Command history remains a
+log remains available through a synthetic read-only full-pane projection. The status renderer is
+the sole owner of interaction chrome: active routing contexts and search prompts replace normal
+Session/Tab status, while pane composition contains no mode-overlay path. Command history remains a
 separate bounded fact. An optional configured file seeds the daemon-wide initial history and is
 atomically replaced on clean shutdown; live Attachment histories still diverge independently. A
 Session switch transfers one

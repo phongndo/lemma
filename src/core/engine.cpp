@@ -4735,54 +4735,23 @@ struct MessageViewStorage final {
   return {.lines = std::span(storage.lines).first(storage.size), .active = true};
 }
 
-struct CopyOverlayStorage final {
-  std::array<char, limits::search_query_bytes_max + 16U> text{};
-  std::size_t size{0};
-
-  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
-};
-
 [[nodiscard]] auto copy_feedback_text(const CopyModeFeedback feedback) noexcept
     -> std::string_view {
   switch (feedback) {
   case CopyModeFeedback::no_match:
-    return " no match ";
+    return "no match";
   case CopyModeFeedback::empty_selection:
-    return " empty ";
+    return "empty";
   case CopyModeFeedback::clipboard_busy:
-    return " clipboard busy ";
+    return "clipboard busy";
   case CopyModeFeedback::too_large:
-    return " selection too large ";
+    return "selection too large";
   case CopyModeFeedback::failed:
-    return " copy failed ";
+    return "copy failed";
   case CopyModeFeedback::none:
     return {};
   }
   return {};
-}
-
-void assign_copy_overlay(const std::string_view text, const std::size_t limit,
-                         CopyOverlayStorage& output) noexcept {
-  output.size = std::min(limit, text.size());
-  std::ranges::copy(std::span(text).first(output.size), output.text.begin());
-}
-
-void build_copy_query_overlay(const CopyModeState& state, const std::size_t limit,
-                              CopyOverlayStorage& output) noexcept {
-  output.text.front() = state.prompt_search_direction == CopySearchDirection::forward ? '/' : '?';
-  output.size = 1;
-  if (limit == 1) {
-    return;
-  }
-  const auto query = state.draft_query_view();
-  const auto count = std::min(query.size(), limit - 1U);
-  const auto begin = query.size() - count;
-  for (const char character : std::span(query).subspan(begin, count)) {
-    const auto value = static_cast<unsigned char>(character);
-    const auto sanitized = value >= 0x20U && value < 0x7FU ? character : '?';
-    std::span(output.text).subspan(output.size, 1).front() = sanitized;
-    ++output.size;
-  }
 }
 
 [[nodiscard]] auto format_copy_position(const PaneRuntime& runtime,
@@ -4811,35 +4780,11 @@ void build_copy_query_overlay(const CopyModeState& state, const std::size_t limi
   return static_cast<std::size_t>(std::distance(output.data(), std::next(total.ptr)));
 }
 
-void build_copy_overlay(const SessionRecord& session, const std::uint16_t columns,
-                        CopyOverlayStorage& output) noexcept {
-  output.size = 0;
-  if (columns == 0) {
-    return;
-  }
-  const auto limit = std::min<std::size_t>(columns, output.text.size());
-  const auto& state = session.attachment.copy_mode;
-  // An editable prompt remains visible for its complete lifetime. Incremental no-match feedback is
-  // provisional and must not replace the query between keystrokes; Enter exposes the committed
-  // result after leaving the prompt phase.
-  if (state.phase == CopyModePhase::search_prompt) {
-    build_copy_query_overlay(state, limit, output);
-    return;
-  }
-  const auto feedback = copy_feedback_text(state.feedback);
-  if (!feedback.empty()) {
-    assign_copy_overlay(feedback, limit, output);
-  } else if (state.phase == CopyModePhase::searching) {
-    assign_copy_overlay(" searching ", limit, output);
-  }
-}
-
 // Surface projection combines bounded semantic and runtime state without retaining either.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
-                 std::array<render::PaneSurface, panes_per_tab_max>& storage,
-                 CopyOverlayStorage& copy_overlay, render::PaneOverlay& overlay) noexcept
+                 std::array<render::PaneSurface, panes_per_tab_max>& storage) noexcept
     -> std::span<const render::PaneSurface> {
   auto* const tab = active_tab(session);
   if (tab == nullptr || tab->layout_suspended) {
@@ -4867,10 +4812,6 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
     const auto cursor_point = cursor.value_or(vt::TerminalPoint{});
     const bool cursor_override = cursor.has_value() && cursor_point.row < pane->rectangle.rows &&
                                  cursor_point.column < pane->rectangle.columns;
-    if (copy_pane && cursor_override) {
-      build_copy_overlay(session, pane->rectangle.columns, copy_overlay);
-      overlay = {.terminal = &runtime->terminal, .top_right = copy_overlay.view()};
-    }
     std::span(storage).subspan(count, 1).front() = {
         .terminal = &runtime->terminal,
         .rectangle = pane->rectangle,
@@ -6527,7 +6468,8 @@ void mix_command_line_status(const CommandLineState& command_line, Mixer& mix) n
 }
 
 [[nodiscard]] auto status_input_context(const SessionRecord& session) noexcept -> std::string_view {
-  if (session.attachment.command_line.active || !visible_status_message(session).empty()) {
+  if (session.attachment.command_line.active || !visible_status_message(session).empty() ||
+      session.attachment.copy_mode.phase == CopyModePhase::search_prompt) {
     return {};
   }
   if (session.attachment.copy_mode.active() || session.attachment.rename_prompt.active() ||
@@ -6539,9 +6481,14 @@ void mix_command_line_status(const CommandLineState& command_line, Mixer& mix) n
 
 struct StatusContextStorage final {
   std::array<char, render::status_context_bytes_max> text{};
+  std::array<char, limits::search_query_bytes_max> prompt{};
   std::size_t size{0};
+  std::size_t prompt_size{0};
 
   [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
+  [[nodiscard]] auto prompt_view() const noexcept -> std::string_view {
+    return {prompt.data(), prompt_size};
+  }
 };
 
 void append_status_context(StatusContextStorage& storage, const std::string_view text) noexcept {
@@ -6551,29 +6498,64 @@ void append_status_context(StatusContextStorage& storage, const std::string_view
   storage.size += retained.size();
 }
 
+void append_status_separator(StatusContextStorage& storage) noexcept {
+  if (storage.size > 0 && std::span(storage.text).subspan(storage.size - 1U, 1U).front() != ' ') {
+    append_status_context(storage, " ");
+  }
+}
+
+void append_sanitized_status_text(StatusContextStorage& storage,
+                                  const std::string_view text) noexcept {
+  for (const char character : text) {
+    const auto value = static_cast<unsigned char>(character);
+    const char sanitized = value >= 0x20U && value < 0x7FU ? character : '?';
+    append_status_context(storage, std::string_view(&sanitized, 1U));
+  }
+}
+
+void collect_copy_search_prompt(const CopyModeState& state,
+                                StatusContextStorage& storage) noexcept {
+  for (const char character : state.draft_query_view()) {
+    const auto value = static_cast<unsigned char>(character);
+    std::span(storage.prompt).subspan(storage.prompt_size, 1U).front() =
+        value >= 0x20U && value < 0x7FU ? character : '?';
+    ++storage.prompt_size;
+  }
+}
+
 [[nodiscard]] auto collect_status_input_context(const SessionRecord& session,
                                                 const PaneRuntimeStore& runtimes,
                                                 StatusContextStorage& storage) noexcept
     -> std::string_view {
-  const auto label = status_input_context(session);
-  append_status_context(storage, label);
-  if (!session.attachment.copy_mode.active()) {
+  const auto& copy_mode = session.attachment.copy_mode;
+  if (copy_mode.phase == CopyModePhase::search_prompt) {
+    collect_copy_search_prompt(copy_mode, storage);
     return storage.view();
   }
-  const auto* const runtime = copy_mode_runtime(session, runtimes);
-  if (runtime == nullptr) {
+  append_status_context(storage, status_input_context(session));
+  if (!copy_mode.active()) {
     return storage.view();
   }
-  std::array<char, 64> position{};
-  const auto position_size = format_copy_position(*runtime, position);
-  if (position_size == 0) {
+  if (copy_mode.phase == CopyModePhase::searching) {
+    append_status_separator(storage);
+    append_status_context(storage,
+                          copy_mode.search_direction == CopySearchDirection::forward ? "/" : "?");
+    append_sanitized_status_text(storage, copy_mode.query_view());
     return storage.view();
   }
-  if (storage.size > 0 && std::span(storage.text).subspan(storage.size - 1U, 1U).front() != ' ') {
-    append_status_context(storage, " ");
+  if (const auto* const runtime = copy_mode_runtime(session, runtimes); runtime != nullptr) {
+    std::array<char, 64> position{};
+    const auto position_size = format_copy_position(*runtime, position);
+    if (position_size > 0) {
+      append_status_separator(storage);
+      append_status_context(storage, std::string_view(position.data(), position_size));
+    }
   }
-  append_status_context(storage, std::string_view(position.data(), position_size));
-  append_status_context(storage, " ");
+  const auto feedback = copy_feedback_text(copy_mode.feedback);
+  if (!feedback.empty()) {
+    append_status_separator(storage);
+    append_status_context(storage, feedback);
+  }
   return storage.view();
 }
 
@@ -6581,7 +6563,8 @@ void append_status_context(StatusContextStorage& storage, const std::string_view
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto current_status_signature(const SessionRecord& session,
                                             const PaneRuntimeStore& runtimes,
-                                            const std::string_view input_context) noexcept
+                                            const std::string_view input_context,
+                                            const std::string_view copy_search_prompt) noexcept
     -> std::uint64_t {
   constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
   constexpr std::uint64_t prime = 1'099'511'628'211ULL;
@@ -6611,6 +6594,13 @@ void append_status_context(StatusContextStorage& storage, const std::string_view
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
   mix_command_line_status(session.attachment.command_line, mix);
+  const auto& copy_mode = session.attachment.copy_mode;
+  mix(static_cast<std::uint8_t>(copy_mode.phase));
+  mix(static_cast<std::uint8_t>(copy_mode.feedback));
+  mix(static_cast<std::uint8_t>(copy_mode.prompt_search_direction));
+  for (const char character : copy_search_prompt) {
+    mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
+  }
   mix(session.attachment.status_message_visible ? 1U : 0U);
   for (const char character : visible_status_message(session)) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
@@ -6637,7 +6627,7 @@ void append_status_context(StatusContextStorage& storage, const std::string_view
     -> std::uint64_t {
   StatusContextStorage storage;
   const auto input_context = collect_status_input_context(session, runtimes, storage);
-  return current_status_signature(session, runtimes, input_context);
+  return current_status_signature(session, runtimes, input_context, storage.prompt_view());
 }
 
 [[nodiscard]] constexpr auto status_prompt_target(const RenamePromptKind kind) noexcept
@@ -6753,32 +6743,67 @@ collect_status_tabs(const SessionRecord& session, const PaneRuntimeStore& runtim
   return std::span(storage).first(order.size());
 }
 
+struct StatusPromptProjection final {
+  render::StatusPromptTarget target{render::StatusPromptTarget::none};
+  render::StatusPromptFeedback feedback{render::StatusPromptFeedback::none};
+  std::string_view value;
+  std::string_view context_override;
+  std::size_t cursor{0};
+};
+
+[[nodiscard]] auto collect_status_prompt(const SessionRecord& session,
+                                         const std::string_view copy_search_prompt) noexcept
+    -> StatusPromptProjection {
+  const auto& command_line = session.attachment.command_line;
+  if (command_line.active) {
+    return {.target = render::StatusPromptTarget::command_line,
+            .feedback = render::StatusPromptFeedback::none,
+            .value = command_line.view(),
+            .context_override = {},
+            .cursor = command_line.cursor};
+  }
+  const auto message = visible_status_message(session);
+  if (!message.empty()) {
+    return {.target = render::StatusPromptTarget::message,
+            .feedback = render::StatusPromptFeedback::none,
+            .value = {},
+            .context_override = message,
+            .cursor = 0};
+  }
+  const auto& copy_mode = session.attachment.copy_mode;
+  if (copy_mode.phase == CopyModePhase::search_prompt) {
+    const auto target = copy_mode.prompt_search_direction == CopySearchDirection::forward
+                            ? render::StatusPromptTarget::copy_search_forward
+                            : render::StatusPromptTarget::copy_search_backward;
+    return {.target = target,
+            .feedback = render::StatusPromptFeedback::none,
+            .value = copy_search_prompt,
+            .context_override = {},
+            .cursor = copy_search_prompt.size()};
+  }
+  const auto& rename = session.attachment.rename_prompt;
+  return {.target = status_prompt_target(rename.kind),
+          .feedback = status_prompt_feedback(rename.feedback),
+          .value = rename.view(),
+          .context_override = {},
+          .cursor = rename.cursor};
+}
+
 [[nodiscard]] auto status_line_value(const SessionRecord& session,
                                      const std::span<const render::StatusTab> tabs,
                                      const std::string_view input_context,
+                                     const std::string_view copy_search_prompt,
                                      const bool dirty) noexcept -> render::StatusLine {
-  const auto& command_line = session.attachment.command_line;
-  const auto command_prompt = command_line.active;
-  auto prompt_target = status_prompt_target(session.attachment.rename_prompt.kind);
-  const auto message = visible_status_message(session);
-  if (!message.empty()) {
-    prompt_target = render::StatusPromptTarget::message;
-  }
-  if (command_prompt) {
-    prompt_target = render::StatusPromptTarget::command_line;
-  }
+  const auto prompt = collect_status_prompt(session, copy_search_prompt);
+  const auto context = prompt.context_override.empty() ? input_context : prompt.context_override;
   return {
       .session_name = session.session_name(),
       .tabs = tabs,
-      .prompt_target = prompt_target,
-      .prompt_feedback = command_prompt
-                             ? render::StatusPromptFeedback::none
-                             : status_prompt_feedback(session.attachment.rename_prompt.feedback),
-      .prompt_value =
-          command_prompt ? command_line.view() : session.attachment.rename_prompt.view(),
-      .input_context = !message.empty() ? message : input_context,
-      .prompt_cursor =
-          command_prompt ? command_line.cursor : session.attachment.rename_prompt.cursor,
+      .prompt_target = prompt.target,
+      .prompt_feedback = prompt.feedback,
+      .prompt_value = prompt.value,
+      .input_context = context,
+      .prompt_cursor = prompt.cursor,
       .dirty = dirty,
   };
 }
@@ -6797,12 +6822,13 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   const auto order = collect_status_tab_order(session, order_storage);
   const auto tabs = collect_status_tabs(session, runtimes, order, storage);
   const auto input_context = collect_status_input_context(session, runtimes, context_storage);
-  const auto signature = current_status_signature(session, runtimes, input_context);
+  const auto signature =
+      current_status_signature(session, runtimes, input_context, context_storage.prompt_view());
   const bool dirty = !session.attachment_runtime.status_valid ||
                      signature != session.attachment_runtime.status_signature;
   session.attachment_runtime.status_signature = signature;
   session.attachment_runtime.status_valid = true;
-  return status_line_value(session, tabs, input_context, dirty);
+  return status_line_value(session, tabs, input_context, context_storage.prompt_view(), dirty);
 }
 
 [[nodiscard]] auto status_target_at_column(const SessionRecord& session,
@@ -6819,7 +6845,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   StatusContextStorage context_storage;
   const auto input_context = collect_status_input_context(session, runtimes, context_storage);
   const auto target = render::status_target_at_column(
-      status_line_value(session, tabs, input_context, false),
+      status_line_value(session, tabs, input_context, context_storage.prompt_view(), false),
       {.columns = session.attachment.columns, .rows = session.attachment.rows}, column);
   if (!target.has_value()) {
     return std::nullopt;
@@ -6932,11 +6958,9 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-  CopyOverlayStorage copy_overlay;
   MessageViewStorage message_storage;
   StatusContextStorage status_context_storage;
-  render::PaneOverlay overlay;
-  const auto surfaces = collect_surfaces(session, runtimes, surface_storage, copy_overlay, overlay);
+  const auto surfaces = collect_surfaces(session, runtimes, surface_storage);
   const auto message_view = collect_message_view(session, message_storage);
   const auto status =
       collect_status_line(session, runtimes, status_storage, status_context_storage);
@@ -6950,8 +6974,8 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
                                    surfaces.size());
   const auto rendered = render::compose_retained_frame(
       surfaces, {.columns = session.attachment.columns, .rows = session.attachment.rows},
-      session.attachment_runtime.frame, force_full, status, overlay,
-      session.attachment_runtime.outer_modes, message_view);
+      session.attachment_runtime.frame, force_full, status, session.attachment_runtime.outer_modes,
+      message_view);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
                                    rendered.has_value() ? rendered->bytes : 0);

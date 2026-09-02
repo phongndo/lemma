@@ -344,14 +344,14 @@ TEST(SynchronizedOutputBoundaryTest, ReleasedFocusedPaneRestoresCanonicalInputMo
   write_terminal(live, "visible");
   panes.front().presentation_suppressed = true;
   const auto suppressed = render::compose_frame(panes, {.columns = 12, .rows = 2}, output, false,
-                                                {}, {}, initial->outer_modes);
+                                                {}, initial->outer_modes);
   ASSERT_TRUE(suppressed.has_value());
   outer.write(std::span(output).first(suppressed->bytes));
 
   write_terminal(held, "\x1B[?2026l");
   panes.front().presentation_suppressed = false;
   const auto released = render::compose_frame(panes, {.columns = 12, .rows = 2}, output, false, {},
-                                              {}, suppressed->outer_modes);
+                                              suppressed->outer_modes);
   ASSERT_TRUE(released.has_value());
   outer.write(std::span(output).first(released->bytes));
 
