@@ -1127,9 +1127,12 @@ class LemmaRuntime:
 
     def command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         normalized = list(arguments)
-        if len(normalized) == 2 and normalized[0] == "list":
-            normalized[0] = "inspect"
-        return subprocess.run(
+        requested_session = (
+            normalized.pop()
+            if len(normalized) == 2 and normalized[0] == "list"
+            else None
+        )
+        completed = subprocess.run(
             [str(self.cli_path), str(self.socket_path), *normalized],
             env=self.environment,
             check=True,
@@ -1137,6 +1140,18 @@ class LemmaRuntime:
             text=True,
             timeout=5.0,
         )
+        if requested_session is not None:
+            prefix = f'lemma session "{requested_session}":'
+            completed.stdout = "".join(
+                line
+                for line in completed.stdout.splitlines(keepends=True)
+                if line.startswith(prefix)
+            )
+            if not completed.stdout:
+                raise RuntimeError(
+                    f"Lemma session {requested_session!r} was not listed"
+                )
+        return completed
 
     def attach_arguments(self, session: str) -> list[str]:
         return [str(self.cli_path), str(self.socket_path), "attach", session]

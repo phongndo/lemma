@@ -55,6 +55,27 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         process.communicate(timeout=1.0)
         return json.loads(line)
 
+    def test_root_help_prioritizes_daily_commands(self) -> None:
+        help_result = self.server.command("--help")
+        self.assertEqual(help_result.status, 0, help_result.output)
+        self.assertIn(
+            "Usage:\n"
+            "  lemma                                  Create a numbered Session and attach\n"
+            "  lemma new [NAME] [OPTIONS]             Create a Session and attach\n",
+            help_result.output,
+        )
+        self.assertIn(
+            "  lemma list | ls                        List Sessions and their status\n",
+            help_result.output,
+        )
+        self.assertIn("Automation:\n  lemma proc ...", help_result.output)
+        self.assertNotIn("Sessions:\n", help_result.output)
+        self.assertNotIn("lemma inspect", help_result.output)
+
+        removed = self.server.command("inspect", "missing")
+        self.assertEqual(removed.status, 2, removed.output)
+        self.assertIn("invalid lemma command or arguments: inspect", removed.output)
+
     def test_focus_preserving_creation_keeps_controller_selection(self) -> None:
         status, started = self.json_command(
             "proc", "session", "start", "focus-preserve", "--", "/bin/sh"
