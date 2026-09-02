@@ -1,7 +1,7 @@
 #ifndef LEMMA_DAEMON_SERVER_HPP
 #define LEMMA_DAEMON_SERVER_HPP
 
-#include "api/op.hpp"
+#include "api/command.hpp"
 #include "lemma/id.hpp"
 
 #include <cstddef>
@@ -49,7 +49,7 @@ struct ServeOptions final {
 // -1 means the daemon is unavailable.
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
 [[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, std::string_view document) -> int;
-[[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, const api::Op& op) -> int;
+[[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, const api::Command& command) -> int;
 
 struct LaunchOptions final {
   std::string_view working_directory;
@@ -91,7 +91,7 @@ struct SurfaceOptions final {
   bool hold{false};
 };
 
-enum class SemanticOp : std::uint8_t {
+enum class SemanticCommand : std::uint8_t {
   tab_select,
   tab_move,
   tab_kill,
@@ -107,7 +107,7 @@ enum class SemanticOp : std::uint8_t {
   session_kill,
 };
 
-struct OpTarget final {
+struct CommandTarget final {
   TabId tab;
   PaneId pane;
   PaneId peer_pane;
@@ -159,8 +159,9 @@ struct PaneStatus final {
 [[nodiscard]] auto create_surface(const RuntimeEndpoint& endpoint, std::string_view session,
                                   SurfaceCreateKind kind, PaneId target,
                                   SurfaceOptions options = {}) -> SurfaceResult;
-[[nodiscard]] auto perform_op(const RuntimeEndpoint& endpoint, std::string_view session,
-                              SemanticOp op, OpTarget target) -> OperationStatus;
+[[nodiscard]] auto perform_command(const RuntimeEndpoint& endpoint, std::string_view session,
+                                   SemanticCommand command, CommandTarget target)
+    -> OperationStatus;
 [[nodiscard]] auto send_pane(const RuntimeEndpoint& endpoint, std::string_view session, PaneId pane,
                              std::string_view text) -> OperationStatus;
 [[nodiscard]] auto capture_pane(const RuntimeEndpoint& endpoint, std::string_view session,

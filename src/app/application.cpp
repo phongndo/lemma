@@ -1,6 +1,6 @@
 #include "app/application.hpp"
 
-#include "api/op.hpp"
+#include "api/command.hpp"
 #include "api/proc.hpp"
 #include "api/schema.hpp"
 #include "app/proc.hpp"
@@ -132,8 +132,8 @@ template <typename Integer>
       "  rename OLD NEW                         Rename a session\n"
       "  kill NAME                              Kill a session\n\n"
       "Automation:\n"
-      "  proc DOMAIN OP [ARGUMENTS...]          Execute a one-operation Proc\n"
-      "  proc --file FILE                       Execute a bounded multi-operation Proc\n"
+      "  proc DOMAIN COMMAND [ARGUMENTS...]          Execute a one-command Proc\n"
+      "  proc --file FILE                       Execute a bounded multi-command Proc\n"
       "  proc --stdin                           Read a Proc document from standard input\n"
       "  events [OPTIONS]                       Stream machine-readable observations\n\n"
       "Reference:\n"
@@ -147,8 +147,8 @@ template <typename Integer>
       "  --hold                                 Retain an exited pane and its final output\n"
       "  -- COMMAND [ARGUMENTS...]              Execute directly, without a shell\n\n"
       "Proc domains: daemon, session, tab, pane\n"
-      "Operation targets: --session NAME|ID, --tab ID|POSITION, --pane ID\n"
-      "Inside Lemma, omitted operation targets use the current pane context.\n\n"
+      "Command targets: --session NAME|ID, --tab ID|POSITION, --pane ID\n"
+      "Inside Lemma, omitted command targets use the current pane context.\n\n"
       "Event options: --session NAME|ID, --pane ID, --screen\n";
   return write_fragment(stream, usage) ? 0 : 1;
 }
@@ -167,9 +167,9 @@ template <typename Integer>
   constexpr std::string_view summary =
       "Lemma Control API\n"
       "  Proc    lemma.proc/v1 -> lemma.proc-result/v1\n"
-      "  Op      nested request -> lemma.op-result/v1\n"
+      "  Command nested request -> lemma.command-result/v1\n"
       "  Events  lemma.events/v1 -> lemma.event/v1\n\n"
-      "Operations\n"
+      "Commands\n"
       "  daemon   inspect\n"
       "  session  start list inspect rename kill\n"
       "  tab      new list inspect select move rename kill\n"
@@ -190,11 +190,11 @@ metadata:
 
 # Lemma
 
-Lemma's hierarchy is `Session -> Tab -> Pane`. Use typed Procs; never emulate mux operations by
+Lemma's hierarchy is `Session -> Tab -> Pane`. Use typed Procs; never emulate mux commands by
 sending prefix keys.
 
 ```text
-Proc  = one to 64 bounded ordered Ops, including reads and synchronization
+Proc  = one to 64 bounded ordered Commands, including reads and synchronization
 Event = immutable asynchronous observation
 ```
 
@@ -202,8 +202,8 @@ Operate Lemma only through its CLI. These commands use Lemma's typed daemon cont
 do not open sockets, write RPC clients, or wrap the protocol.
 
 ```text
-one interaction     -> lemma proc DOMAIN OP
-multiple operations -> lemma proc --file FILE or lemma proc --stdin
+one interaction  -> lemma proc DOMAIN COMMAND
+multiple commands -> lemma proc --file FILE or lemma proc --stdin
 observation stream  -> lemma events
 schema discovery    -> lemma api schema --json
 ```
@@ -213,10 +213,10 @@ schema discovery    -> lemma api schema --json
 - Do not run bare `lemma`, `lemma new`, or `lemma attach` from a noninteractive tool: they attach to
   a terminal. Use `lemma proc session start` for detached agent-created work.
 - Inside a Lemma pane, the CLI infers targets from `LEMMA_SESSION_ID`, `LEMMA_TAB_ID`, and
-  `LEMMA_PANE_ID`. Outside Lemma, provide explicit targets for operations that require them. Pane
+  `LEMMA_PANE_ID`. Outside Lemma, provide explicit targets for commands that require them. Pane
   IDs are Session-scoped.
 - Names and Tab positions are human/discovery conveniences; prefer returned generational IDs for
-  subsequent operations. Tab and Pane IDs are Session-scoped.
+  subsequent commands. Tab and Pane IDs are Session-scoped.
 - Read every canonical JSON result. Only `applied` and `no_effect` are successful. On `stale`,
   `wrong_owner`, or `conflict`, inspect current state instead of blindly retrying. Use returned
   Session revisions for conditional semantic mutations and terminal generations for waits.
@@ -232,8 +232,8 @@ schema discovery    -> lemma api schema --json
   destroy pre-existing, user-owned, or intentionally persistent resources unless explicitly
   requested.
 - `lemma proc pane wait` defaults to current-Pane child-process completion. Use its condition
-  options only for exact process, output, or prompt waits. A multi-operation Proc may compose the
-  same operation with other steps. Bound open-ended `lemma events` streams with the agent host's
+  options only for exact process, output, or prompt waits. A multi-command Proc may compose the
+  same Command with other steps. Bound open-ended `lemma events` streams with the agent host's
   cancellation mechanism.
 
 ## CLI
@@ -261,27 +261,27 @@ lemma proc --file FILE
 lemma api schema --json
 ```
 
-`lemma proc` prints canonical Proc JSON results. Read nested Op results, IDs, revisions, and
+`lemma proc` prints canonical Proc JSON results. Read nested Command results, IDs, revisions, and
 terminal generations rather than assuming them. Prefer exact argv launch for ordinary commands; use
 atomic `pane.input` only for an existing interactive terminal.
 
-Use `lemma proc DOMAIN OP --help` for CLI grammar before reaching for the full schema. Use
-`lemma api schema --json` for exact Op, Proc, result, subscription, and Event shapes, fields,
+Use `lemma proc DOMAIN COMMAND --help` for CLI grammar before reaching for the full schema. Use
+`lemma api schema --json` for exact Command, Proc, result, subscription, and Event shapes, fields,
 selectors, and bounds. Do not inspect Lemma source code to discover installed CLI syntax.
 
-## Multi-operation Procs
+## Multi-Command Procs
 
-Proc validates and compiles its complete bounded document, Op schemas, selectors, bounds, and
-backward-only typed references before executing sequentially through the Op executor. It is non-atomic:
+Proc validates and compiles its complete bounded document, Command schemas, selectors, bounds, and
+backward-only typed references before executing sequentially through the Command executor. It is non-atomic:
 completed effects are not rolled back. Inspect all results. If execution stops before planned
 cleanup, clean up only temporary task-owned resources afterward.
 
 ```json
-{"schema":"lemma.proc/v1","on_error":"continue","ops":[
-  {"id":"qa","op":"session.start","name":"qa"},
-  {"id":"tests","op":"tab.new","session":{"result":"qa"},"title":"tests"},
-  {"op":"pane.zoom","pane":{"result":"tests"},"enabled":true},
-  {"op":"session.kill","session":{"result":"qa"}}
+{"schema":"lemma.proc/v1","on_error":"continue","commands":[
+  {"id":"qa","command":"session.start","name":"qa"},
+  {"id":"tests","command":"tab.new","session":{"result":"qa"},"title":"tests"},
+  {"command":"pane.zoom","pane":{"result":"tests"},"enabled":true},
+  {"command":"session.kill","session":{"result":"qa"}}
 ]}
 ```
 )SKILL";
@@ -319,10 +319,10 @@ struct SurfaceArguments final {
   return value == "daemon" || value == "session" || value == "tab" || value == "pane";
 }
 
-// Branches mirror the complete public Op CLI grammar.
+// Branches mirror the complete public Command CLI grammar.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] constexpr auto op_help(const std::string_view domain,
-                                     const std::string_view operation) noexcept
+[[nodiscard]] constexpr auto command_help(const std::string_view domain,
+                                          const std::string_view operation) noexcept
     -> std::string_view {
   if (domain == "daemon") {
     return operation == "inspect" ? "Usage:\n  lemma proc daemon inspect\n\nInspect live "
@@ -333,7 +333,7 @@ struct SurfaceArguments final {
     if (operation == "list") {
       return "Usage:\n"
              "  lemma proc session list\n\n"
-             "List Sessions and their stable IDs. This Op does not accept a target.\n";
+             "List Sessions and their stable IDs. This Command does not accept a target.\n";
     }
     if (operation == "start") {
       return "Usage:\n"
@@ -478,23 +478,24 @@ struct SurfaceArguments final {
   return {};
 }
 
-[[nodiscard]] auto print_proc_operation_help(const std::string_view text) noexcept -> int {
+[[nodiscard]] auto print_proc_command_help(const std::string_view text) noexcept -> int {
   return write_fragment(stdout, text) ? 0 : 1;
 }
 
-// Branches format the complete operation help catalog without adding parser state.
+// Branches format the complete command help catalog without adding parser state.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto print_op_help(const std::span<char*> arguments) noexcept -> int {
+[[nodiscard]] auto print_command_help(const std::span<char*> arguments) noexcept -> int {
   constexpr std::string_view overview =
-      "Lemma Proc operation CLI\n\n"
+      "Lemma Proc command CLI\n\n"
       "Usage:\n"
-      "  lemma proc DOMAIN OP [ARGUMENTS...]\n\n"
-      "Domains and operations:\n"
+      "  lemma proc DOMAIN COMMAND [ARGUMENTS...]\n\n"
+      "Domains and commands:\n"
       "  daemon   inspect\n"
       "  session  start list inspect rename kill\n"
       "  tab      new list inspect select move rename kill\n"
       "  pane     split list inspect focus swap resize zoom input capture wait kill\n\n"
-      "Use `lemma proc DOMAIN OP --help` for exact CLI grammar. Session-scoped operations may use "
+      "Use `lemma proc DOMAIN COMMAND --help` for exact CLI grammar. Session-scoped commands may "
+      "use "
       "--if-session-revision N for an optimistic precondition.\n"
       "Every invocation prints one canonical lemma.proc-result/v1 JSON value.\n";
   if (arguments.empty()) {
@@ -503,17 +504,17 @@ struct SurfaceArguments final {
   const std::string_view domain(arguments.front());
   if (arguments.size() == 1U) {
     constexpr std::string_view daemon =
-        "Daemon Ops\n\n"
+        "Daemon Commands\n\n"
         "  inspect                               Inspect live versions and capacity\n";
     constexpr std::string_view session =
-        "Session Ops\n\n"
+        "Session Commands\n\n"
         "  start [NAME] [OPTIONS]               Create a detached Session\n"
         "  list                                 List Sessions\n"
         "  inspect [SESSION]                    Inspect one Session\n"
         "  rename [SESSION] NAME                Rename one Session\n"
         "  kill [SESSION]                       Kill one Session\n";
     constexpr std::string_view tab =
-        "Tab Ops\n\n"
+        "Tab Commands\n\n"
         "  new [OPTIONS]                        Create a Tab\n"
         "  list                                 List Tabs\n"
         "  inspect [TAB]                        Inspect a Tab and its layout\n"
@@ -522,7 +523,7 @@ struct SurfaceArguments final {
         "  rename [TAB] [TITLE]                 Rename or clear a Tab title\n"
         "  kill [TAB]                           Kill a Tab\n";
     constexpr std::string_view pane =
-        "Pane Ops\n\n"
+        "Pane Commands\n\n"
         "  split [PANE] DIRECTION [OPTIONS]     Split a Pane right or down\n"
         "  list                                 List Panes\n"
         "  inspect [PANE]                       Inspect process and terminal state\n"
@@ -546,7 +547,7 @@ struct SurfaceArguments final {
     if (domain == "pane") {
       return write_fragment(stdout, pane) ? 0 : 1;
     }
-    static_cast<void>(write_fragment(stderr, "unknown Lemma Op domain: "));
+    static_cast<void>(write_fragment(stderr, "unknown Lemma Command domain: "));
     static_cast<void>(write_fragment(stderr, domain));
     static_cast<void>(write_fragment(stderr, "\n"));
     static_cast<void>(write_fragment(stderr, overview));
@@ -554,11 +555,11 @@ struct SurfaceArguments final {
   }
   if (arguments.size() == 2U) {
     const auto operation = std::string_view(arguments.back());
-    const auto text = op_help(domain, operation);
+    const auto text = command_help(domain, operation);
     if (!text.empty()) {
-      return print_proc_operation_help(text);
+      return print_proc_command_help(text);
     }
-    static_cast<void>(write_fragment(stderr, "unknown Lemma Op: "));
+    static_cast<void>(write_fragment(stderr, "unknown Lemma Command: "));
     static_cast<void>(write_fragment(stderr, domain));
     static_cast<void>(write_fragment(stderr, " "));
     static_cast<void>(write_fragment(stderr, operation));
@@ -587,16 +588,16 @@ struct SurfaceArguments final {
 [[nodiscard]] auto print_proc_help(const std::span<char*> arguments) noexcept -> int {
   if (arguments.size() >= 2U && proc_domain(arguments.subspan(1, 1).front())) {
     const auto target = arguments.subspan(1);
-    return print_op_help(target.first(std::min(target.size(), std::size_t{2})));
+    return print_command_help(target.first(std::min(target.size(), std::size_t{2})));
   }
   constexpr std::string_view help =
       "Usage:\n"
-      "  lemma proc DOMAIN OP [ARGUMENTS...]\n"
+      "  lemma proc DOMAIN COMMAND [ARGUMENTS...]\n"
       "  lemma proc --file FILE\n"
       "  lemma proc --stdin\n\n"
-      "Execute one bounded lemma.proc/v1 request. A Proc contains one to 64 ordered operations, "
+      "Execute one bounded lemma.proc/v1 request. A Proc contains one to 64 ordered commands, "
       "validates completely before execution, is non-atomic, and may use backward typed result "
-      "references. Read every nested operation result.\n";
+      "references. Read every nested Command result.\n";
   return write_fragment(stdout, help) ? 0 : 1;
 }
 
@@ -606,7 +607,7 @@ struct SurfaceArguments final {
   }
   const std::string_view command(arguments.front());
   if (command == "session" || command == "tab" || command == "pane") {
-    return print_op_help(arguments.first(std::min(arguments.size(), std::size_t{2})));
+    return print_command_help(arguments.first(std::min(arguments.size(), std::size_t{2})));
   }
   if (command == "proc") {
     return print_proc_help(arguments);
@@ -788,7 +789,7 @@ template <typename Id>
   return parsed;
 }
 
-struct OpCliArguments final {
+struct CommandCliArguments final {
   std::vector<char*> values;
   std::optional<api::SessionSelector> session;
   std::optional<api::TabSelector> tab;
@@ -848,11 +849,12 @@ struct OpCliArguments final {
   return value.has_value() ? pane_selector(*value) : std::nullopt;
 }
 
-// Target options are frontend conveniences. They are removed before operation-specific parsing so
-// the Op crossing the socket contains only concrete selectors.
+// Target options are frontend conveniences. They are removed before command-specific parsing so
+// the Command crossing the socket contains only concrete selectors.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto parse_op_cli_arguments(const std::span<char*> arguments) -> OpCliArguments {
-  OpCliArguments parsed;
+[[nodiscard]] auto parse_command_cli_arguments(const std::span<char*> arguments)
+    -> CommandCliArguments {
+  CommandCliArguments parsed;
   parsed.values.reserve(arguments.size());
   bool launch_arguments = false;
   for (std::size_t index = 0; index < arguments.size(); ++index) {
@@ -887,50 +889,51 @@ struct OpCliArguments final {
   return parsed;
 }
 
-[[nodiscard]] auto concrete_session(OpCliArguments& arguments)
+[[nodiscard]] auto concrete_session(CommandCliArguments& arguments)
     -> std::optional<api::SessionSelector> {
   return arguments.session.has_value() ? arguments.session : current_session_selector();
 }
 
-[[nodiscard]] auto concrete_tab(OpCliArguments& arguments) -> std::optional<api::TabSelector> {
+[[nodiscard]] auto concrete_tab(CommandCliArguments& arguments) -> std::optional<api::TabSelector> {
   return arguments.tab.has_value() ? arguments.tab : current_tab_selector();
 }
 
-[[nodiscard]] auto concrete_pane(OpCliArguments& arguments) -> std::optional<api::PaneSelector> {
+[[nodiscard]] auto concrete_pane(CommandCliArguments& arguments)
+    -> std::optional<api::PaneSelector> {
   return arguments.pane.has_value() ? arguments.pane : current_pane_selector();
 }
 
-[[nodiscard]] auto run_concrete_op(const daemon::RuntimeEndpoint& endpoint, const api::Op& op)
-    -> int {
-  return daemon::run_proc(endpoint, op);
+[[nodiscard]] auto run_concrete_command(const daemon::RuntimeEndpoint& endpoint,
+                                        const api::Command& command) -> int {
+  return daemon::run_proc(endpoint, command);
 }
 
-[[nodiscard]] auto run_daemon_op(const daemon::RuntimeEndpoint& endpoint,
-                                 const std::string_view operation, const OpCliArguments& arguments)
-    -> int {
+[[nodiscard]] auto run_daemon_command(const daemon::RuntimeEndpoint& endpoint,
+                                      const std::string_view operation,
+                                      const CommandCliArguments& arguments) -> int {
   if (operation != "inspect" || !arguments.valid || !arguments.values.empty() ||
       arguments.session.has_value() || arguments.tab.has_value() || arguments.pane.has_value() ||
       arguments.expected_session_revision.has_value()) {
     return invalid_arguments("proc daemon");
   }
-  api::Op op;
-  op.kind = api::OpKind::daemon_inspect;
-  return run_concrete_op(endpoint, op);
+  api::Command command;
+  command.kind = api::CommandKind::daemon_inspect;
+  return run_concrete_command(endpoint, command);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_session_op(const daemon::RuntimeEndpoint& endpoint,
-                                  const std::string_view operation, OpCliArguments arguments)
-    -> int {
+[[nodiscard]] auto run_session_command(const daemon::RuntimeEndpoint& endpoint,
+                                       const std::string_view operation,
+                                       CommandCliArguments arguments) -> int {
   if (!arguments.valid || arguments.tab.has_value() || arguments.pane.has_value()) {
     return invalid_arguments("proc session");
   }
-  api::Op op;
-  op.expected_session_revision = arguments.expected_session_revision;
+  api::Command command;
+  command.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.session.has_value() &&
       !arguments.expected_session_revision.has_value()) {
-    op.kind = api::OpKind::session_list;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::session_list;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "start") {
     const auto parsed = parse_creation(arguments.values);
@@ -938,14 +941,14 @@ struct OpCliArguments final {
         arguments.pane.has_value() || arguments.expected_session_revision.has_value()) {
       return invalid_arguments("proc session start");
     }
-    op.kind = api::OpKind::session_start;
-    op.name = parsed->name.has_value() ? std::string(*parsed->name) : std::string{};
-    op.working_directory = parsed->working_directory;
-    op.hold = parsed->hold;
+    command.kind = api::CommandKind::session_start;
+    command.name = parsed->name.has_value() ? std::string(*parsed->name) : std::string{};
+    command.working_directory = parsed->working_directory;
+    command.hold = parsed->hold;
     for (const auto value : parsed->command) {
-      op.arguments.emplace_back(value);
+      command.arguments.emplace_back(value);
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "inspect" || operation == "kill") {
     if (arguments.values.size() > 1U) {
@@ -956,9 +959,10 @@ struct OpCliArguments final {
     if (!target.has_value()) {
       return invalid_arguments("proc session");
     }
-    op.kind = operation == "inspect" ? api::OpKind::session_inspect : api::OpKind::session_kill;
-    op.session = std::move(*target);
-    return run_concrete_op(endpoint, op);
+    command.kind =
+        operation == "inspect" ? api::CommandKind::session_inspect : api::CommandKind::session_kill;
+    command.session = std::move(*target);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "rename") {
     std::optional<api::SessionSelector> target;
@@ -973,17 +977,18 @@ struct OpCliArguments final {
     if (!target.has_value() || !SessionNameValue::create(name).has_value()) {
       return invalid_arguments("proc session rename");
     }
-    op.kind = api::OpKind::session_rename;
-    op.session = std::move(*target);
-    op.name = name;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::session_rename;
+    command.session = std::move(*target);
+    command.name = name;
+    return run_concrete_command(endpoint, command);
   }
   return invalid_arguments("proc session");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_tab_op(const daemon::RuntimeEndpoint& endpoint,
-                              const std::string_view operation, OpCliArguments arguments) -> int {
+[[nodiscard]] auto run_tab_command(const daemon::RuntimeEndpoint& endpoint,
+                                   const std::string_view operation, CommandCliArguments arguments)
+    -> int {
   if (!arguments.valid || arguments.pane.has_value()) {
     return invalid_arguments("proc tab");
   }
@@ -991,27 +996,27 @@ struct OpCliArguments final {
   if (!session.has_value()) {
     return invalid_arguments("proc tab; provide --session outside Lemma");
   }
-  api::Op op;
-  op.session = std::move(*session);
-  op.expected_session_revision = arguments.expected_session_revision;
+  api::Command command;
+  command.session = std::move(*session);
+  command.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.tab.has_value()) {
-    op.kind = api::OpKind::tab_list;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::tab_list;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "new") {
     const auto parsed = parse_surface(arguments.values, true);
     if (!parsed.has_value() || arguments.tab.has_value()) {
       return invalid_arguments("proc tab new");
     }
-    op.kind = api::OpKind::tab_new;
-    op.title = parsed->title;
-    op.working_directory = parsed->working_directory;
-    op.hold = parsed->hold;
-    op.focus = parsed->focus;
+    command.kind = api::CommandKind::tab_new;
+    command.title = parsed->title;
+    command.working_directory = parsed->working_directory;
+    command.hold = parsed->hold;
+    command.focus = parsed->focus;
     for (const auto value : parsed->command) {
-      op.arguments.emplace_back(value);
+      command.arguments.emplace_back(value);
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "inspect" || operation == "select" || operation == "kill") {
     if (arguments.values.size() > 1U) {
@@ -1022,14 +1027,14 @@ struct OpCliArguments final {
     if (!target.has_value()) {
       return invalid_arguments("proc tab");
     }
-    op.kind = api::OpKind::tab_kill;
+    command.kind = api::CommandKind::tab_kill;
     if (operation == "inspect") {
-      op.kind = api::OpKind::tab_inspect;
+      command.kind = api::CommandKind::tab_inspect;
     } else if (operation == "select") {
-      op.kind = api::OpKind::tab_select;
+      command.kind = api::CommandKind::tab_select;
     }
-    op.tab = *target;
-    return run_concrete_op(endpoint, op);
+    command.tab = *target;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "move") {
     std::optional<api::TabSelector> target;
@@ -1045,10 +1050,10 @@ struct OpCliArguments final {
         *destination > command_tab_slots_max) {
       return invalid_arguments("proc tab move");
     }
-    op.kind = api::OpKind::tab_move;
-    op.tab = *target;
-    op.to_position = *destination;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::tab_move;
+    command.tab = *target;
+    command.to_position = *destination;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "rename") {
     std::optional<api::TabSelector> target;
@@ -1063,10 +1068,10 @@ struct OpCliArguments final {
     if (!target.has_value() || !TabTitleValue::create(title).has_value()) {
       return invalid_arguments("proc tab rename");
     }
-    op.kind = api::OpKind::tab_rename;
-    op.tab = *target;
-    op.title = title;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::tab_rename;
+    command.tab = *target;
+    command.title = title;
+    return run_concrete_command(endpoint, command);
   }
   return invalid_arguments("proc tab");
 }
@@ -1123,8 +1128,9 @@ struct OpCliArguments final {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_pane_op(const daemon::RuntimeEndpoint& endpoint,
-                               const std::string_view operation, OpCliArguments arguments) -> int {
+[[nodiscard]] auto run_pane_command(const daemon::RuntimeEndpoint& endpoint,
+                                    const std::string_view operation, CommandCliArguments arguments)
+    -> int {
   if (!arguments.valid || arguments.tab.has_value()) {
     return invalid_arguments("proc pane");
   }
@@ -1132,12 +1138,12 @@ struct OpCliArguments final {
   if (!session.has_value()) {
     return invalid_arguments("proc pane; provide --session outside Lemma");
   }
-  api::Op op;
-  op.session = std::move(*session);
-  op.expected_session_revision = arguments.expected_session_revision;
+  api::Command command;
+  command.session = std::move(*session);
+  command.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.pane.has_value()) {
-    op.kind = api::OpKind::pane_list;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::pane_list;
+    return run_concrete_command(endpoint, command);
   }
 
   auto target = concrete_pane(arguments);
@@ -1151,19 +1157,19 @@ struct OpCliArguments final {
   if (!target.has_value()) {
     return invalid_arguments("proc pane; provide --pane outside Lemma");
   }
-  op.pane = *target;
+  command.pane = *target;
 
   if (operation == "inspect" || operation == "focus" || operation == "kill") {
     if (!values.empty()) {
       return invalid_arguments("proc pane");
     }
-    op.kind = api::OpKind::pane_kill;
+    command.kind = api::CommandKind::pane_kill;
     if (operation == "inspect") {
-      op.kind = api::OpKind::pane_inspect;
+      command.kind = api::CommandKind::pane_inspect;
     } else if (operation == "focus") {
-      op.kind = api::OpKind::pane_focus;
+      command.kind = api::CommandKind::pane_focus;
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "split") {
     if (values.empty()) {
@@ -1176,15 +1182,15 @@ struct OpCliArguments final {
         (*direction != api::Direction::right && *direction != api::Direction::down)) {
       return invalid_arguments("proc pane split");
     }
-    op.kind = api::OpKind::pane_split;
-    op.direction = *direction;
-    op.working_directory = parsed->working_directory;
-    op.hold = parsed->hold;
-    op.focus = parsed->focus;
+    command.kind = api::CommandKind::pane_split;
+    command.direction = *direction;
+    command.working_directory = parsed->working_directory;
+    command.hold = parsed->hold;
+    command.focus = parsed->focus;
     for (const auto value : parsed->command) {
-      op.arguments.emplace_back(value);
+      command.arguments.emplace_back(value);
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "swap") {
     if (values.size() != 1U) {
@@ -1194,9 +1200,9 @@ struct OpCliArguments final {
     if (!other.has_value()) {
       return invalid_arguments("proc pane swap");
     }
-    op.kind = api::OpKind::pane_swap;
-    op.other = *other;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::pane_swap;
+    command.other = *other;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "resize") {
     if (values.empty() || values.size() > 2U) {
@@ -1209,30 +1215,30 @@ struct OpCliArguments final {
         *amount > command_resize_amount_max) {
       return invalid_arguments("proc pane resize");
     }
-    op.kind = api::OpKind::pane_resize;
-    op.direction = *direction;
-    op.amount = *amount;
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::pane_resize;
+    command.direction = *direction;
+    command.amount = *amount;
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "zoom") {
     if (values.size() != 1U || (std::string_view(values.front()) != "--on" &&
                                 std::string_view(values.front()) != "--off")) {
       return invalid_arguments("proc pane zoom");
     }
-    op.kind = api::OpKind::pane_zoom;
-    op.enabled = std::string_view(values.front()) == "--on";
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::pane_zoom;
+    command.enabled = std::string_view(values.front()) == "--on";
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "send") {
     if (values.size() != 2U || std::string_view(values.front()) != "--text") {
       return invalid_arguments("proc pane send");
     }
-    op.kind = api::OpKind::pane_send;
-    op.text = values.back();
-    return run_concrete_op(endpoint, op);
+    command.kind = api::CommandKind::pane_send;
+    command.text = values.back();
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "input") {
-    op.kind = api::OpKind::pane_input;
+    command.kind = api::CommandKind::pane_input;
     for (std::size_t index = 0; index < values.size(); ++index) {
       const std::string_view option(values.subspan(index, 1).front());
       if ((option == "--text" || option == "--paste") && index + 1U < values.size()) {
@@ -1240,7 +1246,7 @@ struct OpCliArguments final {
         if (text.empty()) {
           return invalid_arguments("proc pane input");
         }
-        op.input_events.push_back(
+        command.input_events.push_back(
             {.kind = option == "--text" ? api::InputEventKind::text : api::InputEventKind::paste,
              .text = std::string(text)});
       } else if (option == "--key" && index + 1U < values.size()) {
@@ -1248,21 +1254,21 @@ struct OpCliArguments final {
         if (!key.has_value()) {
           return invalid_arguments("proc pane input");
         }
-        op.input_events.push_back(std::move(*key));
+        command.input_events.push_back(std::move(*key));
       } else {
         return invalid_arguments("proc pane input");
       }
     }
-    if (op.input_events.empty() || op.input_events.size() > api::input_events_max) {
+    if (command.input_events.empty() || command.input_events.size() > api::input_events_max) {
       return invalid_arguments("proc pane input");
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "wait") {
-    if (op.expected_session_revision.has_value()) {
+    if (command.expected_session_revision.has_value()) {
       return invalid_arguments("proc pane wait");
     }
-    op.kind = api::OpKind::pane_wait;
+    command.kind = api::CommandKind::pane_wait;
     bool condition_seen = false;
     bool timeout_seen = false;
     bool generation_seen = false;
@@ -1277,49 +1283,49 @@ struct OpCliArguments final {
         if (!valid) {
           return invalid_arguments("proc pane wait");
         }
-        op.wait_condition =
+        command.wait_condition =
             option == "--exit-code" ? api::WaitCondition::exit_code : api::WaitCondition::signal;
-        op.wait_value = *value;
+        command.wait_value = *value;
         condition_seen = true;
       } else if (option == "--contains" && !condition_seen && index + 1U < values.size()) {
         const std::string_view contains(values.subspan(++index, 1).front());
         if (contains.empty() || contains.size() > std::numeric_limits<std::uint16_t>::max()) {
           return invalid_arguments("proc pane wait");
         }
-        op.wait_condition = api::WaitCondition::contains;
-        op.contains = contains;
+        command.wait_condition = api::WaitCondition::contains;
+        command.contains = contains;
         condition_seen = true;
       } else if (option == "--until-prompt" && !condition_seen) {
-        op.wait_condition = api::WaitCondition::prompt;
+        command.wait_condition = api::WaitCondition::prompt;
         condition_seen = true;
       } else if (option == "--after-generation" && !generation_seen && index + 1U < values.size()) {
         const auto generation = parse_integer<std::uint64_t>(values.subspan(++index, 1).front());
         if (!generation.has_value()) {
           return invalid_arguments("proc pane wait");
         }
-        op.after_terminal_generation = *generation;
+        command.after_terminal_generation = *generation;
         generation_seen = true;
       } else if (option == "--timeout" && !timeout_seen && index + 1U < values.size()) {
         const auto timeout = parse_duration(values.subspan(++index, 1).front());
         if (!timeout.has_value()) {
           return invalid_arguments("proc pane wait");
         }
-        op.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
+        command.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
         timeout_seen = true;
       } else {
         return invalid_arguments("proc pane wait");
       }
     }
-    if ((op.wait_condition == api::WaitCondition::process_exit ||
-         op.wait_condition == api::WaitCondition::exit_code ||
-         op.wait_condition == api::WaitCondition::signal) &&
-        op.after_terminal_generation != 0) {
+    if ((command.wait_condition == api::WaitCondition::process_exit ||
+         command.wait_condition == api::WaitCondition::exit_code ||
+         command.wait_condition == api::WaitCondition::signal) &&
+        command.after_terminal_generation != 0) {
       return invalid_arguments("proc pane wait");
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   if (operation == "capture") {
-    op.kind = api::OpKind::pane_capture;
+    command.kind = api::CommandKind::pane_capture;
     bool lines_seen = false;
     bool source_seen = false;
     bool format_seen = false;
@@ -1331,16 +1337,16 @@ struct OpCliArguments final {
         if (!lines.has_value() || *lines == 0) {
           return invalid_arguments("proc pane capture");
         }
-        op.lines = *lines;
+        command.lines = *lines;
         lines_seen = true;
       } else if (option == "--source" && !source_seen && index + 1U < values.size()) {
         const std::string_view source(values.subspan(++index, 1).front());
         if (source == "visible") {
-          op.capture_source = api::CaptureSource::visible;
+          command.capture_source = api::CaptureSource::visible;
         } else if (source == "recent") {
-          op.capture_source = api::CaptureSource::recent;
+          command.capture_source = api::CaptureSource::recent;
         } else if (source == "last-command") {
-          op.capture_source = api::CaptureSource::last_command;
+          command.capture_source = api::CaptureSource::last_command;
         } else {
           return invalid_arguments("proc pane capture");
         }
@@ -1348,9 +1354,9 @@ struct OpCliArguments final {
       } else if (option == "--format" && !format_seen && index + 1U < values.size()) {
         const std::string_view format(values.subspan(++index, 1).front());
         if (format == "plain") {
-          op.capture_format = api::CaptureFormat::plain;
+          command.capture_format = api::CaptureFormat::plain;
         } else if (format == "ansi") {
-          op.capture_format = api::CaptureFormat::ansi;
+          command.capture_format = api::CaptureFormat::ansi;
         } else {
           return invalid_arguments("proc pane capture");
         }
@@ -1358,9 +1364,9 @@ struct OpCliArguments final {
       } else if (option == "--wrap" && !wrap_seen && index + 1U < values.size()) {
         const std::string_view wrap(values.subspan(++index, 1).front());
         if (wrap == "rendered") {
-          op.capture_wrap = api::CaptureWrap::rendered;
+          command.capture_wrap = api::CaptureWrap::rendered;
         } else if (wrap == "logical") {
-          op.capture_wrap = api::CaptureWrap::logical;
+          command.capture_wrap = api::CaptureWrap::logical;
         } else {
           return invalid_arguments("proc pane capture");
         }
@@ -1369,33 +1375,33 @@ struct OpCliArguments final {
         return invalid_arguments("proc pane capture");
       }
     }
-    if (op.capture_source == api::CaptureSource::last_command && lines_seen) {
+    if (command.capture_source == api::CaptureSource::last_command && lines_seen) {
       return invalid_arguments("proc pane capture");
     }
-    return run_concrete_op(endpoint, op);
+    return run_concrete_command(endpoint, command);
   }
   return invalid_arguments("proc pane");
 }
 
-[[nodiscard]] auto run_op_command(const daemon::RuntimeEndpoint& endpoint,
-                                  const std::span<char*> arguments) -> int {
+[[nodiscard]] auto run_proc_command(const daemon::RuntimeEndpoint& endpoint,
+                                    const std::span<char*> arguments) -> int {
   if (arguments.size() < 2U) {
     return invalid_arguments("proc");
   }
   const std::string_view domain(arguments.front());
   const std::string_view operation(arguments.subspan(1, 1).front());
-  auto parsed = parse_op_cli_arguments(arguments.subspan(2));
+  auto parsed = parse_command_cli_arguments(arguments.subspan(2));
   if (domain == "daemon") {
-    return run_daemon_op(endpoint, operation, parsed);
+    return run_daemon_command(endpoint, operation, parsed);
   }
   if (domain == "session") {
-    return run_session_op(endpoint, operation, std::move(parsed));
+    return run_session_command(endpoint, operation, std::move(parsed));
   }
   if (domain == "tab") {
-    return run_tab_op(endpoint, operation, std::move(parsed));
+    return run_tab_command(endpoint, operation, std::move(parsed));
   }
   if (domain == "pane") {
-    return run_pane_op(endpoint, operation, std::move(parsed));
+    return run_pane_command(endpoint, operation, std::move(parsed));
   }
   return invalid_arguments("proc");
 }
@@ -1421,8 +1427,8 @@ struct OpCliArguments final {
   return created.has_value() ? client::attach(endpoint, *created) : 1;
 }
 
-[[nodiscard]] auto report_operation(const daemon::OperationStatus status,
-                                    const std::string_view success) noexcept -> int {
+[[nodiscard]] auto report_command(const daemon::OperationStatus status,
+                                  const std::string_view success) noexcept -> int {
   if (status == daemon::OperationStatus::applied || status == daemon::OperationStatus::no_effect) {
     return success.empty() || (write_fragment(stdout, success) && write_fragment(stdout, "\n")) ? 0
                                                                                                 : 1;
@@ -1450,9 +1456,10 @@ struct OpCliArguments final {
          write_integer(stream, id.generation());
 }
 
-[[nodiscard]] constexpr auto op_target(const TabId tab = {}, const PaneId pane = {},
-                                       const PaneId peer = {}, const std::uint16_t tab_position = 0,
-                                       const std::uint16_t value = 0) noexcept -> daemon::OpTarget {
+[[nodiscard]] constexpr auto
+command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer = {},
+               const std::uint16_t tab_position = 0, const std::uint16_t value = 0) noexcept
+    -> daemon::CommandTarget {
   return {
       .tab = tab, .pane = pane, .peer_pane = peer, .tab_position = tab_position, .value = value};
 }
@@ -1460,7 +1467,7 @@ struct OpCliArguments final {
 [[nodiscard]] auto report_surface(const daemon::SurfaceResult& result,
                                   const std::string_view object) noexcept -> int {
   if (!result.succeeded()) {
-    return report_operation(result.status, {});
+    return report_command(result.status, {});
   }
   return write_fragment(stdout, "created lemma ") && write_fragment(stdout, object) &&
                  write_fragment(stdout, " tab=") && print_id(stdout, result.tab) &&
@@ -1565,7 +1572,7 @@ struct OpCliArguments final {
   return invalid_arguments(requested_operation);
 }
 
-// Tab branches are the complete one-shot tab op grammar.
+// Tab branches are the complete one-shot tab command grammar.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_tab(const daemon::RuntimeEndpoint& endpoint,
                            const std::span<char*> arguments) -> int {
@@ -1606,11 +1613,11 @@ struct OpCliArguments final {
     if (!id.has_value() && (!position.has_value() || *position == 0)) {
       return invalid_arguments("tab");
     }
-    const auto op =
-        operation == "select" ? daemon::SemanticOp::tab_select : daemon::SemanticOp::tab_kill;
-    return report_operation(
-        daemon::perform_op(endpoint, arguments.subspan(1, 1).front(), op,
-                           op_target(id.value_or(TabId{}), {}, {}, position.value_or(0))),
+    const auto command = operation == "select" ? daemon::SemanticCommand::tab_select
+                                               : daemon::SemanticCommand::tab_kill;
+    return report_command(
+        daemon::perform_command(endpoint, arguments.subspan(1, 1).front(), command,
+                                command_target(id.value_or(TabId{}), {}, {}, position.value_or(0))),
         operation == "select" ? "selected lemma tab" : "killed lemma tab");
   }
   if (operation == "move" && arguments.size() == 4) {
@@ -1623,29 +1630,30 @@ struct OpCliArguments final {
         *destination == 0) {
       return invalid_arguments("tab move");
     }
-    return report_operation(daemon::perform_op(endpoint, arguments.subspan(1, 1).front(),
-                                               daemon::SemanticOp::tab_move,
-                                               op_target(id.value_or(TabId{}), {}, {},
-                                                         source.value_or(0), *destination)),
-                            "moved lemma tab");
+    return report_command(daemon::perform_command(endpoint, arguments.subspan(1, 1).front(),
+                                                  daemon::SemanticCommand::tab_move,
+                                                  command_target(id.value_or(TabId{}), {}, {},
+                                                                 source.value_or(0), *destination)),
+                          "moved lemma tab");
   }
   return invalid_arguments("tab");
 }
 
-[[nodiscard]] auto pane_op(const daemon::RuntimeEndpoint& endpoint,
-                           const std::span<char*> arguments, const daemon::SemanticOp op,
-                           const std::string_view success) -> int {
+[[nodiscard]] auto pane_command(const daemon::RuntimeEndpoint& endpoint,
+                                const std::span<char*> arguments,
+                                const daemon::SemanticCommand command,
+                                const std::string_view success) -> int {
   const auto pane =
       arguments.size() >= 3 ? parse_id<PaneId>(arguments.subspan(2, 1).front()) : std::nullopt;
   if (arguments.size() != 3 || !pane.has_value()) {
     return invalid_arguments("pane");
   }
-  return report_operation(
-      daemon::perform_op(endpoint, arguments.subspan(1, 1).front(), op, op_target({}, *pane)),
-      success);
+  return report_command(daemon::perform_command(endpoint, arguments.subspan(1, 1).front(), command,
+                                                command_target({}, *pane)),
+                        success);
 }
 
-// Pane operations intentionally remain explicit: no attached focus or caller context is used to
+// Pane commands intentionally remain explicit: no attached focus or caller context is used to
 // guess a target for automation.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_pane(const daemon::RuntimeEndpoint& endpoint,
@@ -1676,10 +1684,12 @@ struct OpCliArguments final {
                           "pane");
   }
   if (operation == "focus") {
-    return pane_op(endpoint, arguments, daemon::SemanticOp::pane_focus, "focused lemma pane");
+    return pane_command(endpoint, arguments, daemon::SemanticCommand::pane_focus,
+                        "focused lemma pane");
   }
   if (operation == "kill") {
-    return pane_op(endpoint, arguments, daemon::SemanticOp::pane_kill, "killed lemma pane");
+    return pane_command(endpoint, arguments, daemon::SemanticCommand::pane_kill,
+                        "killed lemma pane");
   }
   if (operation == "swap" && arguments.size() == 4) {
     const auto pane = parse_id<PaneId>(arguments.subspan(2, 1).front());
@@ -1687,10 +1697,10 @@ struct OpCliArguments final {
     if (!pane.has_value() || !peer.has_value()) {
       return invalid_arguments("pane swap");
     }
-    return report_operation(daemon::perform_op(endpoint, arguments.subspan(1, 1).front(),
-                                               daemon::SemanticOp::pane_swap,
-                                               op_target({}, *pane, *peer)),
-                            "swapped lemma panes");
+    return report_command(daemon::perform_command(endpoint, arguments.subspan(1, 1).front(),
+                                                  daemon::SemanticCommand::pane_swap,
+                                                  command_target({}, *pane, *peer)),
+                          "swapped lemma panes");
   }
   if (operation == "resize" && arguments.size() == 5) {
     const auto pane = parse_id<PaneId>(arguments.subspan(2, 1).front());
@@ -1699,22 +1709,23 @@ struct OpCliArguments final {
     if (!pane.has_value() || !amount.has_value() || *amount == 0 || *amount > 100) {
       return invalid_arguments("pane resize");
     }
-    std::optional<daemon::SemanticOp> op;
+    std::optional<daemon::SemanticCommand> command;
     if (direction == "left") {
-      op = daemon::SemanticOp::pane_resize_left;
+      command = daemon::SemanticCommand::pane_resize_left;
     } else if (direction == "right") {
-      op = daemon::SemanticOp::pane_resize_right;
+      command = daemon::SemanticCommand::pane_resize_right;
     } else if (direction == "up") {
-      op = daemon::SemanticOp::pane_resize_up;
+      command = daemon::SemanticCommand::pane_resize_up;
     } else if (direction == "down") {
-      op = daemon::SemanticOp::pane_resize_down;
+      command = daemon::SemanticCommand::pane_resize_down;
     }
-    if (!op.has_value()) {
+    if (!command.has_value()) {
       return invalid_arguments("pane resize");
     }
-    return report_operation(daemon::perform_op(endpoint, arguments.subspan(1, 1).front(), *op,
-                                               op_target({}, *pane, {}, 0, *amount)),
-                            "resized lemma pane");
+    return report_command(daemon::perform_command(endpoint, arguments.subspan(1, 1).front(),
+                                                  *command,
+                                                  command_target({}, *pane, {}, 0, *amount)),
+                          "resized lemma pane");
   }
   if (operation == "zoom" && arguments.size() == 4) {
     const auto pane = parse_id<PaneId>(arguments.subspan(2, 1).front());
@@ -1722,19 +1733,19 @@ struct OpCliArguments final {
     if (!pane.has_value() || (state != "--on" && state != "--off")) {
       return invalid_arguments("pane zoom");
     }
-    const auto op =
-        state == "--on" ? daemon::SemanticOp::pane_zoom_on : daemon::SemanticOp::pane_zoom_off;
-    return report_operation(
-        daemon::perform_op(endpoint, arguments.subspan(1, 1).front(), op, op_target({}, *pane)),
-        "updated lemma pane zoom");
+    const auto command = state == "--on" ? daemon::SemanticCommand::pane_zoom_on
+                                         : daemon::SemanticCommand::pane_zoom_off;
+    return report_command(daemon::perform_command(endpoint, arguments.subspan(1, 1).front(),
+                                                  command, command_target({}, *pane)),
+                          "updated lemma pane zoom");
   }
   if (operation == "send" && arguments.size() == 5 &&
       std::string_view(arguments.subspan(3, 1).front()) == "--text") {
     const auto pane = parse_id<PaneId>(arguments.subspan(2, 1).front());
     return pane.has_value()
-               ? report_operation(daemon::send_pane(endpoint, arguments.subspan(1, 1).front(),
-                                                    *pane, arguments.back()),
-                                  {})
+               ? report_command(daemon::send_pane(endpoint, arguments.subspan(1, 1).front(), *pane,
+                                                  arguments.back()),
+                                {})
                : invalid_arguments("pane send");
   }
   if (operation == "capture" && (arguments.size() == 3 || arguments.size() == 5)) {
@@ -1754,7 +1765,7 @@ struct OpCliArguments final {
     const auto [status, text] =
         daemon::capture_pane(endpoint, arguments.subspan(1, 1).front(), *pane);
     if (status != daemon::OperationStatus::applied) {
-      return report_operation(status, {});
+      return report_command(status, {});
     }
     return write_fragment(stdout, tail_lines(text, lines)) ? 0 : 1;
   }
@@ -1764,10 +1775,10 @@ struct OpCliArguments final {
     if (!session.has_value() || !pane.has_value()) {
       return invalid_arguments("pane wait");
     }
-    api::Op op;
-    op.kind = api::OpKind::pane_wait;
-    op.session = *session;
-    op.pane = {.id = *pane};
+    api::Command command;
+    command.kind = api::CommandKind::pane_wait;
+    command.session = *session;
+    command.pane = {.id = *pane};
     bool condition_seen = false;
     bool timeout_seen = false;
     for (std::size_t index = 3; index < arguments.size(); ++index) {
@@ -1783,29 +1794,30 @@ struct OpCliArguments final {
         if (!valid) {
           return invalid_arguments("pane wait");
         }
-        op.wait_condition =
+        command.wait_condition =
             argument == "--exit-code" ? api::WaitCondition::exit_code : api::WaitCondition::signal;
-        op.wait_value = *value;
+        command.wait_value = *value;
         condition_seen = true;
       } else if (argument == "--contains" && !condition_seen && index + 1U < arguments.size()) {
-        op.contains = arguments.subspan(++index, 1).front();
-        if (op.contains.empty()) {
+        command.contains = arguments.subspan(++index, 1).front();
+        if (command.contains.empty()) {
           return invalid_arguments("pane wait");
         }
-        op.wait_condition = api::WaitCondition::contains;
+        command.wait_condition = api::WaitCondition::contains;
         condition_seen = true;
       } else if (argument == "--timeout" && !timeout_seen && index + 1U < arguments.size()) {
         const auto timeout = parse_duration(arguments.subspan(++index, 1).front());
         if (!timeout.has_value()) {
           return invalid_arguments("pane wait");
         }
-        op.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
+        command.wait_timeout_milliseconds = static_cast<std::uint32_t>(timeout->count());
         timeout_seen = true;
       } else {
         return invalid_arguments("pane wait");
       }
     }
-    return condition_seen ? run_concrete_op(endpoint, op) : invalid_arguments("pane wait");
+    return condition_seen ? run_concrete_command(endpoint, command)
+                          : invalid_arguments("pane wait");
   }
   return invalid_arguments("pane");
 }
@@ -1843,12 +1855,12 @@ struct OpCliArguments final {
     return run_session_control(endpoint, command_arguments);
   }
   if (command == "session" || command == "tab" || command == "pane") {
-    return run_op_command(endpoint, command_arguments);
+    return run_proc_command(endpoint, command_arguments);
   }
   if (command == "proc") {
     const auto proc_arguments = command_arguments.subspan(1);
     if (proc_arguments.size() >= 2U && proc_domain(proc_arguments.front())) {
-      return run_op_command(endpoint, proc_arguments);
+      return run_proc_command(endpoint, proc_arguments);
     }
     if (proc_arguments.size() == 1U && std::string_view(proc_arguments.front()) == "--stdin") {
       return run_proc_document(endpoint, "-");

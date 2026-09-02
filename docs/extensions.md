@@ -129,7 +129,7 @@ The bounded routing contexts are:
 - `copy_searching`: an in-progress bounded search;
 - `rename`: session and tab prompt editing.
 
-Core owns the operations and interaction state, but not their keys. Resize transitions, copy
+Core owns the commands and interaction state, but not their keys. Resize transitions, copy
 navigation/search, rename editing, prefix replay, and pane key rewrites all come from the compiled
 configuration. An explicit `preset = "none"` configuration can recreate the complete shipped
 policy. After publication the router cannot distinguish a seeded binding from a user binding.
