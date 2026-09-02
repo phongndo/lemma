@@ -147,6 +147,47 @@ TEST(InputRouterTest, PreservesUnboundRunsAndRoutesOneShotPrefixCommands) {
   EXPECT_FALSE(router.legacy_route_requires_checkpoint());
 }
 
+TEST(InputRouterTest, DefaultPrefixEntersCommandLineAndItsEditorOwnsCompletionAndHistory) {
+  InputRouter router(default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{':'}};
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(enter, 2).effect));
+  const auto entered = router.route_legacy(std::span(enter).subspan(1), 1);
+  const auto* const begin = std::get_if<RoutedCommand>(&entered.effect);
+  ASSERT_NE(begin, nullptr);
+  EXPECT_EQ(begin->command, InputCommand::begin_command_line);
+
+  router.select_base(ConfiguredInputContext::command_line);
+  constexpr std::array tab{std::byte{'\t'}};
+  const auto completed = router.route_legacy(tab, 1);
+  ASSERT_NE(std::get_if<RoutedCommand>(&completed.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(completed.effect).command, InputCommand::command_line_complete);
+
+  const auto up = router.route_key({.action = KeyAction::press,
+                                    .key = PhysicalKey::arrow_up,
+                                    .modifiers = 0,
+                                    .unshifted_codepoint = 0,
+                                    .text = {}});
+  ASSERT_NE(std::get_if<RoutedCommand>(&up.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(up.effect).command,
+            InputCommand::command_line_history_previous);
+}
+
+TEST(InputRouterTest, DefaultPrefixOpensTheBoundedMessageViewer) {
+  InputRouter router(default_input_map());
+  constexpr std::array enter{std::byte{0x02}, std::byte{'~'}};
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(enter, 2).effect));
+  const auto entered = router.route_legacy(std::span(enter).subspan(1), 1);
+  const auto* const begin = std::get_if<RoutedCommand>(&entered.effect);
+  ASSERT_NE(begin, nullptr);
+  EXPECT_EQ(begin->command, InputCommand::show_messages);
+
+  router.select_base(ConfiguredInputContext::messages);
+  constexpr std::array up{std::byte{'k'}};
+  const auto previous = router.route_legacy(up, 1);
+  ASSERT_NE(std::get_if<RoutedCommand>(&previous.effect), nullptr);
+  EXPECT_EQ(std::get<RoutedCommand>(previous.effect).command, InputCommand::message_view_previous);
+}
+
 TEST(InputRouterTest, ReplaysAnUnboundPrefixWithoutLosingInput) {
   InputRouter router(default_input_map());
   constexpr std::array prefix{std::byte{0x02}};
@@ -222,7 +263,7 @@ TEST(InputRouterTest, TransientResizeContextRepeatsAndExitsWithoutCoreModeState)
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(entered.effect));
   EXPECT_TRUE(entered.presentation_changed);
   EXPECT_TRUE(entered.interaction_preemption_requested);
-  EXPECT_EQ(router.active_label(), " RESIZE ");
+  EXPECT_EQ(router.active_label(), "RESIZE");
   EXPECT_FALSE(router.legacy_route_requires_checkpoint());
 
   constexpr std::array directions{std::byte{'h'}, std::byte{'h'}, std::byte{'j'}};
@@ -231,7 +272,7 @@ TEST(InputRouterTest, TransientResizeContextRepeatsAndExitsWithoutCoreModeState)
     const auto* const command = std::get_if<RoutedCommand>(&routed.effect);
     ASSERT_NE(command, nullptr);
     EXPECT_EQ(command->command, index < 2U ? InputCommand::resize_left : InputCommand::resize_down);
-    EXPECT_EQ(router.active_label(), " RESIZE ");
+    EXPECT_EQ(router.active_label(), "RESIZE");
   }
 
   constexpr std::array legacy_arrow{std::byte{0x1B}, std::byte{'['}, std::byte{'D'}};
@@ -245,7 +286,7 @@ TEST(InputRouterTest, TransientResizeContextRepeatsAndExitsWithoutCoreModeState)
   const auto nested_command = router.route_legacy(std::span(nested_prefix).subspan(1), 1);
   ASSERT_NE(std::get_if<RoutedCommand>(&nested_command.effect), nullptr);
   EXPECT_EQ(std::get<RoutedCommand>(nested_command.effect).command, InputCommand::toggle_zoom);
-  EXPECT_EQ(router.active_label(), " RESIZE ");
+  EXPECT_EQ(router.active_label(), "RESIZE");
 
   constexpr std::array rename{std::byte{0x02}, std::byte{'r'}};
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(rename, 2).effect));
@@ -257,7 +298,7 @@ TEST(InputRouterTest, TransientResizeContextRepeatsAndExitsWithoutCoreModeState)
   ASSERT_TRUE(std::holds_alternative<ConsumedInput>(router.route_legacy(enter, 2).effect));
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(
       router.route_legacy(std::span(enter).subspan(1), 1).effect));
-  EXPECT_EQ(router.active_label(), " RESIZE ");
+  EXPECT_EQ(router.active_label(), "RESIZE");
 
   constexpr std::array leave{std::byte{'q'}};
   const auto exited = router.route_legacy(leave, 1);
@@ -436,7 +477,7 @@ TEST(InputRouterTest, ResizeContextConsumesHostLineMotionAndKeepsCopy) {
 
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(prefix).effect));
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(resize).effect));
-  EXPECT_EQ(router.active_label(), " RESIZE ");
+  EXPECT_EQ(router.active_label(), "RESIZE");
   EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(left).effect));
   const auto copied = router.route_key(copy);
   ASSERT_NE(std::get_if<RoutedCommand>(&copied.effect), nullptr);

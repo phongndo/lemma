@@ -128,6 +128,8 @@ The default prefix is `C-b`.
 | --- | --- |
 | `C-b C-b` | Send a literal `C-b` |
 | `C-b d` | Detach |
+| `C-b :` | Open the interactive command line |
+| `C-b ~` | Open the bounded message history viewer |
 | `C-b %` / `C-b "` | Split left-right / top-bottom |
 | `C-b h/j/k/l` | Focus a neighboring Pane |
 | `C-b H/J/K/L` | Swap with a neighboring Pane |
@@ -149,11 +151,60 @@ resize split dividers, select terminal text, and scroll canonical history. Mouse
 the child when its active terminal modes request them. Visible pane and built-in editor cursors use
 a block shape; pane-requested blinking is preserved.
 
+The status row is the only interaction chrome. An active resize, copy, search, log, or command mode
+replaces normal Session and Tab status with one flat, left-aligned mode row; mode labels and prompts
+never cover pane content. Normal status returns immediately when the interaction ends.
+
+## Command line
+
+`C-b :` replaces the status row with an empty `:` prompt. Up recalls the most recently submitted
+command, and Up/Down continue through the bounded per-attachment history. Tab completes command
+words and live Session names, Enter runs the command, and Escape, `C-c`, or `C-g` cancels. Arrows,
+Home/End, `C-a`/`C-e`, Backspace/Delete, `C-u`, and `C-w` edit the line. The row stays otherwise
+empty while editing. After Enter, a failure closes the prompt and replaces the status row with a
+left-aligned error message. The message clears after 1.5 seconds or on the next keyboard or mouse
+input, immediately restoring Session and Tab status. Repeated failures restart the timeout.
+
+Each Attachment retains the latest 16 status messages. `C-b ~` opens a timestamped, read-only
+full-pane view with the newest messages at the bottom while the status row reads `LOG`. Use `k`/Up
+and `j`/Down, PageUp/PageDown,
+`g`/Home, and `G`/End to navigate; use `q`, Escape, Enter, `C-c`, or `C-g` to leave. The log has a
+general information/error representation, although command-line failures are its first producer.
+
+Command history is separately limited to 16 entries. It is memory-only by default. Configure an
+absolute `history.file` path to load it when the daemon starts and save it atomically when the daemon
+exits cleanly; the parent directory must already exist. Missing files may be created, while failed
+reads or malformed existing files are left untouched at shutdown. Loaded history seeds new
+Attachments.
+
+The grammar is the human, mutating subset of `lemma proc`: omit `proc` and omit selectors for the
+current Session, Tab, and Pane. Quotes and backslashes group literal text without shell expansion.
+For example:
+
+```text
+pane split --right
+tab new --title tests
+pane resize --left 5
+switch work
+```
+
+`switch SESSION` moves the live client connection to an existing detached Session without
+restarting the client. `attach SESSION` and `session switch SESSION` are aliases; none of these
+creates a nested Session. Session names are completed from the daemon's live Session registry.
+Commands and options come from one native discovery catalog. Lua custom command registration is not
+exposed; the palette currently contains native commands only.
+
+Command and copy-search prompts are hosted by the native status row. With
+`ui.status_line = false`, their bindings are intentionally inert rather than capturing invisible
+input.
+
 ## Copy mode
 
-Copy mode uses Vim-shaped movement over Ghostty-owned history. `h/j/k/l`, arrows, word movement,
-line movement, and page movement update the copy cursor. `v`, `V`, and `C-v` start character, line,
-and block selection. `y` or Enter copies the selection and leaves copy mode.
+Copy mode uses Vim-shaped movement over Ghostty-owned history. Its status row includes the current
+history position as `COPY [current/total]`. `h/j/k/l`, arrows, word movement, line movement, and page
+movement update the copy cursor. `v`, `V`, and `C-v` start character, line, and block selection. `y`
+or Enter copies the selection and leaves copy mode. Search replaces that row with the editable
+`/query` or `?query` prompt; progress and feedback return to the same row without covering the pane.
 
 `Super-c` and `Ctrl-Shift-c` copy the current copy-mode or mouse selection. Lemma currently uses
 bounded OSC 52 output for user-authorized clipboard writes; it has no native clipboard provider.

@@ -398,10 +398,10 @@ private:
                                     .rows = canonical_.size().rows};
     const auto first = render::compose_frame(std::span(&first_surface, 1), viewport,
                                              std::span(frame_buffer_).first(capacity), force_full,
-                                             {}, {}, previous_outer_modes_);
+                                             {}, previous_outer_modes_);
     const auto second = render::compose_frame(std::span(&second_surface, 1), viewport,
                                               std::span(frame_buffer_chunked_).first(capacity),
-                                              force_full, {}, {}, previous_outer_modes_chunked_);
+                                              force_full, {}, previous_outer_modes_chunked_);
     if (first.has_value() != second.has_value() ||
         (!first.has_value() && first.error() != second.error())) {
       return std::string{"canonical and chunked composition outcomes diverged"};

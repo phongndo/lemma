@@ -28,27 +28,45 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
 
         pane.expect_output("__APP_CURSOR_1b4f41__")
 
-    def test_default_copy_mode_keys_use_the_compiled_policy(self) -> None:
+    def test_default_modes_replace_status_without_pane_overlays(self) -> None:
         session = self.server.create_session("compiled_copy_policy")
         client = session.require_client()
         pane = session.pane()
         pane.send("printf '__COPY_POLICY_LINE__\\n'\r")
         pane.expect_output("__COPY_POLICY_LINE__")
 
-        def copy_mode_visible(expected: bool) -> bool | None:
+        def status_row() -> str:
             client.drain()
-            return True if ("COPY\n" in client.screen_text()) == expected else None
+            return client.screen_text().splitlines()[0]
+
+        def status_starts_with(prefix: str) -> bool | None:
+            return True if status_row().startswith(prefix) else None
 
         client.prefix("[")
+        wait_until("copy mode status row", lambda: status_starts_with("COPY [0/0]"))
+        self.assertNotIn("compiled_copy_policy", status_row())
+
+        client.prefix("/")
+        client.send(b"ls")
+        wait_until("copy search status prompt", lambda: status_starts_with("/ls"))
+        self.assertNotIn("SEARCH", status_row())
+        client.send(b"\x1b")
         wait_until(
-            "compiled copy mode to become visible",
-            lambda: copy_mode_visible(True),
+            "copy mode after search cancel", lambda: status_starts_with("COPY [0/0]")
         )
-        client.send(b"h")
         client.send(b"\x07")
         wait_until(
-            "compiled copy leave binding to restore normal input",
-            lambda: copy_mode_visible(False),
+            "normal status after leaving copy mode",
+            lambda: True if not status_row().startswith("COPY") else None,
+        )
+
+        client.prefix("m")
+        wait_until("resize mode status row", lambda: status_starts_with("RESIZE"))
+        self.assertNotIn("compiled_copy_policy", status_row())
+        client.send(b"q")
+        wait_until(
+            "normal status after leaving resize mode",
+            lambda: True if not status_row().startswith("RESIZE") else None,
         )
         pane.expect_alive()
 

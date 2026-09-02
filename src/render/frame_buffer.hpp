@@ -97,9 +97,8 @@ static_assert(sizeof(FrameBuffer) <= 5U * sizeof(void*));
 // Composition only fills one retained bounded frame. Descriptor progress is owned by the core.
 [[nodiscard]] auto compose_retained_frame(
     std::span<const PaneSurface> panes, Viewport viewport, FrameBuffer& frame, bool force_full,
-    StatusLine status = {}, PaneOverlay overlay = {},
-    std::optional<OuterModeProjection> previous_outer_modes = std::nullopt) noexcept
-    -> std::expected<CompositionResult, CompositionError>;
+    StatusLine status = {}, std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
+    MessageView message_view = {}) noexcept -> std::expected<CompositionResult, CompositionError>;
 
 [[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,
                                                 bool force_full = false) noexcept

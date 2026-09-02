@@ -16,6 +16,7 @@ BUILD = ROOT / "build" / PROFILE
 # suite. Non-default entries are precise aliases for one test rather than broad module synonyms.
 MUX_DOMAINS: dict[str, tuple[str, bool]] = {
     "configuration": ("tests.mux.test_configuration", True),
+    "command-line": ("tests.mux.test_command_line", True),
     "pane-lifecycle": ("tests.mux.test_pane_lifecycle", True),
     "session-lifecycle": ("tests.mux.test_session_lifecycle", True),
     "detach-reattach": (

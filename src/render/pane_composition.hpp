@@ -2,6 +2,7 @@
 #define LEMMA_RENDER_PANE_COMPOSITION_HPP
 
 #include "lemma/geometry.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -14,6 +15,8 @@
 namespace lemma::render {
 
 inline constexpr std::size_t status_tabs_max = 16;
+inline constexpr std::size_t status_context_bytes_max = limits::search_query_bytes_max + 64U;
+inline constexpr std::size_t message_view_line_bytes_max = limits::status_message_bytes_max + 32U;
 
 struct Viewport final {
   std::uint16_t columns{0};
@@ -44,6 +47,10 @@ enum class StatusPromptTarget : std::uint8_t {
   none,
   session,
   active_tab,
+  command_line,
+  copy_search_forward,
+  copy_search_backward,
+  message,
 };
 
 enum class StatusPromptFeedback : std::uint8_t {
@@ -63,13 +70,19 @@ struct StatusLine final {
   bool dirty{false};
 
   [[nodiscard]] constexpr auto prompting() const noexcept -> bool {
-    return prompt_target != StatusPromptTarget::none;
+    return prompt_target != StatusPromptTarget::none &&
+           prompt_target != StatusPromptTarget::message;
   }
 };
 
-struct PaneOverlay final {
-  vt::Terminal* terminal{nullptr};
-  std::string_view top_right;
+struct MessageViewLine final {
+  std::string_view text;
+  bool error{false};
+};
+
+struct MessageView final {
+  std::span<const MessageViewLine> lines;
+  bool active{false};
 };
 
 enum class OuterModeProjection : std::uint8_t {
@@ -110,7 +123,7 @@ struct StatusTarget final {
 };
 
 // Returns the status control owning the zero-based outer-terminal column. Session cells,
-// separators, overflow markers, spacing, prompts, and the input-context block are not targets.
+// separators, overflow markers, spacing, prompts, and modal status rows are not targets.
 // The hit test and status renderer share one bounded projection.
 [[nodiscard]] auto status_target_at_column(StatusLine status, Viewport viewport,
                                            std::uint16_t column) noexcept
@@ -118,13 +131,13 @@ struct StatusTarget final {
 
 // Composes already-resolved content-area pane rectangles into one synchronized outer-terminal
 // update. A visible status line occupies the top row, and pane content and separators are offset
-// below it. One optional bounded overlay is projected after pane rendering, then restores the copy
-// cursor. The focused surface otherwise owns cursor and terminal modes. Callers must force a full
-// frame after changing pane geometry.
+// below it. The focused surface owns cursor and terminal modes unless a status prompt is active.
+// Callers must force a full frame after changing pane geometry.
 [[nodiscard]] auto
 compose_frame(std::span<const PaneSurface> panes, Viewport viewport, std::span<std::byte> output,
-              bool force_full, StatusLine status = {}, PaneOverlay overlay = {},
-              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt) noexcept
+              bool force_full, StatusLine status = {},
+              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
+              MessageView message_view = {}) noexcept
     -> std::expected<CompositionResult, CompositionError>;
 
 } // namespace lemma::render

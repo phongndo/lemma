@@ -427,7 +427,6 @@ struct StatusLineProjection final {
   std::size_t label_count{0};
   std::size_t begin{0};
   std::size_t end{0};
-  std::size_t context_columns{0};
   std::uint16_t tab_column{1};
   std::uint16_t create_column{0};
   bool show_range{false};
@@ -451,8 +450,7 @@ struct StatusLineProjection final {
     }
   }
 
-  projection.context_columns = std::min<std::size_t>(status.input_context.size(), viewport.columns);
-  const auto content_columns = viewport.columns - projection.context_columns;
+  const auto content_columns = static_cast<std::size_t>(viewport.columns);
   const auto active_width = labels.subspan(active, 1).front().size;
   const auto separator_reservation =
       status.session_name.empty() ? 0U : status_group_separator.size();
@@ -528,7 +526,6 @@ struct StatusLineProjection final {
 
 constexpr ui::Style status_default_cell_style{};
 constexpr ui::Style status_identity_cell_style{.attributes = ui::attribute_bold};
-constexpr ui::Style status_context_cell_style{.attributes = ui::attribute_reverse};
 constexpr ui::Style status_prompt_cell_style{.attributes =
                                                  ui::attribute_bold | ui::attribute_underline};
 
@@ -588,9 +585,65 @@ constexpr ui::Style status_prompt_cell_style{.attributes =
              bounded_status_view(text, field.edit_offset + field.edit_size, text.size()), base);
 }
 
+struct ModalPromptProjection final {
+  PromptValueProjection value;
+  std::uint16_t cursor_column{1};
+};
+
+[[nodiscard]] constexpr auto modal_prompt_projection(const StatusLine status,
+                                                     const Viewport viewport) noexcept
+    -> ModalPromptProjection {
+  ModalPromptProjection projection;
+  const auto columns = static_cast<std::size_t>(viewport.columns);
+  const auto capacity = columns > 1U ? columns - 1U : 0U;
+  projection.value = prompt_value_projection(status, capacity);
+  projection.cursor_column = static_cast<std::uint16_t>(
+      std::clamp(std::size_t{2} + projection.value.cursor, std::size_t{1}, columns));
+  return projection;
+}
+
+[[nodiscard]] constexpr auto is_modal_prompt(const StatusPromptTarget target) noexcept -> bool {
+  return target == StatusPromptTarget::command_line ||
+         target == StatusPromptTarget::copy_search_forward ||
+         target == StatusPromptTarget::copy_search_backward;
+}
+
+[[nodiscard]] constexpr auto modal_prompt_prefix(const StatusPromptTarget target) noexcept
+    -> std::string_view {
+  switch (target) {
+  case StatusPromptTarget::command_line:
+    return ":";
+  case StatusPromptTarget::copy_search_forward:
+    return "/";
+  case StatusPromptTarget::copy_search_backward:
+    return "?";
+  case StatusPromptTarget::none:
+  case StatusPromptTarget::session:
+  case StatusPromptTarget::active_tab:
+  case StatusPromptTarget::message:
+    return {};
+  }
+  return {};
+}
+
+[[nodiscard]] auto build_modal_prompt_cells(const StatusLine status, const Viewport viewport,
+                                            const std::span<ui::Cell> cells) noexcept -> bool {
+  const auto projection = modal_prompt_projection(status, viewport);
+  std::size_t column = 0;
+  return write_status_text(cells, column, modal_prompt_prefix(status.prompt_target),
+                           status_identity_cell_style) &&
+         write_status_text(cells, column,
+                           bounded_status_view(status.prompt_value, projection.value.begin,
+                                               projection.value.size),
+                           status_identity_cell_style);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto build_status_prompt_cells(const StatusLine status, const Viewport viewport,
                                              const std::span<ui::Cell> cells) noexcept -> bool {
+  if (is_modal_prompt(status.prompt_target)) {
+    return build_modal_prompt_cells(status, viewport, cells);
+  }
   const auto projection = inline_status_prompt_projection(status, viewport);
   std::size_t column = 0;
   if (projection.session.size > 0) {
@@ -645,8 +698,26 @@ constexpr ui::Style status_prompt_cell_style{.attributes =
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto build_status_cells(const StatusLine status, const Viewport viewport,
                                       const std::span<ui::Cell> cells) noexcept -> bool {
+  if (status.prompt_target == StatusPromptTarget::message) {
+    std::size_t column = 0;
+    return write_status_text(
+        cells, column,
+        bounded_status_view(
+            status.input_context, 0,
+            std::min(status.input_context.size(), static_cast<std::size_t>(viewport.columns))),
+        status_identity_cell_style);
+  }
   if (status.prompting()) {
     return build_status_prompt_cells(status, viewport, cells);
+  }
+  if (!status.input_context.empty()) {
+    std::size_t column = 0;
+    return write_status_text(
+        cells, column,
+        bounded_status_view(
+            status.input_context, 0,
+            std::min(status.input_context.size(), static_cast<std::size_t>(viewport.columns))),
+        status_identity_cell_style);
   }
   const auto projection = status_line_projection(status, viewport);
   const auto labels = std::span(projection.labels).first(projection.label_count);
@@ -680,19 +751,8 @@ constexpr ui::Style status_prompt_cell_style{.attributes =
                                  status_identity_cell_style)) {
     return false;
   }
-  if (projection.show_create &&
-      !write_status_text(cells, column, status_create_button, status_default_cell_style)) {
-    return false;
-  }
-  if (projection.context_columns > 0U) {
-    column = viewport.columns - projection.context_columns;
-    if (!write_status_text(cells, column,
-                           bounded_status_view(status.input_context, 0, projection.context_columns),
-                           status_context_cell_style)) {
-      return false;
-    }
-  }
-  return true;
+  return !projection.show_create ||
+         write_status_text(cells, column, status_create_button, status_default_cell_style);
 }
 
 // Default status and prompt content share one bounded cell projection and painter.
@@ -707,6 +767,58 @@ constexpr ui::Style status_prompt_cell_style{.attributes =
   return build_status_cells(status, viewport, cells) &&
          ui::paint_cells({.columns = viewport.columns, .rows = 1}, viewport.columns, 1, cells,
                          output, used);
+}
+
+void build_message_view_cells(const MessageViewLine line,
+                              const std::span<ui::Cell> cells) noexcept {
+  const auto text = std::span(line.text).first(std::min(line.text.size(), cells.size()));
+  auto destination = cells.begin();
+  for (const char character : text) {
+    auto& cell = *destination;
+    ++destination;
+    cell.text.front() = character;
+    cell.text_size = 1;
+    cell.painted = true;
+    cell.style.attributes = line.error ? ui::attribute_bold : 0;
+  }
+}
+
+[[nodiscard]] auto message_view_line_at_row(const MessageView message_view, const std::uint16_t row,
+                                            const std::size_t first_line_row) noexcept
+    -> std::optional<MessageViewLine> {
+  if (row < first_line_row) {
+    return std::nullopt;
+  }
+  const auto index = static_cast<std::size_t>(row) - first_line_row;
+  return index < message_view.lines.size()
+             ? std::optional{message_view.lines.subspan(index, 1U).front()}
+             : std::nullopt;
+}
+
+[[nodiscard]] auto render_message_view(const MessageView message_view, const PaneRectangle content,
+                                       const std::span<std::byte> output,
+                                       std::size_t& used) noexcept -> bool {
+  if (!message_view.active) {
+    return true;
+  }
+  std::array<ui::Cell, limits::terminal_columns_hard_max> storage{};
+  const auto cells = std::span(storage).first(content.columns);
+  const auto first_line_row =
+      content.rows > message_view.lines.size() ? content.rows - message_view.lines.size() : 0U;
+  for (std::uint16_t row = 0; row < content.rows; ++row) {
+    std::ranges::fill(cells, ui::Cell{});
+    if (const auto line = message_view_line_at_row(message_view, row, first_line_row);
+        line.has_value()) {
+      build_message_view_cells(*line, cells);
+    }
+    if (!ui::paint_cells({.row = static_cast<std::uint16_t>(content.row + row),
+                          .columns = content.columns,
+                          .rows = 1},
+                         content.columns, 1, cells, output, used)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] auto valid_viewport(const Viewport viewport) noexcept -> bool {
@@ -772,6 +884,10 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   case StatusPromptTarget::none:
   case StatusPromptTarget::session:
   case StatusPromptTarget::active_tab:
+  case StatusPromptTarget::command_line:
+  case StatusPromptTarget::copy_search_forward:
+  case StatusPromptTarget::copy_search_backward:
+  case StatusPromptTarget::message:
     return true;
   }
   return false;
@@ -788,6 +904,25 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   return false;
 }
 
+[[nodiscard]] constexpr auto prompt_capacity(const StatusPromptTarget target) noexcept
+    -> std::size_t {
+  switch (target) {
+  case StatusPromptTarget::session:
+    return limits::session_name_bytes_max;
+  case StatusPromptTarget::command_line:
+    return limits::command_line_bytes_max;
+  case StatusPromptTarget::copy_search_forward:
+  case StatusPromptTarget::copy_search_backward:
+    return limits::search_query_bytes_max;
+  case StatusPromptTarget::active_tab:
+    return limits::tab_title_bytes_max;
+  case StatusPromptTarget::none:
+  case StatusPromptTarget::message:
+    return 0;
+  }
+  return 0;
+}
+
 [[nodiscard]] auto valid_prompt_value(const StatusLine status) noexcept -> bool {
   if (!status.prompting()) {
     return status.prompt_value.empty() && status.prompt_cursor == 0;
@@ -802,19 +937,23 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
     }
     return byte >= 0x20U && byte <= 0x7eU;
   };
-  const auto capacity = status.prompt_target == StatusPromptTarget::session
-                            ? limits::session_name_bytes_max
-                            : limits::tab_title_bytes_max;
-  return status.prompt_value.size() <= capacity &&
+  return status.prompt_value.size() <= prompt_capacity(status.prompt_target) &&
          std::ranges::all_of(status.prompt_value, valid_character);
 }
 
 [[nodiscard]] auto valid_status(const StatusLine status) noexcept -> bool {
-  const bool valid_context = status.input_context.size() <= 32U &&
-                             std::ranges::all_of(status.input_context, [](const char character) {
-                               const auto byte = static_cast<unsigned char>(character);
-                               return byte >= 0x20U && byte <= 0x7eU;
-                             });
+  const auto printable = [](const char character) {
+    const auto byte = static_cast<unsigned char>(character);
+    return byte >= 0x20U && byte <= 0x7eU;
+  };
+  const auto context_capacity = status.prompt_target == StatusPromptTarget::message
+                                    ? limits::status_message_bytes_max
+                                    : status_context_bytes_max;
+  const bool valid_context =
+      status.input_context.size() <= context_capacity &&
+      (!is_modal_prompt(status.prompt_target) || status.input_context.empty()) &&
+      (status.prompt_target != StatusPromptTarget::message || !status.input_context.empty()) &&
+      std::ranges::all_of(status.input_context, printable);
   return valid_context && valid_prompt_target(status.prompt_target) &&
          valid_prompt_feedback(status.prompt_feedback) && valid_prompt_value(status) &&
          status.tabs.size() <= status_tabs_max &&
@@ -830,11 +969,25 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   return !status.tabs.empty() && viewport.rows >= 2;
 }
 
+[[nodiscard]] auto valid_message_view(const MessageView message_view) noexcept -> bool {
+  const auto printable = [](const char character) {
+    const auto byte = static_cast<unsigned char>(character);
+    return byte >= 0x20U && byte <= 0x7eU;
+  };
+  return message_view.lines.size() <= limits::status_message_history_max &&
+         (message_view.active || message_view.lines.empty()) &&
+         std::ranges::all_of(message_view.lines, [&](const MessageViewLine& line) {
+           return !line.text.empty() && line.text.size() <= message_view_line_bytes_max &&
+                  std::ranges::all_of(line.text, printable);
+         });
+}
+
 // Composition validation deliberately keeps geometry, overlap, and focus checks in one pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto validate_composition(const std::span<const PaneSurface> panes,
                                         const Viewport viewport, const Viewport content_viewport,
-                                        const StatusLine status, const PaneOverlay overlay) noexcept
+                                        const StatusLine status,
+                                        const MessageView message_view) noexcept
     -> std::expected<bool, CompositionError> {
   if (!valid_viewport(viewport)) {
     return std::unexpected(CompositionError::invalid_viewport);
@@ -842,15 +995,8 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   if (panes.size() > limits::panes_hard_max) {
     return std::unexpected(CompositionError::too_many_panes);
   }
-  if (!valid_status(status)) {
+  if (!valid_status(status) || !valid_message_view(message_view)) {
     return std::unexpected(CompositionError::invalid_status);
-  }
-  if (!overlay.top_right.empty()) {
-    const auto pane = std::ranges::find(panes, overlay.terminal, &PaneSurface::terminal);
-    if (pane == panes.end() || !pane->focused || !pane->cursor_override ||
-        overlay.top_right.size() > pane->rectangle.columns) {
-      return std::unexpected(CompositionError::invalid_pane);
-    }
   }
   bool has_focus = false;
   bool has_presented_focus = false;
@@ -943,35 +1089,6 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
     }
   }
   return {};
-}
-
-[[nodiscard]] auto draw_top_right_overlay(const std::span<const PaneSurface> panes,
-                                          const PaneOverlay overlay,
-                                          const std::span<std::byte> output, std::size_t& used,
-                                          const std::uint16_t column_offset,
-                                          const std::uint16_t row_offset) noexcept -> bool {
-  if (overlay.top_right.empty()) {
-    return true;
-  }
-  const auto pane = std::ranges::find(panes, overlay.terminal, &PaneSurface::terminal);
-  LEMMA_ASSERT(pane != panes.end());
-  if (pane->presentation_suppressed) {
-    return true;
-  }
-  constexpr std::string_view overlay_style = "\x1B[0;7m";
-  const auto overlay_column =
-      static_cast<std::uint16_t>(pane->rectangle.column + column_offset + pane->rectangle.columns -
-                                 overlay.top_right.size() + 1U);
-  const auto overlay_row = static_cast<std::uint16_t>(pane->rectangle.row + row_offset + 1U);
-  const auto cursor_row =
-      static_cast<std::uint16_t>(pane->rectangle.row + row_offset + pane->cursor_override_row + 1U);
-  const auto cursor_column = static_cast<std::uint16_t>(pane->rectangle.column + column_offset +
-                                                        pane->cursor_override_column + 1U);
-  return append_position(output, used, overlay_row, overlay_column) &&
-         append(output, used, overlay_style) && append(output, used, overlay.top_right) &&
-         append(output, used, "\x1B[0m") &&
-         append_position(output, used, cursor_row, cursor_column) &&
-         append(output, used, "\x1B[?25h");
 }
 
 [[nodiscard]] auto border_cell(const std::span<const PaneSurface> panes, const std::uint16_t row,
@@ -1121,13 +1238,15 @@ struct CompositionPolicy final {
 
 [[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
                                       const Viewport viewport, const Viewport content_viewport,
-                                      const StatusLine status, const PaneOverlay overlay) noexcept
+                                      const StatusLine status,
+                                      const MessageView message_view) noexcept
     -> std::expected<CompositionPolicy, CompositionError> {
-  const auto validation = validate_composition(panes, viewport, content_viewport, status, overlay);
+  const auto validation =
+      validate_composition(panes, viewport, content_viewport, status, message_view);
   if (!validation.has_value()) {
     return std::unexpected(validation.error());
   }
-  if (!*validation) {
+  if (!*validation || message_view.active) {
     return CompositionPolicy{};
   }
   const auto focused = std::ranges::find(panes, true, &PaneSurface::focused);
@@ -1150,9 +1269,11 @@ struct CompositionPolicy final {
   if (!status.prompting() || viewport.rows < 2) {
     return true;
   }
-  const auto projection = inline_status_prompt_projection(status, viewport);
+  const auto cursor_column = is_modal_prompt(status.prompt_target)
+                                 ? modal_prompt_projection(status, viewport).cursor_column
+                                 : inline_status_prompt_projection(status, viewport).cursor_column;
   // A steady block marks the insertion point without styling the cursor cell.
-  return append_position(output, used, 1, projection.cursor_column) &&
+  return append_position(output, used, 1, cursor_column) &&
          append(output, used, "\x1B[2 q\x1B[?25h");
 }
 
@@ -1187,14 +1308,14 @@ struct CompositionPolicy final {
          (!project_outer_modes || projected()) && append(output, used, "\x1B[?2026l");
 }
 
-[[nodiscard]] auto finish_composition(
-    const std::span<const PaneSurface> panes, const PaneOverlay overlay, const StatusLine status,
-    const Viewport viewport, const std::span<std::byte> output, std::size_t used,
-    const std::uint16_t column_offset, const std::uint16_t row_offset, const bool force_full,
-    const bool complete_frame, const std::optional<OuterModeProjection> previous_outer_modes,
-    CompositionResult composition) noexcept -> std::expected<CompositionResult, CompositionError> {
-  if (!draw_top_right_overlay(panes, overlay, output, used, column_offset, row_offset) ||
-      !render_status_prompt_cursor(status, viewport, output, used)) {
+[[nodiscard]] auto finish_composition(const std::span<const PaneSurface> panes,
+                                      const StatusLine status, const Viewport viewport,
+                                      const std::span<std::byte> output, std::size_t used,
+                                      const bool force_full, const bool complete_frame,
+                                      const std::optional<OuterModeProjection> previous_outer_modes,
+                                      CompositionResult composition) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
+  if (!render_status_prompt_cursor(status, viewport, output, used)) {
     invalidate_panes(panes);
     return std::unexpected(CompositionError::output_exhausted);
   }
@@ -1227,7 +1348,8 @@ struct CompositionPolicy final {
                                            const std::uint16_t column) noexcept
     -> std::optional<StatusTarget> {
   if (!valid_viewport(viewport) || !valid_status(status) || !has_visible_status(viewport, status) ||
-      status.prompting() || column >= viewport.columns) {
+      status.prompting() || status.prompt_target == StatusPromptTarget::message ||
+      !status.input_context.empty() || column >= viewport.columns) {
     return std::nullopt;
   }
   const auto projection = status_line_projection(status, viewport);
@@ -1255,11 +1377,11 @@ struct CompositionPolicy final {
 // Validation is a separate pass so malformed composition input cannot partially consume terminal
 // damage or alter retained pane state. The bounded branches preserve all-or-nothing composition.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto
-compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
-              const std::span<std::byte> output, const bool force_full, const StatusLine status,
-              const PaneOverlay overlay,
-              const std::optional<OuterModeProjection> previous_outer_modes) noexcept
+[[nodiscard]] auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
+                                 const std::span<std::byte> output, const bool force_full,
+                                 const StatusLine status,
+                                 const std::optional<OuterModeProjection> previous_outer_modes,
+                                 const MessageView message_view) noexcept
     -> std::expected<CompositionResult, CompositionError> {
   const auto status_rows =
       has_visible_status(viewport, status) ? std::uint16_t{1} : std::uint16_t{0};
@@ -1269,39 +1391,46 @@ compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
       .rows = static_cast<std::uint16_t>(viewport.rows - status_rows),
   };
   const Viewport content_viewport{.columns = content.columns, .rows = content.rows};
-  const auto policy = composition_policy(panes, viewport, content_viewport, status, overlay);
+  const auto policy = composition_policy(panes, viewport, content_viewport, status, message_view);
   if (!policy.has_value()) {
     return std::unexpected(policy.error());
   }
 
-  const bool complete_frame = std::ranges::none_of(panes, &PaneSurface::presentation_suppressed);
+  const bool complete_frame =
+      message_view.active || std::ranges::none_of(panes, &PaneSurface::presentation_suppressed);
   const bool complete_full = force_full && complete_frame;
   std::size_t used = 0;
   if (!begin_frame(output, used, complete_full)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   CompositionResult composition{
-      .panes = panes.size(),
+      .panes = message_view.active ? 0U : panes.size(),
       .outer_modes = status.prompting() ? OuterModeProjection::button_mouse : policy->outer_modes,
       .full = complete_full,
   };
   // Separators are outside every pane surface and can only change with a layout/full redraw.
   // Re-emitting them for ordinary pane damage wastes bytes and CPU without changing presentation.
-  if (force_full && !draw_borders(panes, output, used, content.column, content.row)) {
+  if (force_full && !message_view.active &&
+      !draw_borders(panes, output, used, content.column, content.row)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   composition.status = has_visible_status(viewport, status) && (force_full || status.dirty);
-  const auto rendered = render_panes(panes, content_viewport, output, used, force_full,
-                                     content.column, content.row, composition);
-  if (!rendered.has_value()) {
-    return std::unexpected(rendered.error());
+  if (message_view.active) {
+    if (!render_message_view(message_view, content, output, used)) {
+      return std::unexpected(CompositionError::output_exhausted);
+    }
+  } else {
+    const auto rendered = render_panes(panes, content_viewport, output, used, force_full,
+                                       content.column, content.row, composition);
+    if (!rendered.has_value()) {
+      return std::unexpected(rendered.error());
+    }
   }
-  return finish_composition(panes, overlay, status, viewport, output, used, content.column,
-                            content.row, force_full, complete_frame, previous_outer_modes,
-                            composition);
+  return finish_composition(panes, status, viewport, output, used, force_full, complete_frame,
+                            previous_outer_modes, composition);
 }
 
 } // namespace lemma::render

@@ -339,6 +339,7 @@ void release_listener(void* const context) noexcept {
       .scrollback_lines = std::nullopt,
       .default_program = {},
       .default_cwd = {},
+      .command_history_file = {},
       .status_line = true,
   };
   const auto result = run_server_with_environment(

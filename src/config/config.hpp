@@ -35,11 +35,18 @@ struct LaunchConfiguration final {
   std::vector<std::string> default_program;
 };
 
+struct HistoryConfiguration final {
+  // Empty disables persistence. A configured path is absolute so daemon startup does not inherit
+  // an implicit working-directory dependency.
+  std::string file;
+};
+
 struct Configuration final {
   input::InputMapConfiguration input;
   TerminalConfiguration terminal;
   UiConfiguration ui;
   LaunchConfiguration launch;
+  HistoryConfiguration history;
 };
 
 enum class Error : std::uint8_t {
@@ -66,11 +73,11 @@ struct DecodeResult final {
 class Generation final {
 public:
   Generation(input::CompiledInputMap&& input_map, std::optional<std::size_t> scrollback_lines,
-             bool status_line, std::string&& default_cwd,
-             std::vector<std::byte>&& default_program) noexcept
+             bool status_line, std::string&& default_cwd, std::vector<std::byte>&& default_program,
+             std::string&& history_file) noexcept
       : input_map_(std::move(input_map)), scrollback_lines_(scrollback_lines),
         default_cwd_(std::move(default_cwd)), default_program_(std::move(default_program)),
-        status_line_(status_line) {}
+        history_file_(std::move(history_file)), status_line_(status_line) {}
   Generation(const Generation&) = delete;
   auto operator=(const Generation&) -> Generation& = delete;
   Generation(Generation&&) noexcept = default;
@@ -88,12 +95,14 @@ public:
     return default_program_;
   }
   [[nodiscard]] auto status_line() const noexcept -> bool { return status_line_; }
+  [[nodiscard]] auto history_file() const noexcept -> std::string_view { return history_file_; }
 
 private:
   input::CompiledInputMap input_map_;
   std::optional<std::size_t> scrollback_lines_;
   std::string default_cwd_;
   std::vector<std::byte> default_program_;
+  std::string history_file_;
   bool status_line_{true};
 };
 

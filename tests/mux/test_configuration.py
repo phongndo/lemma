@@ -25,6 +25,7 @@ lemma.context.set("copy", { label = " COPY ", unbound = "consume" })
 lemma.keymap.set("normal", "M-c", "enter_copy_mode")
 lemma.keymap.set("copy", "x", "copy_leave")
 lemma.keymap.set("normal", "M-s", "split_left_right")
+lemma.keymap.set("normal", "M-f", "enter_copy_search_forward")
 lemma.keymap.del("normal", "C-b")
 """
         )
@@ -47,6 +48,17 @@ lemma.keymap.del("normal", "C-b")
             "configured split key to create a second pane",
         )
         self.assertEqual(state.panes, 2)
+
+    def test_copy_search_does_not_capture_input_without_a_status_line(self) -> None:
+        session = self.server.create_session("configured_hidden_search")
+        client = session.require_client()
+        pane = session.pane()
+        client.expect_output("CONFIGURED_PROGRAM:/tmp")
+
+        client.send(b"\x1bfprintf '__VISIBLE_AFTER_SEARCH__\\n'\r")
+
+        pane.expect_output("__VISIBLE_AFTER_SEARCH__")
+        pane.expect_alive()
 
 
 if __name__ == "__main__":

@@ -282,6 +282,31 @@ struct LuaConfiguration final {
   return 0;
 }
 
+[[nodiscard]] auto read_history_options(lua_State* const state, const int table,
+                                        config::HistoryConfiguration& target) -> int {
+  const auto absolute = lua_absindex(state, table);
+  lua_pushnil(state);
+  while (lua_next(state, absolute) != 0) {
+    const auto key = lua_table_key(state);
+    if (key != std::optional<std::string_view>{"file"}) {
+      return raise_lua_error(state, "history.file is the only supported history option");
+    }
+    std::size_t size = 0;
+    const char* const value = luaL_checklstring(state, -1, &size);
+    if (value == nullptr || size > config::configuration_path_bytes_max ||
+        std::string_view(value, size).contains('\0') || (size > 0U && *value != '/')) {
+      return raise_lua_error(state, "history.file must be empty or an absolute path");
+    }
+    try {
+      target.file.assign(value, size);
+    } catch (...) {
+      return raise_lua_error(state, "history.file allocation failed");
+    }
+    lua_pop(state, 1);
+  }
+  return 0;
+}
+
 [[nodiscard]] auto config_setup(lua_State* const state) -> int {
   luaL_checktype(state, 1, LUA_TTABLE);
   auto& target = host_configuration(state).configuration;
@@ -295,10 +320,12 @@ struct LuaConfiguration final {
     if ((*key == "input" && read_input_options(state, -1, target.input) != 0) ||
         (*key == "terminal" && read_terminal_options(state, -1, target.terminal) != 0) ||
         (*key == "ui" && read_ui_options(state, -1, target.ui) != 0) ||
-        (*key == "launch" && read_launch_options(state, -1, target.launch) != 0)) {
+        (*key == "launch" && read_launch_options(state, -1, target.launch) != 0) ||
+        (*key == "history" && read_history_options(state, -1, target.history) != 0)) {
       return 0;
     }
-    if (*key != "input" && *key != "terminal" && *key != "ui" && *key != "launch") {
+    if (*key != "input" && *key != "terminal" && *key != "ui" && *key != "launch" &&
+        *key != "history") {
       return raise_lua_error(state, "unknown lemma.setup option");
     }
     lua_pop(state, 1);

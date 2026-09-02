@@ -62,6 +62,7 @@ struct ReactorEnvironment final {
   std::optional<std::size_t> scrollback_lines;
   std::span<const std::byte> default_program;
   std::string_view default_cwd;
+  std::string_view command_history_file;
   bool status_line{true};
 
   [[nodiscard]] constexpr auto valid() const noexcept -> bool {
