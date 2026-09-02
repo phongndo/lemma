@@ -1,7 +1,7 @@
 #ifndef LEMMA_DAEMON_SERVER_HPP
 #define LEMMA_DAEMON_SERVER_HPP
 
-#include "api/action.hpp"
+#include "api/op.hpp"
 #include "lemma/id.hpp"
 
 #include <cstddef>
@@ -48,11 +48,8 @@ struct ServeOptions final {
 // Connects to the selected daemon. Ownership of the returned descriptor transfers to the caller;
 // -1 means the daemon is unavailable.
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
-// Encodes one concrete Action onto the public lock-step control connection and prints its JSON
-// result. start_daemon is valid only for session.start bootstrap.
-[[nodiscard]] auto run_action(const RuntimeEndpoint& endpoint, const api::Action& action,
-                              bool start_daemon = false) -> int;
 [[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, std::string_view document) -> int;
+[[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, const api::Op& op) -> int;
 
 struct LaunchOptions final {
   std::string_view working_directory;
@@ -94,7 +91,7 @@ struct SurfaceOptions final {
   bool hold{false};
 };
 
-enum class SemanticAction : std::uint8_t {
+enum class SemanticOp : std::uint8_t {
   tab_select,
   tab_move,
   tab_kill,
@@ -110,7 +107,7 @@ enum class SemanticAction : std::uint8_t {
   session_kill,
 };
 
-struct ActionTarget final {
+struct OpTarget final {
   TabId tab;
   PaneId pane;
   PaneId peer_pane;
@@ -162,8 +159,8 @@ struct PaneStatus final {
 [[nodiscard]] auto create_surface(const RuntimeEndpoint& endpoint, std::string_view session,
                                   SurfaceCreateKind kind, PaneId target,
                                   SurfaceOptions options = {}) -> SurfaceResult;
-[[nodiscard]] auto perform_action(const RuntimeEndpoint& endpoint, std::string_view session,
-                                  SemanticAction action, ActionTarget target) -> OperationStatus;
+[[nodiscard]] auto perform_op(const RuntimeEndpoint& endpoint, std::string_view session,
+                              SemanticOp op, OpTarget target) -> OperationStatus;
 [[nodiscard]] auto send_pane(const RuntimeEndpoint& endpoint, std::string_view session, PaneId pane,
                              std::string_view text) -> OperationStatus;
 [[nodiscard]] auto capture_pane(const RuntimeEndpoint& endpoint, std::string_view session,

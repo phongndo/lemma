@@ -1,7 +1,8 @@
 #include "core/engine.hpp"
 
-#include "api/action.hpp"
 #include "api/json.hpp"
+#include "api/op.hpp"
+#include "api/proc.hpp"
 #include "core/client_frame_output.hpp"
 #include "core/connection_output.hpp"
 #include "core/copy_mode.hpp"
@@ -6761,25 +6762,32 @@ enum class PendingState : std::uint8_t {
   read_control_payload_size,
   read_control_payload,
   read_public_json,
-  execute_public_action_wait,
-  execute_public_procedure,
+  execute_public_proc,
   prepare_public_observer,
   observe,
   flush_response,
 };
 
-enum class PendingAction : std::uint8_t {
+enum class PendingDisposition : std::uint8_t {
   close,
   attach,
-  keep_action,
+  keep_proc,
   keep_observe,
   shutdown,
 };
 
-struct ProcedureExecutionState;
+struct PublicProcId final {
+  std::uint32_t slot{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t generation{0};
 
-struct PublicActionWait final {
-  api::Action action;
+  [[nodiscard]] auto valid() const noexcept -> bool {
+    return slot < limits::pending_connections_hard_max && generation > 0;
+  }
+  [[nodiscard]] auto operator==(const PublicProcId&) const noexcept -> bool = default;
+};
+
+struct ProcOpWait final {
+  api::Op op;
   std::chrono::steady_clock::time_point deadline;
   std::uint64_t observed_terminal_generation{0};
   bool observed{false};
@@ -6799,13 +6807,13 @@ struct PendingConnection final {
   auto operator=(const PendingConnection&) -> PendingConnection& = delete;
   PendingConnection(PendingConnection&&) = delete;
   auto operator=(PendingConnection&&) -> PendingConnection& = delete;
-  ~PendingConnection();
+  ~PendingConnection() = default;
   [[nodiscard]] auto active() const noexcept -> bool { return state != PendingState::unused; }
 
   int descriptor{-1};
   std::uint32_t generation{0};
   PendingState state{PendingState::unused};
-  PendingAction action{PendingAction::close};
+  PendingDisposition disposition{PendingDisposition::close};
   std::byte command{};
   SessionName session;
   WorkingDirectory working_directory;
@@ -6824,14 +6832,14 @@ struct PendingConnection final {
   std::string public_input;
   std::string public_output;
   std::size_t public_output_offset{0};
-  std::unique_ptr<ProcedureExecutionState> procedure;
-  std::optional<PublicActionWait> wait;
+  PublicProcId proc;
   api::EventSubscription subscription;
   std::uint64_t event_sequence{0};
   std::uint64_t observed_semantic_hash{0};
   std::array<PublicObservedPaneState, api::event_panes_max> observed_panes{};
   std::size_t observed_pane_cursor{0};
   bool public_connection{false};
+  std::uint32_t slot{std::numeric_limits<std::uint32_t>::max()};
   protocol::ClientDecoder attach_decoder;
   protocol::Dimensions attach_dimensions{};
   std::optional<protocol::HostTerminalTheme> attach_host_theme;
@@ -6880,7 +6888,7 @@ struct ObservedPane final {
   PaneRuntime* runtime{nullptr};
 };
 
-struct PublicActionExecution final {
+struct OpExecution final {
   CommandStatus status{CommandStatus::failed};
   std::string session_name;
   SessionId session;
@@ -6963,10 +6971,10 @@ struct PublicActionExecution final {
   return selector.position > 0 ? tab_at_position(session, selector.position - 1U) : nullptr;
 }
 
-[[nodiscard]] auto public_launch_command(const api::Action& action, std::vector<std::byte>& output)
+[[nodiscard]] auto public_launch_command(const api::Op& op, std::vector<std::byte>& output)
     -> bool {
   std::size_t size = 0;
-  for (const auto& argument : action.arguments) {
+  for (const auto& argument : op.arguments) {
     if (argument.size() + 1U > protocol::command_bytes_max - size) {
       return false;
     }
@@ -6978,7 +6986,7 @@ struct PublicActionExecution final {
     return false;
   }
   std::size_t offset = 0;
-  for (const auto& argument : action.arguments) {
+  for (const auto& argument : op.arguments) {
     std::ranges::copy(std::as_bytes(std::span(argument.data(), argument.size())),
                       std::span(output).subspan(offset).begin());
     offset += argument.size();
@@ -6988,10 +6996,9 @@ struct PublicActionExecution final {
   return valid_launch_command(output);
 }
 
-[[nodiscard]] auto public_environment(const api::Action& action, std::vector<std::byte>& output)
-    -> bool {
+[[nodiscard]] auto public_environment(const api::Op& op, std::vector<std::byte>& output) -> bool {
   std::size_t size = 0;
-  for (const auto& entry : action.environment) {
+  for (const auto& entry : op.environment) {
     if (entry.size() + 1U > protocol::environment_bytes_max - size) {
       return false;
     }
@@ -7003,7 +7010,7 @@ struct PublicActionExecution final {
     return false;
   }
   std::size_t offset = 0;
-  for (const auto& entry : action.environment) {
+  for (const auto& entry : op.environment) {
     std::ranges::copy(std::as_bytes(std::span(entry.data(), entry.size())),
                       std::span(output).subspan(offset).begin());
     offset += entry.size();
@@ -7125,7 +7132,7 @@ struct PublicCaptureFormatting final {
   }
   std::string output = R"({"version":)";
   if (!api::append_json_string(output, lemma::version) || !append_public(output, R"(,"api":)") ||
-      !api::append_json_string(output, api::action_schema) ||
+      !api::append_json_string(output, api::proc_schema) ||
       !append_public(output, R"(,"resources":{"sessions":{"used":)") ||
       !append_public_number(output, active_sessions) || !append_public(output, R"(,"limit":)") ||
       !append_public_number(output, limits::sessions_hard_max) ||
@@ -7316,21 +7323,27 @@ struct PublicCaptureFormatting final {
   return output;
 }
 
-// Every public Action reaches the same semantic transitions and runtime helpers as keyboard and
-// the legacy control transport. The JSON envelope owns no mux policy.
+// Every admitted Op reaches the same semantic transitions and Runtime helpers as native input.
+// The JSON envelope owns no mux policy.
+class OpExecutor final {
+public:
+  [[nodiscard]] static auto execute(const api::Op& op, Sessions& sessions,
+                                    PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
+                                    std::span<std::byte> scratch) -> OpExecution;
+};
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto execute_public_action(const api::Action& action, Sessions& sessions,
-                                         PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                                         const std::span<std::byte> scratch)
-    -> PublicActionExecution {
-  PublicActionExecution result;
-  if (action.kind == api::ActionKind::daemon_inspect) {
+auto OpExecutor::execute(const api::Op& op, Sessions& sessions, PaneRuntimeStore& runtimes,
+                         std::uint64_t& activity_order, const std::span<std::byte> scratch)
+    -> OpExecution {
+  OpExecution result;
+  if (op.kind == api::OpKind::daemon_inspect) {
     result.value_json = daemon_inspection(sessions, runtimes);
     result.value_field = "daemon";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (action.kind == api::ActionKind::session_list) {
+  if (op.kind == api::OpKind::session_list) {
     ConnectionOutput encoded;
     result.status = append_structured_sessions(encoded, sessions) &&
                             copy_connection_json(encoded, result.value_json)
@@ -7339,9 +7352,9 @@ struct PublicCaptureFormatting final {
     result.value_field = "sessions";
     return result;
   }
-  if (action.kind == api::ActionKind::session_start) {
+  if (op.kind == api::OpKind::session_start) {
     SessionName allocated;
-    std::string_view name = action.name;
+    std::string_view name = op.name;
     if (name.empty()) {
       const auto candidate = allocate_numeric_session_name(sessions);
       if (!candidate.has_value()) {
@@ -7361,12 +7374,12 @@ struct PublicCaptureFormatting final {
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(action, command)) {
+    if (!public_launch_command(op, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
     std::array<char, limits::working_directory_bytes_max + 1U> default_directory{};
-    std::string_view working_directory = action.working_directory;
+    std::string_view working_directory = op.working_directory;
     if (working_directory.empty()) {
       working_directory = reactor_default_cwd();
     }
@@ -7379,8 +7392,8 @@ struct PublicCaptureFormatting final {
       working_directory = std::string_view(default_directory.data(), size);
     }
     std::vector<std::byte> environment;
-    if (action.environment_set) {
-      if (!public_environment(action, environment)) {
+    if (op.environment_set) {
+      if (!public_environment(op, environment)) {
         result.status = CommandStatus::failed;
         return result;
       }
@@ -7415,7 +7428,7 @@ struct PublicCaptureFormatting final {
     inserted->attachment.id = AttachmentId::from_parts(id->slot(), id->generation());
     inserted->attachment.session = *id;
     inserted->activity_order = ++activity_order;
-    const auto policy = action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
+    const auto policy = op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close;
     auto* const tab = create_tab(*inserted, runtimes, command, working_directory, policy);
     if (tab == nullptr) {
       const bool erased = sessions.erase(*id);
@@ -7433,7 +7446,7 @@ struct PublicCaptureFormatting final {
     return result;
   }
 
-  auto* const session = public_session(sessions, action.session);
+  auto* const session = public_session(sessions, op.session);
   if (session == nullptr || !session->active) {
     result.status = CommandStatus::stale_target;
     return result;
@@ -7441,22 +7454,22 @@ struct PublicCaptureFormatting final {
   result.session_name = std::string(session->session_name());
   result.session = session->id;
   result.session_revision = session->mutation_generation;
-  if (action.expected_session_revision.has_value() &&
-      *action.expected_session_revision != session->mutation_generation) {
+  if (op.expected_session_revision.has_value() &&
+      *op.expected_session_revision != session->mutation_generation) {
     result.status = CommandStatus::conflict;
     result.error_reason = "revision_mismatch";
     result.retryable = true;
     return result;
   }
 
-  if (action.kind == api::ActionKind::session_inspect) {
+  if (op.kind == api::OpKind::session_inspect) {
     result.value_json = session_inspection(*session);
     result.value_field = "session_state";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (action.kind == api::ActionKind::tab_inspect) {
-    auto* const tab = public_tab(*session, action.tab);
+  if (op.kind == api::OpKind::tab_inspect) {
+    auto* const tab = public_tab(*session, op.tab);
     if (tab == nullptr) {
       result.status = CommandStatus::stale_target;
       return result;
@@ -7468,10 +7481,10 @@ struct PublicCaptureFormatting final {
     return result;
   }
 
-  if (action.kind == api::ActionKind::tab_list || action.kind == api::ActionKind::pane_list) {
+  if (op.kind == api::OpKind::tab_list || op.kind == api::OpKind::pane_list) {
     ConnectionOutput encoded;
     bool appended = false;
-    if (action.kind == api::ActionKind::tab_list) {
+    if (op.kind == api::OpKind::tab_list) {
       appended = append_structured_tabs(encoded, *session, runtimes);
       result.value_field = "tabs";
     } else {
@@ -7483,8 +7496,8 @@ struct PublicCaptureFormatting final {
                         : CommandStatus::failed;
     return result;
   }
-  if (action.kind == api::ActionKind::session_rename) {
-    const auto name = SessionNameValue::create(action.name);
+  if (op.kind == api::OpKind::session_rename) {
+    const auto name = SessionNameValue::create(op.name);
     if (!name.has_value()) {
       result.status = CommandStatus::invalid_command;
       return result;
@@ -7501,18 +7514,18 @@ struct PublicCaptureFormatting final {
         dispatch_session_command(*session, runtimes, command, &session_name_conflict, &sessions)
             .status;
     if (result.status == CommandStatus::applied) {
-      result.session_name = action.name;
+      result.session_name = op.name;
     }
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (action.kind == api::ActionKind::session_kill) {
+  if (op.kind == api::OpKind::session_kill) {
     const Command command{.kind = CommandKind::stop_session, .origin = CommandOrigin::cli};
     result.status = dispatch_session_command(*session, runtimes, command).status;
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (action.kind == api::ActionKind::tab_new) {
+  if (op.kind == api::OpKind::tab_new) {
     if (tab_count(*session) >= session->tabs.size() ||
         pane_count(*session) >= panes_per_session_max ||
         runtimes.size() >= limits::panes_hard_max) {
@@ -7520,18 +7533,18 @@ struct PublicCaptureFormatting final {
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(action, command)) {
+    if (!public_launch_command(op, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
-    auto* const created = create_tab(*session, runtimes, command, action.working_directory,
-                                     action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
-                                     action.focus == api::FocusPolicy::created);
+    auto* const created = create_tab(*session, runtimes, command, op.working_directory,
+                                     op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                                     op.focus == api::FocusPolicy::created);
     if (created == nullptr) {
       result.status = CommandStatus::failed;
       return result;
     }
-    if (!created->set_title_override(action.title)) {
+    if (!created->set_title_override(op.title)) {
       const Command rollback{.kind = CommandKind::close_tab,
                              .origin = CommandOrigin::internal,
                              .target = {.session = session->id,
@@ -7554,9 +7567,9 @@ struct PublicCaptureFormatting final {
         created_runtime == nullptr ? 0 : created_runtime->observation_generation;
     return result;
   }
-  if (action.kind == api::ActionKind::tab_select || action.kind == api::ActionKind::tab_move ||
-      action.kind == api::ActionKind::tab_rename || action.kind == api::ActionKind::tab_kill) {
-    auto* const tab = public_tab(*session, action.tab);
+  if (op.kind == api::OpKind::tab_select || op.kind == api::OpKind::tab_move ||
+      op.kind == api::OpKind::tab_rename || op.kind == api::OpKind::tab_kill) {
+    auto* const tab = public_tab(*session, op.tab);
     if (tab == nullptr) {
       result.status = CommandStatus::stale_target;
       return result;
@@ -7566,15 +7579,14 @@ struct PublicCaptureFormatting final {
         .origin = CommandOrigin::cli,
         .target = {
             .session = session->id, .tab = tab->id, .pane = {}, .peer_pane = {}, .attachment = {}}};
-    if (action.kind == api::ActionKind::tab_select) {
+    if (op.kind == api::OpKind::tab_select) {
       command.kind = CommandKind::select_tab;
-      command.payload =
-          CommandCoordinate{.value = static_cast<std::uint16_t>(
-                                action.tab.position == 0 ? 0 : action.tab.position - 1U)};
-    } else if (action.kind == api::ActionKind::tab_kill) {
+      command.payload = CommandCoordinate{
+          .value = static_cast<std::uint16_t>(op.tab.position == 0 ? 0 : op.tab.position - 1U)};
+    } else if (op.kind == api::OpKind::tab_kill) {
       command.kind = CommandKind::close_tab;
-    } else if (action.kind == api::ActionKind::tab_move) {
-      const auto anchor = tab_move_anchor(*session, tab->id, action.to_position);
+    } else if (op.kind == api::OpKind::tab_move) {
+      const auto anchor = tab_move_anchor(*session, tab->id, op.to_position);
       if (!anchor.has_value()) {
         result.status = CommandStatus::invalid_target;
         return result;
@@ -7582,7 +7594,7 @@ struct PublicCaptureFormatting final {
       command.kind = CommandKind::place_tab;
       command.payload = TabPlacementCommand{.before = anchor->value_or(TabId{})};
     } else {
-      const auto title = TabTitleValue::create(action.title);
+      const auto title = TabTitleValue::create(op.title);
       if (!title.has_value()) {
         result.status = CommandStatus::invalid_command;
         return result;
@@ -7597,7 +7609,7 @@ struct PublicCaptureFormatting final {
     return result;
   }
 
-  auto* const pane = find_pane(*session, action.pane.id);
+  auto* const pane = find_pane(*session, op.pane.id);
   auto* const tab = pane == nullptr ? nullptr : find_tab(*session, pane->tab);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   if (pane == nullptr || tab == nullptr || runtime == nullptr) {
@@ -7607,29 +7619,29 @@ struct PublicCaptureFormatting final {
   result.tab = tab->id;
   result.pane = pane->id;
   result.terminal_generation = runtime->observation_generation;
-  if (action.kind == api::ActionKind::pane_inspect) {
+  if (op.kind == api::OpKind::pane_inspect) {
     result.value_json = pane_inspection(*tab, *pane, *runtime);
     result.value_field = "pane_state";
     result.status = result.value_json.empty() ? CommandStatus::failed : CommandStatus::applied;
     return result;
   }
-  if (action.kind == api::ActionKind::pane_split) {
+  if (op.kind == api::OpKind::pane_split) {
     if (pane_count(*session) >= panes_per_session_max ||
         runtimes.size() >= limits::panes_hard_max) {
       result.status = CommandStatus::capacity;
       return result;
     }
     std::vector<std::byte> command;
-    if (!public_launch_command(action, command)) {
+    if (!public_launch_command(op, command)) {
       result.status = CommandStatus::failed;
       return result;
     }
     const auto axis =
-        action.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
+        op.direction == api::Direction::right ? SplitAxis::left_right : SplitAxis::top_bottom;
     auto* const created =
-        split_pane(*session, *tab, runtimes, pane->id, axis, command, action.working_directory,
-                   action.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
-                   action.focus == api::FocusPolicy::created);
+        split_pane(*session, *tab, runtimes, pane->id, axis, command, op.working_directory,
+                   op.hold ? PaneExitPolicy::hold : PaneExitPolicy::close,
+                   op.focus == api::FocusPolicy::created);
     result.status = created == nullptr ? CommandStatus::failed : CommandStatus::applied;
     if (created != nullptr) {
       result.pane = created->id;
@@ -7640,10 +7652,9 @@ struct PublicCaptureFormatting final {
     result.session_revision = session->mutation_generation;
     return result;
   }
-  if (action.kind == api::ActionKind::pane_send) {
+  if (op.kind == api::OpKind::pane_send) {
     const auto queued = queue_application_bytes_to(
-        *session, runtimes, *runtime,
-        std::as_bytes(std::span(action.text.data(), action.text.size())));
+        *session, runtimes, *runtime, std::as_bytes(std::span(op.text.data(), op.text.size())));
     result.status =
         queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
     if (queued != InputQueueResult::queued) {
@@ -7653,8 +7664,8 @@ struct PublicCaptureFormatting final {
     }
     return result;
   }
-  if (action.kind == api::ActionKind::pane_input) {
-    const auto queued = queue_public_input_batch(*session, runtimes, *runtime, action.input_events);
+  if (op.kind == api::OpKind::pane_input) {
+    const auto queued = queue_public_input_batch(*session, runtimes, *runtime, op.input_events);
     result.status =
         queued == InputQueueResult::queued ? CommandStatus::applied : CommandStatus::unavailable;
     if (queued != InputQueueResult::queued) {
@@ -7664,18 +7675,18 @@ struct PublicCaptureFormatting final {
     }
     return result;
   }
-  if (action.kind == api::ActionKind::pane_capture) {
-    const auto format = action.capture_format == api::CaptureFormat::plain ? vt::ScreenFormat::plain
-                                                                           : vt::ScreenFormat::vt;
-    const bool unwrap = action.capture_wrap == api::CaptureWrap::logical;
+  if (op.kind == api::OpKind::pane_capture) {
+    const auto format = op.capture_format == api::CaptureFormat::plain ? vt::ScreenFormat::plain
+                                                                       : vt::ScreenFormat::vt;
+    const bool unwrap = op.capture_wrap == api::CaptureWrap::logical;
     std::expected<std::size_t, vt::Error> formatted = std::unexpected(vt::Error::invalid_state);
-    if (action.capture_source == api::CaptureSource::visible) {
-      auto visible = format_public_visible(runtime->terminal, format, action.capture_wrap,
-                                           action.lines, scratch);
+    if (op.capture_source == api::CaptureSource::visible) {
+      auto visible =
+          format_public_visible(runtime->terminal, format, op.capture_wrap, op.lines, scratch);
       formatted = std::move(visible.result);
       result.capture_truncated = visible.truncated;
-    } else if (action.capture_source == api::CaptureSource::recent) {
-      auto rows = static_cast<std::size_t>(action.lines == 0 ? 80U : action.lines);
+    } else if (op.capture_source == api::CaptureSource::recent) {
+      auto rows = static_cast<std::size_t>(op.lines == 0 ? 80U : op.lines);
       formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
       while (!formatted.has_value() && formatted.error() == vt::Error::out_of_space && rows > 1U) {
         rows /= 2U;
@@ -7686,7 +7697,7 @@ struct PublicCaptureFormatting final {
       formatted = runtime->terminal.format_last_command(format, scratch, unwrap);
     }
     if (!formatted.has_value()) {
-      result.status = action.capture_source == api::CaptureSource::last_command
+      result.status = op.capture_source == api::CaptureSource::last_command
                           ? CommandStatus::unavailable
                           : CommandStatus::failed;
       result.error_reason = formatted.error() == vt::Error::out_of_space ? "capture_too_large"
@@ -7703,9 +7714,9 @@ struct PublicCaptureFormatting final {
     }
     result.has_text = true;
     result.has_capture = true;
-    result.capture_source = action.capture_source;
-    result.capture_format = action.capture_format;
-    result.capture_wrap = action.capture_wrap;
+    result.capture_source = op.capture_source;
+    result.capture_format = op.capture_format;
+    result.capture_wrap = op.capture_wrap;
     result.terminal_generation = runtime->observation_generation;
     result.status = CommandStatus::applied;
     return result;
@@ -7717,18 +7728,18 @@ struct PublicCaptureFormatting final {
                              .pane = pane->id,
                              .peer_pane = {},
                              .attachment = {}}};
-  if (action.kind == api::ActionKind::pane_focus) {
+  if (op.kind == api::OpKind::pane_focus) {
     command.kind = CommandKind::focus_pane;
-  } else if (action.kind == api::ActionKind::pane_kill) {
+  } else if (op.kind == api::OpKind::pane_kill) {
     command.kind = CommandKind::close_pane;
-  } else if (action.kind == api::ActionKind::pane_swap) {
+  } else if (op.kind == api::OpKind::pane_swap) {
     command.kind = CommandKind::swap_panes;
-    command.payload = PaneSwapCommand{.other = action.other.id};
-  } else if (action.kind == api::ActionKind::pane_zoom) {
+    command.payload = PaneSwapCommand{.other = op.other.id};
+  } else if (op.kind == api::OpKind::pane_zoom) {
     command.kind = CommandKind::set_zoom;
-    command.payload = PaneZoomCommand{.enabled = action.enabled};
+    command.payload = PaneZoomCommand{.enabled = op.enabled};
   } else {
-    switch (action.direction) {
+    switch (op.direction) {
     case api::Direction::left:
       command.kind = CommandKind::resize_left;
       break;
@@ -7746,37 +7757,37 @@ struct PublicCaptureFormatting final {
       return result;
     }
   }
-  if (action.kind == api::ActionKind::pane_resize) {
-    command.payload = CommandCoordinate{.value = action.amount};
+  if (op.kind == api::OpKind::pane_resize) {
+    command.payload = CommandCoordinate{.value = op.amount};
   }
   result.status = dispatch_session_command(*session, runtimes, command).status;
   result.session_revision = session->mutation_generation;
   return result;
 }
 
-[[nodiscard]] auto begin_public_wait(api::Action action) -> PublicActionWait {
-  const auto timeout = std::chrono::milliseconds(action.wait_timeout_milliseconds);
-  return {.action = std::move(action),
+[[nodiscard]] auto begin_public_wait(api::Op op) -> ProcOpWait {
+  const auto timeout = std::chrono::milliseconds(op.wait_timeout_milliseconds);
+  return {.op = std::move(op),
           .deadline = reactor_now() + timeout,
           .observed_terminal_generation = 0,
           .observed = false,
           .pane_was_present = false};
 }
 
-[[nodiscard]] auto public_wait_target(const PublicActionWait& wait, Sessions& sessions,
+[[nodiscard]] auto public_wait_target(const ProcOpWait& wait, Sessions& sessions,
                                       PaneRuntimeStore& runtimes) noexcept -> ObservedPane {
-  auto* const session = public_session(sessions, wait.action.session);
-  auto* const pane = session == nullptr ? nullptr : find_pane(*session, wait.action.pane.id);
+  auto* const session = public_session(sessions, wait.op.session);
+  auto* const pane = session == nullptr ? nullptr : find_pane(*session, wait.op.pane.id);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   return {.session = session, .pane = pane, .runtime = runtime};
 }
 
-[[nodiscard]] constexpr auto is_terminal_wait(const api::Action& action) noexcept -> bool {
-  return action.wait_condition == api::WaitCondition::contains ||
-         action.wait_condition == api::WaitCondition::prompt;
+[[nodiscard]] constexpr auto is_terminal_wait(const api::Op& op) noexcept -> bool {
+  return op.wait_condition == api::WaitCondition::contains ||
+         op.wait_condition == api::WaitCondition::prompt;
 }
 
-[[nodiscard]] auto public_wait_has_work(const PublicActionWait& wait, Sessions& sessions,
+[[nodiscard]] auto public_wait_has_work(const ProcOpWait& wait, Sessions& sessions,
                                         PaneRuntimeStore& runtimes,
                                         const std::chrono::steady_clock::time_point now) noexcept
     -> bool {
@@ -7790,20 +7801,20 @@ struct PublicCaptureFormatting final {
   if (target.pane->process_exit.has_value()) {
     return true;
   }
-  return is_terminal_wait(wait.action) &&
-         target.runtime->observation_generation > wait.action.after_terminal_generation &&
+  return is_terminal_wait(wait.op) &&
+         target.runtime->observation_generation > wait.op.after_terminal_generation &&
          target.runtime->observation_generation != wait.observed_terminal_generation;
 }
 
-[[nodiscard]] auto wait_process_matches(const api::Action& action,
-                                        const ProcessExit process) noexcept -> bool {
-  switch (action.wait_condition) {
+[[nodiscard]] auto wait_process_matches(const api::Op& op, const ProcessExit process) noexcept
+    -> bool {
+  switch (op.wait_condition) {
   case api::WaitCondition::process_exit:
     return true;
   case api::WaitCondition::exit_code:
-    return process.kind == ProcessExitKind::exited && process.value == action.wait_value;
+    return process.kind == ProcessExitKind::exited && process.value == op.wait_value;
   case api::WaitCondition::signal:
-    return process.kind == ProcessExitKind::signaled && process.value == action.wait_value;
+    return process.kind == ProcessExitKind::signaled && process.value == op.wait_value;
   case api::WaitCondition::contains:
   case api::WaitCondition::prompt:
     return false;
@@ -7811,19 +7822,19 @@ struct PublicCaptureFormatting final {
   return false;
 }
 
-[[nodiscard]] auto public_action_failure(const std::string_view reason,
-                                         const bool retryable = false) -> PublicActionExecution {
-  PublicActionExecution result;
+[[nodiscard]] auto op_failure(const std::string_view reason, const bool retryable = false)
+    -> OpExecution {
+  OpExecution result;
   result.status = CommandStatus::failed;
   result.error_reason = reason;
   result.retryable = retryable;
   return result;
 }
 
-[[nodiscard]] auto complete_process_wait(PublicActionExecution result, const api::Action& action,
-                                         const ProcessExit process) -> PublicActionExecution {
+[[nodiscard]] auto complete_process_wait(OpExecution result, const api::Op& op,
+                                         const ProcessExit process) -> OpExecution {
   result.process = process;
-  if (wait_process_matches(action, process)) {
+  if (wait_process_matches(op, process)) {
     result.status = CommandStatus::applied;
   } else {
     result.status = CommandStatus::failed;
@@ -7832,17 +7843,17 @@ struct PublicCaptureFormatting final {
   return result;
 }
 
-[[nodiscard]] auto missing_public_wait(const PublicActionWait& wait) -> PublicActionExecution {
-  PublicActionExecution result;
+[[nodiscard]] auto missing_public_wait(const ProcOpWait& wait) -> OpExecution {
+  OpExecution result;
   if (!wait.observed || !wait.pane_was_present) {
     result.status = CommandStatus::stale_target;
     return result;
   }
-  return complete_process_wait(std::move(result), wait.action, ProcessExit{});
+  return complete_process_wait(std::move(result), wait.op, ProcessExit{});
 }
 
-[[nodiscard]] auto public_wait_result(const ObservedPane target) -> PublicActionExecution {
-  PublicActionExecution result;
+[[nodiscard]] auto public_wait_result(const ObservedPane target) -> OpExecution {
+  OpExecution result;
   result.session_name = std::string(target.session->session_name());
   result.session = target.session->id;
   result.session_revision = target.session->mutation_generation;
@@ -7852,12 +7863,11 @@ struct PublicCaptureFormatting final {
   return result;
 }
 
-[[nodiscard]] auto complete_terminal_wait(PublicActionWait& wait, const ObservedPane target,
-                                          const std::span<std::byte> scratch,
-                                          PublicActionExecution result)
-    -> std::optional<PublicActionExecution> {
+[[nodiscard]] auto complete_terminal_wait(ProcOpWait& wait, const ObservedPane target,
+                                          const std::span<std::byte> scratch, OpExecution result)
+    -> std::optional<OpExecution> {
   const auto generation = target.runtime->observation_generation;
-  if (generation <= wait.action.after_terminal_generation ||
+  if (generation <= wait.op.after_terminal_generation ||
       generation == wait.observed_terminal_generation) {
     return std::nullopt;
   }
@@ -7873,9 +7883,9 @@ struct PublicCaptureFormatting final {
   // Byte payloads and character storage have the same object representation.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
-  const bool matched = wait.action.wait_condition == api::WaitCondition::prompt
+  const bool matched = wait.op.wait_condition == api::WaitCondition::prompt
                            ? *at_prompt
-                           : text.contains(wait.action.contains);
+                           : text.contains(wait.op.contains);
   if (!matched) {
     return std::nullopt;
   }
@@ -7895,27 +7905,27 @@ struct PublicCaptureFormatting final {
   return result;
 }
 
-[[nodiscard]] auto completed_public_wait(PublicActionWait& wait, Sessions& sessions,
+[[nodiscard]] auto completed_public_wait(ProcOpWait& wait, Sessions& sessions,
                                          PaneRuntimeStore& runtimes,
                                          const std::span<std::byte> scratch)
-    -> std::optional<PublicActionExecution> {
+    -> std::optional<OpExecution> {
   const auto target = public_wait_target(wait, sessions, runtimes);
   if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
     return missing_public_wait(wait);
   }
   wait.observed = true;
   wait.pane_was_present = true;
-  wait.action.session.id = target.session->id;
-  wait.action.session.name.clear();
+  wait.op.session.id = target.session->id;
+  wait.op.session.name.clear();
   auto result = public_wait_result(target);
-  if (is_terminal_wait(wait.action)) {
+  if (is_terminal_wait(wait.op)) {
     auto completed = complete_terminal_wait(wait, target, scratch, result);
     if (completed.has_value()) {
       return completed;
     }
   }
   if (target.pane->process_exit.has_value()) {
-    return complete_process_wait(std::move(result), wait.action, *target.pane->process_exit);
+    return complete_process_wait(std::move(result), wait.op, *target.pane->process_exit);
   }
   if (reactor_now() >= wait.deadline) {
     result.status = CommandStatus::failed;
@@ -7926,14 +7936,14 @@ struct PublicCaptureFormatting final {
   return std::nullopt;
 }
 
-[[nodiscard]] auto poll_public_wait(PublicActionWait& wait, Sessions& sessions,
+[[nodiscard]] auto poll_public_wait(ProcOpWait& wait, Sessions& sessions,
                                     PaneRuntimeStore& runtimes, PublicScratch& scratch_owner)
-    -> std::optional<PublicActionExecution> {
+    -> std::optional<OpExecution> {
   auto scratch = std::span<std::byte>{};
-  if (is_terminal_wait(wait.action)) {
+  if (is_terminal_wait(wait.op)) {
     scratch = acquire_public_scratch(scratch_owner);
     if (scratch.empty()) {
-      return public_action_failure("resource_failure");
+      return op_failure("resource_failure");
     }
   }
   return completed_public_wait(wait, sessions, runtimes, scratch);
@@ -7953,13 +7963,12 @@ struct PublicCaptureFormatting final {
   return false;
 }
 
-[[nodiscard]] auto encode_public_error(const api::ActionDecodeError error,
+[[nodiscard]] auto encode_public_error(const api::OpDecodeError error,
                                        const std::optional<std::size_t> byte = std::nullopt)
     -> std::string {
   std::string output;
   try {
-    output =
-        R"({"schema":"lemma.action-result/v1","action":"","status":"failed","error":{"reason":)";
+    output = R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":)";
     if (!api::append_json_string(output, error.reason)) {
       return {};
     }
@@ -7971,26 +7980,26 @@ struct PublicCaptureFormatting final {
         (!append_public(output, ",\"byte\":") || !append_public_number(output, *byte))) {
       return {};
     }
-    return append_public(output, "}}\n") ? output : std::string{};
+    return append_public(output, "},\"results\":[]}\n") ? output : std::string{};
   } catch (...) {
     return {};
   }
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto encode_public_result(const api::Action& action,
-                                        const PublicActionExecution& result) -> std::string {
+[[nodiscard]] auto encode_op_result(const api::Op& op, const OpExecution& result,
+                                    const bool target_resolved) -> std::string {
   std::string output;
   try {
-    output = R"({"schema":"lemma.action-result/v1","action":)";
-    if (!api::append_json_string(output, api::action_name(action.kind)) ||
+    output = R"({"schema":"lemma.op-result/v1","op":)";
+    if (!api::append_json_string(output, api::op_name(op.kind)) ||
         !append_public(output, ",\"status\":") ||
         !api::append_json_string(output, public_status_name(result.status))) {
       return {};
     }
-    if (action.kind == api::ActionKind::pane_wait &&
+    if (op.kind == api::OpKind::pane_wait &&
         (!append_public(output, R"(,"condition":)") ||
-         !api::append_json_string(output, api::wait_condition_name(action.wait_condition)))) {
+         !api::append_json_string(output, api::wait_condition_name(op.wait_condition)))) {
       return {};
     }
     if (result.session.is_valid()) {
@@ -8009,8 +8018,8 @@ struct PublicCaptureFormatting final {
       return {};
     }
     auto result_pane = result.pane;
-    if (!result_pane.is_valid() && action.kind == api::ActionKind::pane_wait) {
-      result_pane = action.pane.id;
+    if (!result_pane.is_valid() && target_resolved && op.kind == api::OpKind::pane_wait) {
+      result_pane = op.pane.id;
     }
     if (result_pane.is_valid() &&
         (!append_public(output, ",\"pane\":") || !append_public_id(output, result_pane))) {
@@ -8041,9 +8050,9 @@ struct PublicCaptureFormatting final {
           !append_public(output, result.retryable ? "true" : "false")) {
         return {};
       }
-      if (action.expected_session_revision.has_value() &&
+      if (op.expected_session_revision.has_value() &&
           (!append_public(output, R"(,"expected":)") ||
-           !append_public_number(output, *action.expected_session_revision) ||
+           !append_public_number(output, *op.expected_session_revision) ||
            !append_public(output, R"(,"current":)") ||
            !append_public_number(output, result.session_revision))) {
         return {};
@@ -8065,27 +8074,59 @@ struct PublicCaptureFormatting final {
   }
 }
 
-struct ProcedureBinding final {
+struct ProcBinding final {
   std::string id;
   bool session{false};
   bool tab{false};
   bool pane{false};
-  PublicActionExecution output;
 };
 
-struct ProcedureExecutionState final {
-  std::vector<api::JsonValue> actions;
-  std::vector<ProcedureBinding> shapes;
-  std::vector<ProcedureBinding> bindings;
+enum class ProcReferenceField : std::uint8_t {
+  session,
+  tab,
+  pane,
+  other,
+};
+
+struct ProcReference final {
+  std::size_t step{0};
+  ProcReferenceField field{ProcReferenceField::session};
+};
+
+struct CompiledProcStep final {
+  api::Op op;
+  std::string id;
+  std::array<ProcReference, 4> references{};
+  std::size_t reference_count{0};
+  std::optional<std::size_t> inferred_session_step;
+};
+
+struct ProcOutputIds final {
+  SessionId session;
+  TabId tab;
+  PaneId pane;
+};
+
+struct ProcExecutionState final {
+  std::vector<CompiledProcStep> steps;
+  std::vector<ProcOutputIds> outputs;
   std::vector<std::string> results;
-  std::optional<PublicActionWait> wait;
+  std::optional<ProcOpWait> wait;
+  PublicProcId id;
+  std::size_t owner_slot{limits::pending_connections_hard_max};
+  std::uint32_t owner_generation{0};
   std::size_t retained_result_bytes{0};
-  std::size_t next_action{0};
+  std::size_t next_op{0};
   bool continue_on_error{false};
   bool ok{true};
 };
 
-PendingConnection::~PendingConnection() = default;
+struct PublicProcSlot final {
+  std::unique_ptr<ProcExecutionState> execution;
+  std::uint32_t generation{0};
+};
+
+using PublicProcExecutions = std::array<PublicProcSlot, limits::pending_connections_hard_max>;
 
 [[nodiscard]] auto mutable_json_member(api::JsonValue& object, const std::string_view key) noexcept
     -> api::JsonValue* {
@@ -8098,22 +8139,21 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
   std::erase_if(object.object, [&](const api::JsonMember& entry) { return entry.key == key; });
 }
 
-[[nodiscard]] auto procedure_id_valid(const std::string_view id) noexcept -> bool {
+[[nodiscard]] auto proc_id_valid(const std::string_view id) noexcept -> bool {
   return !id.empty() && id.size() <= 32U && std::ranges::all_of(id, [](const char character) {
     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
            (character >= '0' && character <= '9') || character == '_' || character == '-';
   });
 }
 
-[[nodiscard]] auto procedure_binding(const std::span<const ProcedureBinding> bindings,
-                                     const std::string_view id) noexcept
-    -> const ProcedureBinding* {
-  const auto found = std::ranges::find_if(
-      bindings, [&](const ProcedureBinding& binding) { return binding.id == id; });
+[[nodiscard]] auto proc_binding(const std::span<const ProcBinding> bindings,
+                                const std::string_view id) noexcept -> const ProcBinding* {
+  const auto found =
+      std::ranges::find_if(bindings, [&](const ProcBinding& binding) { return binding.id == id; });
   return found == bindings.end() ? nullptr : &*found;
 }
 
-[[nodiscard]] auto procedure_resource(const std::string_view key) noexcept -> std::string_view {
+[[nodiscard]] auto proc_resource(const std::string_view key) noexcept -> std::string_view {
   if (key == "session") {
     return "session";
   }
@@ -8121,7 +8161,7 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto procedure_json_string(std::string value) -> api::JsonValue {
+[[nodiscard]] auto proc_json_string(std::string value) -> api::JsonValue {
   return {.kind = api::JsonKind::string,
           .boolean = false,
           .number = 0,
@@ -8130,7 +8170,7 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
           .object = {}};
 }
 
-[[nodiscard]] auto procedure_json_object() -> api::JsonValue {
+[[nodiscard]] auto proc_json_object() -> api::JsonValue {
   return {.kind = api::JsonKind::object,
           .boolean = false,
           .number = 0,
@@ -8140,10 +8180,9 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto replace_procedure_reference(api::JsonValue& action, const std::string_view key,
-                                               const std::span<const ProcedureBinding> bindings,
-                                               const bool placeholder) -> bool {
-  auto* const selector = mutable_json_member(action, key);
+[[nodiscard]] auto replace_proc_reference(api::JsonValue& op, const std::string_view key,
+                                          const std::span<const ProcBinding> bindings) -> bool {
+  auto* const selector = mutable_json_member(op, key);
   if (selector == nullptr || selector->kind != api::JsonKind::object) {
     return true;
   }
@@ -8161,11 +8200,11 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
   if (api::json_member(*selector, "field") != nullptr && !field.has_value()) {
     return false;
   }
-  const auto resource = procedure_resource(key);
+  const auto resource = proc_resource(key);
   if (field.has_value() && *field != resource) {
     return false;
   }
-  const auto* const binding = procedure_binding(bindings, *reference);
+  const auto* const binding = proc_binding(bindings, *reference);
   const bool supported = binding != nullptr && ((resource == "session" && binding->session) ||
                                                 (resource == "tab" && binding->tab) ||
                                                 (resource == "pane" && binding->pane));
@@ -8173,160 +8212,210 @@ void erase_json_member(api::JsonValue& object, const std::string_view key) {
     return false;
   }
   std::optional<api::JsonValue> inferred_parent;
-  if (key != "session" && mutable_json_member(action, "session") == nullptr) {
-    auto parent = procedure_json_object();
-    if (placeholder) {
-      parent.object.push_back({.key = "name", .value = procedure_json_string("placeholder")});
-    } else if (binding->output.session.is_valid()) {
-      std::string id;
-      if (!append_public_id(id, binding->output.session)) {
-        return false;
-      }
-      id.erase(id.begin());
-      id.pop_back();
-      parent.object.push_back({.key = "id", .value = procedure_json_string(std::move(id))});
-    } else {
-      return false;
-    }
+  if (key != "session" && mutable_json_member(op, "session") == nullptr) {
+    auto parent = proc_json_object();
+    parent.object.push_back({.key = "name", .value = proc_json_string("placeholder")});
     inferred_parent = std::move(parent);
   }
   selector->object.clear();
   if (resource == "session") {
-    if (placeholder) {
-      selector->object.push_back({.key = "name", .value = procedure_json_string("placeholder")});
-    } else if (binding->output.session.is_valid()) {
-      std::string id;
-      if (!append_public_id(id, binding->output.session)) {
-        return false;
-      }
-      id.erase(id.begin());
-      id.pop_back();
-      selector->object.push_back({.key = "id", .value = procedure_json_string(std::move(id))});
-    } else {
-      return false;
-    }
+    selector->object.push_back({.key = "name", .value = proc_json_string("placeholder")});
     return true;
   }
-  std::string encoded = "0:1";
-  if (!placeholder) {
-    encoded.clear();
-    const bool appended = resource == "tab" ? append_public_id(encoded, binding->output.tab)
-                                            : append_public_id(encoded, binding->output.pane);
-    if (!appended) {
-      return false;
-    }
-    encoded.erase(encoded.begin());
-    encoded.pop_back();
-  }
-  selector->object.push_back({.key = "id", .value = procedure_json_string(std::move(encoded))});
+  selector->object.push_back({.key = "id", .value = proc_json_string("0:1")});
   if (inferred_parent.has_value()) {
-    action.object.push_back({.key = "session", .value = std::move(*inferred_parent)});
+    op.object.push_back({.key = "session", .value = std::move(*inferred_parent)});
   }
   return true;
 }
 
-[[nodiscard]] auto concrete_procedure_action(const api::JsonValue& source,
-                                             const std::span<const ProcedureBinding> bindings,
-                                             const bool placeholder) -> std::optional<api::Action> {
+[[nodiscard]] auto compile_proc_op(const api::JsonValue& source,
+                                   const std::span<const ProcBinding> bindings)
+    -> std::optional<api::Op> {
   if (source.kind != api::JsonKind::object) {
     return std::nullopt;
   }
   auto document = source;
   erase_json_member(document, "id");
-  document.object.push_back(
-      {.key = "schema", .value = procedure_json_string(std::string(api::action_schema))});
   for (const std::string_view key : {"session", "tab", "pane", "other"}) {
-    if (!replace_procedure_reference(document, key, bindings, placeholder)) {
+    if (!replace_proc_reference(document, key, bindings)) {
       return std::nullopt;
     }
   }
-  auto decoded = api::decode_action(document);
-  return std::move(decoded.action);
+  auto decoded = api::decode_op(document);
+  return std::move(decoded.op);
 }
 
-[[nodiscard]] auto procedure_error(const std::string_view reason,
-                                   const std::optional<std::size_t> index = std::nullopt)
+[[nodiscard]] auto proc_reference_field(const std::string_view key) noexcept -> ProcReferenceField {
+  if (key == "session") {
+    return ProcReferenceField::session;
+  }
+  if (key == "tab") {
+    return ProcReferenceField::tab;
+  }
+  return key == "pane" ? ProcReferenceField::pane : ProcReferenceField::other;
+}
+
+void compile_proc_references(const api::JsonValue& source,
+                             const std::span<const ProcBinding> shapes,
+                             CompiledProcStep& step) noexcept {
+  const bool explicit_session = api::json_member(source, "session") != nullptr;
+  for (const std::string_view key : {"session", "tab", "pane", "other"}) {
+    const auto* const selector = api::json_member(source, key);
+    if (selector == nullptr) {
+      continue;
+    }
+    const auto reference = api::json_string(*selector, "result");
+    if (!reference.has_value()) {
+      continue;
+    }
+    const auto* const binding = proc_binding(shapes, *reference);
+    LEMMA_ASSERT(binding != nullptr && step.reference_count < step.references.size());
+    const auto binding_index = static_cast<std::size_t>(binding - shapes.data());
+    std::span(step.references).subspan(step.reference_count, 1).front() = {
+        .step = binding_index, .field = proc_reference_field(key)};
+    ++step.reference_count;
+    if (!explicit_session && key != "session" && !step.inferred_session_step.has_value()) {
+      step.inferred_session_step = binding_index;
+    }
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto concrete_proc_op(const CompiledProcStep& step,
+                                    const std::span<const ProcOutputIds> outputs)
+    -> std::optional<api::Op> {
+  auto op = step.op;
+  for (const auto& reference : std::span(step.references).first(step.reference_count)) {
+    if (reference.step >= outputs.size()) {
+      return std::nullopt;
+    }
+    const auto& output = outputs.subspan(reference.step, 1).front();
+    switch (reference.field) {
+    case ProcReferenceField::session:
+      if (!output.session.is_valid()) {
+        return std::nullopt;
+      }
+      op.session.id = output.session;
+      op.session.name.clear();
+      break;
+    case ProcReferenceField::tab:
+      if (!output.tab.is_valid()) {
+        return std::nullopt;
+      }
+      op.tab.id = output.tab;
+      op.tab.position = 0;
+      break;
+    case ProcReferenceField::pane:
+      if (!output.pane.is_valid()) {
+        return std::nullopt;
+      }
+      op.pane.id = output.pane;
+      break;
+    case ProcReferenceField::other:
+      if (!output.pane.is_valid()) {
+        return std::nullopt;
+      }
+      op.other.id = output.pane;
+      break;
+    }
+  }
+  if (step.inferred_session_step.has_value()) {
+    const auto index = *step.inferred_session_step;
+    if (index >= outputs.size() || !outputs.subspan(index, 1).front().session.is_valid()) {
+      return std::nullopt;
+    }
+    op.session.id = outputs.subspan(index, 1).front().session;
+    op.session.name.clear();
+  }
+  return op;
+}
+
+[[nodiscard]] auto proc_error(const std::string_view reason,
+                              const std::optional<std::size_t> index = std::nullopt)
     -> std::string {
   std::string output = R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":)";
   if (!api::append_json_string(output, reason)) {
     return {};
   }
   if (index.has_value() &&
-      (!append_public(output, R"(,"action_index":)") || !append_public_number(output, *index))) {
+      (!append_public(output, R"(,"op_index":)") || !append_public_number(output, *index))) {
     return {};
   }
   return append_public(output, "},\"results\":[]}\n") ? output : std::string{};
 }
 
-struct ProcedurePrepareError final {
+struct ProcPrepareError final {
   std::string_view reason;
   std::optional<std::size_t> index;
 };
 
 // A Proc is validated completely with placeholder generational IDs before its first concrete
-// Action executes. References remain a composition concern and never enter the Action executor.
+// Op executes. References remain a composition concern and never enter the Op executor.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto prepare_public_procedure(api::JsonValue document)
-    -> std::expected<ProcedureExecutionState, ProcedurePrepareError> {
+[[nodiscard]] auto prepare_public_proc(api::JsonValue document)
+    -> std::expected<ProcExecutionState, ProcPrepareError> {
   if (document.kind != api::JsonKind::object ||
-      api::json_string(document, "schema") != std::optional<std::string_view>{"lemma.proc/v1"}) {
-    return std::unexpected(
-        ProcedurePrepareError{.reason = "invalid_schema", .index = std::nullopt});
+      api::json_string(document, "schema") != std::optional{api::proc_schema}) {
+    return std::unexpected(ProcPrepareError{.reason = "invalid_schema", .index = std::nullopt});
   }
   for (const auto& member : document.object) {
-    if (member.key != "schema" && member.key != "on_error" && member.key != "actions") {
-      return std::unexpected(
-          ProcedurePrepareError{.reason = "unknown_field", .index = std::nullopt});
+    if (member.key != "schema" && member.key != "on_error" && member.key != "ops") {
+      return std::unexpected(ProcPrepareError{.reason = "unknown_field", .index = std::nullopt});
     }
   }
-  auto* const actions = mutable_json_member(document, "actions");
+  auto* const ops = mutable_json_member(document, "ops");
   const auto* const on_error_value = api::json_member(document, "on_error");
   const auto on_error = api::json_string(document, "on_error").value_or("stop");
-  if (actions == nullptr || actions->kind != api::JsonKind::array || actions->array.size() > 64U ||
+  if (ops == nullptr || ops->kind != api::JsonKind::array || ops->array.empty() ||
+      ops->array.size() > api::proc_operations_max ||
       (on_error_value != nullptr && on_error_value->kind != api::JsonKind::string) ||
       (on_error != "stop" && on_error != "continue")) {
-    return std::unexpected(
-        ProcedurePrepareError{.reason = "invalid_document", .index = std::nullopt});
+    return std::unexpected(ProcPrepareError{.reason = "invalid_document", .index = std::nullopt});
   }
 
-  ProcedureExecutionState state;
-  state.actions = std::move(actions->array);
+  auto sources = std::move(ops->array);
+  ProcExecutionState state;
+  std::vector<ProcBinding> shapes;
   state.continue_on_error = on_error == "continue";
-  state.shapes.reserve(state.actions.size());
-  state.bindings.reserve(state.actions.size());
-  state.results.reserve(state.actions.size());
-  for (std::size_t index = 0; index < state.actions.size(); ++index) {
-    const auto& source = std::span(state.actions).subspan(index, 1).front();
-    const auto action = concrete_procedure_action(source, state.shapes, true);
-    if (!action.has_value()) {
-      return std::unexpected(ProcedurePrepareError{.reason = "invalid_action", .index = index});
+  state.steps.reserve(sources.size());
+  state.outputs.reserve(sources.size());
+  state.results.reserve(sources.size());
+  shapes.reserve(sources.size());
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    const auto& source = std::span(sources).subspan(index, 1).front();
+    auto op = compile_proc_op(source, shapes);
+    if (!op.has_value()) {
+      return std::unexpected(ProcPrepareError{.reason = "invalid_op", .index = index});
     }
     const auto* const id_value = api::json_member(source, "id");
     const auto id = api::json_string(source, "id");
-    const bool creates = action->kind == api::ActionKind::session_start ||
-                         action->kind == api::ActionKind::tab_new ||
-                         action->kind == api::ActionKind::pane_split;
+    const bool creates = op->kind == api::OpKind::session_start ||
+                         op->kind == api::OpKind::tab_new || op->kind == api::OpKind::pane_split;
     if ((id_value != nullptr && !id.has_value()) ||
-        (id.has_value() && (!creates || !procedure_id_valid(*id) ||
-                            procedure_binding(state.shapes, *id) != nullptr))) {
-      return std::unexpected(
-          ProcedurePrepareError{.reason = "invalid_or_duplicate_id", .index = index});
+        (id.has_value() &&
+         (!creates || !proc_id_valid(*id) || proc_binding(shapes, *id) != nullptr))) {
+      return std::unexpected(ProcPrepareError{.reason = "invalid_or_duplicate_id", .index = index});
     }
-    state.shapes.push_back({.id = id.has_value() ? std::string(*id) : std::string{},
-                            .session = creates,
-                            .tab = creates,
-                            .pane = creates,
-                            .output = {}});
+    CompiledProcStep step;
+    step.op = std::move(*op);
+    step.id = id.has_value() ? std::string(*id) : std::string{};
+    compile_proc_references(source, shapes, step);
+    state.steps.push_back(std::move(step));
+    shapes.push_back({.id = id.has_value() ? std::string(*id) : std::string{},
+                      .session = creates,
+                      .tab = creates,
+                      .pane = creates});
   }
   return state;
 }
 
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-encode_procedure_result(const ProcedureExecutionState& state,
-                        const std::optional<std::string_view> error = std::nullopt,
-                        const std::optional<std::size_t> error_index = std::nullopt,
-                        const bool action_completed = false) -> std::string {
+encode_proc_result(const ProcExecutionState& state,
+                   const std::optional<std::string_view> error = std::nullopt,
+                   const std::optional<std::size_t> error_index = std::nullopt,
+                   const bool op_completed = false) -> std::string {
   std::string output = state.ok ? R"({"schema":"lemma.proc-result/v1","ok":true)"
                                 : R"({"schema":"lemma.proc-result/v1","ok":false)";
   if (error.has_value()) {
@@ -8334,11 +8423,11 @@ encode_procedure_result(const ProcedureExecutionState& state,
         !api::append_json_string(output, *error)) {
       return {};
     }
-    if (error_index.has_value() && (!append_public(output, R"(,"action_index":)") ||
+    if (error_index.has_value() && (!append_public(output, R"(,"op_index":)") ||
                                     !append_public_number(output, *error_index))) {
       return {};
     }
-    if (action_completed && !append_public(output, R"(,"action_completed":true)")) {
+    if (op_completed && !append_public(output, R"(,"op_completed":true)")) {
       return {};
     }
     if (!append_public(output, "}")) {
@@ -8357,21 +8446,20 @@ encode_procedure_result(const ProcedureExecutionState& state,
   return append_public(output, "]}\n") ? output : std::string{};
 }
 
-// One call executes at most one already-validated Action. The reactor schedules later steps on
-// later turns so Proc bounds do not become one monolithic PTY-starving handling path.
+// One call executes at most one already-validated Op from one admitted Proc.
+[[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto execute_public_procedure_step(ProcedureExecutionState& state, Sessions& sessions,
-                                                 PaneRuntimeStore& runtimes,
-                                                 std::uint64_t& activity_order,
-                                                 PublicScratch& scratch_owner)
+execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRuntimeStore& runtimes,
+                         std::uint64_t& activity_order, PublicScratch& scratch_owner)
     -> std::optional<std::string> {
-  if (state.next_action >= state.actions.size()) {
-    return encode_procedure_result(state);
+  const auto op_count = state.steps.size();
+  if (state.next_op >= op_count) {
+    return encode_proc_result(state);
   }
-  const auto index = state.next_action;
-  const auto& source = std::span(state.actions).subspan(index, 1).front();
-  std::optional<api::Action> action;
-  PublicActionExecution execution;
+  const auto index = state.next_op;
+  const auto& step = std::span(state.steps).subspan(index, 1).front();
+  std::optional<api::Op> op;
+  OpExecution execution;
   if (state.wait.has_value()) {
     if (!public_wait_has_work(*state.wait, sessions, runtimes, reactor_now())) {
       return std::nullopt;
@@ -8380,159 +8468,143 @@ encode_procedure_result(const ProcedureExecutionState& state,
     if (!completed.has_value()) {
       return std::nullopt;
     }
-    action = std::move(state.wait->action);
+    op = std::move(state.wait->op);
     state.wait.reset();
     execution = std::move(*completed);
   } else {
-    action = concrete_procedure_action(source, state.bindings, false);
-    if (action.has_value() && action->kind == api::ActionKind::pane_wait) {
-      state.wait = begin_public_wait(std::move(*action));
+    op = concrete_proc_op(step, state.outputs);
+    if (op.has_value() && op->kind == api::OpKind::pane_wait) {
+      state.wait = begin_public_wait(std::move(*op));
       return std::nullopt;
     }
-    if (action.has_value()) {
+    if (op.has_value()) {
       auto scratch = std::span<std::byte>{};
-      if (action->kind == api::ActionKind::pane_capture) {
+      if (op->kind == api::OpKind::pane_capture) {
         scratch = acquire_public_scratch(scratch_owner);
       }
-      if (scratch.empty() && action->kind == api::ActionKind::pane_capture) {
+      if (scratch.empty() && op->kind == api::OpKind::pane_capture) {
         execution.status = CommandStatus::failed;
       } else {
-        execution = execute_public_action(*action, sessions, runtimes, activity_order, scratch);
+        execution = OpExecutor::execute(*op, sessions, runtimes, activity_order, scratch);
       }
+    } else {
+      execution.error_reason = "unresolved_reference";
     }
   }
-  const auto result_template = concrete_procedure_action(source, state.shapes, true);
-  if (!result_template.has_value()) {
-    state.ok = false;
-    return encode_procedure_result(state, "resource_failure", index, action.has_value());
-  }
-  const auto& result_action = action.has_value() ? *action : *result_template;
-  auto encoded = encode_public_result(result_action, execution);
+  const auto& result_op = op.has_value() ? *op : step.op;
+  auto encoded = encode_op_result(result_op, execution, op.has_value());
   if (encoded.empty()) {
     state.ok = false;
-    return encode_procedure_result(state, "resource_failure", index, action.has_value());
+    return encode_proc_result(state, "resource_failure", index, op.has_value());
   }
   if (encoded.back() == '\n') {
     encoded.pop_back();
   }
   std::string wrapped = R"({"index":)" + std::to_string(index);
-  const auto id = api::json_string(source, "id");
-  if (id.has_value()) {
+  if (!step.id.empty()) {
     wrapped += R"(,"id":)";
-    if (!api::append_json_string(wrapped, *id)) {
+    if (!api::append_json_string(wrapped, step.id)) {
       state.ok = false;
-      return encode_procedure_result(state, "resource_failure", index, action.has_value());
+      return encode_proc_result(state, "resource_failure", index, op.has_value());
     }
   }
   wrapped += R"(,"result":)" + encoded + "}";
-  constexpr std::size_t procedure_result_envelope_reserve = 512;
-  static_assert(procedure_result_envelope_reserve < api::json_bytes_max);
+  constexpr std::size_t proc_result_envelope_reserve = 512;
+  static_assert(proc_result_envelope_reserve < api::json_bytes_max);
   const auto separator = state.results.empty() ? 0U : 1U;
-  if (state.retained_result_bytes > api::json_bytes_max - procedure_result_envelope_reserve ||
+  if (state.retained_result_bytes > api::json_bytes_max - proc_result_envelope_reserve ||
       separator >
-          api::json_bytes_max - procedure_result_envelope_reserve - state.retained_result_bytes ||
-      wrapped.size() > api::json_bytes_max - procedure_result_envelope_reserve -
+          api::json_bytes_max - proc_result_envelope_reserve - state.retained_result_bytes ||
+      wrapped.size() > api::json_bytes_max - proc_result_envelope_reserve -
                            state.retained_result_bytes - separator) {
     state.ok = false;
-    return encode_procedure_result(state, "result_too_large", index, action.has_value());
+    return encode_proc_result(state, "result_too_large", index, op.has_value());
   }
   state.retained_result_bytes += separator + wrapped.size();
   state.results.push_back(std::move(wrapped));
   const bool succeeded =
       execution.status == CommandStatus::applied || execution.status == CommandStatus::no_effect;
   state.ok = state.ok && succeeded;
-  const bool creates = action.has_value() && (action->kind == api::ActionKind::session_start ||
-                                              action->kind == api::ActionKind::tab_new ||
-                                              action->kind == api::ActionKind::pane_split);
-  state.bindings.push_back({.id = id.has_value() ? std::string(*id) : std::string{},
-                            .session = creates,
-                            .tab = creates,
-                            .pane = creates,
-                            .output = std::move(execution)});
-  ++state.next_action;
-  if ((!succeeded && !state.continue_on_error) || state.next_action == state.actions.size()) {
-    return encode_procedure_result(state);
+  state.outputs.push_back(
+      {.session = execution.session, .tab = execution.tab, .pane = execution.pane});
+  ++state.next_op;
+  if ((!succeeded && !state.continue_on_error) || state.next_op == op_count) {
+    return encode_proc_result(state);
   }
   return std::nullopt;
 }
 
 void finish_public_output(PendingConnection& pending, std::string output,
-                          const PendingAction action) noexcept {
+                          const PendingDisposition disposition) noexcept {
   if (output.empty()) {
     pending.state = PendingState::unused;
     return;
   }
   pending.public_output = std::move(output);
   pending.public_output_offset = 0;
-  pending.action = action;
+  pending.disposition = disposition;
   pending.state = PendingState::flush_response;
   pending.deadline = reactor_now() + setup_progress_timeout;
 }
 
-// NOLINTNEXTLINE(bugprone-exception-escape)
-void service_public_waits(PendingConnections& connections, Sessions& sessions,
-                          PaneRuntimeStore& runtimes, PublicScratch& scratch_owner,
-                          std::size_t& cursor) noexcept {
-  const auto now = reactor_now();
-  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
-    const auto slot = (cursor + visited) % connections.size();
-    auto* const pending = std::span(connections).subspan(slot, 1).front().get();
-    if (pending == nullptr || pending->state != PendingState::execute_public_action_wait ||
-        !pending->wait.has_value() ||
-        !public_wait_has_work(*pending->wait, sessions, runtimes, now)) {
-      continue;
-    }
-    try {
-      auto execution = poll_public_wait(*pending->wait, sessions, runtimes, scratch_owner);
-      if (execution.has_value()) {
-        auto output = encode_public_result(pending->wait->action, *execution);
-        pending->wait.reset();
-        finish_public_output(*pending, std::move(output), PendingAction::keep_action);
-      }
-    } catch (...) {
-      const auto execution = public_action_failure("resource_failure");
-      auto output = pending->wait.has_value()
-                        ? encode_public_result(pending->wait->action, execution)
-                        : std::string{};
-      pending->wait.reset();
-      finish_public_output(*pending, std::move(output), PendingAction::keep_action);
-    }
-    cursor = (slot + 1U) % connections.size();
-    return;
+[[nodiscard]] auto owned_public_proc(PendingConnections& connections,
+                                     const ProcExecutionState& execution) noexcept
+    -> PendingConnection* {
+  if (execution.owner_slot >= connections.size()) {
+    return nullptr;
   }
+  auto* const pending = std::span(connections).subspan(execution.owner_slot, 1).front().get();
+  if (pending == nullptr || pending->generation != execution.owner_generation ||
+      pending->state != PendingState::execute_public_proc || pending->proc != execution.id) {
+    return nullptr;
+  }
+  return pending;
 }
 
+[[nodiscard]] auto public_proc_failure(ProcExecutionState& execution) -> std::string {
+  execution.ok = false;
+  return encode_proc_result(execution, "resource_failure", execution.next_op, false);
+}
+
+// The reactor owns admitted Procs independently of transports. The connection slot and generation
+// are only a completion owner: closing or reusing that owner cancels the Proc before another step.
 // NOLINTNEXTLINE(bugprone-exception-escape)
-void service_public_procedures(PendingConnections& connections, Sessions& sessions,
-                               PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                               PublicScratch& scratch, std::size_t& cursor) noexcept {
-  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
-    const auto slot = (cursor + visited) % connections.size();
-    auto* const pending = std::span(connections).subspan(slot, 1).front().get();
-    if (pending == nullptr || pending->state != PendingState::execute_public_procedure ||
-        pending->procedure == nullptr) {
+void service_public_procs(PublicProcExecutions& executions, PendingConnections& connections,
+                          Sessions& sessions, PaneRuntimeStore& runtimes,
+                          std::uint64_t& activity_order, PublicScratch& scratch,
+                          std::size_t& cursor) noexcept {
+  for (std::size_t visited = 0; visited < executions.size(); ++visited) {
+    const auto slot = (cursor + visited) % executions.size();
+    auto& proc_slot = std::span(executions).subspan(slot, 1).front();
+    if (proc_slot.execution == nullptr) {
+      continue;
+    }
+    auto* const pending = owned_public_proc(connections, *proc_slot.execution);
+    if (pending == nullptr) {
+      proc_slot.execution.reset();
       continue;
     }
     try {
-      auto output = execute_public_procedure_step(*pending->procedure, sessions, runtimes,
-                                                  activity_order, scratch);
+      auto output = execute_public_proc_step(*proc_slot.execution, sessions, runtimes,
+                                             activity_order, scratch);
       if (output.has_value()) {
-        pending->procedure.reset();
-        finish_public_output(*pending, std::move(*output), PendingAction::keep_action);
+        pending->proc = {};
+        proc_slot.execution.reset();
+        finish_public_output(*pending, std::move(*output), PendingDisposition::keep_proc);
       }
     } catch (...) {
       try {
-        pending->procedure->ok = false;
-        auto output = encode_procedure_result(*pending->procedure, "resource_failure",
-                                              pending->procedure->next_action, false);
-        pending->procedure.reset();
-        finish_public_output(*pending, std::move(output), PendingAction::keep_action);
+        auto output = public_proc_failure(*proc_slot.execution);
+        pending->proc = {};
+        proc_slot.execution.reset();
+        finish_public_output(*pending, std::move(output), PendingDisposition::keep_proc);
       } catch (...) {
-        pending->procedure.reset();
+        pending->proc = {};
+        proc_slot.execution.reset();
         pending->state = PendingState::unused;
       }
     }
-    cursor = (slot + 1U) % connections.size();
+    cursor = (slot + 1U) % executions.size();
     return;
   }
 }
@@ -8772,70 +8844,56 @@ void service_public_procedures(PendingConnections& connections, Sessions& sessio
   }
 }
 
+[[nodiscard]] auto admit_public_proc(PendingConnection& pending, PublicProcExecutions& executions,
+                                     ProcExecutionState execution) -> bool {
+  for (std::size_t slot = 0; slot < executions.size(); ++slot) {
+    auto& destination = std::span(executions).subspan(slot, 1).front();
+    if (destination.execution != nullptr) {
+      continue;
+    }
+    destination.generation = next_generation(destination.generation);
+    execution.id = {.slot = static_cast<std::uint32_t>(slot), .generation = destination.generation};
+    execution.owner_slot = pending.slot;
+    execution.owner_generation = pending.generation;
+    destination.execution = std::make_unique<ProcExecutionState>(std::move(execution));
+    pending.proc = destination.execution->id;
+    std::string{}.swap(pending.public_input);
+    pending.state = PendingState::execute_public_proc;
+    return true;
+  }
+  return false;
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void prepare_public_document(PendingConnection& pending, Sessions& sessions,
-                             PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                             PublicScratch& scratch_owner) noexcept {
+void prepare_public_document(PendingConnection& pending,
+                             PublicProcExecutions& executions) noexcept {
   try {
     auto parsed = api::parse_json(pending.public_input);
     if (!parsed.value.has_value()) {
       finish_public_output(
           pending,
           encode_public_error({.reason = "invalid_json", .field = {}}, parsed.error_offset),
-          PendingAction::close);
+          PendingDisposition::close);
       return;
     }
     const auto schema = api::json_string(*parsed.value, "schema");
-    if (schema == std::optional<std::string_view>{api::action_schema}) {
-      auto decoded = api::decode_action(*parsed.value);
-      if (!decoded.action.has_value()) {
-        finish_public_output(pending, encode_public_error(decoded.error),
-                             PendingAction::keep_action);
-        return;
-      }
-      if (decoded.action->kind == api::ActionKind::pane_wait) {
-        pending.wait = begin_public_wait(std::move(*decoded.action));
-        std::string{}.swap(pending.public_input);
-        pending.state = PendingState::execute_public_action_wait;
-        return;
-      }
-      auto scratch = std::span<std::byte>{};
-      if (decoded.action->kind == api::ActionKind::pane_capture) {
-        scratch = acquire_public_scratch(scratch_owner);
-      }
-      PublicActionExecution execution;
-      if (scratch.empty() && decoded.action->kind == api::ActionKind::pane_capture) {
-        execution.status = CommandStatus::failed;
-      } else {
-        execution =
-            execute_public_action(*decoded.action, sessions, runtimes, activity_order, scratch);
-      }
-      auto output = encode_public_result(*decoded.action, execution);
-      if (output.empty()) {
-        execution = {};
-        execution.status = CommandStatus::failed;
-        output = encode_public_result(*decoded.action, execution);
-      }
-      finish_public_output(pending, std::move(output), PendingAction::keep_action);
-      return;
-    }
-    if (schema == std::optional<std::string_view>{"lemma.proc/v1"}) {
-      auto prepared = prepare_public_procedure(std::move(*parsed.value));
+    if (schema == std::optional{api::proc_schema}) {
+      auto prepared = prepare_public_proc(std::move(*parsed.value));
       if (!prepared.has_value()) {
-        finish_public_output(pending,
-                             procedure_error(prepared.error().reason, prepared.error().index),
-                             PendingAction::keep_action);
+        finish_public_output(pending, proc_error(prepared.error().reason, prepared.error().index),
+                             PendingDisposition::keep_proc);
         return;
       }
-      pending.procedure = std::make_unique<ProcedureExecutionState>(std::move(prepared.value()));
-      std::string{}.swap(pending.public_input);
-      pending.state = PendingState::execute_public_procedure;
+      if (!admit_public_proc(pending, executions, std::move(prepared.value()))) {
+        finish_public_output(pending, proc_error("capacity"), PendingDisposition::keep_proc);
+      }
       return;
     }
     if (schema == std::optional<std::string_view>{api::events_schema}) {
       const auto decoded = api::decode_event_subscription(*parsed.value);
       if (!decoded.subscription.has_value()) {
-        finish_public_output(pending, encode_public_error(decoded.error), PendingAction::close);
+        finish_public_output(pending, encode_public_error(decoded.error),
+                             PendingDisposition::close);
         return;
       }
       pending.subscription = *decoded.subscription;
@@ -8844,10 +8902,10 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
     }
     finish_public_output(pending,
                          encode_public_error({.reason = "invalid_schema", .field = "schema"}),
-                         PendingAction::close);
+                         PendingDisposition::close);
   } catch (...) {
     finish_public_output(pending, encode_public_error({.reason = "resource_failure", .field = {}}),
-                         PendingAction::close);
+                         PendingDisposition::close);
   }
 }
 
@@ -8884,17 +8942,17 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
         if (snapshot_screen && scratch.empty()) {
           finish_public_output(pending,
                                encode_public_error({.reason = "resource_failure", .field = {}}),
-                               PendingAction::close);
+                               PendingDisposition::close);
           continue;
         }
         auto snapshot = encode_initial_snapshot(pending, sessions, runtimes, scratch);
         if (snapshot.empty()) {
           finish_public_output(pending,
                                encode_public_error({.reason = "resource_failure", .field = {}}),
-                               PendingAction::close);
+                               PendingDisposition::close);
           continue;
         }
-        finish_public_output(pending, std::move(snapshot), PendingAction::keep_observe);
+        finish_public_output(pending, std::move(snapshot), PendingDisposition::keep_observe);
         if (snapshot_screen) {
           formatted_screen = true;
           cursor = (slot + 1U) % connections.size();
@@ -8993,7 +9051,7 @@ void prepare_public_document(PendingConnection& pending, Sessions& sessions,
         }
       }
       if (!output.empty()) {
-        finish_public_output(pending, std::move(output), PendingAction::keep_observe);
+        finish_public_output(pending, std::move(output), PendingDisposition::keep_observe);
       }
     } catch (...) {
       pending.state = PendingState::unused;
@@ -9100,20 +9158,21 @@ void close_capacity_rejection(CapacityRejectionConnections& connections,
   connection.flush_response = false;
 }
 
-void finish_pending_output(PendingConnection& pending,
-                           const PendingAction action = PendingAction::close) noexcept {
-  pending.action = action;
+void finish_pending_output(PendingConnection& pending, const PendingDisposition disposition =
+                                                           PendingDisposition::close) noexcept {
+  pending.disposition = disposition;
   pending.state = PendingState::flush_response;
   pending.field_size = 0;
   pending.field_target = 0;
 }
 
-void finish_pending_byte(PendingConnection& pending, const std::byte response,
-                         const PendingAction action = PendingAction::close) noexcept {
+void finish_pending_byte(
+    PendingConnection& pending, const std::byte response,
+    const PendingDisposition disposition = PendingDisposition::close) noexcept {
   pending.output.reset();
   const bool appended = pending.output.append(std::span(&response, 1));
   LEMMA_ASSERT(appended);
-  finish_pending_output(pending, action);
+  finish_pending_output(pending, disposition);
 }
 
 void finish_pending_create(PendingConnection& pending, const SessionRecord& session) noexcept {
@@ -9181,8 +9240,9 @@ void prepare_unnamed_command(PendingConnection& pending, Sessions& sessions,
   if (!prepared) {
     fail_pending_output(pending);
   } else {
-    finish_pending_output(pending, pending.command == command_shutdown ? PendingAction::shutdown
-                                                                       : PendingAction::close);
+    finish_pending_output(pending, pending.command == command_shutdown
+                                       ? PendingDisposition::shutdown
+                                       : PendingDisposition::close);
   }
 }
 
@@ -9823,7 +9883,7 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
   const auto hello = protocol::encode_daemon_hello(pending.attach_dimensions);
   const bool appended = pending.output.append(hello.bytes());
   LEMMA_ASSERT(appended);
-  finish_pending_output(pending, PendingAction::attach);
+  finish_pending_output(pending, PendingDisposition::attach);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
@@ -10047,8 +10107,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     prepare_control_payload(pending, sessions, runtimes);
     break;
   case PendingState::read_public_json:
-  case PendingState::execute_public_action_wait:
-  case PendingState::execute_public_procedure:
+  case PendingState::execute_public_proc:
   case PendingState::prepare_public_observer:
   case PendingState::observe:
   case PendingState::unused:
@@ -10059,11 +10118,9 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
-void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
-                         std::uint64_t& activity_order, PublicScratch& scratch) noexcept {
+void process_public_read(PendingConnection& pending, PublicProcExecutions& executions) noexcept {
   if (pending.state == PendingState::observe ||
-      pending.state == PendingState::execute_public_action_wait ||
-      pending.state == PendingState::execute_public_procedure) {
+      pending.state == PendingState::execute_public_proc) {
     std::array<std::byte, 256> unexpected{};
     const auto received = ::recv(pending.descriptor, unexpected.data(), unexpected.size(), 0);
     if (received == 0 || received > 0 ||
@@ -10080,7 +10137,7 @@ void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRun
     if (size > api::json_bytes_max - pending.public_input.size()) {
       finish_public_output(pending,
                            encode_public_error({.reason = "payload_too_large", .field = {}}),
-                           PendingAction::close);
+                           PendingDisposition::close);
       return;
     }
     try {
@@ -10099,14 +10156,14 @@ void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRun
         })) {
       finish_public_output(pending,
                            encode_public_error({.reason = "pipelining_not_supported", .field = {}}),
-                           PendingAction::close);
+                           PendingDisposition::close);
       return;
     }
     pending.public_input.resize(newline);
     if (!pending.public_input.empty() && pending.public_input.back() == '\r') {
       pending.public_input.pop_back();
     }
-    prepare_public_document(pending, sessions, runtimes, activity_order, scratch);
+    prepare_public_document(pending, executions);
     return;
   }
   if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -10119,21 +10176,20 @@ void process_public_read(PendingConnection& pending, Sessions& sessions, PaneRun
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                            PublicScratch& scratch, const std::size_t slot) noexcept {
+                            PublicProcExecutions& executions, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
   for (std::size_t operation = 0; operation < operations_per_turn_max && pending->active() &&
                                   pending->state != PendingState::flush_response;
        ++operation) {
-    if (pending->state == PendingState::execute_public_action_wait ||
-        pending->state == PendingState::execute_public_procedure ||
+    if (pending->state == PendingState::execute_public_proc ||
         pending->state == PendingState::prepare_public_observer) {
       return;
     }
     if (pending->state == PendingState::read_public_json ||
         pending->state == PendingState::observe) {
-      process_public_read(*pending, sessions, runtimes, activity_order, scratch);
+      process_public_read(*pending, executions);
       if (pending->state == PendingState::unused) {
         close_pending(connections, slot, sessions);
       }
@@ -10219,14 +10275,14 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                          PublicScratch& scratch, const std::size_t slot) noexcept {
+                          PublicProcExecutions& executions, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   if (!pending->public_connection && reactor_now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, runtimes, activity_order, scratch, slot);
+  process_pending_fields(connections, sessions, runtimes, activity_order, executions, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -10303,7 +10359,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
                                         std::uint64_t& activity_order) noexcept -> bool {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
-  const auto action = pending->action;
+  const auto disposition = pending->disposition;
   if (pending->public_connection) {
     while (pending->public_output_offset < pending->public_output.size() && global_budget > 0) {
       const auto remaining =
@@ -10334,16 +10390,16 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
     }
     pending->public_output.clear();
     pending->public_output_offset = 0;
-    if (action == PendingAction::keep_action) {
+    if (disposition == PendingDisposition::keep_proc) {
       pending->public_input.clear();
       pending->state = PendingState::read_public_json;
-      pending->action = PendingAction::close;
+      pending->disposition = PendingDisposition::close;
       return false;
     }
-    if (action == PendingAction::keep_observe) {
+    if (disposition == PendingDisposition::keep_observe) {
       pending->public_input.clear();
       pending->state = PendingState::observe;
-      pending->action = PendingAction::close;
+      pending->disposition = PendingDisposition::close;
       return false;
     }
     close_pending(connections, slot, sessions);
@@ -10353,17 +10409,17 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
       flush_connection_output(pending->output, global_budget, &write_pending_output, pending);
   if (status == ConnectionFlushStatus::hard_error) {
     close_pending(connections, slot, sessions);
-    return action == PendingAction::shutdown;
+    return disposition == PendingDisposition::shutdown;
   }
   if (!pending->active() || status != ConnectionFlushStatus::drained) {
     return false;
   }
-  if (action == PendingAction::attach) {
+  if (disposition == PendingDisposition::attach) {
     handoff_attached_connection(connections, slot, sessions, runtimes, activity_order);
   } else {
     close_pending(connections, slot, sessions);
   }
-  return action == PendingAction::shutdown;
+  return disposition == PendingDisposition::shutdown;
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -10382,7 +10438,7 @@ void process_capacity_rejection_read(CapacityRejectionConnections& connections,
       LEMMA_ASSERT(appended);
     } else if (discriminator == std::byte{'{'}) {
       constexpr std::string_view rejection =
-          R"({"schema":"lemma.action-result/v1","action":"","status":"capacity"}
+          R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"capacity"},"results":[]}
 )";
       const bool appended = connection.output.append(std::as_bytes(std::span(rejection)));
       LEMMA_ASSERT(appended);
@@ -10478,6 +10534,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto poll_timeout(Sessions& sessions, PaneRuntimeStore& runtimes,
                                 const PendingConnections& pending,
+                                const PublicProcExecutions& executions,
                                 const CapacityRejectionConnections& capacity_rejections,
                                 const bool immediate_public_work) noexcept -> int {
   const auto now = reactor_now();
@@ -10495,28 +10552,23 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
     return false;
   };
+  for (const auto& slot : executions) {
+    if (slot.execution == nullptr) {
+      continue;
+    }
+    if (!slot.execution->wait.has_value()) {
+      return 0;
+    }
+    if (public_wait_has_work(*slot.execution->wait, sessions, runtimes, now) ||
+        tighten(*slot.execution->wait)) {
+      return 0;
+    }
+  }
   for (const auto& connection : pending) {
     if (connection == nullptr || !connection->active()) {
       continue;
     }
-    if (connection->state == PendingState::execute_public_action_wait) {
-      if (!connection->wait.has_value() ||
-          public_wait_has_work(*connection->wait, sessions, runtimes, now)) {
-        return 0;
-      }
-      if (tighten(*connection->wait)) {
-        return 0;
-      }
-      continue;
-    }
-    if (connection->state == PendingState::execute_public_procedure) {
-      if (connection->procedure == nullptr || !connection->procedure->wait.has_value()) {
-        return 0;
-      }
-      if (public_wait_has_work(*connection->procedure->wait, sessions, runtimes, now) ||
-          tighten(*connection->procedure->wait)) {
-        return 0;
-      }
+    if (connection->state == PendingState::execute_public_proc) {
       continue;
     }
     if ((!connection->public_connection || public_deadline_applies(*connection)) &&
@@ -11053,6 +11105,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
     auto& generation = std::span(generations).subspan(*available, 1).front();
     generation = next_generation(generation);
     owner->generation = generation;
+    owner->slot = static_cast<std::uint32_t>(*available);
     const auto now = reactor_now();
     owner->deadline = now + setup_progress_timeout;
     owner->setup_deadline = now + setup_total_timeout;
@@ -11101,6 +11154,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   auto& runtimes = *pane_runtimes;
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
+  PublicProcExecutions public_procs{};
   CapacityRejectionConnections capacity_rejections{};
   if (!child_reaper.valid() || !set_nonblocking(listener)) {
     return 1;
@@ -11118,8 +11172,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
-  std::size_t wait_cursor = 0;
-  std::size_t procedure_cursor = 0;
+  std::size_t proc_cursor = 0;
   std::size_t observer_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
@@ -11234,8 +11287,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     const auto poll_result =
         reactor_poll(std::span(descriptors).first(descriptor_count),
-                     poll_timeout(sessions, runtimes, pending_connections, capacity_rejections,
-                                  public_screen_work_pending));
+                     poll_timeout(sessions, runtimes, pending_connections, public_procs,
+                                  capacity_rejections, public_screen_work_pending));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -11342,10 +11395,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           continue;
         }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-        const bool execution_pending = pending->state == PendingState::execute_public_action_wait ||
-                                       pending->state == PendingState::execute_public_procedure;
+        const bool execution_pending = pending->state == PendingState::execute_public_proc;
         if (execution_pending && (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-          process_public_read(*pending, sessions, runtimes, activity_order, public_scratch);
+          process_public_read(*pending, public_procs);
           if (pending->state == PendingState::unused) {
             close_pending(pending_connections, owner.auxiliary_slot, sessions);
           }
@@ -11353,7 +11405,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                    pending->state != PendingState::prepare_public_observer &&
                    (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, activity_order,
-                               public_scratch, owner.auxiliary_slot);
+                               public_procs, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -11365,9 +11417,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
       }
     }
-    service_public_waits(pending_connections, sessions, runtimes, public_scratch, wait_cursor);
-    service_public_procedures(pending_connections, sessions, runtimes, activity_order,
-                              public_scratch, procedure_cursor);
+    service_public_procs(public_procs, pending_connections, sessions, runtimes, activity_order,
+                         public_scratch, proc_cursor);
 
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.

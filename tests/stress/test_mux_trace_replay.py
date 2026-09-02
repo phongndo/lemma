@@ -126,13 +126,14 @@ class RealMuxTraceReplayTest(unittest.TestCase):
         observed_processes = {initial.focused.pid}
         previous_revision = initial.revision
 
-        def action(*arguments: str) -> dict[str, object]:
-            result = server.command("action", *arguments)
+        def op(*arguments: str) -> dict[str, object]:
+            result = server.command("proc", *arguments)
             try:
-                document = json.loads(result.output)
-            except json.JSONDecodeError as error:
+                proc = json.loads(result.output)
+                document = proc["results"][0]["result"]
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
                 raise AssertionError(
-                    f"trace action {arguments!r} returned invalid JSON: {result.output}"
+                    f"trace op {arguments!r} returned invalid JSON: {result.output}"
                 ) from error
             document["_exit_status"] = result.status
             return document
@@ -158,7 +159,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
             elif kind == "split":
                 sim_tab = require_sim(operation.tab, "Tab")
                 sim_pane = require_sim(operation.pane, "Pane")
-                created = action(
+                created = op(
                     "pane",
                     "split",
                     "--session",
@@ -176,7 +177,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                 pane_map[new_sim_pane] = str(created["pane"])
                 panes_by_tab[sim_tab].add(new_sim_pane)
             elif kind == "create-tab":
-                created = action(
+                created = op(
                     "tab",
                     "new",
                     "--session",
@@ -197,7 +198,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
             elif kind in {"focus", "stale-focus"}:
                 sim_pane = require_sim(operation.pane, "Pane")
                 real_pane = pane_map.get(sim_pane, sim_pane)
-                focused = action(
+                focused = op(
                     "pane", "focus", "--session", session.name, "--pane", real_pane
                 )
                 expected = "stale" if kind == "stale-focus" else None
@@ -211,7 +212,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                 sim_tab = require_sim(operation.tab, "Tab")
                 sim_pane = require_sim(operation.pane, "Pane")
                 desired = not zoomed[sim_tab]
-                result = action(
+                result = op(
                     "pane",
                     "zoom",
                     "--session",
@@ -224,7 +225,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                 zoomed[sim_tab] = desired
             elif kind == "resize":
                 sim_pane = require_sim(operation.pane, "Pane")
-                result = action(
+                result = op(
                     "pane",
                     "resize",
                     "--session",
@@ -241,7 +242,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                 )
             elif kind == "select-tab":
                 sim_tab = require_sim(operation.tab, "Tab")
-                selected = action(
+                selected = op(
                     "tab",
                     "select",
                     "--session",
@@ -259,7 +260,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                     tab_order.append(sim_tab)
                 else:
                     tab_order.insert(tab_order.index(operation.peer_tab), sim_tab)
-                moved = action(
+                moved = op(
                     "tab",
                     "move",
                     "--session",
@@ -272,7 +273,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
             elif kind == "swap":
                 sim_pane = require_sim(operation.pane, "Pane")
                 peer = require_sim(operation.peer_pane, "peer Pane")
-                swapped = action(
+                swapped = op(
                     "pane",
                     "swap",
                     "--session",
@@ -287,7 +288,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                 sim_pane = require_sim(operation.pane, "Pane")
                 real_pane = pane_map[sim_pane]
                 process = session.state().pane(real_pane).pid
-                closed = action(
+                closed = op(
                     "pane", "kill", "--session", session.name, "--pane", real_pane
                 )
                 self.assertEqual(closed.get("status"), "applied", closed)
@@ -304,7 +305,7 @@ class RealMuxTraceReplayTest(unittest.TestCase):
                     session.state().pane(pane_map[pane]).pid
                     for pane in panes_by_tab[sim_tab]
                 ]
-                closed = action(
+                closed = op(
                     "tab", "kill", "--session", session.name, "--tab", tab_map[sim_tab]
                 )
                 self.assertEqual(closed.get("status"), "applied", closed)

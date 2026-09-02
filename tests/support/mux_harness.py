@@ -333,17 +333,19 @@ class LemmaServer:
             if client.session == name and client.running:
                 client.drain(0.002)
 
-        inspected = self.command("action", "session", "inspect", "--session", name)
+        inspected = self.command("proc", "session", "inspect", "--session", name)
         if inspected.status != 0:
             return None
-        listed = self.command("action", "pane", "list", "--session", name)
+        listed = self.command("proc", "pane", "list", "--session", name)
         if listed.status != 0:
             raise RuntimeError(
                 f"structured pane listing failed for {name!r}:\n{listed.output}"
             )
         try:
-            inspected_document = json.loads(inspected.output)
-            listed_document = json.loads(listed.output)
+            inspected_proc = json.loads(inspected.output)
+            listed_proc = json.loads(listed.output)
+            inspected_document = inspected_proc["results"][0]["result"]
+            listed_document = listed_proc["results"][0]["result"]
             session = inspected_document["session_state"]
             panes = tuple(
                 PaneState(
@@ -423,7 +425,7 @@ class LemmaServer:
         hold: bool = False,
     ) -> Session:
         if command or hold:
-            arguments = ["action", "session", "start", name]
+            arguments = ["proc", "session", "start", name]
             if hold:
                 arguments.append("--hold")
             if command:
