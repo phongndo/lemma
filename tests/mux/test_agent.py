@@ -76,6 +76,53 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(removed.status, 2, removed.output)
         self.assertIn("invalid lemma command or arguments: inspect", removed.output)
 
+    def test_coding_agent_skill_is_valid_and_teaches_a_safe_job_workflow(self) -> None:
+        result = self.server.command("skill")
+        self.assertEqual(result.status, 0, result.output)
+        self.assertTrue(result.output.startswith("---\nname: lemma\ndescription:"))
+        self.assertIn("license: MIT\n", result.output)
+        normalized = " ".join(result.output.split())
+        self.assertIn("Use **closed-loop control**", normalized)
+        self.assertIn("Creation does not change those environment values.", normalized)
+        self.assertIn("the first Session starts the daemon", normalized)
+        self.assertIn("JSON Proc selectors are objects", normalized)
+        self.assertIn("`id` is not a universal label", normalized)
+        self.assertIn("Command success is not process success.", normalized)
+
+        example = (
+            result.output.split("## Preferred detached-job Proc", maxsplit=1)[1]
+            .split("```json\n", maxsplit=1)[1]
+            .split("\n```", maxsplit=1)[0]
+        )
+        procedure = json.loads(example)
+        self.assertEqual(procedure["schema"], "lemma.proc/v1")
+        self.assertEqual(procedure["on_error"], "continue")
+        self.assertEqual(
+            [command["command"] for command in procedure["commands"]],
+            ["session.start", "pane.wait", "pane.capture", "session.kill"],
+        )
+        self.assertTrue(procedure["commands"][0]["hold"])
+        self.assertEqual(procedure["commands"][1]["exit_code"], 0)
+        self.assertEqual(procedure["commands"][2]["pane"], {"result": "job"})
+        self.assertEqual(procedure["commands"][3]["session"], {"result": "job"})
+
+        procedure["commands"][0] |= {
+            "name": "skill-job",
+            "cwd": str(self.server.root),
+            "argv": ["/bin/sh", "-c", "printf '__SKILL_JOB__\\n'"],
+        }
+        proc = self.server.root / "skill-job.json"
+        proc.write_text(json.dumps(procedure))
+        status, execution = self.json_command("proc", "--file", str(proc), unwrap=False)
+        self.assertEqual(status, 0, execution)
+        self.assertEqual(
+            [entry["result"]["status"] for entry in execution["results"]],
+            ["applied"] * 4,
+        )
+        self.assertIn(
+            "__SKILL_JOB__", execution["results"][2]["result"]["capture"]["text"]
+        )
+
     def test_focus_preserving_creation_keeps_controller_selection(self) -> None:
         status, started = self.json_command(
             "proc", "session", "start", "focus-preserve", "--", "/bin/sh"

@@ -111,7 +111,7 @@ def write_signature(build: Path, fingerprint: str) -> None:
 def run_checked(
     arguments: Sequence[str], root: Path, environment: Mapping[str, str]
 ) -> None:
-    subprocess.run(arguments, cwd=root, env=environment, check=True)
+    subprocess.run(arguments, cwd=root, env=environment, check=True, stdout=sys.stderr)
 
 
 def binary_build_id(binary: Path) -> str:

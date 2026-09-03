@@ -75,6 +75,10 @@ bench:
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
 
+# Compare coding-agent behavior with and without the embedded Lemma skill.
+skill-bench *args:
+    {{ nix }} uv run --locked python tools/benchmark_lemma_skill.py "$@"
+
 # Enforce the reviewed performance budgets on the pinned dedicated host.
 regression-bench:
     {{ nix }} scripts/ci/regression-budgets

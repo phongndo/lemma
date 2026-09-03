@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import runpy
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,6 +25,23 @@ class DevelopmentRunnerContractTest(unittest.TestCase):
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn('exec ./scripts/dev-run "$@"', justfile)
         self.assertIn('exec "$runner" "$@"', flake)
+
+    def test_build_diagnostics_do_not_pollute_application_stdout(self) -> None:
+        runner = load_runner()
+        run_checked = runner["run_checked"]
+        root = Path("/work/lemma")
+        environment = {"PATH": "/bin"}
+
+        with mock.patch.object(subprocess, "run") as run:
+            run_checked(["cmake", "--build", "build/dev"], root, environment)
+
+        run.assert_called_once_with(
+            ["cmake", "--build", "build/dev"],
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=sys.stderr,
+        )
 
     def test_session_creation_defaults_to_the_invocation_directory(self) -> None:
         runner = load_runner()
