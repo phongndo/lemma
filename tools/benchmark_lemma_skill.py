@@ -13,6 +13,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -384,6 +385,13 @@ def run_environment(
     runtime.mkdir(parents=True, mode=0o700)
     runtime.chmod(0o700)
     environment = os.environ.copy()
+    for name in (
+        "LEMMA_SESSION_ID",
+        "LEMMA_SESSION_NAME",
+        "LEMMA_TAB_ID",
+        "LEMMA_PANE_ID",
+    ):
+        environment.pop(name, None)
     environment.update(
         {
             "PATH": f"{subject.command.parent}:{environment.get('PATH', '')}",
@@ -431,6 +439,49 @@ def cleanup_session(
     subject: Subject, environment: dict[str, str], session_name: str
 ) -> None:
     lemma(subject, environment, "proc", "session", "kill", "--session", session_name)
+
+
+def socket_is_live(path: Path, timeout_seconds: float = 0.05) -> bool:
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(timeout_seconds)
+    try:
+        peer.connect(str(path))
+    except OSError:
+        return False
+    finally:
+        peer.close()
+    return True
+
+
+def wait_for_daemon_exit(socket_path: Path, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not socket_is_live(socket_path):
+            return True
+        time.sleep(0.01)
+    return not socket_is_live(socket_path)
+
+
+def shutdown_runtime(runtime: Path) -> None:
+    socket_path = runtime / "daemon.sock"
+    if wait_for_daemon_exit(socket_path, 0.25):
+        return
+
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(2.0)
+    try:
+        peer.connect(str(socket_path))
+        peer.sendall(b"S")
+        while peer.recv(4096):
+            pass
+    except OSError as error:
+        if socket_is_live(socket_path):
+            raise RuntimeError("failed to stop isolated benchmark daemon") from error
+    finally:
+        peer.close()
+
+    if not wait_for_daemon_exit(socket_path, 2.0):
+        raise RuntimeError("isolated benchmark daemon did not stop")
 
 
 def create_shell(
@@ -768,6 +819,7 @@ def run_positive(
         return result
     finally:
         cleanup_session(subject, environment, name)
+        shutdown_runtime(runtime)
         injection_path.unlink(missing_ok=True)
         if not configuration.keep_run_directories:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -852,6 +904,7 @@ def run_negative(
         )
         return result
     finally:
+        shutdown_runtime(runtime)
         if not configuration.keep_run_directories:
             shutil.rmtree(workspace, ignore_errors=True)
             shutil.rmtree(runtime, ignore_errors=True)

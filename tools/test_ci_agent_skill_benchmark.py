@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import benchmark_lemma_skill as benchmark
 
@@ -55,6 +58,59 @@ class AgentSkillBenchmarkTest(unittest.TestCase):
             name = benchmark.session_name(case, 999)
             self.assertLessEqual(len(name), 32)
             self.assertRegex(name, r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+
+    def test_run_environment_removes_inherited_lemma_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = root / "bin" / "lemma"
+            subject = benchmark.Subject(
+                binary=command,
+                command=command,
+                skill=root / "skill" / "lemma" / "SKILL.md",
+                binary_sha256="0" * 64,
+                skill_sha256="1" * 64,
+            )
+            inherited = {
+                "LEMMA_SESSION_ID": "9:9",
+                "LEMMA_SESSION_NAME": "user-session",
+                "LEMMA_TAB_ID": "9:8",
+                "LEMMA_PANE_ID": "9:7",
+            }
+            with mock.patch.dict(os.environ, inherited, clear=False):
+                environment = benchmark.run_environment(subject, root / "runtime", None)
+
+        for name in inherited:
+            self.assertNotIn(name, environment)
+        self.assertEqual(environment["LEMMA_DEV_RUNTIME_DIR"], str(root / "runtime"))
+
+    def test_shutdown_runtime_stops_a_live_isolated_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            socket_path = runtime / "daemon.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen()
+            shutdown_seen = threading.Event()
+
+            def serve() -> None:
+                try:
+                    while True:
+                        connection, _ = listener.accept()
+                        with connection:
+                            if connection.recv(1) == b"S":
+                                shutdown_seen.set()
+                                return
+                finally:
+                    listener.close()
+                    socket_path.unlink(missing_ok=True)
+
+            server = threading.Thread(target=serve)
+            server.start()
+            benchmark.shutdown_runtime(runtime)
+            server.join(timeout=2.0)
+
+        self.assertTrue(shutdown_seen.is_set())
+        self.assertFalse(server.is_alive())
 
     def test_cold_job_scoring_requires_observed_output_and_bounded_wait(self) -> None:
         procedure = (
