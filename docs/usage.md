@@ -221,8 +221,17 @@ lemma events --session work --pane 0:1 --screen
 lemma api schema --json
 ```
 
-See [Automation API](api.md) for the control model. `lemma skill` prints the version-matched
-single-file guide intended for coding agents.
+See [Automation API](api.md) for the control model. `lemma skill` prints a version-matched,
+Agent Skills-compatible `SKILL.md` intended for coding agents. Save it under a directory named
+`lemma` in the skill location used by the agent host. For example, Pi discovers the shared location
+below:
+
+```sh
+mkdir -p ~/.agents/skills/lemma
+lemma skill > ~/.agents/skills/lemma/SKILL.md
+```
+
+Repeat the export after updating Lemma so the installed guide stays matched to the binary.
 
 ## Current limits
 

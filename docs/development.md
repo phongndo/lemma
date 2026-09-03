@@ -161,6 +161,30 @@ stable PaneId and TabId values own semantic identity, while PID is observed only
 lifetime assertions. Use native tests for pure invariants and Python only when the contract requires
 real descriptors, PTYs, processes, or the daemon.
 
+### Coding-agent skill benchmark
+
+Run the local behavioral comparison interactively and choose the agent provider, model, and thinking
+level at startup, or pass them explicitly:
+
+```sh
+just skill-bench
+just skill-bench --provider xai --model grok-4.6 --thinking low
+just skill-bench --provider xai --model grok-4.6 --repetitions 3 --case cold-failure
+```
+
+The benchmark gives each run an isolated workspace and Lemma runtime, randomizes paired baseline and
+skill order, verifies terminal consequences externally, and writes raw traces plus JSON and Markdown
+reports under `build/agent-skill-benchmark/`. Baseline runs cannot fetch the embedded skill through
+`lemma skill`. Model calls may incur provider charges; this benchmark is local and is not a CI gate.
+
+Pi is the built-in adapter. For another coding agent, pass an executable with `--adapter PATH`. The
+benchmark invokes it as `PATH REQUEST.json` in the isolated workspace with the benchmark environment.
+The request uses `lemma.agent-skill-benchmark-request/v1` and supplies the prompt, optional skill path,
+provider, model, thinking level, and timeout. The executable must print one JSON object using
+`lemma.agent-skill-benchmark-result/v1` with `returncode`, `final_text`, normalized `tool_calls` and
+`tool_results` arrays, and `skill_loaded`; `usage` is optional. This adapter boundary keeps scenarios
+and scoring independent of any one agent harness.
+
 CTest remains the CI integration surface. Cheap tests run in parallel; process tests are serialized
 where host contention changes the behavior under test. Stress, resource, and allocation work stays
 outside the common edit loop.
