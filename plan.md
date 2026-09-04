@@ -302,7 +302,8 @@ For each optimization record:
 - [~] Park detached/invisible Panes without consuming post-snapshot PTY bytes; coalesce bounded wake
   reasons and define deterministic failure ownership.
   - Quiet live Panes in detached, unobserved Sessions now become eligible after a five-minute
-    production delay. Non-active residency suppresses PTY polling; attach holds its reservation
+    production delay. Parked PTYs now observe output/HUP/ERR readiness and request wake without
+    consuming bytes; hydrating PTYs leave the readiness set until complete. Attach holds its reservation
     through bounded one-page hydration, terminal-dependent automation initiates wake and reports
     retryable `pane_hydrating`, and legacy input/capture/topology controls wake before returning
     unavailable. Restore failure fails the Pane, while parking admission/storage failure retains the
@@ -314,15 +315,36 @@ For each optimization record:
     hydration pause proves that disconnect during `prepare_attach` releases the reservation before
     another attachment acquires it; the race-free case passed ten repeated runs. Parking invisible
     Panes in attached Sessions remains evidence-gated.
-- [x] Add reviewed secure ephemeral snapshot storage, quotas, atomic replacement, cleanup, and crash
-  behavior.
-  - Exact-sized owner-only temporary files are close-on-exec and immediately unlinked, writable only
-    during encoding, synchronously sealed into read-only mappings, and removed by kernel cleanup on
-    process failure. The temporary writable descriptor is closed before the sealed mapping is
-    published. The versioned Lemma envelope binds the Ghostty commit/profile,
-    geometry, payload length, and payload hash. Per-Pane (64 MiB), per-Session (256 MiB), and daemon
-    (1 GiB) RAII reservations fail before publication; failed replacement leaves the live terminal
-    authoritative.
+- [~] Qualify authenticated ephemeral snapshot storage, quotas, atomic replacement, cleanup, and
+  crash behavior.
+  - `pane_snapshot_storage` now uses libsodium secretstream authenticated encryption with locked,
+    wiped per-snapshot keys. Plaintext exists only in operation-owned anonymous mappings, wiped on
+    release. The approved threat model excludes transient plaintext swap/live-memory/dump exposure;
+    plaintext backing files are not permitted. Checked ciphertext writes replace writable file
+    mappings and synchronous durability flushes. See `docs/architecture.md` for the physical storage,
+    descriptor, kernel cache, key, and hydration-peak boundaries. Per-Pane (64 MiB), per-Session
+    (256 MiB), and daemon (1 GiB) payload reservations remain unchanged. Linux storage tests cover
+    randomization, ciphertext tampering, chunk reordering, truncation, trailing bytes, and I/O failure;
+    platform and performance qualification of this repair is not complete.
+- [!] Qualify large-snapshot and parking/failure storms against unrelated-Session interaction budgets.
+  - Lifecycle-owned quiet deadlines suppress unrelated-turn parking scans; due attempts are
+    round-robin and capped at one Pane per turn, with failure retries measured from completion.
+    This does not bound a single synchronous sizing/encode/encrypt/I/O/decrypt operation. No claim
+    of foreground isolation or mission completion is made by these repairs. The maximum-size storage
+    round-trip diagnostic is approximately 111 ms (`build/pr12-repair/encrypted-storage-micro.json`),
+    not a foreground-interaction result. A single bounded ownership-transfer worker is authorized
+    for the next repair; `platform::spawn_process` currently performs environment/NSS work after
+    `forkpty`, which must be made safe before introducing a daemon thread.
+  - Linux `nix develop -c just check`, `nix develop -c just ci-check`, release tests, simulation, and
+    `nix build .#lemma` pass for this repair slice. The 20-cycle/four-Pane resource diagnostic returns
+    to zero descriptor/process/backing-file deltas. A/A calibration passes on approved `box` under
+    `build/performance/pr12-repair-calibration/`. Candidate macOS and paired A/B qualification remain
+    separate gates; adding ARM/Intel PR jobs is not evidence they have passed.
+  - Debug lifecycle repetition exposed oversized vector stores in Zig 0.16.0's x86-64 Debug
+    snapshot encoder. Valgrind evidence is `build/pr12-repair/valgrind.log`; Debug now uses checked
+    LLVM ReleaseSafe for Ghostty, with the same dependency pin/features. This does not independently
+    resolve the earlier streaming-restore experiment. Current repair checks and diagnostics live
+    under `build/pr12-repair/`; the existing F/K performance reports predate these repairs.
 - [~] Benchmark active versus parked PSS, disk bytes, park/READY/full latency, peak hydration memory,
   first action/output/attach/capture/resize, backpressure, density, and churn.
   - On approved host `box`, 16 detached 5,000-row Panes reduced daemon PSS from 58,328,064 to

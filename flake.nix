@@ -92,6 +92,7 @@
                 pkgs.xcbuild
               ];
               buildInputs = [
+                pkgs.libsodium
                 pkgs.lua5_4
                 zstdStatic
               ];

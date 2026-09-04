@@ -72,6 +72,14 @@ include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
 find_package(zstd CONFIG REQUIRED)
+find_package(libsodium CONFIG QUIET)
+if(TARGET libsodium::libsodium)
+  set(LEMMA_SODIUM_TARGET libsodium::libsodium)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.22)
+  set(LEMMA_SODIUM_TARGET PkgConfig::SODIUM)
+endif()
 find_package(Lua 5.4 REQUIRED)
 if(TARGET lua::lua)
   set(LEMMA_LUA_TARGET lua::lua)
@@ -210,6 +218,7 @@ target_link_libraries(
     lemma_protocol
     lemma_render
     lemma_terminal
+    ${LEMMA_SODIUM_TARGET}
 )
 
 # Public dependency-version helpers remain separate from semantic Core and Runtime ownership.

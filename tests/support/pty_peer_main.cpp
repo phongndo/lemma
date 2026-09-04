@@ -472,6 +472,49 @@ struct TuiFrameGeometry final {
   }
 }
 
+// The completion file is independent of Lemma: reaching it proves that detached output and the
+// terminal response both progressed without an attach, capture, input request, or child exit wake.
+[[nodiscard]] auto run_parked_output(const char* const gate, const char* const completed) noexcept
+    -> int {
+  if (!enter_raw_input() || !write_all("__LEMMA_PARKED_OUTPUT_READY__\r\n\033[3;") ||
+      !wait_for_gate(gate) || !write_all("7H\033[6n")) {
+    return 1;
+  }
+  std::array<char, 6> response{};
+  std::size_t received = 0;
+  while (received < response.size()) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    if (::poll(&event, 1, 5'000) <= 0) {
+      return 1;
+    }
+    const auto remaining = std::span(response).subspan(received);
+    const auto count = ::read(STDIN_FILENO, remaining.data(), remaining.size());
+    if (count <= 0) {
+      return 1;
+    }
+    received += static_cast<std::size_t>(count);
+  }
+  if (std::string_view(response.data(), response.size()) != "\033[3;7R") {
+    return 1;
+  }
+  for (std::size_t row = 0; row < 4'096; ++row) {
+    if (!write_all("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n")) {
+      return 1;
+    }
+  }
+  if (!write_all("\033[2J\033[H__LEMMA_DETACHED_OUTPUT_COMPLETE__")) {
+    return 1;
+  }
+  // POSIX open takes a mode when O_CREAT is set.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const auto descriptor = ::open(completed, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (descriptor < 0 || ::close(descriptor) != 0) {
+    return 1;
+  }
+  pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+  return ::poll(&event, 1, -1) < 0 ? 1 : 0;
+}
+
 struct GeometryReport final {
   std::uint16_t rows{0};
   std::uint16_t columns{0};
@@ -1262,6 +1305,10 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "observer-echo") {
     return run_observer_echo();
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "parked-output") {
+    return run_parked_output(arguments.subspan(2, 1).front(), arguments.subspan(3, 1).front());
   }
   if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "parking") {
     return run_parking(parse_size(arguments.subspan(2, 1).front()),

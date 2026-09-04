@@ -292,8 +292,9 @@ collect samples, and report distributions.
 ## CI
 
 `.github/workflows/quality.yml` contains merge-blocking formatting, build/test, clang-tidy, clangd,
-Python, sanitizer, and workflow checks selected by changed paths. `.github/workflows/extended.yml`
-runs the platform matrix plus scheduled simulation, fuzz, and benchmark sweeps.
+Python, sanitizer, and workflow checks selected by changed paths. The build/test job includes Linux and macOS ARM/Intel on each impacted PR.
+`.github/workflows/extended.yml` additionally runs the platform matrix plus scheduled simulation,
+fuzz, and benchmark sweeps.
 
 The local equivalents live under `scripts/ci/`; `just ci-check` runs the merge-blocking set in a
 safe sequence.

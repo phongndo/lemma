@@ -190,11 +190,11 @@ auto PaneResidency::begin_unparking() noexcept -> std::expected<void, vt::Error>
       .compatibility = current_pane_snapshot_compatibility(),
       .geometry = parked->options.size,
   };
-  const auto payload = parked->storage.payload(metadata);
+  auto payload = parked->storage.payload(metadata);
   if (!payload.has_value()) {
     return std::unexpected(map_storage_error(payload.error()));
   }
-  auto restore = vt::TerminalSnapshotRestore::begin(parked->options, *payload);
+  auto restore = vt::TerminalSnapshotRestore::begin(parked->options, payload->bytes());
   if (!restore.has_value()) {
     return std::unexpected(restore.error());
   }
@@ -204,7 +204,7 @@ auto PaneResidency::begin_unparking() noexcept -> std::expected<void, vt::Error>
   auto reservation = std::move(parked->reservation);
   auto decoder = std::move(*restore);
   cold.state.emplace<Unparking>(std::move(snapshot), options, std::move(reservation),
-                                std::move(decoder));
+                                std::move(*payload), std::move(decoder));
   return {};
 }
 

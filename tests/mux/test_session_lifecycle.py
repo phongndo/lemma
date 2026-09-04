@@ -23,6 +23,12 @@ class SessionLifecycleTest(unittest.TestCase):
         self.server = LemmaServer.from_environment(parking_delay_ms=25)
         self.addCleanup(self.server.close)
 
+    def snapshot_resources(self) -> dict[str, Any]:
+        result = self.server.command("proc", "daemon", "inspect")
+        self.assertEqual(result.status, 0, result.output)
+        daemon = json.loads(result.output)["results"][0]["result"]["daemon"]
+        return daemon["resources"]["snapshot_bytes"]
+
     def test_output_while_detached_is_current_on_reattach(self) -> None:
         session = self.server.create_session("detach_output")
         pane = session.pane()
@@ -432,12 +438,18 @@ class SessionLifecycleTest(unittest.TestCase):
         client.expect_output("__HYDRATED_INPUT__")
         self.assertEqual(client.screen_text().count("__HYDRATED_INPUT__"), 1)
 
-    def test_blocked_post_snapshot_output_resumes_after_attach(self) -> None:
+    def test_post_snapshot_output_and_response_resume_without_attach(self) -> None:
         gate = self.server.root / "parked-output.gate"
+        completed = self.server.root / "parked-output.completed"
         session = self.server.create_session(
             "parked_output",
             attach=False,
-            command=(str(self.server.peer_path), "active-output", str(gate)),
+            command=(
+                str(self.server.peer_path),
+                "parked-output",
+                str(gate),
+                str(completed),
+            ),
         )
         pane = session.pane()
         ready = wait_until(
@@ -450,23 +462,79 @@ class SessionLifecycleTest(unittest.TestCase):
                     )
                 ).status
                 == 0
-                and "__LEMMA_ACTIVE_OUTPUT_READY__" in result.output
+                and "__LEMMA_PARKED_OUTPUT_READY__" in result.output
                 else None
             ),
             diagnostics=self.server.diagnostics,
         )
-        self.assertIn("__LEMMA_ACTIVE_OUTPUT_READY__", ready.output)
-        time.sleep(0.05)
-        self.assertFalse(session.state().attached)
+        self.assertIn("__LEMMA_PARKED_OUTPUT_READY__", ready.output)
 
+        wait_until(
+            "detached Pane snapshot admission",
+            lambda: True if self.snapshot_resources()["parked_panes"] == 1 else None,
+            diagnostics=self.server.diagnostics,
+        )
+        self.assertFalse(session.state().attached)
         gate.touch()
-        time.sleep(0.05)
-        pane.expect_alive()
-        client = session.attach()
-        client.expect_output(
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        # Do not issue a terminal-dependent request here: the producer must make progress through
+        # PTY readiness alone, including a cursor response and more output than the kernel holds.
+        wait_until(
+            "detached producer completion without attachment",
+            lambda: True if completed.exists() else None,
+            diagnostics=self.server.diagnostics,
         )
         pane.expect_alive()
+        self.assertFalse(session.state().attached)
+        client = session.attach()
+        client.expect_output("__LEMMA_DETACHED_OUTPUT_COMPLETE__")
+        self.assertEqual(
+            client.screen_text().count("__LEMMA_DETACHED_OUTPUT_COMPLETE__"), 1
+        )
+        pane.expect_alive()
+
+    def test_output_wake_during_paused_hydration_is_cancelled_by_removal(self) -> None:
+        self.server.close()
+        self.server = LemmaServer.from_environment(
+            parking_delay_ms=25, hydration_steps_per_turn=0
+        )
+        self.addCleanup(self.server.close)
+        gate = self.server.root / "paused-output.gate"
+        completed = self.server.root / "paused-output.completed"
+        producer = self.server.create_session(
+            "paused_output",
+            command=(
+                str(self.server.peer_path),
+                "parked-output",
+                str(gate),
+                str(completed),
+            ),
+        )
+        producer.pane().expect_output("__LEMMA_PARKED_OUTPUT_READY__")
+        producer.detach()
+        wait_until(
+            "producer to park before output",
+            lambda: True if self.snapshot_resources()["parked_panes"] == 1 else None,
+            diagnostics=self.server.diagnostics,
+        )
+        gate.touch()
+        wait_until(
+            "PTY-only wake to own one hydration",
+            lambda: True if self.snapshot_resources()["hydrating_panes"] == 1 else None,
+            diagnostics=self.server.diagnostics,
+        )
+        other = self.server.create_session("unrelated_progress")
+        other.pane().send("printf '__UNRELATED_PROGRESS__\\n'\r")
+        other.pane().expect_output("__UNRELATED_PROGRESS__")
+        self.assertFalse(
+            completed.exists(), "PTY bytes consumed before terminal restoration"
+        )
+        self.assertEqual(self.snapshot_resources()["hydrating_panes"], 1)
+        producer.destroy()
+        self.assertEqual(self.snapshot_resources()["reserved"], 0)
+        self.assertEqual(self.snapshot_resources()["hydrating_panes"], 0)
+        replacement = self.server.create_session("replacement_after_cancel")
+        replacement.pane().send("printf '__REPLACEMENT_OK__\\n'\r")
+        replacement.pane().expect_output("__REPLACEMENT_OK__")
 
     def test_child_exit_wakes_a_parked_held_pane(self) -> None:
         session = self.server.create_session(

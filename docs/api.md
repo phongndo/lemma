@@ -62,7 +62,10 @@ terminal generation. A terminal-dependent command against a parked Pane initiate
 and returns `unavailable` with retryable reason `pane_hydrating`; retry the complete command without
 changing its selector. `pane_restore_failed` is not retryable and indicates that the Pane's sealed
 state could not be restored. Session, Tab, and Pane listings plus Session/Tab inspection remain
-available without waking parked Panes.
+available without waking parked Panes. `daemon.inspect.resources.snapshot_bytes` reports reserved
+plaintext payload bytes, their daemon-wide limit, `parked_panes`, and `hydrating_panes`. These are
+logical accounting values, not physical memory or allocated disk usage. Encryption adds a 120-byte
+envelope and 17 bytes per 64 KiB payload chunk, plus filesystem allocation rounding and cache costs.
 
 `pane.input` admits one ordered batch of text, opaque paste, and logical key events. Logical keys use
 an optional `phase` of `press`, `repeat`, or `release`; it defaults to `press`. `pane.capture` reads a

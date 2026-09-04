@@ -1,7 +1,9 @@
 #include "core/engine.hpp"
 #include "core/layout.hpp"
+#include "core/pane_snapshot_storage.hpp"
 #include "input/input_router.hpp"
 #include "lemma/command.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
@@ -9,6 +11,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -1135,6 +1138,36 @@ void benchmark_terminal_snapshot_encode(benchmark::State& state) {
   state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(input->encoded.size()));
 }
 
+// Admission-to-release cost, including ciphertext I/O, authentication, anonymous plaintext peak,
+// and wiping. This is a storage ceiling diagnostic, not an unrelated-Session interaction gate.
+void benchmark_snapshot_storage_roundtrip(benchmark::State& state) {
+  const auto size = static_cast<std::size_t>(state.range(0));
+  const core::PaneSnapshotMetadata metadata{
+      .compatibility = core::current_pane_snapshot_compatibility(),
+      .geometry = {.columns = 80, .rows = 23},
+  };
+  for ([[maybe_unused]] const auto iteration : state) {
+    auto writable = core::WritablePaneSnapshot::create(metadata, size);
+    if (!writable.has_value()) {
+      state.SkipWithError("snapshot storage admission failed");
+      return;
+    }
+    std::ranges::fill(writable->payload(), std::byte{0x61});
+    auto snapshot = std::move(*writable).finish();
+    if (!snapshot.has_value()) {
+      state.SkipWithError("snapshot storage seal failed");
+      return;
+    }
+    auto plaintext = snapshot->payload(metadata);
+    if (!plaintext.has_value() || plaintext->bytes().size() != size) {
+      state.SkipWithError("snapshot storage authentication failed");
+      return;
+    }
+    benchmark::DoNotOptimize(plaintext->bytes().data());
+  }
+  state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(size));
+}
+
 void benchmark_terminal_snapshot_ready(benchmark::State& state) {
   const auto input = make_snapshot_benchmark_input();
   if (!input.has_value()) {
@@ -1256,6 +1289,7 @@ BENCHMARK(benchmark_terminal_viewport_wheel_frames);
 BENCHMARK(benchmark_terminal_visible_capture)->Arg(23)->Arg(200);
 BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
 BENCHMARK(benchmark_terminal_snapshot_encode);
+BENCHMARK(benchmark_snapshot_storage_roundtrip)->Arg(65'536)->Arg(limits::snapshot_bytes_max);
 BENCHMARK(benchmark_terminal_snapshot_ready)->UseManualTime();
 BENCHMARK(benchmark_terminal_snapshot_full_restore)->UseManualTime();
 BENCHMARK(benchmark_terminal_full_frames);

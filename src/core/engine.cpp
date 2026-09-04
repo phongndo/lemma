@@ -786,11 +786,18 @@ struct PaneRuntime final {
     };
   }
   [[nodiscard]] auto live() const noexcept -> bool { return !failure.has_value(); }
-  [[nodiscard]] auto pollable() const noexcept -> bool {
+  [[nodiscard]] auto observes_pty() const noexcept -> bool {
+    const auto phase = residency.phase();
+    // Once hydration owns the wake, remove its level-triggered descriptor until the terminal is
+    // complete. Leaving it registered with zero events would still spin on HUP/ERR in poll().
+    return live() && pty >= 0 &&
+           (phase == PaneResidencyPhase::active || phase == PaneResidencyPhase::parked);
+  }
+  [[nodiscard]] auto pty_io_ready() const noexcept -> bool {
     return live() && pty >= 0 && residency.phase() == PaneResidencyPhase::active;
   }
   [[nodiscard]] auto accepts_input() const noexcept -> bool {
-    return pollable() && child > 0 && !observed_exit.has_value();
+    return pty_io_ready() && child > 0 && !observed_exit.has_value();
   }
   [[nodiscard]] auto held() const noexcept -> bool {
     return live() && pty < 0 && residency.phase() == PaneResidencyPhase::active;
@@ -966,6 +973,7 @@ public:
     pane.generation = address.pane.generation();
     scrollback_bytes_reserved_ += runtime->scrollback_bytes_reserved;
     runtime->owner = this;
+    defer_parking(*runtime);
     pending_writes_possible_ = pending_writes_possible_ || !runtime->pending_writes.empty();
     pane.runtime = std::move(runtime);
     link(pane_key(address), pane);
@@ -1143,7 +1151,15 @@ public:
       }
     });
   }
-  void clear_parking_deadline_hint() noexcept { parking_deadline_hint_.reset(); }
+  void defer_parking(PaneRuntime& runtime) noexcept {
+    LEMMA_ASSERT(active_reactor_environment != nullptr);
+    const auto delay = active_reactor_environment->detached_pane_parking_delay;
+    if (delay.has_value() && runtime.live() &&
+        runtime.residency.phase() == PaneResidencyPhase::active) {
+      runtime.parking_deadline = reactor_now() + *delay;
+      tighten_deadline(parking_deadline_hint_, *runtime.parking_deadline);
+    }
+  }
   [[nodiscard]] auto scrollback_bytes_reserved() const noexcept -> std::size_t {
     return scrollback_bytes_reserved_;
   }
@@ -1181,7 +1197,7 @@ public:
     }
     const auto phase = runtime->residency.phase();
     if (phase == PaneResidencyPhase::active) {
-      runtime->parking_deadline.reset();
+      defer_parking(*runtime);
       return true;
     }
     runtime->residency.request_wake(reason);
@@ -1216,7 +1232,7 @@ public:
       LEMMA_ASSERT(unparking_count_ > 0);
       --unparking_count_;
       static_cast<void>(runtime->residency.take_wake_reasons());
-      runtime->parking_deadline.reset();
+      defer_parking(*runtime);
     }
     return restored;
   }
@@ -1524,6 +1540,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
     runtime->active_terminal().scroll_viewport(vt::ViewportScroll::bottom);
     record_terminal_observation(*runtime);
     runtime->interactive_damage.reset();
+    runtimes.defer_parking(*runtime);
   }
 
   session.attachment.copy_mode = {};
@@ -8767,6 +8784,10 @@ struct PublicCaptureFormatting final {
     ++active_sessions;
     attached_sessions += session->attachment_runtime.client >= 0 ? 1U : 0U;
   }
+  std::size_t parked_panes = 0;
+  runtimes.for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+    parked_panes += runtime.residency.phase() == PaneResidencyPhase::parked ? 1U : 0U;
+  });
   std::string output = R"({"version":)";
   if (!api::append_json_string(output, lemma::version) || !append_public(output, R"(,"api":)") ||
       !api::append_json_string(output, api::proc_schema) ||
@@ -8780,6 +8801,14 @@ struct PublicCaptureFormatting final {
       !append_public_number(output, runtimes.scrollback_bytes_reserved()) ||
       !append_public(output, R"(,"limit":)") ||
       !append_public_number(output, limits::terminal_scrollback_bytes_aggregate_max) ||
+      !append_public(output, R"(},"snapshot_bytes":{"reserved":)") ||
+      !append_public_number(output, runtimes.snapshot_bytes_reserved()) ||
+      !append_public(output, R"(,"limit":)") ||
+      !append_public_number(output, limits::snapshot_daemon_bytes_max) ||
+      !append_public(output, R"(,"parked_panes":)") ||
+      !append_public_number(output, parked_panes) ||
+      !append_public(output, R"(,"hydrating_panes":)") ||
+      !append_public_number(output, runtimes.unparking_count()) ||
       !append_public(output, R"(}},"attachments":{"connected":)") ||
       !append_public_number(output, attached_sessions) || !append_public(output, "}}")) {
     return {};
@@ -12707,7 +12736,22 @@ constexpr std::size_t blocked_sink_pty_read_bytes_per_turn_max = std::size_t{4} 
 void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRuntime& runtime,
                          PaneRuntimeStore& runtimes, const pollfd& events,
                          std::size_t& global_budget, std::size_t& blocked_session_budget) noexcept {
+  if (!runtime.live() || events.fd != runtime.pty) {
+    return;
+  }
+  if ((events.revents & POLLNVAL) != 0) {
+    runtime.fail(PaneRuntimeFailure::pty_read_error);
+    return;
+  }
   if ((events.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+    return;
+  }
+  if (!runtime.pty_io_ready()) {
+    // PTY bytes stay in the kernel until complete Ghostty state is available. Child-exit and
+    // consumer wakes share this transition, so a second readiness event never restarts restoration.
+    if (!runtimes.wake(pane_address(session, pane), PaneWakeReason::output).has_value()) {
+      runtime.fail(PaneRuntimeFailure::snapshot_restore_error);
+    }
     return;
   }
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -12735,8 +12779,8 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
   }
   runtimes.note_presentation_deadline(runtime.presentation_gate.deadline());
   const auto bytes_drained = pane_budget_before - pane_budget;
-  if (bytes_drained > 0) {
-    runtime.parking_deadline.reset();
+  if (bytes_drained > 0 && runtime.parking_deadline.has_value()) {
+    runtimes.defer_parking(runtime);
   }
   global_budget -= bytes_drained;
   if (blocked_sink) {
@@ -13223,7 +13267,7 @@ void flush_pending_pane_writes(PaneRuntimeStore& runtimes, std::size_t& cursor) 
   }
   std::size_t count = 0;
   runtimes.for_each([&](const PaneAddress, const PaneRuntime& runtime) {
-    count += static_cast<std::size_t>(runtime.pollable() && !runtime.pending_writes.empty());
+    count += static_cast<std::size_t>(runtime.pty_io_ready() && !runtime.pending_writes.empty());
   });
   if (count == 0) {
     cursor = 0;
@@ -13237,14 +13281,15 @@ void flush_pending_pane_writes(PaneRuntimeStore& runtimes, std::size_t& cursor) 
   const auto flush_range = [&](const std::size_t begin, const std::size_t end) {
     std::size_t ordinal = 0;
     runtimes.for_each([&](const PaneAddress, PaneRuntime& runtime) {
-      if (!runtime.pollable() || runtime.pending_writes.empty()) {
+      if (!runtime.pty_io_ready() || runtime.pending_writes.empty()) {
         return;
       }
       if (ordinal >= begin && ordinal < end && global_budget > 0) {
         if (!flush_pane_writes(runtime, global_budget)) {
           runtime.fail(PaneRuntimeFailure::pty_write_error);
         }
-        writes_remain = writes_remain || (runtime.pollable() && !runtime.pending_writes.empty());
+        writes_remain =
+            writes_remain || (runtime.pty_io_ready() && !runtime.pending_writes.empty());
         ++visited;
       }
       ++ordinal;
@@ -13441,23 +13486,12 @@ void service_pending_attach_preparations(PendingConnections& connections, Sessio
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void update_detached_pane_parking(Sessions& sessions, PaneRuntimeStore& runtimes,
-                                  const PublicObservers& connections,
+                                  const PublicObservers& connections, std::size_t& cursor,
                                   const std::optional<ReactorClock::duration> parking_delay,
                                   const bool corrupt_snapshots_for_test) noexcept {
-  if (!parking_delay.has_value()) {
-    return;
-  }
-  bool has_detached_session = false;
-  for (const auto& session : sessions) {
-    if (session != nullptr && session->active && session->attachment_runtime.client < 0 &&
-        session->attachment_runtime.pending_attach_slot ==
-            std::numeric_limits<std::uint32_t>::max()) {
-      has_detached_session = true;
-      break;
-    }
-  }
-  if (!has_detached_session) {
-    runtimes.clear_parking_deadline_hint();
+  const auto now = reactor_now();
+  const auto hint = runtimes.parking_deadline_hint();
+  if (!parking_delay.has_value() || !hint.has_value() || now < *hint) {
     return;
   }
   std::array<bool, limits::sessions_hard_max> observed_sessions{};
@@ -13473,40 +13507,53 @@ void update_detached_pane_parking(Sessions& sessions, PaneRuntimeStore& runtimes
       std::span(observed_sessions).subspan(observed->id.slot(), 1).front() = true;
     }
   }
-  const auto now = reactor_now();
+  const auto count = runtimes.size();
+  cursor = count == 0 ? 0 : cursor % count;
+  std::size_t ordinal = 0;
+  std::size_t distance = count;
+  std::optional<PaneAddress> due;
   runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+    const auto position = (ordinal++ + count - cursor) % count;
+    if (!runtime.parking_deadline.has_value() || now < *runtime.parking_deadline) {
+      return;
+    }
     const auto* const session = sessions.get(address.session);
     LEMMA_ASSERT(session != nullptr);
-    const bool detached = session->active && session->attachment_runtime.client < 0 &&
-                          session->attachment_runtime.pending_attach_slot ==
-                              std::numeric_limits<std::uint32_t>::max() &&
-                          !std::span(observed_sessions).subspan(session->id.slot(), 1).front();
-    if (!detached) {
-      // Attach and observer preparation route through wake_session_panes(), which clears any
-      // armed quiet deadline. Avoid any Pane-capacity walk on ordinary attached reactor turns.
+    const bool detached = session->active && session->attachment_runtime.client < 0;
+    if (!detached || runtime.residency.phase() != PaneResidencyPhase::active || !runtime.live() ||
+        runtime.observed_exit.has_value()) {
+      runtime.parking_deadline.reset();
       return;
     }
-    if (runtime.residency.phase() != PaneResidencyPhase::active || !runtime.live() ||
-        !runtime.pending_writes.empty() || runtime.observed_exit.has_value()) {
+    if (!runtime.pending_writes.empty() ||
+        session->attachment_runtime.pending_attach_slot !=
+            std::numeric_limits<std::uint32_t>::max() ||
+        std::span(observed_sessions).subspan(session->id.slot(), 1).front()) {
+      // Observer teardown, attach cancellation, and write drain cannot strand a detached Pane
+      // without a deadline. Retry conservatively instead of rediscovering eligibility every turn.
+      runtimes.defer_parking(runtime);
       return;
     }
-    if (!runtime.parking_deadline.has_value()) {
-      runtime.parking_deadline = now + *parking_delay;
-    }
-    if (now < *runtime.parking_deadline) {
-      return;
-    }
-    runtime.compression_scheduled = false;
-    const auto parked =
-        runtimes.park(address, corrupt_snapshots_for_test ? SnapshotTestCorruption::ghostty_payload
-                                                          : SnapshotTestCorruption::none);
-    runtime.parking_deadline.reset();
-    if (!parked.has_value()) {
-      // Parking is an optional resource optimization. Retry after a full quiet interval without
-      // failing the authoritative live terminal when quota or storage is unavailable.
-      runtime.parking_deadline = now + *parking_delay;
+    if (position < distance) {
+      due = address;
+      distance = position;
     }
   });
+  if (due.has_value()) {
+    auto* const runtime = runtimes.get(*due);
+    LEMMA_ASSERT(runtime != nullptr);
+    runtime->compression_scheduled = false;
+    const auto parked =
+        runtimes.park(*due, corrupt_snapshots_for_test ? SnapshotTestCorruption::ghostty_payload
+                                                       : SnapshotTestCorruption::none);
+    runtime->parking_deadline.reset();
+    refresh_reactor_turn_time();
+    if (!parked.has_value()) {
+      // Retry after a full interval measured from completion, not from before expensive work.
+      runtimes.defer_parking(*runtime);
+    }
+    cursor = (cursor + distance + 1U) % count;
+  }
   runtimes.refresh_parking_deadline_hint();
   runtimes.refresh_compression_deadline_hint();
 }
@@ -13898,6 +13945,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
   std::size_t hydration_cursor = 0;
+  std::size_t parking_cursor = 0;
   std::size_t proc_cursor = 0;
   std::size_t observer_cursor = 0;
   std::uint64_t activity_order = 0;
@@ -13918,7 +13966,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     const bool public_screen_work_pending =
         !observers.empty() &&
         service_public_observers(observers, sessions, runtimes, public_scratch, observer_cursor);
-    update_detached_pane_parking(sessions, runtimes, observers,
+    update_detached_pane_parking(sessions, runtimes, observers, parking_cursor,
                                  environment.detached_pane_parking_delay,
                                  environment.corrupt_parked_snapshots_for_test);
     std::size_t pending_ordinal = 0;
@@ -13965,11 +14013,13 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       const auto* const session = sessions.get(address.session);
       const auto* const pane = session == nullptr ? nullptr : find_pane(*session, address.pane);
       LEMMA_ASSERT(session != nullptr && pane != nullptr);
-      if (!session->active || !runtime.pollable()) {
+      if (!session->active || !runtime.observes_pty()) {
         return;
       }
-      const auto pane_events = static_cast<short>(
-          POLLIN | (!runtime.pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
+      const auto pane_events =
+          static_cast<short>(POLLIN | (runtime.pty_io_ready() && !runtime.pending_writes.empty()
+                                           ? static_cast<short>(POLLOUT)
+                                           : 0));
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = runtime.pty, .events = pane_events, .revents = 0};
       std::span(owners).subspan(descriptor_count, 1).front() = {.session = address.session,

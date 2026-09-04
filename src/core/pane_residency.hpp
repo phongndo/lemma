@@ -33,6 +33,7 @@ enum class PaneWakeReason : std::uint8_t {
   resize = 1U << 2U,
   capture = 1U << 3U,
   explicit_request = 1U << 4U,
+  output = 1U << 5U,
 };
 
 class PaneWakeReasons final {
@@ -79,8 +80,9 @@ public:
       -> std::expected<void, vt::Error>;
   void cancel_parking() noexcept;
 
-  // READY construction borrows the sealed mapping. One call restores at most one Ghostty history
-  // page. A true result means the complete terminal has atomically returned to active residency.
+  // READY construction borrows authenticated operation-owned plaintext. One call restores at most
+  // one Ghostty history page. A true result means the complete terminal has atomically returned to
+  // active residency.
   [[nodiscard]] auto begin_unparking() noexcept -> std::expected<void, vt::Error>;
   [[nodiscard]] auto restore_one_history_page() noexcept -> std::expected<bool, vt::Error>;
   void cancel_unparking() noexcept;
@@ -119,13 +121,16 @@ private:
   struct Unparking final {
     Unparking(PaneSnapshot&& storage_value, const vt::TerminalOptions& options_value,
               PaneSnapshotQuota::Reservation&& reservation_value,
+              PaneSnapshotPlaintext&& plaintext_value,
               vt::TerminalSnapshotRestore&& restore_value) noexcept
         : storage(std::move(storage_value)), options(options_value),
-          reservation(std::move(reservation_value)), restore(std::move(restore_value)) {}
+          reservation(std::move(reservation_value)), plaintext(std::move(plaintext_value)),
+          restore(std::move(restore_value)) {}
     PaneSnapshot storage;
     vt::TerminalOptions options;
     PaneSnapshotQuota::Reservation reservation;
-    // Declared last so it is destroyed first and releases its borrowed decoder before storage.
+    PaneSnapshotPlaintext plaintext;
+    // Declared last: decoder destruction precedes wiping/unmapping its borrowed plaintext.
     vt::TerminalSnapshotRestore restore;
   };
 

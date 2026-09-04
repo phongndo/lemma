@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <span>
@@ -62,6 +63,7 @@ TEST(PaneResidencyTest, TransitionsThroughMappedSnapshotOneHistoryPagePerTurn) {
 
   residency.request_wake(PaneWakeReason::attach);
   residency.request_wake(PaneWakeReason::input);
+  residency.request_wake(PaneWakeReason::output);
   residency.request_wake(PaneWakeReason::attach);
   ASSERT_TRUE(residency.begin_unparking().has_value());
   EXPECT_EQ(residency.phase(), PaneResidencyPhase::unparking);
@@ -86,6 +88,7 @@ TEST(PaneResidencyTest, TransitionsThroughMappedSnapshotOneHistoryPagePerTurn) {
   const auto reasons = residency.take_wake_reasons();
   EXPECT_TRUE(reasons.contains(PaneWakeReason::attach));
   EXPECT_TRUE(reasons.contains(PaneWakeReason::input));
+  EXPECT_TRUE(reasons.contains(PaneWakeReason::output));
   EXPECT_FALSE(reasons.contains(PaneWakeReason::resize));
   EXPECT_TRUE(residency.take_wake_reasons().empty());
 

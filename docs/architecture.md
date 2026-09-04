@@ -190,17 +190,42 @@ only after another quiet interval. A Pane that may be snapshotted opts into at m
 and UTF-8 parser state to survive restore. Complete restore and READY-first restore share one path;
 each incremental step consumes at most one history page and reports source and screen progress.
 Destroying an unfinished restore cancels it by freeing the decoder before its borrowed terminal.
-`PaneResidency` encodes `Active -> Parking -> Parked -> Unparking -> Active`; PTY polling is valid
-only in `Active`. Cold states own secure unlinked, exact-sized mappings under per-Pane, per-Session,
-and daemon byte quotas. The temporary writable descriptor is close-on-exec and is closed after the
-mapping is synchronously sealed read-only, before publication. A Lemma envelope rejects a mismatched Ghostty pin/profile,
-schema, geometry, payload length, or payload hash before Ghostty decoding. The decoder is declared
-after its borrowed mapping owner so cancellation always destroys it first. The reactor parks only
-live, quiet Panes in detached, unobserved Sessions after five minutes; the production interval
-remains evidence-gated. Parking atomically snapshots and releases the terminal, then suppresses PTY
-reads so post-snapshot bytes remain ordered in the kernel. Attach, input, capture, and explicit
-terminal-dependent requests coalesce typed wake reasons. Hydration fairly advances at most one
-Ghostty history page per Pane step and eight Pane steps per reactor turn. Attach preparation retains
+`PaneResidency` encodes `Active -> Parking -> Parked -> Unparking -> Active`. Active PTYs permit I/O;
+parked PTYs permit readiness observation only. Output/HUP/ERR readiness requests restoration without
+reading bytes. Hydrating PTYs are omitted from the readiness set until complete; merely clearing the
+event mask would still spin on level-triggered HUP with `poll()`. Attach, input, capture, output, and
+explicit terminal-dependent requests share the wake transition. Hydration fairly advances at most
+one Ghostty history page per Pane step and eight Pane steps per reactor turn.
+
+Cold states own an owner-only, unlinked, close-on-exec file containing libsodium
+[XChaCha20-Poly1305 secretstream](https://libsodium.gitbook.io/doc/secret-key_cryptography/secretstream)
+ciphertext, not plaintext. Every 64 KiB chunk authenticates the exact pin/profile, schema, geometry,
+and length envelope as additional data. The ordered stream and required final tag reject mutation,
+reordering, truncation, and trailing bytes before Ghostty receives any plaintext. Each snapshot owns
+an independent random key in guarded, explicitly locked libsodium memory; failed key locking fails
+parking admission without losing the live terminal. The stream state shares that locked allocation
+and is wiped after each operation. Keys are wiped on snapshot destruction. This protects backing-file
+contents from recovery/tampering, not live-memory compromise, process dumps, hibernation, or swap of
+transient plaintext. Memory locking has [OS and register/stack limitations](https://libsodium.gitbook.io/doc/memory_management).
+
+Encoding and decryption use operation-owned anonymous plaintext mappings that are wiped and unmapped
+on release. The restoring decoder is destroyed before its borrowed plaintext mapping, including on
+cancellation. Parked storage retains one descriptor and one guarded locked allocation per Pane.
+Payload quotas exclude the 120-byte envelope, 17-byte per-chunk authentication overhead, filesystem
+allocation rounding, and kernel ciphertext cache. Hydration temporarily holds encrypted backing,
+a full decrypted snapshot, and the rebuilding terminal simultaneously. No crash durability is
+promised: writes use checked `pwrite`, not writable file mappings or synchronous `msync`/`fsync`.
+Deferred kernel writeback and cache memory still cost resources; a daemon PSS reduction alone does
+not measure them.
+
+The reactor parks only live, quiet Panes in detached, unobserved Sessions after five minutes.
+Creation, detach, wake, hydration completion, and output activity arm/postpone authoritative quiet
+deadlines. Only a due minimum permits an eligibility walk. Pending writes, observers, and pending
+attachments retain a conservative retry deadline; failures retry after a full interval from attempt
+completion. Each due pass selects at most one Pane round-robin, including failures. Snapshot sizing,
+encoding, encryption/I/O, and initial decryption remain synchronous: this bounds the Pane multiplier,
+not the maximum single-operation reactor latency. Large-snapshot foreground isolation remains an
+unqualified merge gate. Attach preparation retains
 its reservation until every Pane is active; automation receives retryable `pane_hydrating` while a
 wake is pending. Restore failure fails the Pane rather than consuming later PTY bytes against an
 unknown terminal state.

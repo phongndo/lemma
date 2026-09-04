@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from benchmarks.parking_resources import (  # noqa: E402
+    snapshot_backing,
+    snapshot_residency,
+)
 from tests.support.mux_harness import LemmaServer, wait_until  # noqa: E402
 
 
@@ -62,28 +66,16 @@ def descendant_count(process: int) -> int:
     return 1 + descendants
 
 
-def snapshot_mappings(process: int) -> tuple[int, int]:
-    count = 0
-    mapped_bytes = 0
-    for line in Path(f"/proc/{process}/maps").read_text().splitlines():
-        if ".lemma-pane-snapshot-" not in line:
-            continue
-        start_text, end_text = line.split(maxsplit=1)[0].split("-", maxsplit=1)
-        count += 1
-        mapped_bytes += int(end_text, 16) - int(start_text, 16)
-    return count, mapped_bytes
-
-
-def sample_resources(process: int) -> dict[str, int]:
-    mappings, mapped_bytes = snapshot_mappings(process)
+def sample_resources(server: LemmaServer) -> dict[str, int]:
+    process = server.process.pid
     return {
+        **snapshot_backing(process),
+        "parked_panes": snapshot_residency(server)["parked_panes"],
         "daemon_pss_bytes": daemon_rollup_bytes(process, "Pss"),
         "daemon_private_dirty_bytes": daemon_rollup_bytes(process, "Private_Dirty"),
         "daemon_rss_bytes": daemon_rss_bytes(process),
         "daemon_descriptors": daemon_descriptors(process),
         "process_tree_processes": descendant_count(process),
-        "snapshot_mappings": mappings,
-        "snapshot_mapped_bytes": mapped_bytes,
     }
 
 
@@ -126,7 +118,7 @@ def main() -> int:
             command=(str(server.peer_path), "idle"),
         )
         anchor.pane().expect_output("__LEMMA_IDLE_READY__")
-        baseline = sample_resources(server.process.pid)
+        baseline = sample_resources(server)
 
         panes: list[tuple[str, str]] = []
         for index in range(arguments.sessions):
@@ -164,19 +156,17 @@ def main() -> int:
         hydration_latencies_ns: list[int] = []
         for cycle in range(arguments.cycles):
             wait_until(
-                f"cycle {cycle} parked mappings",
+                f"cycle {cycle} parked Panes",
                 lambda: (
                     resources
-                    if (resources := sample_resources(server.process.pid))[
-                        "snapshot_mappings"
-                    ]
+                    if (resources := sample_resources(server))["parked_panes"]
                     == arguments.sessions
                     else None
                 ),
                 timeout=(arguments.parking_delay_ms / 1_000) + 10.0,
                 diagnostics=server.diagnostics,
             )
-            parked_samples.append(sample_resources(server.process.pid))
+            parked_samples.append(sample_resources(server))
 
             hydration_started = time.monotonic_ns()
             for index, (name, pane) in enumerate(panes):
@@ -201,11 +191,9 @@ def main() -> int:
                 if f"__LEMMA_PARK_READY_{index:04d}__" not in capture.output:
                     raise RuntimeError(f"cycle {cycle} lost content for {name}")
             hydration_latencies_ns.append(time.monotonic_ns() - hydration_started)
-            hydrated = sample_resources(server.process.pid)
-            if hydrated["snapshot_mappings"] != 0:
-                raise RuntimeError(
-                    f"cycle {cycle} retained a hydrated snapshot mapping"
-                )
+            hydrated = sample_resources(server)
+            if hydrated["snapshot_files"] != 0:
+                raise RuntimeError(f"cycle {cycle} retained hydrated snapshot backing")
             hydrated_samples.append(hydrated)
 
         for name, _pane in panes:
@@ -216,11 +204,9 @@ def main() -> int:
             "parking churn cleanup",
             lambda: (
                 resources
-                if (resources := sample_resources(server.process.pid))[
-                    "process_tree_processes"
-                ]
+                if (resources := sample_resources(server))["process_tree_processes"]
                 == baseline["process_tree_processes"]
-                and resources["snapshot_mappings"] == 0
+                and resources["snapshot_files"] == 0
                 else None
             ),
             timeout=10.0,
@@ -228,7 +214,7 @@ def main() -> int:
         )
         final_samples = []
         for _ in range(10):
-            final_samples.append(sample_resources(server.process.pid))
+            final_samples.append(sample_resources(server))
             time.sleep(0.02)
 
     parked_pss = [sample["daemon_pss_bytes"] for sample in parked_samples]
@@ -244,7 +230,7 @@ def main() -> int:
         sample["daemon_private_dirty_bytes"] for sample in final_samples
     ]
     report: dict[str, Any] = {
-        "schema": "lemma.parking-churn/v1",
+        "schema": "lemma.parking-churn/v2",
         "host": os.uname().nodename,
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "load_before": load_before,
@@ -298,7 +284,8 @@ def main() -> int:
             - baseline["daemon_descriptors"],
             "final_process_delta": final_samples[-1]["process_tree_processes"]
             - baseline["process_tree_processes"],
-            "final_snapshot_mappings": final_samples[-1]["snapshot_mappings"],
+            "final_snapshot_files": final_samples[-1]["snapshot_files"],
+            "kernel_ciphertext_cache_bytes": "unavailable",
             "elapsed_ns": time.monotonic_ns() - started_ns,
         },
     }

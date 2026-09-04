@@ -95,9 +95,11 @@ lemma kill NAME
 
 An omitted `attach` target selects the most recently active detached Session. After five quiet
 minutes, an unobserved detached Pane may be stored as a bounded terminal snapshot. Its process keeps
-running, but Lemma leaves later PTY bytes in the kernel until attach or another terminal-dependent
-request restores the Pane; a sufficiently output-heavy process can therefore experience normal PTY
-backpressure while parked. Restoration preserves the terminal state and byte ordering. Because the
+running. PTY output readiness automatically requests restoration without requiring attachment.
+Bytes remain in the kernel during restoration, so temporary PTY backpressure is possible; consumption
+and mode-dependent input resume only after the complete terminal is valid. Restoration preserves
+terminal state and byte ordering. Parked backing files use authenticated encryption; transient
+plaintext RAM has the same swap and process-dump exposure as the live terminal. Because the
 pinned snapshot format does not encode tracked selection, a Pane with an active selection stays
 resident rather than parking with incomplete presentation state.
 

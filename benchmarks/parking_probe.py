@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from benchmarks.parking_resources import (  # noqa: E402
+    snapshot_backing,
+    snapshot_residency,
+)
 from tests.support.mux_harness import LemmaServer, wait_until  # noqa: E402
 
 
@@ -58,18 +62,6 @@ def median_rss_bytes(process: int) -> int:
         samples.append(daemon_rss_bytes(process))
         time.sleep(0.002)
     return int(statistics.median(samples))
-
-
-def snapshot_mappings(process: int) -> tuple[int, int]:
-    count = 0
-    mapped_bytes = 0
-    for line in Path(f"/proc/{process}/maps").read_text().splitlines():
-        if ".lemma-pane-snapshot-" not in line:
-            continue
-        start_text, end_text = line.split(maxsplit=1)[0].split("-", maxsplit=1)
-        count += 1
-        mapped_bytes += int(end_text, 16) - int(start_text, 16)
-    return count, mapped_bytes
 
 
 def percentile(values: list[int], fraction: float) -> int:
@@ -148,21 +140,20 @@ def main() -> int:
                 diagnostics=server.diagnostics,
             )
         time.sleep(0.1)
-        active_mapping_count, _ = snapshot_mappings(server.process.pid)
-        if active_mapping_count != 0:
+        if snapshot_residency(server)["reserved"] != 0:
             raise RuntimeError("a Pane parked before the active memory sample")
         active_pss = median_pss_bytes(server.process.pid)
-        parked_count, parked_mapped_bytes = wait_until(
+        wait_until(
             "all detached Panes to park",
             lambda: (
-                mapping
-                if (mapping := snapshot_mappings(server.process.pid))[0]
-                == arguments.sessions
+                True
+                if snapshot_residency(server)["parked_panes"] == arguments.sessions
                 else None
             ),
             timeout=(arguments.parking_delay_ms / 1_000) + 10.0,
             diagnostics=server.diagnostics,
         )
+        parked_storage = snapshot_backing(server.process.pid)
         parked_pss = median_pss_bytes(server.process.pid)
 
         capture_count = max(1, arguments.sessions // 2)
@@ -221,9 +212,8 @@ def main() -> int:
             wait_until(
                 "all hydrated Panes to re-park for peak-memory sampling",
                 lambda: (
-                    mapping
-                    if (mapping := snapshot_mappings(server.process.pid))[0]
-                    == arguments.sessions
+                    True
+                    if snapshot_residency(server)["parked_panes"] == arguments.sessions
                     else None
                 ),
                 timeout=(arguments.parking_delay_ms / 1_000) + 10.0,
@@ -270,10 +260,10 @@ def main() -> int:
 
         restored_pss = median_pss_bytes(server.process.pid)
         restored_rss = median_rss_bytes(server.process.pid)
-        final_mapping_count, final_mapped_bytes = snapshot_mappings(server.process.pid)
+        final_storage = snapshot_backing(server.process.pid)
 
     report = {
-        "schema": "lemma.parking-probe/v1",
+        "schema": "lemma.parking-probe/v2",
         "host": os.uname().nodename,
         "cpu_affinity": sorted(os.sched_getaffinity(0)),
         "load_before": load_before,
@@ -293,12 +283,9 @@ def main() -> int:
             "parked_pss_saved_bytes": active_pss - parked_pss,
             "parked_pss_saved_percent": ((active_pss - parked_pss) / active_pss)
             * 100.0,
-            "parked_snapshot_mappings": parked_count,
-            "parked_snapshot_mapped_bytes": parked_mapped_bytes,
-            "parked_snapshot_mapped_bytes_per_pane": parked_mapped_bytes
-            // parked_count,
-            "final_snapshot_mappings": final_mapping_count,
-            "final_snapshot_mapped_bytes": final_mapped_bytes,
+            "parked_storage": parked_storage,
+            "final_storage": final_storage,
+            "kernel_ciphertext_cache_bytes": "unavailable",
             "peak_hydration_daemon_pss_bytes": peak_hydration_pss,
             "peak_hydration_over_restored_pss_bytes": (
                 max(0, peak_hydration_pss - restored_pss)

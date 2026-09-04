@@ -13,10 +13,24 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace lemma::core {
+
+// Deliberately corrupt only the backing object, never the retained key or authoritative terminal.
+struct PaneSnapshotStorageTestAccess final {
+  static auto descriptor(const PaneSnapshot& snapshot) noexcept -> int {
+    return snapshot.descriptor_;
+  }
+  static auto descriptor(const WritablePaneSnapshot& snapshot) noexcept -> int {
+    return snapshot.descriptor_;
+  }
+};
+
 namespace {
 
 class TemporaryDirectory final {
@@ -85,13 +99,17 @@ TEST(PaneSnapshotStorageTest, SealsUnlinkedExactPayloadAndValidatesIdentity) {
   auto snapshot_result = std::move(writable).finish();
   ASSERT_TRUE(snapshot_result.has_value());
   auto snapshot = std::move(*snapshot_result);
+  // finish() consumes the backing ownership and explicitly leaves an empty, queryable writer.
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  EXPECT_TRUE(writable.payload().empty());
+  EXPECT_EQ(writable.payload_bytes(), 0U);
   EXPECT_TRUE(snapshot.valid());
   EXPECT_EQ(snapshot.payload_bytes(), payload_bytes);
   const auto payload = snapshot.payload(test_metadata());
   ASSERT_TRUE(payload.has_value());
-  ASSERT_EQ(payload->size(), payload_bytes);
-  for (std::size_t index = 0; index < payload->size(); ++index) {
-    EXPECT_EQ(payload->subspan(index, 1U).front(), static_cast<std::byte>(index % 251U));
+  ASSERT_EQ(payload->bytes().size(), payload_bytes);
+  for (std::size_t index = 0; index < payload->bytes().size(); ++index) {
+    EXPECT_EQ(payload->bytes().subspan(index, 1U).front(), static_cast<std::byte>(index % 251U));
   }
 
   auto wrong_pin = test_metadata();
@@ -139,7 +157,7 @@ TEST(PaneSnapshotStorageTest, RejectsInvalidBoundsAndIoBeforePublishingStorage) 
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(PaneSnapshotStorageTest, EncodesAndRestoresTerminalDirectlyThroughMappedPayload) {
+TEST(PaneSnapshotStorageTest, EncodesAndRestoresTerminalThroughAuthenticatedPlaintext) {
   vt::TerminalOptions options;
   options.size = {.columns = 24, .rows = 4, .cell_width_px = 8, .cell_height_px = 16};
   options.scrollback_lines_max = 128;
@@ -167,7 +185,7 @@ TEST(PaneSnapshotStorageTest, EncodesAndRestoresTerminalDirectlyThroughMappedPay
 
   const auto encoded = snapshot.payload(metadata);
   ASSERT_TRUE(encoded.has_value());
-  auto restored_result = vt::Terminal::restore_snapshot(options, *encoded);
+  auto restored_result = vt::Terminal::restore_snapshot(options, encoded->bytes());
   ASSERT_TRUE(restored_result.has_value());
   auto restored = std::move(*restored_result);
   std::array<std::byte, 4'096> canonical_text{};
@@ -178,6 +196,108 @@ TEST(PaneSnapshotStorageTest, EncodesAndRestoresTerminalDirectlyThroughMappedPay
   ASSERT_TRUE(restored_size.has_value());
   EXPECT_TRUE(std::ranges::equal(std::span(canonical_text).first(*canonical_size),
                                  std::span(restored_text).first(*restored_size)));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(PaneSnapshotStorageTest, CiphertextIsRandomizedAndContainsNoPlaintext) {
+  TemporaryDirectory directory;
+  constexpr std::string_view secret = "SCROLLBACK-SECRET-0123456789";
+  std::array<std::vector<std::byte>, 2> stored;
+  for (auto& ciphertext : stored) {
+    auto writable = WritablePaneSnapshot::create(test_metadata(), secret.size(), directory.path());
+    ASSERT_TRUE(writable.has_value());
+    std::ranges::copy(std::as_bytes(std::span(secret)), writable->payload().begin());
+    auto snapshot = std::move(*writable).finish();
+    ASSERT_TRUE(snapshot.has_value());
+    const auto descriptor = PaneSnapshotStorageTestAccess::descriptor(*snapshot);
+    struct stat status{};
+    ASSERT_EQ(::fstat(descriptor, &status), 0);
+    EXPECT_EQ(status.st_nlink, 0U);
+    EXPECT_EQ(status.st_mode & 0777, 0600);
+    // POSIX fcntl uses its specified zero-argument form.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    EXPECT_NE(::fcntl(descriptor, F_GETFD) & FD_CLOEXEC, 0);
+    ciphertext.resize(static_cast<std::size_t>(status.st_size));
+    ASSERT_EQ(::pread(descriptor, ciphertext.data(), ciphertext.size(), 0), status.st_size);
+    EXPECT_TRUE(std::ranges::search(ciphertext, std::as_bytes(std::span(secret))).empty());
+    const auto plaintext = snapshot->payload(test_metadata());
+    ASSERT_TRUE(plaintext.has_value());
+    EXPECT_TRUE(std::ranges::equal(plaintext->bytes(), std::as_bytes(std::span(secret))));
+  }
+  EXPECT_NE(stored.front(), stored.back());
+  EXPECT_TRUE(directory.empty());
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(PaneSnapshotStorageTest, RejectsTamperingTruncationReorderingAndTrailingBytes) {
+  TemporaryDirectory directory;
+  constexpr std::size_t chunk = std::size_t{64} * 1'024U;
+  for (const auto mutation : {0, 1, 2, 3, 4, 5}) {
+    SCOPED_TRACE(mutation);
+    auto writable =
+        WritablePaneSnapshot::create(test_metadata(), (chunk * 2U) + 1U, directory.path());
+    ASSERT_TRUE(writable.has_value());
+    std::ranges::fill(writable->payload(), std::byte{0x61});
+    auto snapshot = std::move(*writable).finish();
+    ASSERT_TRUE(snapshot.has_value());
+    const auto descriptor = PaneSnapshotStorageTestAccess::descriptor(*snapshot);
+    struct stat status{};
+    ASSERT_EQ(::fstat(descriptor, &status), 0);
+    std::vector<std::byte> original(static_cast<std::size_t>(status.st_size));
+    ASSERT_EQ(::pread(descriptor, original.data(), original.size(), 0), status.st_size);
+    auto changed = original;
+    switch (mutation) {
+    case 0:
+      changed.front() ^= std::byte{1}; // Authenticated Lemma envelope.
+      break;
+    case 1:
+      changed.at(96) ^= std::byte{1}; // Secretstream nonce header.
+      break;
+    case 2:
+      changed.back() ^= std::byte{1}; // Final authentication tag.
+      break;
+    case 3:
+      changed.pop_back();
+      break;
+    case 4:
+      changed.push_back(std::byte{0});
+      break;
+    case 5:
+      std::swap_ranges(changed.begin() + 120, changed.begin() + 120 + chunk + 17,
+                       changed.begin() + 120 + chunk + 17);
+      break;
+    default:
+      FAIL();
+    }
+    ASSERT_EQ(::ftruncate(descriptor, static_cast<off_t>(changed.size())), 0);
+    ASSERT_EQ(::pwrite(descriptor, changed.data(), changed.size(), 0),
+              static_cast<ssize_t>(changed.size()));
+    const auto invalid = snapshot->payload(test_metadata());
+    ASSERT_FALSE(invalid.has_value());
+    EXPECT_EQ(invalid.error(), PaneSnapshotStorageError::invalid_state);
+    // Failed authentication must not poison a later operation's stream state or expose its prefix.
+    ASSERT_EQ(::ftruncate(descriptor, status.st_size), 0);
+    ASSERT_EQ(::pwrite(descriptor, original.data(), original.size(), 0), status.st_size);
+    EXPECT_TRUE(snapshot->payload(test_metadata()).has_value());
+  }
+}
+
+TEST(PaneSnapshotStorageTest, StorageWriteFailureDoesNotPublishASnapshot) {
+  TemporaryDirectory directory;
+  auto writable = WritablePaneSnapshot::create(test_metadata(), 100, directory.path());
+  ASSERT_TRUE(writable.has_value());
+  // Replacing the test-owned descriptor with a read-only object fails pwrite portably, without
+  // relying on Linux /dev/full or causing a SIGBUS through a writable file mapping.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const auto read_only = ::open("/dev/null", O_RDONLY);
+  ASSERT_GE(read_only, 0);
+  const auto descriptor = PaneSnapshotStorageTestAccess::descriptor(*writable);
+  ASSERT_EQ(::dup2(read_only, descriptor), descriptor);
+  ASSERT_EQ(::close(read_only), 0);
+  const auto snapshot = std::move(*writable).finish();
+  ASSERT_FALSE(snapshot.has_value());
+  EXPECT_EQ(snapshot.error(), PaneSnapshotStorageError::io_error);
+  EXPECT_EQ(writable->payload().size(), 100U);
 }
 
 } // namespace
