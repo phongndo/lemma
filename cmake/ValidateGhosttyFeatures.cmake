@@ -70,6 +70,13 @@ foreach(index RANGE 0 ${feature_last})
     GET "${pin_json}" vt_feature_profiles "${GHOSTTY_FEATURE_PROFILE}" features "${feature}"
   )
   string(FIND "${symbols}" "${symbol}" symbol_offset)
+  if(feature STREQUAL "glyph_protocol" AND symbol_offset EQUAL -1)
+    # ReleaseSafe can inline registerFallible; its glyph payload decoder remains out of line.
+    # Both are feature-owned implementations, absent when glyph support is compiled out.
+    string(FIND "${symbols}" "terminal.apc.glyph.request.Request.Register.decodeGlyfPayload"
+      symbol_offset
+    )
+  endif()
   if(expected AND symbol_offset EQUAL -1)
     message(FATAL_ERROR
       "Ghostty profile '${GHOSTTY_FEATURE_PROFILE}' requires ${feature}, "

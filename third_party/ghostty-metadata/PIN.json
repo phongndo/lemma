@@ -79,7 +79,7 @@
   },
   "optimization_by_cmake_build_type": {
     "Dev": "ReleaseSafe",
-    "Debug": "Debug",
+    "Debug": "ReleaseSafe",
     "Release": "ReleaseFast",
     "RelWithDebInfo": "ReleaseFast",
     "MinSizeRel": "ReleaseFast"
