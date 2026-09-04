@@ -82,13 +82,20 @@ void FrameScheduler::complete() noexcept { clear_pending(); }
 void FrameScheduler::cancel() noexcept { reset(); }
 
 [[nodiscard]] auto FrameScheduler::burst_deadline(const TimePoint now) noexcept -> TimePoint {
-  if (!tracking_burst_ || now - last_burst_request_at_ > burst_continuity_window) {
+  const bool continued = tracking_burst_ && now - last_burst_request_at_ <= burst_continuity_window;
+  if (!continued) {
     burst_started_at_ = now;
     tracking_burst_ = true;
   }
   last_burst_request_at_ = now;
   const bool sustained = now - burst_started_at_ >= sustained_burst_threshold;
-  return now + (sustained ? sustained_burst_delay : burst_delay);
+  auto delay = burst_delay;
+  if (sustained) {
+    delay = sustained_burst_delay;
+  } else if (continued) {
+    delay = continued_burst_delay;
+  }
+  return now + delay;
 }
 
 void FrameScheduler::clear_pending() noexcept {

@@ -38,14 +38,14 @@
         "x86_64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      ghosttyPinMetadata =
+        builtins.fromJSON (builtins.readFile ./third_party/ghostty-metadata/PIN.json);
       ghosttyPin =
-        let
-          pin = builtins.fromJSON (builtins.readFile ./third_party/ghostty-metadata/PIN.json);
-        in
-        if ghosttySource.rev == pin.commit then
-          pin.commit
+        if ghosttySource.rev == ghosttyPinMetadata.commit then
+          ghosttyPinMetadata.commit
         else
-          throw "Ghostty flake input ${ghosttySource.rev} does not match PIN.json ${pin.commit}";
+          throw "Ghostty flake input ${ghosttySource.rev} does not match PIN.json ${ghosttyPinMetadata.commit}";
+      ghosttyFeatureProfile = ghosttyPinMetadata.production_vt_feature_profile;
       mkGhosttyDeps = pkgs: zigPackage:
         pkgs.callPackage "${ghosttySource}/build.zig.zon.nix" {
           zig_0_16 = zigPackage;
@@ -105,6 +105,7 @@
                 "-DLEMMA_GHOSTTY_NIX_SOURCE_REV=${ghosttyPin}"
                 "-DLEMMA_GHOSTTY_ZIG_SYSTEM_DIR=${ghosttyDeps}"
                 "-DLEMMA_GHOSTTY_ZIG_TARGET=${zigTarget}"
+                "-DLEMMA_GHOSTTY_VT_FEATURE_PROFILE=${ghosttyFeatureProfile}"
               ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
                 "-DLEMMA_GHOSTTY_ZIG_LIBC=../.lemma-zig-libc.txt"
               ];
@@ -285,6 +286,8 @@
             benchmarkPkgs.tmux
             benchmarkPkgs.zellij
             herdrSource.packages.${system}.default
+          ] ++ pkgs.lib.optionals (!isDarwin) [
+            pkgs.perf
           ];
           shellEnvironment = {
             CMAKE_GENERATOR = "Ninja";

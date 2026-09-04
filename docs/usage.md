@@ -93,8 +93,15 @@ lemma rename OLD NEW
 lemma kill NAME
 ```
 
-An omitted `attach` target selects the most recently active detached Session. Creation accepts an
-initial directory, an exit policy, and an exact command:
+An omitted `attach` target selects the most recently active detached Session. After five quiet
+minutes, an unobserved detached Pane may be stored as a bounded terminal snapshot. Its process keeps
+running, but Lemma leaves later PTY bytes in the kernel until attach or another terminal-dependent
+request restores the Pane; a sufficiently output-heavy process can therefore experience normal PTY
+backpressure while parked. Restoration preserves the terminal state and byte ordering. Because the
+pinned snapshot format does not encode tracked selection, a Pane with an active selection stays
+resident rather than parking with incomplete presentation state.
+
+Creation accepts an initial directory, an exit policy, and an exact command:
 
 ```sh
 lemma new work --cwd "$PWD"

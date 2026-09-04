@@ -92,6 +92,84 @@ namespace lemma::vt {
 
 namespace {
 
+[[nodiscard]] auto packed_cell_layout_matches_contract() noexcept -> bool {
+  const auto* const encoded_manifest = ghostty_type_json();
+  if (encoded_manifest == nullptr) {
+    return false;
+  }
+  const std::string_view manifest(encoded_manifest);
+  const auto cell_offset =
+      manifest.find("\"GhosttyCell\":{\"kind\":\"packed\",\"size\":8,\"align\":8,"
+                    "\"underlying\":\"u64\",\"bits\":{");
+  if (cell_offset == std::string_view::npos) {
+    return false;
+  }
+  constexpr std::size_t cell_descriptor_bytes_max = 1'200;
+  const auto descriptor = manifest.substr(
+      cell_offset, std::min(cell_descriptor_bytes_max, manifest.size() - cell_offset));
+  const std::array required_fields{
+      std::string_view{"\"content_tag\":{\"lsb\":0,\"width\":2,"
+                       "\"type\":\"GhosttyCellContentTag\"}"},
+      std::string_view{R"("content":{"lsb":2,"width":24,"kind":"union")"},
+      std::string_view{R"("codepoint":{"lsb":0,"width":21,"type":"u21"})"},
+      std::string_view{"\"style_id\":{\"lsb\":26,\"width\":16,"
+                       "\"type\":\"GhosttyStyleId\"}"},
+      std::string_view{"\"wide\":{\"lsb\":42,\"width\":2,"
+                       "\"type\":\"GhosttyCellWide\"}"},
+      std::string_view{R"("r":{"lsb":0,"width":8,"type":"u8"})"},
+      std::string_view{R"("g":{"lsb":8,"width":8,"type":"u8"})"},
+      std::string_view{R"("b":{"lsb":16,"width":8,"type":"u8"})"},
+  };
+  if (!std::ranges::all_of(required_fields, [&descriptor](const auto field) noexcept {
+        return descriptor.find(field) != std::string_view::npos;
+      })) {
+    return false;
+  }
+
+  constexpr GhosttyStyleId expected_style = 0xA55AU;
+  constexpr GhosttyCellWide expected_wide = GHOSTTY_CELL_WIDE_SPACER_TAIL;
+  constexpr GhosttyColorRgb expected_rgb{.r = 0x12U, .g = 0x34U, .b = 0x56U};
+  constexpr auto rgb_content = static_cast<GhosttyCell>(expected_rgb.r) |
+                               (static_cast<GhosttyCell>(expected_rgb.g) << 8U) |
+                               (static_cast<GhosttyCell>(expected_rgb.b) << 16U);
+  constexpr GhosttyCell sample =
+      static_cast<GhosttyCell>(GHOSTTY_CELL_CONTENT_BG_COLOR_RGB) |
+      (rgb_content << detail::PackedCellDecoder::content_bits_shift) |
+      (static_cast<GhosttyCell>(expected_style) << detail::PackedCellDecoder::style_shift) |
+      (static_cast<GhosttyCell>(expected_wide) << detail::PackedCellDecoder::wide_shift);
+  constexpr std::uint32_t expected_codepoint = 0x1F642U;
+  constexpr GhosttyCell codepoint_sample = static_cast<GhosttyCell>(expected_codepoint)
+                                           << detail::PackedCellDecoder::content_bits_shift;
+  constexpr GhosttyColorPaletteIndex expected_palette = 0xABU;
+  constexpr GhosttyCell palette_sample =
+      static_cast<GhosttyCell>(GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE) |
+      (static_cast<GhosttyCell>(expected_palette) << detail::PackedCellDecoder::content_bits_shift);
+  GhosttyCellContentTag content_tag = GHOSTTY_CELL_CONTENT_CODEPOINT;
+  GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+  GhosttyStyleId style_id = 0;
+  GhosttyColorRgb rgb{};
+  std::uint32_t codepoint = 0;
+  GhosttyColorPaletteIndex palette = 0;
+  return ghostty_cell_get(sample, GHOSTTY_CELL_DATA_CONTENT_TAG, &content_tag) == GHOSTTY_SUCCESS &&
+         ghostty_cell_get(sample, GHOSTTY_CELL_DATA_WIDE, &wide) == GHOSTTY_SUCCESS &&
+         ghostty_cell_get(sample, GHOSTTY_CELL_DATA_STYLE_ID, &style_id) == GHOSTTY_SUCCESS &&
+         ghostty_cell_get(sample, GHOSTTY_CELL_DATA_COLOR_RGB, &rgb) == GHOSTTY_SUCCESS &&
+         ghostty_cell_get(codepoint_sample, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint) ==
+             GHOSTTY_SUCCESS &&
+         ghostty_cell_get(palette_sample, GHOSTTY_CELL_DATA_COLOR_PALETTE, &palette) ==
+             GHOSTTY_SUCCESS &&
+         content_tag == detail::PackedCellDecoder::content_tag(sample) &&
+         wide == detail::PackedCellDecoder::wide(sample) &&
+         style_id == detail::PackedCellDecoder::style_id(sample) &&
+         detail::PackedCellDecoder::has_styling(sample) &&
+         !detail::PackedCellDecoder::has_styling(codepoint_sample) &&
+         codepoint == detail::PackedCellDecoder::codepoint(codepoint_sample) &&
+         palette == detail::PackedCellDecoder::background_palette(palette_sample) &&
+         rgb.r == detail::PackedCellDecoder::background_rgb(sample).r &&
+         rgb.g == detail::PackedCellDecoder::background_rgb(sample).g &&
+         rgb.b == detail::PackedCellDecoder::background_rgb(sample).b;
+}
+
 [[nodiscard]] auto ghostty_build_matches_contract() noexcept -> bool {
   const auto info = library_build_info();
   if (!info.has_value()) {
@@ -104,7 +182,8 @@ namespace {
   return version_matches && info->simd == (LEMMA_GHOSTTY_EXPECT_SIMD != 0) &&
          info->kitty_graphics == (LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS != 0) &&
          info->tmux_control_mode == (LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE != 0) &&
-         info->optimization == static_cast<BuildOptimization>(LEMMA_GHOSTTY_EXPECT_OPTIMIZE);
+         info->optimization == static_cast<BuildOptimization>(LEMMA_GHOSTTY_EXPECT_OPTIMIZE) &&
+         packed_cell_layout_matches_contract();
 }
 
 [[nodiscard]] auto valid_size(const TerminalSize& size) noexcept -> bool {
@@ -118,11 +197,8 @@ namespace {
   return size.cell_width_px <= width_max && size.cell_height_px <= height_max;
 }
 
-[[nodiscard]] constexpr auto physical_cell_capacity(const std::size_t current,
-                                                    const std::size_t required) noexcept
-    -> std::size_t {
-  constexpr auto maximum =
-      static_cast<std::size_t>(limits::terminal_columns_hard_max) * limits::terminal_rows_hard_max;
+[[nodiscard]] constexpr auto hash_capacity(const std::size_t current, const std::size_t required,
+                                           const std::size_t maximum) noexcept -> std::size_t {
   LEMMA_ASSERT(required > current && required <= maximum);
   const auto geometric = current + std::max(current / 2U, std::size_t{1});
   return std::min(maximum, std::max(required, geometric));
@@ -138,7 +214,8 @@ namespace {
     return false;
   }
   return options.allocation_bytes_max > 0 &&
-         options.allocation_bytes_max <= limits::terminal_allocation_bytes_hard_max;
+         options.allocation_bytes_max <= limits::terminal_allocation_bytes_hard_max &&
+         options.snapshot_continuation_bytes_max <= limits::snapshot_continuation_bytes_max;
 }
 
 struct ResizeViewportState final {
@@ -265,7 +342,9 @@ template <typename Function>
 [[nodiscard]] auto configure_terminal(const GhosttyTerminal terminal,
                                       const std::size_t scrollback_bytes_max,
                                       const std::optional<std::size_t> scrollback_lines_max,
-                                      const TerminalTheme& theme) noexcept -> GhosttyResult {
+                                      const TerminalTheme& theme,
+                                      const std::size_t snapshot_continuation_bytes_max) noexcept
+    -> GhosttyResult {
   auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
                                      &scrollback_bytes_max);
   if (result == GHOSTTY_SUCCESS) {
@@ -275,6 +354,10 @@ template <typename Function>
   }
   if (result == GHOSTTY_SUCCESS) {
     result = apply_theme(terminal, theme);
+  }
+  if (result == GHOSTTY_SUCCESS && snapshot_continuation_bytes_max != 0) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES,
+                                  &snapshot_continuation_bytes_max);
   }
   if (result == GHOSTTY_SUCCESS) {
     result = disable_unsupported_graphics(terminal);
@@ -508,6 +591,114 @@ auto Terminal::operator=(Terminal&& other) noexcept -> Terminal& = default;
 
 Terminal::~Terminal() = default;
 
+// Logical constness cannot apply: callers mutate the owned projection through this view.
+// NOLINTNEXTLINE(readability-make-member-function-const)
+auto Terminal::Impl::physical_cells() noexcept -> std::span<std::uint64_t> {
+  LEMMA_ASSERT(physical_hashes != nullptr);
+  return std::span(physical_hashes.get(), physical_cell_capacity + row_hash_capacity)
+      .first(physical_cell_count);
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+auto Terminal::Impl::row_hashes() noexcept -> std::span<std::uint64_t> {
+  LEMMA_ASSERT(physical_hashes != nullptr);
+  return std::span(physical_hashes.get(), physical_cell_capacity + row_hash_capacity)
+      .subspan(physical_cell_capacity, row_hash_count);
+}
+
+auto Terminal::Impl::row_hashes() const noexcept -> std::span<const std::uint64_t> {
+  LEMMA_ASSERT(physical_hashes != nullptr);
+  return std::span(physical_hashes.get(), physical_cell_capacity + row_hash_capacity)
+      .subspan(physical_cell_capacity, row_hash_count);
+}
+
+void Terminal::Impl::begin_pty_response_write(const PtyResponseSink responses) noexcept {
+  LEMMA_ASSERT(!pty_response_write_active);
+  active_pty_responses = responses;
+  pty_response_bytes_current_write = 0;
+  pty_response_write_active = true;
+}
+
+void Terminal::Impl::end_pty_response_write() noexcept {
+  LEMMA_ASSERT(pty_response_write_active);
+  active_pty_responses = {};
+  pty_response_bytes_current_write = 0;
+  pty_response_write_active = false;
+}
+
+// Callback installation is shared by fresh and snapshot-restored terminal handles.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Terminal::Impl::install_callbacks() noexcept -> GhosttyResult {
+  auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, this);
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+        callback_pointer(static_cast<GhosttyTerminalWritePtyFn>(&Impl::write_pty)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_BELL,
+                             callback_pointer(static_cast<GhosttyTerminalBellFn>(&Impl::bell)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
+        callback_pointer(static_cast<GhosttyTerminalTitleChangedFn>(&Impl::title_changed)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_PWD_CHANGED,
+        callback_pointer(static_cast<GhosttyTerminalPwdChangedFn>(&Impl::pwd_changed)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result =
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
+                             callback_pointer(static_cast<GhosttyTerminalDesktopNotificationFn>(
+                                 &Impl::desktop_notification)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT,
+        callback_pointer(static_cast<GhosttyTerminalProgressReportFn>(&Impl::progress_report)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE,
+        callback_pointer(static_cast<GhosttyTerminalUnknownSequenceFn>(&Impl::unknown_sequence)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_ENQUIRY,
+        callback_pointer(static_cast<GhosttyTerminalEnquiryFn>(&Impl::enquiry)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+        callback_pointer(static_cast<GhosttyTerminalClipboardWriteFn>(&Impl::clipboard_write)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
+        callback_pointer(static_cast<GhosttyTerminalColorSchemeFn>(&Impl::color_scheme)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
+        callback_pointer(static_cast<GhosttyTerminalDeviceAttributesFn>(&Impl::device_attributes)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_SIZE,
+        callback_pointer(static_cast<GhosttyTerminalSizeFn>(&Impl::size_report)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        terminal, GHOSTTY_TERMINAL_OPT_XTVERSION,
+        callback_pointer(static_cast<GhosttyTerminalXtversionFn>(&Impl::xtversion)));
+  }
+  return result;
+}
+
 // Construction validates and installs each independent Ghostty option before ownership escapes.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<Terminal, Error> {
@@ -530,8 +721,9 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
-  result = configure_terminal(impl->terminal, options.scrollback_bytes_max,
-                              options.scrollback_lines_max, impl->session_theme);
+  result =
+      configure_terminal(impl->terminal, options.scrollback_bytes_max, options.scrollback_lines_max,
+                         impl->session_theme, options.snapshot_continuation_bytes_max);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -568,91 +760,22 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   }
 
   impl->row_hash_count = options.size.rows;
+  impl->row_hash_capacity = impl->row_hash_count;
   impl->physical_cell_count = static_cast<std::size_t>(options.size.columns) * options.size.rows;
   impl->physical_cell_capacity = impl->physical_cell_count;
   try {
-    // Runtime-sized cell storage cannot use std::array.
+    // Runtime-sized hash storage cannot use std::array.
     // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-    impl->physical_cell_hashes =
-        std::make_unique_for_overwrite<std::uint64_t[]>(impl->physical_cell_capacity);
+    impl->physical_hashes = std::make_unique_for_overwrite<std::uint64_t[]>(
+        impl->physical_cell_capacity + impl->row_hash_capacity);
     // NOLINTEND(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     LEMMA_ASSERT(impl->physical_cell_capacity >= impl->physical_cell_count);
+    LEMMA_ASSERT(impl->row_hash_capacity >= impl->row_hash_count);
   } catch (const std::bad_alloc&) {
     return std::unexpected(Error::out_of_memory);
   }
 
-  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, impl.get());
-  if (result != GHOSTTY_SUCCESS) {
-    return std::unexpected(detail::map_error(result));
-  }
-
-  result = ghostty_terminal_set(
-      impl->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
-      callback_pointer(static_cast<GhosttyTerminalWritePtyFn>(&Impl::write_pty)));
-  if (result != GHOSTTY_SUCCESS) {
-    return std::unexpected(detail::map_error(result));
-  }
-
-  result = ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_BELL,
-                                callback_pointer(static_cast<GhosttyTerminalBellFn>(&Impl::bell)));
-  if (result != GHOSTTY_SUCCESS) {
-    return std::unexpected(detail::map_error(result));
-  }
-
-  result = ghostty_terminal_set(
-      impl->terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
-      callback_pointer(static_cast<GhosttyTerminalTitleChangedFn>(&Impl::title_changed)));
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_PWD_CHANGED,
-        callback_pointer(static_cast<GhosttyTerminalPwdChangedFn>(&Impl::pwd_changed)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result =
-        ghostty_terminal_set(impl->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
-                             callback_pointer(static_cast<GhosttyTerminalDesktopNotificationFn>(
-                                 &Impl::desktop_notification)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT,
-        callback_pointer(static_cast<GhosttyTerminalProgressReportFn>(&Impl::progress_report)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE,
-        callback_pointer(static_cast<GhosttyTerminalUnknownSequenceFn>(&Impl::unknown_sequence)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_ENQUIRY,
-        callback_pointer(static_cast<GhosttyTerminalEnquiryFn>(&Impl::enquiry)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
-        callback_pointer(static_cast<GhosttyTerminalClipboardWriteFn>(&Impl::clipboard_write)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
-        callback_pointer(static_cast<GhosttyTerminalColorSchemeFn>(&Impl::color_scheme)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
-        callback_pointer(static_cast<GhosttyTerminalDeviceAttributesFn>(&Impl::device_attributes)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_SIZE,
-        callback_pointer(static_cast<GhosttyTerminalSizeFn>(&Impl::size_report)));
-  }
-  if (result == GHOSTTY_SUCCESS) {
-    result = ghostty_terminal_set(
-        impl->terminal, GHOSTTY_TERMINAL_OPT_XTVERSION,
-        callback_pointer(static_cast<GhosttyTerminalXtversionFn>(&Impl::xtversion)));
-  }
+  result = impl->install_callbacks();
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -660,19 +783,335 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
   return Terminal(std::move(impl));
 }
 
-void Terminal::write(const std::span<const std::byte> bytes) noexcept {
+struct TerminalSnapshotRestore::Impl final {
+  enum class State : std::uint8_t {
+    restoring,
+    complete,
+    failed,
+  };
+
+  Impl(const GhosttySnapshotDecoder decoder_handle, const std::size_t bytes) noexcept
+      : decoder(decoder_handle), source_bytes(bytes) {}
+
+  Impl(const Impl&) = delete;
+  auto operator=(const Impl&) -> Impl& = delete;
+  Impl(Impl&&) = delete;
+  auto operator=(Impl&&) -> Impl& = delete;
+
+  ~Impl() { ghostty_snapshot_decoder_free(decoder); }
+
+  GhosttySnapshotDecoder decoder{nullptr};
+  std::size_t source_bytes{0};
+  State state{State::restoring};
+};
+
+TerminalSnapshotRestore::TerminalSnapshotRestore(Terminal terminal, std::unique_ptr<Impl> impl,
+                                                 const SnapshotReadyInfo ready_info) noexcept
+    : terminal_(std::move(terminal)), impl_(std::move(impl)), ready_info_(ready_info) {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->decoder != nullptr);
+}
+
+TerminalSnapshotRestore::TerminalSnapshotRestore(TerminalSnapshotRestore&& other) noexcept =
+    default;
+
+TerminalSnapshotRestore::~TerminalSnapshotRestore() = default;
+
+auto TerminalSnapshotRestore::terminal() noexcept -> Terminal& { return terminal_; }
+
+auto TerminalSnapshotRestore::terminal() const noexcept -> const Terminal& { return terminal_; }
+
+auto TerminalSnapshotRestore::ready_info() const noexcept -> SnapshotReadyInfo {
+  return ready_info_;
+}
+
+auto TerminalSnapshotRestore::complete() const noexcept -> bool {
+  return impl_ != nullptr && impl_->state == Impl::State::complete;
+}
+
+// READY restoration intentionally reuses ordinary adapter construction, then replaces only its
+// fresh Ghostty terminal handle. This keeps helper ownership and teardown identical.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto TerminalSnapshotRestore::begin(const TerminalOptions& options,
+                                    const std::span<const std::byte> snapshot) noexcept
+    -> std::expected<TerminalSnapshotRestore, Error> {
+  if (snapshot.empty()) {
+    return std::unexpected(Error::invalid_state);
+  }
+  if (snapshot.size() > limits::snapshot_bytes_max) {
+    return std::unexpected(Error::limit_exceeded);
+  }
+
+  auto created = Terminal::create(options);
+  if (!created.has_value()) {
+    return std::unexpected(created.error());
+  }
+  auto restored = std::move(*created);
+  auto& terminal_impl = *restored.impl_;
+  ghostty_terminal_free(terminal_impl.terminal);
+  terminal_impl.terminal = nullptr;
+
+  GhosttySnapshotDecoder decoder = nullptr;
+  // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* const bytes = reinterpret_cast<const std::uint8_t*>(snapshot.data());
+  auto result = ghostty_snapshot_decoder_new_buf(terminal_impl.allocator.native(), &decoder, bytes,
+                                                 snapshot.size());
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+
+  const auto continuation_max = options.snapshot_continuation_bytes_max;
+  const bool retain_continuation = continuation_max != 0;
+  result = ghostty_snapshot_decoder_set(
+      decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES, &continuation_max);
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION,
+                                          &retain_continuation);
+  }
+
+  GhosttyTerminal decoded = nullptr;
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_snapshot_decoder_ready(decoder, &decoded);
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_snapshot_decoder_free(decoder);
+    ghostty_terminal_free(decoded);
+    return std::unexpected(detail::map_error(result));
+  }
+
+  std::uint16_t columns = 0;
+  std::uint16_t rows = 0;
+  const std::array geometry_keys{
+      GHOSTTY_TERMINAL_DATA_COLS,
+      GHOSTTY_TERMINAL_DATA_ROWS,
+  };
+  std::array<void*, geometry_keys.size()> geometry_values{
+      &columns,
+      &rows,
+  };
+  std::size_t geometry_written = 0;
+  result = ghostty_terminal_get_multi(decoded, geometry_keys.size(), geometry_keys.data(),
+                                      geometry_values.data(), &geometry_written);
+  if (result != GHOSTTY_SUCCESS || geometry_written != geometry_keys.size() ||
+      columns != options.size.columns || rows != options.size.rows) {
+    ghostty_snapshot_decoder_free(decoder);
+    ghostty_terminal_free(decoded);
+    return std::unexpected(result == GHOSTTY_SUCCESS ? Error::invalid_options
+                                                     : detail::map_error(result));
+  }
+
+  SnapshotReadyInfo ready_info;
+  result = ghostty_snapshot_decoder_get(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_PRIMARY,
+                                        &ready_info.primary_history_rows);
+  if (result == GHOSTTY_SUCCESS) {
+    std::uint64_t alternate_rows = 0;
+    result = ghostty_snapshot_decoder_get(
+        decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_HISTORY_ROWS_ALTERNATE, &alternate_rows);
+    if (result == GHOSTTY_SUCCESS) {
+      ready_info.alternate_history_rows = alternate_rows;
+    } else if (result == GHOSTTY_NO_VALUE) {
+      result = GHOSTTY_SUCCESS;
+    }
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_snapshot_decoder_get(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET,
+                                          &ready_info.source_bytes_consumed);
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_snapshot_decoder_free(decoder);
+    ghostty_terminal_free(decoded);
+    return std::unexpected(detail::map_error(result));
+  }
+
+  terminal_impl.terminal = decoded;
+  result = configure_terminal(terminal_impl.terminal, options.scrollback_bytes_max,
+                              options.scrollback_lines_max, terminal_impl.session_theme,
+                              options.snapshot_continuation_bytes_max);
+  if (result == GHOSTTY_SUCCESS) {
+    result = terminal_impl.install_callbacks();
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_snapshot_decoder_free(decoder);
+    return std::unexpected(detail::map_error(result));
+  }
+
+  std::unique_ptr<Impl> restore_impl;
+  try {
+    restore_impl = std::make_unique<Impl>(decoder, snapshot.size());
+  } catch (const std::bad_alloc&) {
+    ghostty_snapshot_decoder_free(decoder);
+    return std::unexpected(Error::out_of_memory);
+  }
+  return TerminalSnapshotRestore(std::move(restored), std::move(restore_impl), ready_info);
+}
+
+// Each call consumes exactly one bounded Ghostty history page or validates FINISH.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto TerminalSnapshotRestore::next_history() noexcept
+    -> std::expected<std::optional<SnapshotHistoryProgress>, Error> {
+  if (impl_ == nullptr || impl_->state == Impl::State::failed) {
+    return std::unexpected(Error::invalid_state);
+  }
+  if (impl_->state == Impl::State::complete) {
+    return std::optional<SnapshotHistoryProgress>{};
+  }
+
+  const auto result = ghostty_snapshot_decoder_next(impl_->decoder);
+  if (result == GHOSTTY_NO_VALUE) {
+    std::size_t source_offset = 0;
+    const auto offset_result = ghostty_snapshot_decoder_get(
+        impl_->decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET, &source_offset);
+    ghostty_snapshot_decoder_free(impl_->decoder);
+    impl_->decoder = nullptr;
+    if (offset_result != GHOSTTY_SUCCESS || source_offset != impl_->source_bytes) {
+      impl_->state = Impl::State::failed;
+      return std::unexpected(offset_result == GHOSTTY_SUCCESS ? Error::invalid_state
+                                                              : detail::map_error(offset_result));
+    }
+    impl_->state = Impl::State::complete;
+    return std::optional<SnapshotHistoryProgress>{};
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_snapshot_decoder_free(impl_->decoder);
+    impl_->decoder = nullptr;
+    impl_->state = Impl::State::failed;
+    return std::unexpected(detail::map_error(result));
+  }
+
+  GhosttyTerminalScreen screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+  SnapshotHistoryProgress progress;
+  const std::array keys{
+      GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN,
+      GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS,
+      GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING,
+      GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET,
+  };
+  std::array<void*, keys.size()> values{
+      &screen,
+      &progress.rows_restored,
+      &progress.pages_remaining_on_screen,
+      &progress.source_bytes_consumed,
+  };
+  std::size_t written = 0;
+  const auto progress_result = ghostty_snapshot_decoder_get_multi(
+      impl_->decoder, keys.size(), keys.data(), values.data(), &written);
+  if (progress_result != GHOSTTY_SUCCESS || written != keys.size()) {
+    ghostty_snapshot_decoder_free(impl_->decoder);
+    impl_->decoder = nullptr;
+    impl_->state = Impl::State::failed;
+    return std::unexpected(detail::map_error(progress_result));
+  }
+  switch (screen) {
+  case GHOSTTY_TERMINAL_SCREEN_PRIMARY:
+    progress.screen = ActiveScreen::primary;
+    break;
+  case GHOSTTY_TERMINAL_SCREEN_ALTERNATE:
+    progress.screen = ActiveScreen::alternate;
+    break;
+  case GHOSTTY_TERMINAL_SCREEN_MAX_VALUE:
+    ghostty_snapshot_decoder_free(impl_->decoder);
+    impl_->decoder = nullptr;
+    impl_->state = Impl::State::failed;
+    return std::unexpected(Error::invalid_state);
+  }
+  return std::optional<SnapshotHistoryProgress>{progress};
+}
+
+auto TerminalSnapshotRestore::take_terminal() && noexcept -> std::expected<Terminal, Error> {
+  if (!complete()) {
+    return std::unexpected(Error::invalid_state);
+  }
+  return std::move(terminal_);
+}
+
+auto Terminal::restore_snapshot(const TerminalOptions& options,
+                                const std::span<const std::byte> snapshot) noexcept
+    -> std::expected<Terminal, Error> {
+  auto restore = TerminalSnapshotRestore::begin(options, snapshot);
+  if (!restore.has_value()) {
+    return std::unexpected(restore.error());
+  }
+  while (true) {
+    const auto progress = restore->next_history();
+    if (!progress.has_value()) {
+      return std::unexpected(progress.error());
+    }
+    if (!progress->has_value()) {
+      break;
+    }
+  }
+  return std::move(*restore).take_terminal();
+}
+
+auto Terminal::snapshot_size() noexcept -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  const auto selected = selection_active();
+  if (!selected.has_value()) {
+    return std::unexpected(selected.error());
+  }
+  if (*selected) {
+    // This Ghostty snapshot version omits its tracked selection. Rejecting the snapshot keeps
+    // selection/style projection authoritative instead of silently publishing incomplete state.
+    return std::unexpected(Error::invalid_state);
+  }
+  std::size_t required = 0;
+  const auto result = ghostty_snapshot_encode_buf(impl_->terminal, nullptr, 0, &required);
+  if (required > limits::snapshot_bytes_max) {
+    return std::unexpected(Error::limit_exceeded);
+  }
+  if (result == GHOSTTY_OUT_OF_SPACE || result == GHOSTTY_SUCCESS) {
+    return required;
+  }
+  return std::unexpected(detail::map_error(result));
+}
+
+auto Terminal::encode_snapshot(const std::span<std::byte> output) noexcept
+    -> std::expected<std::size_t, Error> {
+  LEMMA_ASSERT(impl_ != nullptr);
+  LEMMA_ASSERT(impl_->terminal != nullptr);
+
+  const auto selected = selection_active();
+  if (!selected.has_value()) {
+    return std::unexpected(selected.error());
+  }
+  if (*selected) {
+    return std::unexpected(Error::invalid_state);
+  }
+  const auto capacity = std::min(output.size(), limits::snapshot_bytes_max);
+  // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* const bytes = capacity == 0 ? nullptr : reinterpret_cast<std::uint8_t*>(output.data());
+  std::size_t written = 0;
+  const auto result = ghostty_snapshot_encode_buf(impl_->terminal, bytes, capacity, &written);
+  if (written > limits::snapshot_bytes_max) {
+    return std::unexpected(Error::limit_exceeded);
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return written;
+}
+
+void Terminal::write(const std::span<const std::byte> bytes,
+                     const PtyResponseSink responses) noexcept {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
 
   if (!bytes.empty()) {
+    impl_->begin_pty_response_write(responses);
     // std::byte and uint8_t are both byte views; Ghostty's C ABI uses the latter.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
     ghostty_terminal_vt_write(impl_->terminal, data, bytes.size());
+    impl_->end_pty_response_write();
   }
 }
 
-auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes) noexcept
+auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes,
+                                       const PtyResponseSink responses) noexcept
     -> std::expected<DirtyState, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
@@ -680,21 +1119,21 @@ auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes) n
 
   auto result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
   if (result != GHOSTTY_SUCCESS) {
-    write(bytes);
+    write(bytes, responses);
     return std::unexpected(detail::map_error(result));
   }
   const auto prior_damage = impl_->dirty_state();
   if (!prior_damage.has_value()) {
-    write(bytes);
+    write(bytes, responses);
     return std::unexpected(prior_damage.error());
   }
   const auto cleared = impl_->set_dirty_state(DirtyState::clean);
   if (!cleared.has_value()) {
-    write(bytes);
+    write(bytes, responses);
     return std::unexpected(cleared.error());
   }
 
-  write(bytes);
+  write(bytes, responses);
   result = ghostty_render_state_update(impl_->render_state, impl_->terminal);
   if (result != GHOSTTY_SUCCESS) {
     const auto restored = impl_->set_dirty_state(*prior_damage);
@@ -719,7 +1158,8 @@ auto Terminal::write_and_report_damage(const std::span<const std::byte> bytes) n
   return *acquired_damage;
 }
 
-auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, Error> {
+auto Terminal::resize(const TerminalSize& size, const PtyResponseSink responses) noexcept
+    -> std::expected<void, Error> {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
 
@@ -728,16 +1168,26 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   }
 
   const auto physical_cell_count = static_cast<std::size_t>(size.columns) * size.rows;
-  auto target_capacity = impl_->physical_cell_capacity;
-  detail::CellHashStorage physical_cell_hashes;
-  if (physical_cell_count > target_capacity) {
-    target_capacity = target_capacity == 0
-                          ? physical_cell_count
-                          : physical_cell_capacity(target_capacity, physical_cell_count);
+  auto target_cell_capacity = impl_->physical_cell_capacity;
+  auto target_row_capacity = impl_->row_hash_capacity;
+  if (physical_cell_count > target_cell_capacity) {
+    constexpr auto cell_capacity_max = static_cast<std::size_t>(limits::terminal_columns_hard_max) *
+                                       limits::terminal_rows_hard_max;
+    target_cell_capacity =
+        hash_capacity(target_cell_capacity, physical_cell_count, cell_capacity_max);
+  }
+  if (size.rows > target_row_capacity) {
+    target_row_capacity =
+        hash_capacity(target_row_capacity, size.rows, limits::terminal_rows_hard_max);
+  }
+  detail::CellHashStorage physical_hashes;
+  if (target_cell_capacity != impl_->physical_cell_capacity ||
+      target_row_capacity != impl_->row_hash_capacity) {
     try {
-      // Runtime-sized cell storage cannot use std::array.
+      // Runtime-sized hash storage cannot use std::array.
       // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-      physical_cell_hashes = std::make_unique_for_overwrite<std::uint64_t[]>(target_capacity);
+      physical_hashes = std::make_unique_for_overwrite<std::uint64_t[]>(target_cell_capacity +
+                                                                        target_row_capacity);
     } catch (const std::bad_alloc&) {
       return std::unexpected(Error::out_of_memory);
     }
@@ -750,21 +1200,25 @@ auto Terminal::resize(const TerminalSize& size) noexcept -> std::expected<void, 
   if (!viewports.has_value()) {
     return std::unexpected(viewports.error());
   }
+  impl_->begin_pty_response_write(responses);
   const auto result = ghostty_terminal_resize(impl_->terminal, size.columns, size.rows,
                                               size.cell_width_px, size.cell_height_px);
+  impl_->end_pty_response_write();
   restore_resize_viewports(*this, *viewports);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
 
-  if (physical_cell_hashes != nullptr) {
-    impl_->physical_cell_hashes = std::move(physical_cell_hashes);
-    impl_->physical_cell_capacity = target_capacity;
+  if (physical_hashes != nullptr) {
+    impl_->physical_hashes = std::move(physical_hashes);
+    impl_->physical_cell_capacity = target_cell_capacity;
+    impl_->row_hash_capacity = target_row_capacity;
   }
   impl_->physical_cell_count = physical_cell_count;
-  LEMMA_ASSERT(impl_->physical_cell_capacity >= impl_->physical_cell_count);
-  impl_->row_hashes.fill(0);
   impl_->row_hash_count = size.rows;
+  LEMMA_ASSERT(impl_->physical_cell_capacity >= impl_->physical_cell_count);
+  LEMMA_ASSERT(impl_->row_hash_capacity >= impl_->row_hash_count);
+  std::ranges::fill(impl_->row_hashes(), 0);
   impl_->mirrored_modes_valid = false;
   impl_->mirrored_mouse_modes_valid = false;
   impl_->ansi_physical_valid = false;

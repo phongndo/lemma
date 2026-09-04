@@ -26,6 +26,7 @@ from check_regression import (
 )
 from compare_regression import add_comparison, profile_values, require_manifest_identity
 from compare_regression import policy as paired_policy
+from ghostty_feature_matrix import FEATURE_NAMES, load_pin
 from latency_trace import input_paths
 from mux_benchmark import (
     ALT_SCREEN,
@@ -44,8 +45,13 @@ from mux_benchmark import (
     interaction_visible_token,
     lifecycle_sentinel_arguments,
     linux_host_metadata,
+    mixed_active_indices,
     open_descriptor_snapshot,
+    parse_linux_io,
+    parse_linux_proc_stat,
     parse_linux_schedstat,
+    parse_linux_schedstat_fields,
+    parse_linux_status,
     percentile,
     tui_redraw,
     wait_for_profile_shell,
@@ -53,14 +59,119 @@ from mux_benchmark import (
 from mux_benchmark import (
     summary as latency_summary,
 )
+from perf_stat import parse_perf_stat
 from terminal_lab import validate_samples
+
+
+class GhosttyFeatureMatrixTest(unittest.TestCase):
+    def test_pin_defines_complete_reproducible_profiles(self) -> None:
+        pin_path = Path("third_party/ghostty-metadata/PIN.json")
+        if "vt_feature_profiles" not in json.loads(
+            pin_path.read_text(encoding="utf-8")
+        ):
+            self.skipTest("capture checkout predates Ghostty feature profiles")
+        pin = load_pin(pin_path)
+
+        self.assertEqual(pin["production_vt_feature_profile"], "full")
+        self.assertEqual(
+            list(pin["vt_feature_profiles"]),
+            ["full", "trimmed", "minimal", "minimal-snapshot"],
+        )
+        self.assertTrue(all(pin["vt_feature_profiles"]["full"]["features"].values()))
+        self.assertEqual(
+            set(pin["vt_feature_profiles"]["minimal"]["features"]),
+            set(FEATURE_NAMES),
+        )
+        self.assertTrue(pin["vt_feature_profiles"]["minimal"]["features"]["snapshot"])
+        self.assertEqual(
+            pin["vt_feature_profiles"]["minimal"]["zig_value"],
+            pin["vt_feature_profiles"]["minimal-snapshot"]["zig_value"],
+        )
 
 
 class LinuxResourceTest(unittest.TestCase):
     def test_schedstat_uses_nanosecond_cpu_runtime(self) -> None:
         self.assertEqual(parse_linux_schedstat("123456789 42 7\n"), 123456789)
+        self.assertEqual(
+            parse_linux_schedstat_fields("123456789 42 7\n"),
+            (123456789, 42, 7),
+        )
         with self.assertRaisesRegex(ValueError, "schedstat"):
             parse_linux_schedstat("123 invalid 7\n")
+
+    def test_status_requires_peak_thread_and_context_switch_fields(self) -> None:
+        self.assertEqual(
+            parse_linux_status(
+                "VmPeak:\t100 kB\n"
+                "VmHWM:\t40 kB\n"
+                "VmStk:\t16 kB\n"
+                "Threads:\t3\n"
+                "voluntary_ctxt_switches:\t7\n"
+                "nonvoluntary_ctxt_switches:\t2\n"
+            ),
+            {
+                "VmPeak": 100 * 1024,
+                "VmHWM": 40 * 1024,
+                "VmStk": 16 * 1024,
+                "Threads": 3,
+                "voluntary_ctxt_switches": 7,
+                "nonvoluntary_ctxt_switches": 2,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "missing .*status"):
+            parse_linux_status("Threads:\t1\n")
+
+    def test_proc_stat_handles_spaces_and_parentheses_in_comm(self) -> None:
+        record = "42 (worker ) name) S 1 2 3 4 5 6 17 8 9 4 11 12\n"
+        self.assertEqual(parse_linux_proc_stat(record), (17, 9))
+        with self.assertRaisesRegex(ValueError, "stat record"):
+            parse_linux_proc_stat("not a stat record")
+
+    def test_proc_io_requires_byte_and_syscall_counters(self) -> None:
+        self.assertEqual(
+            parse_linux_io(
+                "rchar: 1\nwchar: 2\nsyscr: 3\nsyscw: 4\n"
+                "read_bytes: 5\nwrite_bytes: 6\ncancelled_write_bytes: 7\n"
+            ),
+            {
+                "rchar": 1,
+                "wchar": 2,
+                "syscr": 3,
+                "syscw": 4,
+                "read_bytes": 5,
+                "write_bytes": 6,
+                "cancelled_write_bytes": 7,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "missing .*io"):
+            parse_linux_io("rchar: 1\n")
+
+
+class PerfStatTest(unittest.TestCase):
+    def test_parser_retains_values_and_explicit_unsupported_counters(self) -> None:
+        report = """# started now
+10;;cycles:u;100;50.00;;
+20;;instructions:u;100;50.00;;
+3;;branches:u;100;50.00;;
+1;;branch-misses:u;100;50.00;;
+4;;cache-references:u;100;50.00;;
+<not counted>;;cache-misses:u;0;0.00;;
+5;;context-switches:u;200;100.00;;
+0;;cpu-migrations:u;200;100.00;;
+6;;page-faults:u;200;100.00;;
+"""
+
+        parsed = parse_perf_stat(report)
+
+        self.assertEqual(len(parsed), 9)
+        self.assertEqual(parsed[0]["value"], 10)
+        self.assertEqual(parsed[0]["scope"], "user")
+        self.assertFalse(parsed[5]["supported"])
+        self.assertIsNone(parsed[5]["value"])
+
+    def test_parser_rejects_a_missing_event(self) -> None:
+        with self.assertRaisesRegex(ValueError, "event mismatch"):
+            parse_perf_stat("1;;cycles:u;1;100.00;;\n")
 
 
 class HostFingerprintTest(unittest.TestCase):
@@ -462,6 +573,10 @@ class BenchmarkManifestTest(unittest.TestCase):
             [profile["workspaces"] for profile in manifest["workspace_profiles"]],
             [1, 2, 4, 8, 16],
         )
+        self.assertEqual(
+            [profile["panes"] for profile in manifest["reactor_profiles"]],
+            [64],
+        )
         self.assertEqual(manifest["deterministic_budgets"]["status"], "reviewed")
 
     def test_only_reviewed_subject_failures_are_expected(self) -> None:
@@ -735,6 +850,16 @@ class LatencyReceiptTest(unittest.TestCase):
 
 
 class MuxFixtureTest(unittest.TestCase):
+    def test_mixed_active_indices_are_bounded_and_evenly_spaced(self) -> None:
+        self.assertEqual(mixed_active_indices(64, 0.01), frozenset({0}))
+        self.assertEqual(
+            mixed_active_indices(64, 0.10),
+            frozenset({0, 9, 18, 27, 36, 45, 54}),
+        )
+        self.assertEqual(len(mixed_active_indices(64, 0.50)), 32)
+        with self.assertRaises(ValueError):
+            mixed_active_indices(0, 0.50)
+
     def test_shell_marker_does_not_share_the_rendered_fixture_prefix(self) -> None:
         self.assertNotEqual(SHELL_READY_MARKER[:1], TUI_REDRAW_READY[:1])
 

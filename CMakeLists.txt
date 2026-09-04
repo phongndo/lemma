@@ -184,11 +184,20 @@ add_library(
   src/core/engine.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
+  src/core/pane_residency.cpp
+  src/core/pane_snapshot_quota.cpp
+  src/core/pane_snapshot_storage.cpp
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
 )
 lemma_internal_target(lemma_runtime)
+target_compile_definitions(
+  lemma_runtime
+  PRIVATE
+    LEMMA_GHOSTTY_PINNED_COMMIT="${LEMMA_GHOSTTY_PINNED_COMMIT}"
+    LEMMA_GHOSTTY_PINNED_PROFILE="${LEMMA_GHOSTTY_PINNED_PROFILE}"
+)
 target_link_libraries(
   lemma_runtime
   PRIVATE
@@ -267,6 +276,13 @@ if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
 
   add_executable(lemma_benchmark_probe benchmarks/process_probe.cpp)
   target_link_libraries(lemma_benchmark_probe PRIVATE lemma_warnings)
+
+  add_executable(lemma_terminal_memory_probe benchmarks/terminal_memory_probe.cpp)
+  lemma_internal_target(lemma_terminal_memory_probe)
+  target_link_libraries(lemma_terminal_memory_probe PRIVATE lemma_terminal)
+
+  add_executable(lemma_reactor_thread_probe benchmarks/reactor_thread_probe.cpp)
+  target_link_libraries(lemma_reactor_thread_probe PRIVATE lemma_warnings)
 endif()
 
 if(LEMMA_BUILD_TESTS)
@@ -292,6 +308,7 @@ if(LEMMA_BUILD_TESTS)
     tests/input_router_test.cpp
     tests/latency_trace_test.cpp
     tests/layout_test.cpp
+    tests/pane_snapshot_quota_test.cpp
     tests/protocol_test.cpp
     tests/reactor_environment_test.cpp
   )
@@ -319,6 +336,8 @@ if(LEMMA_BUILD_TESTS)
     lemma_terminal_boundary_tests
     tests/client_frame_output_test.cpp
     tests/core_input_test.cpp
+    tests/pane_residency_test.cpp
+    tests/pane_snapshot_storage_test.cpp
     tests/pty_writer_test.cpp
     tests/render_composition_test.cpp
     tests/terminal_integration_regression_test.cpp

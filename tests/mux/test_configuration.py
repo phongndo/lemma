@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import signal
 import unittest
+from pathlib import Path
 
-from tests.support.mux_harness import LemmaServer
+from tests.support.mux_harness import LemmaServer, process_exists, wait_until
 
 
 class ConfigurationMuxTest(unittest.TestCase):
@@ -48,6 +51,41 @@ lemma.keymap.del("normal", "C-b")
             "configured split key to create a second pane",
         )
         self.assertEqual(state.panes, 2)
+
+    def test_compiled_policy_survives_extension_host_crash(self) -> None:
+        session = self.server.create_session("configured_host_crash")
+        client = session.require_client()
+        client.expect_output("CONFIGURED_PROGRAM:/tmp")
+        children_path = Path(
+            f"/proc/{self.server.process.pid}/task/{self.server.process.pid}/children"
+        )
+        if not children_path.exists():
+            self.skipTest("extension-host process isolation probe requires Linux /proc")
+        children = [int(value) for value in children_path.read_text().split()]
+        hosts = []
+        for child in children:
+            command_path = Path(f"/proc/{child}/cmdline")
+            if not command_path.exists():
+                continue
+            command = command_path.read_bytes().split(b"\0", maxsplit=1)[0]
+            if command == os.fsencode(self.server.server_path):
+                hosts.append(child)
+        self.assertEqual(len(hosts), 1, self.server.diagnostics())
+        os.kill(hosts[0], signal.SIGKILL)
+        wait_until(
+            "extension host crash cleanup",
+            lambda: not process_exists(hosts[0]) or None,
+            diagnostics=self.server.diagnostics,
+        )
+
+        client.send(b"\x1bs")
+        self.server.wait_for_state(
+            session.name,
+            lambda current: current.panes == 2,
+            "compiled policy after extension host crash",
+        )
+        client.send("printf '__HOST_CRASH_ISOLATED__\\n'\r")
+        session.pane().expect_output("__HOST_CRASH_ISOLATED__")
 
     def test_copy_search_does_not_capture_input_without_a_status_line(self) -> None:
         session = self.server.create_session("configured_hidden_search")

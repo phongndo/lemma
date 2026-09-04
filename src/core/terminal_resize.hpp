@@ -21,8 +21,9 @@ using PtyResizeOperation = bool (*)(void* context, const vt::TerminalSize& size)
 // resize, restores the PTY geometry; consistency_lost is the fail-closed rollback failure.
 [[nodiscard]] auto resize_terminal_transaction(vt::Terminal& terminal,
                                                const vt::TerminalSize& requested,
-                                               PtyResizeOperation resize_pty,
-                                               void* context) noexcept -> TerminalResizeStatus;
+                                               PtyResizeOperation resize_pty, void* context,
+                                               vt::PtyResponseSink responses = {}) noexcept
+    -> TerminalResizeStatus;
 
 } // namespace lemma::core
 

@@ -596,9 +596,26 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
   return 0;
 }
 
+[[nodiscard]] auto indexed_completion_marker(const std::string_view prefix, const std::size_t index)
+    -> std::string {
+  if (index >= repetitions_max) {
+    return {};
+  }
+  std::array<char, 4> digits{};
+  auto value = index;
+  for (auto& digit : std::views::reverse(digits)) {
+    digit = static_cast<char>('0' + static_cast<char>(value % 10U));
+    value /= 10U;
+  }
+  std::string marker(prefix);
+  marker.append(digits.data(), digits.size());
+  marker.append("__");
+  return marker;
+}
+
 [[nodiscard]] auto run_command(const int outer_descriptor, const std::size_t repetitions,
-                               const std::string_view command, const std::string_view marker)
-    -> int {
+                               const std::string_view command, const std::string_view marker,
+                               const bool indexed) -> int {
   std::vector<std::uint64_t> latencies;
   std::vector<std::uint64_t> outer_bytes;
   latencies.reserve(repetitions);
@@ -611,7 +628,9 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
                 << '\n';
       return 1;
     }
-    const auto [latency, bytes] = read_outer_marker(outer_descriptor, marker, started_ns);
+    const auto expected_marker =
+        indexed ? indexed_completion_marker(marker, index) : std::string(marker);
+    const auto [latency, bytes] = read_outer_marker(outer_descriptor, expected_marker, started_ns);
     if (latency == 0) {
       std::cerr << "command probe marker failed at iteration " << index << " errno=" << errno
                 << '\n';
@@ -883,6 +902,7 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     return first == "__LEMMA_OUTPUT_0000_AAAAAA__" && last == "__LEMMA_OUTPUT_9999_YYYYJP__" &&
                    generated_profile == "__LEMMA_P2_IDLE_0000_ZZZUCE__" &&
                    interaction_marker("OUTPUT", "OUT", 0).empty() &&
+                   indexed_completion_marker("__DONE_", 42) == "__DONE_0042__" &&
                    decoded_outer == "__LEMMA_OUTPUT_DONE__" &&
                    maximum_repetition_window > std::chrono::seconds(80)
                ? 0
@@ -909,7 +929,8 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     return run_attach(static_cast<std::size_t>(repetitions), argument(arguments, 3),
                       arguments.subspan(5));
   }
-  if (arguments.size() == 6U && std::string_view(argument(arguments, 1)) == "command") {
+  if (arguments.size() == 6U && (std::string_view(argument(arguments, 1)) == "command" ||
+                                 std::string_view(argument(arguments, 1)) == "indexed-command")) {
     const auto outer_descriptor =
         parse_integer(argument(arguments, 2), 0, std::numeric_limits<int>::max());
     const auto repetitions =
@@ -917,8 +938,9 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     if (outer_descriptor < 0 || repetitions < 0) {
       return 2;
     }
+    const bool indexed = std::string_view(argument(arguments, 1)) == "indexed-command";
     return run_command(outer_descriptor, static_cast<std::size_t>(repetitions),
-                       argument(arguments, 4), argument(arguments, 5));
+                       argument(arguments, 4), argument(arguments, 5), indexed);
   }
   if (arguments.size() == 9U && std::string_view(argument(arguments, 1)) == "open-loop") {
     const auto outer_descriptor =

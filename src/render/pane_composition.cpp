@@ -1034,7 +1034,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 
 [[nodiscard]] auto render_surface(const PaneSurface& pane, const std::span<std::byte> output,
                                   std::size_t& used, const bool force_full,
-                                  const bool allow_terminal_scroll,
+                                  const bool allow_terminal_scroll, const bool allow_line_erase,
                                   const std::uint16_t column_offset, const std::uint16_t row_offset,
                                   CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
@@ -1047,6 +1047,7 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
       .focused = pane.focused,
       .cursor_override = pane.cursor_override,
       .allow_terminal_scroll = allow_terminal_scroll,
+      .allow_line_erase = allow_line_erase,
   };
   const auto rendered = pane.terminal->render_pane_ansi(output.subspan(used), options);
   if (!rendered.has_value()) {
@@ -1066,12 +1067,17 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
                                 const std::uint16_t row_offset,
                                 CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
+  // Hardware scrolling is safe only when the pane owns the outer terminal's full origin and width;
+  // otherwise it would move status or neighboring content.
   const bool allow_terminal_scroll =
       column_offset == 0 && row_offset == 0 && is_single_full_viewport(panes, viewport);
   for (const auto& pane : panes) {
     if (!pane.focused && !pane.presentation_suppressed) {
-      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           column_offset, row_offset, composition);
+      const bool allow_line_erase =
+          pane.rectangle.column + pane.rectangle.columns == viewport.columns;
+      const auto rendered =
+          render_surface(pane, output, used, force_full, allow_terminal_scroll, allow_line_erase,
+                         column_offset, row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;
@@ -1080,8 +1086,11 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   }
   for (const auto& pane : panes) {
     if (pane.focused && !pane.presentation_suppressed) {
-      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           column_offset, row_offset, composition);
+      const bool allow_line_erase =
+          pane.rectangle.column + pane.rectangle.columns == viewport.columns;
+      const auto rendered =
+          render_surface(pane, output, used, force_full, allow_terminal_scroll, allow_line_erase,
+                         column_offset, row_offset, composition);
       if (!rendered.has_value()) {
         invalidate_panes(panes);
         return rendered;

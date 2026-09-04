@@ -600,25 +600,37 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
 }
 
 auto ClientDecoder::prepare() noexcept -> std::expected<void, DecodeError> {
+  if (ordinary_storage_ == nullptr) {
+    try {
+      // Runtime-sized decoder storage cannot use std::array.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+      ordinary_storage_ = std::make_unique_for_overwrite<std::byte[]>(inline_storage_bytes);
+    } catch (const std::bad_alloc&) {
+      return std::unexpected(DecodeError::allocation_failed);
+    }
+  }
   prepared_ = true;
   return {};
 }
 
 void ClientDecoder::release() noexcept {
   expanded_storage_.reset();
+  ordinary_storage_.reset();
   reset();
   prepared_ = false;
 }
 
 [[nodiscard]] auto ClientDecoder::mutable_storage() noexcept -> std::span<std::byte> {
+  LEMMA_ASSERT(ordinary_storage_ != nullptr);
   return expanded_storage_ == nullptr
-             ? std::span<std::byte>(inline_storage_)
+             ? std::span<std::byte>(ordinary_storage_.get(), inline_storage_bytes)
              : std::span<std::byte>(expanded_storage_.get(), client_decoder_bytes_max);
 }
 
 [[nodiscard]] auto ClientDecoder::storage() const noexcept -> std::span<const std::byte> {
+  LEMMA_ASSERT(ordinary_storage_ != nullptr);
   return expanded_storage_ == nullptr
-             ? std::span<const std::byte>(inline_storage_)
+             ? std::span<const std::byte>(ordinary_storage_.get(), inline_storage_bytes)
              : std::span<const std::byte>(expanded_storage_.get(), client_decoder_bytes_max);
 }
 
@@ -741,7 +753,7 @@ void ClientDecoder::release() noexcept {
       // Allocated only after a valid live paste envelope exceeds the ordinary input bound.
       // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
       auto expanded = std::make_unique_for_overwrite<std::byte[]>(client_decoder_bytes_max);
-      std::ranges::copy(std::span(inline_storage_).first(used_), expanded.get());
+      std::ranges::copy(storage().first(used_), expanded.get());
       expanded_storage_ = std::move(expanded);
     } catch (const std::bad_alloc&) {
       return std::unexpected(DecodeError::allocation_failed);
@@ -943,9 +955,9 @@ void ClientDecoder::consume() noexcept {
   std::memmove(active_storage.data(), active_storage.subspan(pending_size_).data(),
                used_ - pending_size_);
   used_ -= pending_size_;
-  if (expanded_storage_ != nullptr && used_ <= inline_storage_.size()) {
+  if (expanded_storage_ != nullptr && used_ <= inline_storage_bytes) {
     std::ranges::copy(std::span(expanded_storage_.get(), used_).first(used_),
-                      inline_storage_.begin());
+                      ordinary_storage_.get());
     expanded_storage_.reset();
   }
   pending_size_ = 0;

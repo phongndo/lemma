@@ -16,6 +16,67 @@
     "kitty_graphics": true,
     "tmux_control_mode": false
   },
+  "production_vt_feature_profile": "full",
+  "vt_feature_profiles": {
+    "full": {
+      "zig_value": "+all",
+      "features": {
+        "snapshot": true,
+        "formatter": true,
+        "selection": true,
+        "render_state": true,
+        "input_encode": true,
+        "color": true,
+        "grid_introspection": true,
+        "glyph_protocol": true,
+        "kitty_graphics": true
+      }
+    },
+    "trimmed": {
+      "zig_value": "-kitty-graphics,-glyph-protocol",
+      "features": {
+        "snapshot": true,
+        "formatter": true,
+        "selection": true,
+        "render_state": true,
+        "input_encode": true,
+        "color": true,
+        "grid_introspection": true,
+        "glyph_protocol": false,
+        "kitty_graphics": false
+      }
+    },
+    "minimal": {
+      "zig_value": "-all,+snapshot,+formatter,+selection,+render-state,+input-encode,+color,+grid-introspection",
+      "note": "Snapshot is required by the tracked selection-checkpoint API used by current Lemma; this pin cannot retain that API while compiling out snapshot codecs.",
+      "features": {
+        "snapshot": true,
+        "formatter": true,
+        "selection": true,
+        "render_state": true,
+        "input_encode": true,
+        "color": true,
+        "grid_introspection": true,
+        "glyph_protocol": false,
+        "kitty_graphics": false
+      }
+    },
+    "minimal-snapshot": {
+      "zig_value": "-all,+snapshot,+formatter,+selection,+render-state,+input-encode,+color,+grid-introspection",
+      "note": "Capability-equivalent to minimal at this pin because Ghostty gates tracked selection checkpoints and terminal snapshot codecs together.",
+      "features": {
+        "snapshot": true,
+        "formatter": true,
+        "selection": true,
+        "render_state": true,
+        "input_encode": true,
+        "color": true,
+        "grid_introspection": true,
+        "glyph_protocol": false,
+        "kitty_graphics": false
+      }
+    }
+  },
   "optimization_by_cmake_build_type": {
     "Dev": "ReleaseSafe",
     "Debug": "Debug",

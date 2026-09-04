@@ -1,6 +1,11 @@
 #include "daemon/server.hpp"
 
+#include <charconv>
+#include <chrono>
 #include <csignal>
+#include <cstdint>
+#include <cstdlib>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -28,5 +33,36 @@ int main(const int argc, char** argv) {
   if (sigemptyset(&action.sa_mask) != 0 || ::sigaction(SIGTERM, &action, nullptr) != 0) {
     return 2;
   }
-  return lemma::daemon::serve(*endpoint, {.stop_requested = &should_stop});
+  lemma::daemon::ServeOptions options{.stop_requested = &should_stop,
+                                      .detached_pane_parking_delay = std::nullopt,
+                                      .pane_hydration_steps_per_turn = std::nullopt,
+                                      .corrupt_parked_snapshots_for_test = false};
+  if (const char* const configured = std::getenv("LEMMA_TEST_PARKING_DELAY_MS");
+      configured != nullptr) {
+    const std::string_view text(configured);
+    std::uint32_t milliseconds = 0;
+    const auto parsed = std::from_chars(text.begin(), text.end(), milliseconds);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.end() || milliseconds > 60'000U) {
+      return 2;
+    }
+    options.detached_pane_parking_delay = std::chrono::milliseconds{milliseconds};
+  }
+  if (const char* const configured = std::getenv("LEMMA_TEST_HYDRATION_STEPS_PER_TURN");
+      configured != nullptr) {
+    const std::string_view text(configured);
+    std::uint32_t steps = 0;
+    const auto parsed = std::from_chars(text.begin(), text.end(), steps);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.end() || steps > 8U) {
+      return 2;
+    }
+    options.pane_hydration_steps_per_turn = steps;
+  }
+  if (const char* const configured = std::getenv("LEMMA_TEST_CORRUPT_PARKED_SNAPSHOTS");
+      configured != nullptr) {
+    if (std::string_view(configured) != "1") {
+      return 2;
+    }
+    options.corrupt_parked_snapshots_for_test = true;
+  }
+  return lemma::daemon::serve(*endpoint, options);
 }

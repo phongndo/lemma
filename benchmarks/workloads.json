@@ -158,15 +158,41 @@
       "W16"
     ]
   },
+  "reactor_profiles": [
+    {
+      "id": "R64",
+      "panes": 64,
+      "purpose": "production epoll threshold at one full-capacity Session"
+    }
+  ],
+  "reactor_profile_suites": {
+    "smoke": [
+      "R64"
+    ],
+    "gate": [
+      "R64"
+    ],
+    "extended": [
+      "R64"
+    ]
+  },
   "session_profile_metrics": [
     "process_tree_cpu_time_ns",
     "process_tree_rss_bytes",
     "wakeups_when_supported",
     "direct_role_cpu_and_rss"
   ],
+  "mixed_activity_profile": "PMAX",
+  "mixed_activity_fractions": [
+    0.01,
+    0.1,
+    0.5
+  ],
   "profile_conditions": {
     "idle": "all panes are live shells with no injected activity during resource sampling; focused-pane interaction is measured after the idle sample",
-    "active": "the focused pane emits bounded continuous output from a one-millisecond input-aware poll deadline while resource and interaction samples are collected; all remaining panes stay live and idle"
+    "active": "the focused pane emits bounded continuous output from a one-millisecond input-aware poll deadline while resource and interaction samples are collected; all remaining panes stay live and idle",
+    "all_active": "every pane begins the same bounded 81-byte output producer from one shared gate and a one-millisecond poll deadline; one focused producer also echoes correlated interaction tokens",
+    "mixed_active": "at the PMAX capacity, deterministic evenly-spaced 1%, 10%, and 50% Pane subsets begin the bounded producer from one shared gate; the focused producer echoes correlated interaction tokens"
   },
   "pane_profile_metrics": [
     "key_to_pty_ns",
@@ -635,6 +661,17 @@
           "unit": "ns"
         },
         {
+          "id": "interactive_output_bytes_p50",
+          "samples_path": [
+            "workloads",
+            "interactive_under_output",
+            "outer_bytes"
+          ],
+          "statistic": "p50",
+          "maximum": 1100,
+          "unit": "bytes"
+        },
+        {
           "id": "interactive_output_bytes_p95",
           "samples_path": [
             "workloads",
@@ -984,11 +1021,11 @@
       "absolute_noise_floor_by_id": {
         "warm_scroll_latency_p50": 750000,
         "warm_scroll_bytes_p50": 160,
-        "attach_to_visible_latency_p95": 150000,
-        "interactive_output_bytes_p95": 160
+        "attach_to_visible_latency_p95": 150000
       },
       "diagnostic_ids": [
         "interactive_output_key_to_outer_bytes_p99",
+        "interactive_output_bytes_p95",
         "idle_peer_key_to_outer_bytes_p99",
         "blocked_peer_key_to_outer_bytes_p99",
         "blocked_client_idle_key_to_outer_bytes_p99",

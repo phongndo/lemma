@@ -11,6 +11,8 @@
 #include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
 #include "core/layout.hpp"
+#include "core/pane_residency.hpp"
+#include "core/pane_snapshot_quota.hpp"
 #include "core/presentation_gate.hpp"
 #include "core/pty_writer.hpp"
 #include "core/session.hpp"
@@ -33,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -56,6 +59,9 @@
 #include <vector>
 
 #include <poll.h>
+#ifdef __linux__
+#include <sys/epoll.h>
+#endif
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -120,6 +126,13 @@ using platform::close_descriptor;
 using platform::set_nonblocking;
 using render::FrameBuffer;
 
+[[nodiscard]] auto next_poll_identity() noexcept -> std::uint64_t {
+  static std::atomic<std::uint64_t> next{1};
+  const auto identity = next.fetch_add(1, std::memory_order_relaxed);
+  LEMMA_ASSERT(identity != 0);
+  return identity;
+}
+
 thread_local const ReactorEnvironment* active_reactor_environment = nullptr;
 thread_local CommandLineHistory* active_command_history = nullptr;
 
@@ -171,10 +184,28 @@ private:
   bool replace_on_shutdown_{false};
 };
 
-[[nodiscard]] auto reactor_now() noexcept -> ReactorClock::time_point {
+thread_local std::optional<ReactorClock::time_point> active_reactor_turn_time;
+
+[[nodiscard]] auto sample_reactor_clock() noexcept -> ReactorClock::time_point {
   LEMMA_ASSERT(active_reactor_environment != nullptr);
   return active_reactor_environment->now(active_reactor_environment->context);
 }
+
+[[nodiscard]] auto reactor_now() noexcept -> ReactorClock::time_point {
+  return active_reactor_turn_time.has_value() ? *active_reactor_turn_time : sample_reactor_clock();
+}
+
+class ReactorTurnClockGuard final {
+public:
+  ReactorTurnClockGuard() noexcept = default;
+  ReactorTurnClockGuard(const ReactorTurnClockGuard&) = delete;
+  ReactorTurnClockGuard(ReactorTurnClockGuard&&) = delete;
+  auto operator=(const ReactorTurnClockGuard&) -> ReactorTurnClockGuard& = delete;
+  auto operator=(ReactorTurnClockGuard&&) -> ReactorTurnClockGuard& = delete;
+  ~ReactorTurnClockGuard() { active_reactor_turn_time.reset(); }
+};
+
+void refresh_reactor_turn_time() noexcept { active_reactor_turn_time = sample_reactor_clock(); }
 
 [[nodiscard]] auto reactor_input_map() noexcept -> const input::CompiledInputMap& {
   LEMMA_ASSERT(active_reactor_environment != nullptr);
@@ -203,10 +234,11 @@ private:
 }
 
 [[nodiscard]] auto reactor_poll(const std::span<pollfd> descriptors,
+                                const std::span<const std::uint64_t> identities,
                                 const int timeout_milliseconds) noexcept -> int {
-  LEMMA_ASSERT(active_reactor_environment != nullptr);
+  LEMMA_ASSERT(active_reactor_environment != nullptr && identities.size() == descriptors.size());
   return active_reactor_environment->poll(active_reactor_environment->context, descriptors,
-                                          timeout_milliseconds);
+                                          identities, timeout_milliseconds);
 }
 
 [[nodiscard]] auto reactor_send(const int descriptor, const std::span<const std::byte> bytes,
@@ -216,10 +248,216 @@ private:
                                           flags);
 }
 
+#ifdef __linux__
+inline constexpr std::size_t production_descriptors_max =
+    std::size_t{2} + limits::panes_hard_max + limits::sessions_hard_max +
+    limits::pending_connections_hard_max + std::size_t{8};
+inline constexpr std::size_t epoll_descriptor_threshold = 8;
+inline constexpr std::size_t dense_readiness_denominator = 4;
+
+class AdaptiveEpoll final {
+public:
+  AdaptiveEpoll() = default;
+  AdaptiveEpoll(const AdaptiveEpoll&) = delete;
+  auto operator=(const AdaptiveEpoll&) -> AdaptiveEpoll& = delete;
+  AdaptiveEpoll(AdaptiveEpoll&&) = delete;
+  auto operator=(AdaptiveEpoll&&) -> AdaptiveEpoll& = delete;
+  ~AdaptiveEpoll() { close_descriptor(epoll_); }
+
+  [[nodiscard]] auto wait(const std::span<pollfd> descriptors,
+                          const std::span<const std::uint64_t> identities,
+                          const int timeout_milliseconds) noexcept -> int {
+    if (!eligible(descriptors, identities)) {
+      reset();
+      return poll(descriptors, timeout_milliseconds);
+    }
+    if (dense_previous_turn(descriptors.size())) {
+      return poll_dense(descriptors, timeout_milliseconds);
+    }
+    if (!synchronize(descriptors, identities)) {
+      reset();
+      return poll(descriptors, timeout_milliseconds);
+    }
+    for (auto& descriptor : descriptors) {
+      descriptor.revents = 0;
+    }
+    const auto ready = ::epoll_wait(epoll_, events_.data(), static_cast<int>(descriptors.size()),
+                                    timeout_milliseconds);
+    if (ready <= 0) {
+      previous_ready_ = 0;
+      return ready;
+    }
+    const auto translated = translate_events(descriptors, identities, ready);
+    if (!translated.has_value()) {
+      reset();
+      return poll(descriptors, timeout_milliseconds);
+    }
+    previous_ready_ = static_cast<std::size_t>(*translated);
+    return *translated;
+  }
+
+private:
+  [[nodiscard]] auto eligible(const std::span<const pollfd> descriptors,
+                              const std::span<const std::uint64_t> identities) const noexcept
+      -> bool {
+    return identities.size() == descriptors.size() &&
+           std::ranges::none_of(identities, [](const auto identity) { return identity == 0; }) &&
+           descriptors.size() >= epoll_descriptor_threshold &&
+           descriptors.size() <= previous_.size();
+  }
+
+  [[nodiscard]] auto dense_previous_turn(const std::size_t descriptor_count) const noexcept
+      -> bool {
+    return previous_count_ > 0 &&
+           previous_ready_ >=
+               (descriptor_count + dense_readiness_denominator - 1U) / dense_readiness_denominator;
+  }
+
+  [[nodiscard]] auto poll_dense(const std::span<pollfd> descriptors,
+                                const int timeout_milliseconds) noexcept -> int {
+    const auto ready = poll(descriptors, timeout_milliseconds);
+    previous_ready_ = static_cast<std::size_t>(std::max(ready, 0));
+    return ready;
+  }
+
+  [[nodiscard]] static auto translated_events(const std::uint32_t events) noexcept -> short {
+    short translated = 0;
+    translated |= (events & EPOLLIN) != 0 ? POLLIN : 0;
+    translated |= (events & EPOLLOUT) != 0 ? POLLOUT : 0;
+    translated |= (events & EPOLLPRI) != 0 ? POLLPRI : 0;
+    translated |= (events & EPOLLERR) != 0 ? POLLERR : 0;
+    translated |= (events & (EPOLLHUP | EPOLLRDHUP)) != 0 ? POLLHUP : 0;
+    return translated;
+  }
+
+  [[nodiscard]] auto translate_events(const std::span<pollfd> descriptors,
+                                      const std::span<const std::uint64_t> identities,
+                                      const int ready) const noexcept -> std::optional<int> {
+    int ready_descriptors = 0;
+    for (int event_index = 0; event_index < ready; ++event_index) {
+      // event_index is bounded by epoll_wait's requested event count.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
+      const auto event = events_[static_cast<std::size_t>(event_index)];
+      const auto index = static_cast<std::size_t>(event.data.u32);
+      if (!registration_matches(index, descriptors, identities)) {
+        return std::nullopt;
+      }
+      auto& descriptor = descriptors.subspan(index, 1).front();
+      const auto translated = translated_events(event.events);
+      ready_descriptors += static_cast<int>(descriptor.revents == 0 && translated != 0);
+      descriptor.revents = static_cast<short>(descriptor.revents | translated);
+    }
+    return ready_descriptors;
+  }
+
+  [[nodiscard]] static auto epoll_events(const short events) noexcept -> std::uint32_t {
+    std::uint32_t translated = EPOLLRDHUP;
+    translated |= (events & POLLIN) != 0 ? EPOLLIN : 0U;
+    translated |= (events & POLLOUT) != 0 ? EPOLLOUT : 0U;
+    translated |= (events & POLLPRI) != 0 ? EPOLLPRI : 0U;
+    return translated;
+  }
+
+  [[nodiscard]] static auto poll(const std::span<pollfd> descriptors,
+                                 const int timeout_milliseconds) noexcept -> int {
+    return ::poll(descriptors.data(), static_cast<nfds_t>(descriptors.size()),
+                  timeout_milliseconds);
+  }
+
+  [[nodiscard]] auto ensure_epoll() noexcept -> bool {
+    if (epoll_ >= 0) {
+      return true;
+    }
+    epoll_ = ::epoll_create1(EPOLL_CLOEXEC);
+    return epoll_ >= 0;
+  }
+
+  [[nodiscard]] auto
+  registration_matches(const std::size_t index, const std::span<const pollfd> descriptors,
+                       const std::span<const std::uint64_t> identities) const noexcept -> bool {
+    if (index >= previous_count_ || index >= descriptors.size()) {
+      return false;
+    }
+    const auto& previous = std::span(previous_).subspan(index, 1).front();
+    const auto previous_identity = std::span(previous_identities_).subspan(index, 1).front();
+    return previous.fd == descriptors.subspan(index, 1).front().fd &&
+           previous_identity == identities.subspan(index, 1).front();
+  }
+
+  [[nodiscard]] auto remove_stale(const std::span<const pollfd> descriptors,
+                                  const std::span<const std::uint64_t> identities) const noexcept
+      -> bool {
+    for (std::size_t index = 0; index < previous_count_; ++index) {
+      if (registration_matches(index, descriptors, identities)) {
+        continue;
+      }
+      const auto descriptor = std::span(previous_).subspan(index, 1).front().fd;
+      const auto result = ::epoll_ctl(epoll_, EPOLL_CTL_DEL, descriptor, nullptr);
+      if (result < 0 && errno != ENOENT && errno != EBADF) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] auto upsert_current(const std::span<const pollfd> descriptors,
+                                    const std::span<const std::uint64_t> identities) const noexcept
+      -> bool {
+    for (std::size_t index = 0; index < descriptors.size(); ++index) {
+      const auto& descriptor = descriptors.subspan(index, 1).front();
+      const bool same_descriptor = registration_matches(index, descriptors, identities);
+      const auto& previous = std::span(previous_).subspan(index, 1).front();
+      if (same_descriptor && previous.events == descriptor.events) {
+        continue;
+      }
+      epoll_event event{};
+      event.events = epoll_events(descriptor.events);
+      event.data.u32 = static_cast<std::uint32_t>(index);
+      const auto operation = same_descriptor ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+      if (::epoll_ctl(epoll_, operation, descriptor.fd, &event) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] auto synchronize(const std::span<const pollfd> descriptors,
+                                 const std::span<const std::uint64_t> identities) noexcept -> bool {
+    if (!ensure_epoll() || !remove_stale(descriptors, identities) ||
+        !upsert_current(descriptors, identities)) {
+      return false;
+    }
+    std::ranges::copy(descriptors, previous_.begin());
+    std::ranges::copy(identities, previous_identities_.begin());
+    previous_count_ = descriptors.size();
+    return true;
+  }
+
+  void reset() noexcept {
+    close_descriptor(epoll_);
+    previous_count_ = 0;
+    previous_ready_ = 0;
+  }
+
+  std::array<pollfd, production_descriptors_max> previous_{};
+  std::array<std::uint64_t, production_descriptors_max> previous_identities_{};
+  std::array<epoll_event, production_descriptors_max> events_{};
+  std::size_t previous_count_{0};
+  std::size_t previous_ready_{0};
+  int epoll_{-1};
+};
+#endif
+
 [[nodiscard]] auto production_poll([[maybe_unused]] void* context,
                                    const std::span<pollfd> descriptors,
+                                   [[maybe_unused]] const std::span<const std::uint64_t> identities,
                                    const int timeout_milliseconds) noexcept -> int {
+#ifdef __linux__
+  static thread_local AdaptiveEpoll backend;
+  return backend.wait(descriptors, identities, timeout_milliseconds);
+#else
   return ::poll(descriptors.data(), static_cast<nfds_t>(descriptors.size()), timeout_milliseconds);
+#endif
 }
 
 [[nodiscard]] auto production_now([[maybe_unused]] void* context) noexcept
@@ -267,6 +505,7 @@ private:
 }
 
 [[nodiscard]] auto resize_pane_terminal(const int pty, vt::Terminal& terminal,
+                                        PanePtyWriteQueue& pending_writes,
                                         const std::uint16_t requested_columns,
                                         const std::uint16_t requested_rows) noexcept
     -> TerminalResizeStatus {
@@ -280,7 +519,8 @@ private:
       .cell_height_px = previous.cell_height_px,
   };
   auto descriptor = pty;
-  return resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor);
+  return resize_terminal_transaction(terminal, requested, &resize_pty_for_transaction, &descriptor,
+                                     pane_pty_response_sink(pending_writes));
 }
 
 enum class PaneRuntimeFailure : std::uint8_t {
@@ -289,6 +529,7 @@ enum class PaneRuntimeFailure : std::uint8_t {
   pty_write_error,
   terminal_integrity_error,
   scrollback_compression_error,
+  snapshot_restore_error,
   resize_consistency_lost,
 };
 
@@ -325,13 +566,14 @@ trace_pty_output([[maybe_unused]] PtyDrainResult& drain,
 }
 
 void write_pty_output(vt::Terminal& terminal, PresentationGate& presentation_gate,
-                      const std::span<const std::byte> bytes, bool& capture_damage,
+                      const std::span<const std::byte> bytes,
+                      const vt::PtyResponseSink response_sink, bool& capture_damage,
                       PtyDrainResult& drain) noexcept {
   bool damage_acquired = true;
   if (!capture_damage) {
-    terminal.write(bytes);
+    terminal.write(bytes, response_sink);
   } else {
-    const auto damage = terminal.write_and_report_damage(bytes);
+    const auto damage = terminal.write_and_report_damage(bytes, response_sink);
     if (!damage.has_value()) {
       drain.damage_capture_failed = true;
       capture_damage = false;
@@ -364,7 +606,8 @@ process_pty_output(const int pty, vt::Terminal& terminal, PresentationGate& pres
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::daemon_pty_output_read,
                                    static_cast<std::uint32_t>(pty), bytes.size(),
                                    trace_correlation);
-  write_pty_output(terminal, presentation_gate, bytes, capture_damage, drain);
+  write_pty_output(terminal, presentation_gate, bytes, pane_pty_response_sink(pending_writes),
+                   capture_damage, drain);
   const auto effects = terminal.take_effects();
   // Desktop notifications use the same bounded visible-attention policy as BEL. Title, PWD, and
   // progress changes invalidate status metadata; denied clipboard and unknown sequences are
@@ -373,7 +616,7 @@ process_pty_output(const int pty, vt::Terminal& terminal, PresentationGate& pres
   drain.title_changed = drain.title_changed || effects.title_changes > 0 ||
                         effects.pwd_changes > 0 || effects.progress_reports > 0;
   drain.changed = true;
-  return queue_terminal_responses(pending_writes, terminal);
+  return !terminal.integrity_failed();
 }
 
 [[nodiscard]] auto
@@ -383,7 +626,10 @@ drain_pty(const int pty, vt::Terminal& terminal, PresentationGate& presentation_
           [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept
     -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
-  std::array<std::byte, std::size_t{64} * 1'024U> output{};
+  // read(2) initializes the exact prefix consumed below; clearing 64 KiB for every ready PTY turn
+  // would make short continuous writes pay a per-byte-unrelated memory bandwidth tax.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  std::array<std::byte, std::size_t{64} * 1'024U> output;
   PtyDrainResult drain{};
   bool capture_damage = capture_interactive_damage;
   for (std::size_t read_count = 0; read_count < reads_per_turn_max && global_budget > 0;
@@ -498,9 +744,12 @@ struct SessionName final {
   });
 }
 
+class PaneRuntimeStore;
+
 struct PaneRuntime final {
-  PaneRuntime(vt::Terminal&& created_terminal, const std::size_t scrollback_reservation) noexcept
-      : terminal(std::move(created_terminal)), scrollback_bytes_reserved(scrollback_reservation) {}
+  PaneRuntime(vt::Terminal&& created_terminal, const vt::TerminalOptions& terminal_options) noexcept
+      : residency(std::move(created_terminal)),
+        scrollback_bytes_reserved(terminal_options.scrollback_bytes_max) {}
 
   PaneRuntime(const PaneRuntime&) = delete;
   auto operator=(const PaneRuntime&) -> PaneRuntime& = delete;
@@ -515,22 +764,45 @@ struct PaneRuntime final {
     close_descriptor(pty);
   }
 
+  [[nodiscard]] auto active_terminal() noexcept -> vt::Terminal& {
+    auto* const terminal = residency.active_terminal();
+    LEMMA_ASSERT(terminal != nullptr);
+    return *terminal;
+  }
+  [[nodiscard]] auto active_terminal() const noexcept -> const vt::Terminal& {
+    const auto* const terminal = residency.active_terminal();
+    LEMMA_ASSERT(terminal != nullptr);
+    return *terminal;
+  }
+  [[nodiscard]] auto restoration_options() const noexcept -> vt::TerminalOptions {
+    const auto& terminal = active_terminal();
+    return {
+        .size = terminal.size(),
+        .scrollback_bytes_max = scrollback_bytes_reserved,
+        .allocation_bytes_max = limits::terminal_allocation_bytes_default,
+        .theme = terminal.theme(),
+        .scrollback_lines_max = reactor_scrollback_lines(),
+        .snapshot_continuation_bytes_max = limits::snapshot_continuation_bytes_max,
+    };
+  }
   [[nodiscard]] auto live() const noexcept -> bool { return !failure.has_value(); }
-  [[nodiscard]] auto pollable() const noexcept -> bool { return live() && pty >= 0; }
+  [[nodiscard]] auto pollable() const noexcept -> bool {
+    return live() && pty >= 0 && residency.phase() == PaneResidencyPhase::active;
+  }
   [[nodiscard]] auto accepts_input() const noexcept -> bool {
     return pollable() && child > 0 && !observed_exit.has_value();
   }
-  [[nodiscard]] auto held() const noexcept -> bool { return live() && pty < 0; }
+  [[nodiscard]] auto held() const noexcept -> bool {
+    return live() && pty < 0 && residency.phase() == PaneResidencyPhase::active;
+  }
   [[nodiscard]] auto publishable() const noexcept -> bool {
-    return accepts_input() && !terminal.integrity_failed();
+    return accepts_input() && !active_terminal().integrity_failed();
   }
-  void fail(const PaneRuntimeFailure reason) noexcept {
-    if (!failure.has_value()) {
-      failure = reason;
-    }
-  }
+  void fail(PaneRuntimeFailure reason) noexcept;
 
-  vt::Terminal terminal;
+  PaneResidency residency;
+  PaneRuntimeStore* owner{nullptr};
+  std::uint64_t poll_identity{next_poll_identity()};
   int pty{-1};
   decltype(::getpid()) child{-1};
   std::array<char, process_name_bytes_max> process_name{};
@@ -546,6 +818,7 @@ struct PaneRuntime final {
   std::uint64_t observation_generation{1};
   std::size_t scrollback_bytes_reserved{0};
   std::chrono::steady_clock::time_point compression_deadline;
+  std::optional<std::chrono::steady_clock::time_point> parking_deadline;
   bool compression_scheduled{false};
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   diagnostic::LatencyTraceMarkerMatcher input_trace_matcher;
@@ -567,9 +840,15 @@ struct PaneAddress final {
 // Pane identity is Session-scoped. A tab move changes only semantic membership and never rekeys the
 // PTY, terminal, queues, or process owned by this direct runtime counterpart.
 class PaneRuntimeStore final {
+  using PaneKey = std::uint16_t;
+  static constexpr PaneKey no_pane_key = std::numeric_limits<PaneKey>::max();
+  static_assert(limits::panes_hard_max < no_pane_key);
+
   struct PaneSlot final {
     std::unique_ptr<PaneRuntime> runtime;
     std::uint32_t generation{0};
+    PaneKey previous{no_pane_key};
+    PaneKey next{no_pane_key};
   };
 
   struct SessionSlots final {
@@ -590,6 +869,75 @@ class PaneRuntimeStore final {
   void release_scrollback(const std::size_t bytes) noexcept {
     LEMMA_ASSERT(scrollback_bytes_reserved_ >= bytes);
     scrollback_bytes_reserved_ -= bytes;
+  }
+
+  void release_runtime_tracking(PaneRuntime& runtime) noexcept {
+    release_scrollback(runtime.scrollback_bytes_reserved);
+    if (runtime.failure.has_value()) {
+      LEMMA_ASSERT(failed_count_ > 0);
+      --failed_count_;
+    }
+    if (runtime.residency.phase() == PaneResidencyPhase::unparking) {
+      LEMMA_ASSERT(unparking_count_ > 0);
+      --unparking_count_;
+    }
+  }
+
+  [[nodiscard]] static constexpr auto pane_key(const PaneAddress address) noexcept -> PaneKey {
+    return static_cast<PaneKey>((address.session.slot() * panes_per_session_max) +
+                                address.pane.slot());
+  }
+
+  [[nodiscard]] static constexpr auto session_slot(const PaneKey key) noexcept -> std::size_t {
+    return key / panes_per_session_max;
+  }
+
+  [[nodiscard]] static constexpr auto pane_slot(const PaneKey key) noexcept -> std::size_t {
+    return key % panes_per_session_max;
+  }
+
+  [[nodiscard]] auto linked_slot(const PaneKey key) noexcept -> PaneSlot& {
+    auto& session = std::span(sessions_).subspan(session_slot(key), 1).front();
+    LEMMA_ASSERT(session != nullptr);
+    return std::span(session->panes).subspan(pane_slot(key), 1).front();
+  }
+
+  [[nodiscard]] auto linked_slot(const PaneKey key) const noexcept -> const PaneSlot& {
+    const auto& session = std::span(sessions_).subspan(session_slot(key), 1).front();
+    LEMMA_ASSERT(session != nullptr);
+    return std::span(session->panes).subspan(pane_slot(key), 1).front();
+  }
+
+  void link(const PaneKey key, PaneSlot& slot) noexcept {
+    PaneKey previous = no_pane_key;
+    auto current = active_head_;
+    while (current != no_pane_key && current < key) {
+      previous = current;
+      current = linked_slot(current).next;
+    }
+    slot.previous = previous;
+    slot.next = current;
+    if (previous == no_pane_key) {
+      active_head_ = key;
+    } else {
+      linked_slot(previous).next = key;
+    }
+    if (current != no_pane_key) {
+      linked_slot(current).previous = key;
+    }
+  }
+
+  void unlink(PaneSlot& slot) noexcept {
+    if (slot.previous == no_pane_key) {
+      active_head_ = slot.next;
+    } else {
+      linked_slot(slot.previous).next = slot.next;
+    }
+    if (slot.next != no_pane_key) {
+      linked_slot(slot.next).previous = slot.previous;
+    }
+    slot.previous = no_pane_key;
+    slot.next = no_pane_key;
   }
 
 public:
@@ -617,7 +965,10 @@ public:
     }
     pane.generation = address.pane.generation();
     scrollback_bytes_reserved_ += runtime->scrollback_bytes_reserved;
+    runtime->owner = this;
+    pending_writes_possible_ = pending_writes_possible_ || !runtime->pending_writes.empty();
     pane.runtime = std::move(runtime);
+    link(pane_key(address), pane);
     ++session->size;
     ++size_;
     return true;
@@ -659,7 +1010,8 @@ public:
     if (pane.runtime == nullptr || pane.generation != address.pane.generation()) {
       return false;
     }
-    release_scrollback(pane.runtime->scrollback_bytes_reserved);
+    release_runtime_tracking(*pane.runtime);
+    unlink(pane);
     pane.runtime.reset();
     pane.generation = 0;
     --session->size;
@@ -678,9 +1030,10 @@ public:
     if (session == nullptr || session->generation != session_id.generation()) {
       return;
     }
-    for (const auto& pane : session->panes) {
+    for (auto& pane : session->panes) {
       if (pane.runtime != nullptr) {
-        release_scrollback(pane.runtime->scrollback_bytes_reserved);
+        release_runtime_tracking(*pane.runtime);
+        unlink(pane);
       }
     }
     LEMMA_ASSERT(size_ >= session->size);
@@ -688,21 +1041,218 @@ public:
     session.reset();
   }
 
+  template <typename Function> void for_each(Function function) noexcept {
+    auto key = active_head_;
+    while (key != no_pane_key) {
+      auto& session = std::span(sessions_).subspan(session_slot(key), 1).front();
+      LEMMA_ASSERT(session != nullptr);
+      auto& pane = std::span(session->panes).subspan(pane_slot(key), 1).front();
+      LEMMA_ASSERT(pane.runtime != nullptr);
+      const auto next = pane.next;
+      function(
+          PaneAddress{
+              .session = SessionId::from_parts(static_cast<std::uint32_t>(session_slot(key)),
+                                               session->generation),
+              .pane =
+                  PaneId::from_parts(static_cast<std::uint32_t>(pane_slot(key)), pane.generation),
+          },
+          *pane.runtime);
+      key = next;
+    }
+  }
+
+  template <typename Function> void for_each(Function function) const noexcept {
+    auto key = active_head_;
+    while (key != no_pane_key) {
+      const auto& session = std::span(sessions_).subspan(session_slot(key), 1).front();
+      LEMMA_ASSERT(session != nullptr);
+      const auto& pane = std::span(session->panes).subspan(pane_slot(key), 1).front();
+      LEMMA_ASSERT(pane.runtime != nullptr);
+      const auto next = pane.next;
+      function(
+          PaneAddress{
+              .session = SessionId::from_parts(static_cast<std::uint32_t>(session_slot(key)),
+                                               session->generation),
+              .pane =
+                  PaneId::from_parts(static_cast<std::uint32_t>(pane_slot(key)), pane.generation),
+          },
+          *pane.runtime);
+      key = next;
+    }
+  }
+
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] auto failed_count() const noexcept -> std::size_t { return failed_count_; }
+  [[nodiscard]] auto unparking_count() const noexcept -> std::size_t { return unparking_count_; }
+  [[nodiscard]] auto pending_writes_possible() const noexcept -> bool {
+    return pending_writes_possible_;
+  }
+  void note_pending_writes() noexcept { pending_writes_possible_ = true; }
+  void clear_pending_writes_hint() noexcept { pending_writes_possible_ = false; }
+  [[nodiscard]] auto compression_deadline_hint() const noexcept
+      -> std::optional<std::chrono::steady_clock::time_point> {
+    return compression_deadline_hint_;
+  }
+  [[nodiscard]] auto presentation_deadline_hint() const noexcept
+      -> std::optional<std::chrono::steady_clock::time_point> {
+    return presentation_deadline_hint_;
+  }
+  [[nodiscard]] auto parking_deadline_hint() const noexcept
+      -> std::optional<std::chrono::steady_clock::time_point> {
+    return parking_deadline_hint_;
+  }
+  void note_failure() noexcept {
+    LEMMA_ASSERT(failed_count_ < size_);
+    ++failed_count_;
+  }
+  void clear_failure(PaneRuntime& runtime) noexcept {
+    if (runtime.failure.has_value()) {
+      LEMMA_ASSERT(failed_count_ > 0);
+      --failed_count_;
+      runtime.failure.reset();
+    }
+  }
+  void note_compression_deadline(const std::chrono::steady_clock::time_point deadline) noexcept {
+    tighten_deadline(compression_deadline_hint_, deadline);
+  }
+  void note_presentation_deadline(
+      const std::optional<std::chrono::steady_clock::time_point> deadline) noexcept {
+    if (deadline.has_value()) {
+      tighten_deadline(presentation_deadline_hint_, *deadline);
+    }
+  }
+  void refresh_compression_deadline_hint() noexcept {
+    compression_deadline_hint_.reset();
+    for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+      if (runtime.live() && runtime.compression_scheduled) {
+        tighten_deadline(compression_deadline_hint_, runtime.compression_deadline);
+      }
+    });
+  }
+  void refresh_presentation_deadline_hint() noexcept {
+    presentation_deadline_hint_.reset();
+    for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+      note_presentation_deadline(runtime.presentation_gate.deadline());
+    });
+  }
+  void refresh_parking_deadline_hint() noexcept {
+    parking_deadline_hint_.reset();
+    for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+      if (runtime.live() && runtime.parking_deadline.has_value()) {
+        tighten_deadline(parking_deadline_hint_, *runtime.parking_deadline);
+      }
+    });
+  }
+  void clear_parking_deadline_hint() noexcept { parking_deadline_hint_.reset(); }
   [[nodiscard]] auto scrollback_bytes_reserved() const noexcept -> std::size_t {
     return scrollback_bytes_reserved_;
   }
   [[nodiscard]] auto can_reserve_scrollback(const std::size_t bytes) const noexcept -> bool {
     return bytes <= limits::terminal_scrollback_bytes_aggregate_max - scrollback_bytes_reserved_;
   }
+  [[nodiscard]] auto snapshot_bytes_reserved() const noexcept -> std::size_t {
+    return snapshot_quota_.daemon_bytes();
+  }
+  [[nodiscard]] auto
+  park(const PaneAddress address,
+       const SnapshotTestCorruption corruption = SnapshotTestCorruption::none) noexcept
+      -> std::expected<std::size_t, vt::Error> {
+    auto* const runtime = get(address);
+    if (runtime == nullptr || runtime->residency.phase() != PaneResidencyPhase::active) {
+      return std::unexpected(vt::Error::invalid_state);
+    }
+    const auto restore_options = runtime->restoration_options();
+    const auto started =
+        runtime->residency.begin_parking(restore_options, snapshot_quota_, address.session.slot());
+    if (!started.has_value()) {
+      return std::unexpected(started.error());
+    }
+    const auto finished = runtime->residency.finish_parking(corruption);
+    if (!finished.has_value()) {
+      return std::unexpected(finished.error());
+    }
+    return *started;
+  }
+  [[nodiscard]] auto wake(const PaneAddress address, const PaneWakeReason reason) noexcept
+      -> std::expected<bool, vt::Error> {
+    auto* const runtime = get(address);
+    if (runtime == nullptr) {
+      return std::unexpected(vt::Error::invalid_state);
+    }
+    const auto phase = runtime->residency.phase();
+    if (phase == PaneResidencyPhase::active) {
+      runtime->parking_deadline.reset();
+      return true;
+    }
+    runtime->residency.request_wake(reason);
+    switch (phase) {
+    case PaneResidencyPhase::active:
+      LEMMA_ASSERT(false);
+      return true;
+    case PaneResidencyPhase::parking:
+      runtime->residency.cancel_parking();
+      return true;
+    case PaneResidencyPhase::parked: {
+      const auto started = runtime->residency.begin_unparking();
+      if (!started.has_value()) {
+        return std::unexpected(started.error());
+      }
+      LEMMA_ASSERT(unparking_count_ < size_);
+      ++unparking_count_;
+      return false;
+    }
+    case PaneResidencyPhase::unparking:
+      return false;
+    }
+  }
+  [[nodiscard]] auto restore_one_history_page(const PaneAddress address) noexcept
+      -> std::expected<bool, vt::Error> {
+    auto* const runtime = get(address);
+    if (runtime == nullptr) {
+      return std::unexpected(vt::Error::invalid_state);
+    }
+    const auto restored = runtime->residency.restore_one_history_page();
+    if (restored.has_value() && *restored) {
+      LEMMA_ASSERT(unparking_count_ > 0);
+      --unparking_count_;
+      static_cast<void>(runtime->residency.take_wake_reasons());
+      runtime->parking_deadline.reset();
+    }
+    return restored;
+  }
 
 private:
+  static void tighten_deadline(std::optional<std::chrono::steady_clock::time_point>& current,
+                               const std::chrono::steady_clock::time_point candidate) noexcept {
+    if (!current.has_value() || candidate < *current) {
+      current = candidate;
+    }
+  }
+
+  // Declared before Pane owners so all RAII reservations release before their quota authority.
+  PaneSnapshotQuota snapshot_quota_;
   std::array<std::unique_ptr<SessionSlots>, limits::sessions_hard_max> sessions_{};
+  PaneKey active_head_{no_pane_key};
   std::size_t size_{0};
+  std::size_t failed_count_{0};
+  std::size_t unparking_count_{0};
   std::size_t scrollback_bytes_reserved_{0};
+  bool pending_writes_possible_{false};
+  std::optional<std::chrono::steady_clock::time_point> compression_deadline_hint_;
+  std::optional<std::chrono::steady_clock::time_point> presentation_deadline_hint_;
+  std::optional<std::chrono::steady_clock::time_point> parking_deadline_hint_;
 };
 
 static_assert(sizeof(PaneRuntimeStore) <= std::size_t{4} * 1'024U);
+
+void PaneRuntime::fail(const PaneRuntimeFailure reason) noexcept {
+  if (!failure.has_value()) {
+    failure = reason;
+    if (owner != nullptr) {
+      owner->note_failure();
+    }
+  }
+}
 
 void record_terminal_observation(PaneRuntime& runtime) noexcept {
   runtime.observation_generation =
@@ -751,6 +1301,31 @@ struct CopyModeRuntimeState final {
   bool preview_match{false};
 };
 
+struct SessionRecord;
+
+// Frame work is sparse even when many detached Sessions are live. The registry is the bounded
+// authority for Sessions whose scheduler owns a pending request; stable Session IDs continue to
+// address the generational store independently.
+class DenseSessionRegistry final {
+public:
+  void publish(SessionRecord& session, std::size_t& inverse_index) noexcept;
+  void erase(SessionRecord& session, std::size_t& inverse_index) noexcept;
+  [[nodiscard]] auto size() const noexcept -> std::size_t { return live_count_; }
+  [[nodiscard]] auto at(std::size_t index) noexcept -> SessionRecord*;
+  [[nodiscard]] auto at(std::size_t index) const noexcept -> const SessionRecord*;
+
+private:
+  struct Entry final {
+    SessionRecord* session{nullptr};
+    std::size_t* inverse_index{nullptr};
+  };
+
+  std::array<Entry, limits::sessions_hard_max> live_sessions_{};
+  std::size_t live_count_{0};
+};
+
+inline constexpr std::size_t no_dense_session_index = limits::sessions_hard_max;
+
 // Runtime-sized bounded clipboard staging cannot use std::array.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
 using ClipboardStorage = std::unique_ptr<std::byte[]>;
@@ -790,6 +1365,7 @@ struct AttachmentRuntime final {
     clipboard_write.reset();
     close_descriptor(client);
     connection_id = {};
+    poll_identity = 0;
     decoder.release();
     output.reset();
     frame.release();
@@ -822,6 +1398,7 @@ struct AttachmentRuntime final {
   CopyModeRuntimeState copy_mode;
   FrameScheduler frame_scheduler;
   ConnectionId connection_id;
+  std::uint64_t poll_identity{0};
   std::uint32_t server_sequence{2};
   std::uint32_t full_redraw_generation{0};
   std::uint32_t pending_attach_slot{std::numeric_limits<std::uint32_t>::max()};
@@ -851,7 +1428,7 @@ struct SessionRecord final : Session {
   SessionRecord(const std::string_view session_name,
                 const std::string_view initial_working_directory,
                 const std::span<const std::byte> initial_environment,
-                const LaunchEnvironmentMode initial_environment_mode) noexcept
+                const LaunchEnvironmentMode initial_environment_mode)
       : Session(session_name, initial_working_directory, initial_environment,
                 initial_environment_mode),
         input_router(reactor_input_map()), interaction_router(reactor_input_map()),
@@ -867,8 +1444,55 @@ struct SessionRecord final : Session {
   input::InputRouter interaction_router;
   AttachmentRuntime attachment_runtime;
   vt::TerminalTheme theme;
+  DenseSessionRegistry* frame_work_registry{nullptr};
+  DenseSessionRegistry* attachment_registry{nullptr};
+  std::size_t live_registry_index{0};
+  std::size_t frame_work_registry_index{no_dense_session_index};
+  std::size_t attachment_registry_index{no_dense_session_index};
   std::uint32_t connection_generation{0};
 };
+
+void DenseSessionRegistry::publish(SessionRecord& session, std::size_t& inverse_index) noexcept {
+  if (inverse_index != no_dense_session_index) {
+    LEMMA_ASSERT(inverse_index < live_count_);
+    const auto& entry = std::span(live_sessions_).subspan(inverse_index, 1).front();
+    LEMMA_ASSERT(entry.session == &session && entry.inverse_index == &inverse_index);
+    return;
+  }
+  LEMMA_ASSERT(live_count_ < live_sessions_.size());
+  inverse_index = live_count_;
+  std::span(live_sessions_).subspan(live_count_, 1).front() = {.session = &session,
+                                                               .inverse_index = &inverse_index};
+  ++live_count_;
+}
+
+void DenseSessionRegistry::erase(SessionRecord& session, std::size_t& inverse_index) noexcept {
+  if (inverse_index == no_dense_session_index) {
+    return;
+  }
+  LEMMA_ASSERT(live_count_ > 0 && inverse_index < live_count_);
+  const auto index = inverse_index;
+  const auto& erased = std::span(live_sessions_).subspan(index, 1).front();
+  LEMMA_ASSERT(erased.session == &session && erased.inverse_index == &inverse_index);
+  --live_count_;
+  const auto moved = std::span(live_sessions_).subspan(live_count_, 1).front();
+  LEMMA_ASSERT(moved.session != nullptr && moved.inverse_index != nullptr);
+  std::span(live_sessions_).subspan(index, 1).front() = moved;
+  *moved.inverse_index = index;
+  std::span(live_sessions_).subspan(live_count_, 1).front() = {};
+  inverse_index = no_dense_session_index;
+}
+
+[[nodiscard]] auto DenseSessionRegistry::at(const std::size_t index) noexcept -> SessionRecord* {
+  LEMMA_ASSERT(index < live_count_);
+  return std::span(live_sessions_).subspan(index, 1).front().session;
+}
+
+[[nodiscard]] auto DenseSessionRegistry::at(const std::size_t index) const noexcept
+    -> const SessionRecord* {
+  LEMMA_ASSERT(index < live_count_);
+  return std::span(live_sessions_).subspan(index, 1).front().session;
+}
 
 static_assert(sizeof(AttachmentRuntime) <= std::size_t{16} * 1'024U);
 static_assert(sizeof(SessionRecord) <= std::size_t{96} * 1'024U);
@@ -894,10 +1518,10 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
     }
     auto* const runtime = runtimes.get({.session = session.id, .pane = pane_slot.pane->id});
     LEMMA_ASSERT(runtime != nullptr);
-    runtime->terminal.reset_selection_gesture();
-    runtime->terminal.clear_selection_checkpoint();
-    runtime->terminal.clear_selection();
-    runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+    runtime->active_terminal().reset_selection_gesture();
+    runtime->active_terminal().clear_selection_checkpoint();
+    runtime->active_terminal().clear_selection();
+    runtime->active_terminal().scroll_viewport(vt::ViewportScroll::bottom);
     record_terminal_observation(*runtime);
     runtime->interactive_damage.reset();
   }
@@ -911,6 +1535,9 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   session.interaction_router.reset();
   session.attachment.selection_target.reset();
   session.attachment.mouse_capture.reset();
+  LEMMA_ASSERT(session.frame_work_registry != nullptr && session.attachment_registry != nullptr);
+  session.frame_work_registry->erase(session, session.frame_work_registry_index);
+  session.attachment_registry->erase(session, session.attachment_registry_index);
   session.attachment_runtime.reset_connection();
 }
 
@@ -962,7 +1589,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   for (std::size_t remaining = changed.size(); remaining > 0; --remaining) {
     auto* const runtime = changed.subspan(remaining - 1U, 1).front();
     LEMMA_ASSERT(runtime != nullptr);
-    if (!runtime->terminal.set_theme(previous).has_value()) {
+    if (!runtime->active_terminal().set_theme(previous).has_value()) {
       runtime->fail(PaneRuntimeFailure::terminal_integrity_error);
       restored = false;
     }
@@ -982,7 +1609,7 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
     }
     auto* const runtime = runtimes.get({.session = session.id, .pane = pane_slot.pane->id});
     LEMMA_ASSERT(runtime != nullptr && changed_count < changed.size());
-    if (!runtime->terminal.set_theme(theme).has_value()) {
+    if (!runtime->active_terminal().set_theme(theme).has_value()) {
       const bool restored =
           rollback_session_theme(std::span(changed).first(changed_count), session.theme);
       session.active = session.active && restored;
@@ -1057,14 +1684,14 @@ struct EncodedContextId final {
   options.size = {.columns = columns, .rows = rows};
   options.theme = theme;
   options.scrollback_lines_max = reactor_scrollback_lines();
+  options.snapshot_continuation_bytes_max = limits::snapshot_continuation_bytes_max;
   auto terminal_result = vt::Terminal::create(options);
   if (!terminal_result.has_value()) {
     return nullptr;
   }
   std::unique_ptr<PaneRuntime> runtime;
   try {
-    runtime =
-        std::make_unique<PaneRuntime>(std::move(*terminal_result), options.scrollback_bytes_max);
+    runtime = std::make_unique<PaneRuntime>(std::move(*terminal_result), options);
   } catch (const std::bad_alloc&) {
     return nullptr;
   }
@@ -1088,7 +1715,7 @@ struct EncodedContextId final {
                             options.size.cell_height_px)) {
     return nullptr;
   }
-  const auto compression_activity = runtime->terminal.compression_activity();
+  const auto compression_activity = runtime->active_terminal().compression_activity();
   if (!compression_activity.has_value()) {
     return nullptr;
   }
@@ -1184,6 +1811,34 @@ refresh_process_name_if_due(PaneRuntime& runtime,
   return {.session = session.id, .pane = pane.id};
 }
 
+enum class SessionWakeStatus : std::uint8_t {
+  active,
+  pending,
+  failed,
+};
+
+[[nodiscard]] auto wake_session_panes(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                      const PaneWakeReason reason) noexcept -> SessionWakeStatus {
+  auto status = SessionWakeStatus::active;
+  for (const auto& pane_slot : session.panes) {
+    if (pane_slot.pane == nullptr) {
+      continue;
+    }
+    const auto address = pane_address(session, *pane_slot.pane);
+    auto* const runtime = runtimes.get(address);
+    LEMMA_ASSERT(runtime != nullptr);
+    const auto awake = runtimes.wake(address, reason);
+    if (!awake.has_value()) {
+      runtime->fail(PaneRuntimeFailure::snapshot_restore_error);
+      return SessionWakeStatus::failed;
+    }
+    if (!*awake) {
+      status = SessionWakeStatus::pending;
+    }
+  }
+  return status;
+}
+
 [[nodiscard]] auto find_pane_runtime(PaneRuntimeStore& runtimes, const SessionRecord& session,
                                      const Pane& pane) noexcept -> PaneRuntime* {
   return runtimes.get(pane_address(session, pane));
@@ -1269,7 +1924,7 @@ using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
                                              const render::PaneRectangle target) noexcept
     -> TerminalResizeStatus {
   if (runtime.held()) {
-    const auto previous = runtime.terminal.size();
+    const auto previous = runtime.active_terminal().size();
     if (previous.columns == target.columns && previous.rows == target.rows) {
       return TerminalResizeStatus::unchanged;
     }
@@ -1277,15 +1932,17 @@ using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
                                      .rows = target.rows,
                                      .cell_width_px = previous.cell_width_px,
                                      .cell_height_px = previous.cell_height_px};
-    if (!runtime.terminal.resize(requested).has_value()) {
+    if (!runtime.active_terminal()
+             .resize(requested, pane_pty_response_sink(runtime.pending_writes))
+             .has_value()) {
       runtime.fail(PaneRuntimeFailure::resize_consistency_lost);
       return TerminalResizeStatus::consistency_lost;
     }
     runtime.pending_writes.clear();
     return TerminalResizeStatus::applied;
   }
-  const auto status =
-      resize_pane_terminal(runtime.pty, runtime.terminal, target.columns, target.rows);
+  const auto status = resize_pane_terminal(runtime.pty, runtime.active_terminal(),
+                                           runtime.pending_writes, target.columns, target.rows);
   if (status == TerminalResizeStatus::consistency_lost) {
     runtime.fail(PaneRuntimeFailure::resize_consistency_lost);
     return status;
@@ -1293,19 +1950,23 @@ using PaneResizePlan = std::array<PaneResizePlanEntry, panes_per_tab_max>;
   if (status != TerminalResizeStatus::applied) {
     return status;
   }
-  // Ghostty may emit mode-2048 size reports from resize itself. Those bytes must enter the
-  // pane's ordered PTY queue immediately; they are not left in the adapter until the next PTY
-  // read or keystroke.
-  if (!queue_terminal_responses(runtime.pending_writes, runtime.terminal)) {
+  // Ghostty may emit mode-2048 size reports from resize itself. They have already entered the
+  // pane's single ordered PTY queue synchronously.
+  LEMMA_ASSERT(runtime.owner != nullptr);
+  if (!runtime.pending_writes.empty()) {
+    runtime.owner->note_pending_writes();
+  }
+  if (runtime.active_terminal().integrity_failed()) {
     runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
     return TerminalResizeStatus::consistency_lost;
   }
-  const auto synchronized = runtime.terminal.synchronized_output();
+  const auto synchronized = runtime.active_terminal().synchronized_output();
   if (!synchronized.has_value()) {
     runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
     return TerminalResizeStatus::consistency_lost;
   }
   static_cast<void>(runtime.presentation_gate.observe(*synchronized, true, reactor_now()));
+  runtime.owner->note_presentation_deadline(runtime.presentation_gate.deadline());
   return status;
 }
 
@@ -1457,12 +2118,12 @@ void refresh_copy_selection_after_layout(SessionRecord& session, Tab& tab,
   }
   auto* const runtime = find_pane_runtime(runtimes, session, tab, *pane);
   LEMMA_ASSERT(runtime != nullptr);
-  const auto refreshed = runtime->terminal.refresh_selection();
+  const auto refreshed = runtime->active_terminal().refresh_selection();
   // Reflow updates Ghostty's tracked endpoints, but the renderer requires a freshly installed
   // selection snapshot. Re-anchor Ghostty's canonical viewport to that endpoint.
   const auto scrolled =
       refreshed.has_value() && *refreshed
-          ? runtime->terminal.scroll_selection_into_view()
+          ? runtime->active_terminal().scroll_selection_into_view()
           : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
   if (!scrolled.has_value() || !update_copy_viewport_offset(session, *runtime)) {
     leave_copy_mode(session, runtimes);
@@ -1492,6 +2153,10 @@ void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
                     const bool force_full) noexcept {
   session.attachment_runtime.frame_scheduler.request(urgency, force_full, reactor_now(),
                                                      frame_sink_state(session));
+  if (session.attachment_runtime.frame_scheduler.pending()) {
+    LEMMA_ASSERT(session.frame_work_registry != nullptr);
+    session.frame_work_registry->publish(session, session.frame_work_registry_index);
+  }
 }
 
 struct ProductionSessionRuntimeContext final {
@@ -1577,7 +2242,7 @@ void production_hold_pane(void* const context, const SessionId session, const Pa
   LEMMA_ASSERT(runtime != nullptr);
   close_descriptor(runtime->pty);
   runtime->pending_writes.clear();
-  runtime->failure.reset();
+  owner.runtimes->clear_failure(*runtime);
   runtime->observed_exit.reset();
   runtime->child = -1;
   runtime->process_name = {};
@@ -1610,7 +2275,7 @@ void apply_session_change(SessionRecord& session, PaneRuntimeStore& runtimes,
   if (change.invalidate_terminal.is_valid()) {
     auto* const runtime = runtimes.get({.session = session.id, .pane = change.invalidate_terminal});
     if (runtime != nullptr) {
-      runtime->terminal.invalidate_ansi_render_state();
+      runtime->active_terminal().invalidate_ansi_render_state();
     }
   }
   if (change.frame_requested && session.active) {
@@ -1678,7 +2343,7 @@ void finish_live_divider_resize(SessionRecord& session, const bool discard_relea
 }
 
 void note_compression_activity(PaneRuntime& runtime) noexcept {
-  const auto activity = runtime.terminal.compression_activity();
+  const auto activity = runtime.active_terminal().compression_activity();
   if (!activity.has_value()) {
     runtime.fail(PaneRuntimeFailure::scrollback_compression_error);
     return;
@@ -1691,11 +2356,13 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
   }
   runtime.compression_scheduled = true;
   runtime.compression_deadline = reactor_now() + limits::scrollback_compression_idle_delay;
+  LEMMA_ASSERT(runtime.owner != nullptr);
+  runtime.owner->note_compression_deadline(runtime.compression_deadline);
 }
 
 [[nodiscard]] auto scroll_viewport_for_application_input(SessionRecord& session,
                                                          PaneRuntime& runtime) noexcept -> bool {
-  const auto scrolled = runtime.terminal.scroll_viewport_to_bottom();
+  const auto scrolled = runtime.active_terminal().scroll_viewport_to_bottom();
   if (!scrolled.has_value()) {
     runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
     return false;
@@ -1709,13 +2376,13 @@ void note_compression_activity(PaneRuntime& runtime) noexcept {
 }
 
 void invalidate_copy_presentation(SessionRecord& session, PaneRuntime& runtime) noexcept {
-  runtime.terminal.invalidate_ansi_render_state();
+  runtime.active_terminal().invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, false);
 }
 
 [[nodiscard]] auto update_copy_viewport_offset(SessionRecord& session,
                                                PaneRuntime& runtime) noexcept -> bool {
-  const auto viewport = runtime.terminal.viewport_state();
+  const auto viewport = runtime.active_terminal().viewport_state();
   if (!viewport.has_value()) {
     return false;
   }
@@ -1737,11 +2404,11 @@ void leave_copy_mode(SessionRecord& session, PaneRuntimeStore& runtimes) noexcep
   const auto target = session.attachment.selection_target;
   auto* const runtime = selection_runtime(session, runtimes);
   if (runtime != nullptr) {
-    runtime->terminal.reset_selection_gesture();
-    runtime->terminal.clear_selection_checkpoint();
-    runtime->terminal.clear_selection();
+    runtime->active_terminal().reset_selection_gesture();
+    runtime->active_terminal().clear_selection_checkpoint();
+    runtime->active_terminal().clear_selection();
     if (changed) {
-      runtime->terminal.scroll_viewport(vt::ViewportScroll::bottom);
+      runtime->active_terminal().scroll_viewport(vt::ViewportScroll::bottom);
       record_terminal_observation(*runtime);
       note_compression_activity(*runtime);
     }
@@ -1917,10 +2584,10 @@ void clear_mouse_selection(SessionRecord& session, PaneRuntimeStore& runtimes) n
   auto* const runtime = selection_runtime(session, runtimes);
   bool changed = false;
   if (runtime != nullptr) {
-    const auto active = runtime->terminal.selection_active();
+    const auto active = runtime->active_terminal().selection_active();
     changed = !active.has_value() || *active;
-    runtime->terminal.reset_selection_gesture();
-    runtime->terminal.clear_selection();
+    runtime->active_terminal().reset_selection_gesture();
+    runtime->active_terminal().clear_selection();
   }
   reset_selection_capture(session.attachment, target);
   session.attachment.selection_target.reset();
@@ -1934,7 +2601,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   if (copy_mode_pane(session) != &pane) {
     return;
   }
-  runtime.terminal.scroll_viewport(
+  runtime.active_terminal().scroll_viewport(
       vt::ViewportScroll::row,
       static_cast<std::int64_t>(session.attachment.copy_mode.viewport_offset));
   if (!update_copy_viewport_offset(session, runtime)) {
@@ -1946,7 +2613,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
                                    PaneRuntime& runtime, PaneRuntimeStore& runtimes) noexcept
     -> bool {
   leave_copy_mode(session, runtimes);
-  const auto update = runtime.terminal.update_render_state();
+  const auto update = runtime.active_terminal().update_render_state();
   if (!update.has_value()) {
     return false;
   }
@@ -1956,7 +2623,7 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
       .row = update->cursor_in_viewport ? update->cursor_row
                                         : static_cast<std::uint32_t>(pane.rectangle.rows - 1U),
   };
-  const auto selected = runtime.terminal.select(vt::SelectionUnit::cell, cursor);
+  const auto selected = runtime.active_terminal().select(vt::SelectionUnit::cell, cursor);
   if (!selected.has_value() || !*selected) {
     return false;
   }
@@ -1965,12 +2632,12 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
   session.attachment.copy_mode.phase = CopyModePhase::navigation;
   session.interaction_router.select_base(input::ConfiguredInputContext::copy);
   if (!update_copy_viewport_offset(session, runtime)) {
-    runtime.terminal.clear_selection();
+    runtime.active_terminal().clear_selection();
     session.attachment.selection_target.reset();
     session.attachment.copy_mode = {};
     return false;
   }
-  runtime.terminal.invalidate_ansi_render_state();
+  runtime.active_terminal().invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, true);
   return true;
 }
@@ -1978,15 +2645,15 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
 [[nodiscard]] auto scroll_viewport_with_mouse(SessionRecord& session, PaneRuntime& runtime,
                                               const protocol::MouseInputButton button,
                                               const bool copy_selection) noexcept -> bool {
-  const auto viewport = runtime.terminal.viewport_state();
+  const auto viewport = runtime.active_terminal().viewport_state();
   if (!viewport.has_value()) {
     return false;
   }
 
   const bool upward = button == protocol::MouseInputButton::four;
-  runtime.terminal.scroll_viewport(vt::ViewportScroll::delta,
-                                   upward ? -mouse_wheel_scroll_rows : mouse_wheel_scroll_rows);
-  const auto scrolled = runtime.terminal.viewport_state();
+  runtime.active_terminal().scroll_viewport(
+      vt::ViewportScroll::delta, upward ? -mouse_wheel_scroll_rows : mouse_wheel_scroll_rows);
+  const auto scrolled = runtime.active_terminal().viewport_state();
   if (!scrolled.has_value()) {
     return false;
   }
@@ -2025,21 +2692,22 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
                                          const vt::SelectionAdjustment adjustment) noexcept
     -> bool {
   const auto phase = session.attachment.copy_mode.phase;
-  const auto adjusted =
-      runtime.terminal.selection_adjust(adjustment, session.attachment.copy_mode.selecting());
+  const auto adjusted = runtime.active_terminal().selection_adjust(
+      adjustment, session.attachment.copy_mode.selecting());
   if (!adjusted.has_value()) {
     leave_copy_mode(session, runtimes);
     return false;
   }
   if (*adjusted && session.attachment.copy_mode.selecting()) {
-    const auto normalized = runtime.terminal.selection_normalize_unit(copy_selection_unit(phase));
+    const auto normalized =
+        runtime.active_terminal().selection_normalize_unit(copy_selection_unit(phase));
     if (!normalized.has_value()) {
       leave_copy_mode(session, runtimes);
       return false;
     }
   }
   if (*adjusted) {
-    const auto scrolled = runtime.terminal.scroll_selection_into_view();
+    const auto scrolled = runtime.active_terminal().scroll_selection_into_view();
     if (!scrolled.has_value() || !update_copy_viewport_offset(session, runtime)) {
       leave_copy_mode(session, runtimes);
       return false;
@@ -2060,8 +2728,8 @@ void preserve_copy_viewport_after_mutation(SessionRecord& session, Pane& pane, P
 [[nodiscard]] auto copy_search_boundary(PaneRuntime& runtime,
                                         const CopySearchDirection direction) noexcept
     -> std::optional<vt::TerminalPoint> {
-  const auto viewport = runtime.terminal.viewport_state();
-  const auto columns = runtime.terminal.size().columns;
+  const auto viewport = runtime.active_terminal().viewport_state();
+  const auto columns = runtime.active_terminal().size().columns;
   if (!viewport.has_value() || viewport->total_rows == 0 || columns == 0) {
     return std::nullopt;
   }
@@ -2169,7 +2837,7 @@ command_status_for_copy_selection(const CopySelectionResult result) noexcept -> 
   if (storage == nullptr) {
     return fail(CopyModeFeedback::failed);
   }
-  const auto formatted = runtime.terminal.format_selection(
+  const auto formatted = runtime.active_terminal().format_selection(
       vt::ScreenFormat::plain, std::span(storage.get(), delivery_capacity));
   if (!formatted.has_value()) {
     return fail(formatted.error() == vt::Error::out_of_space ? CopyModeFeedback::too_large
@@ -2271,11 +2939,11 @@ struct CopyEscapeDecode final {
 [[nodiscard]] auto restore_copy_search_selection(SessionRecord& session,
                                                  PaneRuntime& runtime) noexcept -> bool {
   auto& search = session.attachment_runtime.copy_mode;
-  const auto restored = runtime.terminal.restore_selection_checkpoint();
+  const auto restored = runtime.active_terminal().restore_selection_checkpoint();
   if (!restored.has_value() || !*restored || !search.search_restore_viewport_offset.has_value()) {
     return false;
   }
-  runtime.terminal.scroll_viewport(
+  runtime.active_terminal().scroll_viewport(
       vt::ViewportScroll::row, static_cast<std::int64_t>(*search.search_restore_viewport_offset));
   record_terminal_observation(runtime);
   return update_copy_viewport_offset(session, runtime);
@@ -2287,7 +2955,7 @@ void reset_copy_search_task(CopyModeRuntimeState& search) noexcept {
 }
 
 void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& search) noexcept {
-  runtime.terminal.clear_selection_checkpoint();
+  runtime.active_terminal().clear_selection_checkpoint();
   search.search_restore_viewport_offset.reset();
 }
 
@@ -2296,9 +2964,9 @@ void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& sea
   if (!reactor_status_line()) {
     return false;
   }
-  const auto endpoint = runtime.terminal.selection_endpoint(vt::PointSpace::screen);
-  const auto viewport = runtime.terminal.viewport_state();
-  const auto checkpointed = runtime.terminal.checkpoint_selection();
+  const auto endpoint = runtime.active_terminal().selection_endpoint(vt::PointSpace::screen);
+  const auto viewport = runtime.active_terminal().viewport_state();
+  const auto checkpointed = runtime.active_terminal().checkpoint_selection();
   if (!endpoint.has_value() || !endpoint->has_value() || !viewport.has_value() ||
       !checkpointed.has_value() || !*checkpointed) {
     return false;
@@ -2336,7 +3004,8 @@ void discard_copy_search_restore(PaneRuntime& runtime, CopyModeRuntimeState& sea
   // Keep the previous preview installed while the refined query is searched. The tracked
   // checkpoint remains the stable search origin, so no temporary restore frame can flash the
   // original copy cursor between previews.
-  const auto endpoint = runtime.terminal.selection_checkpoint_endpoint(vt::PointSpace::screen);
+  const auto endpoint =
+      runtime.active_terminal().selection_checkpoint_endpoint(vt::PointSpace::screen);
   if (!endpoint.has_value() || !endpoint->has_value()) {
     return false;
   }
@@ -2378,7 +3047,7 @@ void commit_draft_copy_query(CopyModeState& state) noexcept {
   }
   commit_draft_copy_query(state);
   if (search.preview_match) {
-    const auto selected = runtime.terminal.selection_range(vt::PointSpace::screen);
+    const auto selected = runtime.active_terminal().selection_range(vt::PointSpace::screen);
     if (!selected.has_value() || !selected->has_value()) {
       return false;
     }
@@ -2416,9 +3085,9 @@ void commit_draft_copy_query(CopyModeState& state) noexcept {
   if (state.query_size == 0) {
     return true;
   }
-  const auto endpoint = runtime.terminal.selection_endpoint(vt::PointSpace::screen);
-  const auto viewport = runtime.terminal.viewport_state();
-  const auto checkpointed = runtime.terminal.checkpoint_selection();
+  const auto endpoint = runtime.active_terminal().selection_endpoint(vt::PointSpace::screen);
+  const auto viewport = runtime.active_terminal().viewport_state();
+  const auto checkpointed = runtime.active_terminal().checkpoint_selection();
   if (!endpoint.has_value() || !endpoint->has_value() || !viewport.has_value() ||
       !checkpointed.has_value() || !*checkpointed) {
     return false;
@@ -2438,16 +3107,16 @@ void commit_draft_copy_query(CopyModeState& state) noexcept {
                                          const CopyModePhase phase) noexcept -> bool {
   auto& state = session.attachment.copy_mode;
   if (state.phase == phase) {
-    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    const auto collapsed = runtime.active_terminal().collapse_selection_to_endpoint();
     if (!collapsed.has_value() || !*collapsed) {
       return false;
     }
     state.phase = CopyModePhase::navigation;
   } else {
-    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    const auto collapsed = runtime.active_terminal().collapse_selection_to_endpoint();
     const auto selected =
         collapsed.has_value() && *collapsed
-            ? runtime.terminal.selection_set_unit(copy_selection_unit(phase))
+            ? runtime.active_terminal().selection_set_unit(copy_selection_unit(phase))
             : std::expected<bool, vt::Error>{std::unexpected(vt::Error::invalid_state)};
     if (!selected.has_value() || !*selected) {
       return false;
@@ -2552,7 +3221,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
     leave_copy_mode(session, runtimes);
     return false;
   case CopyActionKind::cancel_selection: {
-    const auto collapsed = runtime.terminal.collapse_selection_to_endpoint();
+    const auto collapsed = runtime.active_terminal().collapse_selection_to_endpoint();
     if (!collapsed.has_value() || !*collapsed) {
       leave_copy_mode(session, runtimes);
       return false;
@@ -2581,7 +3250,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
     if (!state.selecting()) {
       return true;
     }
-    const auto swapped = runtime.terminal.swap_selection_endpoints();
+    const auto swapped = runtime.active_terminal().swap_selection_endpoints();
     if (!swapped.has_value() || !*swapped) {
       leave_copy_mode(session, runtimes);
       return false;
@@ -3179,7 +3848,7 @@ void focus_pane(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtimes,
   LEMMA_ASSERT(focused != nullptr);
   auto* const focused_runtime = find_pane_runtime(runtimes, session, tab, *focused);
   LEMMA_ASSERT(focused_runtime != nullptr);
-  focused_runtime->terminal.invalidate_ansi_render_state();
+  focused_runtime->active_terminal().invalidate_ansi_render_state();
   schedule_frame(session, FrameUrgency::state_change, tab.zoomed);
 }
 
@@ -4031,7 +4700,7 @@ struct StatusHit final {
     if (runtime == nullptr) {
       return {.status = CommandStatus::unavailable};
     }
-    const auto active = runtime->terminal.selection_active();
+    const auto active = runtime->active_terminal().selection_active();
     if (!active.has_value()) {
       return {.status = CommandStatus::failed};
     }
@@ -4771,7 +5440,7 @@ struct MessageViewStorage final {
 
 [[nodiscard]] auto format_copy_position(const PaneRuntime& runtime,
                                         const std::span<char> output) noexcept -> std::size_t {
-  const auto viewport = runtime.terminal.viewport_state();
+  const auto viewport = runtime.active_terminal().viewport_state();
   if (!viewport.has_value() || output.size() < 5U) {
     return 0;
   }
@@ -4819,16 +5488,16 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
         session.attachment.copy_mode.active() &&
         session.attachment.selection_target ==
             std::optional{AttachmentPaneTarget{.tab = tab->id, .pane = pane->id}};
-    const auto copy_cursor = copy_pane
-                                 ? runtime->terminal.selection_endpoint(vt::PointSpace::viewport)
-                                 : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
-                                       std::optional<vt::TerminalPoint>{}};
+    const auto copy_cursor =
+        copy_pane ? runtime->active_terminal().selection_endpoint(vt::PointSpace::viewport)
+                  : std::expected<std::optional<vt::TerminalPoint>, vt::Error>{
+                        std::optional<vt::TerminalPoint>{}};
     const auto cursor = copy_cursor.value_or(std::optional<vt::TerminalPoint>{});
     const auto cursor_point = cursor.value_or(vt::TerminalPoint{});
     const bool cursor_override = cursor.has_value() && cursor_point.row < pane->rectangle.rows &&
                                  cursor_point.column < pane->rectangle.columns;
     std::span(storage).subspan(count, 1).front() = {
-        .terminal = &runtime->terminal,
+        .terminal = &runtime->active_terminal(),
         .rectangle = pane->rectangle,
         .cursor_override_column = cursor_override ? cursor_point.column : std::uint16_t{0},
         .cursor_override_row =
@@ -4908,12 +5577,12 @@ selection_gesture_phase(const protocol::MouseInputAction action) noexcept
       rectangle.row);
   bool presentation_changed = false;
   if (mouse.action == protocol::MouseInputAction::press) {
-    const auto active = runtime.terminal.selection_active();
+    const auto active = runtime.active_terminal().selection_active();
     if (!active.has_value()) {
       return false;
     }
     presentation_changed = *active;
-    runtime.terminal.clear_selection();
+    runtime.active_terminal().clear_selection();
   }
   const auto now = reactor_now().time_since_epoch();
   const auto time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
@@ -4933,7 +5602,7 @@ selection_gesture_phase(const protocol::MouseInputAction action) noexcept
       .repeat_distance = mouse_repeat_click_distance,
       .has_pointer_position = true,
   };
-  const auto result = runtime.terminal.selection_gesture(event);
+  const auto result = runtime.active_terminal().selection_gesture(event);
   if (!result.has_value()) {
     return false;
   }
@@ -5117,7 +5786,8 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
     return InputQueueResult::encoding_failed;
   }
   const auto queued_bytes_before = runtime.pending_writes.size();
-  const auto queued = queue_normalized_input(runtime.pending_writes, runtime.terminal, bytes);
+  const auto queued =
+      queue_normalized_input(runtime.pending_writes, runtime.active_terminal(), bytes);
   if (queued != InputQueueResult::queued) {
     return queued;
   }
@@ -5129,6 +5799,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
                                    static_cast<std::uint32_t>(runtime.pty), bytes.size(),
                                    trace_correlation);
   if (runtime.pending_writes.size() > queued_bytes_before) {
+    runtimes.note_pending_writes();
     clear_mouse_selection(session, runtimes);
     if (!scroll_viewport_for_application_input(session, runtime)) {
       return InputQueueResult::encoding_failed;
@@ -5182,8 +5853,9 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   for (const auto& event : events) {
     InputQueueResult queued = InputQueueResult::encoding_failed;
     if (event.kind == api::InputEventKind::text) {
-      queued = queue_normalized_input(
-          staged, runtime.terminal, std::as_bytes(std::span(event.text.data(), event.text.size())));
+      queued =
+          queue_normalized_input(staged, runtime.active_terminal(),
+                                 std::as_bytes(std::span(event.text.data(), event.text.size())));
     } else if (event.kind == api::InputEventKind::paste) {
       std::vector<std::byte> paste;
       try {
@@ -5192,7 +5864,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
       } catch (...) {
         return InputQueueResult::encoding_failed;
       }
-      queued = queue_paste_input(staged, runtime.terminal, paste);
+      queued = queue_paste_input(staged, runtime.active_terminal(), paste);
     } else {
       const auto key = public_input_key(event);
       std::array<std::byte, 1> text{};
@@ -5209,7 +5881,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
         text.front() = static_cast<std::byte>(character);
         key_text = text;
       }
-      queued = queue_key_input(staged, runtime.terminal, key, key_text);
+      queued = queue_key_input(staged, runtime.active_terminal(), key, key_text);
     }
     if (queued != InputQueueResult::queued) {
       return queued;
@@ -5227,6 +5899,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   const auto queued_bytes_before = runtime.pending_writes.size();
   const bool appended = runtime.pending_writes.append(staged.readable_span());
   LEMMA_ASSERT(appended);
+  runtimes.note_pending_writes();
   clear_mouse_selection(session, runtimes);
   runtime.interactive_damage.await_write(queued_bytes_before, runtime.pending_writes.size());
   return InputQueueResult::queued;
@@ -5252,12 +5925,14 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   const auto queued_bytes_before = runtime->pending_writes.size();
   const auto queued =
       prefix.empty()
-          ? queue_key_input(runtime->pending_writes, runtime->terminal, key, text)
-          : queue_prefixed_key_input(runtime->pending_writes, runtime->terminal, prefix, key, text);
+          ? queue_key_input(runtime->pending_writes, runtime->active_terminal(), key, text)
+          : queue_prefixed_key_input(runtime->pending_writes, runtime->active_terminal(), prefix,
+                                     key, text);
   if (queued != InputQueueResult::queued) {
     return queued;
   }
   if (runtime->pending_writes.size() > queued_bytes_before) {
+    runtimes.note_pending_writes();
     clear_mouse_selection(session, runtimes);
     if (!scroll_viewport_for_application_input(session, *runtime)) {
       return InputQueueResult::encoding_failed;
@@ -5488,7 +6163,7 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
   if (runtime == nullptr) {
     return false;
   }
-  const auto active = runtime->terminal.selection_active();
+  const auto active = runtime->active_terminal().selection_active();
   return active.has_value() && *active;
 }
 
@@ -5767,7 +6442,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       }
       const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_paste_input(runtime->pending_writes, runtime->terminal, message.input);
+          queue_paste_input(runtime->pending_writes, runtime->active_terminal(), message.input);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
@@ -5775,6 +6450,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         return ParseResult::error;
       }
       if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtimes.note_pending_writes();
         if (!scroll_viewport_for_application_input(session, *runtime)) {
           return ParseResult::error;
         }
@@ -5795,7 +6471,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       }
       const auto queued_bytes_before = runtime->pending_writes.size();
       const auto queued =
-          queue_focus_input(runtime->pending_writes, runtime->terminal,
+          queue_focus_input(runtime->pending_writes, runtime->active_terminal(),
                             message.focus == protocol::FocusInput::gained ? vt::FocusEvent::gained
                                                                           : vt::FocusEvent::lost);
       if (queued == InputQueueResult::full) {
@@ -5805,6 +6481,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         return ParseResult::error;
       }
       if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtimes.note_pending_writes();
         runtime->interactive_damage.await_write(queued_bytes_before,
                                                 runtime->pending_writes.size());
       }
@@ -6076,7 +6753,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
             return ParseResult::error;
           }
         }
-        const auto tracking = runtime->terminal.mouse_tracking();
+        const auto tracking = runtime->active_terminal().mouse_tracking();
         if (!tracking.has_value()) {
           return ParseResult::error;
         }
@@ -6085,7 +6762,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                     session.attachment.selection_target == std::optional{target};
         if (wheel_button && (copy_selection || !tracking->enabled)) {
           if (!copy_selection) {
-            const auto alternate_scroll = runtime->terminal.wheel_uses_alternate_scroll();
+            const auto alternate_scroll = runtime->active_terminal().wheel_uses_alternate_scroll();
             if (!alternate_scroll.has_value()) {
               return ParseResult::error;
             }
@@ -6093,7 +6770,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
               clear_mouse_selection(session, runtimes);
               const auto queued_bytes_before = runtime->pending_writes.size();
               const auto queued = queue_alternate_scroll_input(
-                  runtime->pending_writes, runtime->terminal,
+                  runtime->pending_writes, runtime->active_terminal(),
                   message.mouse.button == protocol::MouseInputButton::four);
               if (queued == InputQueueResult::full) {
                 return ParseResult::backpressure;
@@ -6102,6 +6779,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                 return ParseResult::error;
               }
               if (runtime->pending_writes.size() > queued_bytes_before) {
+                runtimes.note_pending_writes();
                 runtime->interactive_damage.await_write(queued_bytes_before,
                                                         runtime->pending_writes.size());
               }
@@ -6170,7 +6848,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
           .any_button_pressed = message.mouse.any_button_pressed,
       };
       const auto queued_bytes_before = runtime->pending_writes.size();
-      const auto queued = queue_mouse_input(runtime->pending_writes, runtime->terminal, event);
+      const auto queued =
+          queue_mouse_input(runtime->pending_writes, runtime->active_terminal(), event);
       if (queued == InputQueueResult::full) {
         return ParseResult::backpressure;
       }
@@ -6178,6 +6857,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         return ParseResult::error;
       }
       if (runtime->pending_writes.size() > queued_bytes_before) {
+        runtimes.note_pending_writes();
         runtime->interactive_damage.await_write(queued_bytes_before,
                                                 runtime->pending_writes.size());
       }
@@ -6261,11 +6941,11 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
                                               const CopySearchDirection direction) noexcept
     -> bool {
-  const auto viewport = runtime.terminal.viewport_state();
+  const auto viewport = runtime.active_terminal().viewport_state();
   if (!viewport.has_value() || viewport->total_rows == 0) {
     return false;
   }
-  const auto columns = runtime.terminal.size().columns;
+  const auto columns = runtime.active_terminal().size().columns;
   if (direction == CopySearchDirection::forward) {
     if (point.column + 1U < columns) {
       ++point.column;
@@ -6303,7 +6983,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     return false;
   }
   const auto direction = search.search_task->direction;
-  const auto endpoint = runtime.terminal.selection_checkpoint_endpoint(vt::PointSpace::screen);
+  const auto endpoint =
+      runtime.active_terminal().selection_checkpoint_endpoint(vt::PointSpace::screen);
   return endpoint.has_value() && endpoint->has_value() &&
          begin_copy_search(session, runtime, direction, **endpoint);
 }
@@ -6312,19 +6993,19 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                             const vt::SearchMatch match) noexcept -> bool {
   auto& state = session.attachment.copy_mode;
   auto& search = session.attachment_runtime.copy_mode;
-  const auto selected = runtime.terminal.select_search_match(match);
+  const auto selected = runtime.active_terminal().select_search_match(match);
   if (!selected.has_value()) {
     return false;
   }
-  const auto viewport = runtime.terminal.viewport_state();
+  const auto viewport = runtime.active_terminal().viewport_state();
   if (!viewport.has_value()) {
     return false;
   }
   const auto target_offset = copy_search_viewport_offset(
       match.end.row, viewport->offset, viewport->visible_rows, viewport->total_rows);
   if (target_offset != viewport->offset) {
-    runtime.terminal.scroll_viewport(vt::ViewportScroll::row,
-                                     static_cast<std::int64_t>(target_offset));
+    runtime.active_terminal().scroll_viewport(vt::ViewportScroll::row,
+                                              static_cast<std::int64_t>(target_offset));
     record_terminal_observation(runtime);
   }
   if (!update_copy_viewport_offset(session, runtime)) {
@@ -6407,7 +7088,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   const auto work_limit = std::min(work_budget, limits::search_candidates_per_step);
   work_budget -= work_limit;
   const auto stop = task->wrapped ? std::optional{task->stop_before} : std::nullopt;
-  const auto searched = runtime->terminal.search_literal_step(
+  const auto searched = runtime->active_terminal().search_literal_step(
       query, terminal_search_direction(task->direction), task->cursor, work_limit, stop);
   if (!searched.has_value()) {
     leave_copy_mode(session, runtimes);
@@ -6444,7 +7125,10 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   if (runtime->process_name_size > 0) {
     return {runtime->process_name.data(), runtime->process_name_size};
   }
-  const auto title = runtime->terminal.title();
+  if (runtime->residency.phase() != PaneResidencyPhase::active) {
+    return "shell";
+  }
+  const auto title = runtime->active_terminal().title();
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
 }
 
@@ -6635,14 +7319,6 @@ void collect_copy_search_prompt(const CopyModeState& state,
   mix(static_cast<std::uint8_t>(drag >> 48U));
   mix(static_cast<std::uint8_t>(drag >> 56U));
   return signature;
-}
-
-[[nodiscard]] auto current_status_signature(const SessionRecord& session,
-                                            const PaneRuntimeStore& runtimes) noexcept
-    -> std::uint64_t {
-  StatusContextStorage storage;
-  const auto input_context = collect_status_input_context(session, runtimes, storage);
-  return current_status_signature(session, runtimes, input_context, storage.prompt_view());
 }
 
 [[nodiscard]] constexpr auto status_prompt_target(const RenamePromptKind kind) noexcept
@@ -7310,7 +7986,18 @@ public:
     if (session != nullptr) {
       session->attachment_runtime.frame.bind_capacity_budget(frame_capacity_budget_);
     }
-    return sessions_.insert(std::move(session));
+    const auto inserted = sessions_.insert(std::move(session));
+    if (!inserted.has_value()) {
+      return std::nullopt;
+    }
+    auto* const live = sessions_.get(*inserted);
+    LEMMA_ASSERT(live != nullptr && live_count_ < live_sessions_.size());
+    live->frame_work_registry = &frame_work_registry_;
+    live->attachment_registry = &attachment_registry_;
+    live->live_registry_index = live_count_;
+    std::span(live_sessions_).subspan(live_count_, 1).front() = live;
+    ++live_count_;
+    return inserted;
   }
 
   [[nodiscard]] auto get(const SessionId id) noexcept -> SessionRecord* {
@@ -7319,19 +8006,62 @@ public:
   [[nodiscard]] auto get(const SessionId id) const noexcept -> const SessionRecord* {
     return sessions_.get(id);
   }
-  [[nodiscard]] auto erase(const SessionId id) noexcept -> bool { return sessions_.erase(id); }
-  [[nodiscard]] auto size() const noexcept -> std::size_t { return sessions_.size(); }
+  [[nodiscard]] auto erase(const SessionId id) noexcept -> bool {
+    auto* const erased = sessions_.get(id);
+    if (erased == nullptr) {
+      return false;
+    }
+    LEMMA_ASSERT(live_count_ > 0 && erased->live_registry_index < live_count_);
+    const auto index = erased->live_registry_index;
+    --live_count_;
+    auto* const moved = std::span(live_sessions_).subspan(live_count_, 1).front();
+    std::span(live_sessions_).subspan(index, 1).front() = moved;
+    moved->live_registry_index = index;
+    std::span(live_sessions_).subspan(live_count_, 1).front() = nullptr;
+    frame_work_registry_.erase(*erased, erased->frame_work_registry_index);
+    attachment_registry_.erase(*erased, erased->attachment_registry_index);
+    erased->frame_work_registry = nullptr;
+    erased->attachment_registry = nullptr;
+    const bool removed = sessions_.erase(id);
+    LEMMA_ASSERT(removed);
+    return removed;
+  }
+  [[nodiscard]] auto size() const noexcept -> std::size_t { return live_count_; }
+  [[nodiscard]] auto live_at(const std::size_t index) noexcept -> SessionRecord* {
+    LEMMA_ASSERT(index < live_count_);
+    return std::span(live_sessions_).subspan(index, 1).front();
+  }
+  [[nodiscard]] auto frame_work() noexcept -> DenseSessionRegistry& { return frame_work_registry_; }
+  [[nodiscard]] auto frame_work() const noexcept -> const DenseSessionRegistry& {
+    return frame_work_registry_;
+  }
+  [[nodiscard]] auto attachments() noexcept -> DenseSessionRegistry& {
+    return attachment_registry_;
+  }
+  [[nodiscard]] auto attachments() const noexcept -> const DenseSessionRegistry& {
+    return attachment_registry_;
+  }
   [[nodiscard]] static constexpr auto capacity() noexcept -> std::size_t {
     return Store::capacity();
   }
-  [[nodiscard]] auto begin() noexcept { return sessions_.begin(); }
-  [[nodiscard]] auto end() noexcept { return sessions_.end(); }
-  [[nodiscard]] auto begin() const noexcept { return sessions_.begin(); }
-  [[nodiscard]] auto end() const noexcept { return sessions_.end(); }
+  [[nodiscard]] auto begin() noexcept {
+    return std::span(live_sessions_).first(live_count_).begin();
+  }
+  [[nodiscard]] auto end() noexcept { return std::span(live_sessions_).first(live_count_).end(); }
+  [[nodiscard]] auto begin() const noexcept {
+    return std::span(live_sessions_).first(live_count_).begin();
+  }
+  [[nodiscard]] auto end() const noexcept {
+    return std::span(live_sessions_).first(live_count_).end();
+  }
 
 private:
   render::FrameCapacityBudget frame_capacity_budget_;
+  DenseSessionRegistry frame_work_registry_;
+  DenseSessionRegistry attachment_registry_;
   Store sessions_;
+  std::array<SessionRecord*, limits::sessions_hard_max> live_sessions_{};
+  std::size_t live_count_{0};
 };
 
 [[nodiscard]] auto append_structured_sessions(ConnectionOutput& output,
@@ -7356,7 +8086,7 @@ private:
     -> SessionRecord* {
   for (auto& session : sessions) {
     if (session != nullptr && session->active && session->session_name() == name) {
-      return session.get();
+      return session;
     }
   }
   return nullptr;
@@ -7389,7 +8119,7 @@ private:
       continue;
     }
     if (selected == nullptr || session->activity_order > selected->activity_order) {
-      selected = session.get();
+      selected = session;
     }
   }
   return selected;
@@ -7398,13 +8128,10 @@ private:
 [[nodiscard]] auto session_name_conflict(void* const context, const SessionId renamed,
                                          const std::string_view candidate) noexcept -> bool {
   auto& sessions = *static_cast<Sessions*>(context);
-  for (const auto& session : sessions) {
-    if (session != nullptr && session->active && session->id != renamed &&
-        session->session_name() == candidate) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(sessions, [renamed, candidate](const auto* const session) {
+    return session != nullptr && session->active && session->id != renamed &&
+           session->session_name() == candidate;
+  });
 }
 
 [[nodiscard]] auto process_exit_from_wait_status(int status) noexcept -> ProcessExit {
@@ -7419,25 +8146,32 @@ private:
   return {};
 }
 
+void finish_reaped_child(SessionRecord& session, const Pane& pane, PaneRuntime& runtime,
+                         PaneRuntimeStore& runtimes, const ChildExit child_exit) noexcept {
+  runtime.observed_exit = process_exit_from_wait_status(child_exit.status);
+  runtime.child = -1;
+  if (runtime.residency.phase() == PaneResidencyPhase::active) {
+    return;
+  }
+  const auto wake = runtimes.wake(pane_address(session, pane), PaneWakeReason::explicit_request);
+  if (!wake.has_value()) {
+    runtime.fail(PaneRuntimeFailure::snapshot_restore_error);
+  }
+}
+
 void record_reaped_child(Sessions& sessions, PaneRuntimeStore& runtimes,
                          const ChildExit child_exit) noexcept {
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active) {
-      continue;
+  bool matched = false;
+  runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+    if (matched || runtime.child != child_exit.process) {
+      return;
     }
-    for (auto& pane_slot : session->panes) {
-      if (pane_slot.pane == nullptr) {
-        continue;
-      }
-      auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
-      LEMMA_ASSERT(runtime != nullptr);
-      if (runtime->child == child_exit.process) {
-        runtime->observed_exit = process_exit_from_wait_status(child_exit.status);
-        runtime->child = -1;
-        return;
-      }
-    }
-  }
+    auto* const session = sessions.get(address.session);
+    auto* const pane = session == nullptr ? nullptr : find_pane(*session, address.pane);
+    LEMMA_ASSERT(session != nullptr && pane != nullptr);
+    finish_reaped_child(*session, *pane, runtime, runtimes, child_exit);
+    matched = true;
+  });
   // Already-closed panes are also daemon children and require no Core transition.
 }
 
@@ -7499,6 +8233,7 @@ enum class PendingState : std::uint8_t {
   read_control_payload,
   read_public_json,
   execute_public_proc,
+  prepare_attach,
   prepare_public_observer,
   observe,
   flush_response,
@@ -7537,6 +8272,63 @@ struct PublicObservedPaneState final {
   bool process_exited{false};
 };
 
+class PendingFieldStorage final {
+public:
+  [[nodiscard]] auto prepare(const std::size_t required) noexcept -> bool {
+    if (required <= inline_storage.size()) {
+      expanded.reset();
+      expanded_size = 0;
+      return true;
+    }
+    if (expanded_size == required) {
+      return true;
+    }
+    try {
+      // Runtime-sized pending field storage cannot use std::array.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+      auto replacement = std::make_unique_for_overwrite<std::byte[]>(required);
+      expanded = std::move(replacement);
+      expanded_size = required;
+      return true;
+    } catch (const std::bad_alloc&) {
+      return false;
+    }
+  }
+
+  void release() noexcept {
+    expanded.reset();
+    expanded_size = 0;
+  }
+
+  [[nodiscard]] auto data() noexcept -> std::byte* {
+    return expanded == nullptr ? inline_storage.data() : expanded.get();
+  }
+  [[nodiscard]] auto data() const noexcept -> const std::byte* {
+    return expanded == nullptr ? inline_storage.data() : expanded.get();
+  }
+  [[nodiscard]] auto size() const noexcept -> std::size_t {
+    return expanded == nullptr ? inline_storage.size() : expanded_size;
+  }
+  [[nodiscard]] auto begin() noexcept -> std::byte* { return data(); }
+  // A contiguous range endpoint is necessarily one-past the bounded backing allocation.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  [[nodiscard]] auto end() noexcept -> std::byte* { return data() + size(); }
+  [[nodiscard]] auto begin() const noexcept -> const std::byte* { return data(); }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  [[nodiscard]] auto end() const noexcept -> const std::byte* { return data() + size(); }
+  [[nodiscard]] auto front() noexcept -> std::byte& { return *data(); }
+  [[nodiscard]] auto front() const noexcept -> const std::byte& { return *data(); }
+
+private:
+  // Common names and mutation values stay allocation-free. Larger CWD, environment, and control
+  // fields fund only the exact announced payload while setup owns it; long-lived observers retain
+  // only this small protocol scratch.
+  std::array<std::byte, protocol::tab_title_bytes_max> inline_storage{};
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> expanded;
+  std::size_t expanded_size{0};
+};
+
 struct PendingConnection final {
   PendingConnection() = default;
   PendingConnection(const PendingConnection&) = delete;
@@ -7548,11 +8340,14 @@ struct PendingConnection final {
 
   int descriptor{-1};
   std::uint32_t generation{0};
+  std::uint64_t poll_identity{0};
   PendingState state{PendingState::unused};
   PendingDisposition disposition{PendingDisposition::close};
   std::byte command{};
   SessionName session;
-  WorkingDirectory working_directory;
+  // Create-with-context is the only protocol path that needs a CWD. Keeping its 4 KiB bound
+  // indirect avoids charging it to every long-lived public observer.
+  std::unique_ptr<WorkingDirectory> working_directory;
   std::vector<std::byte> environment;
   std::size_t environment_size{0};
   std::vector<std::byte> launch_command;
@@ -7561,7 +8356,7 @@ struct PendingConnection final {
   std::array<char, protocol::tab_title_bytes_max> mutation_text{};
   std::size_t mutation_text_size{0};
   std::uint8_t mutation_position{0};
-  std::array<std::byte, protocol::environment_bytes_max> field{};
+  PendingFieldStorage field;
   std::size_t field_size{0};
   std::size_t field_target{0};
   ConnectionOutput output;
@@ -7570,10 +8365,6 @@ struct PendingConnection final {
   std::size_t public_output_offset{0};
   PublicProcId proc;
   api::EventSubscription subscription;
-  std::uint64_t event_sequence{0};
-  std::uint64_t observed_semantic_hash{0};
-  std::array<PublicObservedPaneState, api::event_panes_max> observed_panes{};
-  std::size_t observed_pane_cursor{0};
   bool public_connection{false};
   std::uint32_t slot{std::numeric_limits<std::uint32_t>::max()};
   protocol::ClientDecoder attach_decoder;
@@ -7584,33 +8375,142 @@ struct PendingConnection final {
   std::chrono::steady_clock::time_point setup_deadline;
 };
 
+// Fixed-capacity owner tables retain authoritative dense live-slot registries. Stable protocol
+// indices still address the sparse owner arrays, while ordinary turn work is O(live owners).
+template <typename Owner, std::size_t Capacity> class UniqueOwnerSlots final {
+  static_assert(Capacity <= std::numeric_limits<std::uint16_t>::max());
+
+public:
+  using Slot = std::unique_ptr<Owner>;
+
+  [[nodiscard]] auto begin() noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() noexcept { return slots_.end(); }
+  [[nodiscard]] auto begin() const noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() const noexcept { return slots_.end(); }
+  [[nodiscard]] auto data() noexcept { return slots_.data(); }
+  [[nodiscard]] auto data() const noexcept { return slots_.data(); }
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return slots_.size(); }
+  [[nodiscard]] auto live_count() const noexcept -> std::size_t { return live_count_; }
+  [[nodiscard]] auto empty() const noexcept -> bool { return live_count_ == 0; }
+  [[nodiscard]] auto live_slot(const std::size_t index) const noexcept -> std::size_t {
+    LEMMA_ASSERT(index < live_count_);
+    return std::span(live_slots_).subspan(index, 1).front();
+  }
+
+  void publish(const std::size_t slot, Slot owner) noexcept {
+    auto& destination = std::span(slots_).subspan(slot, 1).front();
+    LEMMA_ASSERT(slot < slots_.size() && destination == nullptr && owner != nullptr &&
+                 live_count_ < Capacity);
+    destination = std::move(owner);
+    std::span(live_slots_).subspan(live_count_, 1).front() = static_cast<std::uint16_t>(slot);
+    std::span(live_positions_).subspan(slot, 1).front() = static_cast<std::uint16_t>(live_count_);
+    ++live_count_;
+  }
+
+  void erase(Slot& owner) noexcept {
+    if (owner == nullptr) {
+      return;
+    }
+    const auto slot = static_cast<std::size_t>(&owner - slots_.data());
+    LEMMA_ASSERT(slot < slots_.size() && live_count_ > 0);
+    const auto position =
+        static_cast<std::size_t>(std::span(live_positions_).subspan(slot, 1).front());
+    LEMMA_ASSERT(position < live_count_ && live_slot(position) == slot);
+    const auto moved_slot = live_slot(live_count_ - 1U);
+    --live_count_;
+    std::span(live_slots_).subspan(position, 1).front() = static_cast<std::uint16_t>(moved_slot);
+    std::span(live_positions_).subspan(moved_slot, 1).front() =
+        static_cast<std::uint16_t>(position);
+    owner.reset();
+  }
+
+private:
+  std::array<Slot, Capacity> slots_{};
+  std::array<std::uint16_t, Capacity> live_slots_{};
+  std::array<std::uint16_t, Capacity> live_positions_{};
+  std::size_t live_count_{0};
+};
+
 // Pending setup storage is materialized only after accept claims a slot. The fixed table owns one
 // optional RAII object per live setup instead of eagerly touching 128 x 135 KiB at daemon startup.
 using PendingConnections =
-    std::array<std::unique_ptr<PendingConnection>, limits::pending_connections_hard_max>;
+    UniqueOwnerSlots<PendingConnection, limits::pending_connections_hard_max>;
 using PendingConnectionGenerations =
     std::array<std::uint32_t, limits::pending_connections_hard_max>;
-using PublicScratchStorage = std::array<std::byte, api::json_bytes_max>;
-using PublicScratch = std::unique_ptr<PublicScratchStorage>;
+
+// An admitted passive observer owns only its immutable subscription projection, delivery cursor,
+// bounded event state, and socket. Setup parser, create, attach, and Proc fields are released as
+// soon as the Event subscription is admitted.
+struct PublicObserver final {
+  [[nodiscard]] auto active() const noexcept -> bool { return descriptor >= 0; }
+
+  int descriptor{-1};
+  std::uint64_t poll_identity{0};
+  api::EventSubscription subscription;
+  std::string public_output;
+  std::size_t public_output_offset{0};
+  std::uint64_t event_sequence{0};
+  std::uint64_t observed_semantic_hash{0};
+  std::array<PublicObservedPaneState, api::event_panes_max> observed_panes{};
+  std::size_t observed_pane_cursor{0};
+  std::chrono::steady_clock::time_point deadline;
+  PendingState state{PendingState::prepare_public_observer};
+  PendingDisposition disposition{PendingDisposition::close};
+};
+
+using PublicObservers = UniqueOwnerSlots<PublicObserver, limits::pending_connections_hard_max>;
+
 // A JSON string may expand one raw control byte to six ASCII bytes. Reserve envelope space so every
 // successful capture can still fit in one public record after escaping.
 inline constexpr std::size_t public_capture_bytes_max =
     (api::json_bytes_max - (std::size_t{4} * 1'024U)) / 6U;
 
-[[nodiscard]] auto acquire_public_scratch(PublicScratch& owner) noexcept -> std::span<std::byte> {
+// Capture bytes are write-before-read; avoiding a 1 MiB zero-fill keeps first-observer admission
+// proportional to the requested terminal projection.
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+struct PublicScratchStorage final {
+  std::array<std::byte, api::json_bytes_max> bytes;
+  SessionId screen_session;
+  PaneId screen_pane;
+  std::uint64_t screen_generation{0};
+  std::size_t screen_size{0};
+  bool screen_truncated{false};
+  bool screen_cursor_at_prompt{false};
+  bool screen_valid{false};
+};
+
+using PublicScratch = std::unique_ptr<PublicScratchStorage>;
+
+[[nodiscard]] auto ensure_public_scratch(PublicScratch& owner) noexcept -> PublicScratchStorage* {
   if (owner == nullptr) {
     try {
       owner = std::make_unique_for_overwrite<PublicScratchStorage>();
     } catch (...) {
-      return {};
+      return nullptr;
     }
   }
-  return std::span(*owner).first(public_capture_bytes_max);
+  return owner.get();
 }
 
-static_assert(sizeof(PendingConnection) <= std::size_t{160} * 1'024U);
-static_assert(sizeof(PendingConnections) ==
-              limits::pending_connections_hard_max * sizeof(std::unique_ptr<PendingConnection>));
+[[nodiscard]] auto acquire_public_scratch(PublicScratch& owner) noexcept -> std::span<std::byte> {
+  auto* const storage = ensure_public_scratch(owner);
+  if (storage == nullptr) {
+    return {};
+  }
+  storage->screen_valid = false;
+  return std::span(storage->bytes).first(public_capture_bytes_max);
+}
+
+static_assert(sizeof(PendingConnection) <= std::size_t{1} * 1'024U);
+static_assert(sizeof(PublicObserver) <= std::size_t{512});
+static_assert(sizeof(PendingConnections) <=
+              (limits::pending_connections_hard_max * (sizeof(std::unique_ptr<PendingConnection>) +
+                                                       (std::size_t{2} * sizeof(std::uint16_t)))) +
+                  sizeof(std::size_t));
+static_assert(sizeof(PublicObservers) <=
+              (limits::pending_connections_hard_max * (sizeof(std::unique_ptr<PublicObserver>) +
+                                                       (std::size_t{2} * sizeof(std::uint16_t)))) +
+                  sizeof(std::size_t));
 static_assert(sizeof(PendingConnectionGenerations) ==
               limits::pending_connections_hard_max * sizeof(std::uint32_t));
 
@@ -8008,9 +8908,9 @@ struct PublicCaptureFormatting final {
 
 [[nodiscard]] auto pane_inspection(const Tab& tab, const Pane& pane, const PaneRuntime& runtime)
     -> std::string {
-  const auto terminal = runtime.terminal.inspection();
-  const auto title = runtime.terminal.title();
-  const auto pwd = runtime.terminal.pwd();
+  const auto terminal = runtime.active_terminal().inspection();
+  const auto title = runtime.active_terminal().title();
+  const auto pwd = runtime.active_terminal().pwd();
   if (!terminal.has_value() || !title.has_value() || !pwd.has_value()) {
     return {};
   }
@@ -8027,9 +8927,9 @@ struct PublicCaptureFormatting final {
       !append_public(output, R"(,"terminal":{"generation":)") ||
       !append_public_number(output, runtime.observation_generation) ||
       !append_public(output, R"(,"size":{"columns":)") ||
-      !append_public_number(output, runtime.terminal.size().columns) ||
+      !append_public_number(output, runtime.active_terminal().size().columns) ||
       !append_public(output, R"(,"rows":)") ||
-      !append_public_number(output, runtime.terminal.size().rows) ||
+      !append_public_number(output, runtime.active_terminal().size().rows) ||
       !append_public(output, R"(},"screen":)") ||
       !api::append_json_string(
           output, terminal->active_screen == vt::ActiveScreen::primary ? "primary" : "alternate") ||
@@ -8053,7 +8953,8 @@ struct PublicCaptureFormatting final {
       !append_public(output, R"(,"input_accepted":)") ||
       !append_public(output, runtime.accepts_input() ? "true" : "false") ||
       !append_public(output, R"(,"health":)") ||
-      !api::append_json_string(output, runtime.terminal.integrity_failed() ? "failed" : "ok") ||
+      !api::append_json_string(output,
+                               runtime.active_terminal().integrity_failed() ? "failed" : "ok") ||
       !append_public(output, "}}")) {
     return {};
   }
@@ -8197,6 +9098,30 @@ auto PublicCommandExecutor::execute(const api::Command& request, Sessions& sessi
     result.error_reason = "revision_mismatch";
     result.retryable = true;
     return result;
+  }
+
+  const bool terminal_independent = request.kind == api::CommandKind::session_inspect ||
+                                    request.kind == api::CommandKind::session_rename ||
+                                    request.kind == api::CommandKind::session_kill ||
+                                    request.kind == api::CommandKind::tab_inspect ||
+                                    request.kind == api::CommandKind::tab_list ||
+                                    request.kind == api::CommandKind::pane_list;
+  if (!terminal_independent) {
+    auto reason = PaneWakeReason::explicit_request;
+    if (request.kind == api::CommandKind::pane_send ||
+        request.kind == api::CommandKind::pane_input) {
+      reason = PaneWakeReason::input;
+    } else if (request.kind == api::CommandKind::pane_capture) {
+      reason = PaneWakeReason::capture;
+    }
+    const auto wake = wake_session_panes(*session, runtimes, reason);
+    if (wake != SessionWakeStatus::active) {
+      result.status = CommandStatus::unavailable;
+      result.error_reason =
+          wake == SessionWakeStatus::pending ? "pane_hydrating" : "pane_restore_failed";
+      result.retryable = wake == SessionWakeStatus::pending;
+      return result;
+    }
   }
 
   if (request.kind == api::CommandKind::session_inspect) {
@@ -8422,20 +9347,20 @@ auto PublicCommandExecutor::execute(const api::Command& request, Sessions& sessi
     const bool unwrap = request.capture_wrap == api::CaptureWrap::logical;
     std::expected<std::size_t, vt::Error> formatted = std::unexpected(vt::Error::invalid_state);
     if (request.capture_source == api::CaptureSource::visible) {
-      auto visible = format_public_visible(runtime->terminal, format, request.capture_wrap,
+      auto visible = format_public_visible(runtime->active_terminal(), format, request.capture_wrap,
                                            request.lines, scratch);
       formatted = std::move(visible.result);
       result.capture_truncated = visible.truncated;
     } else if (request.capture_source == api::CaptureSource::recent) {
       auto rows = static_cast<std::size_t>(request.lines == 0 ? 80U : request.lines);
-      formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
+      formatted = runtime->active_terminal().format_recent(format, rows, scratch, unwrap);
       while (!formatted.has_value() && formatted.error() == vt::Error::out_of_space && rows > 1U) {
         rows /= 2U;
         result.capture_truncated = true;
-        formatted = runtime->terminal.format_recent(format, rows, scratch, unwrap);
+        formatted = runtime->active_terminal().format_recent(format, rows, scratch, unwrap);
       }
     } else {
-      formatted = runtime->terminal.format_last_command(format, scratch, unwrap);
+      formatted = runtime->active_terminal().format_last_command(format, scratch, unwrap);
     }
     if (!formatted.has_value()) {
       result.status = request.capture_source == api::CaptureSource::last_command
@@ -8614,9 +9539,10 @@ auto PublicCommandExecutor::execute(const api::Command& request, Sessions& sessi
     return std::nullopt;
   }
   wait.observed_terminal_generation = generation;
-  const auto formatted = format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
-                                               api::CaptureWrap::rendered, 0, scratch);
-  const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
+  const auto formatted =
+      format_public_visible(target.runtime->active_terminal(), vt::ScreenFormat::plain,
+                            api::CaptureWrap::rendered, 0, scratch);
+  const auto at_prompt = target.runtime->active_terminal().cursor_at_prompt();
   if (!formatted.result.has_value() || !at_prompt.has_value()) {
     result.status = CommandStatus::unavailable;
     result.error_reason = "capture_unavailable";
@@ -8869,7 +9795,55 @@ struct PublicProcSlot final {
   std::uint32_t generation{0};
 };
 
-using PublicProcExecutions = std::array<PublicProcSlot, limits::pending_connections_hard_max>;
+class PublicProcExecutions final {
+  static constexpr auto capacity = limits::pending_connections_hard_max;
+  static_assert(capacity <= std::numeric_limits<std::uint16_t>::max());
+
+public:
+  [[nodiscard]] auto begin() noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() noexcept { return slots_.end(); }
+  [[nodiscard]] auto begin() const noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() const noexcept { return slots_.end(); }
+  [[nodiscard]] auto data() noexcept { return slots_.data(); }
+  [[nodiscard]] auto data() const noexcept { return slots_.data(); }
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return slots_.size(); }
+  [[nodiscard]] auto live_count() const noexcept -> std::size_t { return live_count_; }
+  [[nodiscard]] auto empty() const noexcept -> bool { return live_count_ == 0; }
+  [[nodiscard]] auto live_slot(const std::size_t index) const noexcept -> std::size_t {
+    LEMMA_ASSERT(index < live_count_);
+    return std::span(live_slots_).subspan(index, 1).front();
+  }
+
+  void publish(const std::size_t slot, std::unique_ptr<ProcExecutionState> execution) noexcept {
+    auto& destination = std::span(slots_).subspan(slot, 1).front();
+    LEMMA_ASSERT(slot < slots_.size() && destination.execution == nullptr && execution != nullptr &&
+                 live_count_ < capacity);
+    destination.execution = std::move(execution);
+    std::span(live_slots_).subspan(live_count_, 1).front() = static_cast<std::uint16_t>(slot);
+    std::span(live_positions_).subspan(slot, 1).front() = static_cast<std::uint16_t>(live_count_);
+    ++live_count_;
+  }
+
+  void erase(const std::size_t slot) noexcept {
+    auto& destination = std::span(slots_).subspan(slot, 1).front();
+    LEMMA_ASSERT(slot < slots_.size() && destination.execution != nullptr && live_count_ > 0);
+    const auto position =
+        static_cast<std::size_t>(std::span(live_positions_).subspan(slot, 1).front());
+    LEMMA_ASSERT(position < live_count_ && live_slot(position) == slot);
+    const auto moved_slot = live_slot(live_count_ - 1U);
+    --live_count_;
+    std::span(live_slots_).subspan(position, 1).front() = static_cast<std::uint16_t>(moved_slot);
+    std::span(live_positions_).subspan(moved_slot, 1).front() =
+        static_cast<std::uint16_t>(position);
+    destination.execution.reset();
+  }
+
+private:
+  std::array<PublicProcSlot, capacity> slots_{};
+  std::array<std::uint16_t, capacity> live_slots_{};
+  std::array<std::uint16_t, capacity> live_positions_{};
+  std::size_t live_count_{0};
+};
 
 [[nodiscard]] auto mutable_json_member(api::JsonValue& object, const std::string_view key) noexcept
     -> api::JsonValue* {
@@ -9292,6 +10266,19 @@ void finish_public_output(PendingConnection& pending, std::string output,
   pending.deadline = reactor_now() + setup_progress_timeout;
 }
 
+void finish_public_output(PublicObserver& observer, std::string output,
+                          const PendingDisposition disposition) noexcept {
+  if (output.empty()) {
+    observer.state = PendingState::unused;
+    return;
+  }
+  observer.public_output = std::move(output);
+  observer.public_output_offset = 0;
+  observer.disposition = disposition;
+  observer.state = PendingState::flush_response;
+  observer.deadline = reactor_now() + setup_progress_timeout;
+}
+
 [[nodiscard]] auto owned_public_proc(PendingConnections& connections,
                                      const ProcExecutionState& execution) noexcept
     -> PendingConnection* {
@@ -9313,20 +10300,19 @@ void finish_public_output(PendingConnection& pending, std::string output,
 
 // The reactor owns admitted Procs independently of transports. The connection slot and generation
 // are only a completion owner: closing or reusing that owner cancels the Proc before another step.
-// NOLINTNEXTLINE(bugprone-exception-escape)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 void service_public_procs(PublicProcExecutions& executions, PendingConnections& connections,
                           Sessions& sessions, PaneRuntimeStore& runtimes,
                           std::uint64_t& activity_order, PublicScratch& scratch,
                           std::size_t& cursor) noexcept {
-  for (std::size_t visited = 0; visited < executions.size(); ++visited) {
-    const auto slot = (cursor + visited) % executions.size();
+  while (!executions.empty()) {
+    cursor %= executions.live_count();
+    const auto slot = executions.live_slot(cursor);
     auto& proc_slot = std::span(executions).subspan(slot, 1).front();
-    if (proc_slot.execution == nullptr) {
-      continue;
-    }
+    LEMMA_ASSERT(proc_slot.execution != nullptr);
     auto* const pending = owned_public_proc(connections, *proc_slot.execution);
     if (pending == nullptr) {
-      proc_slot.execution.reset();
+      executions.erase(slot);
       continue;
     }
     try {
@@ -9334,24 +10320,31 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
                                              activity_order, scratch);
       if (output.has_value()) {
         pending->proc = {};
-        proc_slot.execution.reset();
+        executions.erase(slot);
         finish_public_output(*pending, std::move(*output), PendingDisposition::keep_proc);
       }
     } catch (...) {
       try {
         auto output = public_proc_failure(*proc_slot.execution);
         pending->proc = {};
-        proc_slot.execution.reset();
+        executions.erase(slot);
         finish_public_output(*pending, std::move(output), PendingDisposition::keep_proc);
       } catch (...) {
         pending->proc = {};
-        proc_slot.execution.reset();
+        executions.erase(slot);
         pending->state = PendingState::unused;
       }
     }
-    cursor = (slot + 1U) % executions.size();
+    if (executions.empty()) {
+      cursor = 0;
+    } else if (proc_slot.execution == nullptr) {
+      cursor %= executions.live_count();
+    } else {
+      cursor = (cursor + 1U) % executions.live_count();
+    }
     return;
   }
+  cursor = 0;
 }
 
 [[nodiscard]] auto semantic_hash(const Sessions& sessions,
@@ -9382,7 +10375,7 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
   return value;
 }
 
-[[nodiscard]] auto observed_pane(PendingConnection& pending, Sessions& sessions,
+[[nodiscard]] auto observed_pane(PublicObserver& pending, Sessions& sessions,
                                  PaneRuntimeStore& runtimes, const std::size_t index) noexcept
     -> ObservedPane {
   if (!pending.subscription.session.has_value() || index >= pending.subscription.panes.size()) {
@@ -9414,7 +10407,7 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
   return false;
 }
 
-[[nodiscard]] auto append_event_header(std::string& output, PendingConnection& pending,
+[[nodiscard]] auto append_event_header(std::string& output, PublicObserver& pending,
                                        const std::string_view event) -> bool {
   return append_public(output, R"({"schema":"lemma.event/v1","sequence":)") &&
          append_public_number(output, pending.event_sequence++) &&
@@ -9435,7 +10428,7 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
       for (const auto& candidate : sessions) {
         if (candidate != nullptr && candidate->active &&
             candidate->session_name() == filter->name) {
-          session = candidate.get();
+          session = candidate;
           break;
         }
       }
@@ -9449,39 +10442,93 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
   return appended && copy_connection_json(encoded, json) && append_public(output, json);
 }
 
-[[nodiscard]] auto append_screen_event(std::string& output, PendingConnection& pending,
-                                       const ObservedPane target,
-                                       const std::span<std::byte> scratch,
-                                       const std::string_view event = "pane.screen") -> bool {
+struct PublicScreenProjection final {
+  std::span<const std::byte> bytes;
+  bool truncated{false};
+  bool cursor_at_prompt{false};
+  bool newly_formatted{false};
+};
+
+[[nodiscard]] auto public_screen_cache_matches(const PublicScratch& owner,
+                                               const ObservedPane target) noexcept -> bool {
+  return owner != nullptr && owner->screen_valid && target.session != nullptr &&
+         target.pane != nullptr && target.runtime != nullptr &&
+         owner->screen_session == target.session->id && owner->screen_pane == target.pane->id &&
+         owner->screen_generation == target.runtime->observation_generation;
+}
+
+[[nodiscard]] auto public_screen_projection(PublicScratch& owner,
+                                            const ObservedPane target) noexcept
+    -> std::optional<PublicScreenProjection> {
   if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
-    return false;
+    return std::nullopt;
   }
-  const auto formatted = format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
-                                               api::CaptureWrap::rendered, 0, scratch);
-  const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
-  if (!formatted.result.has_value() || !at_prompt.has_value() ||
-      !append_event_header(output, pending, event) || !append_public(output, R"(,"session":)") ||
-      !append_public_id(output, target.session->id) || !append_public(output, R"(,"pane":)") ||
-      !append_public_id(output, target.pane->id) || !append_public(output, R"(,"generation":)") ||
+  auto* const storage = ensure_public_scratch(owner);
+  if (storage == nullptr) {
+    return std::nullopt;
+  }
+  if (public_screen_cache_matches(owner, target)) {
+    return PublicScreenProjection{
+        .bytes = std::span(storage->bytes).first(storage->screen_size),
+        .truncated = storage->screen_truncated,
+        .cursor_at_prompt = storage->screen_cursor_at_prompt,
+        .newly_formatted = false,
+    };
+  }
+  storage->screen_valid = false;
+  auto scratch = std::span(storage->bytes).first(public_capture_bytes_max);
+  const auto formatted =
+      format_public_visible(target.runtime->active_terminal(), vt::ScreenFormat::plain,
+                            api::CaptureWrap::rendered, 0, scratch);
+  const auto at_prompt = target.runtime->active_terminal().cursor_at_prompt();
+  if (!formatted.result.has_value() || !at_prompt.has_value()) {
+    return std::nullopt;
+  }
+  storage->screen_session = target.session->id;
+  storage->screen_pane = target.pane->id;
+  storage->screen_generation = target.runtime->observation_generation;
+  storage->screen_size = *formatted.result;
+  storage->screen_truncated = formatted.truncated;
+  storage->screen_cursor_at_prompt = *at_prompt;
+  storage->screen_valid = true;
+  return PublicScreenProjection{
+      .bytes = std::span(storage->bytes).first(storage->screen_size),
+      .truncated = storage->screen_truncated,
+      .cursor_at_prompt = storage->screen_cursor_at_prompt,
+      .newly_formatted = true,
+  };
+}
+
+[[nodiscard]] auto append_screen_event(std::string& output, PublicObserver& pending,
+                                       const ObservedPane target, PublicScratch& scratch,
+                                       bool& newly_formatted,
+                                       const std::string_view event = "pane.screen") -> bool {
+  const auto projection = public_screen_projection(scratch, target);
+  if (!projection.has_value() || !append_event_header(output, pending, event) ||
+      !append_public(output, R"(,"session":)") || !append_public_id(output, target.session->id) ||
+      !append_public(output, R"(,"pane":)") || !append_public_id(output, target.pane->id) ||
+      !append_public(output, R"(,"generation":)") ||
       !append_public_number(output, target.runtime->observation_generation) ||
       !append_public(output, R"(,"cursor_at_prompt":)") ||
-      !append_public(output, *at_prompt ? "true" : "false")) {
+      !append_public(output, projection->cursor_at_prompt ? "true" : "false")) {
     return false;
   }
+  newly_formatted = projection->newly_formatted;
   // Byte payloads and character storage have the same object representation.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
+  const std::string_view text(reinterpret_cast<const char*>(projection->bytes.data()),
+                              projection->bytes.size());
   return append_public(output, R"(,"capture":)") &&
          api::append_capture(output, api::CaptureSource::visible, api::CaptureFormat::plain,
                              api::CaptureWrap::rendered, target.runtime->observation_generation,
-                             formatted.truncated, text) &&
+                             projection->truncated, text) &&
          append_public(output, "}\n");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto encode_initial_snapshot(PendingConnection& pending, Sessions& sessions,
-                                           PaneRuntimeStore& runtimes,
-                                           const std::span<std::byte> scratch) -> std::string {
+[[nodiscard]] auto encode_initial_snapshot(PublicObserver& pending, Sessions& sessions,
+                                           PaneRuntimeStore& runtimes, PublicScratch& scratch,
+                                           bool& newly_formatted) -> std::string {
   std::string output;
   try {
     pending.event_sequence = 0;
@@ -9511,23 +10558,20 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
           return {};
         }
         if (pending.subscription.screen) {
-          const auto formatted =
-              format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
-                                    api::CaptureWrap::rendered, 0, scratch);
-          const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
-          if (!formatted.result.has_value() || !at_prompt.has_value() ||
-              !append_public(output, R"(,"cursor_at_prompt":)") ||
-              !append_public(output, *at_prompt ? "true" : "false")) {
+          const auto projection = public_screen_projection(scratch, target);
+          if (!projection.has_value() || !append_public(output, R"(,"cursor_at_prompt":)") ||
+              !append_public(output, projection->cursor_at_prompt ? "true" : "false")) {
             return {};
           }
+          newly_formatted = projection->newly_formatted;
           // Byte payloads and character storage have the same object representation.
           // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-          const std::string_view text(reinterpret_cast<const char*>(scratch.data()),
-                                      *formatted.result);
+          const std::string_view text(reinterpret_cast<const char*>(projection->bytes.data()),
+                                      projection->bytes.size());
           if (!append_public(output, R"(,"capture":)") ||
               !api::append_capture(output, api::CaptureSource::visible, api::CaptureFormat::plain,
                                    api::CaptureWrap::rendered,
-                                   target.runtime->observation_generation, formatted.truncated,
+                                   target.runtime->observation_generation, projection->truncated,
                                    text)) {
             return {};
           }
@@ -9600,8 +10644,9 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
     execution.id = {.slot = static_cast<std::uint32_t>(slot), .generation = destination.generation};
     execution.owner_slot = pending.slot;
     execution.owner_generation = pending.generation;
-    destination.execution = std::make_unique<ProcExecutionState>(std::move(execution));
-    pending.proc = destination.execution->id;
+    auto admitted = std::make_unique<ProcExecutionState>(std::move(execution));
+    pending.proc = admitted->id;
+    executions.publish(slot, std::move(admitted));
     std::string{}.swap(pending.public_input);
     pending.state = PendingState::execute_public_proc;
     return true;
@@ -9654,18 +10699,83 @@ void prepare_public_document(PendingConnection& pending,
   }
 }
 
+[[nodiscard]] auto empty_public_observer_slot(PublicObservers& observers) noexcept
+    -> std::optional<std::size_t> {
+  for (std::size_t slot = 0; slot < observers.size(); ++slot) {
+    if (std::span(observers).subspan(slot, 1).front() == nullptr) {
+      return slot;
+    }
+  }
+  return std::nullopt;
+}
+
+// Event setup is transient. Transfer the socket and decoded immutable subscription into the
+// observer-only owner before any snapshot formatting so long-lived viewers cannot retain parser,
+// attach, create, mutation, or Proc capacity.
+void admit_prepared_public_observers(PendingConnections& pending_connections,
+                                     PublicObservers& observers) noexcept {
+  std::size_t ordinal = 0;
+  while (ordinal < pending_connections.live_count()) {
+    const auto slot = pending_connections.live_slot(ordinal);
+    auto& pending_owner = std::span(pending_connections).subspan(slot, 1).front();
+    LEMMA_ASSERT(pending_owner != nullptr);
+    if (pending_owner->state != PendingState::prepare_public_observer) {
+      ++ordinal;
+      continue;
+    }
+    const auto available = empty_public_observer_slot(observers);
+    if (!available.has_value()) {
+      finish_public_output(*pending_owner, encode_public_error({.reason = "capacity", .field = {}}),
+                           PendingDisposition::close);
+      ++ordinal;
+      continue;
+    }
+    try {
+      auto observer = std::make_unique<PublicObserver>();
+      observer->descriptor = pending_owner->descriptor;
+      observer->poll_identity = pending_owner->poll_identity;
+      observer->subscription = std::move(pending_owner->subscription);
+      pending_owner->descriptor = -1;
+      pending_owner->poll_identity = 0;
+      observers.publish(*available, std::move(observer));
+      pending_connections.erase(pending_owner);
+    } catch (...) {
+      finish_public_output(*pending_owner,
+                           encode_public_error({.reason = "resource_failure", .field = {}}),
+                           PendingDisposition::close);
+      ++ordinal;
+    }
+  }
+}
+
+void close_public_observer(PublicObservers& observers, const std::size_t slot) noexcept {
+  auto& observer = std::span(observers).subspan(slot, 1).front();
+  if (observer == nullptr) {
+    return;
+  }
+  close_descriptor(observer->descriptor);
+  observers.erase(observer);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto service_public_observers(PendingConnections& connections, Sessions& sessions,
+[[nodiscard]] auto service_public_observers(PublicObservers& connections, Sessions& sessions,
                                             PaneRuntimeStore& runtimes,
                                             PublicScratch& scratch_owner,
                                             std::size_t& cursor) noexcept -> bool {
   bool formatted_screen = false;
   bool screen_work_pending = false;
-  for (std::size_t visited = 0; visited < connections.size(); ++visited) {
-    const auto slot = (cursor + visited) % connections.size();
+  const auto count = connections.live_count();
+  if (count == 0) {
+    cursor = 0;
+    return false;
+  }
+  cursor %= count;
+  for (std::size_t visited = 0; visited < count; ++visited) {
+    const auto ordinal = (cursor + visited) % count;
+    const auto slot = connections.live_slot(ordinal);
     auto* const owner = std::span(connections).subspan(slot, 1).front().get();
-    if (owner == nullptr ||
-        (owner->state != PendingState::prepare_public_observer &&
+    LEMMA_ASSERT(owner != nullptr);
+    if ((owner->state != PendingState::prepare_public_observer &&
          owner->state != PendingState::observe) ||
         !owner->public_output.empty()) {
       continue;
@@ -9674,23 +10784,35 @@ void prepare_public_document(PendingConnection& pending,
     std::string output;
     try {
       if (pending.state == PendingState::prepare_public_observer) {
-        const bool snapshot_screen =
-            pending.subscription.screen && pending.subscription.panes.size() == 1U;
-        if (snapshot_screen && formatted_screen) {
-          screen_work_pending = true;
-          continue;
+        auto wake_status = SessionWakeStatus::active;
+        if (pending.subscription.session.has_value()) {
+          auto* const observed = public_session(sessions, *pending.subscription.session);
+          if (observed != nullptr) {
+            wake_status = wake_session_panes(*observed, runtimes, PaneWakeReason::capture);
+          }
         }
-        auto scratch = std::span<std::byte>{};
-        if (snapshot_screen) {
-          scratch = acquire_public_scratch(scratch_owner);
-        }
-        if (snapshot_screen && scratch.empty()) {
+        if (wake_status == SessionWakeStatus::failed) {
           finish_public_output(pending,
                                encode_public_error({.reason = "resource_failure", .field = {}}),
                                PendingDisposition::close);
           continue;
         }
-        auto snapshot = encode_initial_snapshot(pending, sessions, runtimes, scratch);
+        if (wake_status == SessionWakeStatus::pending) {
+          screen_work_pending = screen_work_pending || pending.subscription.screen;
+          continue;
+        }
+        const bool snapshot_screen =
+            pending.subscription.screen && pending.subscription.panes.size() == 1U;
+        const auto snapshot_target =
+            snapshot_screen ? observed_pane(pending, sessions, runtimes, 0) : ObservedPane{};
+        if (snapshot_screen && formatted_screen &&
+            !public_screen_cache_matches(scratch_owner, snapshot_target)) {
+          screen_work_pending = true;
+          continue;
+        }
+        bool newly_formatted = false;
+        auto snapshot =
+            encode_initial_snapshot(pending, sessions, runtimes, scratch_owner, newly_formatted);
         if (snapshot.empty()) {
           finish_public_output(pending,
                                encode_public_error({.reason = "resource_failure", .field = {}}),
@@ -9699,8 +10821,8 @@ void prepare_public_document(PendingConnection& pending,
         }
         finish_public_output(pending, std::move(snapshot), PendingDisposition::keep_observe);
         if (snapshot_screen) {
-          formatted_screen = true;
-          cursor = (slot + 1U) % connections.size();
+          formatted_screen = formatted_screen || newly_formatted;
+          cursor = (ordinal + 1U) % count;
         }
         continue;
       }
@@ -9765,17 +10887,19 @@ void prepare_public_document(PendingConnection& pending,
             observed.process_exited = process_exited;
           }
           if (target.runtime->observation_generation != observed.terminal_generation) {
-            if (!output.empty() || (pending.subscription.screen && formatted_screen)) {
+            const bool uncached_screen =
+                pending.subscription.screen && !public_screen_cache_matches(scratch_owner, target);
+            if (!output.empty() || (formatted_screen && uncached_screen)) {
               screen_work_pending = screen_work_pending || pending.subscription.screen;
             } else if (pending.subscription.screen) {
-              const auto scratch = acquire_public_scratch(scratch_owner);
-              if (scratch.empty() || !append_screen_event(output, pending, target, scratch)) {
+              bool newly_formatted = false;
+              if (!append_screen_event(output, pending, target, scratch_owner, newly_formatted)) {
                 pending.state = PendingState::unused;
                 continue;
               }
               observed.terminal_generation = target.runtime->observation_generation;
-              formatted_screen = true;
-              cursor = (slot + 1U) % connections.size();
+              formatted_screen = formatted_screen || newly_formatted;
+              cursor = (ordinal + 1U) % count;
             } else {
               if (!append_event_header(output, pending, "pane.terminal") ||
                   !append_public(output, R"(,"session":)") ||
@@ -9845,14 +10969,58 @@ struct CapacityRejectionConnection final {
   [[nodiscard]] auto active() const noexcept -> bool { return descriptor >= 0; }
 
   int descriptor{-1};
+  std::uint64_t poll_identity{0};
   CapacityRejectionOutput output;
   std::chrono::steady_clock::time_point deadline;
   bool flush_response{false};
 };
 
 constexpr std::size_t capacity_rejection_connections_max = 8;
-using CapacityRejectionConnections =
-    std::array<CapacityRejectionConnection, capacity_rejection_connections_max>;
+
+class CapacityRejectionConnections final {
+public:
+  [[nodiscard]] auto begin() noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() noexcept { return slots_.end(); }
+  [[nodiscard]] auto begin() const noexcept { return slots_.begin(); }
+  [[nodiscard]] auto end() const noexcept { return slots_.end(); }
+  [[nodiscard]] auto data() noexcept { return slots_.data(); }
+  [[nodiscard]] auto data() const noexcept { return slots_.data(); }
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return slots_.size(); }
+  [[nodiscard]] auto live_count() const noexcept -> std::size_t { return live_count_; }
+  [[nodiscard]] auto empty() const noexcept -> bool { return live_count_ == 0; }
+  [[nodiscard]] auto live_slot(const std::size_t index) const noexcept -> std::size_t {
+    LEMMA_ASSERT(index < live_count_);
+    return std::span(live_slots_).subspan(index, 1).front();
+  }
+
+  void activate(const std::size_t slot) noexcept {
+    const auto& destination = std::span(slots_).subspan(slot, 1).front();
+    LEMMA_ASSERT(slot < slots_.size() && !destination.active() &&
+                 live_count_ < capacity_rejection_connections_max);
+    std::span(live_slots_).subspan(live_count_, 1).front() = static_cast<std::uint8_t>(slot);
+    std::span(live_positions_).subspan(slot, 1).front() = static_cast<std::uint8_t>(live_count_);
+    ++live_count_;
+  }
+
+  void deactivate(const std::size_t slot) noexcept {
+    const auto& destination = std::span(slots_).subspan(slot, 1).front();
+    LEMMA_ASSERT(slot < slots_.size() && destination.active() && live_count_ > 0);
+    const auto position =
+        static_cast<std::size_t>(std::span(live_positions_).subspan(slot, 1).front());
+    LEMMA_ASSERT(position < live_count_ && live_slot(position) == slot);
+    const auto moved_slot = live_slot(live_count_ - 1U);
+    --live_count_;
+    std::span(live_slots_).subspan(position, 1).front() = static_cast<std::uint8_t>(moved_slot);
+    std::span(live_positions_).subspan(moved_slot, 1).front() = static_cast<std::uint8_t>(position);
+  }
+
+private:
+  std::array<CapacityRejectionConnection, capacity_rejection_connections_max> slots_{};
+  std::array<std::uint8_t, capacity_rejection_connections_max> live_slots_{};
+  std::array<std::uint8_t, capacity_rejection_connections_max> live_positions_{};
+  std::size_t live_count_{0};
+};
+
 static_assert(sizeof(CapacityRejectionConnections) <= std::size_t{4} * 1'024U);
 
 void record_pending_progress(PendingConnection& pending) noexcept {
@@ -9863,25 +11031,44 @@ void record_pending_progress(PendingConnection& pending) noexcept {
 
 void begin_pending_field(PendingConnection& pending, const PendingState state,
                          const std::size_t size) noexcept {
-  LEMMA_ASSERT(size > 0 && size <= pending.field.size());
+  LEMMA_ASSERT(size > 0 && size <= protocol::environment_bytes_max);
+  if (!pending.field.prepare(size)) {
+    pending.state = PendingState::unused;
+    pending.field_size = 0;
+    pending.field_target = 0;
+    return;
+  }
   pending.state = state;
   pending.field_size = 0;
   pending.field_target = size;
 }
 
 void release_attach_reservation(PendingConnection& pending, const std::size_t slot,
-                                Sessions& sessions) noexcept {
-  auto* const session = sessions.get(pending.attach_session);
-  if (session != nullptr && session->attachment_runtime.pending_attach_slot == slot &&
-      session->attachment_runtime.pending_attach_generation == pending.generation) {
-    if (session->attachment_runtime.client < 0) {
-      session->attachment_runtime.reset_connection();
+                                SessionRecord& session) noexcept {
+  if (session.attachment_runtime.pending_attach_slot == slot &&
+      session.attachment_runtime.pending_attach_generation == pending.generation) {
+    if (session.attachment_runtime.client < 0) {
+      LEMMA_ASSERT(session.frame_work_registry != nullptr &&
+                   session.attachment_registry != nullptr);
+      session.frame_work_registry->erase(session, session.frame_work_registry_index);
+      session.attachment_registry->erase(session, session.attachment_registry_index);
+      session.attachment_runtime.reset_connection();
     } else {
-      session->attachment_runtime.pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
-      session->attachment_runtime.pending_attach_generation = 0;
+      session.attachment_runtime.pending_attach_slot = std::numeric_limits<std::uint32_t>::max();
+      session.attachment_runtime.pending_attach_generation = 0;
     }
   }
   pending.attach_session = {};
+}
+
+void release_attach_reservation(PendingConnection& pending, const std::size_t slot,
+                                Sessions& sessions) noexcept {
+  auto* const session = sessions.get(pending.attach_session);
+  if (session != nullptr) {
+    release_attach_reservation(pending, slot, *session);
+  } else {
+    pending.attach_session = {};
+  }
 }
 
 void close_pending(PendingConnections& connections, const std::size_t slot,
@@ -9892,13 +11079,15 @@ void close_pending(PendingConnections& connections, const std::size_t slot,
   }
   release_attach_reservation(*owner, slot, sessions);
   close_descriptor(owner->descriptor);
-  owner.reset();
+  connections.erase(owner);
 }
 
 void close_capacity_rejection(CapacityRejectionConnections& connections,
                               const std::size_t slot) noexcept {
   auto& connection = std::span(connections).subspan(slot, 1).front();
+  connections.deactivate(slot);
   close_descriptor(connection.descriptor);
+  connection.poll_identity = 0;
   connection.output.reset();
   connection.flush_response = false;
 }
@@ -10163,6 +11352,11 @@ void prepare_semantic_action(PendingConnection& pending, Sessions& sessions,
     finish_command_result(pending, dispatch_session_command(*session, runtimes, command));
     return;
   }
+  if (wake_session_panes(*session, runtimes, PaneWakeReason::explicit_request) !=
+      SessionWakeStatus::active) {
+    finish_pending_byte(pending, response_unavailable);
+    return;
+  }
   switch (action) {
   case protocol::ControlAction::tab_select:
   case protocol::ControlAction::tab_move:
@@ -10306,6 +11500,11 @@ void prepare_surface_create(PendingConnection& pending, Sessions& sessions,
     finish_pending_byte(pending, response_missing);
     return;
   }
+  if (wake_session_panes(*session, runtimes, PaneWakeReason::explicit_request) !=
+      SessionWakeStatus::active) {
+    finish_pending_byte(pending, response_unavailable);
+    return;
+  }
   const auto exit_policy = flags == 0 ? PaneExitPolicy::close : PaneExitPolicy::hold;
   if (kind == protocol::SurfaceCreateKind::tab) {
     if (target->is_valid()) {
@@ -10368,6 +11567,11 @@ void prepare_send_pane(PendingConnection& pending, Sessions& sessions, PaneRunti
     finish_pending_byte(pending, response_missing);
     return;
   }
+  const auto wake = runtimes.wake(pane_address(*session, *pane), PaneWakeReason::input);
+  if (!wake.has_value() || !*wake) {
+    finish_pending_byte(pending, response_unavailable);
+    return;
+  }
   const auto result = queue_application_bytes_to(*session, runtimes, *runtime,
                                                  payload.subspan(protocol::control_id_bytes));
   finish_command_result(pending, {.status = result == InputQueueResult::queued
@@ -10390,10 +11594,19 @@ void prepare_capture_pane(PendingConnection& pending, Sessions& sessions,
     finish_pending_byte(pending, response_missing);
     return;
   }
+  const auto wake = runtimes.wake(pane_address(*session, *pane), PaneWakeReason::capture);
+  if (!wake.has_value() || !*wake) {
+    finish_pending_byte(pending, response_unavailable);
+    return;
+  }
   constexpr std::size_t header_size = 3;
-  const auto formatted = runtime->terminal.format_screen(
-      vt::ScreenFormat::plain,
-      std::span(pending.field).first(limits::pending_connection_output_bytes_max - header_size));
+  constexpr auto capture_capacity = limits::pending_connection_output_bytes_max - header_size;
+  if (!pending.field.prepare(capture_capacity)) {
+    fail_pending_output(pending);
+    return;
+  }
+  const auto formatted = runtime->active_terminal().format_screen(
+      vt::ScreenFormat::plain, std::span(pending.field).first(capture_capacity));
   if (!formatted.has_value() || *formatted > std::numeric_limits<std::uint16_t>::max()) {
     fail_pending_output(pending);
     return;
@@ -10403,6 +11616,7 @@ void prepare_capture_pane(PendingConnection& pending, Sessions& sessions,
   const bool appended = pending.output.append(std::span(&response_ready, 1)) &&
                         pending.output.append(size) &&
                         pending.output.append(std::span(pending.field).first(*formatted));
+  pending.field.release();
   if (!appended) {
     fail_pending_output(pending);
   } else {
@@ -10488,8 +11702,11 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
                                       ? LaunchEnvironmentMode::replace
                                       : LaunchEnvironmentMode::inherit;
     const std::span<const std::byte> environment(pending.environment);
-    auto created = create_session(pending.session.view(), pending.working_directory.view(),
-                                  environment, environment_mode);
+    const auto working_directory = pending.working_directory == nullptr
+                                       ? std::string_view{}
+                                       : pending.working_directory->view();
+    auto created =
+        create_session(pending.session.view(), working_directory, environment, environment_mode);
     if (created == nullptr) {
       finish_pending_byte(pending, response_failed);
       return;
@@ -10576,6 +11793,41 @@ void prepare_named_command(PendingConnection& pending, Sessions& sessions,
   finish_pending_output(pending);
 }
 
+void finish_prepare_attach(PendingConnection& pending, SessionRecord& session,
+                           PaneRuntimeStore& runtimes) noexcept {
+  LEMMA_ASSERT(session.attachment_runtime.pending_attach_generation == pending.generation);
+  const protocol::Dimensions previous_dimensions{.columns = session.attachment.columns,
+                                                 .rows = session.attachment.rows};
+  if (!resize_session(session, runtimes, pending.attach_dimensions)) {
+    session.attachment_runtime.frame.release();
+    release_attach_reservation(pending, pending.slot, session);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                              "failed to prepare attached viewport");
+    return;
+  }
+  if (!session.theme_bound && pending.attach_host_theme.has_value() &&
+      !bind_session_theme(session, runtimes, *pending.attach_host_theme)) {
+    // Viewport and theme are one attach transaction. A recoverable theme failure restores the
+    // previous viewport; inability to restore either terminal state fails the Session closed.
+    if (session.active && !resize_session(session, runtimes, previous_dimensions)) {
+      session.active = false;
+    }
+    session.attachment_runtime.frame.release();
+    release_attach_reservation(pending, pending.slot, session);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                              "failed to apply host terminal theme");
+    return;
+  }
+  // Theme and viewport are committed together here. Failure while flushing the accepted hello is
+  // then ordinary AttachmentRuntime loss: it releases connection resources but does not rewrite
+  // stable Session defaults or the last committed viewport.
+  pending.output.reset();
+  const auto hello = protocol::encode_daemon_hello(pending.attach_dimensions);
+  const bool appended = pending.output.append(hello.bytes());
+  LEMMA_ASSERT(appended);
+  finish_pending_output(pending, PendingDisposition::attach);
+}
+
 void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeStore& runtimes,
                     const std::size_t slot) noexcept {
   SessionRecord* const session = pending.session.size == 0
@@ -10598,37 +11850,19 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
                               "attachment identity capacity exhausted");
     return;
   }
-  const protocol::Dimensions previous_dimensions{.columns = session->attachment.columns,
-                                                 .rows = session->attachment.rows};
-  if (!resize_session(*session, runtimes, pending.attach_dimensions)) {
-    session->attachment_runtime.frame.release();
-    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
-                              "failed to prepare attached viewport");
-    return;
-  }
-  if (!session->theme_bound && pending.attach_host_theme.has_value() &&
-      !bind_session_theme(*session, runtimes, *pending.attach_host_theme)) {
-    // Viewport and theme are one attach transaction. A recoverable theme failure restores the
-    // previous viewport; inability to restore either terminal state fails the Session closed.
-    if (session->active && !resize_session(*session, runtimes, previous_dimensions)) {
-      session->active = false;
-    }
-    session->attachment_runtime.frame.release();
-    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
-                              "failed to apply host terminal theme");
-    return;
-  }
-  // Theme and viewport are committed together here. Failure while flushing the accepted hello is
-  // then ordinary AttachmentRuntime loss: it releases connection resources but does not rewrite
-  // stable Session defaults or the last committed viewport.
+
   session->attachment_runtime.pending_attach_slot = static_cast<std::uint32_t>(slot);
   session->attachment_runtime.pending_attach_generation = pending.generation;
   pending.attach_session = session->id;
-  pending.output.reset();
-  const auto hello = protocol::encode_daemon_hello(pending.attach_dimensions);
-  const bool appended = pending.output.append(hello.bytes());
-  LEMMA_ASSERT(appended);
-  finish_pending_output(pending, PendingDisposition::attach);
+  pending.state = PendingState::prepare_attach;
+  const auto wake = wake_session_panes(*session, runtimes, PaneWakeReason::attach);
+  if (wake == SessionWakeStatus::failed) {
+    release_attach_reservation(pending, slot, *session);
+    finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                              "failed to restore parked panes");
+  } else if (wake == SessionWakeStatus::active) {
+    finish_prepare_attach(pending, *session, runtimes);
+  }
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
@@ -10757,22 +11991,31 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
         size > protocol::working_directory_bytes_max) {
       pending.state = PendingState::unused;
     } else {
+      try {
+        pending.working_directory = std::make_unique<WorkingDirectory>();
+      } catch (...) {
+        fail_pending_output(pending);
+        break;
+      }
       begin_pending_field(pending, PendingState::read_working_directory, size);
     }
     break;
   }
-  case PendingState::read_working_directory:
-    pending.working_directory = {};
-    pending.working_directory.size = pending.field_target;
-    std::ranges::copy(std::span(pending.field).first(pending.working_directory.size),
-                      std::as_writable_bytes(std::span(pending.working_directory.bytes)).begin());
-    if (pending.working_directory.view().front() != '/' ||
-        pending.working_directory.view().contains('\0')) {
+  case PendingState::read_working_directory: {
+    auto* const working_directory = pending.working_directory.get();
+    LEMMA_ASSERT(working_directory != nullptr);
+    *working_directory = {};
+    working_directory->size = pending.field_target;
+    std::ranges::copy(std::span(pending.field).first(working_directory->size),
+                      std::as_writable_bytes(std::span(working_directory->bytes)).begin());
+    if (working_directory->view().empty() || working_directory->view().front() != '/' ||
+        working_directory->view().contains('\0')) {
       pending.state = PendingState::unused;
     } else {
       begin_pending_field(pending, PendingState::read_environment_size, 2);
     }
     break;
+  }
   case PendingState::read_environment_size: {
     const auto size =
         protocol::decode_bounded_size(std::span<const std::byte>(pending.field).first<2>());
@@ -10801,6 +12044,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       }
       std::ranges::copy(std::span(pending.field).first(pending.environment_size),
                         pending.environment.begin());
+      pending.field.release();
       begin_pending_field(pending, PendingState::read_launch_command_size, 2);
     }
     break;
@@ -10841,7 +12085,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   case PendingState::read_control_payload_size: {
     const auto size =
         protocol::decode_bounded_size(std::span<const std::byte>(pending.field).first<2>());
-    if (size == 0 || size > protocol::control_payload_bytes_max || size > pending.field.size()) {
+    if (size == 0 || size > protocol::control_payload_bytes_max) {
       pending.state = PendingState::unused;
     } else {
       begin_pending_field(pending, PendingState::read_control_payload, size);
@@ -10850,9 +12094,11 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
   }
   case PendingState::read_control_payload:
     prepare_control_payload(pending, sessions, runtimes);
+    pending.field.release();
     break;
   case PendingState::read_public_json:
   case PendingState::execute_public_proc:
+  case PendingState::prepare_attach:
   case PendingState::prepare_public_observer:
   case PendingState::observe:
   case PendingState::unused:
@@ -10929,6 +12175,7 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                                   pending->state != PendingState::flush_response;
        ++operation) {
     if (pending->state == PendingState::execute_public_proc ||
+        pending->state == PendingState::prepare_attach ||
         pending->state == PendingState::prepare_public_observer) {
       return;
     }
@@ -11050,9 +12297,13 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   const int connection = pending.descriptor;
   pending.descriptor = -1;
   session->attachment_runtime.client = connection;
+  LEMMA_ASSERT(session->attachment_registry != nullptr);
+  session->attachment_registry->publish(*session, session->attachment_registry_index);
+  session->attachment_runtime.poll_identity = pending.poll_identity;
+  pending.poll_identity = 0;
   session->attachment_runtime.decoder = std::move(pending.attach_decoder);
   release_attach_reservation(pending, slot, sessions);
-  owner.reset();
+  connections.erase(owner);
 
   if (activity_order < std::numeric_limits<std::uint64_t>::max()) {
     session->activity_order = ++activity_order;
@@ -11084,6 +12335,61 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
                              parse_client_packets(*session, runtimes, message_budget,
                                                   geometry_budget, input_budget,
                                                   &session_name_conflict, &sessions));
+}
+
+void process_public_observer_read(PublicObservers& observers, const std::size_t slot) noexcept {
+  const auto& observer = std::span(observers).subspan(slot, 1).front();
+  LEMMA_ASSERT(observer != nullptr);
+  std::array<std::byte, 256> unexpected{};
+  const auto received = ::recv(observer->descriptor, unexpected.data(), unexpected.size(), 0);
+  if (received == 0 || received > 0 ||
+      (received < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)) {
+    close_public_observer(observers, slot);
+  }
+}
+
+// The branches are the bounded socket-write state machine, not independent policy.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void flush_public_observer_output(PublicObservers& observers, const std::size_t slot,
+                                  std::size_t& global_budget) noexcept {
+  const auto& observer = std::span(observers).subspan(slot, 1).front();
+  LEMMA_ASSERT(observer != nullptr && observer->state == PendingState::flush_response);
+  while (observer->public_output_offset < observer->public_output.size() && global_budget > 0) {
+    const auto remaining =
+        std::string_view(observer->public_output)
+            .substr(observer->public_output_offset,
+                    std::min(observer->public_output.size() - observer->public_output_offset,
+                             global_budget));
+    const auto sent =
+        reactor_send(observer->descriptor, std::as_bytes(std::span(remaining)), MSG_NOSIGNAL);
+    if (sent.bytes > 0) {
+      const auto size = static_cast<std::size_t>(sent.bytes);
+      observer->public_output_offset += size;
+      global_budget -= size;
+      observer->deadline = reactor_now() + setup_progress_timeout;
+      continue;
+    }
+    if (sent.bytes < 0 && sent.error == EINTR) {
+      continue;
+    }
+    if (sent.bytes < 0 && (sent.error == EAGAIN || sent.error == EWOULDBLOCK)) {
+      return;
+    }
+    close_public_observer(observers, slot);
+    return;
+  }
+  if (observer->public_output_offset < observer->public_output.size()) {
+    return;
+  }
+  const auto disposition = observer->disposition;
+  observer->public_output.clear();
+  observer->public_output_offset = 0;
+  observer->disposition = PendingDisposition::close;
+  if (disposition == PendingDisposition::keep_observe) {
+    observer->state = PendingState::observe;
+  } else {
+    close_public_observer(observers, slot);
+  }
 }
 
 [[nodiscard]] auto write_pending_output(void* const context,
@@ -11223,11 +12529,11 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
   }
 }
 
-// Deadline folding is bounded across the fixed session/tab/pane hierarchy.
+// Deadline folding visits lifecycle-owned Session work registries and Pane deadline minima.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
-                                      const FrameScheduler::TimePoint now, int timeout) noexcept
-    -> int {
+                                      const FrameScheduler::TimePoint now, int timeout,
+                                      const bool hydration_enabled) noexcept -> int {
   const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
     if (!deadline.has_value()) {
       return false;
@@ -11241,8 +12547,11 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
     return false;
   };
-  for (const auto& session : sessions) {
-    if (session == nullptr || !session->active) {
+  const auto& attachments = sessions.attachments();
+  for (std::size_t index = 0; index < attachments.size(); ++index) {
+    const auto* const session = attachments.at(index);
+    LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+    if (!session->active) {
       continue;
     }
     if (session->attachment_runtime.client_work_pending ||
@@ -11251,27 +12560,30 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
          !session->attachment_runtime.output.busy())) {
       return 0;
     }
-    if ((session->attachment_runtime.copy_mode.search_task.has_value() &&
-         tighten(session->attachment_runtime.copy_mode.search_task->deadline)) ||
+    const auto search_deadline = session->attachment_runtime.copy_mode.search_task.transform(
+        [](const auto& task) { return task.deadline; });
+    if (tighten(search_deadline) ||
         (session->attachment_runtime.copy_mode.pending_escape_size > 0 &&
          tighten(session->attachment_runtime.copy_mode.pending_escape_deadline)) ||
         (session->attachment.status_message_visible &&
          tighten(session->attachment_runtime.status_message_deadline)) ||
-        tighten(session->attachment_runtime.frame_scheduler.deadline(frame_sink_state(*session))) ||
         tighten(session->attachment_runtime.output.deadline())) {
       return 0;
     }
-    for (const auto& pane_slot : session->panes) {
-      if (pane_slot.pane == nullptr) {
-        continue;
-      }
-      const auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
-      LEMMA_ASSERT(runtime != nullptr);
-      if (tighten(runtime->presentation_gate.deadline()) ||
-          (runtime->compression_scheduled && tighten(runtime->compression_deadline))) {
-        return 0;
-      }
+  }
+  const auto& frame_work = sessions.frame_work();
+  for (std::size_t index = 0; index < frame_work.size(); ++index) {
+    const auto* const session = frame_work.at(index);
+    LEMMA_ASSERT(session != nullptr);
+    if (session->active &&
+        tighten(session->attachment_runtime.frame_scheduler.deadline(frame_sink_state(*session)))) {
+      return 0;
     }
+  }
+  if (runtimes.failed_count() > 0 || (hydration_enabled && runtimes.unparking_count() > 0) ||
+      tighten(runtimes.parking_deadline_hint()) || tighten(runtimes.presentation_deadline_hint()) ||
+      tighten(runtimes.compression_deadline_hint())) {
+    return 0;
   }
   return timeout;
 }
@@ -11283,10 +12595,11 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto poll_timeout(Sessions& sessions, PaneRuntimeStore& runtimes,
-                                const PendingConnections& pending,
+                                const PendingConnections& pending, const PublicObservers& observers,
                                 const PublicProcExecutions& executions,
                                 const CapacityRejectionConnections& capacity_rejections,
-                                const bool immediate_public_work) noexcept -> int {
+                                const bool immediate_public_work,
+                                const bool hydration_enabled) noexcept -> int {
   const auto now = reactor_now();
   int timeout = -1;
   if (immediate_public_work) {
@@ -11302,10 +12615,10 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
     timeout = timeout < 0 ? candidate : std::min(timeout, candidate);
     return false;
   };
-  for (const auto& slot : executions) {
-    if (slot.execution == nullptr) {
-      continue;
-    }
+  for (std::size_t ordinal = 0; ordinal < executions.live_count(); ++ordinal) {
+    const auto slot_index = executions.live_slot(ordinal);
+    const auto& slot = std::span(executions).subspan(slot_index, 1).front();
+    LEMMA_ASSERT(slot.execution != nullptr);
     if (!slot.execution->wait.has_value()) {
       return 0;
     }
@@ -11314,10 +12627,10 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
       return 0;
     }
   }
-  for (const auto& connection : pending) {
-    if (connection == nullptr || !connection->active()) {
-      continue;
-    }
+  for (std::size_t ordinal = 0; ordinal < pending.live_count(); ++ordinal) {
+    const auto slot = pending.live_slot(ordinal);
+    const auto& connection = std::span(pending).subspan(slot, 1).front();
+    LEMMA_ASSERT(connection != nullptr && connection->active());
     if (connection->state == PendingState::execute_public_proc) {
       continue;
     }
@@ -11326,12 +12639,23 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
       return 0;
     }
   }
-  for (const auto& connection : capacity_rejections) {
-    if (connection.active() && tighten(connection)) {
+  for (std::size_t ordinal = 0; ordinal < observers.live_count(); ++ordinal) {
+    const auto slot = observers.live_slot(ordinal);
+    const auto& observer = std::span(observers).subspan(slot, 1).front();
+    LEMMA_ASSERT(observer != nullptr);
+    if (observer->state == PendingState::flush_response && tighten(*observer)) {
       return 0;
     }
   }
-  return frame_poll_timeout(sessions, runtimes, now, timeout);
+  for (std::size_t ordinal = 0; ordinal < capacity_rejections.live_count(); ++ordinal) {
+    const auto slot = capacity_rejections.live_slot(ordinal);
+    const auto& connection = std::span(capacity_rejections).subspan(slot, 1).front();
+    LEMMA_ASSERT(connection.active());
+    if (tighten(connection)) {
+      return 0;
+    }
+  }
+  return frame_poll_timeout(sessions, runtimes, now, timeout, hydration_enabled);
 }
 
 struct PaneDamageAssessment final {
@@ -11339,18 +12663,13 @@ struct PaneDamageAssessment final {
   bool status_changed{false};
 };
 
-[[nodiscard]] auto assess_pane_damage(SessionRecord& session, const PaneRuntimeStore& runtimes,
-                                      PaneRuntime& runtime, const PtyDrainResult& drained,
-                                      const bool track_interactive_damage,
-                                      const std::uint64_t interactive_status_before) noexcept
+[[nodiscard]] auto
+assess_pane_damage(SessionRecord& session, PaneRuntime& runtime, const PtyDrainResult& drained,
+                   const bool track_interactive_damage, const bool status_changed_by_event) noexcept
     -> PaneDamageAssessment {
-  const auto status_after = current_status_signature(session, runtimes);
-  const bool interactive_status_damage =
-      track_interactive_damage && status_after != interactive_status_before;
-  const bool status_changed = !session.attachment_runtime.status_valid ||
-                              status_after != session.attachment_runtime.status_signature;
-  const bool visible_damage =
-      drained.render_damage || interactive_status_damage || drained.damage_capture_failed;
+  const bool status_changed = !session.attachment_runtime.status_valid;
+  const bool visible_damage = drained.render_damage || drained.damage_capture_failed ||
+                              (track_interactive_damage && status_changed_by_event);
   const bool interactive_damage = runtime.interactive_damage.pending() && visible_damage;
   if (interactive_damage) {
     // Damage in an inactive tab is already covered by its next full redraw. Do not let the input
@@ -11398,8 +12717,6 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
 #endif
   const bool track_interactive_damage =
       session.attachment_runtime.client >= 0 && runtime.interactive_damage.pending();
-  const auto interactive_status_before =
-      track_interactive_damage ? current_status_signature(session, runtimes) : 0;
   // A client-blocked session keeps consuming canonical PTY state, but all of its ready panes share
   // one isolation slice so a many-pane session cannot spend the daemon-wide allowance by taking a
   // fresh slice for every pane.
@@ -11411,9 +12728,16 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
   }
   const auto pane_budget_before = pane_budget;
   const auto drained =
-      drain_pty(runtime.pty, runtime.terminal, runtime.presentation_gate, runtime.pending_writes,
-                pane_budget, track_interactive_damage, trace_matcher);
+      drain_pty(runtime.pty, runtime.active_terminal(), runtime.presentation_gate,
+                runtime.pending_writes, pane_budget, track_interactive_damage, trace_matcher);
+  if (!runtime.pending_writes.empty()) {
+    runtimes.note_pending_writes();
+  }
+  runtimes.note_presentation_deadline(runtime.presentation_gate.deadline());
   const auto bytes_drained = pane_budget_before - pane_budget;
+  if (bytes_drained > 0) {
+    runtime.parking_deadline.reset();
+  }
   global_budget -= bytes_drained;
   if (blocked_sink) {
     blocked_session_budget -= bytes_drained;
@@ -11422,20 +12746,21 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
     runtime.fail(*drained.failure);
   }
   session.attachment_runtime.bell_pending = session.attachment_runtime.bell_pending || drained.bell;
-  if (drained.title_changed) {
-    session.attachment_runtime.status_valid = false;
-  }
   if (drained.changed && runtime.live()) {
     record_terminal_mutation(runtime);
     preserve_copy_viewport_after_mutation(session, pane, runtime, runtimes);
     note_compression_activity(runtime);
   }
   const bool process_changed = refresh_process_name_if_due(runtime, reactor_now());
+  const bool status_changed_by_event = drained.title_changed || process_changed ||
+                                       (drained.changed && session.attachment.copy_mode.active());
+  session.attachment_runtime.status_valid =
+      session.attachment_runtime.status_valid && !status_changed_by_event;
   if (!pane_event_changed(session, drained, process_changed)) {
     return;
   }
-  const auto damage = assess_pane_damage(session, runtimes, runtime, drained,
-                                         track_interactive_damage, interactive_status_before);
+  const auto damage = assess_pane_damage(session, runtime, drained, track_interactive_damage,
+                                         status_changed_by_event);
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   if (drained.correlation != 0 && tab.id == session.active_tab && pane.id == tab.focused_pane) {
     session.attachment_runtime.frame_trace_correlation = drained.correlation;
@@ -11698,6 +13023,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   publish_status_message(session, StatusMessageKind::error, message);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto transfer_attachment(SessionRecord& source, SessionRecord& target,
                                        PaneRuntimeStore& runtimes,
                                        std::uint64_t& activity_order) noexcept
@@ -11721,6 +13047,16 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   if (target.connection_generation == std::numeric_limits<std::uint32_t>::max()) {
     return AttachmentTransferResult::capacity;
   }
+  const auto wake = wake_session_panes(target, runtimes, PaneWakeReason::attach);
+  if (wake == SessionWakeStatus::pending) {
+    return AttachmentTransferResult::deferred;
+  }
+  if (wake == SessionWakeStatus::failed) {
+    return AttachmentTransferResult::failed;
+  }
+  LEMMA_ASSERT(target.frame_work_registry != nullptr && target.attachment_registry != nullptr);
+  target.frame_work_registry->erase(target, target.frame_work_registry_index);
+  target.attachment_registry->erase(target, target.attachment_registry_index);
   target_runtime.reset_connection();
   const protocol::Dimensions previous_dimensions{.columns = target.attachment.columns,
                                                  .rows = target.attachment.rows};
@@ -11744,6 +13080,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   const auto previous_outer_modes = source_runtime.outer_modes;
   const bool client_work_pending = source_runtime.client_work_pending;
   const int client = std::exchange(source_runtime.client, -1);
+  const auto poll_identity = std::exchange(source_runtime.poll_identity, std::uint64_t{0});
   auto decoder = std::move(source_runtime.decoder);
   source_runtime.decoder = {};
   auto history = source.attachment.command_history;
@@ -11753,6 +13090,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   detach_attachment(source, runtimes);
 
   target_runtime.client = client;
+  target.attachment_registry->publish(target, target.attachment_registry_index);
+  target_runtime.poll_identity = poll_identity;
   target_runtime.decoder = std::move(decoder);
   target_runtime.server_sequence = server_sequence;
   target_runtime.full_redraw_generation = full_redraw_generation;
@@ -11780,8 +13119,11 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runtimes,
                                       std::uint64_t& activity_order) noexcept {
-  for (auto& owner : sessions) {
-    if (owner == nullptr || !owner->active || owner->attachment_runtime.client < 0) {
+  auto& attachments = sessions.attachments();
+  for (std::size_t index = 0; index < attachments.size(); ++index) {
+    auto* const owner = attachments.at(index);
+    LEMMA_ASSERT(owner != nullptr && owner->attachment_runtime.client >= 0);
+    if (!owner->active) {
       continue;
     }
     auto& session = *owner;
@@ -11872,6 +13214,53 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
          PtyFlushStatus::hard_error;
 }
 
+// Writable Panes are normally absent. Count one live registry pass without constructing or clearing
+// a 4,096-pointer turn-local projection; only a nonempty queue pays for the two bounded fair
+// ranges. NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void flush_pending_pane_writes(PaneRuntimeStore& runtimes, std::size_t& cursor) noexcept {
+  if (!runtimes.pending_writes_possible()) {
+    return;
+  }
+  std::size_t count = 0;
+  runtimes.for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+    count += static_cast<std::size_t>(runtime.pollable() && !runtime.pending_writes.empty());
+  });
+  if (count == 0) {
+    cursor = 0;
+    runtimes.clear_pending_writes_hint();
+    return;
+  }
+  cursor %= count;
+  std::size_t global_budget = std::size_t{1} * 1'024U * 1'024U;
+  std::size_t visited = 0;
+  bool writes_remain = false;
+  const auto flush_range = [&](const std::size_t begin, const std::size_t end) {
+    std::size_t ordinal = 0;
+    runtimes.for_each([&](const PaneAddress, PaneRuntime& runtime) {
+      if (!runtime.pollable() || runtime.pending_writes.empty()) {
+        return;
+      }
+      if (ordinal >= begin && ordinal < end && global_budget > 0) {
+        if (!flush_pane_writes(runtime, global_budget)) {
+          runtime.fail(PaneRuntimeFailure::pty_write_error);
+        }
+        writes_remain = writes_remain || (runtime.pollable() && !runtime.pending_writes.empty());
+        ++visited;
+      }
+      ++ordinal;
+    });
+  };
+  flush_range(cursor, count);
+  if (visited < count && global_budget > 0) {
+    flush_range(0, cursor);
+  }
+  writes_remain = writes_remain || visited < count;
+  if (!writes_remain) {
+    runtimes.clear_pending_writes_hint();
+  }
+  cursor = (cursor + visited) % count;
+}
+
 struct PaneRuntimeOutcome final {
   PaneAddress pane;
   std::optional<ProcessExit> process_exit;
@@ -11902,90 +13291,263 @@ void apply_pane_runtime_outcome(SessionRecord& session, Tab& tab, PaneRuntimeSto
   apply_session_change(session, runtimes, transition.change);
 }
 
-// Removal may rewrite tab and pane ownership while traversing fixed Session pane slots.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void reclaim_dead_panes(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  for (std::size_t index = 0; index < session.panes.size() && session.active; ++index) {
-    // index is bounded by the fixed Session pane capacity.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
-    auto& pane_owner = session.panes[index].pane;
-    if (pane_owner == nullptr) {
-      continue;
-    }
-    auto* const tab = find_tab(session, pane_owner->tab);
-    LEMMA_ASSERT(tab != nullptr);
-    auto* const runtime = find_pane_runtime(runtimes, session, *pane_owner);
-    LEMMA_ASSERT(runtime != nullptr);
-    if (!runtime->live()) {
-      LEMMA_ASSERT(runtime->failure.has_value());
-      const auto failure = *runtime->failure;
-      if (failure == PaneRuntimeFailure::child_exit && !runtime->observed_exit.has_value() &&
-          runtime->child > 0) {
+// Runtime failure discovery visits only lifecycle-owned live Pane slots. Apply one result after
+// each pass because the Core transition may erase the current Pane, sibling Panes, or the whole
+// Session. NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void reclaim_dead_panes(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
+  if (runtimes.failed_count() == 0) {
+    return;
+  }
+  for (std::size_t reclaimed = 0; reclaimed < limits::panes_hard_max; ++reclaimed) {
+    std::optional<PaneRuntimeOutcome> outcome;
+    runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+      if (outcome.has_value() || runtime.live()) {
+        return;
+      }
+      LEMMA_ASSERT(runtime.failure.has_value());
+      const auto failure = *runtime.failure;
+      if (failure == PaneRuntimeFailure::child_exit && !runtime.observed_exit.has_value() &&
+          runtime.child > 0) {
         int status = 0;
-        const auto reaped = ::waitpid(runtime->child, &status, WNOHANG);
-        if (reaped == runtime->child) {
-          runtime->observed_exit = process_exit_from_wait_status(status);
-          runtime->child = -1;
+        const auto reaped = ::waitpid(runtime.child, &status, WNOHANG);
+        if (reaped == runtime.child) {
+          runtime.observed_exit = process_exit_from_wait_status(status);
+          runtime.child = -1;
         } else if (reaped == 0 || (reaped < 0 && errno == EINTR)) {
           // PTY EOF and wait status can become observable in adjacent reactor turns. Keep the
           // failed runtime unpublished until Core has the real outcome rather than committing a
           // transient unknown status.
-          continue;
+          return;
         }
       }
-      const auto address = pane_address(session, *pane_owner);
-      apply_pane_runtime_outcome(
-          session, *tab, runtimes,
-          {.pane = address, .process_exit = runtime->observed_exit, .failure = failure});
+      outcome = {.pane = address, .process_exit = runtime.observed_exit, .failure = failure};
+    });
+    if (!outcome.has_value()) {
+      return;
     }
+    auto* const session = sessions.get(outcome->pane.session);
+    auto* const pane = session == nullptr ? nullptr : find_pane(*session, outcome->pane.pane);
+    auto* const tab = pane == nullptr ? nullptr : find_tab(*session, pane->tab);
+    LEMMA_ASSERT(session != nullptr && pane != nullptr && tab != nullptr);
+    apply_pane_runtime_outcome(*session, *tab, runtimes, *outcome);
   }
 }
 
 void expire_status_messages(Sessions& sessions, const ReactorClock::time_point now) noexcept {
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active || !session->attachment.status_message_visible ||
-        !session->attachment_runtime.status_message_deadline.has_value() ||
-        now < *session->attachment_runtime.status_message_deadline) {
+  auto& attachments = sessions.attachments();
+  for (std::size_t index = 0; index < attachments.size(); ++index) {
+    auto* const session = attachments.at(index);
+    LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+    if (!session->active || !session->attachment.status_message_visible) {
+      continue;
+    }
+    const auto& deadline = session->attachment_runtime.status_message_deadline;
+    if (now < deadline.value_or(ReactorClock::time_point::max())) {
       continue;
     }
     clear_status_message(*session);
   }
 }
 
-// Collecting due panes traverses the fixed session hierarchy before the bounded fair work pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtimes,
-                                    std::size_t& cursor) noexcept {
+void service_pane_hydration(Sessions& sessions, PaneRuntimeStore& runtimes, std::size_t& cursor,
+                            const std::size_t configured_steps_per_turn) noexcept {
   constexpr std::size_t steps_per_turn_max = 8;
-  const auto now = reactor_now();
-  std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> due{};
-  std::size_t count = 0;
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active) {
-      continue;
-    }
-    for (auto& pane_slot : session->panes) {
-      if (pane_slot.pane == nullptr) {
-        continue;
-      }
-      auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
-      LEMMA_ASSERT(runtime != nullptr);
-      if (runtime->live() && runtime->compression_scheduled &&
-          now >= runtime->compression_deadline) {
-        std::span(due).subspan(count, 1).front() = runtime;
-        ++count;
-      }
-    }
+  const auto step_limit = std::min(configured_steps_per_turn, steps_per_turn_max);
+  if (step_limit == 0) {
+    return;
   }
+  const auto count = runtimes.unparking_count();
   if (count == 0) {
     cursor = 0;
     return;
   }
   cursor %= count;
-  const auto steps = std::min(count, steps_per_turn_max);
+  const auto steps = std::min(count, step_limit);
+  std::array<PaneAddress, steps_per_turn_max> due{};
+  std::size_t ordinal = 0;
+  runtimes.for_each([&](const PaneAddress address, const PaneRuntime& runtime) {
+    if (runtime.residency.phase() != PaneResidencyPhase::unparking) {
+      return;
+    }
+    const auto position = (ordinal + count - cursor) % count;
+    if (position < steps) {
+      std::span(due).subspan(position, 1).front() = address;
+    }
+    ++ordinal;
+  });
   for (std::size_t visited = 0; visited < steps; ++visited) {
-    auto& runtime = *std::span(due).subspan((cursor + visited) % count, 1).front();
-    const auto compressed = runtime.terminal.compress_scrollback();
+    const auto address = std::span(due).subspan(visited, 1).front();
+    auto* const runtime = runtimes.get(address);
+    auto* const session = sessions.get(address.session);
+    LEMMA_ASSERT(runtime != nullptr && session != nullptr);
+    const auto restored = runtimes.restore_one_history_page(address);
+    if (!restored.has_value()) {
+      runtime->fail(PaneRuntimeFailure::snapshot_restore_error);
+      continue;
+    }
+    if (*restored) {
+      const auto activity = runtime->active_terminal().compression_activity();
+      if (!activity.has_value() || runtime->active_terminal().integrity_failed()) {
+        runtime->fail(PaneRuntimeFailure::snapshot_restore_error);
+        continue;
+      }
+      runtime->compression_activity = *activity;
+      runtime->active_terminal().invalidate_ansi_render_state();
+      session->attachment_runtime.status_valid = false;
+      if (session->attachment_runtime.client >= 0 ||
+          session->attachment_runtime.pending_attach_slot !=
+              std::numeric_limits<std::uint32_t>::max()) {
+        schedule_frame(*session, FrameUrgency::state_change, true);
+      }
+    }
+  }
+  cursor = (cursor + steps) % count;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void service_pending_attach_preparations(PendingConnections& connections, Sessions& sessions,
+                                         PaneRuntimeStore& runtimes) noexcept {
+  for (std::size_t ordinal = 0; ordinal < connections.live_count(); ++ordinal) {
+    const auto slot = connections.live_slot(ordinal);
+    auto& owner = std::span(connections).subspan(slot, 1).front();
+    LEMMA_ASSERT(owner != nullptr);
+    if (owner->state != PendingState::prepare_attach) {
+      continue;
+    }
+    auto& pending = *owner;
+    auto* const session = sessions.get(pending.attach_session);
+    const bool owns_reservation =
+        session != nullptr && session->attachment_runtime.pending_attach_slot == pending.slot &&
+        session->attachment_runtime.pending_attach_generation == pending.generation;
+    if (session == nullptr || !session->active || !owns_reservation) {
+      if (session != nullptr && owns_reservation) {
+        release_attach_reservation(pending, pending.slot, *session);
+      }
+      finish_pending_disconnect(pending, protocol::DisconnectReason::session_missing,
+                                "parked session ended while attaching");
+      continue;
+    }
+    const auto wake = wake_session_panes(*session, runtimes, PaneWakeReason::attach);
+    if (wake == SessionWakeStatus::failed) {
+      release_attach_reservation(pending, pending.slot, *session);
+      finish_pending_disconnect(pending, protocol::DisconnectReason::setup_failed,
+                                "failed to restore parked panes");
+    } else if (wake == SessionWakeStatus::active) {
+      finish_prepare_attach(pending, *session, runtimes);
+    }
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void update_detached_pane_parking(Sessions& sessions, PaneRuntimeStore& runtimes,
+                                  const PublicObservers& connections,
+                                  const std::optional<ReactorClock::duration> parking_delay,
+                                  const bool corrupt_snapshots_for_test) noexcept {
+  if (!parking_delay.has_value()) {
+    return;
+  }
+  bool has_detached_session = false;
+  for (const auto& session : sessions) {
+    if (session != nullptr && session->active && session->attachment_runtime.client < 0 &&
+        session->attachment_runtime.pending_attach_slot ==
+            std::numeric_limits<std::uint32_t>::max()) {
+      has_detached_session = true;
+      break;
+    }
+  }
+  if (!has_detached_session) {
+    runtimes.clear_parking_deadline_hint();
+    return;
+  }
+  std::array<bool, limits::sessions_hard_max> observed_sessions{};
+  for (std::size_t ordinal = 0; ordinal < connections.live_count(); ++ordinal) {
+    const auto slot = connections.live_slot(ordinal);
+    const auto& owner = std::span(connections).subspan(slot, 1).front();
+    LEMMA_ASSERT(owner != nullptr);
+    if (owner->state == PendingState::unused || !owner->subscription.session.has_value()) {
+      continue;
+    }
+    const auto* const observed = public_session(sessions, *owner->subscription.session);
+    if (observed != nullptr) {
+      std::span(observed_sessions).subspan(observed->id.slot(), 1).front() = true;
+    }
+  }
+  const auto now = reactor_now();
+  runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+    const auto* const session = sessions.get(address.session);
+    LEMMA_ASSERT(session != nullptr);
+    const bool detached = session->active && session->attachment_runtime.client < 0 &&
+                          session->attachment_runtime.pending_attach_slot ==
+                              std::numeric_limits<std::uint32_t>::max() &&
+                          !std::span(observed_sessions).subspan(session->id.slot(), 1).front();
+    if (!detached) {
+      // Attach and observer preparation route through wake_session_panes(), which clears any
+      // armed quiet deadline. Avoid any Pane-capacity walk on ordinary attached reactor turns.
+      return;
+    }
+    if (runtime.residency.phase() != PaneResidencyPhase::active || !runtime.live() ||
+        !runtime.pending_writes.empty() || runtime.observed_exit.has_value()) {
+      return;
+    }
+    if (!runtime.parking_deadline.has_value()) {
+      runtime.parking_deadline = now + *parking_delay;
+    }
+    if (now < *runtime.parking_deadline) {
+      return;
+    }
+    runtime.compression_scheduled = false;
+    const auto parked =
+        runtimes.park(address, corrupt_snapshots_for_test ? SnapshotTestCorruption::ghostty_payload
+                                                          : SnapshotTestCorruption::none);
+    runtime.parking_deadline.reset();
+    if (!parked.has_value()) {
+      // Parking is an optional resource optimization. Retry after a full quiet interval without
+      // failing the authoritative live terminal when quota or storage is unavailable.
+      runtime.parking_deadline = now + *parking_delay;
+    }
+  });
+  runtimes.refresh_parking_deadline_hint();
+  runtimes.refresh_compression_deadline_hint();
+}
+
+// Due work is dormant behind an authoritative earliest-deadline hint. Reaching a hint performs one
+// bounded live-Pane collection and refreshes the next minimum after the fair pass.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void run_due_scrollback_compression(PaneRuntimeStore& runtimes, std::size_t& cursor) noexcept {
+  constexpr std::size_t steps_per_turn_max = 8;
+  const auto now = reactor_now();
+  const auto hint = runtimes.compression_deadline_hint();
+  if (!hint.has_value() || now < *hint) {
+    return;
+  }
+  std::size_t count = 0;
+  runtimes.for_each([&](const PaneAddress, const PaneRuntime& runtime) {
+    count += static_cast<std::size_t>(runtime.live() && runtime.compression_scheduled &&
+                                      now >= runtime.compression_deadline);
+  });
+  if (count == 0) {
+    cursor = 0;
+    runtimes.refresh_compression_deadline_hint();
+    return;
+  }
+  cursor %= count;
+  const auto steps = std::min(count, steps_per_turn_max);
+  std::array<PaneRuntime*, steps_per_turn_max> due{};
+  std::size_t ordinal = 0;
+  runtimes.for_each([&](const PaneAddress, PaneRuntime& runtime) {
+    if (!runtime.live() || !runtime.compression_scheduled || now < runtime.compression_deadline) {
+      return;
+    }
+    const auto position = (ordinal + count - cursor) % count;
+    if (position < steps) {
+      std::span(due).subspan(position, 1).front() = &runtime;
+    }
+    ++ordinal;
+  });
+  for (std::size_t visited = 0; visited < steps; ++visited) {
+    auto& runtime = *std::span(due).subspan(visited, 1).front();
+    const auto compressed = runtime.active_terminal().compress_scrollback();
     if (!compressed.has_value()) {
       runtime.fail(PaneRuntimeFailure::scrollback_compression_error);
       runtime.compression_scheduled = false;
@@ -11997,43 +13559,55 @@ void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtim
     }
   }
   cursor = (cursor + steps) % count;
+  runtimes.refresh_compression_deadline_hint();
 }
 
-// Gate expiry visits the same fixed hierarchy and schedules only visible active-tab repairs.
+// Gate expiry is dormant until the authoritative earliest-deadline hint is reached.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   const auto now = reactor_now();
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active) {
-      continue;
-    }
-    for (auto& pane_slot : session->panes) {
-      if (pane_slot.pane == nullptr) {
-        continue;
-      }
-      auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
-      LEMMA_ASSERT(runtime != nullptr);
-      const auto released = runtime->presentation_gate.release_if_expired(now);
-      if (released.urgent_render && pane_slot.pane->tab == session->active_tab) {
-        schedule_frame(*session, FrameUrgency::state_change, released.force_full);
-      }
-    }
+  const auto hint = runtimes.presentation_deadline_hint();
+  if (!hint.has_value() || now < *hint) {
+    return;
   }
+  runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+    auto* const session = sessions.get(address.session);
+    auto* const pane = session == nullptr ? nullptr : find_pane(*session, address.pane);
+    LEMMA_ASSERT(session != nullptr && pane != nullptr);
+    if (!session->active) {
+      return;
+    }
+    const auto released = runtime.presentation_gate.release_if_expired(now);
+    if (released.urgent_render && pane->tab == session->active_tab) {
+      schedule_frame(*session, FrameUrgency::state_change, released.force_full);
+    }
+  });
+  runtimes.refresh_presentation_deadline_hint();
 }
 
 void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
   const auto now = reactor_now();
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active ||
-        session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
-        !session->attachment_runtime.frame_scheduler.due(now, frame_sink_state(*session))) {
+  auto& frame_work = sessions.frame_work();
+  std::size_t index = 0;
+  while (index < frame_work.size()) {
+    auto* const session = frame_work.at(index);
+    LEMMA_ASSERT(session != nullptr);
+    if (!session->active) {
+      frame_work.erase(*session, session->frame_work_registry_index);
       continue;
     }
-    if (!compose_session_frame(*session, runtimes,
-                               session->attachment_runtime.frame_scheduler.force_full(), now)) {
+    if (session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
+        !session->attachment_runtime.frame_scheduler.due(now, frame_sink_state(*session))) {
+      ++index;
+      continue;
+    }
+    const bool composed = compose_session_frame(
+        *session, runtimes, session->attachment_runtime.frame_scheduler.force_full(), now);
+    session->attachment_runtime.frame_scheduler.complete();
+    frame_work.erase(*session, session->frame_work_registry_index);
+    if (!composed) {
       detach_attachment(*session, runtimes);
     }
-    session->attachment_runtime.frame_scheduler.complete();
   }
 }
 
@@ -12047,21 +13621,29 @@ void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
 
 void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                    const ClientFrameOutput::TimePoint now) noexcept {
-  for (auto& session : sessions) {
-    if (session != nullptr && session->active && session->attachment_runtime.client >= 0 &&
-        session->attachment_runtime.output.expired(now)) {
+  auto& attachments = sessions.attachments();
+  std::size_t index = 0;
+  while (index < attachments.size()) {
+    auto* const session = attachments.at(index);
+    LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+    if (session->active && session->attachment_runtime.output.expired(now)) {
       detach_attachment(*session, runtimes);
+    } else {
+      ++index;
     }
   }
 }
 
-void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
-                                  const std::span<ClientFrameFlushTarget> storage,
-                                  std::size_t& cursor,
-                                  const ClientFrameOutput::TimePoint now) noexcept {
+[[nodiscard]] auto
+collect_attached_client_flush_targets(Sessions& sessions,
+                                      const std::span<ClientFrameFlushTarget> storage) noexcept
+    -> std::span<ClientFrameFlushTarget> {
   std::size_t count = 0;
-  for (auto& session : sessions) {
-    if (session == nullptr || !session->active || session->attachment_runtime.client < 0) {
+  auto& attachments = sessions.attachments();
+  for (std::size_t index = 0; index < attachments.size(); ++index) {
+    auto* const session = attachments.at(index);
+    LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+    if (!session->active) {
       continue;
     }
     LEMMA_ASSERT(count < storage.size());
@@ -12070,13 +13652,19 @@ void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes
         .frame = &session->attachment_runtime.frame,
         .output = &session->attachment_runtime.output,
         .write = &write_attached_client,
-        .context = session.get(),
+        .context = session,
     };
     ++count;
   }
+  return storage.first(count);
+}
 
+void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
+                                  const std::span<ClientFrameFlushTarget> storage,
+                                  std::size_t& cursor,
+                                  const ClientFrameOutput::TimePoint now) noexcept {
   std::size_t global_budget = attached_client_write_bytes_per_turn_max;
-  auto active_targets = storage.first(count);
+  auto active_targets = collect_attached_client_flush_targets(sessions, storage);
   flush_ready_client_frames(active_targets, cursor, global_budget, now);
   for (std::size_t index = 0; index < active_targets.size(); ++index) {
     auto& target = active_targets.subspan(index, 1).front();
@@ -12100,30 +13688,68 @@ void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes
 
 void expire_pending_connections(PendingConnections& pending_connections,
                                 Sessions& sessions) noexcept {
+  if (pending_connections.empty()) {
+    return;
+  }
   const auto now = reactor_now();
-  for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+  std::size_t ordinal = 0;
+  while (ordinal < pending_connections.live_count()) {
+    const auto slot = pending_connections.live_slot(ordinal);
     const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-    if (pending != nullptr && pending->active() &&
-        (!pending->public_connection || public_deadline_applies(*pending)) &&
+    LEMMA_ASSERT(pending != nullptr);
+    if (pending->active() && (!pending->public_connection || public_deadline_applies(*pending)) &&
         now >= pending->deadline) {
       close_pending(pending_connections, slot, sessions);
+    } else {
+      ++ordinal;
+    }
+  }
+}
+
+void expire_public_observers(PublicObservers& observers) noexcept {
+  if (observers.empty()) {
+    return;
+  }
+  const auto now = reactor_now();
+  std::size_t ordinal = 0;
+  while (ordinal < observers.live_count()) {
+    const auto slot = observers.live_slot(ordinal);
+    const auto& observer = std::span(observers).subspan(slot, 1).front();
+    LEMMA_ASSERT(observer != nullptr);
+    if (observer->state == PendingState::flush_response && now >= observer->deadline) {
+      close_public_observer(observers, slot);
+    } else {
+      ++ordinal;
     }
   }
 }
 
 void expire_capacity_rejections(CapacityRejectionConnections& connections) noexcept {
+  if (connections.empty()) {
+    return;
+  }
   const auto now = reactor_now();
-  for (std::size_t slot = 0; slot < connections.size(); ++slot) {
+  std::size_t ordinal = 0;
+  while (ordinal < connections.live_count()) {
+    const auto slot = connections.live_slot(ordinal);
     const auto& connection = std::span(connections).subspan(slot, 1).front();
-    if (connection.active() && now >= connection.deadline) {
+    LEMMA_ASSERT(connection.active());
+    if (now >= connection.deadline) {
       close_capacity_rejection(connections, slot);
+    } else {
+      ++ordinal;
     }
   }
 }
 
 [[nodiscard]] auto empty_pending_slot(PendingConnections& pending_connections,
-                                      const PendingConnectionGenerations& generations) noexcept
+                                      const PendingConnectionGenerations& generations,
+                                      const PublicObservers& observers) noexcept
     -> std::optional<std::size_t> {
+  if (std::cmp_greater_equal(pending_connections.live_count() + observers.live_count(),
+                             limits::pending_connections_hard_max)) {
+    return std::nullopt;
+  }
   for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
     if (std::span(pending_connections).subspan(slot, 1).front() == nullptr &&
         std::span(generations).subspan(slot, 1).front() <
@@ -12148,10 +13774,11 @@ void expire_capacity_rejections(CapacityRejectionConnections& connections) noexc
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void accept_pending_connections(const int listener, PendingConnections& pending_connections,
                                 PendingConnectionGenerations& generations,
+                                const PublicObservers& observers,
                                 CapacityRejectionConnections& capacity_rejections) noexcept {
   constexpr std::size_t accepts_per_turn_max = 8;
   for (std::size_t accepted = 0; accepted < accepts_per_turn_max; ++accepted) {
-    const auto available = empty_pending_slot(pending_connections, generations);
+    const auto available = empty_pending_slot(pending_connections, generations, observers);
     std::optional<std::size_t> rejection_slot;
     if (!available.has_value()) {
       rejection_slot = empty_capacity_rejection_slot(capacity_rejections);
@@ -12176,20 +13803,23 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
         continue;
       }
       auto& rejection = std::span(capacity_rejections).subspan(*rejection_slot, 1).front();
+      capacity_rejections.activate(*rejection_slot);
       rejection.descriptor = connection;
+      rejection.poll_identity = next_poll_identity();
       rejection.output.reset();
       rejection.flush_response = false;
       rejection.deadline = reactor_now() + setup_progress_timeout;
       continue;
     }
-    auto& owner = std::span(pending_connections).subspan(*available, 1).front();
     try {
-      owner = std::make_unique<PendingConnection>();
+      pending_connections.publish(*available, std::make_unique<PendingConnection>());
     } catch (const std::bad_alloc&) {
       close_descriptor(connection);
       continue;
     }
+    auto& owner = std::span(pending_connections).subspan(*available, 1).front();
     owner->descriptor = connection;
+    owner->poll_identity = next_poll_identity();
     auto& generation = std::span(generations).subspan(*available, 1).front();
     generation = next_generation(generation);
     owner->generation = generation;
@@ -12206,6 +13836,7 @@ enum class DescriptorKind : std::uint8_t {
   pane,
   client,
   pending,
+  observer,
   capacity_rejection,
 };
 
@@ -12230,6 +13861,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     return 1;
   }
   const ReactorEnvironmentGuard environment_guard(environment);
+  const ReactorTurnClockGuard turn_clock;
   CommandHistoryGuard command_history_guard(environment.command_history_file);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
@@ -12243,6 +13875,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   auto& runtimes = *pane_runtimes;
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
+  PublicObservers observers{};
   PublicProcExecutions public_procs{};
   CapacityRejectionConnections capacity_rejections{};
   if (!child_reaper.valid() || !set_nonblocking(listener)) {
@@ -12254,6 +13887,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                         capacity_rejection_connections_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
+  std::array<std::uint64_t, descriptor_count_max> poll_identities{};
+  const auto listener_poll_identity = next_poll_identity();
+  const auto child_reaper_poll_identity = next_poll_identity();
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
       client_flush_targets{};
   std::size_t pty_read_cursor = 0;
@@ -12261,93 +13897,128 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
+  std::size_t hydration_cursor = 0;
   std::size_t proc_cursor = 0;
   std::size_t observer_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
 
   while (true) {
+    refresh_reactor_turn_time();
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    reap_exited_children(sessions, runtimes, child_reaper);
+    service_pane_hydration(sessions, runtimes, hydration_cursor,
+                           environment.pane_hydration_steps_per_turn);
+    if (!pending_connections.empty()) {
+      service_pending_attach_preparations(pending_connections, sessions, runtimes);
+      admit_prepared_public_observers(pending_connections, observers);
+    }
     expire_status_messages(sessions, reactor_now());
-    const bool public_screen_work_pending = service_public_observers(
-        pending_connections, sessions, runtimes, public_scratch, observer_cursor);
-    for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+    const bool public_screen_work_pending =
+        !observers.empty() &&
+        service_public_observers(observers, sessions, runtimes, public_scratch, observer_cursor);
+    update_detached_pane_parking(sessions, runtimes, observers,
+                                 environment.detached_pane_parking_delay,
+                                 environment.corrupt_parked_snapshots_for_test);
+    std::size_t pending_ordinal = 0;
+    while (pending_ordinal < pending_connections.live_count()) {
+      const auto slot = pending_connections.live_slot(pending_ordinal);
       const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-      if (pending != nullptr && !pending->active()) {
+      LEMMA_ASSERT(pending != nullptr);
+      if (!pending->active()) {
         close_pending(pending_connections, slot, sessions);
+      } else {
+        ++pending_ordinal;
+      }
+    }
+    std::size_t observer_ordinal = 0;
+    while (observer_ordinal < observers.live_count()) {
+      const auto slot = observers.live_slot(observer_ordinal);
+      const auto& observer = std::span(observers).subspan(slot, 1).front();
+      LEMMA_ASSERT(observer != nullptr);
+      if (observer->state == PendingState::unused) {
+        close_public_observer(observers, slot);
+      } else {
+        ++observer_ordinal;
       }
     }
     std::size_t descriptor_count = 2;
     descriptors.front() = {.fd = listener, .events = POLLIN, .revents = 0};
     std::span(descriptors).subspan(1, 1).front() = {
         .fd = child_reaper.wake_descriptor, .events = POLLIN, .revents = 0};
+    owners.front() = {.session = {},
+                      .tab = {},
+                      .pane = {},
+                      .connection = {},
+                      .auxiliary_slot = 0,
+                      .kind = DescriptorKind::client};
     std::span(owners).subspan(1, 1).front() = {.session = {},
                                                .tab = {},
                                                .pane = {},
                                                .connection = {},
                                                .auxiliary_slot = 0,
                                                .kind = DescriptorKind::child_reaper};
-    for (const auto& session : sessions) {
-      if (session == nullptr || !session->active) {
+    poll_identities.front() = listener_poll_identity;
+    std::span(poll_identities).subspan(1, 1).front() = child_reaper_poll_identity;
+    runtimes.for_each([&](const PaneAddress address, const PaneRuntime& runtime) {
+      const auto* const session = sessions.get(address.session);
+      const auto* const pane = session == nullptr ? nullptr : find_pane(*session, address.pane);
+      LEMMA_ASSERT(session != nullptr && pane != nullptr);
+      if (!session->active || !runtime.pollable()) {
+        return;
+      }
+      const auto pane_events = static_cast<short>(
+          POLLIN | (!runtime.pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = runtime.pty, .events = pane_events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = address.session,
+                                                                .tab = pane->tab,
+                                                                .pane = address.pane,
+                                                                .connection = {},
+                                                                .auxiliary_slot = 0,
+                                                                .kind = DescriptorKind::pane};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() = runtime.poll_identity;
+      ++descriptor_count;
+    });
+    const auto& attached_sessions = sessions.attachments();
+    for (std::size_t index = 0; index < attached_sessions.size(); ++index) {
+      const auto* const session = attached_sessions.at(index);
+      LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+      if (!session->active) {
         continue;
       }
-      for (const auto& pane_slot : session->panes) {
-        const auto& pane = pane_slot.pane;
-        if (pane == nullptr) {
-          continue;
-        }
-        const auto address = pane_address(*session, *pane);
-        const auto* const runtime = runtimes.get(address);
-        LEMMA_ASSERT(runtime != nullptr);
-        if (!runtime->pollable()) {
-          continue;
-        }
-        const auto pane_events = static_cast<short>(
-            POLLIN | (!runtime->pending_writes.empty() ? static_cast<short>(POLLOUT) : 0));
-        std::span(descriptors).subspan(descriptor_count, 1).front() = {
-            .fd = runtime->pty, .events = pane_events, .revents = 0};
-        std::span(owners).subspan(descriptor_count, 1).front() = {.session = address.session,
-                                                                  .tab = pane->tab,
-                                                                  .pane = address.pane,
-                                                                  .connection = {},
-                                                                  .auxiliary_slot = 0,
-                                                                  .kind = DescriptorKind::pane};
-        ++descriptor_count;
-      }
-      if (session->attachment_runtime.client >= 0) {
-        const auto client_events = static_cast<short>(
-            (session->attachment_runtime.input_backpressured ||
-                     session->attachment_runtime.client_work_pending ||
-                     session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
-                     session->attachment.command_line.submit_requested ||
-                     session->attachment.command_line.completion_requested
-                 ? 0
-                 : POLLIN) |
-            (session->attachment_runtime.output.busy() ? static_cast<short>(POLLOUT) : 0));
-        std::span(descriptors).subspan(descriptor_count, 1).front() = {
-            .fd = session->attachment_runtime.client, .events = client_events, .revents = 0};
-        std::span(owners).subspan(descriptor_count, 1).front() = {
-            .session = session->id,
-            .tab = {},
-            .pane = {},
-            .connection = session->attachment_runtime.connection_id,
-            .auxiliary_slot = 0,
-            .kind = DescriptorKind::client};
-        ++descriptor_count;
-      }
+      const auto client_events = static_cast<short>(
+          (session->attachment_runtime.input_backpressured ||
+                   session->attachment_runtime.client_work_pending ||
+                   session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
+                   session->attachment.command_line.submit_requested ||
+                   session->attachment.command_line.completion_requested
+               ? 0
+               : POLLIN) |
+          (session->attachment_runtime.output.busy() ? static_cast<short>(POLLOUT) : 0));
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = session->attachment_runtime.client, .events = client_events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {
+          .session = session->id,
+          .tab = {},
+          .pane = {},
+          .connection = session->attachment_runtime.connection_id,
+          .auxiliary_slot = 0,
+          .kind = DescriptorKind::client};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() =
+          session->attachment_runtime.poll_identity;
+      ++descriptor_count;
     }
-    for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+    for (std::size_t ordinal = 0; ordinal < pending_connections.live_count(); ++ordinal) {
+      const auto slot = pending_connections.live_slot(ordinal);
       const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-      if (pending == nullptr || !pending->active()) {
-        continue;
-      }
+      LEMMA_ASSERT(pending != nullptr && pending->active());
       short events = 0;
       if (pending->state == PendingState::flush_response) {
         events = POLLOUT;
-      } else if (pending->state != PendingState::prepare_public_observer) {
+      } else if (pending->state != PendingState::prepare_attach &&
+                 pending->state != PendingState::prepare_public_observer) {
         events = POLLIN;
       }
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
@@ -12358,13 +14029,34 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .connection = {},
                                                                 .auxiliary_slot = slot,
                                                                 .kind = DescriptorKind::pending};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() = pending->poll_identity;
       ++descriptor_count;
     }
-    for (std::size_t slot = 0; slot < capacity_rejections.size(); ++slot) {
-      const auto& rejection = std::span(capacity_rejections).subspan(slot, 1).front();
-      if (!rejection.active()) {
-        continue;
+    for (std::size_t ordinal = 0; ordinal < observers.live_count(); ++ordinal) {
+      const auto slot = observers.live_slot(ordinal);
+      const auto& observer = std::span(observers).subspan(slot, 1).front();
+      LEMMA_ASSERT(observer != nullptr && observer->active());
+      short events = 0;
+      if (observer->state == PendingState::flush_response) {
+        events = POLLOUT;
+      } else if (observer->state == PendingState::observe) {
+        events = POLLIN;
       }
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = observer->descriptor, .events = events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
+                                                                .tab = {},
+                                                                .pane = {},
+                                                                .connection = {},
+                                                                .auxiliary_slot = slot,
+                                                                .kind = DescriptorKind::observer};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() = observer->poll_identity;
+      ++descriptor_count;
+    }
+    for (std::size_t ordinal = 0; ordinal < capacity_rejections.live_count(); ++ordinal) {
+      const auto slot = capacity_rejections.live_slot(ordinal);
+      const auto& rejection = std::span(capacity_rejections).subspan(slot, 1).front();
+      LEMMA_ASSERT(rejection.active());
       const auto events = static_cast<short>(rejection.flush_response ? POLLOUT : POLLIN);
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = rejection.descriptor, .events = events, .revents = 0};
@@ -12375,18 +14067,22 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .connection = {},
           .auxiliary_slot = slot,
           .kind = DescriptorKind::capacity_rejection};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() = rejection.poll_identity;
       ++descriptor_count;
     }
     const auto poll_result =
         reactor_poll(std::span(descriptors).first(descriptor_count),
-                     poll_timeout(sessions, runtimes, pending_connections, public_procs,
-                                  capacity_rejections, public_screen_work_pending));
+                     std::span(poll_identities).first(descriptor_count),
+                     poll_timeout(sessions, runtimes, pending_connections, observers, public_procs,
+                                  capacity_rejections, public_screen_work_pending,
+                                  environment.pane_hydration_steps_per_turn > 0));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
       }
       return 1;
     }
+    refresh_reactor_turn_time();
     const auto child_reaper_events = std::span(descriptors).subspan(1, 1).front().revents;
     if ((child_reaper_events & (POLLIN | POLLHUP | POLLERR)) != 0) {
       reap_exited_children(sessions, runtimes, child_reaper);
@@ -12397,9 +14093,14 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     // Drain every ready PTY before handling client input, then remove exited panes so input is
     // always routed to a live focused pane selected by close_pane.
     std::size_t pty_read_budget = std::size_t{256} * 1'024U;
+    // Only live Session slots are read below; initializing empty capacity would restore an O(max)
+    // turn cost. NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
-        blocked_session_read_budgets{};
-    blocked_session_read_budgets.fill(blocked_sink_pty_read_bytes_per_turn_max);
+        blocked_session_read_budgets;
+    for (const auto* const session : sessions) {
+      std::span(blocked_session_read_budgets).subspan(session->id.slot(), 1).front() =
+          blocked_sink_pty_read_bytes_per_turn_max;
+    }
     const auto ready_owner_count = descriptor_count - 2U;
     if (ready_owner_count > 0) {
       pty_read_cursor %= ready_owner_count;
@@ -12425,21 +14126,34 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     } else {
       pty_read_cursor = 0;
     }
-    for (auto& session : sessions) {
-      if (session != nullptr && session->active) {
-        reclaim_dead_panes(*session, runtimes);
+    reclaim_dead_panes(sessions, runtimes);
+    auto& attached_after_poll = sessions.attachments();
+    for (std::size_t index = 0; index < attached_after_poll.size(); ++index) {
+      auto* const session = attached_after_poll.at(index);
+      LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+      if (session->active) {
         service_copy_input_timeout(*session, runtimes, reactor_now());
       }
     }
+    // Descriptors can reference only the live Session slots initialized immediately below.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
-        client_message_budgets{};
+        client_message_budgets;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
-        client_geometry_budgets{};
+        client_geometry_budgets;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
-        client_input_budgets{};
-    client_message_budgets.fill(client_messages_per_turn_max);
-    client_geometry_budgets.fill(client_geometry_messages_per_turn_max);
-    client_input_budgets.fill(client_input_steps_per_turn_max);
+        client_input_budgets;
+    // A command-line Session transfer can attach a previously detached live Session after these
+    // arrays are initialized, so every live stable slot must own a budget for the complete turn.
+    for (const auto* const session : sessions) {
+      const auto slot = session->id.slot();
+      std::span(client_message_budgets).subspan(slot, 1).front() = client_messages_per_turn_max;
+      std::span(client_geometry_budgets).subspan(slot, 1).front() =
+          client_geometry_messages_per_turn_max;
+      std::span(client_input_budgets).subspan(slot, 1).front() = client_input_steps_per_turn_max;
+    }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::client) {
@@ -12462,24 +14176,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
     service_attachment_command_lines(sessions, runtimes, activity_order);
-    std::array<SessionRecord*, static_cast<std::size_t>(limits::sessions_hard_max)>
-        search_sessions{};
-    for (auto& session : sessions) {
-      if (session != nullptr && session->active) {
-        std::span(search_sessions).subspan(session->id.slot(), 1).front() = session.get();
-      }
-    }
     std::size_t search_work_budget = limits::search_candidates_per_step;
     std::size_t visited = 0;
-    for (; visited < search_sessions.size() && search_work_budget > 0; ++visited) {
-      auto* const session = std::span(search_sessions)
-                                .subspan((search_cursor + visited) % search_sessions.size(), 1)
-                                .front();
-      if (session != nullptr) {
+    const auto live_session_count = sessions.size();
+    for (; visited < live_session_count && search_work_budget > 0; ++visited) {
+      auto* const session = sessions.live_at((search_cursor + visited) % live_session_count);
+      if (session->active) {
         static_cast<void>(service_copy_search(*session, runtimes, search_work_budget));
       }
     }
-    search_cursor = (search_cursor + visited) % search_sessions.size();
+    search_cursor = live_session_count == 0 ? 0 : (search_cursor + visited) % live_session_count;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::pending) {
@@ -12490,16 +14196,30 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         const bool execution_pending = pending->state == PendingState::execute_public_proc;
-        if (execution_pending && (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        if (pending->state == PendingState::prepare_attach && (events & (POLLHUP | POLLERR)) != 0) {
+          close_pending(pending_connections, owner.auxiliary_slot, sessions);
+        } else if (execution_pending && (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_public_read(*pending, public_procs);
           if (pending->state == PendingState::unused) {
             close_pending(pending_connections, owner.auxiliary_slot, sessions);
           }
         } else if (pending->state != PendingState::flush_response &&
+                   pending->state != PendingState::prepare_attach &&
                    pending->state != PendingState::prepare_public_observer &&
                    (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, activity_order,
                                public_procs, owner.auxiliary_slot);
+        }
+      } else if (owner.kind == DescriptorKind::observer) {
+        const auto& observer = std::span(observers).subspan(owner.auxiliary_slot, 1).front();
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        if (observer != nullptr && observer->state == PendingState::observe &&
+            (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
+          process_public_observer_read(observers, owner.auxiliary_slot);
+        } else if (observer != nullptr &&
+                   observer->state == PendingState::prepare_public_observer &&
+                   (events & (POLLHUP | POLLERR)) != 0) {
+          close_public_observer(observers, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
@@ -12516,49 +14236,14 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
 
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
-    std::size_t pty_write_budget = std::size_t{1} * 1'024U * 1'024U;
-    std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
-    std::size_t writable_pane_count = 0;
-    for (auto& session : sessions) {
-      if (session == nullptr || !session->active) {
-        continue;
-      }
-      for (auto& pane_slot : session->panes) {
-        if (pane_slot.pane == nullptr) {
-          continue;
-        }
-        auto* const runtime = find_pane_runtime(runtimes, *session, *pane_slot.pane);
-        LEMMA_ASSERT(runtime != nullptr);
-        if (runtime->pollable() && !runtime->pending_writes.empty()) {
-          std::span(writable_panes).subspan(writable_pane_count, 1).front() = runtime;
-          ++writable_pane_count;
-        }
-      }
-    }
-    if (writable_pane_count > 0) {
-      pty_flush_cursor %= writable_pane_count;
-      std::size_t writable_visited = 0;
-      for (; writable_visited < writable_pane_count && pty_write_budget > 0; ++writable_visited) {
-        const auto index = (pty_flush_cursor + writable_visited) % writable_pane_count;
-        auto& runtime = *std::span(writable_panes).subspan(index, 1).front();
-        if (!flush_pane_writes(runtime, pty_write_budget)) {
-          runtime.fail(PaneRuntimeFailure::pty_write_error);
-        }
-      }
-      pty_flush_cursor = (pty_flush_cursor + writable_visited) % writable_pane_count;
-    } else {
-      pty_flush_cursor = 0;
-    }
-    for (auto& session : sessions) {
-      if (session != nullptr && session->active) {
-        reclaim_dead_panes(*session, runtimes);
-      }
-    }
+    flush_pending_pane_writes(runtimes, pty_flush_cursor);
+    reclaim_dead_panes(sessions, runtimes);
     // Capacity may have become available without new client socket readiness.
     const pollfd no_events{.fd = -1, .events = 0, .revents = 0};
-    for (auto& session : sessions) {
-      if (session != nullptr && session->active && session->attachment_runtime.client >= 0 &&
-          session->attachment_runtime.input_backpressured) {
+    for (std::size_t index = 0; index < attached_after_poll.size(); ++index) {
+      auto* const session = attached_after_poll.at(index);
+      LEMMA_ASSERT(session != nullptr && session->attachment_runtime.client >= 0);
+      if (session->active && session->attachment_runtime.input_backpressured) {
         auto& message_budget =
             std::span(client_message_budgets).subspan(session->id.slot(), 1).front();
         auto& geometry_budget =
@@ -12587,6 +14272,12 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           shutdown_after_outputs = true;
           break;
         }
+      } else if (owner.kind == DescriptorKind::observer) {
+        const auto& observer = std::span(observers).subspan(owner.auxiliary_slot, 1).front();
+        if (observer != nullptr && observer->state == PendingState::flush_response &&
+            (events & (POLLOUT | POLLHUP | POLLERR)) != 0) {
+          flush_public_observer_output(observers, owner.auxiliary_slot, pending_output_budget);
+        }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
             std::span(capacity_rejections).subspan(owner.auxiliary_slot, 1).front();
@@ -12598,7 +14289,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
 
-    run_due_scrollback_compression(sessions, runtimes, compression_cursor);
+    run_due_scrollback_compression(runtimes, compression_cursor);
     release_expired_presentation_gates(sessions, runtimes);
     queue_due_frames(sessions, runtimes);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
@@ -12610,28 +14301,41 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       return 0;
     }
     expire_pending_connections(pending_connections, sessions);
+    expire_public_observers(observers);
     expire_capacity_rejections(capacity_rejections);
     owned_a_session = owned_a_session || sessions.size() > 0;
     reclaim_inactive_sessions(sessions, runtimes);
     if (owned_a_session && sessions.size() == 0) {
-      for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
+      pending_ordinal = 0;
+      while (pending_ordinal < pending_connections.live_count()) {
+        const auto slot = pending_connections.live_slot(pending_ordinal);
         const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
-        if (pending != nullptr && pending->public_connection &&
-            pending->state != PendingState::flush_response) {
+        LEMMA_ASSERT(pending != nullptr);
+        if (pending->public_connection && pending->state != PendingState::flush_response) {
           close_pending(pending_connections, slot, sessions);
+        } else {
+          ++pending_ordinal;
+        }
+      }
+      observer_ordinal = 0;
+      while (observer_ordinal < observers.live_count()) {
+        const auto slot = observers.live_slot(observer_ordinal);
+        const auto& observer = std::span(observers).subspan(slot, 1).front();
+        LEMMA_ASSERT(observer != nullptr);
+        if (observer->state != PendingState::flush_response) {
+          close_public_observer(observers, slot);
+        } else {
+          ++observer_ordinal;
         }
       }
     }
-    const bool pending_control =
-        std::ranges::any_of(pending_connections, [](const auto& connection) {
-          return connection != nullptr && connection->active();
-        });
+    const bool pending_control = !pending_connections.empty() || !observers.empty();
     if (owned_a_session && sessions.size() == 0 && !pending_control) {
       return 0;
     }
 
     if ((descriptors.front().revents & POLLIN) != 0) {
-      accept_pending_connections(listener, pending_connections, pending_generations,
+      accept_pending_connections(listener, pending_connections, pending_generations, observers,
                                  capacity_rejections);
     }
     reclaim_inactive_sessions(sessions, runtimes);
@@ -12650,6 +14354,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .default_program = {},
           .default_cwd = {},
           .command_history_file = {},
+          .detached_pane_parking_delay = std::chrono::minutes{5},
+          .pane_hydration_steps_per_turn = 8,
+          .corrupt_parked_snapshots_for_test = false,
           .status_line = true};
 }
 

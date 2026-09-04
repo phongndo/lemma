@@ -37,10 +37,10 @@ TEST(FrameSchedulerTest, ClassifiesInputAndArmsOnlyAfterItsPtyWriteProgress) {
 TEST(FrameSchedulerTest, HigherUrgencyAdvancesButLaterRequestsNeverPostponeDeadline) {
   FrameScheduler scheduler;
   scheduler.request(FrameUrgency::burst, false, origin, FrameSinkState::ready);
-  ASSERT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 2ms);
+  ASSERT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 3ms);
 
   scheduler.request(FrameUrgency::burst, false, origin + 1ms, FrameSinkState::ready);
-  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 2ms);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 3ms);
 
   scheduler.request(FrameUrgency::interactive, false, origin + 1500us, FrameSinkState::ready);
   EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 1500us);
@@ -54,25 +54,27 @@ TEST(FrameSchedulerTest, HigherUrgencyAdvancesButLaterRequestsNeverPostponeDeadl
 TEST(FrameSchedulerTest, BurstContinuationGetsOneBoundedCoalescingDeadlinePerFrame) {
   FrameScheduler scheduler;
   scheduler.request(FrameUrgency::burst, false, origin, FrameSinkState::ready);
-  EXPECT_FALSE(scheduler.due(origin + 1999us, FrameSinkState::ready));
-  EXPECT_TRUE(scheduler.due(origin + 2ms, FrameSinkState::ready));
+  EXPECT_FALSE(scheduler.due(origin + 2999us, FrameSinkState::ready));
+  EXPECT_TRUE(scheduler.due(origin + 3ms, FrameSinkState::ready));
 
   scheduler.complete();
   EXPECT_FALSE(scheduler.pending());
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
 
-  scheduler.request(FrameUrgency::burst, false, origin + 3ms, FrameSinkState::ready);
-  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 5ms);
+  scheduler.request(FrameUrgency::burst, false, origin + 4ms, FrameSinkState::ready);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 10ms);
 }
 
 // GoogleTest assertion macros inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(FrameSchedulerTest, SustainedBurstUsesDisplayCadenceWithoutDelayingShortBursts) {
   FrameScheduler scheduler;
+  bool first = true;
   for (auto elapsed : {0ms, 9ms, 18ms, 27ms, 36ms, 45ms}) {
     scheduler.request(FrameUrgency::burst, false, origin + elapsed, FrameSinkState::ready);
-    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + elapsed + 2ms);
+    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + elapsed + (first ? 3ms : 6ms));
     scheduler.complete();
+    first = false;
   }
 
   scheduler.request(FrameUrgency::burst, false, origin + 54ms, FrameSinkState::ready);
@@ -83,7 +85,7 @@ TEST(FrameSchedulerTest, SustainedBurstUsesDisplayCadenceWithoutDelayingShortBur
 
   // A gap outside the continuity window starts a fresh low-latency burst.
   scheduler.request(FrameUrgency::burst, false, origin + 65ms, FrameSinkState::ready);
-  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 67ms);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 68ms);
 }
 
 TEST(FrameSchedulerTest, BlockedOutputRetainsOnePendingRequestWithoutADeadlineWakeup) {
@@ -127,7 +129,7 @@ TEST(FrameSchedulerTest, DetachCancelsPendingDeadlineFullRedrawAndBurstHistory) 
 
   scheduler.cancel();
   scheduler.request(FrameUrgency::burst, false, origin + 55ms, FrameSinkState::ready);
-  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 57ms);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 58ms);
 }
 
 TEST(FrameSchedulerTest, NoClientDoesNotCreatePendingWorkOrAnIdleTimer) {

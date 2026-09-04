@@ -193,23 +193,19 @@ void PanePtyWriteQueue::release_storage() noexcept {
   release_allocation(released);
 }
 
-[[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
-                                            vt::Terminal& terminal) noexcept -> bool {
-  if (terminal.integrity_failed()) {
-    return false;
-  }
-  const auto pending_bytes = terminal.pending_pty_response_bytes();
-  if (pending_bytes > queue.remaining() || !queue.reserve(pending_bytes)) {
-    return false;
-  }
-  std::array<std::byte, std::size_t{4} * 1'024U> response{};
-  while (terminal.pending_pty_response_bytes() > 0) {
-    const auto size = terminal.read_pty_responses(response);
-    if (size == 0 || !queue.append(std::span(response).first(size))) {
-      return false;
-    }
-  }
-  return true;
+namespace {
+
+[[nodiscard]] auto append_pty_response(void* const context,
+                                       const std::span<const std::byte> bytes) noexcept -> bool {
+  LEMMA_ASSERT(context != nullptr);
+  return static_cast<PanePtyWriteQueue*>(context)->append(bytes);
+}
+
+} // namespace
+
+[[nodiscard]] auto pane_pty_response_sink(PanePtyWriteQueue& queue) noexcept
+    -> vt::PtyResponseSink {
+  return {.context = &queue, .append = &append_pty_response};
 }
 
 namespace {

@@ -66,10 +66,9 @@ enum class InputQueueResult : std::uint8_t {
   encoding_failed,
 };
 
-// Moves complete terminal-generated replies onto the pane's ordered write path before they can be
-// overtaken by input accepted later in the same reactor turn.
-[[nodiscard]] auto queue_terminal_responses(PanePtyWriteQueue& queue,
-                                            vt::Terminal& terminal) noexcept -> bool;
+// Borrows the pane's single ordered PTY path as the synchronous destination for terminal-generated
+// replies. The sink is valid only while the queue remains alive and is not moved.
+[[nodiscard]] auto pane_pty_response_sink(PanePtyWriteQueue& queue) noexcept -> vt::PtyResponseSink;
 
 // Normalizes attached-terminal legacy bytes against the pane's active keyboard modes, then appends
 // the complete encoded packet transactionally. A full queue is unchanged so the caller can retain

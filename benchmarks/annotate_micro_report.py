@@ -47,6 +47,7 @@ def main() -> int:
     parser.add_argument(
         "--manifest", type=Path, default=Path("benchmarks/workloads.json")
     )
+    parser.add_argument("--ghostty-feature-profile")
     parser.add_argument("--command", nargs=argparse.REMAINDER, default=[])
     arguments = parser.parse_args()
 
@@ -73,6 +74,8 @@ def main() -> int:
             "benchmark_command": arguments.command,
         }
     )
+    if arguments.ghostty_feature_profile is not None:
+        context["ghostty_vt_feature_profile"] = arguments.ghostty_feature_profile
     arguments.report.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

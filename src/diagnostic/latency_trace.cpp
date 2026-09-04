@@ -17,7 +17,8 @@ namespace {
         (token * 26U) + static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(byte) -
                                                    std::to_integer<std::uint8_t>(std::byte{'A'}));
   }
-  // There are only 26^8 valid payloads, so this base-26 encoding is collision-free and bounded.
+  // There are only 26^6 valid fixture payloads, so this base-26 encoding is collision-free and
+  // bounded.
   return token + 1U;
 }
 
@@ -36,8 +37,9 @@ LatencyTraceMarkerMatcher::observe(const std::span<const std::byte> bytes) noexc
         marker_size_ = 1;
       }
     } else {
-      const bool payload_position = marker_size_ >= 1U && marker_size_ <= 8U;
-      const bool terminator_position = marker_size_ == 9U || marker_size_ == 10U;
+      const bool payload_position = marker_size_ >= 1U && marker_size_ <= payload_bytes;
+      const bool terminator_position =
+          marker_size_ == payload_bytes + 1U || marker_size_ == payload_bytes + 2U;
       const bool valid = (payload_position && byte >= std::byte{'A'} && byte <= std::byte{'Z'}) ||
                          (terminator_position && byte == std::byte{'_'});
       if (!valid) {
@@ -51,7 +53,7 @@ LatencyTraceMarkerMatcher::observe(const std::span<const std::byte> bytes) noexc
         ++marker_size_;
         if (marker_size_ == marker_.size()) {
           if (observed == 0) {
-            observed = marker_token(std::span(marker_).subspan<1, 8>());
+            observed = marker_token(std::span(marker_).subspan<1, payload_bytes>());
           }
           reset();
         }

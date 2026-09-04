@@ -317,7 +317,7 @@ def build_report(
         "correlation": {
             "status": "correlated" if paths else "no_complete_paths",
             "method": (
-                "exact bounded _XXXXXXXX__ fixture token observed at each byte boundary; "
+                "exact bounded _XXXXXX__ fixture token observed at each byte boundary; "
                 "client receive uses the exact decoder-completing socket-read event"
             ),
             "input_processes": input_processes,

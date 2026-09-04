@@ -6,8 +6,8 @@ namespace lemma::core {
 
 [[nodiscard]] auto
 resize_terminal_transaction(vt::Terminal& terminal, const vt::TerminalSize& requested,
-                            const PtyResizeOperation resize_pty, void* const context) noexcept
-    -> TerminalResizeStatus {
+                            const PtyResizeOperation resize_pty, void* const context,
+                            const vt::PtyResponseSink responses) noexcept -> TerminalResizeStatus {
   const auto previous = terminal.size();
   if (requested == previous) {
     return TerminalResizeStatus::unchanged;
@@ -18,7 +18,7 @@ resize_terminal_transaction(vt::Terminal& terminal, const vt::TerminalSize& requ
   if (!resize_pty(context, requested)) {
     return TerminalResizeStatus::rejected;
   }
-  if (terminal.resize(requested).has_value()) {
+  if (terminal.resize(requested, responses).has_value()) {
     return TerminalResizeStatus::applied;
   }
   return resize_pty(context, previous) ? TerminalResizeStatus::rolled_back

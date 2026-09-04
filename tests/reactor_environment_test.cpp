@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -261,6 +262,7 @@ thread_local ScriptedReactor* active_script = nullptr;
 }
 
 [[nodiscard]] auto scripted_poll(void* const context, const std::span<pollfd> descriptors,
+                                 [[maybe_unused]] const std::span<const std::uint64_t> identities,
                                  const int timeout_milliseconds) noexcept -> int {
   auto& script = *static_cast<ScriptedReactor*>(context);
   ++script.polls;
@@ -340,6 +342,9 @@ void release_listener(void* const context) noexcept {
       .default_program = {},
       .default_cwd = {},
       .command_history_file = {},
+      .detached_pane_parking_delay = std::nullopt,
+      .pane_hydration_steps_per_turn = 8,
+      .corrupt_parked_snapshots_for_test = false,
       .status_line = true,
   };
   const auto result = run_server_with_environment(
@@ -351,8 +356,53 @@ void release_listener(void* const context) noexcept {
 }
 
 TEST(ReactorEnvironmentTest, ProductionEnvironmentIsComplete) {
-  EXPECT_TRUE(production_reactor_environment().valid());
+  const auto environment = production_reactor_environment();
+  EXPECT_TRUE(environment.valid());
+  EXPECT_EQ(environment.pane_hydration_steps_per_turn, 8U);
 }
+
+#ifdef __linux__
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ReactorEnvironmentTest, ProductionEpollTracksDescriptorLifetimeIdentity) {
+  constexpr std::size_t descriptor_count = 64;
+  std::vector<std::array<int, 2>> pipes;
+  std::vector<pollfd> descriptors;
+  std::vector<std::uint64_t> identities;
+  pipes.reserve(descriptor_count);
+  descriptors.reserve(descriptor_count);
+  identities.reserve(descriptor_count);
+  for (std::size_t index = 0; index < descriptor_count; ++index) {
+    std::array<int, 2> pipe_descriptors{-1, -1};
+    ASSERT_EQ(::pipe(pipe_descriptors.data()), 0);
+    pipes.push_back(pipe_descriptors);
+    descriptors.push_back({.fd = pipe_descriptors.front(), .events = POLLIN, .revents = 0});
+    identities.push_back(index + 1U);
+  }
+  const auto environment = production_reactor_environment();
+  std::byte ready{0x5A};
+  ASSERT_EQ(::write(pipes.back().back(), &ready, 1), 1);
+  ASSERT_EQ(environment.poll(environment.context, descriptors, identities, 0), 1);
+  EXPECT_NE(descriptors.back().revents & POLLIN, 0);
+
+  std::byte consumed{};
+  ASSERT_EQ(::read(pipes.back().front(), &consumed, 1), 1);
+  static_cast<void>(::close(pipes.back().front()));
+  static_cast<void>(::close(pipes.back().back()));
+  pipes.back() = {-1, -1};
+  ASSERT_EQ(::pipe(pipes.back().data()), 0);
+  descriptors.back() = {.fd = pipes.back().front(), .events = POLLIN, .revents = 0};
+  identities.back() += descriptor_count;
+  ASSERT_EQ(::write(pipes.back().back(), &ready, 1), 1);
+  ASSERT_EQ(environment.poll(environment.context, descriptors, identities, 0), 1);
+  EXPECT_NE(descriptors.back().revents & POLLIN, 0);
+
+  for (const auto& pipe_descriptors : pipes) {
+    static_cast<void>(::close(pipe_descriptors.front()));
+    static_cast<void>(::close(pipe_descriptors.back()));
+  }
+}
+#endif
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

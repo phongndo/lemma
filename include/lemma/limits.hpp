@@ -59,7 +59,13 @@ inline constexpr std::size_t clipboard_decoded_bytes_max = std::size_t{1} * 1'02
 inline constexpr std::size_t hyperlink_uri_bytes_max = std::size_t{8} * 1'024U;
 inline constexpr std::size_t unknown_sequence_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t snapshot_bytes_max = std::size_t{64} * 1'024U * 1'024U;
+// Parked snapshots are independently capped per Pane and in aggregate. The Session limit prevents
+// one detached workspace from monopolizing the daemon-wide anonymous snapshot backing store.
+inline constexpr std::size_t snapshot_session_bytes_max = std::size_t{256} * 1'024U * 1'024U;
+inline constexpr std::size_t snapshot_daemon_bytes_max = std::size_t{1} * 1'024U * 1'024U * 1'024U;
 inline constexpr std::size_t snapshot_continuation_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+static_assert(snapshot_bytes_max <= snapshot_session_bytes_max);
+static_assert(snapshot_session_bytes_max <= snapshot_daemon_bytes_max);
 inline constexpr std::size_t graphics_command_chunk_bytes_max = frame_chunk_bytes_max;
 inline constexpr std::size_t graphics_decoded_image_bytes_max = std::size_t{64} * 1'024U * 1'024U;
 inline constexpr std::size_t graphics_image_pixels_max = std::size_t{4'096} * 4'096U;
