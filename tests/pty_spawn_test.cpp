@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <span>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -144,6 +143,41 @@ private:
   bool valid_{false};
 };
 
+// Supported Apple libc++ SDKs do not yet provide jthread/stop_token. Keep this test thread's
+// startup and unconditional join in one owner, including when a fatal GTest assertion returns.
+class AllocatorActivity final {
+public:
+  AllocatorActivity() : thread_([this] { run(); }) {
+    while (!entered_.load(std::memory_order_relaxed)) {
+      std::this_thread::yield();
+    }
+  }
+  AllocatorActivity(const AllocatorActivity&) = delete;
+  auto operator=(const AllocatorActivity&) -> AllocatorActivity& = delete;
+  AllocatorActivity(AllocatorActivity&&) = delete;
+  auto operator=(AllocatorActivity&&) -> AllocatorActivity& = delete;
+  ~AllocatorActivity() {
+    stop_.store(true, std::memory_order_relaxed);
+    thread_.join();
+  }
+
+private:
+  void run() noexcept {
+    // Volatile indirection prevents dead-allocation elimination in optimized builds.
+    void* (*volatile allocate)(std::size_t) = &std::malloc;
+    while (!stop_.load(std::memory_order_relaxed)) {
+      // This fixture intentionally exercises libc allocation concurrently with process spawning.
+      // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+      std::free(allocate(131072U));
+      entered_.store(true, std::memory_order_relaxed);
+    }
+  }
+
+  std::atomic<bool> stop_{false};
+  std::atomic<bool> entered_{false};
+  std::thread thread_;
+};
+
 class TemporaryScript final {
 public:
   explicit TemporaryScript(const std::string_view source) noexcept {
@@ -174,8 +208,10 @@ private:
 void expect_success(const CapturedChild& child) {
   ASSERT_GT(child.pid, 0) << child.error;
   ASSERT_EQ(child.error, 0);
-  ASSERT_TRUE(WIFEXITED(child.status)) << child.output;
-  EXPECT_EQ(WEXITSTATUS(child.status), 0) << child.output;
+  // Darwin's wait macros inspect through a non-const pointer: pass a local scalar copy.
+  auto status = child.status;
+  ASSERT_TRUE(WIFEXITED(status)) << child.output;
+  EXPECT_EQ(WEXITSTATUS(status), 0) << child.output;
 }
 
 // Assertions describe separate inherited process properties.
@@ -286,8 +322,9 @@ TEST(PtySpawnTest, KeepsChildSetupAndTargetExecFailuresAsExit127) {
        }) {
     ASSERT_GT(result.pid, 0) << result.error;
     ASSERT_EQ(result.error, 0);
-    ASSERT_TRUE(WIFEXITED(result.status));
-    EXPECT_EQ(WEXITSTATUS(result.status), 127);
+    auto status = result.status;
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 127);
   }
 }
 
@@ -306,20 +343,7 @@ TEST(PtySpawnTest, RejectsInvalidAdmissionWithoutOverwritingTheDescriptor) {
 TEST(PtySpawnTest, SpawnsWhileAnotherThreadOwnsAllocatorActivity) {
   const auto program = child_program();
   ASSERT_FALSE(program.empty());
-  std::atomic<unsigned int> allocations{0};
-  const std::jthread allocator([&allocations](const std::stop_token& stop) {
-    // Indirection through volatile prevents dead-allocation elimination in optimized test builds.
-    void* (*volatile allocate)(std::size_t) = &std::malloc;
-    while (!stop.stop_requested()) {
-      // This fixture intentionally exercises the libc allocator while the other thread spawns.
-      // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-      std::free(allocate(131072U));
-      allocations.fetch_add(1, std::memory_order_relaxed);
-    }
-  });
-  while (allocations.load(std::memory_order_relaxed) == 0) {
-    std::this_thread::yield();
-  }
+  const AllocatorActivity allocator;
   const auto command = packed({program, "--ready"});
   for (std::size_t index = 0; index < 50; ++index) {
     const auto result = capture(command);
