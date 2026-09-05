@@ -116,9 +116,13 @@ def run_checked(
 
 def binary_build_id(binary: Path) -> str:
     digest = hashlib.sha256()
-    with binary.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
+    for artifact in (binary, binary.with_name("lemma-pty-launcher")):
+        digest.update(artifact.name.encode())
+        digest.update(b"\0")
+        digest.update(artifact.stat().st_size.to_bytes(8, "big"))
+        with artifact.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
     return digest.hexdigest()
 
 

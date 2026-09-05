@@ -14,3 +14,4 @@ scripts/ci/deterministic-budgets debug
 
 # Exercise command dispatch without opening a PTY or creating persistent state.
 ./build/debug/lemma --help >/dev/null
+python3 scripts/ci/installed.py --build build/debug

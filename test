@@ -105,9 +105,23 @@ def run_terminal(filter_value: str | None = None) -> None:
 
 
 def run_component() -> None:
-    build("lemma_component_integration_tests")
-    binary("lemma_component_integration_tests", "--gtest_brief=1")
+    build("lemma_component_integration_tests", "lemma_test_spawn_parent")
+    run(
+        [str(BUILD / "lemma_component_integration_tests"), "--gtest_brief=1"],
+        environment={
+            **os.environ,
+            "LEMMA_TEST_SPAWN_CHILD": str(BUILD / "lemma_test_spawn_child"),
+        },
+    )
     run([sys.executable, "-m", "unittest", "-v", "tests.support.test_pty_process"])
+    run(
+        [sys.executable, "-m", "unittest", "-v", "tests.pty_launcher_test"],
+        environment={
+            **os.environ,
+            "LEMMA_TEST_SPAWN_PARENT": str(BUILD / "lemma_test_spawn_parent"),
+            "LEMMA_TEST_SPAWN_CHILD": str(BUILD / "lemma_test_spawn_child"),
+        },
+    )
 
 
 def run_sim() -> None:

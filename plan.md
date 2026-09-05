@@ -333,8 +333,33 @@ For each optimization record:
     of foreground isolation or mission completion is made by these repairs. The maximum-size storage
     round-trip diagnostic is approximately 111 ms (`build/pr12-repair/encrypted-storage-micro.json`),
     not a foreground-interaction result. A single bounded ownership-transfer worker is authorized
-    for the next repair; `platform::spawn_process` currently performs environment/NSS work after
-    `forkpty`, which must be made safe before introducing a daemon thread.
+    for the next repair. The approved small private launcher now moves environment/NSS/execvp work
+    behind a first `posix_spawn` exec, with deterministic executable-sibling discovery and a prefilled
+    bounded setup socket. Linux process-contract, installation/failure, concurrent-allocation tests
+    and `just check` pass locally (`build/pr12-repair/launcher-{component,installed,check}.log`).
+    `just ci-check` passes (`launcher-ci-check-v2.log`); Nix install checks now exercise the installed
+    executable/helper pair, not only `--version` (`launcher-package-final.log`). Native macOS
+    qualification remains pending for this launcher slice. No daemon worker has been introduced;
+    safe spawning alone does not isolate parking. Remaining daemon-bootstrap and Lua-host forks are
+    startup-only and must stay before worker construction.
+    - Approved `box`, affinity `0-7`, before/after host checks passed. Three alternating 20-sample
+      installed captures per revision compare `ae66e935` with the launcher candidate. Observed p95:
+      fresh-daemon acknowledgement 11.369 -> 11.656 ms; shell-ready capture 19.358 -> 19.863 ms;
+      warm Pane acknowledgement 1.057 -> 1.068 ms and shell-ready capture 8.954 -> 9.481 ms;
+      missing-target exit observation 1.805 -> 1.919 ms. Missing-helper cold failure is 11.528 ms.
+      These include CLI/discovery/input/polling costs, use fresh processes but warm OS caches, and
+      are supplementary diagnostics, not a calibrated paired product gate or foreground isolation.
+    - Equivalent optimized platform-only native callers, one shared child fixture, and the installed
+      helper give 600 samples per revision/case. Explicit-exec drain/reap p50/p95 is
+      0.383/0.467 -> 0.453/0.565 ms; login-shell completion 6.220/6.598 -> 6.301/6.709 ms;
+      missing-target completion 0.076/0.097 -> 0.134/0.199 ms. The extra exec is charged, not hidden.
+    - Stripped Nix executables total 3,380,192 -> 3,402,056 bytes (+21,864; 0.65%), including the
+      17,072-byte helper. Linux helper runtime dependencies are libc only. Artifact hashes and raw
+      distributions: `build/pr12-repair/launcher-summary.json`, `launcher-measurements-v2/`, and
+      `launcher-native/v2/`. The initial diagnostic stopped on an incorrect assumption that the old
+      invalid-command rejection sets errno: it leaves the probe's earlier EBADF unchanged, while
+      the new boundary supplies EINVAL. Its raw output is retained under `launcher-native/` and
+      `launcher-measurements.log`; baseline code/workloads were not changed to make the run pass.
   - Linux `nix develop -c just check`, `nix develop -c just ci-check`, release tests, simulation, and
     `nix build .#lemma` pass for this repair slice. The 20-cycle/four-Pane resource diagnostic returns
     to zero descriptor/process/backing-file deltas. A/A calibration passes on approved `box` under

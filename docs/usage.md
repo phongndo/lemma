@@ -19,7 +19,7 @@ lemma pane split --right
 
 `just run [args...]` is the canonical development entry point. The development shell's `lemma`
 command delegates to the same runner: both configure only when required and incrementally build
-only the `lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies its
+the `lemma` target and its private launcher dependency. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies its
 invocation directory when `--cwd` is omitted; other arguments reach `build/dev/lemma` unchanged.
 The `dev` profile uses optimization, debug symbols, enabled invariants, and frame pointers.
 
@@ -32,6 +32,12 @@ packaging and production behavior:
 nix build .#lemma
 nix run .#lemma
 ```
+
+Build and installation produce two executables: `lemma` and its private `lemma-pty-launcher`
+sibling. Keep them together. PTY creation resolves the helper beside the actual executable (including
+through symlinks), never through `PATH` or a build-tree fallback. The helper has no independent user
+interface or elevated privileges; it sets up one child and immediately replaces itself with the
+requested program. Development daemon identity includes both executables.
 
 The Nix shell supplies the pinned Ghostty source. A non-Nix build must initialize it first:
 

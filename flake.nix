@@ -86,6 +86,7 @@
                 pkgs.cmake
                 pkgs.ninja
                 pkgs.pkg-config
+                pkgs.python3
                 zigPackage
               ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
                 pkgs.darwin.cctools
@@ -118,7 +119,7 @@
 
               doInstallCheck = true;
               installCheckPhase = ''
-                "$out/bin/lemma" --version | grep -q '^lemma '
+                python3 "$src/scripts/ci/installed.py" --binary "$out/bin/lemma"
               '';
 
               meta = {

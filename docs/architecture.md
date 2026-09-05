@@ -57,10 +57,32 @@ destroy the Session.
 | `lemma_protocol` | Bounded private attachment codec |
 | `lemma_client` | Host input, outer-terminal presentation, and restoration |
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
+| `lemma_pty_launcher` | Private, dependency-minimal fresh-process child setup and exec |
 
 Core links no Lua VM, PTY, socket, process, or terminal-emulator owner. Runtime executes accepted
 semantic intent using those mechanisms. The daemon borrows one immutable compiled configuration
 generation; input routing and runtime operation never call into the host process.
+
+PTY creation prepares bounded launch data and descriptors in the parent, then uses `posix_spawn`
+to execute `lemma-pty-launcher` beside the actual caller executable. There is no application-owned
+post-fork child path. A nonblocking socket is completely prefilled before spawning; launch secrets
+are neither argv nor files, and the helper's first exec receives an empty loader environment. The
+single-use record has no listener, dispatcher, or persistent helper process. Command and environment
+payloads retain their existing byte/count bounds; overlay assignments use the same environment
+bounds without imposing a smaller per-name or per-value limit.
+
+Spawn establishes the child's SID/process group and resets SIGCHLD/SIGPIPE while preserving the
+caller's signal mask and credentials. Only the PTY at descriptors 0–2 and setup socket at descriptor
+3 survive: Linux uses `posix_spawn_file_actions_addclosefrom_np` (glibc 2.34+), Darwin uses
+`POSIX_SPAWN_CLOEXEC_DEFAULT`; both use `POSIX_SPAWN_SETSID`. After its first exec the helper acquires
+the controlling terminal, applies cwd/environment/overlays, and performs account-shell lookup or
+libc `execvp` resolution, including script fallback. It links no Ghostty, Lua, daemon, or privilege
+initialization. There is one PID, one extra exec, and no long-lived intermediary. Parent-side
+admission/bootstrap failure returns `-1` with precise `errno` after cleanup, without transferring the
+master. As before, later child setup/target exec failure is exit 127, not distinguishable from an
+intentional exit 127; there is no target-exec acknowledgement channel. The remaining daemon bootstrap
+and isolated Lua-host forks occur on single-threaded startup paths; they must remain before Runtime
+worker construction.
 
 ## Authority and ownership
 
