@@ -65,7 +65,7 @@ int main(const int argc, char** argv) {
       static_cast<unsigned long>(::getegid()), ::isatty(STDIN_FILENO), ::isatty(STDOUT_FILENO),
       ::isatty(STDERR_FILENO), static_cast<unsigned int>(size.ws_col),
       static_cast<unsigned int>(size.ws_row), static_cast<int>(child_action.sa_handler == SIG_DFL),
-      static_cast<int>(pipe_action.sa_handler == SIG_DFL), ::sigismember(&mask, SIGUSR1)));
+      static_cast<int>(pipe_action.sa_handler == SIG_DFL), sigismember(&mask, SIGUSR1)));
   static_cast<void>(std::fputs("cwd=", stdout));
   print_hex(directory.data());
   for (int descriptor = 3; descriptor < 512; ++descriptor) {

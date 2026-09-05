@@ -65,8 +65,9 @@ generation; input routing and runtime operation never call into the host process
 
 PTY creation prepares bounded launch data and descriptors in the parent, then uses `posix_spawn`
 to execute `lemma-pty-launcher` beside the actual caller executable. There is no application-owned
-post-fork child path. A nonblocking socket is completely prefilled before spawning; launch secrets
-are neither argv nor files, and the helper's first exec receives an empty loader environment. The
+post-fork PTY child path. A nonblocking socket is completely prefilled before spawning; bootstrap
+launch data is neither helper argv nor files, and the helper's first exec receives an empty loader
+environment. The
 single-use record has no listener, dispatcher, or persistent helper process. Command and environment
 payloads retain their existing byte/count bounds; overlay assignments use the same environment
 bounds without imposing a smaller per-name or per-value limit.

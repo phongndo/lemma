@@ -102,7 +102,7 @@ public:
   explicit IgnoredSignal(const int number) noexcept : number_(number) {
     struct sigaction action{};
     action.sa_handler = SIG_IGN;
-    valid_ = ::sigemptyset(&action.sa_mask) == 0 && ::sigaction(number, &action, &previous_) == 0;
+    valid_ = sigemptyset(&action.sa_mask) == 0 && ::sigaction(number, &action, &previous_) == 0;
   }
   IgnoredSignal(const IgnoredSignal&) = delete;
   auto operator=(const IgnoredSignal&) -> IgnoredSignal& = delete;
@@ -125,7 +125,7 @@ class BlockedSignal final {
 public:
   BlockedSignal() noexcept {
     sigset_t mask{};
-    valid_ = ::sigemptyset(&mask) == 0 && ::sigaddset(&mask, SIGUSR1) == 0 &&
+    valid_ = sigemptyset(&mask) == 0 && sigaddset(&mask, SIGUSR1) == 0 &&
              ::sigprocmask(SIG_BLOCK, &mask, &previous_) == 0;
   }
   BlockedSignal(const BlockedSignal&) = delete;

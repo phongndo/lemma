@@ -103,10 +103,9 @@ struct SpawnedPty final {
   std::size_t used = 0;
   for (const auto& entry : source) {
     const auto remaining = output.subspan(used);
-    if (entry.name.empty() || entry.name.contains('=') || entry.name.contains('\0') ||
-        entry.value.contains('\0') || remaining.size() < 2U ||
-        entry.name.size() > remaining.size() - 2U ||
-        entry.value.size() > remaining.size() - 2U - entry.name.size()) {
+    if (remaining.size() < 2U || entry.name.size() > remaining.size() - 2U ||
+        entry.value.size() > remaining.size() - 2U - entry.name.size() || entry.name.empty() ||
+        entry.name.contains('=') || entry.name.contains('\0') || entry.value.contains('\0')) {
       return std::nullopt;
     }
     std::ranges::copy(entry.name, remaining.begin());
@@ -278,8 +277,9 @@ private:
 
   [[nodiscard]] auto setup_attributes() noexcept -> int {
     sigset_t defaults{};
-    if (::sigemptyset(&defaults) != 0 || ::sigaddset(&defaults, SIGCHLD) != 0 ||
-        ::sigaddset(&defaults, SIGPIPE) != 0) {
+    // Darwin exposes these POSIX operations as macros, not scope-qualifiable functions.
+    if (sigemptyset(&defaults) != 0 || sigaddset(&defaults, SIGCHLD) != 0 ||
+        sigaddset(&defaults, SIGPIPE) != 0) {
       return errno;
     }
     const auto error = ::posix_spawnattr_setsigdefault(&attributes_, &defaults);

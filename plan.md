@@ -338,12 +338,14 @@ For each optimization record:
     bounded setup socket. Linux process-contract, installation/failure, concurrent-allocation tests
     and `just check` pass locally (`build/pr12-repair/launcher-{component,installed,check}.log`).
     `just ci-check` passes (`launcher-ci-check-v2.log`); Nix install checks now exercise the installed
-    executable/helper pair, not only `--version` (`launcher-package-final.log`). Native macOS
-    qualification remains pending for this launcher slice. No daemon worker has been introduced;
+    executable/helper pair, not only `--version` (`launcher-package-final.log`). Hosted Linux and
+    sanitizers pass at `ba0e3f7`; macOS ARM exposed scope-qualified POSIX signal macros at compile
+    time (`launcher-macos-arm.log`). That spelling is repaired in production and fixtures, and
+    oversized overlay bounds now precede string scanning. Native macOS qualification remains pending. No daemon worker has been introduced;
     safe spawning alone does not isolate parking. Remaining daemon-bootstrap and Lua-host forks are
     startup-only and must stay before worker construction.
     - Approved `box`, affinity `0-7`, before/after host checks passed. Three alternating 20-sample
-      installed captures per revision compare `ae66e935` with the launcher candidate. Observed p95:
+      installed captures per revision compare `ae66e935` with launcher `ba0e3f7`. Observed p95:
       fresh-daemon acknowledgement 11.369 -> 11.656 ms; shell-ready capture 19.358 -> 19.863 ms;
       warm Pane acknowledgement 1.057 -> 1.068 ms and shell-ready capture 8.954 -> 9.481 ms;
       missing-target exit observation 1.805 -> 1.919 ms. Missing-helper cold failure is 11.528 ms.
