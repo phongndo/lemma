@@ -350,7 +350,9 @@ For each optimization record:
     not merely its streamed header, and signals/drains/reaps the PTY child before closing its master.
     The teardown regression fails against the previous implementation and passes with the repair;
     it now runs in the platform lane as well as Python checks. New local `just check` and
-    `just ci-check` pass. Full macOS qualification is still required.
+    `just ci-check` pass. At `651839c`, all hosted checks pass, including complete Linux, macOS ARM,
+    macOS Intel, and sanitizer lanes: https://github.com/phongndo/lemma/actions/runs/33936605460.
+    This qualifies the current behavior/storage slice, not the unimplemented isolation worker.
   - Approved-host paired results for production revision `3507e7c` are retained, not discarded:
     reviewed-head → repair passes (`build/performance/pr12-reviewed-to-repair/paired-regression.json`).
     Original-base → repair fails warm-scroll p95 (21.50 ms vs 18.71 ms permitted) and PMAX active
