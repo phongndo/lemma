@@ -379,6 +379,19 @@ if(LEMMA_BUILD_TESTS)
     PROPERTIES TIMEOUT 30 LABELS "component-integration" RUN_SERIAL TRUE
   )
 
+  add_test(
+    NAME harness.pty_process
+    COMMAND "${Python3_EXECUTABLE}" -m unittest -v tests.support.test_pty_process
+  )
+  set_tests_properties(
+    harness.pty_process
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 30
+      LABELS "component-integration;pty"
+      RUN_SERIAL TRUE
+  )
+
   add_executable(lemma_dependency_integrity_tests tests/dependency_integrity_test.cpp)
   lemma_internal_target(lemma_dependency_integrity_tests)
   target_link_libraries(

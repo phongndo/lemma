@@ -344,7 +344,13 @@ For each optimization record:
     scripted test uses production AF_UNIX transport; the cancellation fixture explicitly gates its
     first output and tests unrelated metadata/process lifecycle without depending on hydration.
     New local `just check`, `just ci-check`, 100 reactor repetitions, and 20 cancellation repetitions
-    pass. Hosted macOS qualification must still pass on the follow-up test repair.
+    pass. At `0577484`, hosted Linux and sanitizers pass; both macOS architectures pass all 274
+    native tests and the parking lifecycle suite. Full macOS checks still fail in command-line tests
+    followed by a teardown timeout. The next fixture repair waits for the actual message-log body,
+    not merely its streamed header, and signals/drains/reaps the PTY child before closing its master.
+    The teardown regression fails against the previous implementation and passes with the repair;
+    it now runs in the platform lane as well as Python checks. New local `just check` and
+    `just ci-check` pass. Full macOS qualification is still required.
   - Approved-host paired results for production revision `3507e7c` are retained, not discarded:
     reviewed-head → repair passes (`build/performance/pr12-reviewed-to-repair/paired-regression.json`).
     Original-base → repair fails warm-scroll p95 (21.50 ms vs 18.71 ms permitted) and PMAX active
@@ -360,6 +366,11 @@ For each optimization record:
     under `build/pr12-repair/`; the existing F/K performance reports predate these repairs.
 - [~] Benchmark active versus parked PSS, disk bytes, park/READY/full latency, peak hydration memory,
   first action/output/attach/capture/resize, backpressure, density, and churn.
+  - An encrypted-storage diagnostic at `0577484` retains 89.27% daemon PSS reduction for 16 detached
+    5,000-row Panes: 58,554,368 active versus 6,282,240 parked bytes. Ciphertext occupies 6,586,032
+    logical / 6,619,136 allocated bytes in 16 files; all files disappear after restoration. Evidence:
+    `build/pr12-repair/encrypted-parking-probe.json`. This unrestricted-affinity diagnostic is not a
+    paired qualification, a kernel-cache measurement, or a foreground-isolation result.
   - On approved host `box`, 16 detached 5,000-row Panes reduced daemon PSS from 58,328,064 to
     4,369,408 bytes (92.51%) while 16 sealed mappings occupied 6,619,136 virtual bytes (413,696 per
     Pane). Full hydration plus a fresh legacy capture process measured 2.535/3.708 ms p50/p95;

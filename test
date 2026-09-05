@@ -107,6 +107,7 @@ def run_terminal(filter_value: str | None = None) -> None:
 def run_component() -> None:
     build("lemma_component_integration_tests")
     binary("lemma_component_integration_tests", "--gtest_brief=1")
+    run([sys.executable, "-m", "unittest", "-v", "tests.support.test_pty_process"])
 
 
 def run_sim() -> None:

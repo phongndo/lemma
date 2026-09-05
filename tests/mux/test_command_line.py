@@ -78,25 +78,44 @@ class CommandLineTest(unittest.TestCase):
         client.prefix(":")
         client.send("unknown-one\r")
         client.expect_output("Error: Unknown command")
-        wait_until("command error to expire", normal_status, timeout=3.0)
+        wait_until(
+            "command error to expire",
+            normal_status,
+            timeout=3.0,
+            diagnostics=client.diagnostics,
+        )
 
         client.prefix(":")
         client.send("unknown-two\r")
         client.expect_output("Error: Unknown command")
         client.send("a")
-        wait_until("keyboard input to dismiss command error", normal_status)
+        wait_until(
+            "keyboard input to dismiss command error",
+            normal_status,
+            diagnostics=client.diagnostics,
+        )
 
         client.prefix(":")
         client.send("unknown-three\r")
         client.expect_output("Error: Unknown command")
         client.send(b"\x1b[<0;1;2M\x1b[<0;1;2m")
-        wait_until("mouse input to dismiss command error", normal_status)
+        wait_until(
+            "mouse input to dismiss command error",
+            normal_status,
+            diagnostics=client.diagnostics,
+        )
 
         client.prefix("~")
         client.expect_output("LOG")
-        self.assertIn("Error: Unknown command", client.screen_text())
+        # The header may arrive before the body on the outer PTY. Observing LOG is not a barrier
+        # for the rest of the frame, so wait for the retained message itself.
+        client.expect_output("Error: Unknown command")
         client.send("q")
-        wait_until("message viewer to restore the pane", normal_status)
+        wait_until(
+            "message viewer to restore the pane",
+            normal_status,
+            diagnostics=client.diagnostics,
+        )
 
     def test_repeated_error_restarts_the_display_timeout(self) -> None:
         session = self.server.create_session("command_timeout")

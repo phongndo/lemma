@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 from tests.support.pty_process import AnsiScreenTracker, PtyProcess
 
@@ -37,6 +38,38 @@ class AnsiScreenTrackerTest(unittest.TestCase):
 
 
 class PtyProcessBufferingTest(unittest.TestCase):
+    def test_close_reaps_a_hup_ignoring_writer_before_releasing_the_master(
+        self,
+    ) -> None:
+        script = (
+            "import os, signal\n"
+            "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+            "os.write(1, b'__FLOOD_READY__\\r\\n')\n"
+            "while True:\n"
+            "    os.write(1, b'x' * 65536)\n"
+        )
+        process = PtyProcess([sys.executable, "-c", script], dict(os.environ))
+        self.addCleanup(process.close)
+        process.read_until(b"__FLOOD_READY__", 5.0)
+        pid = process.pid
+        master = process.descriptor
+        close_descriptor = os.close
+
+        def close_after_reap(descriptor: int) -> None:
+            if descriptor == master:
+                self.assertEqual(process.pid, -1, "master closed before child teardown")
+                with self.assertRaises(ChildProcessError):
+                    os.waitpid(pid, os.WNOHANG)
+            close_descriptor(descriptor)
+
+        with patch("tests.support.pty_process.os.close", side_effect=close_after_reap):
+            process.close()
+
+        self.assertEqual(process.pid, -1)
+        self.assertEqual(process.descriptor, -1)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
+
     def test_wait_for_exit_drains_child_output(self) -> None:
         script = (
             "import os\n"
