@@ -345,7 +345,12 @@ For each optimization record:
     install check also pass at `4116aa9` (combined installed size unchanged); both Macs then exposed
     fixture-only portability issues: const input to Darwin wait macros and unavailable SDK
     `jthread`/`stop_token`. Fixtures now use scalar status copies and one scoped, explicitly joined
-    `std::thread`. Native macOS qualification remains pending. No daemon worker has been introduced;
+    `std::thread`. All hosted checks pass at `4aab438`, including complete native behavior and
+    installed-prefix checks on both Macs, Linux, and sanitizers:
+    https://github.com/phongndo/lemma/actions/runs/33946889015. The macOS recipe additionally builds
+    the real Nix package to cover fixup/signing; this added native package check is pending hosted
+    execution. The extended recipe and `just check` pass locally (`launcher-platform-package-check.log`,
+    `launcher-package-followup-check.log`). No daemon worker has been introduced;
     safe spawning alone does not isolate parking. Remaining daemon-bootstrap and Lua-host forks are
     startup-only and must stay before worker construction.
     - Approved `box`, affinity `0-7`, before/after host checks passed. Three alternating 20-sample

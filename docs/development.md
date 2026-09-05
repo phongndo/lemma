@@ -84,7 +84,8 @@ The default suite separates deterministic component behavior from real process b
 
 The Linux and macOS native recipes also install into a temporary prefix and exercise detached
 Session and Pane creation through the installed executable/helper pair. Nix package install checks
-run the same smoke against `$out/bin/lemma`. Reproduce independently with
+run the same smoke against `$out/bin/lemma`; the macOS recipe additionally builds that Nix package
+to cover native fixup/signing. Reproduce independently with
 `python3 scripts/ci/installed.py --build build/debug` or `--binary /prefix/bin/lemma`; all commands use a
 fresh private runtime namespace, not the user's installed daemon. The helper is a build dependency
 of `lemma_platform`, so building the application, component tests, or test daemon supplies its sibling.
