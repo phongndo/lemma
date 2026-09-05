@@ -4,6 +4,7 @@
 #include "client/host_terminal_theme.hpp"
 #include "daemon/server.hpp"
 #include "diagnostic/latency_trace.hpp"
+#include "lemma/assert.hpp"
 #include "platform/io.hpp"
 #include "platform/terminal_mode.hpp"
 #include "protocol/attachment.hpp"
@@ -581,6 +582,36 @@ template <typename Header>
                       sequence);
 }
 
+[[nodiscard]] auto send_mouse_batch(const int connection,
+                                    const std::span<const HostInputEvent> events,
+                                    std::uint32_t& sequence) noexcept -> bool {
+  constexpr std::size_t wire_bytes_max = std::size_t{16} * 1'024U;
+  // Every transmitted byte is assigned before use; avoid touching the unused bounded suffix.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  std::array<std::byte, wire_bytes_max> wire;
+  std::size_t size = 0;
+  for (const auto& event : events) {
+    LEMMA_ASSERT(event.kind == HostInputKind::mouse);
+    const auto message = protocol::encode_mouse(event.mouse, sequence);
+    if (message.bytes().size() > wire.size() - size) {
+      if (!send_interruptibly(connection, std::span(wire).first(size))) {
+        return false;
+      }
+      size = 0;
+    }
+    LEMMA_ASSERT(message.bytes().size() <= wire.size());
+    std::ranges::copy(message.bytes(), std::span(wire).subspan(size).begin());
+    size += message.bytes().size();
+    if (!advance_sequence(sequence)) {
+      // Match the ordinary per-message path: the final encodable sequence is delivered before the
+      // exhausted connection closes.
+      static_cast<void>(send_interruptibly(connection, std::span(wire).first(size)));
+      return false;
+    }
+  }
+  return size == 0 || send_interruptibly(connection, std::span(wire).first(size));
+}
+
 void report_disconnect(const protocol::ServerMessage& message) noexcept {
   static_cast<void>(write_text_interruptibly(STDERR_FILENO, "lemma attach failed: "));
   static_cast<void>(write_text_interruptibly(
@@ -913,7 +944,13 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     bool attached = terminal_setup_succeeded;
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     const auto forward_host_batch = [&](const HostInputBatch& batch) noexcept {
-      for (const auto& event : std::span(batch.events).first(batch.event_count)) {
+      const auto events = std::span(batch.events).first(batch.event_count);
+      if (events.size() > 1U && std::ranges::all_of(events, [](const HostInputEvent& event) {
+            return event.kind == HostInputKind::mouse;
+          })) {
+        return send_mouse_batch(connection, events, client_sequence);
+      }
+      for (const auto& event : events) {
         const auto bytes = std::span(classified_input).subspan(event.offset, event.size);
         switch (event.kind) {
         case HostInputKind::ordinary:

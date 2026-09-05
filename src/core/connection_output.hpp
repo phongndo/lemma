@@ -9,21 +9,29 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
+#include <memory>
+#include <new>
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace lemma::core {
 
 class ConnectionOutput final {
 public:
   [[nodiscard]] auto append(const std::span<const std::byte> bytes) noexcept -> bool {
-    if (bytes.size() > storage_.size() - size_) {
+    if (bytes.size() > limits::pending_connection_output_bytes_max - size_ ||
+        !ensure_capacity(size_ + bytes.size())) {
       return false;
     }
-    std::ranges::copy(bytes, std::span(storage_).subspan(size_).begin());
-    size_ += bytes.size();
+    if (!bytes.empty()) {
+      auto storage = std::span(storage_.get(), capacity_);
+      std::memcpy(storage.subspan(size_, bytes.size()).data(), bytes.data(), bytes.size());
+      size_ += bytes.size();
+    }
     return true;
   }
 
@@ -34,15 +42,17 @@ public:
   [[nodiscard]] auto append_safe(const std::string_view text, const std::size_t maximum) noexcept
       -> bool {
     const auto size = std::min(text.size(), maximum);
-    if (size > storage_.size() - size_) {
+    if (size > limits::pending_connection_output_bytes_max - size_ ||
+        !ensure_capacity(size_ + size)) {
       return false;
     }
-    for (const char character : std::span(text).first(size)) {
+    const auto source = std::span(text).first(size);
+    auto destination = std::span(storage_.get(), capacity_).subspan(size_, size);
+    std::ranges::transform(source, destination.begin(), [](const char character) noexcept {
       const auto value = static_cast<unsigned char>(character);
-      std::span(storage_).subspan(size_, 1).front() =
-          static_cast<std::byte>(value < 0x20U || value == 0x7FU ? '?' : character);
-      ++size_;
-    }
+      return static_cast<std::byte>(value < 0x20U || value == 0x7FU ? '?' : character);
+    });
+    size_ += size;
     return true;
   }
 
@@ -62,7 +72,8 @@ public:
   }
 
   [[nodiscard]] auto readable() const noexcept -> std::span<const std::byte> {
-    return std::span(storage_).first(size_).subspan(offset_);
+    return size_ == 0 ? std::span<const std::byte>{}
+                      : std::span<const std::byte>(storage_.get(), size_).subspan(offset_);
   }
   [[nodiscard]] auto busy() const noexcept -> bool { return offset_ < size_; }
   [[nodiscard]] auto consume(const std::size_t bytes) noexcept -> bool {
@@ -78,7 +89,31 @@ public:
   }
 
 private:
-  std::array<std::byte, limits::pending_connection_output_bytes_max> storage_{};
+  [[nodiscard]] auto ensure_capacity(const std::size_t required) noexcept -> bool {
+    if (required <= capacity_) {
+      return true;
+    }
+    constexpr std::size_t initial_capacity = std::size_t{4} * 1'024U;
+    const auto preferred = std::min(limits::pending_connection_output_bytes_max,
+                                    std::max({required, initial_capacity, capacity_ * 2U}));
+    try {
+      // Runtime-sized output storage cannot use std::array.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+      auto replacement = std::make_unique_for_overwrite<std::byte[]>(preferred);
+      if (size_ > 0) {
+        std::memcpy(replacement.get(), storage_.get(), size_);
+      }
+      storage_ = std::move(replacement);
+      capacity_ = preferred;
+      return true;
+    } catch (const std::bad_alloc&) {
+      return false;
+    }
+  }
+
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> storage_;
+  std::size_t capacity_{0};
   std::size_t size_{0};
   std::size_t offset_{0};
 };

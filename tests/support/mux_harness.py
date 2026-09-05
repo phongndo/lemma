@@ -220,6 +220,9 @@ class LemmaServer:
         peer: str | Path,
         *,
         config_text: str | None = None,
+        parking_delay_ms: int | None = None,
+        hydration_steps_per_turn: int | None = None,
+        corrupt_parked_snapshots: bool = False,
     ) -> None:
         self.server_path = Path(server).resolve()
         self.cli_path = Path(cli).resolve()
@@ -250,6 +253,18 @@ class LemmaServer:
             "LC_ALL": "C",
             "TMPDIR": str(self.root),
         }
+        if parking_delay_ms is not None:
+            if parking_delay_ms < 0 or parking_delay_ms > 60_000:
+                raise ValueError("parking_delay_ms must be between 0 and 60000")
+            self.environment["LEMMA_TEST_PARKING_DELAY_MS"] = str(parking_delay_ms)
+        if hydration_steps_per_turn is not None:
+            if hydration_steps_per_turn < 0 or hydration_steps_per_turn > 8:
+                raise ValueError("hydration_steps_per_turn must be between 0 and 8")
+            self.environment["LEMMA_TEST_HYDRATION_STEPS_PER_TURN"] = str(
+                hydration_steps_per_turn
+            )
+        if corrupt_parked_snapshots:
+            self.environment["LEMMA_TEST_CORRUPT_PARKED_SNAPSHOTS"] = "1"
         for variable in ("ASAN_OPTIONS", "UBSAN_OPTIONS"):
             if variable in os.environ:
                 self.environment[variable] = os.environ[variable]
@@ -269,14 +284,27 @@ class LemmaServer:
             raise
 
     @classmethod
-    def from_environment(cls, *, config_text: str | None = None) -> LemmaServer:
+    def from_environment(
+        cls,
+        *,
+        config_text: str | None = None,
+        parking_delay_ms: int | None = None,
+        hydration_steps_per_turn: int | None = None,
+        corrupt_parked_snapshots: bool = False,
+    ) -> LemmaServer:
         required = ("LEMMA_TEST_SERVER", "LEMMA_TEST_CLI", "LEMMA_TEST_PTY_PEER")
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             raise RuntimeError(
                 f"missing mux test binary environment: {', '.join(missing)}"
             )
-        return cls(*(os.environ[name] for name in required), config_text=config_text)
+        return cls(
+            *(os.environ[name] for name in required),
+            config_text=config_text,
+            parking_delay_ms=parking_delay_ms,
+            hydration_steps_per_turn=hydration_steps_per_turn,
+            corrupt_parked_snapshots=corrupt_parked_snapshots,
+        )
 
     def __enter__(self) -> LemmaServer:
         return self

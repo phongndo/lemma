@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -136,18 +137,25 @@ auto Tab::set_title_override(const std::string_view title_value) noexcept -> boo
 Session::Session(const std::string_view session_name,
                  const std::string_view initial_working_directory,
                  const std::span<const std::byte> initial_environment,
-                 const LaunchEnvironmentMode initial_environment_mode) noexcept
+                 const LaunchEnvironmentMode initial_environment_mode)
     : working_directory_size(initial_working_directory.size()),
       environment_size(initial_environment.size()), environment_mode(initial_environment_mode) {
   LEMMA_ASSERT(initial_working_directory.size() <= limits::working_directory_bytes_max);
-  LEMMA_ASSERT(initial_environment.size() <= environment.size());
+  LEMMA_ASSERT(initial_environment.size() <= limits::environment_bytes_max);
   const bool named = rename(session_name);
   LEMMA_ASSERT(named);
   if (!initial_working_directory.empty()) {
-    std::memcpy(working_directory.data(), initial_working_directory.data(),
-                initial_working_directory.size());
+    // Runtime-sized immutable launch context cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    working_directory = std::make_unique_for_overwrite<char[]>(working_directory_size);
+    std::memcpy(working_directory.get(), initial_working_directory.data(), working_directory_size);
   }
-  std::ranges::copy(initial_environment, environment.begin());
+  if (!initial_environment.empty()) {
+    // Runtime-sized immutable launch context cannot use std::array.
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    environment = std::make_unique_for_overwrite<std::byte[]>(environment_size);
+    std::memcpy(environment.get(), initial_environment.data(), environment_size);
+  }
 }
 
 auto Session::session_name() const noexcept -> std::string_view { return {name.data(), name_size}; }
@@ -163,11 +171,14 @@ auto Session::rename(const std::string_view session_name) noexcept -> bool {
 }
 
 auto Session::cwd() const noexcept -> std::string_view {
-  return {working_directory.data(), working_directory_size};
+  return working_directory_size == 0
+             ? std::string_view{}
+             : std::string_view(working_directory.get(), working_directory_size);
 }
 
 auto Session::launch_environment() const noexcept -> std::span<const std::byte> {
-  return std::span(environment).first(environment_size);
+  return environment_size == 0 ? std::span<const std::byte>{}
+                               : std::span(environment.get(), environment_size);
 }
 
 } // namespace lemma::core

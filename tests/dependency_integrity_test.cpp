@@ -20,11 +20,9 @@ TEST(GhosttyDependencyIntegrityTest, PinnedBuildInfoMatchesProductionContract) {
   EXPECT_TRUE(info->simd);
   EXPECT_TRUE(info->kitty_graphics);
   EXPECT_FALSE(info->tmux_control_mode);
-#ifdef NDEBUG
-  EXPECT_EQ(info->optimization, BuildOptimization::release_fast);
-#else
-  EXPECT_EQ(info->optimization, BuildOptimization::debug);
-#endif
+  // Construction checks the exact PIN.json-derived optimization and capability contract. C++
+  // NDEBUG is not an authority for the dependency profile (Debug and Dev use ReleaseSafe).
+  EXPECT_TRUE(Terminal::create({}).has_value());
 }
 
 } // namespace

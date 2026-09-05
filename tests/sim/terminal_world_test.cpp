@@ -5,6 +5,8 @@
 #include "lemma/terminal/terminal.hpp"
 #include "render/pane_composition.hpp"
 
+#include "../support/terminal_response_buffer.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -223,9 +225,9 @@ public:
     if (const auto error = validate_modes(); error.has_value()) {
       return error;
     }
-    if (canonical_.pending_pty_response_bytes() != chunked_.pending_pty_response_bytes() ||
-        canonical_.pending_pty_response_bytes() > limits::terminal_pty_response_bytes_max) {
-      return std::string{"PTY response queue sizes diverged or exceeded their bound"};
+    if (canonical_responses_.size() != chunked_responses_.size() ||
+        canonical_responses_.size() > limits::terminal_pty_response_bytes_max) {
+      return std::string{"PTY response path sizes diverged or exceeded their bound"};
     }
     if (canonical_.integrity_failed() || chunked_.integrity_failed() ||
         projected_.integrity_failed() || projected_chunked_.integrity_failed()) {
@@ -255,13 +257,12 @@ public:
   }
 
   [[nodiscard]] auto finish() -> std::optional<std::string> {
-    while (canonical_.pending_pty_response_bytes() > 0 ||
-           chunked_.pending_pty_response_bytes() > 0) {
+    while (!canonical_responses_.empty() || !chunked_responses_.empty()) {
       TerminalOperation operation{.kind = TerminalOperationKind::drain_pty};
       std::array<std::byte, input_bytes_max> first{};
       std::array<std::byte, input_bytes_max> second{};
-      const auto first_size = canonical_.read_pty_responses(first);
-      const auto second_size = chunked_.read_pty_responses(second);
+      const auto first_size = canonical_responses_.read(first);
+      const auto second_size = chunked_responses_.read(second);
       if (first_size != second_size || !std::ranges::equal(std::span(first).first(first_size),
                                                            std::span(second).first(second_size))) {
         return std::string{"final PTY response drain diverged"};
@@ -301,13 +302,13 @@ private:
     operation.argument_2 = static_cast<std::uint16_t>(bytes.size());
     operation.result = static_cast<std::int32_t>(bytes.size());
 
-    canonical_.write(bytes);
+    canonical_.write(bytes, canonical_responses_.sink());
     Random chunks(split_seed);
     std::size_t offset = 0;
     while (offset < bytes.size()) {
       const auto remaining = bytes.size() - offset;
       const auto length = 1U + chunks.index(std::min<std::size_t>(remaining, 11U));
-      chunked_.write(bytes.subspan(offset, length));
+      chunked_.write(bytes.subspan(offset, length), chunked_responses_.sink());
       offset += length;
     }
     projection_current_ = false;
@@ -343,8 +344,8 @@ private:
       }
       std::cerr << '\n';
     }
-    const auto first = canonical_.resize(requested);
-    const auto second = chunked_.resize(requested);
+    const auto first = canonical_.resize(requested, canonical_responses_.sink());
+    const auto second = chunked_.resize(requested, chunked_responses_.sink());
     if (first.has_value() != second.has_value() ||
         (!first.has_value() && first.error() != second.error())) {
       return std::string{"canonical and chunked resize outcomes diverged"};
@@ -357,8 +358,9 @@ private:
       return std::nullopt;
     }
 
-    const auto projected = projected_.resize(requested);
-    const auto projected_chunked = projected_chunked_.resize(requested);
+    const auto projected = projected_.resize(requested, projected_responses_.sink());
+    const auto projected_chunked =
+        projected_chunked_.resize(requested, projected_chunked_responses_.sink());
     if (!projected.has_value() || !projected_chunked.has_value()) {
       return std::string{"projected terminal rejected an applied source resize"};
     }
@@ -420,8 +422,9 @@ private:
       return std::string{"canonical and chunked composed frames diverged"};
     }
 
-    projected_.write(std::span(frame_buffer_).first(first->bytes));
-    projected_chunked_.write(std::span(frame_buffer_chunked_).first(second->bytes));
+    projected_.write(std::span(frame_buffer_).first(first->bytes), projected_responses_.sink());
+    projected_chunked_.write(std::span(frame_buffer_chunked_).first(second->bytes),
+                             projected_chunked_responses_.sink());
     previous_outer_modes_ = first->outer_modes;
     previous_outer_modes_chunked_ = second->outer_modes;
     operation.result = static_cast<std::int32_t>(first->bytes);
@@ -545,9 +548,8 @@ private:
       -> std::optional<std::string> {
     const auto capacity = random.index(input_buffer_.size() + 1U);
     operation.argument_0 = static_cast<std::uint16_t>(capacity);
-    const auto first = canonical_.read_pty_responses(std::span(input_buffer_).first(capacity));
-    const auto second =
-        chunked_.read_pty_responses(std::span(input_buffer_chunked_).first(capacity));
+    const auto first = canonical_responses_.read(std::span(input_buffer_).first(capacity));
+    const auto second = chunked_responses_.read(std::span(input_buffer_chunked_).first(capacity));
     if (first != second || !std::ranges::equal(std::span(input_buffer_).first(first),
                                                std::span(input_buffer_chunked_).first(second))) {
       return std::string{"partial PTY response drains diverged"};
@@ -685,10 +687,9 @@ private:
     if (!effects_equal(first_effects, second_effects)) {
       return std::string{"projected terminal effects diverged"};
     }
-    while (projected_.pending_pty_response_bytes() > 0 ||
-           projected_chunked_.pending_pty_response_bytes() > 0) {
-      const auto first = projected_.read_pty_responses(input_buffer_);
-      const auto second = projected_chunked_.read_pty_responses(input_buffer_chunked_);
+    while (!projected_responses_.empty() || !projected_chunked_responses_.empty()) {
+      const auto first = projected_responses_.read(input_buffer_);
+      const auto second = projected_chunked_responses_.read(input_buffer_chunked_);
       if (first != second || !std::ranges::equal(std::span(input_buffer_).first(first),
                                                  std::span(input_buffer_chunked_).first(second))) {
         return std::string{"projected terminal PTY responses diverged"};
@@ -805,7 +806,7 @@ private:
     hash = hash_value(hash, inspection.cursor_column);
     hash = hash_value(hash, inspection.cursor_row);
     hash = hash_value(hash, static_cast<std::uint64_t>(inspection.active_screen));
-    hash = hash_value(hash, canonical_.pending_pty_response_bytes());
+    hash = hash_value(hash, canonical_responses_.size());
     hash = hash_value(hash, child_bytes_hash_);
     hash = hash_value(hash, child_bytes_count_);
     hash = hash_value(hash, total_effects_.bells);
@@ -840,6 +841,10 @@ private:
   vt::Terminal chunked_;
   vt::Terminal projected_;
   vt::Terminal projected_chunked_;
+  test_support::TerminalResponseBuffer<> canonical_responses_;
+  test_support::TerminalResponseBuffer<> chunked_responses_;
+  test_support::TerminalResponseBuffer<> projected_responses_;
+  test_support::TerminalResponseBuffer<> projected_chunked_responses_;
   std::optional<render::OuterModeProjection> previous_outer_modes_;
   std::optional<render::OuterModeProjection> previous_outer_modes_chunked_;
   std::array<std::byte, frame_bytes_max> frame_buffer_{};
@@ -932,10 +937,12 @@ TEST(TerminalExhaustiveTest, StructuredPayloadsAreEquivalentAtEveryFragmentBound
       SCOPED_TRACE(testing::Message() << "payload=" << payload_index << " split=" << split);
       auto whole = make_terminal(options);
       auto fragmented = make_terminal(options);
+      test_support::TerminalResponseBuffer<> whole_response_path;
+      test_support::TerminalResponseBuffer<> fragmented_response_path;
       const auto bytes = std::as_bytes(std::span(payload.data(), payload.size()));
-      whole.write(bytes);
-      fragmented.write(bytes.first(split));
-      fragmented.write(bytes.subspan(split));
+      whole.write(bytes, whole_response_path.sink());
+      fragmented.write(bytes.first(split), fragmented_response_path.sink());
+      fragmented.write(bytes.subspan(split), fragmented_response_path.sink());
 
       const auto whole_inspection = whole.inspection();
       const auto fragmented_inspection = fragmented.inspection();
@@ -954,10 +961,9 @@ TEST(TerminalExhaustiveTest, StructuredPayloadsAreEquivalentAtEveryFragmentBound
                                      std::span(fragmented_screen).first(*fragmented_size)));
       std::array<std::byte, input_bytes_max> whole_responses{};
       std::array<std::byte, input_bytes_max> fragmented_responses{};
-      while (whole.pending_pty_response_bytes() > 0 ||
-             fragmented.pending_pty_response_bytes() > 0) {
-        const auto whole_read = whole.read_pty_responses(whole_responses);
-        const auto fragmented_read = fragmented.read_pty_responses(fragmented_responses);
+      while (!whole_response_path.empty() || !fragmented_response_path.empty()) {
+        const auto whole_read = whole_response_path.read(whole_responses);
+        const auto fragmented_read = fragmented_response_path.read(fragmented_responses);
         ASSERT_EQ(whole_read, fragmented_read);
         EXPECT_TRUE(std::ranges::equal(std::span(whole_responses).first(whole_read),
                                        std::span(fragmented_responses).first(fragmented_read)));
@@ -966,10 +972,12 @@ TEST(TerminalExhaustiveTest, StructuredPayloadsAreEquivalentAtEveryFragmentBound
 
     auto whole = make_terminal(options);
     auto bytewise = make_terminal(options);
+    test_support::TerminalResponseBuffer<> whole_response_path;
+    test_support::TerminalResponseBuffer<> bytewise_response_path;
     const auto bytes = std::as_bytes(std::span(payload.data(), payload.size()));
-    whole.write(bytes);
+    whole.write(bytes, whole_response_path.sink());
     for (const auto byte : bytes) {
-      bytewise.write(std::span(&byte, 1));
+      bytewise.write(std::span(&byte, 1), bytewise_response_path.sink());
     }
     std::array<std::byte, snapshot_bytes_max> whole_screen{};
     std::array<std::byte, snapshot_bytes_max> bytewise_screen{};
@@ -979,6 +987,9 @@ TEST(TerminalExhaustiveTest, StructuredPayloadsAreEquivalentAtEveryFragmentBound
     ASSERT_TRUE(bytewise_size.has_value());
     EXPECT_TRUE(std::ranges::equal(std::span(whole_screen).first(*whole_size),
                                    std::span(bytewise_screen).first(*bytewise_size)))
+        << "payload=" << payload_index;
+    EXPECT_TRUE(std::ranges::equal(whole_response_path.readable_span(),
+                                   bytewise_response_path.readable_span()))
         << "payload=" << payload_index;
   }
 }

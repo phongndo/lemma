@@ -88,8 +88,49 @@ def mux() -> None:
     )
 
 
+def all_active() -> None:
+    build(
+        "lemma_test_server",
+        "lemma_test_cli",
+        "lemma_test_pty_peer",
+        "lemma_benchmark_probe",
+    )
+    for subject in ("lemma", "tmux"):
+        output = BUILD / f"all-active-{subject}-smoke.json"
+        run(
+            [
+                sys.executable,
+                "benchmarks/mux_benchmark.py",
+                "--mode",
+                "all-active-profiles",
+                "--multiplexer",
+                subject,
+                "--intent",
+                "smoke",
+                "--server",
+                str(BUILD / "lemma_test_server"),
+                "--cli",
+                str(BUILD / "lemma_test_cli"),
+                "--peer",
+                str(BUILD / "lemma_test_pty_peer"),
+                "--probe",
+                str(BUILD / "lemma_benchmark_probe"),
+                "--output",
+                str(output),
+            ]
+        )
+        run(
+            [
+                sys.executable,
+                "benchmarks/validate_report.py",
+                "--process",
+                str(output),
+            ]
+        )
+
+
 def usage() -> str:
-    return """usage: ./bench [terminal|layout|protocol|mux|extended]
+    return """usage: ./bench [terminal|layout|protocol|mux|all-active|extended]
 
 The default is a short native smoke. Python only launches and reports; measured loops are native.
 """
@@ -115,6 +156,8 @@ def main() -> int:
         )
     elif tier == "mux":
         mux()
+    elif tier == "all-active":
+        all_active()
     elif tier == "extended":
         run([str(ROOT / "scripts" / "ci" / "benchmarks"), "extended"])
     else:

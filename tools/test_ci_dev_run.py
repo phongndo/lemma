@@ -129,6 +129,7 @@ class DevelopmentRunnerContractTest(unittest.TestCase):
                 fingerprint + "\n", encoding="ascii"
             )
             (build / "lemma").write_bytes(b"current checkout lemma")
+            (build / "lemma-pty-launcher").write_bytes(b"current checkout launcher")
 
             calls: list[list[str]] = []
             prepare.__globals__["runtime_directory"] = lambda _root: runtime
@@ -193,6 +194,7 @@ class DevelopmentRunnerContractTest(unittest.TestCase):
                     )
                 else:
                     (build / "lemma").write_bytes(b"configured lemma")
+                    (build / "lemma-pty-launcher").write_bytes(b"configured launcher")
 
             prepare.__globals__["runtime_directory"] = lambda _root: runtime
             prepare.__globals__["run_checked"] = run_checked
@@ -209,6 +211,21 @@ class DevelopmentRunnerContractTest(unittest.TestCase):
             self.assertTrue(
                 all(call[-2:] == ["--target", "lemma"] for call in build_calls)
             )
+
+    def test_helper_changes_invalidate_the_development_bundle_identity(self) -> None:
+        build_id = load_runner()["binary_build_id"]
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary) / "lemma"
+            helper = binary.with_name("lemma-pty-launcher")
+            binary.write_bytes(b"daemon")
+            helper.write_bytes(b"first launcher")
+            initial = build_id(binary)
+            self.assertEqual(initial, build_id(binary))
+            helper.write_bytes(b"other launcher")
+            self.assertNotEqual(initial, build_id(binary))
+            helper.unlink()
+            with self.assertRaises(FileNotFoundError):
+                build_id(binary)
 
     def test_stale_daemon_is_shut_down_before_execution(self) -> None:
         runner = load_runner()

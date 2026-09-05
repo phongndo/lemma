@@ -72,6 +72,9 @@ TEST(PaneCompositionTest, PlacesMultipleTerminalSurfacesInOneAtomicFrame) {
   EXPECT_EQ(occurrences(encoded, "\x1B[?2026h"), 1U);
   EXPECT_EQ(occurrences(encoded, "\x1B[?2026l"), 1U);
   EXPECT_EQ(occurrences(encoded, "\x1B[2J"), 1U);
+  // Only the right pane may erase through the physical line edge; the left pane must remain
+  // bounded so it cannot clear its neighbor.
+  EXPECT_EQ(occurrences(encoded, "\x1B[K"), 1U);
 }
 
 TEST(PaneCompositionTest, LeftAlignsMinimalTabStatusAbovePaneContent) {
@@ -107,6 +110,49 @@ TEST(PaneCompositionTest, LeftAlignsMinimalTabStatusAbovePaneContent) {
   EXPECT_THAT(encoded, testing::HasSubstr("  +"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[2;1H"));
   EXPECT_THAT(encoded, testing::HasSubstr("content"));
+  EXPECT_EQ(occurrences(encoded, "\x1B[K"), 2U);
+}
+
+TEST(PaneCompositionTest, RepaintsSinglePaneWithoutScrollingTheStatusRow) {
+  auto terminal = make_terminal(12, 3);
+  write_text(terminal, "one\r\ntwo\r\nthree");
+  const PaneSurface pane{
+      .terminal = &terminal,
+      .rectangle = {.columns = 12, .rows = 3},
+      .focused = true,
+  };
+  const std::array tabs{StatusTab{.number = 1, .title = "zsh", .active = true}};
+  StatusLine status{.session_name = {},
+                    .tabs = tabs,
+                    .prompt_target = StatusPromptTarget::none,
+                    .prompt_feedback = StatusPromptFeedback::none,
+                    .prompt_value = {},
+                    .input_context = {},
+                    .prompt_cursor = 0,
+                    .dirty = true};
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  auto outer = make_terminal(12, 4);
+
+  const auto initial =
+      compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 4}, output, true, status);
+  ASSERT_TRUE(initial.has_value());
+  outer.write(std::span(output).first(initial->bytes));
+
+  write_text(terminal, "\r\nfour");
+  status.dirty = false;
+  const auto incremental = compose_frame(std::span(&pane, 1), {.columns = 12, .rows = 4}, output,
+                                         false, status, initial->outer_modes);
+  ASSERT_TRUE(incremental.has_value());
+  const auto encoded = as_text(std::span(output).first(incremental->bytes));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("\x1B[1S")));
+  outer.write(std::span(output).first(incremental->bytes));
+
+  std::array<std::byte, 1'024> visible{};
+  const auto visible_size = outer.format_visible_tail(vt::ScreenFormat::plain, 4, visible);
+  ASSERT_TRUE(visible_size.has_value());
+  const auto text = as_text(std::span(visible).first(*visible_size));
+  EXPECT_THAT(text, testing::HasSubstr("1:zsh"));
+  EXPECT_THAT(text, testing::HasSubstr("two\nthree\nfour"));
 }
 
 TEST(PaneCompositionTest, StatusControlHitTestMatchesRenderedLabelsAndOverflow) {

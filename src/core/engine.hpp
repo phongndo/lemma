@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -43,14 +44,17 @@ struct ReactorIoResult final {
 };
 
 using ReactorPoll = int (*)(void* context, std::span<pollfd> descriptors,
+                            std::span<const std::uint64_t> identities,
                             int timeout_milliseconds) noexcept;
 using ReactorNow = ReactorClock::time_point (*)(void* context) noexcept;
 using ReactorSend = ReactorIoResult (*)(void* context, int descriptor,
                                         std::span<const std::byte> bytes, int flags) noexcept;
 
-// The production environment delegates directly to poll(2), send(2), and steady_clock.
-// Deterministic tests may instead provide one scripted readiness/I/O/clock authority. The
-// callbacks are turn-local and must not retain borrowed spans.
+// The production environment uses activity-aware poll/epoll readiness, send(2), and steady_clock.
+// Deterministic tests may instead provide one scripted readiness/I/O/clock authority. Poll
+// identities are nonzero and unique for each live descriptor ownership lifetime, preventing file
+// descriptor reuse from inheriting a stale persistent registration. Callbacks are turn-local and
+// must not retain borrowed spans.
 struct ReactorEnvironment final {
   void* context{nullptr};
   ReactorPoll poll{nullptr};
@@ -63,6 +67,13 @@ struct ReactorEnvironment final {
   std::span<const std::byte> default_program;
   std::string_view default_cwd;
   std::string_view command_history_file;
+  // Quiet detached Panes become eligible for snapshot parking after this delay. Null disables it.
+  std::optional<ReactorClock::duration> detached_pane_parking_delay;
+  // Production restores at most eight Pane history pages per turn. Zero is a deterministic-test
+  // pause used to exercise cancellation ownership without timing races.
+  std::size_t pane_hydration_steps_per_turn{8};
+  // Test-only fault injection: corrupt Ghostty bytes before sealing each automatic snapshot.
+  bool corrupt_parked_snapshots_for_test{false};
   bool status_line{true};
 
   [[nodiscard]] constexpr auto valid() const noexcept -> bool {

@@ -1,6 +1,7 @@
 #include "terminal/terminal_impl.hpp"
 
 #include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <array>
@@ -16,11 +17,20 @@ namespace lemma::vt {
 void Terminal::Impl::write_pty([[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
                                const std::uint8_t* data, const std::size_t length) noexcept {
   auto& impl = *static_cast<Impl*>(userdata);
+  if (length == 0) {
+    return;
+  }
+  const auto over_limit =
+      impl.pty_response_bytes_current_write > limits::terminal_pty_response_bytes_max ||
+      length > limits::terminal_pty_response_bytes_max - impl.pty_response_bytes_current_write;
   const auto bytes = std::as_bytes(std::span(data, length));
-  if (!impl.pty_responses.append(bytes)) {
+  if (!impl.pty_response_write_active || impl.active_pty_responses.append == nullptr ||
+      over_limit || !impl.active_pty_responses.append(impl.active_pty_responses.context, bytes)) {
     impl.effects.pty_response_overflowed = true;
     impl.pty_response_integrity_failed = true;
+    return;
   }
+  impl.pty_response_bytes_current_write += length;
 }
 
 void Terminal::Impl::bell([[maybe_unused]] GhosttyTerminal terminal_handle,
@@ -181,22 +191,10 @@ auto Terminal::take_effects() noexcept -> EffectBatch {
   return effects;
 }
 
-auto Terminal::pending_pty_response_bytes() const noexcept -> std::size_t {
-  LEMMA_ASSERT(impl_ != nullptr);
-  LEMMA_ASSERT(impl_->terminal != nullptr);
-  return impl_->pty_responses.size();
-}
-
 auto Terminal::pty_response_overflowed() const noexcept -> bool {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
   return impl_->pty_response_integrity_failed;
-}
-
-auto Terminal::read_pty_responses(const std::span<std::byte> output) noexcept -> std::size_t {
-  LEMMA_ASSERT(impl_ != nullptr);
-  LEMMA_ASSERT(impl_->terminal != nullptr);
-  return impl_->pty_responses.read(output);
 }
 
 } // namespace lemma::vt

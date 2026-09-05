@@ -458,6 +458,14 @@ void release_owned_endpoint(void* const context) noexcept {
   };
   child_exit_wakeup_descriptor = child_reaper.write_descriptor();
   auto reactor_environment = core::production_reactor_environment();
+  if (options.detached_pane_parking_delay.has_value()) {
+    reactor_environment.detached_pane_parking_delay = options.detached_pane_parking_delay;
+  }
+  if (options.pane_hydration_steps_per_turn.has_value()) {
+    reactor_environment.pane_hydration_steps_per_turn =
+        std::min(*options.pane_hydration_steps_per_turn, std::size_t{8});
+  }
+  reactor_environment.corrupt_parked_snapshots_for_test = options.corrupt_parked_snapshots_for_test;
   if (configured_runtime.generation != nullptr) {
     reactor_environment.input_map = &configured_runtime.generation->input_map();
     reactor_environment.scrollback_lines = configured_runtime.generation->scrollback_lines();

@@ -145,11 +145,15 @@ jobs:
         run: nix develop .#ci --command scripts/ci/format
 
   build-test:
-    name: Build and test
+    name: Build and test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, macos-15-intel]
 
     steps:
       - name: Checkout with submodules
@@ -173,8 +177,13 @@ jobs:
           restore-keys: |
             lemma-v1-${{ runner.os }}-${{ runner.arch }}-debug-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/llvm', 'flake.lock', 'CMakeLists.txt', '.gitmodules', 'third_party/ghostty-metadata/PIN.json') }}-
 
-      - name: Build and run tests
+      - name: Build and run Linux merge checks
+        if: runner.os == 'Linux'
         run: nix develop .#ci --command scripts/ci/build-test
+
+      - name: Build and run macOS behavior tests
+        if: runner.os == 'macOS'
+        run: nix develop .#platform --command scripts/ci/platform
 
       - name: Save trusted debug cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

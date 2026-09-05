@@ -9,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -414,6 +415,106 @@ struct TuiFrameGeometry final {
   return flags >= 0 && ::fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
+[[nodiscard]] auto wait_for_output_gate(const std::string_view gate_path) noexcept -> bool {
+  if (gate_path.empty()) {
+    return true;
+  }
+  const std::string path(gate_path);
+  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (::access(path.c_str(), F_OK) == 0) {
+      return true;
+    }
+    if (errno != ENOENT) {
+      return false;
+    }
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 1);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0 || (event.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// This test peer keeps the complete nonblocking producer state machine local and explicit.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_active_output(const std::string_view gate_path) noexcept -> int {
+  if (!enter_raw_input() || !write_all("__LEMMA_ACTIVE_OUTPUT_READY__\r\n") ||
+      !wait_for_output_gate(gate_path) || !make_output_nonblocking()) {
+    return 1;
+  }
+  while (true) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    const auto polled = ::poll(&event, 1, 1);
+    if (polled < 0 && errno == EINTR) {
+      continue;
+    }
+    if (polled < 0 || (event.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+      return polled < 0 ? 1 : 0;
+    }
+    if ((event.revents & POLLIN) != 0) {
+      std::array<char, 128> input{};
+      const auto count = ::read(STDIN_FILENO, input.data(), input.size());
+      if (count == 0) {
+        return 0;
+      }
+      if (count < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+        return errno == EIO ? 0 : 1;
+      }
+    }
+    if (!write_background_line()) {
+      return 1;
+    }
+  }
+}
+
+// The completion file is independent of Lemma: reaching it proves that detached output and the
+// terminal response both progressed without an attach, capture, input request, or child exit wake.
+[[nodiscard]] auto run_parked_output(const char* const gate, const char* const completed) noexcept
+    -> int {
+  if (!enter_raw_input() || !write_all("__LEMMA_PARKED_OUTPUT_READY__\r\n\033[3;") ||
+      !wait_for_gate(gate) || !write_all("7H\033[6n")) {
+    return 1;
+  }
+  std::array<char, 6> response{};
+  std::size_t received = 0;
+  while (received < response.size()) {
+    pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    if (::poll(&event, 1, 5'000) <= 0) {
+      return 1;
+    }
+    const auto remaining = std::span(response).subspan(received);
+    const auto count = ::read(STDIN_FILENO, remaining.data(), remaining.size());
+    if (count <= 0) {
+      return 1;
+    }
+    received += static_cast<std::size_t>(count);
+  }
+  if (std::string_view(response.data(), response.size()) != "\033[3;7R") {
+    return 1;
+  }
+  for (std::size_t row = 0; row < 4'096; ++row) {
+    if (!write_all("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n")) {
+      return 1;
+    }
+  }
+  if (!write_all("\033[2J\033[H__LEMMA_DETACHED_OUTPUT_COMPLETE__")) {
+    return 1;
+  }
+  // POSIX open takes a mode when O_CREAT is set.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const auto descriptor = ::open(completed, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (descriptor < 0 || ::close(descriptor) != 0) {
+    return 1;
+  }
+  pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+  return ::poll(&event, 1, -1) < 0 ? 1 : 0;
+}
+
 struct GeometryReport final {
   std::uint16_t rows{0};
   std::uint16_t columns{0};
@@ -756,7 +857,8 @@ constexpr std::string_view latency_peer_suffix = ".peer";
 // This benchmark peer keeps each framed receipt and echo bounded and explicit.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_latency(const std::string_view receipt_path,
-                               const LatencyMode mode = LatencyMode::idle) noexcept -> int {
+                               const LatencyMode mode = LatencyMode::idle,
+                               const std::string_view output_gate = {}) noexcept -> int {
   if (receipt_path.empty()) {
     return 1;
   }
@@ -788,8 +890,9 @@ constexpr std::string_view latency_peer_suffix = ".peer";
   }
   // Readiness is setup, not a sample. Do not begin autonomous output until the harness has
   // observed the marker; a fixed delay can let a contended renderer lose it before its next frame.
-  if (autonomous_output && (!wait_for_latency_visible_ack(receipt) || !make_output_nonblocking() ||
-                            !send_latency_next_ready(receipt))) {
+  if (autonomous_output &&
+      (!wait_for_latency_visible_ack(receipt) || !wait_for_output_gate(output_gate) ||
+       !make_output_nonblocking() || !send_latency_next_ready(receipt))) {
     static_cast<void>(::close(receipt));
     return 1;
   }
@@ -1024,10 +1127,7 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
 
 // The branches are the explicit bounded states of the quiescent peer.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto run_idle() noexcept -> int {
-  if (!enter_raw_input() || !write_all("__LEMMA_IDLE_READY__\r\n")) {
-    return 1;
-  }
+[[nodiscard]] auto wait_for_input_close() noexcept -> int {
   while (true) {
     pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
     const auto polled = ::poll(&event, 1, -1);
@@ -1051,6 +1151,68 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   }
 }
 
+[[nodiscard]] auto run_observer_echo() noexcept -> int {
+  if (!enter_raw_input()) {
+    return 1;
+  }
+  std::string initial;
+  initial.reserve(std::size_t{23} * 82U);
+  for (std::size_t row = 0; row < 23; ++row) {
+    initial.append(79, static_cast<char>('a' + (row % 26U)));
+    initial.append("\r\n");
+  }
+  initial.append("\x1B[H__LEMMA_OBSERVER_READY__");
+  if (!write_all(initial)) {
+    return 1;
+  }
+  std::array<char, 256> input{};
+  while (true) {
+    const auto received = ::read(STDIN_FILENO, input.data(), input.size());
+    if (received > 0) {
+      if (!write_all("\x1B[H\x1B[2K") ||
+          !write_all(std::string_view(input.data(), static_cast<std::size_t>(received)))) {
+        return 1;
+      }
+      continue;
+    }
+    if (received == 0) {
+      return 0;
+    }
+    if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+      return 1;
+    }
+  }
+}
+
+[[nodiscard]] auto run_idle() noexcept -> int {
+  return enter_raw_input() && write_all("__LEMMA_IDLE_READY__\r\n") ? wait_for_input_close() : 1;
+}
+
+[[nodiscard]] auto run_parking(const std::size_t rows, const std::size_t index) noexcept -> int {
+  if (rows == 0 || rows > 25'000U || index > 9'999U || !enter_raw_input()) {
+    return 1;
+  }
+  std::array<char, 81> line{};
+  line.fill('x');
+  std::span(line).subspan(79, 1).front() = '\r';
+  std::span(line).subspan(80, 1).front() = '\n';
+  for (std::size_t row = 0; row < rows; ++row) {
+    if (!write_all({line.data(), line.size()})) {
+      return 1;
+    }
+  }
+  std::array<char, 4> digits{};
+  auto value = index;
+  for (auto& digit : std::views::reverse(digits)) {
+    digit = static_cast<char>('0' + static_cast<char>(value % 10U));
+    value /= 10U;
+  }
+  return write_all("__LEMMA_PARK_READY_") && write_all({digits.data(), digits.size()}) &&
+                 write_all("__\r\n")
+             ? wait_for_input_close()
+             : 1;
+}
+
 [[nodiscard]] auto run_warm_scroll() noexcept -> int {
   std::array<char, 81> line{};
   line.fill('x');
@@ -1065,17 +1227,41 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   return written ? 0 : 1;
 }
 
+[[nodiscard]] auto run_warm_scroll_indexed(const std::size_t index) noexcept -> int {
+  std::array<char, 81> line{};
+  line.fill('x');
+  std::span(line).subspan(79, 1).front() = '\r';
+  std::span(line).subspan(80, 1).front() = '\n';
+  for (std::size_t row = 0; row < 25'000; ++row) {
+    if (!write_all({line.data(), line.size()})) {
+      return 1;
+    }
+  }
+  std::array<char, 4> digits{};
+  auto value = index;
+  for (auto& digit : std::views::reverse(digits)) {
+    digit = static_cast<char>('0' + static_cast<char>(value % 10U));
+    value /= 10U;
+  }
+  return write_all("__LEMMA_WARM_SCROLL_DONE_") && write_all({digits.data(), digits.size()}) &&
+                 write_all("__\r\n")
+             ? 0
+             : 1;
+}
+
 [[nodiscard]] auto run_warm_scroll_loop() noexcept -> int {
   if (!write_all("__LEMMA_WARM_SCROLL_READY__\r\n")) {
     return 1;
   }
   std::array<char, 1> trigger{};
+  std::size_t index = 0;
   while (true) {
     const auto count = ::read(STDIN_FILENO, trigger.data(), trigger.size());
     if (count > 0) {
-      if (run_warm_scroll() != 0) {
+      if (run_warm_scroll_indexed(index) != 0) {
         return 1;
       }
+      ++index;
       continue;
     }
     if (count == 0 || errno != EINTR) {
@@ -1116,6 +1302,26 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "idle") {
     return run_idle();
   }
+  if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "quiet") {
+    return enter_raw_input() ? wait_for_input_close() : 1;
+  }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "observer-echo") {
+    return run_observer_echo();
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "parked-output-gated") {
+    const auto* const gate = arguments.subspan(2, 1).front();
+    return wait_for_gate(gate) ? run_parked_output(gate, arguments.subspan(3, 1).front()) : 1;
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "parked-output") {
+    return run_parked_output(arguments.subspan(2, 1).front(), arguments.subspan(3, 1).front());
+  }
+  if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "parking") {
+    return run_parking(parse_size(arguments.subspan(2, 1).front()),
+                       parse_size(arguments.subspan(3, 1).front()));
+  }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "winch") {
     return run_winch();
   }
@@ -1133,6 +1339,15 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 3 &&
       std::string_view(arguments.subspan(1, 1).front()) == "latency-output") {
     return run_latency(arguments.subspan(2, 1).front(), LatencyMode::autonomous_output);
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "latency-output-gated") {
+    return run_latency(arguments.subspan(2, 1).front(), LatencyMode::autonomous_output,
+                       arguments.subspan(3, 1).front());
+  }
+  if (arguments.size() == 3 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "active-output") {
+    return run_active_output(arguments.subspan(2, 1).front());
   }
   if (arguments.size() == 3 && std::string_view(arguments.subspan(1, 1).front()) == "latency-tui") {
     return run_latency(arguments.subspan(2, 1).front(), LatencyMode::tui_redraw);

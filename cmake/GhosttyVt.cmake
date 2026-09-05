@@ -36,8 +36,66 @@ function(lemma_add_pinned_ghostty)
   string(JSON expected_version GET "${pin_json}" expected_version)
   string(JSON emit_xcframework GET "${pin_json}" build_options emit_xcframework)
   string(JSON expected_simd GET "${pin_json}" expected_build_features simd)
-  string(JSON expected_kitty_graphics GET "${pin_json}" expected_build_features kitty_graphics)
+  string(JSON production_vt_feature_profile
+    GET "${pin_json}" production_vt_feature_profile
+  )
+  string(JSON production_kitty_graphics
+    GET "${pin_json}" expected_build_features kitty_graphics
+  )
   string(JSON expected_tmux_control GET "${pin_json}" expected_build_features tmux_control_mode)
+  set(LEMMA_GHOSTTY_PINNED_COMMIT "${pinned_commit}" PARENT_SCOPE)
+
+  string(JSON vt_feature_profile_count LENGTH "${pin_json}" vt_feature_profiles)
+  math(EXPR vt_feature_profile_last "${vt_feature_profile_count} - 1")
+  set(vt_feature_profiles)
+  foreach(index RANGE 0 ${vt_feature_profile_last})
+    string(JSON profile_name MEMBER "${pin_json}" vt_feature_profiles ${index})
+    list(APPEND vt_feature_profiles "${profile_name}")
+  endforeach()
+  set(
+    LEMMA_GHOSTTY_VT_FEATURE_PROFILE "${production_vt_feature_profile}"
+    CACHE STRING "Pinned libghostty-vt feature profile"
+  )
+  set_property(
+    CACHE LEMMA_GHOSTTY_VT_FEATURE_PROFILE PROPERTY STRINGS ${vt_feature_profiles}
+  )
+  if(NOT LEMMA_GHOSTTY_VT_FEATURE_PROFILE IN_LIST vt_feature_profiles)
+    list(JOIN vt_feature_profiles ", " supported_profiles)
+    message(FATAL_ERROR
+      "unknown libghostty-vt feature profile '${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}'; "
+      "expected one of: ${supported_profiles}"
+    )
+  endif()
+  set(
+    LEMMA_GHOSTTY_PINNED_PROFILE "${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}"
+    PARENT_SCOPE
+  )
+  string(JSON vt_features
+    GET "${pin_json}" vt_feature_profiles "${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}" zig_value
+  )
+  set(vt_feature_names
+    snapshot
+    formatter
+    selection
+    render_state
+    input_encode
+    color
+    grid_introspection
+    glyph_protocol
+    kitty_graphics
+  )
+  foreach(feature IN LISTS vt_feature_names)
+    string(JSON expected_feature_${feature}
+      GET "${pin_json}" vt_feature_profiles "${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}"
+      features "${feature}"
+    )
+  endforeach()
+  if(LEMMA_GHOSTTY_VT_FEATURE_PROFILE STREQUAL production_vt_feature_profile AND
+     NOT expected_feature_kitty_graphics STREQUAL production_kitty_graphics)
+    message(FATAL_ERROR
+      "production Ghostty profile and expected kitty-graphics capability disagree"
+    )
+  endif()
 
   set(GHOSTTY_PIN_FILE "${pin_file}")
   set(GHOSTTY_SOURCE_DIR "${source_dir}")
@@ -107,7 +165,7 @@ function(lemma_add_pinned_ghostty)
     set(simd_flag false)
     set(simd_definition 0)
   endif()
-  if(expected_kitty_graphics)
+  if(expected_feature_kitty_graphics)
     set(kitty_graphics_definition 1)
   else()
     set(kitty_graphics_definition 0)
@@ -130,8 +188,11 @@ function(lemma_add_pinned_ghostty)
   endif()
 
   set(root "${CMAKE_BINARY_DIR}/_deps/ghostty/${pinned_commit}")
-  set(prefix "${root}/${CMAKE_BUILD_TYPE}")
-  set(local_cache "${root}/zig-cache/local-${CMAKE_BUILD_TYPE}")
+  set(prefix "${root}/${CMAKE_BUILD_TYPE}/${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}")
+  set(
+    local_cache
+    "${root}/zig-cache/local-${CMAKE_BUILD_TYPE}-${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}"
+  )
   set(global_cache "${root}/zig-cache/global")
   if(WIN32)
     set(static_library "${prefix}/lib/ghostty-vt-static.lib")
@@ -139,6 +200,7 @@ function(lemma_add_pinned_ghostty)
     set(static_library "${prefix}/lib/libghostty-vt.a")
   endif()
   set(include_dir "${prefix}/include")
+  set(feature_manifest "${prefix}/share/lemma/ghostty-vt-features.json")
   file(MAKE_DIRECTORY "${include_dir}")
 
   add_custom_target(
@@ -147,8 +209,9 @@ function(lemma_add_pinned_ghostty)
     COMMENT "Validating pinned Ghostty source"
     VERBATIM
   )
+  set(feature_validator "${CMAKE_SOURCE_DIR}/cmake/ValidateGhosttyFeatures.cmake")
   add_custom_command(
-    OUTPUT "${static_library}"
+    OUTPUT "${static_library}" "${feature_manifest}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${local_cache}" "${global_cache}"
     COMMAND "${CMAKE_COMMAND}" ${pin_validation_args} -P "${pin_validator}"
     COMMAND
@@ -161,19 +224,31 @@ function(lemma_add_pinned_ghostty)
       -Demit-lib-vt=true
       -Demit-xcframework=${xcframework_flag}
       -Dsimd=${simd_flag}
+      "-Dvt-features=${vt_features}"
       ${zig_target_args}
       -Doptimize=${optimize}
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DGHOSTTY_FEATURE_PIN_FILE=${pin_file}"
+      "-DGHOSTTY_FEATURE_PROFILE=${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}"
+      "-DGHOSTTY_FEATURE_LIBRARY=${static_library}"
+      "-DGHOSTTY_FEATURE_NM=${CMAKE_NM}"
+      "-DGHOSTTY_FEATURE_MANIFEST=${feature_manifest}"
+      -P "${feature_validator}"
     WORKING_DIRECTORY "${source_dir}"
     DEPENDS
       "${pin_file}"
       "${pin_validator}"
+      "${feature_validator}"
       "${source_dir}/build.zig"
       "${source_dir}/build.zig.zon"
     COMMENT "Building pinned libghostty-vt ${pinned_commit} (${optimize})"
     VERBATIM
     USES_TERMINAL
   )
-  add_custom_target(lemma_ghostty_vt_build DEPENDS "${static_library}")
+  add_custom_target(
+    lemma_ghostty_vt_build DEPENDS "${static_library}" "${feature_manifest}"
+  )
   if(LEMMA_VALIDATE_GHOSTTY_EVERY_BUILD)
     add_dependencies(lemma_ghostty_vt_build lemma_ghostty_vt_validate)
   endif()
@@ -189,7 +264,7 @@ function(lemma_add_pinned_ghostty)
       IMPORTED_LOCATION_RELEASE "${static_library}"
       INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
       INTERFACE_COMPILE_DEFINITIONS
-        "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_VERSION=\"${expected_version}\";LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition}"
+        "GHOSTTY_STATIC;LEMMA_GHOSTTY_EXPECT_VERSION=\"${expected_version}\";LEMMA_GHOSTTY_EXPECT_SIMD=${simd_definition};LEMMA_GHOSTTY_EXPECT_KITTY_GRAPHICS=${kitty_graphics_definition};LEMMA_GHOSTTY_EXPECT_TMUX_CONTROL_MODE=${tmux_control_definition};LEMMA_GHOSTTY_EXPECT_OPTIMIZE=${optimize_definition};LEMMA_GHOSTTY_VT_FEATURE_PROFILE=\"${LEMMA_GHOSTTY_VT_FEATURE_PROFILE}\""
   )
   if(WIN32)
     set_property(
@@ -199,5 +274,8 @@ function(lemma_add_pinned_ghostty)
   add_dependencies(ghostty-vt-static lemma_ghostty_vt_build)
 
   message(STATUS "Pinned Ghostty: ${pinned_commit}")
+  message(STATUS
+    "Ghostty VT feature profile: ${LEMMA_GHOSTTY_VT_FEATURE_PROFILE} (${vt_features})"
+  )
   message(STATUS "Ghostty output: ${prefix}")
 endfunction()

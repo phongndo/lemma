@@ -188,10 +188,44 @@ def validate_process_report(
                             "has an invalid distribution"
                         )
 
+    all_active_profiles = report.get("all_active_profiles")
+    if isinstance(all_active_profiles, dict) and all_active_profiles:
+        intent = report.get("run_intent")
+        profile_suites = manifest.get("profile_suites")
+        expected_profiles = (
+            profile_suites.get(intent) if isinstance(profile_suites, dict) else None
+        )
+        if not isinstance(expected_profiles, list) or set(all_active_profiles) != set(
+            expected_profiles
+        ):
+            raise ReportError("all-active profile report has invalid profile IDs")
+        pane_counts = {
+            profile["id"]: profile["panes"] for profile in manifest["pane_profiles"]
+        }
+        for profile, result in all_active_profiles.items():
+            if (
+                not isinstance(result, dict)
+                or result.get("status") != "completed"
+                or result.get("activity") != "all_active"
+                or result.get("panes") != pane_counts[profile]
+            ):
+                raise ReportError(f"all-active profile {profile} did not complete")
+            interaction = result.get("interaction")
+            resources = result.get("resources")
+            if not isinstance(interaction, dict) or not isinstance(resources, dict):
+                raise ReportError(f"all-active profile {profile} is incomplete")
+            for endpoint in ("key_to_pty", "key_to_outer_bytes"):
+                samples = interaction.get(endpoint, {}).get("samples_ns")
+                if not isinstance(samples, list) or len(samples) != repetitions:
+                    raise ReportError(
+                        f"all-active profile {profile}.{endpoint} has an invalid distribution"
+                    )
+
     intent = report.get("run_intent")
     for report_key, suites_key in (
         ("session_profiles", "session_profile_suites"),
         ("workspace_profiles", "workspace_profile_suites"),
+        ("reactor_profiles", "reactor_profile_suites"),
     ):
         scaling_profiles = report.get(report_key)
         if not isinstance(scaling_profiles, dict) or not scaling_profiles:
@@ -216,6 +250,23 @@ def validate_process_report(
                     raise ReportError(
                         f"{report_key}.{profile}.{label} has an invalid distribution"
                     )
+
+    reactor_profiles = report.get("reactor_profiles")
+    if isinstance(reactor_profiles, dict) and reactor_profiles:
+        pane_counts = {
+            profile["id"]: profile["panes"] for profile in manifest["reactor_profiles"]
+        }
+        for profile, result in reactor_profiles.items():
+            if result.get("panes") != pane_counts[profile]:
+                raise ReportError(f"reactor profile {profile} has the wrong Pane count")
+            epoll = result.get("epoll")
+            if report.get("system") == "Linux" and (
+                not isinstance(epoll, dict)
+                or epoll.get("available") is not True
+                or epoll.get("queue_count") != 1
+                or int(epoll.get("registration_count", 0)) < pane_counts[profile]
+            ):
+                raise ReportError(f"reactor profile {profile} did not activate epoll")
 
 
 def validate_comparison_report(

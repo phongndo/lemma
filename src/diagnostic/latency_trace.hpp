@@ -27,7 +27,7 @@ enum class LatencyTraceStage : std::uint8_t {
   client_outer_terminal_write_finished = 11,
 };
 
-// Controlled latency fixtures echo one bounded _XXXXXXXX__ token (eight uppercase payload bytes).
+// Controlled latency fixtures echo one bounded _XXXXXX__ token (six uppercase payload bytes).
 // The same token is observed independently at the client, daemon input, actual PTY writes, and
 // resulting PTY output; it is not inferred from a timestamp window.
 class LatencyTraceMarkerMatcher final {
@@ -38,11 +38,12 @@ public:
   void reset() noexcept;
 
 private:
-  static constexpr std::size_t marker_bytes = 11;
+  static constexpr std::size_t marker_bytes = 9;
+  static constexpr std::size_t payload_bytes = 6;
 
   std::array<std::byte, marker_bytes> marker_{};
   std::size_t marker_size_{0};
-  std::array<std::byte, 8> visible_{};
+  std::array<std::byte, payload_bytes> visible_{};
   std::size_t visible_size_{0};
 };
 

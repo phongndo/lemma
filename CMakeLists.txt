@@ -72,6 +72,14 @@ include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
 find_package(zstd CONFIG REQUIRED)
+find_package(libsodium CONFIG QUIET)
+if(TARGET libsodium::libsodium)
+  set(LEMMA_SODIUM_TARGET libsodium::libsodium)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.22)
+  set(LEMMA_SODIUM_TARGET PkgConfig::SODIUM)
+endif()
 find_package(Lua 5.4 REQUIRED)
 if(TARGET lua::lua)
   set(LEMMA_LUA_TARGET lua::lua)
@@ -113,13 +121,30 @@ add_library(
 lemma_internal_target(lemma_terminal)
 target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
 
+# A private, single-use child bootstrap. It has no dependency on the terminal, runtime, Lua, or
+# daemon. Keep it beside executables in both build and install trees; discovery never uses PATH.
+add_executable(lemma_pty_launcher src/platform/pty_launcher.cpp)
+set_target_properties(lemma_pty_launcher PROPERTIES OUTPUT_NAME lemma-pty-launcher)
+lemma_internal_target(lemma_pty_launcher)
+target_compile_options(lemma_pty_launcher PRIVATE -fno-exceptions -fno-rtti)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(lemma_pty_launcher PRIVATE "LINKER:--as-needed")
+elseif(APPLE)
+  target_link_options(lemma_pty_launcher PRIVATE "LINKER:-dead_strip_dylibs")
+endif()
+
 add_library(
   lemma_platform STATIC
   src/platform/io.cpp
   src/platform/pty.cpp
+  src/platform/pty_spawn.cpp
   src/platform/terminal_mode.cpp
 )
 lemma_internal_target(lemma_platform)
+add_dependencies(lemma_platform lemma_pty_launcher)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(lemma_platform PRIVATE _GNU_SOURCE)
+endif()
 
 add_library(lemma_protocol STATIC src/protocol/attachment.cpp)
 lemma_internal_target(lemma_protocol)
@@ -184,11 +209,20 @@ add_library(
   src/core/engine.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
+  src/core/pane_residency.cpp
+  src/core/pane_snapshot_quota.cpp
+  src/core/pane_snapshot_storage.cpp
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
 )
 lemma_internal_target(lemma_runtime)
+target_compile_definitions(
+  lemma_runtime
+  PRIVATE
+    LEMMA_GHOSTTY_PINNED_COMMIT="${LEMMA_GHOSTTY_PINNED_COMMIT}"
+    LEMMA_GHOSTTY_PINNED_PROFILE="${LEMMA_GHOSTTY_PINNED_PROFILE}"
+)
 target_link_libraries(
   lemma_runtime
   PRIVATE
@@ -201,6 +235,7 @@ target_link_libraries(
     lemma_protocol
     lemma_render
     lemma_terminal
+    ${LEMMA_SODIUM_TARGET}
 )
 
 # Public dependency-version helpers remain separate from semantic Core and Runtime ownership.
@@ -251,7 +286,7 @@ target_include_directories(
 
 add_executable(lemma apps/lemma/main.cpp)
 target_link_libraries(lemma PRIVATE lemma_app lemma_warnings)
-install(TARGETS lemma RUNTIME DESTINATION bin)
+install(TARGETS lemma lemma_pty_launcher RUNTIME DESTINATION bin)
 
 if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_test_server tests/support/server_main.cpp)
@@ -265,8 +300,22 @@ if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_test_pty_peer tests/support/pty_peer_main.cpp)
   target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
 
+  add_executable(lemma_test_spawn_child tests/support/spawn_child_main.cpp)
+  target_link_libraries(lemma_test_spawn_child PRIVATE lemma_warnings)
+
+  add_executable(lemma_test_spawn_parent tests/support/spawn_parent_main.cpp)
+  lemma_internal_target(lemma_test_spawn_parent)
+  target_link_libraries(lemma_test_spawn_parent PRIVATE lemma_platform)
+
   add_executable(lemma_benchmark_probe benchmarks/process_probe.cpp)
   target_link_libraries(lemma_benchmark_probe PRIVATE lemma_warnings)
+
+  add_executable(lemma_terminal_memory_probe benchmarks/terminal_memory_probe.cpp)
+  lemma_internal_target(lemma_terminal_memory_probe)
+  target_link_libraries(lemma_terminal_memory_probe PRIVATE lemma_terminal)
+
+  add_executable(lemma_reactor_thread_probe benchmarks/reactor_thread_probe.cpp)
+  target_link_libraries(lemma_reactor_thread_probe PRIVATE lemma_warnings)
 endif()
 
 if(LEMMA_BUILD_TESTS)
@@ -292,6 +341,7 @@ if(LEMMA_BUILD_TESTS)
     tests/input_router_test.cpp
     tests/latency_trace_test.cpp
     tests/layout_test.cpp
+    tests/pane_snapshot_quota_test.cpp
     tests/protocol_test.cpp
     tests/reactor_environment_test.cpp
   )
@@ -319,6 +369,8 @@ if(LEMMA_BUILD_TESTS)
     lemma_terminal_boundary_tests
     tests/client_frame_output_test.cpp
     tests/core_input_test.cpp
+    tests/pane_residency_test.cpp
+    tests/pane_snapshot_storage_test.cpp
     tests/pty_writer_test.cpp
     tests/render_composition_test.cpp
     tests/terminal_integration_regression_test.cpp
@@ -340,15 +392,52 @@ if(LEMMA_BUILD_TESTS)
   gtest_discover_tests(lemma_terminal_boundary_tests PROPERTIES LABELS "terminal-unit")
 
   # Real platform-process contracts remain native but are never presented as pure unit tests.
-  add_executable(lemma_component_integration_tests tests/platform_test.cpp)
+  add_executable(
+    lemma_component_integration_tests tests/platform_test.cpp tests/pty_spawn_test.cpp
+  )
   lemma_internal_target(lemma_component_integration_tests)
   target_link_libraries(
     lemma_component_integration_tests
     PRIVATE lemma::lib lemma_client lemma_platform lemma_protocol GTest::gtest_main
   )
+  add_dependencies(lemma_component_integration_tests lemma_test_spawn_child)
   gtest_discover_tests(
     lemma_component_integration_tests
-    PROPERTIES TIMEOUT 30 LABELS "component-integration" RUN_SERIAL TRUE
+    PROPERTIES
+      TIMEOUT 30
+      LABELS "component-integration"
+      RUN_SERIAL TRUE
+      ENVIRONMENT "LEMMA_TEST_SPAWN_CHILD=$<TARGET_FILE:lemma_test_spawn_child>"
+  )
+
+  add_test(
+    NAME harness.pty_process
+    COMMAND "${Python3_EXECUTABLE}" -m unittest -v tests.support.test_pty_process
+  )
+  set_tests_properties(
+    harness.pty_process
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 30
+      LABELS "component-integration;pty"
+      RUN_SERIAL TRUE
+  )
+
+  add_test(
+    NAME platform.pty_launcher
+    COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "LEMMA_TEST_SPAWN_PARENT=$<TARGET_FILE:lemma_test_spawn_parent>"
+      "LEMMA_TEST_SPAWN_CHILD=$<TARGET_FILE:lemma_test_spawn_child>"
+      "${Python3_EXECUTABLE}" -m unittest -v tests.pty_launcher_test
+  )
+  set_tests_properties(
+    platform.pty_launcher
+    PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      TIMEOUT 30
+      LABELS "component-integration;pty"
+      RUN_SERIAL TRUE
   )
 
   add_executable(lemma_dependency_integrity_tests tests/dependency_integrity_test.cpp)
@@ -453,6 +542,7 @@ if(LEMMA_BUILD_TESTS)
       lemma_unit_tests
       lemma_terminal_boundary_tests
       lemma_component_integration_tests
+      lemma_test_spawn_parent
       lemma_dependency_integrity_tests
       lemma_benchmark_probe
       lemma_test_server

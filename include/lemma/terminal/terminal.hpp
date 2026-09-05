@@ -14,6 +14,8 @@
 
 namespace lemma::vt {
 
+class TerminalSnapshotRestore;
+
 // Version of the privately linked terminal engine. The returned view has static lifetime.
 [[nodiscard]] auto library_version() noexcept -> std::span<const std::uint8_t>;
 
@@ -97,6 +99,9 @@ struct TerminalOptions final {
   std::size_t allocation_bytes_max{limits::terminal_allocation_bytes_default};
   std::optional<TerminalTheme> theme;
   std::optional<std::size_t> scrollback_lines_max;
+  // Zero keeps continuation tracking off. A nonzero bounded value must be configured before input
+  // when snapshots need to preserve unfinished UTF-8 or VT parser state.
+  std::size_t snapshot_continuation_bytes_max{0};
 };
 
 // Covers only allocations routed through Lemma's Ghostty C allocator. Ghostty PagePool storage and
@@ -150,6 +155,8 @@ struct PaneRenderOptions final {
   bool focused{false};
   bool cursor_override{false};
   bool allow_terminal_scroll{false};
+  // EL is bounded to the pane only when its surface reaches the outer viewport's right edge.
+  bool allow_line_erase{false};
 };
 
 enum class KeyAction : std::uint8_t {
@@ -463,9 +470,24 @@ struct SearchStepResult final {
   SearchCursor next{};
 };
 
+// Borrowed synchronous destination for terminal-generated PTY replies. The callback must consume
+// the complete span before returning and must not call back into the same Terminal. Rejection is a
+// fail-closed integrity error because dropping or reordering a protocol reply is not recoverable.
+struct PtyResponseSink final {
+  using Append = bool (*)(void* context, std::span<const std::byte> bytes) noexcept;
+
+  void* context{nullptr};
+  Append append{nullptr};
+};
+
 class Terminal final {
 public:
   [[nodiscard]] static auto create(const TerminalOptions& options) noexcept
+      -> std::expected<Terminal, Error>;
+  // Restores exactly one complete, CRC-validated, pin-specific snapshot. The supplied options are
+  // the server-owned resource policy and must describe the encoded terminal geometry.
+  [[nodiscard]] static auto restore_snapshot(const TerminalOptions& options,
+                                             std::span<const std::byte> snapshot) noexcept
       -> std::expected<Terminal, Error>;
 
   Terminal(Terminal&& other) noexcept;
@@ -476,15 +498,25 @@ public:
 
   ~Terminal();
 
-  void write(std::span<const std::byte> bytes) noexcept;
+  // Replies are appended synchronously to the caller-owned ordered PTY path; Terminal retains no
+  // second response queue.
+  void write(std::span<const std::byte> bytes, PtyResponseSink responses = {}) noexcept;
 
   // Writes bytes exactly once and reports only render damage acquired from this write. Damage
   // already pending in the retained render snapshot is preserved but is not included in the
   // result. An error means damage inspection failed; the bytes have still been parsed.
-  [[nodiscard]] auto write_and_report_damage(std::span<const std::byte> bytes) noexcept
+  [[nodiscard]] auto write_and_report_damage(std::span<const std::byte> bytes,
+                                             PtyResponseSink responses = {}) noexcept
       -> std::expected<DirtyState, Error>;
 
-  [[nodiscard]] auto resize(const TerminalSize& size) noexcept -> std::expected<void, Error>;
+  [[nodiscard]] auto resize(const TerminalSize& size, PtyResponseSink responses = {}) noexcept
+      -> std::expected<void, Error>;
+
+  // Snapshot operations are synchronous lifecycle work. Callers must prevent terminal mutation for
+  // their duration and keep encoded bytes within limits::snapshot_bytes_max.
+  [[nodiscard]] auto snapshot_size() noexcept -> std::expected<std::size_t, Error>;
+  [[nodiscard]] auto encode_snapshot(std::span<std::byte> output) noexcept
+      -> std::expected<std::size_t, Error>;
 
   [[nodiscard]] auto update_render_state() noexcept -> std::expected<RenderUpdate, Error>;
   [[nodiscard]] auto mark_rendered() noexcept -> std::expected<void, Error>;
@@ -617,9 +649,7 @@ public:
   [[nodiscard]] auto scrollback_rows() const noexcept -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto take_effects() noexcept -> EffectBatch;
 
-  [[nodiscard]] auto pending_pty_response_bytes() const noexcept -> std::size_t;
   [[nodiscard]] auto pty_response_overflowed() const noexcept -> bool;
-  auto read_pty_responses(std::span<std::byte> output) noexcept -> std::size_t;
 
   // Sticky terminal-integrity state. A true result means a terminal-owned semantic update or
   // required PTY response may have been lost and the pane must fail closed.
@@ -627,6 +657,7 @@ public:
   [[nodiscard]] auto allocation_stats() const noexcept -> AllocationStats;
 
 private:
+  friend class TerminalSnapshotRestore;
   struct Impl;
 
   explicit Terminal(std::unique_ptr<Impl> impl) noexcept;
@@ -635,9 +666,60 @@ private:
   render_ansi_impl(std::span<std::byte> output, bool force_full, std::uint16_t origin_column,
                    std::uint16_t origin_row, bool composed, bool focused, bool cursor_override,
                    std::uint16_t cursor_override_column, std::uint16_t cursor_override_row,
-                   bool allow_terminal_scroll) noexcept -> std::expected<AnsiRenderResult, Error>;
+                   bool allow_terminal_scroll, bool allow_line_erase) noexcept
+      -> std::expected<AnsiRenderResult, Error>;
 
   std::unique_ptr<Impl> impl_;
+};
+
+struct SnapshotReadyInfo final {
+  std::uint64_t primary_history_rows{0};
+  std::optional<std::uint64_t> alternate_history_rows;
+  std::size_t source_bytes_consumed{0};
+};
+
+struct SnapshotHistoryProgress final {
+  ActiveScreen screen{ActiveScreen::primary};
+  std::size_t rows_restored{0};
+  std::uint32_t pages_remaining_on_screen{0};
+  std::size_t source_bytes_consumed{0};
+};
+
+// READY-first restoration over one borrowed immutable snapshot. Each next_history() call consumes
+// at most one history page. The source bytes must outlive this object until complete() is true or
+// the restore is destroyed. Destruction cancels remaining history without invalidating other state.
+class TerminalSnapshotRestore final {
+public:
+  [[nodiscard]] static auto begin(const TerminalOptions& options,
+                                  std::span<const std::byte> snapshot) noexcept
+      -> std::expected<TerminalSnapshotRestore, Error>;
+
+  TerminalSnapshotRestore(TerminalSnapshotRestore&& other) noexcept;
+  auto operator=(TerminalSnapshotRestore&& other) noexcept -> TerminalSnapshotRestore& = delete;
+
+  TerminalSnapshotRestore(const TerminalSnapshotRestore&) = delete;
+  auto operator=(const TerminalSnapshotRestore&) -> TerminalSnapshotRestore& = delete;
+
+  ~TerminalSnapshotRestore();
+
+  [[nodiscard]] auto terminal() noexcept -> Terminal&;
+  [[nodiscard]] auto terminal() const noexcept -> const Terminal&;
+  [[nodiscard]] auto ready_info() const noexcept -> SnapshotReadyInfo;
+  [[nodiscard]] auto next_history() noexcept
+      -> std::expected<std::optional<SnapshotHistoryProgress>, Error>;
+  [[nodiscard]] auto complete() const noexcept -> bool;
+  [[nodiscard]] auto take_terminal() && noexcept -> std::expected<Terminal, Error>;
+
+private:
+  struct Impl;
+
+  TerminalSnapshotRestore(Terminal terminal, std::unique_ptr<Impl> impl,
+                          SnapshotReadyInfo ready_info) noexcept;
+
+  // Terminal is declared first so the decoder PImpl is destroyed before the borrowed terminal.
+  Terminal terminal_;
+  std::unique_ptr<Impl> impl_;
+  SnapshotReadyInfo ready_info_;
 };
 
 } // namespace lemma::vt

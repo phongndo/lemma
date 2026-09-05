@@ -48,7 +48,8 @@ public:
 
   // Preserve short-command completion while presenting long autonomous streams at display cadence.
   // Interactive and state-change requests always bypass both delays.
-  static constexpr auto burst_delay = std::chrono::milliseconds(2);
+  static constexpr auto burst_delay = std::chrono::milliseconds(3);
+  static constexpr auto continued_burst_delay = std::chrono::milliseconds(6);
   static constexpr auto sustained_burst_delay = std::chrono::milliseconds(16);
   static constexpr auto sustained_burst_threshold = std::chrono::milliseconds(50);
   static constexpr auto burst_continuity_window = std::chrono::milliseconds(10);

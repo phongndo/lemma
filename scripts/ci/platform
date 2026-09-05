@@ -7,3 +7,7 @@ scripts/ci/configure debug \
 cmake --build --preset debug --target lemma lemma_fast_test_binaries
 scripts/ci/test debug
 ./build/debug/lemma --help >/dev/null
+python3 scripts/ci/installed.py --build build/debug
+
+# Exercise Darwin's actual package fixup/signing and installCheckPhase, not only a CMake prefix.
+nix build .#lemma --no-link --print-build-logs

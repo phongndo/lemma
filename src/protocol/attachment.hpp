@@ -585,11 +585,12 @@ private:
   static constexpr std::size_t inline_storage_bytes =
       attach_header_bytes + legacy_input_message_bytes_max;
 
-  // Setup and ordinary input stay inline. Only an accepted live decoder that sees a large paste
-  // envelope grows to the structured-input bound.
-  std::array<std::byte, inline_storage_bytes> inline_storage_{};
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  // Detached Sessions retain no decoder payload capacity. prepare() funds the exact ordinary-input
+  // bound; only a validated large-paste envelope replaces it with the structured-input bound.
+  // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> ordinary_storage_;
   std::unique_ptr<std::byte[]> expanded_storage_;
+  // NOLINTEND(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
   HostTerminalTheme host_theme_{};
   std::size_t used_{0};
   std::size_t pending_size_{0};

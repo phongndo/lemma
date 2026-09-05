@@ -125,6 +125,13 @@ def validate_manifest(manifest: Any) -> None:
         "workspaces",
         64,
     )
+    _scaling_profiles(
+        manifest,
+        "reactor_profiles",
+        "reactor_profile_suites",
+        "panes",
+        4_096,
+    )
 
     workloads = manifest.get("process_workloads")
     if not isinstance(workloads, list) or not workloads:

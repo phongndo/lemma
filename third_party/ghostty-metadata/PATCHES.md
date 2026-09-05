@@ -2,6 +2,13 @@
 
 Production Ghostty commit: [`3e7230bf5d0e12d018b850ed3856daa848bfebb7`](PIN.json).
 
+The C++ Debug profile builds Ghostty in `ReleaseSafe` (checked LLVM code generation), not Zig's
+x86-64 Debug backend. Zig 0.16.0 Debug code generation for the pinned snapshot narrow-cell encoder
+can emit a 16-byte store for a four-byte vector, overrunning the writer allocation. The detached
+output/response regression in `tests/mux/test_session_lifecycle.py` exercises this snapshot path.
+ReleaseSafe retains dependency safety checks; production remains ReleaseFast. Requalify Debug
+snapshot encoding under a memory checker before restoring the unoptimized dependency profile.
+
 There are **no local Ghostty patches**. The submodule must be clean and exactly match `PIN.json` at
 configure time and whenever the Ghostty archive is built or reused.
 

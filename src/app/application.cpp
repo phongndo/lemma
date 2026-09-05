@@ -87,7 +87,7 @@ template <typename Integer>
       "  \x1B[32m✓\x1B[0m ANSI colors and styles\r\n"
       "  \x1B[32m✓\x1B[0m Unicode: λ  你好  🚀\r\n"
       "  \x1B[32m✓\x1B[0m Dirty-row tracking and reflow\r\n"
-      "  \x1B[32m✓\x1B[0m Bounded effect and PTY response queues\r\n"
+      "  \x1B[32m✓\x1B[0m Bounded effects and ordered PTY replies\r\n"
       "\r\n"
       "progress: 10%\rprogress: \x1B[1;32m100%\x1B[0m\r\n"
       "\a\x1B[7m Next: PTY reactor and tmux-compatible key tables \x1B[0m";

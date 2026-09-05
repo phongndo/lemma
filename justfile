@@ -75,6 +75,14 @@ bench:
 mux-bench:
     {{ nix }} scripts/ci/benchmarks extended
 
+# Build and benchmark the pinned libghostty-vt feature profiles.
+ghostty-feature-matrix *args:
+    {{ nix }} python3 benchmarks/ghostty_feature_matrix.py "$@"
+
+# Profile one explicit command and all descendants with reviewed Linux perf-stat groups.
+perf-stat output *command:
+    {{ nix }} python3 benchmarks/perf_stat.py --output "{{ output }}" -- {{ command }}
+
 # Compare coding-agent behavior with and without the embedded Lemma skill.
 skill-bench *args:
     {{ nix }} uv run --locked python tools/benchmark_lemma_skill.py "$@"

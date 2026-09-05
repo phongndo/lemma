@@ -303,43 +303,40 @@ class PtyProcess:
         if self.pid <= 0:
             return
         try:
-            os.close(self.descriptor)
-        except OSError:
-            pass
-        self.descriptor = -1
-        try:
-            os.kill(self.pid, signal.SIGHUP)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + 0.5
+            for signum in (signal.SIGHUP, signal.SIGKILL):
+                try:
+                    os.kill(self.pid, signum)
+                except ProcessLookupError:
+                    pass
+                if self._reap_while_discarding_output(0.5):
+                    return
+            raise RuntimeError(f"PTY child {self.pid} did not exit after SIGKILL")
+        finally:
+            try:
+                os.close(self.descriptor)
+            except OSError:
+                pass
+            self.descriptor = -1
+
+    def _reap_while_discarding_output(self, timeout: float) -> bool:
+        # Signal and drain before closing the master; do not let a live writer or an unbounded
+        # waitpid hide the original test failure during teardown. This is forced cleanup, not the
+        # terminal-restoration assertion in wait_for_exit().
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            try:
+                os.read(self.descriptor, 65_536)
+            except OSError:
+                pass
             try:
                 waited, _ = os.waitpid(self.pid, os.WNOHANG)
             except ChildProcessError:
                 waited = self.pid
             if waited == self.pid:
                 self.pid = -1
-                return
+                return True
             time.sleep(0.01)
-        try:
-            os.kill(self.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline:
-            try:
-                waited, _ = os.waitpid(self.pid, os.WNOHANG)
-            except ChildProcessError:
-                waited = self.pid
-            if waited == self.pid:
-                self.pid = -1
-                return
-            time.sleep(0.01)
-        try:
-            os.waitpid(self.pid, 0)
-        except ChildProcessError:
-            pass
-        self.pid = -1
+        return False
 
     def write_all(self, data: bytes, timeout: float) -> None:
         offset = 0

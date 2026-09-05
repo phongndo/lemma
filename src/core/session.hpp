@@ -312,7 +312,7 @@ struct Attachment final {
 struct Session {
   Session(std::string_view session_name, std::string_view initial_working_directory,
           std::span<const std::byte> initial_environment,
-          LaunchEnvironmentMode initial_environment_mode) noexcept;
+          LaunchEnvironmentMode initial_environment_mode);
 
   Session(const Session&) = delete;
   auto operator=(const Session&) -> Session& = delete;
@@ -328,9 +328,14 @@ struct Session {
   SessionId id;
   std::array<char, limits::session_name_bytes_max> name{};
   std::size_t name_size{0};
-  std::array<char, limits::working_directory_bytes_max + 1U> working_directory{};
+  // Immutable cold launch context is allocated exactly once at Session creation instead of
+  // inlining worst-case capacities in every SessionRecord.
+  // Runtime-sized immutable buffers cannot use std::array.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<char[]> working_directory;
   std::size_t working_directory_size{0};
-  std::array<std::byte, limits::environment_bytes_max> environment{};
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+  std::unique_ptr<std::byte[]> environment;
   std::size_t environment_size{0};
   LaunchEnvironmentMode environment_mode{LaunchEnvironmentMode::inherit};
   // Core-owned ordering used only to resolve an omitted CLI attach target.

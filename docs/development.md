@@ -78,9 +78,25 @@ The default suite separates deterministic component behavior from real process b
 | --- | --- |
 | Native unit | Core values, commands, layout, protocol, queues, configuration, and input policy |
 | Terminal boundary | Ghostty adapter, rendering, input encoding, effects, resize, and selection |
-| Component integration | Process-opening platform boundaries |
+| Component integration | PTY/session/exec/environment boundaries, private launcher discovery/failures, and PTY harness teardown |
 | Python mux | Real daemon, client, PTY, child process, lifecycle, API, and terminal consequences |
 | Simulation/stress | Deterministic Core and Ghostty worlds, real-mux state machines, history, and allocation evidence |
+
+The Linux and macOS native recipes also install into a temporary prefix and exercise detached
+Session and Pane creation through the installed executable/helper pair. Nix package install checks
+run the same smoke against `$out/bin/lemma`; the macOS recipe additionally builds that Nix package
+to cover native fixup/signing. Reproduce independently with
+`python3 scripts/ci/installed.py --build build/debug` or `--binary /prefix/bin/lemma`; all commands use a
+fresh private runtime namespace, not the user's installed daemon. The helper is a build dependency
+of `lemma_platform`, so building the application, component tests, or test daemon supplies its sibling.
+
+`benchmarks/launcher_probe.py --binary /prefix/bin/lemma --output build/launcher.json` records fresh
+process startup, warm Pane creation, target/helper failures, and combined installed executable size.
+These are diagnostics with raw samples, not a replacement for the paired performance gate: OS caches
+are not cold, CLI/discovery/input/polling costs are included, and no attached foreground isolation is
+measured. `lemma_test_spawn_parent --repeat N PROGRAM [ARG...]` separately reports native spawn and
+PTY-drain/reap completion timings plus before/after low-descriptor counts; no program means the
+account login shell with a bounded completion handshake. Neither diagnostic fixture is installed.
 
 Use the repository entry point:
 
@@ -292,8 +308,9 @@ collect samples, and report distributions.
 ## CI
 
 `.github/workflows/quality.yml` contains merge-blocking formatting, build/test, clang-tidy, clangd,
-Python, sanitizer, and workflow checks selected by changed paths. `.github/workflows/extended.yml`
-runs the platform matrix plus scheduled simulation, fuzz, and benchmark sweeps.
+Python, sanitizer, and workflow checks selected by changed paths. The build/test job includes Linux and macOS ARM/Intel on each impacted PR.
+`.github/workflows/extended.yml` additionally runs the platform matrix plus scheduled simulation,
+fuzz, and benchmark sweeps.
 
 The local equivalents live under `scripts/ci/`; `just ci-check` runs the merge-blocking set in a
 safe sequence.

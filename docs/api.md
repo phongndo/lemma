@@ -58,7 +58,14 @@ inside process metadata for lifetime observation only; PID is not a Pane selecto
 wraps a `lemma.command-result/v1` result. Successful Command statuses are `applied` and `no_effect`.
 Other statuses include `stale`, `wrong_owner`, `conflict`, `capacity`, `unavailable`, and `failed`.
 Results include the relevant stable IDs and, where applicable, the current Session revision or
-terminal generation.
+terminal generation. A terminal-dependent command against a parked Pane initiates bounded hydration
+and returns `unavailable` with retryable reason `pane_hydrating`; retry the complete command without
+changing its selector. `pane_restore_failed` is not retryable and indicates that the Pane's sealed
+state could not be restored. Session, Tab, and Pane listings plus Session/Tab inspection remain
+available without waking parked Panes. `daemon.inspect.resources.snapshot_bytes` reports reserved
+plaintext payload bytes, their daemon-wide limit, `parked_panes`, and `hydrating_panes`. These are
+logical accounting values, not physical memory or allocated disk usage. Encryption adds a 120-byte
+envelope and 17 bytes per 64 KiB payload chunk, plus filesystem allocation rounding and cache costs.
 
 `pane.input` admits one ordered batch of text, opaque paste, and logical key events. Logical keys use
 an optional `phase` of `press`, `repeat`, or `release`; it defaults to `press`. `pane.capture` reads a

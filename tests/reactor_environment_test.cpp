@@ -8,14 +8,15 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace lemma::core {
@@ -27,36 +28,41 @@ struct ConnectedListener final {
 };
 
 [[nodiscard]] auto connected_listener() noexcept -> std::optional<ConnectedListener> {
-  const auto listener = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (listener < 0) {
+  // The script controls every readiness turn and clock tick. TCP delivery/ACK timers are a second,
+  // uncontrolled clock; use the production AF_UNIX transport instead of polling it faster or
+  // sleeping to make its delivery happen before the synthetic deadline.
+  std::array<char, 64> directory{};
+  std::ranges::copy(std::string_view{"/tmp/lemma-reactor-XXXXXX"}, directory.begin());
+  if (::mkdtemp(directory.data()) == nullptr) {
     return std::nullopt;
   }
-  constexpr int enabled = 1;
-  if (::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) != 0) {
-    static_cast<void>(::close(listener));
-    return std::nullopt;
-  }
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = 0;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  const std::string_view prefix(directory.data());
+  auto path = std::span(address.sun_path);
+  std::ranges::copy(prefix, path.begin());
+  std::ranges::copy(std::string_view{"/socket"}, path.subspan(prefix.size()).begin());
+  const auto cleanup_path = [&]() noexcept {
+    static_cast<void>(::unlink(path.data()));
+    static_cast<void>(::rmdir(directory.data()));
+  };
+  const auto listener = ::socket(AF_UNIX, SOCK_STREAM, 0);
   // POSIX socket APIs require the protocol-specific address through their generic address type.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (::bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-      ::listen(listener, 1) != 0) {
-    static_cast<void>(::close(listener));
-    return std::nullopt;
-  }
-  socklen_t address_size = sizeof(address);
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &address_size) != 0) {
-    static_cast<void>(::close(listener));
-    return std::nullopt;
-  }
-  const auto client = ::socket(AF_INET, SOCK_STREAM, 0);
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto* const generic_address = reinterpret_cast<const sockaddr*>(&address);
-  if (client < 0 || ::connect(client, generic_address, sizeof(address)) != 0) {
+  if (listener < 0 || ::bind(listener, generic_address, sizeof(address)) != 0 ||
+      ::listen(listener, 1) != 0) {
+    if (listener >= 0) {
+      static_cast<void>(::close(listener));
+    }
+    cleanup_path();
+    return std::nullopt;
+  }
+  const auto client = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  const bool connected = client >= 0 && ::connect(client, generic_address, sizeof(address)) == 0;
+  // Once connected, the kernel owns the queued connection independently of this pathname.
+  cleanup_path();
+  if (!connected) {
     if (client >= 0) {
       static_cast<void>(::close(client));
     }
@@ -210,9 +216,7 @@ thread_local ScriptedReactor* active_script = nullptr;
   auto* const pending = pending_descriptor(script, descriptors);
   if (script.stage == script.fragment_count + 1U && pending != nullptr &&
       (pending->events & POLLIN) != 0) {
-    // A successful local send does not guarantee that every byte is visible to the next recv on
-    // every kernel. Keep reporting the production descriptor's requested read readiness until the
-    // parser has consumed the final fragment and asks to flush its response.
+    // Keep read readiness until the production parser requests its response flush.
     pending->revents = POLLIN;
     return 1;
   }
@@ -246,8 +250,7 @@ thread_local ScriptedReactor* active_script = nullptr;
   std::byte byte{};
   const auto received = ::recv(script.client, &byte, 1, MSG_DONTWAIT);
   if (received == 0 || (received < 0 && errno == ECONNRESET)) {
-    // A TCP peer may report an unread/incomplete request timeout as either EOF or reset depending
-    // on the host kernel. Both prove that the production connection was closed.
+    // An unread request may close with either EOF or reset. Both prove connection teardown.
     script.timeout_closed_peer = true;
     script.stop = true;
   }
@@ -261,6 +264,7 @@ thread_local ScriptedReactor* active_script = nullptr;
 }
 
 [[nodiscard]] auto scripted_poll(void* const context, const std::span<pollfd> descriptors,
+                                 [[maybe_unused]] const std::span<const std::uint64_t> identities,
                                  const int timeout_milliseconds) noexcept -> int {
   auto& script = *static_cast<ScriptedReactor*>(context);
   ++script.polls;
@@ -340,6 +344,9 @@ void release_listener(void* const context) noexcept {
       .default_program = {},
       .default_cwd = {},
       .command_history_file = {},
+      .detached_pane_parking_delay = std::nullopt,
+      .pane_hydration_steps_per_turn = 8,
+      .corrupt_parked_snapshots_for_test = false,
       .status_line = true,
   };
   const auto result = run_server_with_environment(
@@ -351,8 +358,53 @@ void release_listener(void* const context) noexcept {
 }
 
 TEST(ReactorEnvironmentTest, ProductionEnvironmentIsComplete) {
-  EXPECT_TRUE(production_reactor_environment().valid());
+  const auto environment = production_reactor_environment();
+  EXPECT_TRUE(environment.valid());
+  EXPECT_EQ(environment.pane_hydration_steps_per_turn, 8U);
 }
+
+#ifdef __linux__
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ReactorEnvironmentTest, ProductionEpollTracksDescriptorLifetimeIdentity) {
+  constexpr std::size_t descriptor_count = 64;
+  std::vector<std::array<int, 2>> pipes;
+  std::vector<pollfd> descriptors;
+  std::vector<std::uint64_t> identities;
+  pipes.reserve(descriptor_count);
+  descriptors.reserve(descriptor_count);
+  identities.reserve(descriptor_count);
+  for (std::size_t index = 0; index < descriptor_count; ++index) {
+    std::array<int, 2> pipe_descriptors{-1, -1};
+    ASSERT_EQ(::pipe(pipe_descriptors.data()), 0);
+    pipes.push_back(pipe_descriptors);
+    descriptors.push_back({.fd = pipe_descriptors.front(), .events = POLLIN, .revents = 0});
+    identities.push_back(index + 1U);
+  }
+  const auto environment = production_reactor_environment();
+  std::byte ready{0x5A};
+  ASSERT_EQ(::write(pipes.back().back(), &ready, 1), 1);
+  ASSERT_EQ(environment.poll(environment.context, descriptors, identities, 0), 1);
+  EXPECT_NE(descriptors.back().revents & POLLIN, 0);
+
+  std::byte consumed{};
+  ASSERT_EQ(::read(pipes.back().front(), &consumed, 1), 1);
+  static_cast<void>(::close(pipes.back().front()));
+  static_cast<void>(::close(pipes.back().back()));
+  pipes.back() = {-1, -1};
+  ASSERT_EQ(::pipe(pipes.back().data()), 0);
+  descriptors.back() = {.fd = pipes.back().front(), .events = POLLIN, .revents = 0};
+  identities.back() += descriptor_count;
+  ASSERT_EQ(::write(pipes.back().back(), &ready, 1), 1);
+  ASSERT_EQ(environment.poll(environment.context, descriptors, identities, 0), 1);
+  EXPECT_NE(descriptors.back().revents & POLLIN, 0);
+
+  for (const auto& pipe_descriptors : pipes) {
+    static_cast<void>(::close(pipe_descriptors.front()));
+    static_cast<void>(::close(pipe_descriptors.back()));
+  }
+}
+#endif
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

@@ -73,11 +73,10 @@ TEST(PtyWriterTest, KeepsBlockedTerminalResponsesAheadOfSubsequentInput) {
   auto terminal_result = vt::Terminal::create({});
   ASSERT_TRUE(terminal_result.has_value());
   auto terminal = std::move(*terminal_result);
-  constexpr std::string_view query = "\x1B[5n";
-  terminal.write(std::as_bytes(std::span(query.data(), query.size())));
-
   PanePtyWriteQueue queue;
-  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  constexpr std::string_view query = "\x1B[5n";
+  terminal.write(std::as_bytes(std::span(query.data(), query.size())),
+                 pane_pty_response_sink(queue));
   ScriptedWriter script;
   script.attempts = {{.bytes = -1, .error = EAGAIN}};
   std::size_t budget = 1'024;
@@ -175,11 +174,10 @@ TEST(PtyWriterTest, QueuesInBandSizeReportsGeneratedByResize) {
   auto terminal_result = vt::Terminal::create(options);
   ASSERT_TRUE(terminal_result.has_value());
   auto terminal = std::move(*terminal_result);
-  constexpr std::string_view enable = "\x1B[?2048h";
-  terminal.write(std::as_bytes(std::span(enable.data(), enable.size())));
-
   PanePtyWriteQueue queue;
-  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  constexpr std::string_view enable = "\x1B[?2048h";
+  terminal.write(std::as_bytes(std::span(enable.data(), enable.size())),
+                 pane_pty_response_sink(queue));
   ScriptedWriter script;
   std::size_t budget = 1'024;
   ASSERT_EQ(flush_pty_write_queue(queue, budget, &scripted_write, &script),
@@ -191,8 +189,7 @@ TEST(PtyWriterTest, QueuesInBandSizeReportsGeneratedByResize) {
       .cell_width_px = 8,
       .cell_height_px = 16,
   };
-  ASSERT_TRUE(terminal.resize(resized).has_value());
-  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  ASSERT_TRUE(terminal.resize(resized, pane_pty_response_sink(queue)).has_value());
   budget = 1'024;
   ASSERT_EQ(flush_pty_write_queue(queue, budget, &scripted_write, &script),
             PtyFlushStatus::drained);

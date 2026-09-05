@@ -47,11 +47,13 @@ LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
 )
 WARM_MARKER = b"__LEMMA_WARM_SCROLL_DONE__"
+WARM_INDEXED_MARKER_PREFIX = b"__LEMMA_WARM_SCROLL_DONE_"
 WARM_READY_MARKER = b"__LEMMA_WARM_SCROLL_READY__"
 BLOCK_READY = b"__LEMMA_PTY_READY__"
 BLOCK_DONE = b"__LEMMA_PTY_DONE__ bytes=2097152 digest=d939b04ca2c22325"
 LATENCY_READY = b"__LEMMA_LATENCY_READY__"
 LATENCY_OUTPUT_READY = b"__LEMMA_LATENCY_OUTPUT_READY__"
+ACTIVE_OUTPUT_READY = b"__LEMMA_ACTIVE_OUTPUT_READY__"
 LATENCY_VISIBLE_ACK = b"__LEMMA_LATENCY_VISIBLE__"
 LATENCY_NEXT_READY = b"__LEMMA_LATENCY_NEXT__"
 TUI_REDRAW_READY = b"__LEMMA_TUI_REDRAW_READY__"
@@ -499,13 +501,83 @@ def darwin_resource_snapshot(pids: set[int]) -> dict[str, Any]:
     }
 
 
-def parse_linux_schedstat(value: str) -> int:
+def parse_linux_schedstat_fields(value: str) -> tuple[int, int, int]:
     fields = value.split()
     if len(fields) != 3 or any(
         not field.isascii() or not field.isdecimal() for field in fields
     ):
         raise ValueError("invalid /proc/PID/schedstat record")
-    return int(fields[0])
+    return int(fields[0]), int(fields[1]), int(fields[2])
+
+
+def parse_linux_schedstat(value: str) -> int:
+    """Return the nanosecond CPU-runtime field retained by the original report schema."""
+    return parse_linux_schedstat_fields(value)[0]
+
+
+def parse_linux_status(value: str) -> dict[str, int]:
+    fields: dict[str, int] = {}
+    byte_fields = {"VmPeak", "VmHWM", "VmStk"}
+    count_fields = {
+        "Threads",
+        "voluntary_ctxt_switches",
+        "nonvoluntary_ctxt_switches",
+    }
+    for line in value.splitlines():
+        name, separator, encoded = line.partition(":")
+        if not separator or name not in byte_fields | count_fields:
+            continue
+        parts = encoded.split()
+        if not parts or not parts[0].isascii() or not parts[0].isdecimal():
+            raise ValueError(f"invalid /proc/PID/status field: {name}")
+        amount = int(parts[0])
+        if name in byte_fields:
+            if len(parts) != 2 or parts[1] != "kB":
+                raise ValueError(f"invalid /proc/PID/status unit: {name}")
+            amount *= 1_024
+        fields[name] = amount
+    missing = (byte_fields | count_fields).difference(fields)
+    if missing:
+        raise ValueError(f"missing /proc/PID/status fields: {sorted(missing)}")
+    return fields
+
+
+def parse_linux_proc_stat(value: str) -> tuple[int, int]:
+    # comm is parenthesized and may contain spaces or right parentheses. Fields after the final
+    # right parenthesis begin at the documented state field (3).
+    close = value.rfind(")")
+    if close < 0 or close + 2 >= len(value):
+        raise ValueError("invalid /proc/PID/stat record")
+    fields = value[close + 2 :].split()
+    if len(fields) < 10:
+        raise ValueError("invalid /proc/PID/stat record")
+    try:
+        # minflt and majflt are fields 10 and 12, or offsets 7 and 9 after state.
+        return int(fields[7]), int(fields[9])
+    except ValueError as error:
+        raise ValueError("invalid /proc/PID/stat fault counters") from error
+
+
+def parse_linux_io(value: str) -> dict[str, int]:
+    expected = {
+        "rchar",
+        "wchar",
+        "syscr",
+        "syscw",
+        "read_bytes",
+        "write_bytes",
+        "cancelled_write_bytes",
+    }
+    fields: dict[str, int] = {}
+    for line in value.splitlines():
+        name, separator, encoded = line.partition(":")
+        amount = encoded.strip()
+        if separator and name in expected and amount.isascii() and amount.isdecimal():
+            fields[name] = int(amount)
+    missing = expected.difference(fields)
+    if missing:
+        raise ValueError(f"missing /proc/PID/io fields: {sorted(missing)}")
+    return fields
 
 
 def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
@@ -513,20 +585,67 @@ def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
         return {"available": False, "reason": "not Linux"}
     if not pids:
         return {"available": False, "reason": "no processes to sample"}
+    totals = {
+        "cpu_time_ns": 0,
+        "runqueue_wait_ns": 0,
+        "timeslices": 0,
+        "minor_faults": 0,
+        "major_faults": 0,
+        "voluntary_context_switches": 0,
+        "involuntary_context_switches": 0,
+        "threads": 0,
+        "peak_virtual_bytes": 0,
+        "peak_resident_bytes": 0,
+        "stack_virtual_bytes": 0,
+        "io_read_char_bytes": 0,
+        "io_write_char_bytes": 0,
+        "io_read_syscalls": 0,
+        "io_write_syscalls": 0,
+        "disk_read_bytes": 0,
+        "disk_write_bytes": 0,
+        "cancelled_write_bytes": 0,
+    }
     try:
-        cpu_time_ns = 0
         sampled = 0
         for pid in pids:
-            schedstat = Path(f"/proc/{pid}/schedstat").read_text(encoding="ascii")
-            cpu_time_ns += parse_linux_schedstat(schedstat)
+            runtime, wait, timeslices = parse_linux_schedstat_fields(
+                Path(f"/proc/{pid}/schedstat").read_text(encoding="ascii")
+            )
+            status = parse_linux_status(
+                Path(f"/proc/{pid}/status").read_text(encoding="ascii")
+            )
+            minor_faults, major_faults = parse_linux_proc_stat(
+                Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+            )
+            io = parse_linux_io(Path(f"/proc/{pid}/io").read_text(encoding="ascii"))
+            totals["cpu_time_ns"] += runtime
+            totals["runqueue_wait_ns"] += wait
+            totals["timeslices"] += timeslices
+            totals["minor_faults"] += minor_faults
+            totals["major_faults"] += major_faults
+            totals["voluntary_context_switches"] += status["voluntary_ctxt_switches"]
+            totals["involuntary_context_switches"] += status[
+                "nonvoluntary_ctxt_switches"
+            ]
+            totals["threads"] += status["Threads"]
+            totals["peak_virtual_bytes"] += status["VmPeak"]
+            totals["peak_resident_bytes"] += status["VmHWM"]
+            totals["stack_virtual_bytes"] += status["VmStk"]
+            totals["io_read_char_bytes"] += io["rchar"]
+            totals["io_write_char_bytes"] += io["wchar"]
+            totals["io_read_syscalls"] += io["syscr"]
+            totals["io_write_syscalls"] += io["syscw"]
+            totals["disk_read_bytes"] += io["read_bytes"]
+            totals["disk_write_bytes"] += io["write_bytes"]
+            totals["cancelled_write_bytes"] += io["cancelled_write_bytes"]
             sampled += 1
     except (OSError, ValueError) as error:
         return {"available": False, "reason": str(error)}
     return {
         "available": sampled == len(pids),
-        "source": "/proc/PID/schedstat CPU runtime",
+        "source": "/proc/PID/{schedstat,status,stat,io}",
         "sampled_processes": sampled,
-        "cpu_time_ns": cpu_time_ns,
+        **totals,
     }
 
 
@@ -535,9 +654,22 @@ def linux_memory_snapshot(pids: set[int]) -> dict[str, Any]:
         return {"available": False, "reason": "not Linux"}
     if not pids:
         return {"available": False, "reason": "no processes to sample"}
+    source_fields = {
+        "Rss": "rss_bytes",
+        "Pss": "pss_bytes",
+        "Pss_Anon": "pss_anon_bytes",
+        "Pss_File": "pss_file_bytes",
+        "Pss_Shmem": "pss_shared_memory_bytes",
+        "Shared_Clean": "shared_clean_bytes",
+        "Shared_Dirty": "shared_dirty_bytes",
+        "Private_Clean": "private_clean_bytes",
+        "Private_Dirty": "private_dirty_bytes",
+        "Anonymous": "anonymous_bytes",
+        "Swap": "swap_bytes",
+        "SwapPss": "swap_pss_bytes",
+    }
+    totals = {name: 0 for name in source_fields.values()}
     try:
-        pss_bytes = 0
-        private_bytes = 0
         sampled = 0
         for pid in pids:
             fields: dict[str, int] = {}
@@ -547,25 +679,65 @@ def linux_memory_snapshot(pids: set[int]) -> dict[str, Any]:
                 .splitlines()
             ):
                 name, separator, value = line.partition(":")
-                if not separator:
+                if not separator or name not in source_fields:
                     continue
                 parts = value.split()
-                if parts and parts[0].isdecimal():
+                if parts and parts[0].isascii() and parts[0].isdecimal():
+                    if len(parts) != 2 or parts[1] != "kB":
+                        raise ValueError(f"invalid /proc/PID/smaps_rollup unit: {name}")
                     fields[name] = int(parts[0]) * 1_024
-            pss_bytes += fields["Pss"]
-            private_bytes += fields.get("Private_Clean", 0) + fields.get(
-                "Private_Dirty", 0
-            )
+            missing = source_fields.keys() - fields.keys()
+            if missing:
+                raise ValueError(
+                    f"missing /proc/PID/smaps_rollup fields: {sorted(missing)}"
+                )
+            for source, destination in source_fields.items():
+                totals[destination] += fields[source]
             sampled += 1
-    except (KeyError, OSError, ValueError) as error:
+    except (OSError, ValueError) as error:
         return {"available": False, "reason": str(error)}
+    private_bytes = totals["private_clean_bytes"] + totals["private_dirty_bytes"]
+    shared_bytes = totals["shared_clean_bytes"] + totals["shared_dirty_bytes"]
     return {
         "available": sampled == len(pids),
         "source": "/proc/PID/smaps_rollup",
         "sampled_processes": sampled,
-        "physical_footprint_bytes": pss_bytes,
+        "physical_footprint_bytes": totals["pss_bytes"],
         "private_bytes": private_bytes,
+        "shared_bytes": shared_bytes,
+        **totals,
     }
+
+
+def linux_epoll_snapshot(pid: int) -> dict[str, Any]:
+    if pid <= 0:
+        return {"available": False, "reason": "invalid process"}
+    if platform.system() != "Linux":
+        return {
+            "available": False,
+            "reason": "epoll registration evidence requires Linux /proc",
+        }
+    try:
+        queue_count = 0
+        registration_count = 0
+        for descriptor in Path(f"/proc/{pid}/fd").iterdir():
+            if os.readlink(descriptor) != "anon_inode:[eventpoll]":
+                continue
+            queue_count += 1
+            fdinfo = Path(f"/proc/{pid}/fdinfo/{descriptor.name}").read_text(
+                encoding="utf-8"
+            )
+            registration_count += sum(
+                line.startswith("tfd:") for line in fdinfo.splitlines()
+            )
+        return {
+            "available": True,
+            "source": "/proc/PID/fd and /proc/PID/fdinfo",
+            "queue_count": queue_count,
+            "registration_count": registration_count,
+        }
+    except OSError as error:
+        return {"available": False, "reason": str(error)}
 
 
 def open_descriptor_snapshot(pid: int) -> dict[str, Any]:
@@ -650,6 +822,8 @@ def process_group_snapshot(
             "reason": "no reviewed per-process wakeup counter on this platform",
         }
     )
+    linux_available = linux_cpu.get("available") is True
+    memory_available = linux_memory.get("available") is True
     return {
         "available": True,
         "process_count": len(pids),
@@ -678,6 +852,41 @@ def process_group_snapshot(
             native_cpu.get("source")
             if native_cpu.get("available") is True
             else "ps time"
+        ),
+        "linux_memory": (
+            linux_memory
+            if memory_available
+            else {"available": False, "reason": linux_memory.get("reason")}
+        ),
+        "linux_scheduler": (
+            {
+                key: linux_cpu[key]
+                for key in (
+                    "available",
+                    "source",
+                    "sampled_processes",
+                    "cpu_time_ns",
+                    "runqueue_wait_ns",
+                    "timeslices",
+                    "minor_faults",
+                    "major_faults",
+                    "voluntary_context_switches",
+                    "involuntary_context_switches",
+                    "threads",
+                    "peak_virtual_bytes",
+                    "peak_resident_bytes",
+                    "stack_virtual_bytes",
+                    "io_read_char_bytes",
+                    "io_write_char_bytes",
+                    "io_read_syscalls",
+                    "io_write_syscalls",
+                    "disk_read_bytes",
+                    "disk_write_bytes",
+                    "cancelled_write_bytes",
+                )
+            }
+            if linux_available
+            else {"available": False, "reason": linux_cpu.get("reason")}
         ),
         "wakeups": wakeups,
         "pids": sorted(pids),
@@ -785,6 +994,47 @@ def process_tree_diagnostic(root_pids: list[int]) -> str:
     return "\n".join(line for process, _, line in records if process in selected)
 
 
+def summarize_linux_counters(
+    before_samples: list[dict[str, Any]],
+    after_samples: list[dict[str, Any]],
+    group: str,
+    counters: dict[str, tuple[str, str]],
+    gauges: dict[str, tuple[str, str]],
+) -> dict[str, Any]:
+    before_groups = [sample.get(group, {}) for sample in before_samples]
+    after_groups = [sample.get(group, {}) for sample in after_samples]
+    groups = (*before_groups, *after_groups)
+    if not all(
+        isinstance(item, dict) and item.get("available") is True for item in groups
+    ):
+        reason = next(
+            (
+                str(item.get("reason"))
+                for item in groups
+                if isinstance(item, dict)
+                and item.get("available") is not True
+                and item.get("reason")
+            ),
+            "Linux resource counters were unavailable during sampling",
+        )
+        return {"available": False, "reason": reason}
+    result: dict[str, Any] = {
+        "available": True,
+        "source": after_groups[-1].get("source"),
+    }
+    for source, (destination, unit) in counters.items():
+        values = [
+            max(0, int(after[source]) - int(before[source]))
+            for before, after in zip(before_groups, after_groups)
+        ]
+        result[destination] = metric_summary(values, unit)
+    for source, (destination, unit) in gauges.items():
+        result[destination] = metric_summary(
+            [int(after[source]) for after in after_groups], unit
+        )
+    return result
+
+
 def summarize_resource_samples(
     before_samples: list[dict[str, Any]], after_samples: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -819,9 +1069,63 @@ def summarize_resource_samples(
         wakeup_samples.append(
             max(0, int(after_wakeups["total"]) - int(before_wakeups["total"]))
         )
+    linux_memory = summarize_linux_counters(
+        before_samples,
+        after_samples,
+        "linux_memory",
+        {},
+        {
+            "rss_bytes": ("rss", "bytes"),
+            "pss_bytes": ("pss", "bytes"),
+            "pss_anon_bytes": ("pss_anon", "bytes"),
+            "pss_file_bytes": ("pss_file", "bytes"),
+            "pss_shared_memory_bytes": ("pss_shared_memory", "bytes"),
+            "private_clean_bytes": ("private_clean", "bytes"),
+            "private_dirty_bytes": ("private_dirty", "bytes"),
+            "private_bytes": ("private", "bytes"),
+            "shared_clean_bytes": ("shared_clean", "bytes"),
+            "shared_dirty_bytes": ("shared_dirty", "bytes"),
+            "shared_bytes": ("shared", "bytes"),
+            "anonymous_bytes": ("anonymous", "bytes"),
+            "swap_bytes": ("swap", "bytes"),
+            "swap_pss_bytes": ("swap_pss", "bytes"),
+        },
+    )
+    linux_scheduler = summarize_linux_counters(
+        before_samples,
+        after_samples,
+        "linux_scheduler",
+        {
+            "runqueue_wait_ns": ("runqueue_wait", "ns"),
+            "timeslices": ("timeslices", "count"),
+            "minor_faults": ("minor_faults", "count"),
+            "major_faults": ("major_faults", "count"),
+            "voluntary_context_switches": ("voluntary_context_switches", "count"),
+            "involuntary_context_switches": (
+                "involuntary_context_switches",
+                "count",
+            ),
+            "io_read_char_bytes": ("io_read_char", "bytes"),
+            "io_write_char_bytes": ("io_write_char", "bytes"),
+            "io_read_syscalls": ("io_read_syscalls", "count"),
+            "io_write_syscalls": ("io_write_syscalls", "count"),
+            "disk_read_bytes": ("disk_read", "bytes"),
+            "disk_write_bytes": ("disk_write", "bytes"),
+            "cancelled_write_bytes": ("cancelled_write", "bytes"),
+        },
+        {
+            "threads": ("threads", "count"),
+            "peak_virtual_bytes": ("peak_virtual", "bytes"),
+            "peak_resident_bytes": ("peak_resident", "bytes"),
+            "stack_virtual_bytes": ("stack_virtual", "bytes"),
+        },
+    )
     return {
         "cpu_time": summary(cpu_samples),
         "rss": metric_summary(rss_samples, "bytes"),
+        "process_count": metric_summary(
+            [int(after["process_count"]) for after in after_samples], "count"
+        ),
         "physical_footprint": {
             "available": footprint_available,
             "source": (
@@ -847,6 +1151,8 @@ def summarize_resource_samples(
                 else {"samples_count": []}
             ),
         },
+        "linux_memory": linux_memory,
+        "linux_scheduler": linux_scheduler,
     }
 
 
@@ -1828,11 +2134,11 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         completed = subprocess.run(
             [
                 str(runtime.probe_path),
-                "command",
+                "indexed-command",
                 str(client.descriptor),
                 str(repetitions),
                 "\r",
-                WARM_MARKER.decode("ascii"),
+                WARM_INDEXED_MARKER_PREFIX.decode("ascii"),
             ],
             check=True,
             capture_output=True,
@@ -2236,6 +2542,44 @@ def session_profile(
     }
 
 
+def reactor_profile(
+    runtime: MuxRuntime, panes: int, repetitions: int
+) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("reactor scale profiles require Lemma")
+    panes_per_session_max = 64
+    session_count = math.ceil(panes / panes_per_session_max)
+    if session_count > 64:
+        raise ValueError("reactor profile exceeds the Session capacity")
+    attached: PtyProcess | None = None
+    created = 0
+    for index in range(session_count):
+        session = f"reactor_profile_{index}"
+        client = runtime.start_and_attach(session)
+        session_panes = min(panes_per_session_max, panes - created)
+        build_profile(runtime, client, session_panes, session)
+        created += session_panes
+        if index + 1 < session_count:
+            runtime.detach(client, session)
+        else:
+            attached = client
+    if attached is None or created != panes:
+        raise RuntimeError(f"reactor profile built {created} panes, expected {panes}")
+    resources = sample_resources(runtime, repetitions, attached)
+    epoll = linux_epoll_snapshot(runtime.server.pid)
+    if epoll.get("available") is True and int(epoll["registration_count"]) < panes:
+        raise RuntimeError("production epoll did not register every live Pane")
+    return {
+        "status": "completed",
+        "panes": panes,
+        "sessions": session_count,
+        "activity": "idle",
+        "resources": resources,
+        "descriptors": open_descriptor_snapshot(runtime.server.pid),
+        "epoll": epoll,
+    }
+
+
 def workspace_profile(
     runtime: MuxRuntime, workspaces: int, repetitions: int
 ) -> dict[str, Any]:
@@ -2335,7 +2679,11 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         )
         blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
         receive_attach_hello(blocked)
-        flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"
+        # Fill every rendered row so wire compression (including right-edge EL) cannot turn this
+        # into a low-rate stream that remains buffered in the kernel. The workload must establish
+        # real socket backpressure before measuring the daemon's no-progress bound.
+        flood_line = b"X" * 499
+        flood_command = b"exec yes " + flood_line + b"\r"
         flood_frame = attach_frame(ATTACH_KIND_INPUT, flood_command, 2)
         ready_read, ready_write = os.pipe()
         disconnect_probe = subprocess.Popen(
@@ -2484,20 +2832,29 @@ def build_profile(
     panes: int,
     session: str = "profile",
 ) -> None:
+    if panes < 1:
+        raise ValueError("a pane profile requires at least one pane")
     pane_index = 1
     wait_for_profile_shell(runtime, client, pane_index)
-    tab_count = 1 if panes == 1 else panes // 4
+    tab_count = math.ceil(panes / 4)
     for tab_index in range(tab_count):
-        if panes == 1:
-            return
-
-        if isinstance(runtime, HerdrRuntime):
-            if tab_index > 0:
+        if tab_index > 0:
+            if isinstance(runtime, HerdrRuntime):
                 runtime.session_command(session, "tab", "create", "--focus")
-                pane_index += 1
-                wait_for_profile_panes(runtime, client, session, pane_index)
-                wait_for_profile_shell(runtime, client, pane_index)
-            for direction in ("right", "down", "down"):
+            elif isinstance(runtime, TmuxRuntime):
+                # Profile construction is setup rather than measured input behavior. Use tmux's
+                # control boundary so consecutive prefix chords cannot race its client key table.
+                runtime._command("new-window", "-t", session)
+            else:
+                send_prefix(client, b"c")
+            pane_index += 1
+            wait_for_profile_panes(runtime, client, session, pane_index)
+            wait_for_profile_shell(runtime, client, pane_index)
+
+        panes_in_tab = min(4, panes - (tab_index * 4))
+        for split_index in range(1, panes_in_tab):
+            if isinstance(runtime, HerdrRuntime):
+                direction = ("right", "down", "down")[split_index - 1]
                 runtime.session_command(
                     session,
                     "pane",
@@ -2507,32 +2864,28 @@ def build_profile(
                     direction,
                     "--focus",
                 )
-                pane_index += 1
-                wait_for_profile_panes(runtime, client, session, pane_index)
-                wait_for_profile_shell(runtime, client, pane_index)
-            continue
-
-        send_prefix(client, b"%")
-        pane_index += 1
-        wait_for_profile_panes(runtime, client, session, pane_index)
-        wait_for_profile_shell(runtime, client, pane_index)
-
-        send_prefix(client, b'"')
-        pane_index += 1
-        wait_for_profile_panes(runtime, client, session, pane_index)
-        wait_for_profile_shell(runtime, client, pane_index)
-
-        send_prefix(client, b"o")
-        send_prefix(client, b'"')
-        pane_index += 1
-        wait_for_profile_panes(runtime, client, session, pane_index)
-        wait_for_profile_shell(runtime, client, pane_index)
-
-        if tab_index + 1 < tab_count:
-            send_prefix(client, b"c")
-            wait_for_profile_panes(runtime, client, session, pane_index + 1)
+            elif isinstance(runtime, TmuxRuntime):
+                if split_index == 1:
+                    runtime._command("split-window", "-h", "-t", session)
+                elif split_index == 2:
+                    runtime._command("split-window", "-v", "-t", session)
+                else:
+                    runtime._command("select-pane", "-t", f"{session}:.0")
+                    runtime._command("split-window", "-v", "-t", session)
+            else:
+                if split_index == 1:
+                    send_prefix(client, b"%")
+                elif split_index == 2:
+                    send_prefix(client, b'"')
+                else:
+                    send_prefix(client, b"o")
+                    send_prefix(client, b'"')
             pane_index += 1
+            wait_for_profile_panes(runtime, client, session, pane_index)
             wait_for_profile_shell(runtime, client, pane_index)
+
+    if pane_index != panes:
+        raise RuntimeError(f"pane profile built {pane_index} panes, expected {panes}")
 
 
 def pane_profile(
@@ -2568,6 +2921,115 @@ def pane_profile(
             "interaction": interaction,
         }
     finally:
+        receipts.close()
+
+
+def launch_gated_latency_peer(
+    runtime: LemmaRuntime | TmuxRuntime,
+    client: PtyProcess,
+    gate_path: Path,
+) -> None:
+    command = (
+        f"exec {shlex.quote(str(runtime.peer_path))} latency-output-gated "
+        f"{shlex.quote(str(runtime.receipt_path))} {shlex.quote(str(gate_path))}\r"
+    ).encode()
+    client.write_all(command, 2.0)
+    client.read_until(LATENCY_OUTPUT_READY, 5.0)
+    client.drain(0.005)
+    # The peer now waits for the visibility acknowledgement and shared gate. Releasing it only
+    # after every Pane is armed gives every producer the same measured interval.
+
+
+def launch_gated_background_peer(
+    runtime: LemmaRuntime | TmuxRuntime,
+    client: PtyProcess,
+    gate_path: Path,
+) -> None:
+    command = (
+        f"exec {shlex.quote(str(runtime.peer_path))} active-output "
+        f"{shlex.quote(str(gate_path))}\r"
+    ).encode()
+    client.write_all(command, 2.0)
+    client.read_until(ACTIVE_OUTPUT_READY, 5.0)
+    client.drain(0.005)
+
+
+def mixed_active_indices(panes: int, fraction: float) -> frozenset[int]:
+    if panes <= 0 or not 0.0 < fraction <= 1.0:
+        raise ValueError(
+            "mixed activity requires positive Panes and a fraction in (0, 1]"
+        )
+    active = max(1, math.ceil(panes * fraction))
+    return frozenset((index * panes) // active for index in range(active))
+
+
+def all_active_pane_profile(
+    runtime: LemmaRuntime | TmuxRuntime,
+    profile: str,
+    panes: int,
+    repetitions: int,
+    activity_fraction: float = 1.0,
+) -> dict[str, Any]:
+    receipts = PtyReceiptChannel(runtime.receipt_path)
+    gate_path = Path(f"{runtime.receipt_path}.all-active-gate")
+    try:
+        gate_path.unlink(missing_ok=True)
+        session = "all_active_profile"
+        client = runtime.start_and_attach(session)
+        build_profile(runtime, client, panes, session)
+
+        tab_sizes = [min(4, panes - offset) for offset in range(0, panes, 4)]
+        traversal = [tab_sizes[-1], *tab_sizes[:-1]]
+        active_indices = mixed_active_indices(panes, activity_fraction)
+        visited = 0
+        armed = 0
+        for tab_index, panes_in_tab in enumerate(traversal):
+            for _ in range(panes_in_tab):
+                if visited in active_indices:
+                    if visited == 0:
+                        launch_gated_latency_peer(runtime, client, gate_path)
+                    else:
+                        launch_gated_background_peer(runtime, client, gate_path)
+                    armed += 1
+                visited += 1
+                send_prefix(client, b"o")
+                client.drain(0.005)
+            if tab_index + 1 < len(traversal):
+                send_prefix(client, b"n")
+                client.drain(0.005)
+        if len(traversal) > 1:
+            # Return from the preceding tab to the original final tab and its correlated peer.
+            send_prefix(client, b"n")
+            client.drain(0.005)
+        if visited != panes or armed != len(active_indices):
+            raise RuntimeError(
+                f"visited {visited} panes and armed {armed}, expected {panes} and {len(active_indices)}"
+            )
+
+        gate_path.touch(mode=0o600)
+        release_autonomous_output(receipts)
+        client.drain(0.06)
+        resources = sample_resources(runtime, repetitions, client)
+        interaction = latency_samples(
+            client,
+            receipts,
+            runtime.probe_path,
+            f"{profile}_ACTIVE",
+            repetitions,
+            wait_for_peer_ready=True,
+        )
+        return {
+            "status": "completed",
+            "panes": panes,
+            "activity": "all_active" if activity_fraction == 1.0 else "mixed_active",
+            "activity_fraction": activity_fraction,
+            "active_panes": len(active_indices),
+            "producer_interval_ns": 1_000_000,
+            "resources": resources,
+            "interaction": interaction,
+        }
+    finally:
+        gate_path.unlink(missing_ok=True)
         receipts.close()
 
 
@@ -2839,8 +3301,11 @@ def main() -> int:
             *process_modes,
             "comparison",
             "profiles",
+            "all-active-profiles",
+            "mixed-activity-profiles",
             "session-profiles",
             "workspace-profiles",
+            "reactor-profiles",
             "all",
         ),
         default="comparison",
@@ -2882,7 +3347,7 @@ def main() -> int:
         policy = manifest["sample_policies"][policy_name]
         arguments.repetitions = (
             policy["profile_repetitions"]
-            if arguments.mode == "profiles"
+            if arguments.mode in {"profiles", "all-active-profiles", "reactor-profiles"}
             else policy["process_repetitions"]
         )
     if arguments.repetitions < 1 or arguments.repetitions > 10_000:
@@ -2915,6 +3380,12 @@ def main() -> int:
         "herdr",
     }:
         parser.error("pane profiles require --multiplexer lemma, tmux, or herdr")
+    if arguments.mode in {"all-active-profiles", "mixed-activity-profiles"} and (
+        arguments.multiplexer not in {"lemma", "tmux"}
+    ):
+        parser.error("active profiles require --multiplexer lemma or tmux")
+    if arguments.mode == "reactor-profiles" and arguments.multiplexer != "lemma":
+        parser.error("reactor profiles require --multiplexer lemma")
     if arguments.trace_directory is not None:
         arguments.trace_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if any(arguments.trace_directory.glob("*.ltrace")):
@@ -2966,8 +3437,11 @@ def main() -> int:
 
     workloads: dict[str, Any] = {}
     pane_profiles: dict[str, Any] = {}
+    all_active_profiles: dict[str, Any] = {}
+    mixed_activity_profiles: dict[str, Any] = {}
     session_profiles: dict[str, Any] = {}
     workspace_profiles: dict[str, Any] = {}
+    reactor_profiles: dict[str, Any] = {}
     runtime_version = "unknown"
     binary_provenance: dict[str, Any] = {}
 
@@ -3118,6 +3592,61 @@ def main() -> int:
 
                 pane_profiles[profile][key] = run_operation(profile_operation)
 
+    if arguments.mode == "all-active-profiles":
+        profile_suite = manifest["profile_suites"][arguments.intent]
+        profile_definitions = {
+            profile["id"]: int(profile["panes"])
+            for profile in manifest["pane_profiles"]
+        }
+        for profile in profile_suite:
+            panes = profile_definitions[profile]
+
+            def all_active_profile_operation(
+                runtime: MuxRuntime,
+                repetitions: int,
+                *,
+                profile_id: str = profile,
+                pane_count: int = panes,
+            ) -> dict[str, Any]:
+                if not isinstance(runtime, (LemmaRuntime, TmuxRuntime)):
+                    raise TypeError("all-active profile requires Lemma or tmux runtime")
+                return all_active_pane_profile(
+                    runtime, profile_id, pane_count, repetitions
+                )
+
+            all_active_profiles[profile] = run_operation(all_active_profile_operation)
+
+    if arguments.mode in ("mixed-activity-profiles", "all"):
+        profile_definitions = {
+            profile["id"]: int(profile["panes"])
+            for profile in manifest["pane_profiles"]
+        }
+        profile_id = manifest["mixed_activity_profile"]
+        panes = profile_definitions[profile_id]
+        for fraction in manifest["mixed_activity_fractions"]:
+            fraction_value = float(fraction)
+            key = f"{fraction_value:g}"
+
+            def mixed_activity_operation(
+                runtime: MuxRuntime,
+                repetitions: int,
+                *,
+                selected_profile: str = profile_id,
+                pane_count: int = panes,
+                selected_fraction: float = fraction_value,
+            ) -> dict[str, Any]:
+                if not isinstance(runtime, (LemmaRuntime, TmuxRuntime)):
+                    raise TypeError("mixed activity requires Lemma or tmux runtime")
+                return all_active_pane_profile(
+                    runtime,
+                    selected_profile,
+                    pane_count,
+                    repetitions,
+                    selected_fraction,
+                )
+
+            mixed_activity_profiles[key] = run_operation(mixed_activity_operation)
+
     if (
         arguments.mode in ("session-profiles", "all")
         and arguments.multiplexer != "direct"
@@ -3161,6 +3690,25 @@ def main() -> int:
                 return workspace_profile(runtime, workspace_count, repetitions)
 
             workspace_profiles[profile] = run_operation(workspace_profile_operation)
+
+    if arguments.mode == "reactor-profiles":
+        reactor_suite = manifest["reactor_profile_suites"][arguments.intent]
+        reactor_definitions = {
+            profile["id"]: int(profile["panes"])
+            for profile in manifest["reactor_profiles"]
+        }
+        for profile in reactor_suite:
+            panes = reactor_definitions[profile]
+
+            def reactor_profile_operation(
+                runtime: MuxRuntime,
+                repetitions: int,
+                *,
+                pane_count: int = panes,
+            ) -> dict[str, Any]:
+                return reactor_profile(runtime, pane_count, repetitions)
+
+            reactor_profiles[profile] = run_operation(reactor_profile_operation)
 
     commit, worktree_dirty, worktree_diff_sha256 = git_provenance()
     host_load_average = list(os.getloadavg())
@@ -3215,8 +3763,11 @@ def main() -> int:
         ),
         "workloads": workloads,
         "pane_profiles": pane_profiles,
+        "all_active_profiles": all_active_profiles,
+        "mixed_activity_profiles": mixed_activity_profiles,
         "session_profiles": session_profiles,
         "workspace_profiles": workspace_profiles,
+        "reactor_profiles": reactor_profiles,
     }
 
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"

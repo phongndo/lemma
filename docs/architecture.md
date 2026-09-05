@@ -57,10 +57,33 @@ destroy the Session.
 | `lemma_protocol` | Bounded private attachment codec |
 | `lemma_client` | Host input, outer-terminal presentation, and restoration |
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
+| `lemma_pty_launcher` | Private, dependency-minimal fresh-process child setup and exec |
 
 Core links no Lua VM, PTY, socket, process, or terminal-emulator owner. Runtime executes accepted
 semantic intent using those mechanisms. The daemon borrows one immutable compiled configuration
 generation; input routing and runtime operation never call into the host process.
+
+PTY creation prepares bounded launch data and descriptors in the parent, then uses `posix_spawn`
+to execute `lemma-pty-launcher` beside the actual caller executable. There is no application-owned
+post-fork PTY child path. A nonblocking socket is completely prefilled before spawning; bootstrap
+launch data is neither helper argv nor files, and the helper's first exec receives an empty loader
+environment. The
+single-use record has no listener, dispatcher, or persistent helper process. Command and environment
+payloads retain their existing byte/count bounds; overlay assignments use the same environment
+bounds without imposing a smaller per-name or per-value limit.
+
+Spawn establishes the child's SID/process group and resets SIGCHLD/SIGPIPE while preserving the
+caller's signal mask and credentials. Only the PTY at descriptors 0–2 and setup socket at descriptor
+3 survive: Linux uses `posix_spawn_file_actions_addclosefrom_np` (glibc 2.34+), Darwin uses
+`POSIX_SPAWN_CLOEXEC_DEFAULT`; both use `POSIX_SPAWN_SETSID`. After its first exec the helper acquires
+the controlling terminal, applies cwd/environment/overlays, and performs account-shell lookup or
+libc `execvp` resolution, including script fallback. It links no Ghostty, Lua, daemon, or privilege
+initialization. There is one PID, one extra exec, and no long-lived intermediary. Parent-side
+admission/bootstrap failure returns `-1` with precise `errno` after cleanup, without transferring the
+master. As before, later child setup/target exec failure is exit 127, not distinguishable from an
+intentional exit 127; there is no target-exec acknowledgement channel. The remaining daemon bootstrap
+and isolated Lua-host forks occur on single-threaded startup paths; they must remain before Runtime
+worker construction.
 
 ## Authority and ownership
 
@@ -132,9 +155,34 @@ it never creates a nested client or restarts the terminal process. The catalog i
 projection boundary for command descriptors, and handlers at that boundary compile to bounded typed
 Lemma commands rather than introducing another execution path.
 
-Application input is distinct from mux commands. The daemon input policy resolves physical
-bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,
-paste, focus, and mouse input.
+Application input is distinct from mux commands. The attached client preserves one typed envelope
+and sequence per event; when one physical read contains multiple mouse reports, it copies those
+complete envelopes into a bounded 16 KiB transport batch and sends each full batch once. The daemon
+input policy resolves physical bindings; Runtime then asks the target Pane's Ghostty terminal to
+encode mode-dependent keyboard, paste, focus, and mouse input.
+
+`PaneRuntimeStore` owns an intrusive generation-safe registry of live Panes. Reactor descriptor
+publication and non-dormant Pane work iterate that registry rather than the 4,096-slot capacity. The
+store is also the authority for failed and unparking counts, whether PTY writes can be pending, and
+the minimum parking, presentation, and compression deadlines. Queueing or arming work tightens its
+hint immediately; a reached conservative stale minimum permits one bounded live-Pane refresh but can
+never make work late. Failure clearing, hold, removal, and hydration transitions balance the counts.
+`Sessions` keeps generational identity in its bounded store and lifecycle-maintained dense pointer
+registries for all live Sessions, attached controllers, and pending frame work; swap removal updates
+the moved Session's inverse index. Fixed pending-connection, observer, Proc, and capacity-rejection
+tables retain authoritative dense live-slot registries: stable protocol indices still address sparse
+owners, while ordinary descriptor, service, and deadline passes are O(live owners). Turn-local
+per-Session budgets initialize only slots owned by the dense live-Session registry. The reactor
+samples one clock value for pre-poll work and refreshes it after the blocking poll, and it collects
+children only when the child-reaper descriptor reports readiness.
+
+On Linux, sets of at least eight descriptors use one persistent epoll queue while sparse; every
+descriptor owner supplies a nonzero identity for its exact ownership lifetime, so closing and reusing
+the same numeric descriptor forces a new registration. Event-mask and index changes reconcile before
+waiting. A prior turn with at least 25% readiness uses `poll()` for the next turn to avoid epoll's
+dense-event cost, and any epoll setup or synchronization failure also falls back to `poll()`. Other
+platforms retain `poll()` until their native backend has execution evidence. Both paths preserve the
+same server-before-input ordering and bounded per-turn fairness.
 
 ## Terminal and presentation flow
 
@@ -148,9 +196,92 @@ PTY -> Ghostty parse
           └─> damage -> render -> pane composition -> attached client
 ```
 
-Terminal responses enter the Pane's ordered write queue before later accepted application input.
-Attach, resize, tab changes, and lag recovery can rebuild a complete ANSI frame from daemon-owned
-state. The client does not own a second terminal grid or PTY replay log.
+Ghostty's borrowed response callback appends synchronously to the Pane's existing bounded ordered
+PTY write queue before later accepted application input. The terminal adapter retains no duplicate
+response queue; a missing or rejecting sink fails that Pane closed. Attach, resize, tab changes, and
+lag recovery can rebuild a complete ANSI frame from daemon-owned state. The client does not own a
+second terminal grid or PTY replay log.
+
+The terminal boundary can encode one complete pin-specific Ghostty snapshot into caller-owned
+storage and restore it through the same quota allocator, terminal policy, callbacks, and adapter
+helpers used by fresh construction. Encoding and input are capped by the 64 MiB snapshot boundary;
+restore requires a CRC-valid FINISH marker, no trailing bytes, and the server-retained Pane geometry.
+Continuation tracking is disabled by default so ordinary terminals pay no new per-input work. The
+pinned Ghostty snapshot omits tracked selection, so an active selection makes snapshot sizing and
+encoding fail closed; automatic parking then retains the authoritative live terminal and retries
+only after another quiet interval. A Pane that may be snapshotted opts into at most 1 MiB before receiving input, allowing unfinished VT
+and UTF-8 parser state to survive restore. Complete restore and READY-first restore share one path;
+each incremental step consumes at most one history page and reports source and screen progress.
+Destroying an unfinished restore cancels it by freeing the decoder before its borrowed terminal.
+`PaneResidency` encodes `Active -> Parking -> Parked -> Unparking -> Active`. Active PTYs permit I/O;
+parked PTYs permit readiness observation only. Output/HUP/ERR readiness requests restoration without
+reading bytes. Hydrating PTYs are omitted from the readiness set until complete; merely clearing the
+event mask would still spin on level-triggered HUP with `poll()`. Attach, input, capture, output, and
+explicit terminal-dependent requests share the wake transition. Hydration fairly advances at most
+one Ghostty history page per Pane step and eight Pane steps per reactor turn.
+
+Cold states own an owner-only, unlinked, close-on-exec file containing libsodium
+[XChaCha20-Poly1305 secretstream](https://libsodium.gitbook.io/doc/secret-key_cryptography/secretstream)
+ciphertext, not plaintext. Every 64 KiB chunk authenticates the exact pin/profile, schema, geometry,
+and length envelope as additional data. The ordered stream and required final tag reject mutation,
+reordering, truncation, and trailing bytes before Ghostty receives any plaintext. Each snapshot owns
+an independent random key in guarded, explicitly locked libsodium memory; failed key locking fails
+parking admission without losing the live terminal. The stream state shares that locked allocation
+and is wiped after each operation. Keys are wiped on snapshot destruction. This protects backing-file
+contents from recovery/tampering, not live-memory compromise, process dumps, hibernation, or swap of
+transient plaintext. Memory locking has [OS and register/stack limitations](https://libsodium.gitbook.io/doc/memory_management).
+
+Encoding and decryption use operation-owned anonymous plaintext mappings that are wiped and unmapped
+on release. The restoring decoder is destroyed before its borrowed plaintext mapping, including on
+cancellation. Parked storage retains one descriptor and one guarded locked allocation per Pane.
+Payload quotas exclude the 120-byte envelope, 17-byte per-chunk authentication overhead, filesystem
+allocation rounding, and kernel ciphertext cache. Hydration temporarily holds encrypted backing,
+a full decrypted snapshot, and the rebuilding terminal simultaneously. No crash durability is
+promised: writes use checked `pwrite`, not writable file mappings or synchronous `msync`/`fsync`.
+Deferred kernel writeback and cache memory still cost resources; a daemon PSS reduction alone does
+not measure them.
+
+The reactor parks only live, quiet Panes in detached, unobserved Sessions after five minutes.
+Creation, detach, wake, hydration completion, and output activity arm/postpone authoritative quiet
+deadlines. Only a due minimum permits an eligibility walk. Pending writes, observers, and pending
+attachments retain a conservative retry deadline; failures retry after a full interval from attempt
+completion. Each due pass selects at most one Pane round-robin, including failures. Snapshot sizing,
+encoding, encryption/I/O, and initial decryption remain synchronous: this bounds the Pane multiplier,
+not the maximum single-operation reactor latency. Large-snapshot foreground isolation remains an
+unqualified merge gate. Attach preparation retains
+its reservation until every Pane is active; automation receives retryable `pane_hydrating` while a
+wake is pending. Restore failure fails the Pane rather than consuming later PTY bytes against an
+unknown terminal state.
+
+Public screen observers share one daemon-owned, lazily allocated, bounded visible-screen projection
+cache keyed by Session, Pane, and observation generation. The first observer for a generation
+formats canonical terminal state; later observers append their own sequence-bearing Event envelope
+from the immutable cached bytes. A control capture invalidates the cache before borrowing its
+writable scratch. Slow observers retain only their own bounded output offset and cannot prevent
+other observers or PTYs from progressing. Create-only working-directory storage and protocol fields
+larger than 64 bytes are separate lifecycle-funded allocations, so persistent observers do not
+retain general connection-setup capacity.
+
+ANSI projection bulk-reads each borrowed raw Ghostty row. Direct packed-cell decoding remains
+private to the terminal adapter and is enabled only after the linked `ghostty_type_json()` descriptor
+and representative typed accessors agree on the pinned layout; construction fails closed otherwise.
+Styles and complete graphemes still use typed accessors when their packed tags require them. Each
+row initializes one bounded grapheme scratch buffer and reuses only the exact prefix reported by the
+typed getter or direct encoder; cells do not repeatedly clear hard-limit storage. Physical hashes
+describe emitted cells. Separate scroll hashes include raw cells, resolved styles, complete
+graphemes, selection, palette/default colors, and theme projection. Partial damage invalidates
+scroll equivalence until a complete-damage frame refreshes it. Hardware scrolling is permitted only
+when one Pane owns the outer origin and full width, so status and neighboring content cannot move.
+Likewise, a composed Pane may encode trailing blanks with `CSI K` only when its surface reaches the
+outer content viewport's physical right edge; a left Pane must emit bounded cells rather than erase a
+neighbor. Standalone rendering continues to own its complete line. Consecutive changed rows may use
+ordered relative row movement, but resynchronization and the first changed row retain absolute
+positioning.
+
+Autonomous output enters the bounded burst lane: the first frame waits 3 ms, a continuing short
+burst waits 6 ms per frame, and output sustained past 50 ms uses 16 ms display cadence. Deadlines are
+never postponed after arming. State changes and input-correlated damage bypass these delays, and a
+blocked sink retains one bounded complete-repair request rather than creating timer work.
 
 Resize is coordinated in one direction:
 

@@ -4,6 +4,7 @@
 #include "api/command.hpp"
 #include "lemma/id.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -35,6 +36,12 @@ using StopRequested = bool (*)() noexcept;
 struct ServeOptions final {
   // Foreground/test owners may request a normal reactor unwind after waking its poll.
   StopRequested stop_requested{nullptr};
+  // Test/embedding override. Null retains the production detached-Pane parking delay.
+  std::optional<std::chrono::steady_clock::duration> detached_pane_parking_delay;
+  // Deterministic-test override, clamped to the production maximum of eight. Null retains eight.
+  std::optional<std::size_t> pane_hydration_steps_per_turn;
+  // Test-only fault injection for automatic restore failure coverage.
+  bool corrupt_parked_snapshots_for_test{false};
 };
 
 [[nodiscard]] auto default_runtime_endpoint() -> RuntimeEndpoint;

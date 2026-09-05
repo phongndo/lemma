@@ -1,8 +1,6 @@
 #ifndef LEMMA_TERMINAL_TERMINAL_IMPL_HPP
 #define LEMMA_TERMINAL_TERMINAL_IMPL_HPP
 
-#include "lemma/bounded_byte_queue.hpp"
-#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <ghostty/vt.h>
@@ -12,11 +10,57 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
+#include <span>
 
 namespace lemma::vt {
 namespace detail {
 
 class AnsiWriter;
+
+// These shifts are accepted only after Terminal::create validates them against the exact linked
+// ghostty_type_json manifest and the corresponding typed accessors. Keeping the decoder here gives
+// hot row projection direct packed-cell reads without making the pin-specific layout public.
+struct PackedCellDecoder final {
+  static constexpr std::size_t content_shift = 0;
+  static constexpr std::size_t content_bits_shift = 2;
+  static constexpr std::size_t style_shift = 26;
+  static constexpr std::size_t wide_shift = 42;
+  static constexpr std::uint64_t content_mask = 0x3U;
+  static constexpr std::uint64_t codepoint_mask = 0x1F'FFFFU;
+  static constexpr std::uint64_t style_mask = 0xFFFFU;
+  static constexpr std::uint64_t wide_mask = 0x3U;
+
+  [[nodiscard]] static constexpr auto content_tag(const GhosttyCell cell) noexcept
+      -> GhosttyCellContentTag {
+    return static_cast<GhosttyCellContentTag>((cell >> content_shift) & content_mask);
+  }
+  [[nodiscard]] static constexpr auto wide(const GhosttyCell cell) noexcept -> GhosttyCellWide {
+    return static_cast<GhosttyCellWide>((cell >> wide_shift) & wide_mask);
+  }
+  [[nodiscard]] static constexpr auto style_id(const GhosttyCell cell) noexcept -> GhosttyStyleId {
+    return static_cast<GhosttyStyleId>((cell >> style_shift) & style_mask);
+  }
+  [[nodiscard]] static constexpr auto has_styling(const GhosttyCell cell) noexcept -> bool {
+    return style_id(cell) != 0;
+  }
+  [[nodiscard]] static constexpr auto codepoint(const GhosttyCell cell) noexcept -> std::uint32_t {
+    return static_cast<std::uint32_t>((cell >> content_bits_shift) & codepoint_mask);
+  }
+  [[nodiscard]] static constexpr auto background_palette(const GhosttyCell cell) noexcept
+      -> GhosttyColorPaletteIndex {
+    return static_cast<GhosttyColorPaletteIndex>(cell >> content_bits_shift);
+  }
+  [[nodiscard]] static constexpr auto background_rgb(const GhosttyCell cell) noexcept
+      -> GhosttyColorRgb {
+    const auto content = cell >> content_bits_shift;
+    return {
+        .r = static_cast<std::uint8_t>(content),
+        .g = static_cast<std::uint8_t>(content >> 8U),
+        .b = static_cast<std::uint8_t>(content >> 16U),
+    };
+  }
+};
 
 // Covers allocations routed through Ghostty's C allocator. The render and other adapter-owned
 // buffers remain independently bounded by their owning Lemma components.
@@ -94,17 +138,28 @@ struct Terminal::Impl final {
                           GhosttySizeReportSize* output) noexcept -> bool;
   static auto xtversion(GhosttyTerminal terminal_handle, void* userdata) noexcept -> GhosttyString;
 
+  [[nodiscard]] auto install_callbacks() noexcept -> GhosttyResult;
+  void begin_pty_response_write(PtyResponseSink responses) noexcept;
+  void end_pty_response_write() noexcept;
+  [[nodiscard]] auto physical_cells() noexcept -> std::span<std::uint64_t>;
+  [[nodiscard]] auto row_hashes() noexcept -> std::span<std::uint64_t>;
+  [[nodiscard]] auto row_hashes() const noexcept -> std::span<const std::uint64_t>;
   [[nodiscard]] auto dirty_state() const noexcept -> std::expected<DirtyState, Error>;
   [[nodiscard]] auto set_dirty_state(DirtyState dirty) const noexcept -> std::expected<void, Error>;
   [[nodiscard]] auto populate_render_metadata(RenderUpdate& update) noexcept
       -> std::expected<void, Error>;
   [[nodiscard]] auto dirty_row_count() noexcept -> std::expected<std::size_t, Error>;
-  [[nodiscard]] auto calculate_row_hash() noexcept -> std::expected<std::uint64_t, Error>;
-  [[nodiscard]] auto detect_scroll() const noexcept -> std::int32_t;
+  [[nodiscard]] auto calculate_row_hash(std::uint64_t context_hash) noexcept
+      -> std::expected<std::uint64_t, Error>;
+  [[nodiscard]] auto detect_scroll(std::span<const std::uint64_t> current) const noexcept
+      -> std::int32_t;
   void apply_physical_scroll(std::int32_t scroll) noexcept;
   [[nodiscard]] auto encode_row(detail::AnsiWriter& writer, std::size_t row_index, bool force,
                                 std::uint16_t origin_column, std::uint16_t origin_row,
-                                bool erase_line_tail) noexcept -> std::expected<bool, Error>;
+                                bool position_from_previous_row, bool erase_line_tail,
+                                std::optional<std::uint64_t> scroll_context,
+                                std::optional<std::uint64_t> precomputed_row_hash) noexcept
+      -> std::expected<bool, Error>;
 
   TerminalOptions options;
   TerminalTheme session_theme{};
@@ -122,12 +177,13 @@ struct Terminal::Impl final {
   GhosttyTrackedGridRef selection_checkpoint_start{nullptr};
   GhosttyTrackedGridRef selection_checkpoint_end{nullptr};
   GhosttyRenderStateColors render_colors{};
-  std::array<std::uint64_t, limits::terminal_rows_hard_max> row_hashes{};
-  std::array<std::uint64_t, limits::terminal_rows_hard_max> current_row_hashes{};
-  detail::CellHashStorage physical_cell_hashes;
+  // One right-sized allocation stores retained physical cell hashes followed by retained row
+  // hashes. Current-row hashes are operation-scoped render scratch.
+  detail::CellHashStorage physical_hashes;
   std::size_t physical_cell_count{0};
   std::size_t physical_cell_capacity{0};
   std::size_t row_hash_count{0};
+  std::size_t row_hash_capacity{0};
   std::array<bool, 12> mirrored_mode_values{};
   GhosttyColorRgb projected_cursor_color{};
   std::uint8_t projected_cursor_code{0};
@@ -136,9 +192,12 @@ struct Terminal::Impl final {
   bool mirrored_mouse_modes_valid{false};
   bool projected_cursor_valid{false};
   bool ansi_physical_valid{false};
+  bool scroll_hashes_valid{false};
   bool selection_checkpoint_rectangle{false};
-  BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;
+  PtyResponseSink active_pty_responses{};
+  std::size_t pty_response_bytes_current_write{0};
   EffectBatch effects{};
+  bool pty_response_write_active{false};
   bool pty_response_integrity_failed{false};
 };
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 import errno
 import os
 import shlex
+import socket
 import unittest
 from pathlib import Path
 
-from tests.support.mux_harness import LemmaServer, process_exists, wait_until
+from tests.support.mux_harness import LemmaServer, Session, process_exists, wait_until
 
 
 def release_fifo(path: Path) -> None:
@@ -56,6 +57,41 @@ class ProcessBoundaryMuxTest(unittest.TestCase):
         )
         self.assertEqual(exited.pane(pane.id).pid, 0)
         self.assertFalse(process_exists(child))
+
+    def test_create_context_funds_a_long_working_directory_only_for_setup(self) -> None:
+        working_directory = (
+            self.server.root
+            / ("directory-a-" + ("x" * 48))
+            / ("directory-b-" + ("y" * 48))
+        )
+        working_directory.mkdir(parents=True)
+        name = b"long_working_directory"
+        encoded_directory = os.fsencode(working_directory)
+        request = b"".join(
+            (
+                b"C",
+                bytes((len(name),)),
+                name,
+                b"\0",
+                len(encoded_directory).to_bytes(2, "big"),
+                encoded_directory,
+                b"\0\0",
+                b"\0\0",
+            )
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+            control.settimeout(2.0)
+            control.connect(str(self.server.socket_path))
+            control.sendall(request)
+            self.assertEqual(control.recv(1), b"Y", self.server.diagnostics())
+
+        session = Session(self.server, name.decode())
+        client = session.attach()
+        client.send(
+            f'test "$PWD" = {shlex.quote(str(working_directory))} '
+            "&& printf '__LONG_CWD_OK__\\n'\r"
+        )
+        client.expect_output("__LONG_CWD_OK__")
 
     def test_resize_delivers_sigwinch_to_the_real_child(self) -> None:
         session = self.server.create_session(

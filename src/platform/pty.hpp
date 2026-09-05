@@ -29,7 +29,10 @@ struct EnvironmentVariable final {
 // Spawns an exact NUL-separated argv, or the account's login shell when launch_command is empty,
 // with a new controlling PTY. The parent receives the child PID and master descriptor; the child
 // replaces itself or exits with status 127. Replacement clears the inherited environment even when
-// the supplied snapshot is empty.
+// the supplied snapshot is empty. The private sibling launcher is executed through posix_spawn;
+// no application code runs in a fork child before that exec. Admission/bootstrap-exec errors return
+// -1 with errno preserved and leave pty_descriptor unchanged; child setup/target-exec errors remain
+// exit 127. Inherited environments and overlays are bounded by the environment entry/byte limits.
 [[nodiscard]] auto spawn_process(int& pty_descriptor, std::string_view working_directory = {},
                                  std::span<const std::byte> environment = {},
                                  EnvironmentMode environment_mode = EnvironmentMode::inherit,
