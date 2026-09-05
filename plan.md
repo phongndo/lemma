@@ -338,8 +338,21 @@ For each optimization record:
   - Linux `nix develop -c just check`, `nix develop -c just ci-check`, release tests, simulation, and
     `nix build .#lemma` pass for this repair slice. The 20-cycle/four-Pane resource diagnostic returns
     to zero descriptor/process/backing-file deltas. A/A calibration passes on approved `box` under
-    `build/performance/pr12-repair-calibration/`. Candidate macOS and paired A/B qualification remain
-    separate gates; adding ARM/Intel PR jobs is not evidence they have passed.
+    `build/performance/pr12-repair-calibration/`. Hosted checks at `3507e7c` passed Linux build/test
+    but exposed two fixture races: synthetic polling outran TCP delivery on macOS, and globally
+    paused hydration made attachment-based setup race parking in the sanitizer lane. The repaired
+    scripted test uses production AF_UNIX transport; the cancellation fixture explicitly gates its
+    first output and tests unrelated metadata/process lifecycle without depending on hydration.
+    New local `just check`, `just ci-check`, 100 reactor repetitions, and 20 cancellation repetitions
+    pass. Hosted macOS qualification must still pass on the follow-up test repair.
+  - Approved-host paired results for production revision `3507e7c` are retained, not discarded:
+    reviewed-head → repair passes (`build/performance/pr12-reviewed-to-repair/paired-regression.json`).
+    Original-base → repair fails warm-scroll p95 (21.50 ms vs 18.71 ms permitted) and PMAX active
+    interaction p95 (16.19 ms vs 0.278 ms permitted), in
+    `build/performance/pr12-base-to-repair/paired-regression.json`. The latter capture also adds an
+    eighth absolute miss (PMAX active interaction) to the seven CPU/RSS misses. The candidate code
+    was unchanged; test-only synchronization edits overlapped the second gate. These are not final
+    worker-isolation or mission-completion results, and no thresholds or workloads were relaxed.
   - Debug lifecycle repetition exposed oversized vector stores in Zig 0.16.0's x86-64 Debug
     snapshot encoder. Valgrind evidence is `build/pr12-repair/valgrind.log`; Debug now uses checked
     LLVM ReleaseSafe for Ghostty, with the same dependency pin/features. This does not independently

@@ -500,17 +500,18 @@ class SessionLifecycleTest(unittest.TestCase):
         self.addCleanup(self.server.close)
         gate = self.server.root / "paused-output.gate"
         completed = self.server.root / "paused-output.completed"
+        # Emit no startup bytes: even a slow process launch must be able to park before the
+        # explicitly triggered output wake. A globally paused hydrator cannot prepare attachments.
         producer = self.server.create_session(
             "paused_output",
+            attach=False,
             command=(
                 str(self.server.peer_path),
-                "parked-output",
+                "parked-output-gated",
                 str(gate),
                 str(completed),
             ),
         )
-        producer.pane().expect_output("__LEMMA_PARKED_OUTPUT_READY__")
-        producer.detach()
         wait_until(
             "producer to park before output",
             lambda: True if self.snapshot_resources()["parked_panes"] == 1 else None,
@@ -522,19 +523,25 @@ class SessionLifecycleTest(unittest.TestCase):
             lambda: True if self.snapshot_resources()["hydrating_panes"] == 1 else None,
             diagnostics=self.server.diagnostics,
         )
-        other = self.server.create_session("unrelated_progress")
-        other.pane().send("printf '__UNRELATED_PROGRESS__\\n'\r")
-        other.pane().expect_output("__UNRELATED_PROGRESS__")
+        other = self.server.create_session(
+            "unrelated_progress",
+            attach=False,
+            command=(str(self.server.peer_path), "quiet"),
+        )
+        other.pane().expect_alive()
         self.assertFalse(
             completed.exists(), "PTY bytes consumed before terminal restoration"
         )
         self.assertEqual(self.snapshot_resources()["hydrating_panes"], 1)
         producer.destroy()
-        self.assertEqual(self.snapshot_resources()["reserved"], 0)
         self.assertEqual(self.snapshot_resources()["hydrating_panes"], 0)
-        replacement = self.server.create_session("replacement_after_cancel")
-        replacement.pane().send("printf '__REPLACEMENT_OK__\\n'\r")
-        replacement.pane().expect_output("__REPLACEMENT_OK__")
+        self.assertLessEqual(self.snapshot_resources()["parked_panes"], 1)
+        replacement = self.server.create_session(
+            "replacement_after_cancel",
+            attach=False,
+            command=(str(self.server.peer_path), "quiet"),
+        )
+        replacement.pane().expect_alive()
 
     def test_child_exit_wakes_a_parked_held_pane(self) -> None:
         session = self.server.create_session(

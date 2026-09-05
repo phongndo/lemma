@@ -1302,9 +1302,17 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "idle") {
     return run_idle();
   }
+  if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "quiet") {
+    return enter_raw_input() ? wait_for_input_close() : 1;
+  }
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "observer-echo") {
     return run_observer_echo();
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "parked-output-gated") {
+    const auto* const gate = arguments.subspan(2, 1).front();
+    return wait_for_gate(gate) ? run_parked_output(gate, arguments.subspan(3, 1).front()) : 1;
   }
   if (arguments.size() == 4 &&
       std::string_view(arguments.subspan(1, 1).front()) == "parked-output") {
