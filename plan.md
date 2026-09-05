@@ -347,10 +347,11 @@ For each optimization record:
     `jthread`/`stop_token`. Fixtures now use scalar status copies and one scoped, explicitly joined
     `std::thread`. All hosted checks pass at `4aab438`, including complete native behavior and
     installed-prefix checks on both Macs, Linux, and sanitizers:
-    https://github.com/phongndo/lemma/actions/runs/33946889015. The macOS recipe additionally builds
-    the real Nix package to cover fixup/signing; this added native package check is pending hosted
-    execution. The extended recipe and `just check` pass locally (`launcher-platform-package-check.log`,
-    `launcher-package-followup-check.log`). No daemon worker has been introduced;
+    https://github.com/phongndo/lemma/actions/runs/33946889015. All hosted checks also pass at
+    `e5bb56d`, now including real Nix package fixup/signing and installed behavior on both Macs:
+    https://github.com/phongndo/lemma/actions/runs/33947896017. The extended recipe, `just check`, and
+    `just ci-check` pass locally (`launcher-platform-package-check.log`,
+    `launcher-package-followup-{check,ci-check}.log`). No daemon worker has been introduced;
     safe spawning alone does not isolate parking. Remaining daemon-bootstrap and Lua-host forks are
     startup-only and must stay before worker construction.
     - Approved `box`, affinity `0-7`, before/after host checks passed. Three alternating 20-sample
@@ -371,6 +372,20 @@ For each optimization record:
       invalid-command rejection sets errno: it leaves the probe's earlier EBADF unchanged, while
       the new boundary supplies EINVAL. Its raw output is retained under `launcher-native/` and
       `launcher-measurements.log`; baseline code/workloads were not changed to make the run pass.
+    - A complete repeat on the final production code (`4116aa9`, unchanged in `e5bb56d`) retains the
+      same 60 CLI/600 native samples per revision/case and passed host checks. Explicit-exec native
+      completion p50/p95 is 0.385/0.476 -> 0.451/0.553 ms; spawn-return p95 40.670 -> 49.239 us.
+      Installed fresh-daemon acknowledgement p95 is 11.480 -> 11.650 ms; shell-ready
+      19.506 -> 20.185 ms; warm Pane acknowledgement 1.019 -> 1.035 ms and shell-ready
+      8.927 -> 9.083 ms. Missing-target exit observation is 1.859 -> 1.833 ms; missing-helper cold
+      failure is 11.489 ms. Both diagnostic runs remain visible; no mission gate is superseded.
+      Evidence: `launcher-summary-v3.json`, `launcher-measurements-v3/`, `launcher-native/v3/`
+      under `build/pr12-repair/`. Combined Linux package size is unchanged.
+    - Native Nix installed bundles pass on macOS ARM and Intel: 2,800,440 bytes including a
+      34,896-byte helper on ARM; 2,998,208 including a 14,008-byte helper on Intel. Logs:
+      `build/pr12-repair/launcher-macos-{arm,intel}-package.log`. No approved Darwin performance
+      host was used; these establish native build/install/behavior, not Darwin startup latency or
+      cross-platform size regressions.
   - Linux `nix develop -c just check`, `nix develop -c just ci-check`, release tests, simulation, and
     `nix build .#lemma` pass for this repair slice. The 20-cycle/four-Pane resource diagnostic returns
     to zero descriptor/process/backing-file deltas. A/A calibration passes on approved `box` under
