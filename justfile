@@ -79,6 +79,10 @@ mux-bench:
 skill-bench *args:
     {{ nix }} uv run --locked python tools/benchmark_lemma_skill.py "$@"
 
+# Prove regression detectors reject isolated production-source faults (opt-in, not timing evidence).
+detection-check *args:
+    {{ nix }} uv run --locked python tools/validate_detection.py "$@"
+
 # Enforce the reviewed performance budgets on the pinned dedicated host.
 regression-bench:
     {{ nix }} scripts/ci/regression-budgets

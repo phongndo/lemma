@@ -1,7 +1,8 @@
 lemma-mux-trace-v1
-# regression: cross-runtime lifecycle, identity, geometry, and stale-target convergence
+# corpus-kind: characterization
+# description: cross-runtime lifecycle, identity, geometry, and stale-target convergence
 # source-trace: curated from the deterministic mux operation grammar for real-daemon replay
-# fixed-at: e1374bf
+# introduced-at: 1c0c33c
 # real-replay: supported
 op attachment-resize - - - - 120 40 applied applied
 op split 0:1 - 0:1 - 0 0 applied applied

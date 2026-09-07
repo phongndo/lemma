@@ -126,8 +126,13 @@ failures write the complete trace and a bounded deterministic reduction under
 `scripts/promote-mux-trace path/to/failure.min.trace regression-name 'one-line bug description'`.
 Promotion replays the concrete operations without stale failure checkpoints, records the fixed
 outcomes and discovery metadata atomically, and publishes the trace under
-`tests/sim/corpus/mux/`. Every simulation run replays that permanent corpus, requires its bug
-provenance, and validates its recorded command outcomes and state checkpoints.
+`tests/sim/corpus/mux/`. Every simulation run replays that permanent corpus and validates its recorded
+command outcomes and state checkpoints. Corpus metadata distinguishes `characterization` (generated or curated coverage,
+with `introduced-at`) from `regression` (a discovered bug, with `fixed-at`). Both require a description
+and source trace. Characterization entries are not evidence of bug discovery; recorded checkpoints
+supplement, rather than replace, the simulation's independent semantic invariants. Promotion marks
+an entry as a regression: use it only for a genuine finding whose broken behavior and fix have been
+confirmed.
 
 Use `LEMMA_SIM_TRACE=1` with a non-mux replay command to stream completed operations before a
 dependency abort that cannot return through the normal failure trace. Scheduled CI runs
@@ -160,6 +165,45 @@ report enough state to diagnose a timeout. The mux harness uses structured Sessi
 stable PaneId and TabId values own semantic identity, while PID is observed only for real process
 lifetime assertions. Use native tests for pure invariants and Python only when the contract requires
 real descriptors, PTYs, processes, or the daemon.
+
+### Detector validation
+
+Use bounded source fault injection to check that the tests can reject plausible implementation
+mistakes, not just pass the current implementation:
+
+```sh
+nix develop --command just detection-check
+nix develop --command just detection-check --case partial-write --case stale-id
+```
+
+The opt-in runner copies the current working diff and nonignored new files into a temporary detached
+worktree. It never mutates the source checkout and removes the temporary worktree on exit. Each case
+first requires a passing control, then changes exactly one production source anchor, rebuilds, and
+requires an assertion failure from the selected test or an observed allocation-budget failure.
+Build errors, missing/skipped tests, crashes, timeouts, and unrelated failures do not count as
+successful detection. The current cases cover child wake registration, partial-write suffix loss,
+real slave-PTY resize delivery, stale generation acceptance, and steady-state allocation.
+
+Logs, source fingerprints, the working patch, exact substitutions, and detector results remain under
+`build/detection-*/`. `--output DIRECTORY` selects a new artifact directory; `--timeout SECONDS`
+bounds each native build/check. A changed or ambiguous source anchor fails closed and must be
+reviewed, not silently skipped. These deliberately selected faults are not a mutation-coverage score
+or evidence that all bugs in those domains are caught. The runner's own contract tests run in
+`just python-check`; source mutation runs remain outside the common edit loop.
+
+To validate actual performance rejection, use a clean tracked checkout on the approved host:
+
+```sh
+nix develop .#benchmarks --command just detection-check --performance
+```
+
+This first requires an unchanged A/A paired gate to pass, then adds bounded, non-elidable CPU work
+to production command dispatch in the isolated candidate. It runs the complete manual paired gate
+again and requires `command_dispatch_cpu_p95` to fail its paired threshold. An absolute product-target
+miss, host-policy rejection, or capture failure is not successful detection. Raw samples are never
+edited. The normal host lock, policy, affinity, provenance, and before/after validation remain in
+force. Each gate permits at least four hours; this expensive check is manual and separate from native
+fault checks. A successful run validates rejection of this slowdown, not every workload or threshold.
 
 ### Coding-agent skill benchmark
 
@@ -262,6 +306,23 @@ candidate-owned PTY fixture and native probe are built once and shared by both r
 improvement cannot make an older baseline inexpressible. All evidence remains under
 `build/performance/`. Paired regressions block independently of stricter absolute product targets, so
 an existing target miss cannot authorize further degradation.
+
+### Performance review requirement
+
+Changes to input routing, PTY parsing/writes, rendering/composition, layout projection, resize,
+scheduling, or client output require dedicated-host paired-gate evidence before approval. The author
+must identify the affected multiplier (bytes, events, panes, frames, or clients) and provide:
+
+- the reviewed baseline revision, candidate revision/working-diff identity, and Release profile;
+- the approved host and retained artifact location, including `paired-regression.json`, raw
+  distributions, and before/after host checks;
+- the paired result and any separate absolute-target misses; and
+- relevant correctness tests and deterministic allocation/work-budget results.
+
+The reviewer must verify that the evidence covers the actual candidate being approved. A hot-path
+change without this evidence is not ready for approval; shared-runner smoke timings or a previously
+passing revision are not substitutes. Documentation-only and test-only edits do not require a timing
+capture. This is a documented review requirement, not an automated merge-blocking evidence check.
 
 Host-dependent gates remain manual through `scripts/performance`; no GitHub workflow executes
 candidate code on a persistent self-hosted runner. Any future automation must preserve the same host

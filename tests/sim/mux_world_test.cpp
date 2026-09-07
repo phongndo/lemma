@@ -1666,18 +1666,54 @@ run_mux_world(const std::uint64_t seed, const std::size_t operation_count,
   return assertion_for_run(result, trace_output.value_or(default_failure_path(seed)), replay.str());
 }
 
-[[nodiscard]] auto trace_has_regression_metadata(const std::filesystem::path& path) -> bool {
-  std::ifstream input(path);
+// Characterization records coverage, not a discovered bug. Only regressions name a fixing revision.
+[[nodiscard]] auto trace_has_corpus_metadata(std::istream& input) -> bool {
+  constexpr std::array<std::string_view, 6> prefixes{
+      "# corpus-kind: ",   "# description: ", "# source-trace: ",
+      "# introduced-at: ", "# fixed-at: ",    "# regression: "};
+  std::array<std::string, prefixes.size()> fields;
   std::string line;
-  bool regression = false;
-  bool source = false;
-  bool fixed = false;
   while (std::getline(input, line)) {
-    regression = regression || line.starts_with("# regression: ");
-    source = source || line.starts_with("# source-trace: ");
-    fixed = fixed || line.starts_with("# fixed-at: ");
+    for (std::size_t index = 0; index < prefixes.size(); ++index) {
+      if (!line.starts_with(prefixes.at(index))) {
+        continue;
+      }
+      auto value = line.substr(prefixes.at(index).size());
+      if (!fields.at(index).empty() || value.find_first_not_of(" \t\r") == std::string::npos) {
+        return false;
+      }
+      fields.at(index) = std::move(value);
+    }
   }
-  return regression && source && fixed;
+  const bool common = !fields.at(1).empty() && !fields.at(2).empty() && fields.at(5).empty();
+  const bool characterization =
+      fields.at(0) == "characterization" && !fields.at(3).empty() && fields.at(4).empty();
+  const bool regression =
+      fields.at(0) == "regression" && fields.at(3).empty() && !fields.at(4).empty();
+  return common && (characterization || regression);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(MuxTraceTest, CorpusProvenanceSeparatesCharacterizationFromDiscoveredRegressions) {
+  constexpr std::string_view common = "# description: lifecycle\n# source-trace: seed 0\n";
+  const auto valid = [common](const std::string_view metadata) {
+    std::istringstream input(std::string(common) + std::string(metadata));
+    return trace_has_corpus_metadata(input);
+  };
+  EXPECT_TRUE(valid("# corpus-kind: characterization\n# introduced-at: abc123\n"));
+  EXPECT_TRUE(valid("# corpus-kind: regression\n# fixed-at: abc123\n"));
+  EXPECT_FALSE(valid("# corpus-kind: characterization\n# fixed-at: abc123\n"));
+  EXPECT_FALSE(valid("# corpus-kind: regression\n# introduced-at: abc123\n"));
+  EXPECT_FALSE(valid("# corpus-kind: regression\n# fixed-at: abc123\n# introduced-at: def456\n"));
+  EXPECT_FALSE(valid("# corpus-kind: unknown\n# fixed-at: abc123\n"));
+  EXPECT_FALSE(valid("# corpus-kind: regression\n# fixed-at: \t\n"));
+  EXPECT_FALSE(valid("# corpus-kind: regression\n# fixed-at: abc123\n# fixed-at: def456\n"));
+  EXPECT_FALSE(
+      valid("# corpus-kind: regression\n# fixed-at: abc123\n# regression: old metadata\n"));
+  EXPECT_FALSE(valid("# fixed-at: abc123\n"));
+  std::istringstream missing_description("# corpus-kind: regression\n# fixed-at: abc123\n");
+  EXPECT_FALSE(trace_has_corpus_metadata(missing_description));
 }
 
 [[nodiscard]] auto
@@ -1766,7 +1802,7 @@ TEST(MuxSimulationTest, ConsistencyLossFailsClosedWithoutBreakingSemanticOrRunti
 
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(MuxSimulationTest, ReplaysCheckedInRegressionCorpus) {
+TEST(MuxSimulationTest, ReplaysCheckedInCorpus) {
   const std::filesystem::path corpus{"tests/sim/corpus/mux"};
   std::error_code directory_error;
   std::vector<std::filesystem::path> traces;
@@ -1778,11 +1814,12 @@ TEST(MuxSimulationTest, ReplaysCheckedInRegressionCorpus) {
   }
   ASSERT_FALSE(directory_error) << directory_error.message();
   std::ranges::sort(traces);
-  ASSERT_FALSE(traces.empty()) << "mux regression corpus must contain at least one trace";
+  ASSERT_FALSE(traces.empty()) << "mux corpus must contain at least one trace";
   for (const auto& path : traces) {
     SCOPED_TRACE(path.string());
-    EXPECT_TRUE(trace_has_regression_metadata(path))
-        << "promoted traces must identify the regression, source trace, and fixing revision";
+    std::ifstream metadata(path);
+    ASSERT_TRUE(trace_has_corpus_metadata(metadata))
+        << "traces require a corpus kind, description, source, and kind-specific revision";
     std::vector<MuxTraceEntry> entries;
     std::string error;
     ASSERT_TRUE(read_mux_trace_file(path, entries, error)) << error;

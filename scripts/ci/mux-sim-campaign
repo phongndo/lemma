@@ -24,7 +24,7 @@ rm -rf "${artifact_dir}"
 mkdir -p "${artifact_dir}"
 
 "${binary}" \
-  --gtest_filter=MuxSimulationTest.ReplaysCheckedInRegressionCorpus \
+  --gtest_filter=MuxSimulationTest.ReplaysCheckedInCorpus \
   --gtest_brief=1
 
 for ((index = 0; index < seed_count; ++index)); do

@@ -68,6 +68,27 @@ TEST(PlatformPtyTest, LaunchWorkingDirectoryOverridesStalePwdEnvironment) {
   EXPECT_TRUE(output.starts_with("/\r\n")) << output;
 }
 
+TEST(PlatformPtyTest, ResizeReachesSlaveGeometry) {
+  std::array<int, 2> descriptors{};
+  winsize initial{.ws_row = 24, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0};
+  ASSERT_EQ(::openpty(&descriptors.front(), &descriptors.back(), nullptr, nullptr, &initial), 0);
+
+  const bool resized = resize_pty(descriptors.front(), 100, 30, 8, 16);
+  winsize observed{};
+  // Query the real slave independently of the production resize adapter.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const int queried = ::ioctl(descriptors.back(), TIOCGWINSZ, &observed);
+  static_cast<void>(::close(descriptors.front()));
+  static_cast<void>(::close(descriptors.back()));
+
+  ASSERT_TRUE(resized);
+  ASSERT_EQ(queried, 0);
+  EXPECT_EQ(observed.ws_col, 100);
+  EXPECT_EQ(observed.ws_row, 30);
+  EXPECT_EQ(observed.ws_xpixel, 800);
+  EXPECT_EQ(observed.ws_ypixel, 480);
+}
+
 // GoogleTest assertions and explicit PTY child setup inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(PlatformPtyTest, ReadsForegroundProcessName) {

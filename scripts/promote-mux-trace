@@ -59,11 +59,15 @@ if not lines or lines[0] != "lemma-mux-trace-v1":
     raise SystemExit("refreshed trace has no supported header")
 metadata = [
     lines[0],
-    f"# regression: {regression}",
+    "# corpus-kind: regression",
+    f"# description: {regression}",
     f"# source-trace: {source}",
     f"# fixed-at: {revision}",
 ]
-metadata_prefixes = ("# regression:", "# source-trace:", "# fixed-at:")
+metadata_prefixes = (
+    "# corpus-kind:", "# description:", "# regression:",
+    "# source-trace:", "# introduced-at:", "# fixed-at:",
+)
 body = [line for line in lines[1:] if not line.startswith(metadata_prefixes)]
 path.write_text("\n".join([*metadata, *body]) + "\n", encoding="utf-8")
 PY
