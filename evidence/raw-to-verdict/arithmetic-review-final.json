@@ -1,0 +1,54 @@
+[
+  {
+    "case": "positive-equal-values",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "paired-regression-absolute-pass",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "paired-pass-absolute-miss",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "diagnostic-tail-regression",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "within-candidate-target-fail",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "claimed-summary-disagrees",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "optional-unsupported",
+    "independent_arithmetic": "matched: 79 paired, 80 absolute IDs per side, and emitted calibration results"
+  },
+  {
+    "case": "zero-enforced-checks",
+    "review_rejected": "coverage count mismatch"
+  },
+  {
+    "case": "missing-check",
+    "review_rejected": "coverage count mismatch"
+  },
+  {
+    "case": "duplicate-check",
+    "review_rejected": "coverage count mismatch"
+  },
+  {
+    "case": "diagnostic-promoted-to-pass",
+    "review_rejected": "raw-to-summary mismatch"
+  },
+  {
+    "case": "value-forged",
+    "review_rejected": "raw-to-summary mismatch"
+  },
+  {
+    "case": "failed-summary-promoted",
+    "review_rejected": true
+  }
+]

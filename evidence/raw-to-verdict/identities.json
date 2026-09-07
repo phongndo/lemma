@@ -1,0 +1,77 @@
+{
+  "source_head": "3d9f4dffb3b374a85679623bb2cbca57195a75f8",
+  "python": "3.14.7 (main, Aug  5 2026, 15:35:18) [Clang 22.1.3 ]",
+  "python_executable": "/Users/dp/.local/share/mise/installs/python/3.14/bin/python3",
+  "python_executable_identity": {
+    "sha256": "1ba16b38d45f006e449bb51a923dae83f3c384611bcd4ee428afd044b7ed4c95",
+    "bytes": 18817184
+  },
+  "diagnostic_machine": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "sources": {
+    "benchmarks/workloads.json": {
+      "sha256": "93ec8ef0e7697d28e54110018210ecc149863a1ea8a362dcd5f129bcdf484772",
+      "bytes": 32366
+    },
+    "benchmarks/performance_hosts.json": {
+      "sha256": "27e2bb71426fb6b25f5e20f2726ea7973cf64f16ec436c2024d497a0adebd3ff",
+      "bytes": 544
+    },
+    "benchmarks/benchmark_manifest.py": {
+      "sha256": "75a76920b3e71e6df7e54619634aa7f037ef0ab6642c28c14cdbe213688455c1",
+      "bytes": 14918
+    },
+    "benchmarks/validate_report.py": {
+      "sha256": "b8846ad2b0c18f69bec0557e19971e56e3bef035b798084874a0c551eedeb640",
+      "bytes": 16947
+    },
+    "benchmarks/check_regression.py": {
+      "sha256": "e678d054c2d2de5e3069dd4f7a38e5cd7e6310ca7f609e6cb067b2f3d1164e62",
+      "bytes": 26986
+    },
+    "benchmarks/compare_regression.py": {
+      "sha256": "b5a8f03b2fc1e9fafa5a14fc5d21cb557c280e823419f052644b18e9c2a65a85",
+      "bytes": 15284
+    },
+    "benchmarks/calibrate_regression.py": {
+      "sha256": "f926ff8c46380ee0e35a531230838ba44b28a7e30aa3ef99c37845fdc8304f5b",
+      "bytes": 7667
+    },
+    "benchmarks/performance_host.py": {
+      "sha256": "f801e081ab8c6879372c13d4a1533577e38b498108446b3be927df423d83508a",
+      "bytes": 4352
+    },
+    "benchmarks/annotate_micro_report.py": {
+      "sha256": "6c9f418d462ad343c753ad9ab8a0b7f368f33ced0a9b09485d4292e27d24341c",
+      "bytes": 2915
+    },
+    "benchmarks/mux_benchmark.py": {
+      "sha256": "f7fe05f2b3622b0e9e35e479709ab25672e953a2ef0697b80dd233c93c9c22c1",
+      "bytes": 142134
+    },
+    "scripts/performance": {
+      "sha256": "abb41656f56f9d1e5ebb0bc289e72d3422ca77c8b30b77351aaa566c2c5e3000",
+      "bytes": 5256
+    },
+    "scripts/ci/regression-capture": {
+      "sha256": "7f20a8e0fc215a7f4349541ec2859fb0afa9ac8e16e56ab2885ee96f029eee01",
+      "bytes": 3573
+    },
+    "docs/development.md": {
+      "sha256": "7db21ed3d11a9c5ed7716012d628d602dce0a0bba3a4772177b007484afa9bcf",
+      "bytes": 18322
+    },
+    "docs/usage.md": {
+      "sha256": "4a0817c2ba45048af30794af5b0a5c3ec3c7d0fba33a292aa2d4900bc31fe139",
+      "bytes": 11280
+    },
+    "docs/api.md": {
+      "sha256": "1939295cf87ff2cdfa83bb25a12b900fb2006a27dc95f2eeedcad7590dff588c",
+      "bytes": 6654
+    },
+    "docs/architecture.md": {
+      "sha256": "df12ca10d1419db9b0b1ee5e4826d23cd567ebc7caf7736b249b38558f35bfc2",
+      "bytes": 23316
+    }
+  },
+  "synthetic_only": true
+}
