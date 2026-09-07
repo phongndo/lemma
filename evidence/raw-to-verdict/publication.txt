@@ -1,0 +1,10 @@
+Evidence publication verification (not runtime qualification)
+
+Initial ordinary git push: failed before publication; pre-push submodule-build-test could not find conan outside nix develop.
+Retry: nix develop --command git push origin refs/heads/evidence/raw-to-verdict-negative-probes:refs/heads/evidence/raw-to-verdict-negative-probes
+Result: exit 1; submodule-build-test reached 279 passing native tests, then 21/22 component/integration groups passed and mux.process_boundary failed. The failing selector was test_create_context_funds_a_long_working_directory_only_for_setup; 3 Python cases ran with 1 error. Later clang-tidy/clangd hook steps were aborted. This is the separately classified existing Mac fixture failure, not a diagnostic-asset failure or a new root-cause investigation.
+Full local push log: build/wayfinder-negative-evidence/evidence-push.log (not published; no need to republish terminal capture contents).
+Independent required just check was already run: exit 123 at Clang-tidy; see verification.txt and the archived log. No verification waiver or runtime repair is claimed.
+
+The user explicitly selected "Publish evidence only (recommended)" after being told that existing Mac pre-push failures blocked publication. Authorization is limited to bypassing hooks for this single evidence-only asset-branch push. No runtime changes, qualification waiver, merge, force-push, or persistent hook configuration change is authorized.
+One-shot publication command: git -c core.hooksPath=/dev/null push origin refs/heads/evidence/raw-to-verdict-negative-probes:refs/heads/evidence/raw-to-verdict-negative-probes
