@@ -448,7 +448,7 @@ class LemmaServer:
             client.close()
         self.clients.clear()
         if self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
+            self._signal_process_group(signal.SIGTERM)
             self.process.wait(timeout=2.0)
         self.process = subprocess.Popen(
             [str(self.server_path), str(self.socket_path)],
@@ -477,22 +477,27 @@ class LemmaServer:
             f"clients:\n{clients or '<none>'}\nserver log:\n{self.logs()}"
         )
 
+    def _signal_process_group(self, number: int) -> None:
+        try:
+            os.killpg(self.process.pid, number)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # Darwin reports EPERM for a group whose last member has become a
+            # zombie between poll and killpg. Do not hide a live-process error.
+            if self.process.poll() is None:
+                raise
+
     def close(self) -> None:
         for client in self.clients:
             client.close()
         self.clients.clear()
         if hasattr(self, "process") and self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            self._signal_process_group(signal.SIGTERM)
             try:
                 self.process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                self._signal_process_group(signal.SIGKILL)
                 self.process.wait(timeout=1.0)
         if hasattr(self, "_log") and not self._log.closed:
             self._log.close()

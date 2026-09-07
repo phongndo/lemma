@@ -228,6 +228,9 @@ class PtyProcess:
         self.terminal_modes_restored: bool | None = None
         self.terminal_state_restored: bool | None = None
         try:
+            # forkpty does not set close-on-exec. A later client must not keep this
+            # master alive and prevent the first client's terminal teardown.
+            os.set_inheritable(descriptor, False)
             fcntl.ioctl(
                 descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0)
             )

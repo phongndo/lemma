@@ -94,7 +94,7 @@ class CommandLineTest(unittest.TestCase):
 
         client.prefix("~")
         client.expect_output("LOG")
-        self.assertIn("Error: Unknown command", client.screen_text())
+        client.expect_output("Error: Unknown command")
         client.send("q")
         wait_until("message viewer to restore the pane", normal_status)
 

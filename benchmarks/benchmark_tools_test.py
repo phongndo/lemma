@@ -7,12 +7,14 @@ import json
 import runpy
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
+from annotate_micro_report import git_metadata
 from benchmark_manifest import expected_failure, load_manifest, suite_workloads
 from calibrate_regression import calibration
 from check_regression import (
@@ -29,6 +31,7 @@ from compare_regression import policy as paired_policy
 from latency_trace import input_paths
 from mux_benchmark import (
     ALT_SCREEN,
+    ATTACH_VISIBLE_MARKER,
     INTERACTION_LABEL_CODES,
     LATENCY_VISIBLE_ACK,
     SHELL_READY_MARKER,
@@ -192,6 +195,56 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
         self.assertEqual(runtime.sessions, ["lb-7-tui-redraw"])
         self.assertEqual(runtime.clients, [client])
 
+    def test_zellij_attach_fixture_owns_creation_until_marker_is_retained(self) -> None:
+        runtime = object.__new__(ZellijRuntime)
+        runtime.session_prefix = "lb-7-"
+        runtime.environment = {"TERM": "xterm-256color"}
+        runtime.peer_path = Path("/fixture/peer")
+        runtime.sessions = []
+        runtime.clients = []
+        runtime._arguments = mock.Mock(return_value=["zellij", "attach", "target"])
+        runtime._command = mock.Mock()
+        runtime.detach = mock.Mock()
+        client = mock.Mock()
+
+        with (
+            mock.patch("mux_benchmark.PtyProcess", return_value=client),
+            mock.patch("mux_benchmark.install_attach_shell_startup") as install,
+        ):
+            runtime.start_detached_with_attach_marker("attach_visible")
+
+        install.assert_called_once_with(runtime.environment, runtime.peer_path)
+        runtime._command.assert_not_called()
+        runtime._arguments.assert_called_once_with(
+            "attach", "--create", "lb-7-attach-visible"
+        )
+        self.assertEqual(
+            client.read_until.call_args_list,
+            [
+                mock.call(ALT_SCREEN, 5.0, preserve_suffix=True),
+                mock.call(ATTACH_VISIBLE_MARKER, 5.0, visible_text=True),
+            ],
+        )
+        runtime.detach.assert_called_once_with(client, "attach_visible")
+        self.assertEqual(runtime.sessions, ["lb-7-attach-visible"])
+        self.assertEqual(runtime.clients, [client])
+
+    def test_zellij_detach_waits_for_session_mode_before_sending_its_key(self) -> None:
+        runtime = object.__new__(ZellijRuntime)
+        client = mock.Mock()
+
+        runtime.detach(client, "work")
+
+        self.assertEqual(
+            client.mock_calls,
+            [
+                mock.call.write_all(b"\x0f", 2.0),
+                mock.call.read_until(b"SESSION", 5.0, visible_text=True),
+                mock.call.write_all(b"d", 2.0),
+                mock.call.wait_for_exit(5.0),
+            ],
+        )
+
     def test_maps_generic_lifecycle_commands_to_the_canonical_cli(self) -> None:
         runtime = object.__new__(LemmaRuntime)
         runtime.cli_path = Path("/tmp/lemma-test-cli")
@@ -237,6 +290,42 @@ class BenchEntrypointTest(unittest.TestCase):
 
 
 class BenchmarkProvenanceTest(unittest.TestCase):
+    def test_slow_git_status_retains_source_identity(self) -> None:
+        run = subprocess.run
+
+        def slow_git(arguments: list[str], **kwargs: Any) -> Any:
+            if arguments[1] == "status":
+                return run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(2.1); print(' M tracked-file')",
+                    ],
+                    **kwargs,
+                )
+            return mock.Mock(stdout="abc123\n" if kwargs.get("text") else b"diff")
+
+        with mock.patch("subprocess.run", side_effect=slow_git):
+            self.assertEqual(
+                git_metadata(), {"source_commit": "abc123", "worktree_dirty": True}
+            )
+            commit, dirty, digest = git_provenance()
+        self.assertEqual((commit, dirty), ("abc123", True))
+        self.assertIsNotNone(digest)
+
+    def test_micro_metadata_does_not_hide_a_status_failure(self) -> None:
+        with (
+            mock.patch(
+                "subprocess.run",
+                side_effect=[
+                    mock.Mock(stdout="abc123\n"),
+                    subprocess.TimeoutExpired("git status", 30.0),
+                ],
+            ),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            git_metadata()
+
     def test_preserves_resolved_commit_when_dirty_diff_times_out(self) -> None:
         with mock.patch(
             "mux_benchmark.subprocess.run",

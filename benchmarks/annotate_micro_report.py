@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mux_benchmark import host_fingerprint
+from mux_benchmark import GIT_METADATA_TIMEOUT_SECONDS, host_fingerprint
 
 
 def sha256(path: Path) -> str:
@@ -28,14 +28,14 @@ def git_metadata() -> dict[str, Any]:
         check=True,
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=GIT_METADATA_TIMEOUT_SECONDS,
     ).stdout.strip()
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=normal"],
         check=True,
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=GIT_METADATA_TIMEOUT_SECONDS,
     ).stdout
     return {"source_commit": commit, "worktree_dirty": bool(status)}
 

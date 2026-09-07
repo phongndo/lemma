@@ -37,6 +37,23 @@ class AnsiScreenTrackerTest(unittest.TestCase):
 
 
 class PtyProcessBufferingTest(unittest.TestCase):
+    def test_later_children_do_not_inherit_another_clients_pty(self) -> None:
+        first = PtyProcess(["/bin/cat"], dict(os.environ))
+        self.addCleanup(first.close)
+        script = (
+            "import os\n"
+            "try:\n"
+            f"    os.fstat({first.descriptor})\n"
+            "except OSError:\n"
+            "    print('PTY_NOT_INHERITED', flush=True)\n"
+            "else:\n"
+            "    raise SystemExit('inherited another client PTY')\n"
+        )
+        second = PtyProcess([sys.executable, "-c", script], dict(os.environ))
+        self.addCleanup(second.close)
+        second.read_until(b"PTY_NOT_INHERITED", 1.0)
+        second.wait_for_exit(1.0)
+
     def test_wait_for_exit_drains_child_output(self) -> None:
         script = (
             "import os\n"

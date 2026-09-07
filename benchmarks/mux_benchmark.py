@@ -39,6 +39,10 @@ from benchmarks.benchmark_manifest import (  # noqa: E402
 )
 from tests.support.pty_process import PtyProcess  # noqa: E402
 
+# Repository scans include the Ghostty submodule and can exceed two seconds on
+# cold hosted runners. Metadata is outside the measured interaction.
+GIT_METADATA_TIMEOUT_SECONDS = 30.0
+
 ALT_SCREEN = b"\x1b[?1049h"
 # Exact outer-terminal cleanup emitted by src/client/attached_client.cpp.
 LEMMA_OUTER_TERMINAL_RESTORE = (
@@ -1515,7 +1519,7 @@ class ZellijRuntime:
         client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)
         return client
 
-    def start_and_attach(self, session: str) -> PtyProcess:
+    def _create_and_attach(self, session: str) -> PtyProcess:
         # Creating and attaching through one client is the only Zellij operation that owns both
         # sides of the startup lifetime. A background session can be published by list-sessions and
         # still disappear before a second attach process reaches it.
@@ -1526,6 +1530,10 @@ class ZellijRuntime:
         )
         self.clients.append(client)
         client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)
+        return client
+
+    def start_and_attach(self, session: str) -> PtyProcess:
+        client = self._create_and_attach(session)
         wait_for_startup_shell(self, client)
         return client
 
@@ -1546,15 +1554,17 @@ class ZellijRuntime:
 
     def start_detached_with_attach_marker(self, session: str) -> None:
         install_attach_shell_startup(self.environment, self.peer_path)
-        mapped_session = self.session_prefix + session.replace("_", "-")
-        self._command("attach", "--create-background", mapped_session)
-        self.sessions.append(mapped_session)
-        self._wait_for_session(mapped_session)
-        retain_attach_marker(self, session)
+        client = self._create_and_attach(session)
+        client.read_until(ATTACH_VISIBLE_MARKER, 5.0, visible_text=True)
+        self.detach(client, session)
 
     def detach(self, client: PtyProcess, session: str) -> None:
         del session
-        client.write_all(b"\x0fd", 2.0)
+        # Mode changes round-trip through Zellij's server. Sending both keys in
+        # one write can interpret 'd' in the old mode and leave the client attached.
+        client.write_all(b"\x0f", 2.0)
+        client.read_until(b"SESSION", 5.0, visible_text=True)
+        client.write_all(b"d", 2.0)
         client.wait_for_exit(5.0)
 
     def _server_pids(self) -> list[int]:
@@ -2725,7 +2735,7 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
             check=True,
             capture_output=True,
             text=True,
-            timeout=2.0,
+            timeout=GIT_METADATA_TIMEOUT_SECONDS,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return "unknown", None, None
@@ -2736,7 +2746,7 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
             check=True,
             capture_output=True,
             text=True,
-            timeout=2.0,
+            timeout=GIT_METADATA_TIMEOUT_SECONDS,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return commit, None, None
@@ -2748,7 +2758,7 @@ def git_provenance() -> tuple[str, bool | None, str | None]:
             ["git", "diff", "--binary", "HEAD"],
             check=True,
             capture_output=True,
-            timeout=2.0,
+            timeout=GIT_METADATA_TIMEOUT_SECONDS,
         ).stdout
         untracked = sorted(
             line[3:]
