@@ -1188,7 +1188,8 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   return enter_raw_input() && write_all("__LEMMA_IDLE_READY__\r\n") ? wait_for_input_close() : 1;
 }
 
-[[nodiscard]] auto run_parking(const std::size_t rows, const std::size_t index) noexcept -> int {
+[[nodiscard]] auto run_parking(const std::size_t rows, const std::size_t index,
+                               const bool rich = false) noexcept -> int {
   if (rows == 0 || rows > 25'000U || index > 9'999U || !enter_raw_input()) {
     return 1;
   }
@@ -1196,8 +1197,17 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   line.fill('x');
   std::span(line).subspan(79, 1).front() = '\r';
   std::span(line).subspan(80, 1).front() = '\n';
+  std::string graphemes;
+  if (rich) {
+    for (std::size_t column = 0; column < 79; ++column) {
+      graphemes.append("x\xCC\x81\xCC\x82\xCC\x83\xCC\x84");
+    }
+    graphemes.append("\r\n");
+  }
+  const auto output =
+      rich ? std::string_view(graphemes) : std::string_view(line.data(), line.size());
   for (std::size_t row = 0; row < rows; ++row) {
-    if (!write_all({line.data(), line.size()})) {
+    if (!write_all(output)) {
       return 1;
     }
   }
@@ -1211,6 +1221,31 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
                  write_all("__\r\n")
              ? wait_for_input_close()
              : 1;
+}
+
+// Distinct full-width rows keep the visible surface changing even after its first screen fills.
+// Repeated identical `yes` rows can be elided by the renderer and never backpressure the socket.
+[[nodiscard]] auto run_blocked_output() noexcept -> int {
+  if (!enter_raw_input()) {
+    return 1;
+  }
+  std::array<char, 501> line{};
+  const auto deadline = std::chrono::steady_clock::now() + 15s;
+  std::uint64_t sequence = 0;
+  while (std::chrono::steady_clock::now() < deadline) {
+    line.fill(static_cast<char>('A' + (sequence % 26U)));
+    const auto encoded =
+        std::to_chars(line.data(), std::to_address(std::span(line).first(20).end()), sequence++);
+    if (encoded.ec != std::errc{}) {
+      return 1;
+    }
+    std::span(line).subspan(499, 1).front() = '\r';
+    line.back() = '\n';
+    if (!write_all({line.data(), line.size()})) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 [[nodiscard]] auto run_warm_scroll() noexcept -> int {
@@ -1284,6 +1319,10 @@ int main(const int argc, char** const argv) {
       std::string_view(arguments.subspan(1, 1).front()) == "attach-visible") {
     return run_attach_visible(arguments.subspan(2, 1).front());
   }
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "blocked-output") {
+    return run_blocked_output();
+  }
   if (arguments.size() == 2 && std::string_view(arguments.subspan(1, 1).front()) == "warm-scroll") {
     return run_warm_scroll();
   }
@@ -1317,6 +1356,11 @@ int main(const int argc, char** const argv) {
   if (arguments.size() == 4 &&
       std::string_view(arguments.subspan(1, 1).front()) == "parked-output") {
     return run_parked_output(arguments.subspan(2, 1).front(), arguments.subspan(3, 1).front());
+  }
+  if (arguments.size() == 4 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "parking-rich") {
+    return run_parking(parse_size(arguments.subspan(2, 1).front()),
+                       parse_size(arguments.subspan(3, 1).front()), true);
   }
   if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "parking") {
     return run_parking(parse_size(arguments.subspan(2, 1).front()),

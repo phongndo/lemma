@@ -1,8 +1,10 @@
 #include "core/pane_residency.hpp"
 
 #include "core/pane_snapshot_quota.hpp"
-#include "core/pane_snapshot_storage.hpp"
+#include "core/pane_snapshot_work.hpp"
+#include "core/pane_snapshot_worker.hpp"
 #include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -14,248 +16,151 @@
 #include <variant>
 
 namespace lemma::core {
-namespace {
 
-[[nodiscard]] constexpr auto map_storage_error(const PaneSnapshotStorageError error) noexcept
-    -> vt::Error {
-  switch (error) {
-  case PaneSnapshotStorageError::invalid_options:
-    return vt::Error::invalid_options;
-  case PaneSnapshotStorageError::limit_exceeded:
-    return vt::Error::limit_exceeded;
-  case PaneSnapshotStorageError::io_error:
-    return vt::Error::io_error;
-  case PaneSnapshotStorageError::invalid_state:
-    return vt::Error::invalid_state;
+PaneResidency::PaneResidency(vt::Terminal&& terminal) noexcept
+    : state_(std::in_place_type<vt::Terminal>, std::move(terminal)) {}
+PaneResidency::~PaneResidency() = default;
+
+PaneResidency::ColdResidency::~ColdResidency() {
+  if (const auto* const ticket = std::get_if<PaneSnapshotWorker::Ticket>(&state)) {
+    worker.abandon(*ticket);
   }
 }
 
-} // namespace
-
-PaneResidency::PaneResidency(vt::Terminal&& terminal) noexcept
-    : state_(std::in_place_type<Active>, std::move(terminal)) {}
-
-PaneResidency::~PaneResidency() = default;
-
-// std::variant reports potentially throwing access even though every branch is tag-checked.
-// NOLINTNEXTLINE(bugprone-exception-escape)
 auto PaneResidency::phase() const noexcept -> PaneResidencyPhase {
-  if (std::holds_alternative<Active>(state_)) {
+  const auto* const owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
+  if (owner == nullptr) {
     return PaneResidencyPhase::active;
   }
-  const auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  LEMMA_ASSERT(cold_owner != nullptr && *cold_owner != nullptr);
-  const auto& cold = **cold_owner;
-  if (std::holds_alternative<Parking>(cold.state)) {
-    return PaneResidencyPhase::parking;
+  const auto& cold = **owner;
+  if (cold.waking) {
+    return PaneResidencyPhase::unparking;
   }
-  return std::holds_alternative<Parked>(cold.state) ? PaneResidencyPhase::parked
-                                                    : PaneResidencyPhase::unparking;
+  return std::holds_alternative<PaneSnapshotWorker::Ticket>(cold.state)
+             ? PaneResidencyPhase::parking
+             : PaneResidencyPhase::parked;
 }
 
 auto PaneResidency::active_terminal() noexcept -> vt::Terminal* {
-  auto* const active = std::get_if<Active>(&state_);
-  return active == nullptr ? nullptr : &active->terminal;
+  return std::get_if<vt::Terminal>(&state_);
 }
-
 auto PaneResidency::active_terminal() const noexcept -> const vt::Terminal* {
-  const auto* const active = std::get_if<Active>(&state_);
-  return active == nullptr ? nullptr : &active->terminal;
+  return std::get_if<vt::Terminal>(&state_);
 }
-
-// NOLINTNEXTLINE(bugprone-exception-escape)
 auto PaneResidency::snapshot_bytes() const noexcept -> std::size_t {
-  if (const auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_)) {
-    const auto& cold = **cold_owner;
-    if (const auto* const parking = std::get_if<Parking>(&cold.state)) {
-      return parking->storage.payload_bytes();
-    }
-    if (const auto* const parked = std::get_if<Parked>(&cold.state)) {
-      return parked->storage.payload_bytes();
-    }
-    const auto* const unparking = std::get_if<Unparking>(&cold.state);
-    LEMMA_ASSERT(unparking != nullptr);
-    return unparking->storage.payload_bytes();
-  }
-  return 0;
+  const auto* const owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
+  return owner == nullptr ? 0 : (*owner)->bytes;
 }
 
+// All potentially allocating construction precedes the no-throw ownership transfer.
 // NOLINTNEXTLINE(bugprone-exception-escape)
-auto PaneResidency::begin_parking(const vt::TerminalOptions& restore_options,
+auto PaneResidency::begin_parking(PaneSnapshotWorker& worker,
+                                  const vt::TerminalOptions& restore_options,
                                   PaneSnapshotQuota& quota, const std::size_t session_slot,
-                                  const std::string_view directory) noexcept
-    -> std::expected<std::size_t, vt::Error> {
-  auto* const active = std::get_if<Active>(&state_);
-  if (active == nullptr) {
+                                  const std::string_view directory,
+                                  const SnapshotTestCorruption corruption) noexcept
+    -> std::expected<void, vt::Error> {
+  auto* const terminal = active_terminal();
+  if (terminal == nullptr) {
     return std::unexpected(vt::Error::invalid_state);
   }
   if (restore_options.snapshot_continuation_bytes_max == 0) {
     return std::unexpected(vt::Error::invalid_options);
   }
-  auto options = restore_options;
-  options.size = active->terminal.size();
-  options.theme = active->terminal.theme();
-  const auto required = active->terminal.snapshot_size();
-  if (!required.has_value()) {
-    return std::unexpected(required.error());
+  if (!worker.has_capacity()) {
+    return std::unexpected(vt::Error::limit_exceeded);
   }
-  auto reservation = quota.reserve(session_slot, *required);
+  auto reservation = quota.reserve(session_slot, limits::snapshot_bytes_max);
   if (!reservation.has_value()) {
-    return std::unexpected(reservation.error() == PaneSnapshotQuotaError::capacity
-                               ? vt::Error::limit_exceeded
-                               : vt::Error::invalid_options);
+    return std::unexpected(vt::Error::limit_exceeded);
   }
-  const PaneSnapshotMetadata metadata{
-      .compatibility = current_pane_snapshot_compatibility(),
-      .geometry = options.size,
-  };
-  auto storage = WritablePaneSnapshot::create(metadata, *required, directory);
-  if (!storage.has_value()) {
-    return std::unexpected(map_storage_error(storage.error()));
-  }
-
   std::unique_ptr<ColdResidency> cold;
   try {
-    cold = std::make_unique<ColdResidency>(std::in_place_type<Parking>, std::move(active->terminal),
-                                           std::move(*storage), options, std::move(*reservation));
+    cold = std::make_unique<ColdResidency>(worker);
+    auto& result = *std::get_if<PaneSnapshotWorker::Result>(&cold->state);
+    result.work = std::make_unique<PaneSnapshotWork>(std::move(*terminal));
+    result.reservation.emplace(std::move(*reservation));
   } catch (const std::bad_alloc&) {
     return std::unexpected(vt::Error::out_of_memory);
   }
+  auto& result = *std::get_if<PaneSnapshotWorker::Result>(&cold->state);
+  const auto ticket = worker.submit(result, restore_options, directory, corruption, false);
+  if (!ticket.has_value()) {
+    *terminal = std::move(*result.work->active_terminal());
+    return std::unexpected(ticket.error());
+  }
+  cold->state.emplace<PaneSnapshotWorker::Ticket>(*ticket);
+  cold->bytes = limits::snapshot_bytes_max;
   state_.emplace<std::unique_ptr<ColdResidency>>(std::move(cold));
-  return *required;
-}
-
-// NOLINTNEXTLINE(bugprone-exception-escape)
-auto PaneResidency::finish_parking(const SnapshotTestCorruption corruption) noexcept
-    -> std::expected<void, vt::Error> {
-  auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  if (cold_owner == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  auto& cold = **cold_owner;
-  auto* const parking = std::get_if<Parking>(&cold.state);
-  if (parking == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  auto payload = parking->storage.payload();
-  const auto encoded = parking->terminal.encode_snapshot(payload);
-  if (!encoded.has_value()) {
-    const auto error = encoded.error();
-    cancel_parking();
-    return std::unexpected(error);
-  }
-  if (corruption == SnapshotTestCorruption::ghostty_payload) {
-    LEMMA_ASSERT(!payload.empty());
-    payload.front() ^= std::byte{1};
-  }
-  auto sealed = std::move(parking->storage).finish();
-  if (!sealed.has_value()) {
-    const auto error = map_storage_error(sealed.error());
-    cancel_parking();
-    return std::unexpected(error);
-  }
-  auto snapshot = std::move(*sealed);
-  const auto options = parking->options;
-  auto reservation = std::move(parking->reservation);
-  cold.state.emplace<Parked>(std::move(snapshot), options, std::move(reservation));
   return {};
 }
 
 // NOLINTNEXTLINE(bugprone-exception-escape)
-void PaneResidency::cancel_parking() noexcept {
-  auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  if (cold_owner == nullptr) {
-    return;
-  }
-  auto* const parking = std::get_if<Parking>(&(*cold_owner)->state);
-  if (parking == nullptr) {
-    return;
-  }
-  auto terminal = std::move(parking->terminal);
-  state_.emplace<Active>(std::move(terminal));
-}
-
-// NOLINTNEXTLINE(bugprone-exception-escape)
-auto PaneResidency::begin_unparking() noexcept -> std::expected<void, vt::Error> {
-  auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  if (cold_owner == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  auto& cold = **cold_owner;
-  auto* const parked = std::get_if<Parked>(&cold.state);
-  if (parked == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  const PaneSnapshotMetadata metadata{
-      .compatibility = current_pane_snapshot_compatibility(),
-      .geometry = parked->options.size,
-  };
-  auto payload = parked->storage.payload(metadata);
-  if (!payload.has_value()) {
-    return std::unexpected(map_storage_error(payload.error()));
-  }
-  auto restore = vt::TerminalSnapshotRestore::begin(parked->options, payload->bytes());
-  if (!restore.has_value()) {
-    return std::unexpected(restore.error());
-  }
-
-  auto snapshot = std::move(parked->storage);
-  const auto options = parked->options;
-  auto reservation = std::move(parked->reservation);
-  auto decoder = std::move(*restore);
-  cold.state.emplace<Unparking>(std::move(snapshot), options, std::move(reservation),
-                                std::move(*payload), std::move(decoder));
-  return {};
-}
-
-// NOLINTNEXTLINE(bugprone-exception-escape)
-auto PaneResidency::restore_one_history_page() noexcept -> std::expected<bool, vt::Error> {
-  auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  if (cold_owner == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  auto* const unparking = std::get_if<Unparking>(&(*cold_owner)->state);
-  if (unparking == nullptr) {
-    return std::unexpected(vt::Error::invalid_state);
-  }
-  const auto progress = unparking->restore.next_history();
-  if (!progress.has_value()) {
-    return std::unexpected(progress.error());
-  }
-  if (!unparking->restore.complete()) {
-    return false;
-  }
-  auto terminal = std::move(unparking->restore).take_terminal();
-  if (!terminal.has_value()) {
-    return std::unexpected(terminal.error());
-  }
-  state_.emplace<Active>(std::move(*terminal));
-  return true;
-}
-
-// NOLINTNEXTLINE(bugprone-exception-escape)
-void PaneResidency::cancel_unparking() noexcept {
-  auto* const cold_owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
-  if (cold_owner == nullptr) {
-    return;
-  }
-  auto& cold = **cold_owner;
-  auto* const unparking = std::get_if<Unparking>(&cold.state);
-  if (unparking == nullptr) {
-    return;
-  }
-  auto snapshot = std::move(unparking->storage);
-  const auto options = unparking->options;
-  auto reservation = std::move(unparking->reservation);
-  cold.state.emplace<Parked>(std::move(snapshot), options, std::move(reservation));
-}
-
-void PaneResidency::request_wake(const PaneWakeReason reason) noexcept {
+void PaneResidency::request_wake(const PaneWakeReason reason,
+                                 const bool hydration_enabled) noexcept {
   wake_reasons_.add(reason);
+  auto* const owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
+  if (owner == nullptr) {
+    return;
+  }
+  auto& cold = **owner;
+  cold.waking = true;
+  if (const auto* const ticket = std::get_if<PaneSnapshotWorker::Ticket>(&cold.state)) {
+    cold.worker.request_wake(*ticket);
+  } else if (hydration_enabled) {
+    auto& result = *std::get_if<PaneSnapshotWorker::Result>(&cold.state);
+    if (!result.error.has_value()) {
+      const auto admitted = cold.worker.submit(result, {}, {}, SnapshotTestCorruption::none, true);
+      if (admitted.has_value()) {
+        cold.state.emplace<PaneSnapshotWorker::Ticket>(*admitted);
+      }
+    }
+  }
 }
 
 auto PaneResidency::take_wake_reasons() noexcept -> PaneWakeReasons {
   return std::exchange(wake_reasons_, {});
+}
+
+// Variant emplacement is tag-checked and all moved owners are no-throw.
+// NOLINTNEXTLINE(bugprone-exception-escape)
+auto PaneResidency::advance(const bool hydration_enabled) noexcept
+    -> std::expected<bool, vt::Error> {
+  auto* const owner = std::get_if<std::unique_ptr<ColdResidency>>(&state_);
+  if (owner == nullptr) {
+    return false;
+  }
+  auto& cold = **owner;
+  if (const auto* const ticket = std::get_if<PaneSnapshotWorker::Ticket>(&cold.state)) {
+    auto completed = cold.worker.take(*ticket);
+    if (!completed.has_value()) {
+      return false;
+    }
+    cold.state.emplace<PaneSnapshotWorker::Result>(std::move(*completed));
+  }
+  auto& result = *std::get_if<PaneSnapshotWorker::Result>(&cold.state);
+  if (auto* const terminal = result.work->active_terminal()) {
+    // On parking failure the untouched live terminal comes back. Every large temporary has
+    // already been destroyed on the worker; only the moved-from work and reservation remain.
+    auto restored = std::move(*terminal);
+    state_.emplace<vt::Terminal>(std::move(restored));
+    return true;
+  }
+  cold.bytes = result.work->snapshot_bytes();
+  LEMMA_ASSERT(result.reservation.has_value());
+  result.reservation->shrink(cold.bytes);
+  if (result.error.has_value()) {
+    return std::unexpected(*result.error);
+  }
+  if (cold.waking && hydration_enabled) {
+    const auto ticket = cold.worker.submit(result, {}, {}, SnapshotTestCorruption::none, true);
+    if (ticket.has_value()) {
+      cold.state.emplace<PaneSnapshotWorker::Ticket>(*ticket);
+    } else if (ticket.error() != vt::Error::limit_exceeded) {
+      return std::unexpected(ticket.error());
+    }
+  }
+  return false;
 }
 
 } // namespace lemma::core

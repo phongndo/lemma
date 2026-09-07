@@ -214,11 +214,14 @@ and UTF-8 parser state to survive restore. Complete restore and READY-first rest
 each incremental step consumes at most one history page and reports source and screen progress.
 Destroying an unfinished restore cancels it by freeing the decoder before its borrowed terminal.
 `PaneResidency` encodes `Active -> Parking -> Parked -> Unparking -> Active`. Active PTYs permit I/O;
-parked PTYs permit readiness observation only. Output/HUP/ERR readiness requests restoration without
+parking and parked PTYs permit readiness observation only. Output/HUP/ERR readiness requests restoration without
 reading bytes. Hydrating PTYs are omitted from the readiness set until complete; merely clearing the
 event mask would still spin on level-triggered HUP with `poll()`. Attach, input, capture, output, and
-explicit terminal-dependent requests share the wake transition. Hydration fairly advances at most
-one Ghostty history page per Pane step and eight Pane steps per reactor turn.
+explicit terminal-dependent requests share the wake transition. One lazy snapshot worker exclusively
+owns transferred terminal state during sizing, encoding, storage, and complete restoration. The
+reactor retains only a generational ticket, never a concurrently accessible terminal. Cancellation is
+checked between dependency operations and individual history pages; a running Ghostty or storage
+operation is not forcibly interrupted.
 
 Cold states own an owner-only, unlinked, close-on-exec file containing libsodium
 [XChaCha20-Poly1305 secretstream](https://libsodium.gitbook.io/doc/secret-key_cryptography/secretstream)
@@ -245,13 +248,33 @@ The reactor parks only live, quiet Panes in detached, unobserved Sessions after 
 Creation, detach, wake, hydration completion, and output activity arm/postpone authoritative quiet
 deadlines. Only a due minimum permits an eligibility walk. Pending writes, observers, and pending
 attachments retain a conservative retry deadline; failures retry after a full interval from attempt
-completion. Each due pass selects at most one Pane round-robin, including failures. Snapshot sizing,
-encoding, encryption/I/O, and initial decryption remain synchronous: this bounds the Pane multiplier,
-not the maximum single-operation reactor latency. Large-snapshot foreground isolation remains an
-unqualified merge gate. Attach preparation retains
-its reservation until every Pane is active; automation receives retryable `pane_hydrating` while a
-wake is pending. Restore failure fails the Pane rather than consuming later PTY bytes against an
-unknown terminal state.
+completion. Each due pass selects at most one Pane round-robin, including failures. Worker admission
+is capped at four jobs, including running, completed, and abandoned owners. Saturation leaves a
+parking candidate active. Pending hydration retains its sealed snapshot until a slot is available;
+hydration and wake cancellation outrank queued parking. All quota mutation stays on the reactor:
+parking reserves 64 MiB before sizing, then refines the reservation to the sealed payload size on
+completion. A removed Pane's in-flight reservation remains charged until worker-side destruction.
+Tickets are never reused within a generation, and stale completions cannot target replacement Panes.
+
+At most one operation owns a plaintext mapping (64 MiB maximum) and, during hydration, a rebuilding
+terminal. Queued jobs retain existing terminals or sealed snapshots, not additional plaintext copies.
+The four-job bound also caps retired terminal owners awaiting destruction independently of live-Pane
+accounting. Terminal allocator and scrollback limits still apply; these logical bounds are not RSS
+or kernel-memory claims. The worker requests a 1 MiB stack and uses four close-on-exec pipe descriptors;
+thread/TLS, guard pages, allocator retention, and kernel/storage costs require separate measurement.
+It is constructed only on the first parking admission and inherits blocked signals, so process
+signals and child reaping remain reactor-owned; construction restores the reactor's original mask.
+Release/acquire handoffs and a pollable completion pipe keep reactor service nonblocking. Pane
+destruction cancels without joining; worker join
+occurs only after reactor service has ended, before its quota authority or notification pipes die.
+Shutdown may still await an executing filesystem/dependency operation.
+
+Attach preparation retains its reservation until every Pane is active; automation receives retryable
+`pane_hydrating` while a wake is pending. Restore failure retires the Pane rather than consuming later
+PTY bytes against an unknown terminal state. Functional tests exercise large snapshots, saturated
+parking, storage failures, and cancellation while another Session exchanges input and frames,
+including with the worker deliberately held. This does not qualify calibrated foreground latency,
+maximum-size snapshots, every storage fault, or platform-specific resource/performance targets.
 
 Public screen observers share one daemon-owned, lazily allocated, bounded visible-screen projection
 cache keyed by Session, Pane, and observation generation. The first observer for a generation

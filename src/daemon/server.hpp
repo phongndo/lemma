@@ -2,6 +2,7 @@
 #define LEMMA_DAEMON_SERVER_HPP
 
 #include "api/command.hpp"
+#include "core/pane_snapshot_worker.hpp"
 #include "lemma/id.hpp"
 
 #include <chrono>
@@ -38,8 +39,10 @@ struct ServeOptions final {
   StopRequested stop_requested{nullptr};
   // Test/embedding override. Null retains the production detached-Pane parking delay.
   std::optional<std::chrono::steady_clock::duration> detached_pane_parking_delay;
-  // Deterministic-test override, clamped to the production maximum of eight. Null retains eight.
-  std::optional<std::size_t> pane_hydration_steps_per_turn;
+  // Test-only worker admission, storage and operation-boundary controls.
+  bool pause_pane_hydration_for_test{false};
+  core::PaneSnapshotWorker::TestHook snapshot_worker_test_hook;
+  std::string_view snapshot_directory{"/tmp"};
   // Test-only fault injection for automatic restore failure coverage.
   bool corrupt_parked_snapshots_for_test{false};
 };

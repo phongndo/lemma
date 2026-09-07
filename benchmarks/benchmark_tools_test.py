@@ -44,6 +44,7 @@ from mux_benchmark import (
     interaction_marker,
     interaction_visible_token,
     lifecycle_sentinel_arguments,
+    linux_cpu_snapshot,
     linux_host_metadata,
     mixed_active_indices,
     open_descriptor_snapshot,
@@ -90,6 +91,53 @@ class GhosttyFeatureMatrixTest(unittest.TestCase):
 
 
 class LinuxResourceTest(unittest.TestCase):
+    def test_scheduler_totals_include_worker_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "proc" / "1234"
+            main = process / "task" / "1234"
+            worker = process / "task" / "1235"
+            main.mkdir(parents=True)
+            worker.mkdir()
+            status = (
+                "VmPeak: 100 kB\nVmHWM: 40 kB\nVmStk: 16 kB\nThreads: 2\n"
+                "voluntary_ctxt_switches: 7\nnonvoluntary_ctxt_switches: 2\n"
+            )
+            (process / "status").write_text(status)
+            (process / "schedstat").write_text("100 10 1\n")
+            (process / "stat").write_text(
+                "1234 (worker ) name) S 1 2 3 4 5 6 17 8 9 4 11 12\n"
+            )
+            (process / "io").write_text(
+                "rchar: 1\nwchar: 2\nsyscr: 3\nsyscw: 4\n"
+                "read_bytes: 5\nwrite_bytes: 6\ncancelled_write_bytes: 7\n"
+            )
+            (main / "status").write_text(status)
+            (main / "schedstat").write_text("100 10 1\n")
+            (worker / "status").write_text(
+                status.replace(
+                    "voluntary_ctxt_switches: 7", "voluntary_ctxt_switches: 63"
+                ).replace(
+                    "nonvoluntary_ctxt_switches: 2", "nonvoluntary_ctxt_switches: 18"
+                )
+            )
+            (worker / "schedstat").write_text("900 90 9\n")
+            with (
+                mock.patch("mux_benchmark.platform.system", return_value="Linux"),
+                mock.patch(
+                    "mux_benchmark.Path",
+                    side_effect=lambda path: root / path.lstrip("/"),
+                ),
+            ):
+                result = linux_cpu_snapshot({1234})
+            self.assertTrue(result["available"], result)
+            self.assertEqual(result["cpu_time_ns"], 1000)
+            self.assertEqual(result["runqueue_wait_ns"], 100)
+            self.assertEqual(result["timeslices"], 10)
+            self.assertEqual(result["voluntary_context_switches"], 70)
+            self.assertEqual(result["involuntary_context_switches"], 20)
+            self.assertEqual(result["threads"], 2)
+
     def test_schedstat_uses_nanosecond_cpu_runtime(self) -> None:
         self.assertEqual(parse_linux_schedstat("123456789 42 7\n"), 123456789)
         self.assertEqual(

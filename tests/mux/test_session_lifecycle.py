@@ -24,7 +24,10 @@ class SessionLifecycleTest(unittest.TestCase):
         self.addCleanup(self.server.close)
 
     def snapshot_resources(self) -> dict[str, Any]:
-        result = self.server.command("proc", "daemon", "inspect")
+        return self._snapshot_resources(self.server)
+
+    def _snapshot_resources(self, server: LemmaServer) -> dict[str, Any]:
+        result = server.command("proc", "daemon", "inspect")
         self.assertEqual(result.status, 0, result.output)
         daemon = json.loads(result.output)["results"][0]["result"]["daemon"]
         return daemon["resources"]["snapshot_bytes"]
@@ -114,9 +117,7 @@ class SessionLifecycleTest(unittest.TestCase):
 
     def test_disconnect_during_hydration_releases_attach_reservation(self) -> None:
         self.server.close()
-        server = LemmaServer.from_environment(
-            parking_delay_ms=25, hydration_steps_per_turn=0
-        )
+        server = LemmaServer.from_environment(parking_delay_ms=25, pause_hydration=True)
         self.addCleanup(server.close)
         session = server.create_session(
             "cancel_hydration",
@@ -177,8 +178,14 @@ class SessionLifecycleTest(unittest.TestCase):
             hold=True,
         )
         pane = session.pane()
-        time.sleep(0.05)
-        self.assertFalse(session.state().attached)
+        wait_until(
+            "corrupted snapshot sealed",
+            lambda: (
+                True if self._snapshot_resources(server)["parked_panes"] == 1 else None
+            ),
+            timeout=2.0,
+            diagnostics=server.diagnostics,
+        )
 
         capture = server.command(
             "proc", "pane", "capture", "--session", session.name, "--pane", pane.id
@@ -188,10 +195,16 @@ class SessionLifecycleTest(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(
             result["error"],
-            {"reason": "pane_restore_failed", "retryable": False},
+            {"reason": "pane_hydrating", "retryable": True},
         )
-        # The failed Pane is no longer a terminal-dependent capture target, while Session
-        # metadata remains queryable without attempting to consume post-snapshot PTY bytes.
+        # Failure is discovered asynchronously; the initiating Command cannot synchronously
+        # report an authentication/decoder result. Failed ownership is retired, never retried.
+        wait_until(
+            "failed asynchronous restore retires its Session",
+            lambda: True if server.session_state(session.name) is None else None,
+            timeout=2.0,
+            diagnostics=server.diagnostics,
+        )
         repeated = server.command(
             "proc", "pane", "capture", "--session", session.name, "--pane", pane.id
         )
@@ -495,7 +508,7 @@ class SessionLifecycleTest(unittest.TestCase):
     def test_output_wake_during_paused_hydration_is_cancelled_by_removal(self) -> None:
         self.server.close()
         self.server = LemmaServer.from_environment(
-            parking_delay_ms=25, hydration_steps_per_turn=0
+            parking_delay_ms=25, pause_hydration=True
         )
         self.addCleanup(self.server.close)
         gate = self.server.root / "paused-output.gate"

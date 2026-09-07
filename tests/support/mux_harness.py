@@ -221,8 +221,10 @@ class LemmaServer:
         *,
         config_text: str | None = None,
         parking_delay_ms: int | None = None,
-        hydration_steps_per_turn: int | None = None,
+        pause_hydration: bool = False,
         corrupt_parked_snapshots: bool = False,
+        snapshot_directory: Path | None = None,
+        snapshot_gate: str | None = None,
     ) -> None:
         self.server_path = Path(server).resolve()
         self.cli_path = Path(cli).resolve()
@@ -257,12 +259,18 @@ class LemmaServer:
             if parking_delay_ms < 0 or parking_delay_ms > 60_000:
                 raise ValueError("parking_delay_ms must be between 0 and 60000")
             self.environment["LEMMA_TEST_PARKING_DELAY_MS"] = str(parking_delay_ms)
-        if hydration_steps_per_turn is not None:
-            if hydration_steps_per_turn < 0 or hydration_steps_per_turn > 8:
-                raise ValueError("hydration_steps_per_turn must be between 0 and 8")
-            self.environment["LEMMA_TEST_HYDRATION_STEPS_PER_TURN"] = str(
-                hydration_steps_per_turn
+        if pause_hydration:
+            self.environment["LEMMA_TEST_PAUSE_HYDRATION"] = "1"
+        if snapshot_directory is not None:
+            self.environment["LEMMA_TEST_SNAPSHOT_DIRECTORY"] = str(snapshot_directory)
+        if snapshot_gate is not None:
+            if snapshot_gate not in ("parking", "hydrating"):
+                raise ValueError("snapshot_gate must be parking or hydrating")
+            self.environment["LEMMA_TEST_SNAPSHOT_GATE"] = str(
+                self.root / "snapshot-gate"
             )
+            if snapshot_gate == "hydrating":
+                self.environment["LEMMA_TEST_SNAPSHOT_GATE_STAGE"] = snapshot_gate
         if corrupt_parked_snapshots:
             self.environment["LEMMA_TEST_CORRUPT_PARKED_SNAPSHOTS"] = "1"
         for variable in ("ASAN_OPTIONS", "UBSAN_OPTIONS"):
@@ -289,8 +297,10 @@ class LemmaServer:
         *,
         config_text: str | None = None,
         parking_delay_ms: int | None = None,
-        hydration_steps_per_turn: int | None = None,
+        pause_hydration: bool = False,
         corrupt_parked_snapshots: bool = False,
+        snapshot_directory: Path | None = None,
+        snapshot_gate: str | None = None,
     ) -> LemmaServer:
         required = ("LEMMA_TEST_SERVER", "LEMMA_TEST_CLI", "LEMMA_TEST_PTY_PEER")
         missing = [name for name in required if not os.environ.get(name)]
@@ -302,8 +312,10 @@ class LemmaServer:
             *(os.environ[name] for name in required),
             config_text=config_text,
             parking_delay_ms=parking_delay_ms,
-            hydration_steps_per_turn=hydration_steps_per_turn,
+            pause_hydration=pause_hydration,
             corrupt_parked_snapshots=corrupt_parked_snapshots,
+            snapshot_directory=snapshot_directory,
+            snapshot_gate=snapshot_gate,
         )
 
     def __enter__(self) -> LemmaServer:

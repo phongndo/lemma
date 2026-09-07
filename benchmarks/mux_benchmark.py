@@ -608,25 +608,39 @@ def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
     try:
         sampled = 0
         for pid in pids:
-            runtime, wait, timeslices = parse_linux_schedstat_fields(
-                Path(f"/proc/{pid}/schedstat").read_text(encoding="ascii")
-            )
             status = parse_linux_status(
                 Path(f"/proc/{pid}/status").read_text(encoding="ascii")
             )
+            # /proc/PID/schedstat and status context switches describe only the thread leader.
+            # Count every live task so a residency worker cannot make CPU disappear from reports.
+            task_directory = Path(f"/proc/{pid}/task")
+            tasks = set(task_directory.iterdir())
+            if len(tasks) != status["Threads"]:
+                raise ValueError("thread census changed during resource sampling")
+            for task in tasks:
+                runtime, wait, timeslices = parse_linux_schedstat_fields(
+                    (task / "schedstat").read_text(encoding="ascii")
+                )
+                task_status = parse_linux_status(
+                    (task / "status").read_text(encoding="ascii")
+                )
+                totals["cpu_time_ns"] += runtime
+                totals["runqueue_wait_ns"] += wait
+                totals["timeslices"] += timeslices
+                totals["voluntary_context_switches"] += task_status[
+                    "voluntary_ctxt_switches"
+                ]
+                totals["involuntary_context_switches"] += task_status[
+                    "nonvoluntary_ctxt_switches"
+                ]
+            if tasks != set(task_directory.iterdir()):
+                raise ValueError("thread census changed during resource sampling")
             minor_faults, major_faults = parse_linux_proc_stat(
                 Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
             )
             io = parse_linux_io(Path(f"/proc/{pid}/io").read_text(encoding="ascii"))
-            totals["cpu_time_ns"] += runtime
-            totals["runqueue_wait_ns"] += wait
-            totals["timeslices"] += timeslices
             totals["minor_faults"] += minor_faults
             totals["major_faults"] += major_faults
-            totals["voluntary_context_switches"] += status["voluntary_ctxt_switches"]
-            totals["involuntary_context_switches"] += status[
-                "nonvoluntary_ctxt_switches"
-            ]
             totals["threads"] += status["Threads"]
             totals["peak_virtual_bytes"] += status["VmPeak"]
             totals["peak_resident_bytes"] += status["VmHWM"]
@@ -643,7 +657,9 @@ def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
         return {"available": False, "reason": str(error)}
     return {
         "available": sampled == len(pids),
-        "source": "/proc/PID/{schedstat,status,stat,io}",
+        "source": "/proc/PID/{status,stat,io} and /proc/PID/task/TID/{schedstat,status}",
+        "scheduler_scope": "all live tasks; exited tasks are not retained by procfs",
+        "stack_virtual_scope": "main-thread VmStk only; other stacks remain in process memory totals",
         "sampled_processes": sampled,
         **totals,
     }
@@ -2679,11 +2695,12 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         )
         blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
         receive_attach_hello(blocked)
-        # Fill every rendered row so wire compression (including right-edge EL) cannot turn this
-        # into a low-rate stream that remains buffered in the kernel. The workload must establish
-        # real socket backpressure before measuring the daemon's no-progress bound.
-        flood_line = b"X" * 499
-        flood_command = b"exec yes " + flood_line + b"\r"
+        # Unique full-width rows must continue changing the screen after it fills. Identical yes
+        # rows can be elided, leaving the socket buffered rather than actually backpressured.
+        # The candidate-owned native fixture is shared by both revisions in paired comparisons.
+        flood_command = (
+            f"exec {shlex.quote(str(runtime.peer_path))} blocked-output\r"
+        ).encode()
         flood_frame = attach_frame(ATTACH_KIND_INPUT, flood_command, 2)
         ready_read, ready_write = os.pipe()
         disconnect_probe = subprocess.Popen(
@@ -2718,7 +2735,8 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         if disconnect_probe.returncode != 0:
             raise TimeoutError(
                 "blocked attached client exceeded its no-progress disconnect bound: "
-                f"{probe_error.strip()}"
+                f"returncode={disconnect_probe.returncode} "
+                f"stdout={probe_output!r} stderr={probe_error!r}"
             )
         try:
             disconnect_result = json.loads(probe_output)

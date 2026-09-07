@@ -267,8 +267,11 @@ just performance-gate main
 `benchmarks/performance_hosts.json` pins its hardware identity, CPU policy, and `0-7` affinity.
 Calibration captures the unchanged checkout repeatedly and fails if the reviewed ratio and absolute
 noise floors do not contain the observed A/A spread; it never relaxes policy automatically. Linux
-process CPU evidence uses nanosecond runtime from `/proc/PID/schedstat`, not scheduler-tick-rounded
-`/proc/PID/stat` values. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
+process CPU evidence sums nanosecond runtime from `/proc/PID/task/TID/schedstat` across live threads,
+not the leader-only `/proc/PID/schedstat` or scheduler-tick-rounded `/proc/PID/stat` values. Context
+switches likewise sum task records; a changing census invalidates the sample. Exited threads are not
+retained by procfs. `VmStk` describes only the main stack; additional worker stacks are included in
+process virtual/resident totals but are not individually attributed by that field. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
 diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
 make their rank unstable.
 

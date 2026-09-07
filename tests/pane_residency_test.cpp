@@ -1,19 +1,25 @@
 #include "core/pane_residency.hpp"
 
-#include "lemma/terminal/terminal.hpp"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <memory>
+#include <optional>
+#include <semaphore>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
+
+#include <poll.h>
+#include <pthread.h>
 
 namespace lemma::core {
 namespace {
+using namespace std::chrono_literals;
 
 [[nodiscard]] auto residency_options() -> vt::TerminalOptions {
   vt::TerminalOptions options;
@@ -24,9 +30,9 @@ namespace {
 }
 
 [[nodiscard]] auto populated_terminal(const vt::TerminalOptions& options) -> vt::Terminal {
-  auto terminal_result = vt::Terminal::create(options);
-  EXPECT_TRUE(terminal_result.has_value());
-  auto terminal = std::move(*terminal_result);
+  auto created = vt::Terminal::create(options);
+  EXPECT_TRUE(created.has_value());
+  auto terminal = std::move(*created);
   std::string history;
   for (std::size_t row = 0; row < 700; ++row) {
     history.append("snapshot history row ");
@@ -37,53 +43,122 @@ namespace {
   return terminal;
 }
 
+struct WorkerGate final {
+  std::atomic<PaneSnapshotWorker::Stage> stage{PaneSnapshotWorker::Stage::parking};
+  std::atomic<bool> armed{false};
+  std::counting_semaphore<64> entered{0};
+  std::counting_semaphore<64> released{0};
+  std::atomic<std::size_t> parkings{0};
+  std::atomic<bool> signals_blocked{false};
+
+  void arm(const PaneSnapshotWorker::Stage value) noexcept {
+    stage.store(value);
+    armed.store(true);
+  }
+  static void enter(void* const context, const PaneSnapshotWorker::Stage value) noexcept {
+    auto& gate = *static_cast<WorkerGate*>(context);
+    if (value == PaneSnapshotWorker::Stage::parking) {
+      sigset_t mask{};
+      gate.signals_blocked.store(::pthread_sigmask(SIG_SETMASK, nullptr, &mask) == 0 &&
+                                 sigismember(&mask, SIGCHLD) == 1 &&
+                                 sigismember(&mask, SIGTERM) == 1);
+      gate.parkings.fetch_add(1);
+    }
+    if (gate.stage.load() == value && gate.armed.exchange(false)) {
+      gate.entered.release();
+      gate.released.acquire();
+    }
+  }
+};
+
+class PaneResidencyTest : public ::testing::Test {
+public:
+  // GoogleTest expands each signal-mask equality assertion into several branches.
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+  void SetUp() override {
+    sigset_t before{};
+    ASSERT_EQ(::pthread_sigmask(SIG_SETMASK, nullptr, &before), 0);
+    auto created = PaneSnapshotWorker::create({.context = &gate, .enter = WorkerGate::enter});
+    ASSERT_TRUE(created.has_value());
+    worker = std::move(*created);
+    sigset_t after{};
+    ASSERT_EQ(::pthread_sigmask(SIG_SETMASK, nullptr, &after), 0);
+    EXPECT_EQ(sigismember(&before, SIGCHLD), sigismember(&after, SIGCHLD));
+    EXPECT_EQ(sigismember(&before, SIGTERM), sigismember(&after, SIGTERM));
+  }
+  void TearDown() override {
+    gate.released.release();
+    worker.reset();
+    EXPECT_EQ(quota.daemon_bytes(), 0U);
+  }
+  [[nodiscard]] auto wait_for(PaneResidency& residency, const PaneResidencyPhase target) const
+      -> bool {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      worker->drain_notification();
+      worker->collect();
+      const auto advanced = residency.advance();
+      if (!advanced.has_value()) {
+        ADD_FAILURE() << "residency failure " << static_cast<int>(advanced.error());
+        return false;
+      }
+      if (residency.phase() == target) {
+        return true;
+      }
+      pollfd descriptor{.fd = worker->completion_descriptor(), .events = POLLIN, .revents = 0};
+      static_cast<void>(::poll(&descriptor, 1, 10));
+    }
+    return false;
+  }
+  void collect_until_empty() const {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (quota.daemon_bytes() != 0 && std::chrono::steady_clock::now() < deadline) {
+      worker->drain_notification();
+      worker->collect();
+      pollfd descriptor{.fd = worker->completion_descriptor(), .events = POLLIN, .revents = 0};
+      static_cast<void>(::poll(&descriptor, 1, 10));
+    }
+    EXPECT_EQ(quota.daemon_bytes(), 0U);
+  }
+  WorkerGate gate;
+  PaneSnapshotQuota quota;
+  std::unique_ptr<PaneSnapshotWorker> worker;
+};
+
 // GoogleTest assertions inflate the measured branch count.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(PaneResidencyTest, TransitionsThroughMappedSnapshotOneHistoryPagePerTurn) {
+TEST_F(PaneResidencyTest, ExclusiveTransferRoundTripsHistoryAndRefinesReservation) {
   const auto options = residency_options();
-  PaneSnapshotQuota quota;
   PaneResidency residency(populated_terminal(options));
-  ASSERT_EQ(residency.phase(), PaneResidencyPhase::active);
-  ASSERT_NE(residency.active_terminal(), nullptr);
   std::array<std::byte, std::size_t{128} * 1'024U> before{};
   const auto before_size =
       residency.active_terminal()->format_recent(vt::ScreenFormat::vt_full, 700, before, false);
   ASSERT_TRUE(before_size.has_value());
 
-  const auto required = residency.begin_parking(options, quota, 3);
-  ASSERT_TRUE(required.has_value());
-  EXPECT_GT(*required, 0U);
+  gate.arm(PaneSnapshotWorker::Stage::parking);
+  ASSERT_TRUE(residency.begin_parking(*worker, options, quota, 3).has_value());
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
   EXPECT_EQ(residency.phase(), PaneResidencyPhase::parking);
   EXPECT_EQ(residency.active_terminal(), nullptr);
-  EXPECT_EQ(residency.snapshot_bytes(), *required);
-  EXPECT_EQ(quota.session_bytes(3), *required);
-  ASSERT_TRUE(residency.finish_parking().has_value());
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::parked);
-  EXPECT_EQ(residency.snapshot_bytes(), *required);
+  EXPECT_TRUE(gate.signals_blocked.load());
+  EXPECT_EQ(quota.session_bytes(3), limits::snapshot_bytes_max);
+  // No worker completion exists. The reactor-facing operation returns rather than waiting.
+  EXPECT_FALSE(residency.advance().value());
+  gate.released.release();
+  ASSERT_TRUE(wait_for(residency, PaneResidencyPhase::parked));
+  EXPECT_GT(residency.snapshot_bytes(), 0U);
+  EXPECT_LT(residency.snapshot_bytes(), limits::snapshot_bytes_max);
+  EXPECT_EQ(residency.snapshot_bytes(), quota.session_bytes(3));
 
+  gate.arm(PaneSnapshotWorker::Stage::hydrating);
   residency.request_wake(PaneWakeReason::attach);
   residency.request_wake(PaneWakeReason::input);
   residency.request_wake(PaneWakeReason::output);
-  residency.request_wake(PaneWakeReason::attach);
-  ASSERT_TRUE(residency.begin_unparking().has_value());
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
   EXPECT_EQ(residency.phase(), PaneResidencyPhase::unparking);
   EXPECT_EQ(residency.active_terminal(), nullptr);
-
-  std::size_t turns = 0;
-  while (residency.phase() == PaneResidencyPhase::unparking && turns < 1'024) {
-    const auto restored = residency.restore_one_history_page();
-    ASSERT_TRUE(restored.has_value());
-    ++turns;
-    if (*restored) {
-      EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-    } else {
-      EXPECT_EQ(residency.phase(), PaneResidencyPhase::unparking);
-    }
-  }
-  EXPECT_GT(turns, 0U);
-  ASSERT_EQ(residency.phase(), PaneResidencyPhase::active);
-  ASSERT_NE(residency.active_terminal(), nullptr);
-  EXPECT_EQ(residency.snapshot_bytes(), 0U);
+  gate.released.release();
+  ASSERT_TRUE(wait_for(residency, PaneResidencyPhase::active));
   EXPECT_EQ(quota.daemon_bytes(), 0U);
   const auto reasons = residency.take_wake_reasons();
   EXPECT_TRUE(reasons.contains(PaneWakeReason::attach));
@@ -91,89 +166,153 @@ TEST(PaneResidencyTest, TransitionsThroughMappedSnapshotOneHistoryPagePerTurn) {
   EXPECT_TRUE(reasons.contains(PaneWakeReason::output));
   EXPECT_FALSE(reasons.contains(PaneWakeReason::resize));
   EXPECT_TRUE(residency.take_wake_reasons().empty());
-
   std::array<std::byte, std::size_t{128} * 1'024U> after{};
   const auto after_size =
       residency.active_terminal()->format_recent(vt::ScreenFormat::vt_full, 700, after, false);
-  ASSERT_TRUE(after_size.has_value());
   ASSERT_EQ(after_size, before_size);
   EXPECT_TRUE(std::ranges::equal(std::span(before).first(*before_size),
                                  std::span(after).first(*after_size)));
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(PaneResidencyTest, CancellationRollsBackWithoutLosingTerminalOrSnapshot) {
+TEST_F(PaneResidencyTest, SaturationKeepsLiveOwnerAndWakeCancelsQueuedParking) {
   const auto options = residency_options();
-  PaneSnapshotQuota quota;
-  PaneResidency residency(populated_terminal(options));
-  ASSERT_TRUE(residency.begin_parking(options, quota, 4).has_value());
-  residency.cancel_parking();
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-  ASSERT_NE(residency.active_terminal(), nullptr);
-  EXPECT_EQ(quota.daemon_bytes(), 0U);
-
-  ASSERT_TRUE(residency.begin_parking(options, quota, 4).has_value());
-  ASSERT_TRUE(residency.finish_parking().has_value());
-  const auto stored_bytes = residency.snapshot_bytes();
-  ASSERT_TRUE(residency.begin_unparking().has_value());
-  residency.cancel_unparking();
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::parked);
-  EXPECT_EQ(residency.snapshot_bytes(), stored_bytes);
-
-  ASSERT_TRUE(residency.begin_unparking().has_value());
-  for (std::size_t turn = 0; residency.phase() == PaneResidencyPhase::unparking && turn < 1'024;
-       ++turn) {
-    ASSERT_TRUE(residency.restore_one_history_page().has_value());
+  std::array<std::unique_ptr<PaneResidency>, PaneSnapshotWorker::jobs_max> owners;
+  gate.arm(PaneSnapshotWorker::Stage::parking);
+  for (auto& owner : owners) {
+    owner = std::make_unique<PaneResidency>(populated_terminal(options));
+    ASSERT_TRUE(owner->begin_parking(*worker, options, quota, 4).has_value());
   }
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-  EXPECT_EQ(quota.daemon_bytes(), 0U);
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  EXPECT_EQ(quota.daemon_bytes(), PaneSnapshotWorker::jobs_max * limits::snapshot_bytes_max);
+  PaneResidency excess(populated_terminal(options));
+  EXPECT_FALSE(excess.begin_parking(*worker, options, quota, 5).has_value());
+  EXPECT_NE(excess.active_terminal(), nullptr);
+  owners.back()->request_wake(PaneWakeReason::input);
+  EXPECT_EQ(owners.back()->phase(), PaneResidencyPhase::unparking);
+  gate.released.release();
+  ASSERT_TRUE(wait_for(*owners.back(), PaneResidencyPhase::active));
+  for (auto& owner : owners) {
+    owner.reset();
+  }
+  collect_until_empty();
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(PaneResidencyTest, FailedAdmissionLeavesTheActiveTerminalAuthoritative) {
-  auto options = residency_options();
-  PaneSnapshotQuota quota;
+TEST_F(PaneResidencyTest, HydrationOutranksQueuedParking) {
+  const auto options = residency_options();
+  PaneResidency parked(populated_terminal(options));
+  ASSERT_TRUE(parked.begin_parking(*worker, options, quota, 3).has_value());
+  ASSERT_TRUE(wait_for(parked, PaneResidencyPhase::parked));
+  const auto initial_parkings = gate.parkings.load();
+  PaneResidency running(populated_terminal(options));
+  PaneResidency queued(populated_terminal(options));
+  gate.arm(PaneSnapshotWorker::Stage::parking);
+  ASSERT_TRUE(running.begin_parking(*worker, options, quota, 4).has_value());
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  ASSERT_TRUE(queued.begin_parking(*worker, options, quota, 4).has_value());
+  parked.request_wake(PaneWakeReason::capture);
+  gate.arm(PaneSnapshotWorker::Stage::hydrating);
+  gate.released.release();
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  EXPECT_EQ(gate.parkings.load(), initial_parkings + 1U);
+  gate.released.release();
+  ASSERT_TRUE(wait_for(parked, PaneResidencyPhase::active));
+}
+
+TEST_F(PaneResidencyTest, StorageAndSelectionFailuresReturnTheAuthoritativeLiveTerminal) {
+  const auto options = residency_options();
   PaneResidency residency(populated_terminal(options));
-  {
-    auto first = quota.reserve(5, lemma::limits::snapshot_bytes_max);
-    auto second = quota.reserve(5, lemma::limits::snapshot_bytes_max);
-    auto third = quota.reserve(5, lemma::limits::snapshot_bytes_max);
-    auto fourth = quota.reserve(5, lemma::limits::snapshot_bytes_max);
-    ASSERT_TRUE(first.has_value());
-    ASSERT_TRUE(second.has_value());
-    ASSERT_TRUE(third.has_value());
-    ASSERT_TRUE(fourth.has_value());
-    const auto quota_failure = residency.begin_parking(options, quota, 5);
-    ASSERT_FALSE(quota_failure.has_value());
-    EXPECT_EQ(quota_failure.error(), vt::Error::limit_exceeded);
-    EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-    EXPECT_NE(residency.active_terminal(), nullptr);
-  }
+  ASSERT_TRUE(
+      residency.begin_parking(*worker, options, quota, 5, "/missing/lemma-snapshot-directory")
+          .has_value());
+  ASSERT_TRUE(wait_for(residency, PaneResidencyPhase::active));
   EXPECT_EQ(quota.daemon_bytes(), 0U);
-
-  const auto storage_failure =
-      residency.begin_parking(options, quota, 5, "/missing/lemma-snapshot-directory");
-  ASSERT_FALSE(storage_failure.has_value());
-  EXPECT_EQ(storage_failure.error(), vt::Error::io_error);
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-
-  ASSERT_NE(residency.active_terminal(), nullptr);
   ASSERT_TRUE(residency.active_terminal()->select(vt::SelectionUnit::all).value_or(false));
-  const auto selected = residency.begin_parking(options, quota, 5);
-  ASSERT_FALSE(selected.has_value());
-  EXPECT_EQ(selected.error(), vt::Error::invalid_state);
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-  ASSERT_NE(residency.active_terminal(), nullptr);
-  residency.active_terminal()->clear_selection();
+  ASSERT_TRUE(residency.begin_parking(*worker, options, quota, 5).has_value());
+  ASSERT_TRUE(wait_for(residency, PaneResidencyPhase::active));
+  EXPECT_EQ(quota.daemon_bytes(), 0U);
+}
 
-  options.snapshot_continuation_bytes_max = 0;
-  const auto unsafe = residency.begin_parking(options, quota, 5);
-  ASSERT_FALSE(unsafe.has_value());
-  EXPECT_EQ(unsafe.error(), vt::Error::invalid_options);
-  EXPECT_EQ(residency.phase(), PaneResidencyPhase::active);
-  EXPECT_FALSE(residency.finish_parking().has_value());
-  EXPECT_FALSE(residency.begin_unparking().has_value());
-  EXPECT_FALSE(residency.restore_one_history_page().has_value());
+TEST_F(PaneResidencyTest, RemovalDuringPartialRestoreRetainsQuotaUntilWorkerDestruction) {
+  const auto options = residency_options();
+  auto residency = std::make_unique<PaneResidency>(populated_terminal(options));
+  ASSERT_TRUE(residency->begin_parking(*worker, options, quota, 5).has_value());
+  ASSERT_TRUE(wait_for(*residency, PaneResidencyPhase::parked));
+  gate.arm(PaneSnapshotWorker::Stage::history);
+  residency->request_wake(PaneWakeReason::attach);
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  const auto bytes = quota.daemon_bytes();
+  residency.reset();
+  EXPECT_EQ(quota.daemon_bytes(), bytes);
+  gate.released.release();
+  collect_until_empty();
+}
+
+TEST_F(PaneResidencyTest, RemovalRacingPublicationDestroysCompletedOwnerOnWorker) {
+  const auto options = residency_options();
+  auto residency = std::make_unique<PaneResidency>(populated_terminal(options));
+  gate.arm(PaneSnapshotWorker::Stage::completing);
+  ASSERT_TRUE(residency->begin_parking(*worker, options, quota, 5).has_value());
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  residency.reset();
+  EXPECT_GT(quota.daemon_bytes(), 0U);
+  gate.released.release();
+  collect_until_empty();
+}
+
+TEST_F(PaneResidencyTest, ShutdownReleasesRunningAndQueuedOwnersBeforeQuota) {
+  const auto options = residency_options();
+  auto first = std::make_unique<PaneResidency>(populated_terminal(options));
+  auto second = std::make_unique<PaneResidency>(populated_terminal(options));
+  gate.arm(PaneSnapshotWorker::Stage::parking);
+  ASSERT_TRUE(first->begin_parking(*worker, options, quota, 5).has_value());
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  ASSERT_TRUE(second->begin_parking(*worker, options, quota, 5).has_value());
+  first.reset();
+  second.reset();
+  gate.released.release();
+  worker.reset();
+  EXPECT_EQ(quota.daemon_bytes(), 0U);
+}
+
+// Exercise the ticket boundary independently of Pane/Session addresses: even an identical reused
+// sparse slot cannot accept a stale completion, wake or cancellation from its former generation.
+// GoogleTest assertion expansion, not the ticket protocol, accounts for the branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(PaneResidencyTest, ReusedSlotRejectsStaleTickets) {
+  const auto options = residency_options();
+  const auto submit = [&]() {
+    PaneSnapshotWorker::Result result{
+        .work = std::make_unique<PaneSnapshotWork>(populated_terminal(options)),
+        .reservation = std::move(quota.reserve(5, limits::snapshot_bytes_max)).value(),
+        .error = {}};
+    return worker
+        ->submit(result, options, "/missing/lemma-snapshot-directory", SnapshotTestCorruption::none,
+                 false)
+        .value();
+  };
+  const auto previous = submit();
+  std::optional<PaneSnapshotWorker::Result> completed;
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!completed.has_value() && std::chrono::steady_clock::now() < deadline) {
+    completed = worker->take(previous);
+    pollfd descriptor{.fd = worker->completion_descriptor(), .events = POLLIN, .revents = 0};
+    static_cast<void>(::poll(&descriptor, 1, 10));
+  }
+  ASSERT_TRUE(completed.has_value());
+  completed.reset();
+  gate.arm(PaneSnapshotWorker::Stage::parking);
+  const auto current = submit();
+  ASSERT_TRUE(gate.entered.try_acquire_for(5s));
+  EXPECT_EQ(previous.slot, current.slot);
+  EXPECT_NE(previous.generation, current.generation);
+  worker->abandon(previous);
+  worker->request_wake(previous);
+  EXPECT_FALSE(worker->take(previous).has_value());
+  worker->abandon(current);
+  gate.released.release();
+  collect_until_empty();
 }
 
 } // namespace

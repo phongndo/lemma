@@ -29,6 +29,8 @@ public:
 
     [[nodiscard]] auto bytes() const noexcept -> std::size_t;
     [[nodiscard]] auto valid() const noexcept -> bool;
+    // Reactor-only refinement after worker sizing; admission reserves the full snapshot bound.
+    void shrink(std::size_t bytes) noexcept;
 
   private:
     friend class PaneSnapshotQuota;

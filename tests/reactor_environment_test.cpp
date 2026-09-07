@@ -345,7 +345,9 @@ void release_listener(void* const context) noexcept {
       .default_cwd = {},
       .command_history_file = {},
       .detached_pane_parking_delay = std::nullopt,
-      .pane_hydration_steps_per_turn = 8,
+      .pause_pane_hydration_for_test = false,
+      .snapshot_worker_test_hook = {},
+      .snapshot_directory = "/tmp",
       .corrupt_parked_snapshots_for_test = false,
       .status_line = true,
   };
@@ -360,7 +362,9 @@ void release_listener(void* const context) noexcept {
 TEST(ReactorEnvironmentTest, ProductionEnvironmentIsComplete) {
   const auto environment = production_reactor_environment();
   EXPECT_TRUE(environment.valid());
-  EXPECT_EQ(environment.pane_hydration_steps_per_turn, 8U);
+  EXPECT_FALSE(environment.pause_pane_hydration_for_test);
+  EXPECT_EQ(environment.snapshot_worker_test_hook.enter, nullptr);
+  EXPECT_EQ(environment.snapshot_directory, "/tmp");
 }
 
 #ifdef __linux__

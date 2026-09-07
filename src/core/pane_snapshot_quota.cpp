@@ -39,6 +39,14 @@ void PaneSnapshotQuota::Reservation::reset() noexcept {
   bytes_ = 0;
 }
 
+void PaneSnapshotQuota::Reservation::shrink(const std::size_t bytes) noexcept {
+  LEMMA_ASSERT(owner_ != nullptr && bytes > 0 && bytes <= bytes_);
+  if (bytes < bytes_) {
+    owner_->release(session_slot_, bytes_ - bytes);
+    bytes_ = bytes;
+  }
+}
+
 auto PaneSnapshotQuota::Reservation::bytes() const noexcept -> std::size_t { return bytes_; }
 
 auto PaneSnapshotQuota::Reservation::valid() const noexcept -> bool {

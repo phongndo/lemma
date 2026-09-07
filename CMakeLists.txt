@@ -212,6 +212,8 @@ add_library(
   src/core/pane_residency.cpp
   src/core/pane_snapshot_quota.cpp
   src/core/pane_snapshot_storage.cpp
+  src/core/pane_snapshot_work.cpp
+  src/core/pane_snapshot_worker.cpp
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
@@ -531,6 +533,7 @@ if(LEMMA_BUILD_TESTS)
   lemma_add_python_mux_test(command_line tests.mux.test_command_line)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
+  lemma_add_python_mux_test(snapshot_worker tests.mux.test_snapshot_worker)
   lemma_add_python_mux_test(resize tests.mux.test_resize)
   lemma_add_python_mux_test(terminal_boundary tests.mux.test_terminal_boundary)
   lemma_add_python_mux_test(agent tests.mux.test_agent)

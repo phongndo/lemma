@@ -13,6 +13,8 @@
 #include "core/layout.hpp"
 #include "core/pane_residency.hpp"
 #include "core/pane_snapshot_quota.hpp"
+#include "core/pane_snapshot_work.hpp"
+#include "core/pane_snapshot_worker.hpp"
 #include "core/presentation_gate.hpp"
 #include "core/pty_writer.hpp"
 #include "core/session.hpp"
@@ -791,7 +793,8 @@ struct PaneRuntime final {
     // Once hydration owns the wake, remove its level-triggered descriptor until the terminal is
     // complete. Leaving it registered with zero events would still spin on HUP/ERR in poll().
     return live() && pty >= 0 &&
-           (phase == PaneResidencyPhase::active || phase == PaneResidencyPhase::parked);
+           (phase == PaneResidencyPhase::active || phase == PaneResidencyPhase::parking ||
+            phase == PaneResidencyPhase::parked);
   }
   [[nodiscard]] auto pty_io_ready() const noexcept -> bool {
     return live() && pty >= 0 && residency.phase() == PaneResidencyPhase::active;
@@ -884,9 +887,16 @@ class PaneRuntimeStore final {
       LEMMA_ASSERT(failed_count_ > 0);
       --failed_count_;
     }
-    if (runtime.residency.phase() == PaneResidencyPhase::unparking) {
+    release_transition_tracking(runtime.residency.phase());
+  }
+
+  void release_transition_tracking(const PaneResidencyPhase phase) noexcept {
+    if (phase == PaneResidencyPhase::unparking) {
       LEMMA_ASSERT(unparking_count_ > 0);
       --unparking_count_;
+    } else if (phase == PaneResidencyPhase::parking) {
+      LEMMA_ASSERT(parking_count_ > 0);
+      --parking_count_;
     }
   }
 
@@ -1092,6 +1102,24 @@ public:
   [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
   [[nodiscard]] auto failed_count() const noexcept -> std::size_t { return failed_count_; }
   [[nodiscard]] auto unparking_count() const noexcept -> std::size_t { return unparking_count_; }
+  [[nodiscard]] auto residency_work_pending() const noexcept -> bool {
+    return parking_count_ > 0 || unparking_count_ > 0;
+  }
+  [[nodiscard]] auto snapshot_completion_descriptor() const noexcept -> int {
+    return snapshot_worker_ == nullptr ? -1 : snapshot_worker_->completion_descriptor();
+  }
+  [[nodiscard]] auto snapshot_poll_identity() const noexcept -> std::uint64_t {
+    return snapshot_poll_identity_;
+  }
+  void collect_snapshot_work() noexcept {
+    if (snapshot_worker_ != nullptr) {
+      snapshot_worker_->collect();
+    }
+  }
+  void drain_snapshot_notification() noexcept {
+    LEMMA_ASSERT(snapshot_worker_ != nullptr);
+    snapshot_worker_->drain_notification();
+  }
   [[nodiscard]] auto pending_writes_possible() const noexcept -> bool {
     return pending_writes_possible_;
   }
@@ -1172,22 +1200,27 @@ public:
   [[nodiscard]] auto
   park(const PaneAddress address,
        const SnapshotTestCorruption corruption = SnapshotTestCorruption::none) noexcept
-      -> std::expected<std::size_t, vt::Error> {
+      -> std::expected<void, vt::Error> {
     auto* const runtime = get(address);
     if (runtime == nullptr || runtime->residency.phase() != PaneResidencyPhase::active) {
       return std::unexpected(vt::Error::invalid_state);
     }
-    const auto restore_options = runtime->restoration_options();
-    const auto started =
-        runtime->residency.begin_parking(restore_options, snapshot_quota_, address.session.slot());
-    if (!started.has_value()) {
-      return std::unexpected(started.error());
+    if (snapshot_worker_ == nullptr) {
+      auto worker =
+          PaneSnapshotWorker::create(active_reactor_environment->snapshot_worker_test_hook);
+      if (!worker.has_value()) {
+        return std::unexpected(worker.error());
+      }
+      snapshot_worker_ = std::move(*worker);
+      snapshot_poll_identity_ = next_poll_identity();
     }
-    const auto finished = runtime->residency.finish_parking(corruption);
-    if (!finished.has_value()) {
-      return std::unexpected(finished.error());
+    const auto started = runtime->residency.begin_parking(
+        *snapshot_worker_, runtime->restoration_options(), snapshot_quota_, address.session.slot(),
+        active_reactor_environment->snapshot_directory, corruption);
+    if (started.has_value()) {
+      ++parking_count_;
     }
-    return *started;
+    return started;
   }
   [[nodiscard]] auto wake(const PaneAddress address, const PaneWakeReason reason) noexcept
       -> std::expected<bool, vt::Error> {
@@ -1200,37 +1233,28 @@ public:
       defer_parking(*runtime);
       return true;
     }
-    runtime->residency.request_wake(reason);
-    switch (phase) {
-    case PaneResidencyPhase::active:
-      LEMMA_ASSERT(false);
-      return true;
-    case PaneResidencyPhase::parking:
-      runtime->residency.cancel_parking();
-      return true;
-    case PaneResidencyPhase::parked: {
-      const auto started = runtime->residency.begin_unparking();
-      if (!started.has_value()) {
-        return std::unexpected(started.error());
-      }
+    runtime->residency.request_wake(reason,
+                                    !active_reactor_environment->pause_pane_hydration_for_test);
+    if (phase != PaneResidencyPhase::unparking) {
+      release_transition_tracking(phase);
       LEMMA_ASSERT(unparking_count_ < size_);
       ++unparking_count_;
-      return false;
     }
-    case PaneResidencyPhase::unparking:
-      return false;
-    }
+    return false;
   }
-  [[nodiscard]] auto restore_one_history_page(const PaneAddress address) noexcept
+  [[nodiscard]] auto advance_residency(const PaneAddress address,
+                                       const bool hydration_enabled) noexcept
       -> std::expected<bool, vt::Error> {
     auto* const runtime = get(address);
     if (runtime == nullptr) {
       return std::unexpected(vt::Error::invalid_state);
     }
-    const auto restored = runtime->residency.restore_one_history_page();
+    const auto previous = runtime->residency.phase();
+    const auto restored = runtime->residency.advance(hydration_enabled);
+    if (runtime->residency.phase() != previous) {
+      release_transition_tracking(previous);
+    }
     if (restored.has_value() && *restored) {
-      LEMMA_ASSERT(unparking_count_ > 0);
-      --unparking_count_;
       static_cast<void>(runtime->residency.take_wake_reasons());
       defer_parking(*runtime);
     }
@@ -1247,11 +1271,16 @@ private:
 
   // Declared before Pane owners so all RAII reservations release before their quota authority.
   PaneSnapshotQuota snapshot_quota_;
+  // Lazy: all-active workloads pay neither a thread/stack nor notification descriptors. Worker
+  // teardown follows Pane cancellation and precedes destruction of its quota authority.
+  std::unique_ptr<PaneSnapshotWorker> snapshot_worker_;
+  std::uint64_t snapshot_poll_identity_{0};
   std::array<std::unique_ptr<SessionSlots>, limits::sessions_hard_max> sessions_{};
   PaneKey active_head_{no_pane_key};
   std::size_t size_{0};
   std::size_t failed_count_{0};
   std::size_t unparking_count_{0};
+  std::size_t parking_count_{0};
   std::size_t scrollback_bytes_reserved_{0};
   bool pending_writes_possible_{false};
   std::optional<std::chrono::steady_clock::time_point> compression_deadline_hint_;
@@ -12561,8 +12590,8 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
 // Deadline folding visits lifecycle-owned Session work registries and Pane deadline minima.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto frame_poll_timeout(const Sessions& sessions, const PaneRuntimeStore& runtimes,
-                                      const FrameScheduler::TimePoint now, int timeout,
-                                      const bool hydration_enabled) noexcept -> int {
+                                      const FrameScheduler::TimePoint now, int timeout) noexcept
+    -> int {
   const auto tighten = [now, &timeout](const std::optional<FrameScheduler::TimePoint> deadline) {
     if (!deadline.has_value()) {
       return false;
@@ -12609,8 +12638,8 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
       return 0;
     }
   }
-  if (runtimes.failed_count() > 0 || (hydration_enabled && runtimes.unparking_count() > 0) ||
-      tighten(runtimes.parking_deadline_hint()) || tighten(runtimes.presentation_deadline_hint()) ||
+  if (runtimes.failed_count() > 0 || tighten(runtimes.parking_deadline_hint()) ||
+      tighten(runtimes.presentation_deadline_hint()) ||
       tighten(runtimes.compression_deadline_hint())) {
     return 0;
   }
@@ -12627,8 +12656,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
                                 const PendingConnections& pending, const PublicObservers& observers,
                                 const PublicProcExecutions& executions,
                                 const CapacityRejectionConnections& capacity_rejections,
-                                const bool immediate_public_work,
-                                const bool hydration_enabled) noexcept -> int {
+                                const bool immediate_public_work) noexcept -> int {
   const auto now = reactor_now();
   int timeout = -1;
   if (immediate_public_work) {
@@ -12684,7 +12712,7 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
       return 0;
     }
   }
-  return frame_poll_timeout(sessions, runtimes, now, timeout, hydration_enabled);
+  return frame_poll_timeout(sessions, runtimes, now, timeout);
 }
 
 struct PaneDamageAssessment final {
@@ -13395,59 +13423,45 @@ void expire_status_messages(Sessions& sessions, const ReactorClock::time_point n
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void service_pane_hydration(Sessions& sessions, PaneRuntimeStore& runtimes, std::size_t& cursor,
-                            const std::size_t configured_steps_per_turn) noexcept {
-  constexpr std::size_t steps_per_turn_max = 8;
-  const auto step_limit = std::min(configured_steps_per_turn, steps_per_turn_max);
-  if (step_limit == 0) {
+void service_pane_residency(Sessions& sessions, PaneRuntimeStore& runtimes,
+                            const bool hydration_enabled) noexcept {
+  runtimes.collect_snapshot_work();
+  if (!runtimes.residency_work_pending()) {
     return;
   }
-  const auto count = runtimes.unparking_count();
-  if (count == 0) {
-    cursor = 0;
-    return;
-  }
-  cursor %= count;
-  const auto steps = std::min(count, step_limit);
-  std::array<PaneAddress, steps_per_turn_max> due{};
-  std::size_t ordinal = 0;
-  runtimes.for_each([&](const PaneAddress address, const PaneRuntime& runtime) {
-    if (runtime.residency.phase() != PaneResidencyPhase::unparking) {
-      return;
-    }
-    const auto position = (ordinal + count - cursor) % count;
-    if (position < steps) {
-      std::span(due).subspan(position, 1).front() = address;
-    }
-    ++ordinal;
-  });
-  for (std::size_t visited = 0; visited < steps; ++visited) {
-    const auto address = std::span(due).subspan(visited, 1).front();
-    auto* const runtime = runtimes.get(address);
-    auto* const session = sessions.get(address.session);
-    LEMMA_ASSERT(runtime != nullptr && session != nullptr);
-    const auto restored = runtimes.restore_one_history_page(address);
-    if (!restored.has_value()) {
-      runtime->fail(PaneRuntimeFailure::snapshot_restore_error);
-      continue;
-    }
-    if (*restored) {
-      const auto activity = runtime->active_terminal().compression_activity();
-      if (!activity.has_value() || runtime->active_terminal().integrity_failed()) {
-        runtime->fail(PaneRuntimeFailure::snapshot_restore_error);
-        continue;
+  // First collect all completions, then retry pending hydration against the freed slots. No Pane
+  // performs snapshot work here, and an exhausted worker never makes poll use a zero timeout.
+  for (std::size_t pass = 0; pass < 2; ++pass) {
+    runtimes.for_each([&](const PaneAddress address, PaneRuntime& runtime) {
+      const auto phase = runtime.residency.phase();
+      if (!runtime.live() ||
+          (phase != PaneResidencyPhase::parking && phase != PaneResidencyPhase::unparking)) {
+        return;
       }
-      runtime->compression_activity = *activity;
-      runtime->active_terminal().invalidate_ansi_render_state();
-      session->attachment_runtime.status_valid = false;
-      if (session->attachment_runtime.client >= 0 ||
-          session->attachment_runtime.pending_attach_slot !=
-              std::numeric_limits<std::uint32_t>::max()) {
-        schedule_frame(*session, FrameUrgency::state_change, true);
+      auto* const session = sessions.get(address.session);
+      LEMMA_ASSERT(session != nullptr);
+      const auto restored = runtimes.advance_residency(address, hydration_enabled && pass == 1);
+      if (!restored.has_value()) {
+        runtime.fail(PaneRuntimeFailure::snapshot_restore_error);
+        return;
       }
-    }
+      if (*restored) {
+        const auto activity = runtime.active_terminal().compression_activity();
+        if (!activity.has_value() || runtime.active_terminal().integrity_failed()) {
+          runtime.fail(PaneRuntimeFailure::snapshot_restore_error);
+          return;
+        }
+        runtime.compression_activity = *activity;
+        runtime.active_terminal().invalidate_ansi_render_state();
+        session->attachment_runtime.status_valid = false;
+        if (session->attachment_runtime.client >= 0 ||
+            session->attachment_runtime.pending_attach_slot !=
+                std::numeric_limits<std::uint32_t>::max()) {
+          schedule_frame(*session, FrameUrgency::state_change, true);
+        }
+      }
+    });
   }
-  cursor = (cursor + steps) % count;
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -13880,6 +13894,7 @@ void accept_pending_connections(const int listener, PendingConnections& pending_
 
 enum class DescriptorKind : std::uint8_t {
   child_reaper,
+  snapshot_worker,
   pane,
   client,
   pending,
@@ -13928,7 +13943,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   if (!child_reaper.valid() || !set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
+  constexpr auto descriptor_count_max = std::size_t{3} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::sessions_hard_max) +
                                         limits::pending_connections_hard_max +
                                         capacity_rejection_connections_max;
@@ -13944,7 +13959,6 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t client_flush_cursor = 0;
   std::size_t search_cursor = 0;
   std::size_t compression_cursor = 0;
-  std::size_t hydration_cursor = 0;
   std::size_t parking_cursor = 0;
   std::size_t proc_cursor = 0;
   std::size_t observer_cursor = 0;
@@ -13956,8 +13970,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    service_pane_hydration(sessions, runtimes, hydration_cursor,
-                           environment.pane_hydration_steps_per_turn);
+    service_pane_residency(sessions, runtimes, !environment.pause_pane_hydration_for_test);
     if (!pending_connections.empty()) {
       service_pending_attach_preparations(pending_connections, sessions, runtimes);
       admit_prepared_public_observers(pending_connections, observers);
@@ -14009,6 +14022,20 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                .kind = DescriptorKind::child_reaper};
     poll_identities.front() = listener_poll_identity;
     std::span(poll_identities).subspan(1, 1).front() = child_reaper_poll_identity;
+    if (runtimes.snapshot_completion_descriptor() >= 0) {
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = runtimes.snapshot_completion_descriptor(), .events = POLLIN, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {
+          .session = {},
+          .tab = {},
+          .pane = {},
+          .connection = {},
+          .auxiliary_slot = 0,
+          .kind = DescriptorKind::snapshot_worker};
+      std::span(poll_identities).subspan(descriptor_count, 1).front() =
+          runtimes.snapshot_poll_identity();
+      ++descriptor_count;
+    }
     runtimes.for_each([&](const PaneAddress address, const PaneRuntime& runtime) {
       const auto* const session = sessions.get(address.session);
       const auto* const pane = session == nullptr ? nullptr : find_pane(*session, address.pane);
@@ -14124,8 +14151,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         reactor_poll(std::span(descriptors).first(descriptor_count),
                      std::span(poll_identities).first(descriptor_count),
                      poll_timeout(sessions, runtimes, pending_connections, observers, public_procs,
-                                  capacity_rejections, public_screen_work_pending,
-                                  environment.pane_hydration_steps_per_turn > 0));
+                                  capacity_rejections, public_screen_work_pending));
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -14206,6 +14232,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
+      if (owner.kind == DescriptorKind::snapshot_worker &&
+          (std::span(descriptors).subspan(index, 1).front().revents & POLLIN) != 0) {
+        runtimes.drain_snapshot_notification();
+      }
       if (owner.kind == DescriptorKind::client) {
         auto* const session = sessions.get(owner.session);
         if (session == nullptr || !session->active ||
@@ -14405,7 +14435,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .default_cwd = {},
           .command_history_file = {},
           .detached_pane_parking_delay = std::chrono::minutes{5},
-          .pane_hydration_steps_per_turn = 8,
+          .pause_pane_hydration_for_test = false,
+          .snapshot_worker_test_hook = {},
+          .snapshot_directory = "/tmp",
           .corrupt_parked_snapshots_for_test = false,
           .status_line = true};
 }

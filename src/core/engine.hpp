@@ -1,6 +1,8 @@
 #ifndef LEMMA_CORE_ENGINE_HPP
 #define LEMMA_CORE_ENGINE_HPP
 
+#include "core/pane_snapshot_worker.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -69,9 +71,10 @@ struct ReactorEnvironment final {
   std::string_view command_history_file;
   // Quiet detached Panes become eligible for snapshot parking after this delay. Null disables it.
   std::optional<ReactorClock::duration> detached_pane_parking_delay;
-  // Production restores at most eight Pane history pages per turn. Zero is a deterministic-test
-  // pause used to exercise cancellation ownership without timing races.
-  std::size_t pane_hydration_steps_per_turn{8};
+  // Test-only admission pause; the reactor never advances Ghostty restoration itself.
+  bool pause_pane_hydration_for_test{false};
+  PaneSnapshotWorker::TestHook snapshot_worker_test_hook;
+  std::string_view snapshot_directory{"/tmp"};
   // Test-only fault injection: corrupt Ghostty bytes before sealing each automatic snapshot.
   bool corrupt_parked_snapshots_for_test{false};
   bool status_line{true};

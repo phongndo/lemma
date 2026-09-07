@@ -2,7 +2,8 @@
 #define LEMMA_CORE_PANE_RESIDENCY_HPP
 
 #include "core/pane_snapshot_quota.hpp"
-#include "core/pane_snapshot_storage.hpp"
+#include "core/pane_snapshot_work.hpp"
+#include "core/pane_snapshot_worker.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -10,22 +11,9 @@
 #include <expected>
 #include <memory>
 #include <string_view>
-#include <utility>
 #include <variant>
 
 namespace lemma::core {
-
-enum class PaneResidencyPhase : std::uint8_t {
-  active,
-  parking,
-  parked,
-  unparking,
-};
-
-enum class SnapshotTestCorruption : std::uint8_t {
-  none,
-  ghostty_payload,
-};
 
 enum class PaneWakeReason : std::uint8_t {
   attach = 1U << 0U,
@@ -41,7 +29,6 @@ public:
   constexpr void add(const PaneWakeReason reason) noexcept {
     bits_ |= static_cast<std::uint8_t>(reason);
   }
-
   [[nodiscard]] constexpr auto contains(const PaneWakeReason reason) const noexcept -> bool {
     return (bits_ & static_cast<std::uint8_t>(reason)) != 0;
   }
@@ -51,103 +38,56 @@ private:
   std::uint8_t bits_{0};
 };
 
-// Active residency stays one inline Terminal owner. The larger transition states are allocated only
-// while a Pane is parking or parked, so the all-active daemon does not multiply cold state.
+// Active residency stays one inline Terminal owner. A cold Pane has either its sealed snapshot or
+// a generational worker ticket, never a terminal that the reactor and worker could both access.
 class PaneResidency final {
 public:
   explicit PaneResidency(vt::Terminal&& terminal) noexcept;
-
+  ~PaneResidency();
   PaneResidency(const PaneResidency&) = delete;
   auto operator=(const PaneResidency&) -> PaneResidency& = delete;
   PaneResidency(PaneResidency&&) = delete;
   auto operator=(PaneResidency&&) -> PaneResidency& = delete;
-
-  ~PaneResidency();
 
   [[nodiscard]] auto phase() const noexcept -> PaneResidencyPhase;
   [[nodiscard]] auto active_terminal() noexcept -> vt::Terminal*;
   [[nodiscard]] auto active_terminal() const noexcept -> const vt::Terminal*;
   [[nodiscard]] auto snapshot_bytes() const noexcept -> std::size_t;
 
-  // begin_parking() suppresses future PTY reads by leaving the active phase. finish_parking() then
-  // encodes exactly that terminal state and releases the live terminal only after sealing succeeds.
-  [[nodiscard]] auto begin_parking(const vt::TerminalOptions& restore_options,
-                                   PaneSnapshotQuota& quota, std::size_t session_slot,
-                                   std::string_view directory = "/tmp") noexcept
-      -> std::expected<std::size_t, vt::Error>;
+  // Admission reserves the maximum payload BEFORE transferring ownership. Sizing, storage,
+  // cryptography, and terminal destruction run on the worker. Saturation retains the live owner.
+  // Worker and quota must outlive this Pane; destruction cancels a ticket without waiting for it.
   [[nodiscard]] auto
-  finish_parking(SnapshotTestCorruption corruption = SnapshotTestCorruption::none) noexcept
+  begin_parking(PaneSnapshotWorker& worker, const vt::TerminalOptions& restore_options,
+                PaneSnapshotQuota& quota, std::size_t session_slot,
+                std::string_view directory = "/tmp",
+                SnapshotTestCorruption corruption = SnapshotTestCorruption::none) noexcept
       -> std::expected<void, vt::Error>;
-  void cancel_parking() noexcept;
-
-  // READY construction borrows authenticated operation-owned plaintext. One call restores at most
-  // one Ghostty history page. A true result means the complete terminal has atomically returned to
-  // active residency.
-  [[nodiscard]] auto begin_unparking() noexcept -> std::expected<void, vt::Error>;
-  [[nodiscard]] auto restore_one_history_page() noexcept -> std::expected<bool, vt::Error>;
-  void cancel_unparking() noexcept;
-
-  void request_wake(PaneWakeReason reason) noexcept;
+  void request_wake(PaneWakeReason reason, bool hydration_enabled = true) noexcept;
   [[nodiscard]] auto take_wake_reasons() noexcept -> PaneWakeReasons;
+  // Nonblocking completion handoff and admission of pending hydration. True means active again.
+  // False keeps the cold owner; errors are hydration failures, never loss of a live parking owner.
+  [[nodiscard]] auto advance(bool hydration_enabled = true) noexcept
+      -> std::expected<bool, vt::Error>;
 
 private:
-  struct Active final {
-    explicit Active(vt::Terminal&& value) noexcept : terminal(std::move(value)) {}
-    vt::Terminal terminal;
-  };
-
-  struct Parking final {
-    Parking(vt::Terminal&& terminal_value, WritablePaneSnapshot&& storage_value,
-            const vt::TerminalOptions& options_value,
-            PaneSnapshotQuota::Reservation&& reservation_value) noexcept
-        : terminal(std::move(terminal_value)), storage(std::move(storage_value)),
-          options(options_value), reservation(std::move(reservation_value)) {}
-    vt::Terminal terminal;
-    WritablePaneSnapshot storage;
-    vt::TerminalOptions options;
-    PaneSnapshotQuota::Reservation reservation;
-  };
-
-  struct Parked final {
-    Parked(PaneSnapshot&& storage_value, const vt::TerminalOptions& options_value,
-           PaneSnapshotQuota::Reservation&& reservation_value) noexcept
-        : storage(std::move(storage_value)), options(options_value),
-          reservation(std::move(reservation_value)) {}
-    PaneSnapshot storage;
-    vt::TerminalOptions options;
-    PaneSnapshotQuota::Reservation reservation;
-  };
-
-  struct Unparking final {
-    Unparking(PaneSnapshot&& storage_value, const vt::TerminalOptions& options_value,
-              PaneSnapshotQuota::Reservation&& reservation_value,
-              PaneSnapshotPlaintext&& plaintext_value,
-              vt::TerminalSnapshotRestore&& restore_value) noexcept
-        : storage(std::move(storage_value)), options(options_value),
-          reservation(std::move(reservation_value)), plaintext(std::move(plaintext_value)),
-          restore(std::move(restore_value)) {}
-    PaneSnapshot storage;
-    vt::TerminalOptions options;
-    PaneSnapshotQuota::Reservation reservation;
-    PaneSnapshotPlaintext plaintext;
-    // Declared last: decoder destruction precedes wiping/unmapping its borrowed plaintext.
-    vt::TerminalSnapshotRestore restore;
-  };
-
   struct ColdResidency final {
-    template <typename State, typename... Arguments>
-    explicit ColdResidency(std::in_place_type_t<State> state_type,
-                           Arguments&&... arguments) noexcept
-        : state(state_type, std::forward<Arguments>(arguments)...) {}
-    std::variant<Parking, Parked, Unparking> state;
+    explicit ColdResidency(PaneSnapshotWorker& owner) noexcept : worker(owner) {}
+    ~ColdResidency();
+    ColdResidency(const ColdResidency&) = delete;
+    auto operator=(const ColdResidency&) -> ColdResidency& = delete;
+    ColdResidency(ColdResidency&&) = delete;
+    auto operator=(ColdResidency&&) -> ColdResidency& = delete;
+    PaneSnapshotWorker& worker;
+    std::variant<PaneSnapshotWorker::Result, PaneSnapshotWorker::Ticket> state;
+    std::size_t bytes{0};
+    bool waking{false};
   };
-
-  std::variant<Active, std::unique_ptr<ColdResidency>> state_;
+  std::variant<vt::Terminal, std::unique_ptr<ColdResidency>> state_;
   PaneWakeReasons wake_reasons_;
 };
 
 static_assert(sizeof(PaneResidency) <= 24);
 
 } // namespace lemma::core
-
-#endif // LEMMA_CORE_PANE_RESIDENCY_HPP
+#endif

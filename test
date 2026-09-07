@@ -19,6 +19,7 @@ MUX_DOMAINS: dict[str, tuple[str, bool]] = {
     "command-line": ("tests.mux.test_command_line", True),
     "pane-lifecycle": ("tests.mux.test_pane_lifecycle", True),
     "session-lifecycle": ("tests.mux.test_session_lifecycle", True),
+    "snapshot-worker": ("tests.mux.test_snapshot_worker", True),
     "detach-reattach": (
         "tests.mux.test_session_lifecycle.SessionLifecycleTest."
         "test_output_while_detached_is_current_on_reattach",
