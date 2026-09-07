@@ -52,26 +52,32 @@ TEST(TerminalResourceTest, GrowsAndPrunesScrollbackUnderItsOwnerQuota) {
 TEST(TerminalResourceTest, DefaultScrollbackRetainsMultipleGhosttyPages) {
   constexpr std::string_view line =
       "history-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789------\r\n";
-  constexpr std::size_t input_rows = 20'000;
+  // Debug Ghostty verifies every cell in the growing page on each linefeed. Generate only
+  // enough history to prune the small quota and retain more than 10,000 rows with the default.
+  constexpr std::size_t small_input_rows = 2'000;
+  constexpr std::size_t default_input_rows = 12'000;
 
   TerminalOptions small_options;
   small_options.size = {.columns = 80, .rows = 23};
   small_options.scrollback_bytes_max = 1'000'000;
   auto small = make_terminal(small_options);
-  for (std::size_t row = 0; row < input_rows; ++row) {
+  for (std::size_t row = 0; row < small_input_rows; ++row) {
     write_text(small, line);
   }
   const auto small_rows = small.scrollback_rows();
   ASSERT_TRUE(small_rows.has_value());
+  EXPECT_GT(*small_rows, 0U);
+  EXPECT_LT(*small_rows, small_input_rows - small_options.size.rows + 1U);
 
   TerminalOptions default_options;
   default_options.size = small_options.size;
   auto terminal = make_terminal(default_options);
-  for (std::size_t row = 0; row < input_rows; ++row) {
+  for (std::size_t row = 0; row < default_input_rows; ++row) {
     write_text(terminal, line);
   }
   const auto retained = terminal.scrollback_rows();
   ASSERT_TRUE(retained.has_value());
+  EXPECT_EQ(*retained, default_input_rows - default_options.size.rows + 1U);
   EXPECT_GT(*retained, 10'000U);
   EXPECT_GT(*retained, *small_rows * 10U);
 }
