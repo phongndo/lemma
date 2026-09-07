@@ -7,4 +7,5 @@ Full local push log: build/wayfinder-negative-evidence/evidence-push.log (not pu
 Independent required just check was already run: exit 123 at Clang-tidy; see verification.txt and the archived log. No verification waiver or runtime repair is claimed.
 
 The user explicitly selected "Publish evidence only (recommended)" after being told that existing Mac pre-push failures blocked publication. Authorization is limited to bypassing hooks for this single evidence-only asset-branch push. No runtime changes, qualification waiver, merge, force-push, or persistent hook configuration change is authorized.
-One-shot publication command: git -c core.hooksPath=/dev/null push origin refs/heads/evidence/raw-to-verdict-negative-probes:refs/heads/evidence/raw-to-verdict-negative-probes
+An attempted one-shot core.hooksPath override did not bypass this installation's configured hook event and again stopped at missing conan; no remote branch was created by that attempt. No persistent configuration was changed.
+One-shot publication command: git push --no-verify origin refs/heads/evidence/raw-to-verdict-negative-probes:refs/heads/evidence/raw-to-verdict-negative-probes
