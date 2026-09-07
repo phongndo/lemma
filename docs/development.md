@@ -295,6 +295,13 @@ collect samples, and report distributions.
 Python, sanitizer, and workflow checks selected by changed paths. `.github/workflows/extended.yml`
 runs the platform matrix plus scheduled simulation, fuzz, and benchmark sweeps.
 
+Build caches share an OS, architecture, profile, and dependency fingerprint across workflows.
+Each successful trusted writer saves an immutable snapshot keyed by commit, run ID, and run attempt,
+so concurrent workflows and reruns cannot contend for the same key. Readers prefer snapshots of the
+same commit, then the newest compatible dependency cache. Only successful `main` jobs publish;
+pull requests and merge groups restore without writing. GitHub's cache quota and eviction policy
+bound retained snapshots.
+
 The local equivalents live under `scripts/ci/`; `just ci-check` runs the merge-blocking set in a
 safe sequence.
 
