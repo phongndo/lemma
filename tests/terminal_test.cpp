@@ -772,6 +772,36 @@ TEST(TerminalTest, ReportsTruthfulChildVisibleIdentityAndGeometry) {
   EXPECT_THAT(encoded, testing::HasSubstr("\x1BP1+r544E=787465726D2D323536636F6C6F72\x1B\\"));
 }
 
+TEST(TerminalTest, DeniesKittyClipboardWritesWithoutRememberingPermission) {
+  auto terminal = make_terminal();
+  constexpr std::string_view request = "\x1B]5522;type=write:id=c1:pw=c2VjcmV0:name=YXBw\x1B\\"
+                                       "\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;YQ==\x1B\\"
+                                       "\x1B]5522;type=wdata\x1B\\";
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    write_text(terminal, request);
+    EXPECT_EQ(terminal.take_effects().clipboard_writes_denied, 1U);
+    std::array<std::byte, 256> response{};
+    const auto response_size = terminal.read_pty_responses(response);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+    EXPECT_EQ(encoded, "\x1B]5522;type=write:status=EPERM:id=c1\x1B\\");
+  }
+}
+
+TEST(TerminalTest, DoesNotExposeClipboardContentsToApplications) {
+  auto terminal = make_terminal();
+  write_text(terminal, "\x1B]52;c;?\x1B\\");
+  EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
+
+  write_text(terminal, "\x1B]5522;type=read:id=r1;dGV4dC9wbGFpbg==\x1B\\");
+  std::array<std::byte, 256> response{};
+  const auto response_size = terminal.read_pty_responses(response);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view encoded(reinterpret_cast<const char*>(response.data()), response_size);
+  EXPECT_EQ(encoded, "\x1B]5522;type=read:status=EPERM:id=r1\x1B\\");
+  EXPECT_EQ(terminal.take_effects().clipboard_writes_denied, 0U);
+}
+
 TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   auto terminal = make_terminal();
   write_text(terminal, "\a\x1B]2;lemma title\x1B\\\x1B]7;file:///tmp\x1B\\"

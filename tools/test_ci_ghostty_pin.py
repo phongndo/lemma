@@ -6,7 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "cmake" / "ValidateGhosttyPin.cmake"
-PINNED_COMMIT = "3e7230bf5d0e12d018b850ed3856daa848bfebb7"
+PINNED_COMMIT = json.loads(
+    (ROOT / "third_party" / "ghostty-metadata" / "PIN.json").read_text(encoding="utf-8")
+)["commit"]
 
 
 class GhosttyPinValidationTests(unittest.TestCase):

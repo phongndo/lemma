@@ -461,6 +461,7 @@ const GhosttyAllocatorVtable QuotaAllocator::vtable{
     return Error::io_error;
   case GHOSTTY_LIMIT_EXCEEDED:
     return Error::limit_exceeded;
+  case GHOSTTY_REJECTED:
   case GHOSTTY_INVALID_VALUE:
   case GHOSTTY_NO_VALUE:
   case GHOSTTY_SUCCESS:

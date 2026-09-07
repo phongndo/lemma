@@ -84,17 +84,20 @@ auto Terminal::Impl::enquiry([[maybe_unused]] GhosttyTerminal terminal_handle,
   return {.ptr = identity.data(), .len = identity.size()};
 }
 
-auto Terminal::Impl::clipboard_write([[maybe_unused]] GhosttyTerminal terminal_handle,
-                                     void* userdata,
-                                     [[maybe_unused]] const GhosttyClipboardWrite* write) noexcept
-    -> GhosttyClipboardWriteResult {
+void Terminal::Impl::clipboard_write([[maybe_unused]] GhosttyTerminal terminal_handle,
+                                     void* userdata, const GhosttyClipboardWrite* write) noexcept {
   // Application-originated clipboard access is a separate permission from user copy. Until a
   // session policy explicitly grants it, deny the request at the terminal effect boundary.
   auto& impl = *static_cast<Impl*>(userdata);
   if (impl.effects.clipboard_writes_denied < std::numeric_limits<std::uint64_t>::max()) {
     ++impl.effects.clipboard_writes_denied;
   }
-  return GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED;
+  const GhosttyClipboardWriteReply reply{
+      .size = sizeof(GhosttyClipboardWriteReply),
+      .result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED,
+      .remember = false,
+  };
+  write->reply(write, &reply);
 }
 
 auto Terminal::Impl::color_scheme([[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,

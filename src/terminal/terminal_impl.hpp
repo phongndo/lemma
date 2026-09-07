@@ -83,9 +83,8 @@ struct Terminal::Impl final {
   static void unknown_sequence(GhosttyTerminal terminal_handle, void* userdata,
                                const GhosttyTerminalUnknownSequence* sequence) noexcept;
   static auto enquiry(GhosttyTerminal terminal_handle, void* userdata) noexcept -> GhosttyString;
-  static auto clipboard_write(GhosttyTerminal terminal_handle, void* userdata,
-                              const GhosttyClipboardWrite* write) noexcept
-      -> GhosttyClipboardWriteResult;
+  static void clipboard_write(GhosttyTerminal terminal_handle, void* userdata,
+                              const GhosttyClipboardWrite* write) noexcept;
   static auto color_scheme(GhosttyTerminal terminal_handle, void* userdata,
                            GhosttyColorScheme* output) noexcept -> bool;
   static auto device_attributes(GhosttyTerminal terminal_handle, void* userdata,
