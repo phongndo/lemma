@@ -11,7 +11,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from check_regression import BudgetError, budgets_from_manifest, load_object
+from check_regression import (
+    BudgetError,
+    budgets_from_manifest,
+    load_object,
+    require_scope,
+)
 from compare_regression import (
     micro_value,
     noise_floor,
@@ -83,6 +88,7 @@ def main() -> int:
         manifest_sha256 = hashlib.sha256(arguments.manifest.read_bytes()).hexdigest()
         for capture_reports in loaded:
             require_manifest_identity(capture_reports, manifest_sha256)
+            require_scope(budgets, *capture_reports)
         base_micro, base_process, base_profile = loaded[0]
         for index, (micro, process, profile) in enumerate(loaded[1:], 1):
             require_same_capture_scope(
