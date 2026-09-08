@@ -1,6 +1,7 @@
 #include "core/command_line.hpp"
 
 #include "api/command.hpp"
+#include "extension/commands.hpp"
 #include "lemma/command.hpp"
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
@@ -608,7 +609,8 @@ launch_completion_kind(const std::span<const std::string_view> words,
 } // namespace
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto parse_command_line(const std::string_view line, const CommandLineContext context)
+[[nodiscard]] auto parse_command_line(const std::string_view line, const CommandLineContext context,
+                                      const std::span<const extension::CommandDescriptor> commands)
     -> std::expected<CommandLineAction, CommandLineError> {
   if (line.empty() || line.size() > command_line_bytes_max) {
     return invalid();
@@ -647,6 +649,15 @@ launch_completion_kind(const std::span<const std::string_view> words,
   }
   if (words[0] == "pane") {
     return parse_pane_command(words, context);
+  }
+  if (std::ranges::any_of(commands,
+                          [&](const auto& command) { return command.name == words[0]; })) {
+    CommandLineAction action;
+    action.kind = CommandLineActionKind::hosted;
+    action.hosted_command = words[0];
+    const auto arguments = words.subspan(1);
+    action.arguments.assign(arguments.begin(), arguments.end());
+    return action;
   }
   return std::unexpected(CommandLineError::unknown_command);
 }

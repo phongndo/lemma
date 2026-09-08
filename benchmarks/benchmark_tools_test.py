@@ -19,6 +19,7 @@ from benchmark_manifest import expected_failure, load_manifest, suite_workloads
 from calibrate_regression import calibration
 from check_regression import (
     BudgetError,
+    budgets_from_manifest,
     checked_samples,
     process_check_samples,
     require_completed_process_workloads,
@@ -26,7 +27,12 @@ from check_regression import (
     statistic,
     validate_comparative_check,
 )
-from compare_regression import add_comparison, profile_values, require_manifest_identity
+from compare_regression import (
+    add_comparison,
+    profile_values,
+    require_manifest_identity,
+    require_same_capture_scope,
+)
 from compare_regression import policy as paired_policy
 from latency_trace import input_paths
 from mux_benchmark import (
@@ -56,6 +62,7 @@ from mux_benchmark import (
 from mux_benchmark import (
     summary as latency_summary,
 )
+from performance_host import validate as validate_host
 from terminal_lab import validate_samples
 
 
@@ -639,41 +646,152 @@ class RegressionWorkloadTest(unittest.TestCase):
 
 
 class RegressionScopeTest(unittest.TestCase):
-    def test_rejects_a_different_host_with_the_same_cpu_count(self) -> None:
-        approved = {
-            "host_name": "pinned.example",
-            "model_identifier": "Mac16,5",
-            "cpu_model": "Apple M4 Max",
-            "physical_cpu_count": 16,
-            "memory_bytes": 68_719_476_736,
+    def setUp(self) -> None:
+        self.budgets = budgets_from_manifest(load_manifest())
+        self.policy = json.loads(
+            Path("benchmarks/performance_hosts.json").read_text(encoding="utf-8")
+        )["hosts"]["box"]
+        self.fingerprint = {
+            field: self.policy[field]
+            for field in (
+                "host_name",
+                "model_identifier",
+                "cpu_model",
+                "physical_cpu_count",
+            )
         }
-        budgets = {
-            "scope": {
-                "approved_host": approved,
-                "process_report_requirements": {"system": "Darwin"},
-                "micro_context_requirements": {"num_cpus": 16},
-            }
-        }
-        micro_report = {
+        # Linux MemTotal changed by one page from the original exact manifest pin.
+        self.fingerprint["memory_bytes"] = 32_641_343_488 + 4096
+        self.micro: dict[str, Any] = {
             "context": {
-                "host_name": "other.example",
-                "num_cpus": 16,
-                "host_model_identifier": "Mac16,5",
-                "host_cpu_model": "Apple M4 Max",
-                "host_physical_cpu_count": "16",
-                "host_memory_bytes": "68719476736",
+                "host_name": self.fingerprint["host_name"],
+                "num_cpus": self.policy["logical_cpu_count"],
+                "library_build_type": "release",
+                "host_model_identifier": self.fingerprint["model_identifier"],
+                "host_cpu_model": self.fingerprint["cpu_model"],
+                "host_physical_cpu_count": str(self.fingerprint["physical_cpu_count"]),
+                "host_memory_bytes": str(self.fingerprint["memory_bytes"]),
+                "load_avg": [0.0],
+                "source_commit": "abc",
+                "executable_sha256": "a" * 64,
+                "manifest_sha256": "b" * 64,
             }
         }
-        process_report = {
-            "system": "Darwin",
-            "host": "other.example",
-            "host_fingerprint": {**approved, "host_name": "other.example"},
+        self.process: dict[str, Any] = {
+            "system": self.policy["system"],
+            "architecture": self.policy["architecture"],
+            "build_profile": "release",
+            "host": self.fingerprint["host_name"],
+            "host_fingerprint": dict(self.fingerprint),
+            "host_load_average": [0.0],
             "commit": "abc",
+            "manifest": {"sha256": "b" * 64},
+            "environment_valid": True,
+            "run_intent": "gate",
         }
-        profile_report = dict(process_report)
+        self.profile: dict[str, Any] = {
+            **self.process,
+            "host_fingerprint": dict(self.fingerprint),
+        }
 
-        with self.assertRaisesRegex(BudgetError, "approved pinned host"):
-            require_scope(budgets, micro_report, process_report, profile_report)
+    def test_preflight_and_reports_accept_the_same_approved_memory(self) -> None:
+        snapshot = {
+            **self.policy,
+            "fingerprint": self.fingerprint,
+            "load_average": [0.0],
+        }
+        self.assertEqual(validate_host(snapshot, self.policy), [])
+        require_scope(self.budgets, self.micro, self.process, self.profile)
+
+    def test_rejects_a_different_host_with_the_same_cpu_count(self) -> None:
+        for report in (self.process, self.profile):
+            for field in ("host_name", "model_identifier", "cpu_model"):
+                with self.subTest(report=report, field=field):
+                    original = report["host_fingerprint"][field]
+                    report["host_fingerprint"][field] = "other"
+                    with self.assertRaisesRegex(BudgetError, "approved pinned host"):
+                        require_scope(
+                            self.budgets, self.micro, self.process, self.profile
+                        )
+                    report["host_fingerprint"][field] = original
+
+    def test_manifest_selects_only_an_approved_host_policy(self) -> None:
+        manifest = load_manifest()
+        manifest["regression_budgets"]["scope"]["approved_host"] = "unapproved"
+        with self.assertRaisesRegex(BudgetError, "not approved"):
+            budgets_from_manifest(manifest)
+
+    def test_report_identity_comes_from_the_host_policy(self) -> None:
+        for field, value in (("physical_cpu_count", 8), ("physical_cpu_count", True)):
+            with self.subTest(field=field, value=value):
+                self.process["host_fingerprint"][field] = value
+                with self.assertRaisesRegex(BudgetError, "approved pinned host"):
+                    require_scope(self.budgets, self.micro, self.process, self.profile)
+        self.process["host_fingerprint"] = dict(self.fingerprint)
+        for field in ("system", "architecture"):
+            with self.subTest(field=field):
+                original = self.process[field]
+                self.process[field] = "other"
+                with self.assertRaisesRegex(BudgetError, "outside the reviewed scope"):
+                    require_scope(self.budgets, self.micro, self.process, self.profile)
+                self.process[field] = original
+
+    def test_native_identity_comes_from_the_host_policy(self) -> None:
+        for field, value in (
+            ("host_name", "other"),
+            ("host_model_identifier", "other"),
+            ("host_cpu_model", "other"),
+            ("host_physical_cpu_count", "8"),
+            ("host_memory_bytes", str(self.policy["minimum_memory_bytes"] - 1)),
+            ("num_cpus", 8),
+        ):
+            with self.subTest(field=field):
+                original = self.micro["context"][field]
+                self.micro["context"][field] = value
+                with self.assertRaises(BudgetError):
+                    require_scope(self.budgets, self.micro, self.process, self.profile)
+                self.micro["context"][field] = original
+
+    def test_rejects_insufficient_or_malformed_report_memory(self) -> None:
+        for memory in (
+            self.policy["minimum_memory_bytes"] - 1,
+            None,
+            True,
+            "32000000000",
+        ):
+            with self.subTest(memory=memory):
+                self.process["host_fingerprint"]["memory_bytes"] = memory
+                snapshot = {
+                    **self.policy,
+                    "fingerprint": self.process["host_fingerprint"],
+                    "load_average": [0.0],
+                }
+                self.assertTrue(validate_host(snapshot, self.policy))
+                with self.assertRaisesRegex(BudgetError, "approved pinned host"):
+                    require_scope(self.budgets, self.micro, self.process, self.profile)
+
+    def test_requires_exact_fingerprints_within_a_capture(self) -> None:
+        self.profile["host_fingerprint"]["memory_bytes"] += 4096
+        with self.assertRaisesRegex(BudgetError, "different host fingerprints"):
+            require_scope(self.budgets, self.micro, self.process, self.profile)
+
+    def test_requires_exact_native_and_process_fingerprints(self) -> None:
+        self.micro["context"]["host_memory_bytes"] = str(
+            self.fingerprint["memory_bytes"] + 4096
+        )
+        with self.assertRaisesRegex(BudgetError, "different host fingerprints"):
+            require_scope(self.budgets, self.micro, self.process, self.profile)
+
+    def test_requires_exact_fingerprints_across_paired_captures(self) -> None:
+        candidate = {
+            **self.process,
+            "host_fingerprint": {
+                **self.fingerprint,
+                "memory_bytes": self.fingerprint["memory_bytes"] + 4096,
+            },
+        }
+        with self.assertRaisesRegex(BudgetError, "differ in host_fingerprint"):
+            require_same_capture_scope(self.process, candidate, "process")
 
 
 class DescriptorSnapshotTest(unittest.TestCase):

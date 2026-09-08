@@ -2,6 +2,7 @@
 #define LEMMA_CORE_COMMAND_LINE_HPP
 
 #include "api/command.hpp"
+#include "extension/commands.hpp"
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
 
@@ -11,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lemma::core {
 
@@ -21,6 +23,7 @@ enum class CommandLineActionKind : std::uint8_t {
   command,
   switch_session,
   detach,
+  hosted,
 };
 
 struct CommandLineContext final {
@@ -32,6 +35,8 @@ struct CommandLineContext final {
 struct CommandLineAction final {
   api::Command command;
   api::SessionSelector switch_session;
+  std::string hosted_command;
+  std::vector<std::string> arguments;
   CommandLineActionKind kind{CommandLineActionKind::command};
 };
 
@@ -43,7 +48,8 @@ enum class CommandLineError : std::uint8_t {
 
 // Parses the bounded interactive grammar. It deliberately performs no shell expansion: quotes and
 // backslashes only group literal argv, title, and path text.
-[[nodiscard]] auto parse_command_line(std::string_view line, CommandLineContext context)
+[[nodiscard]] auto parse_command_line(std::string_view line, CommandLineContext context,
+                                      std::span<const extension::CommandDescriptor> commands = {})
     -> std::expected<CommandLineAction, CommandLineError>;
 
 enum class CommandLineCompletionKind : std::uint8_t {

@@ -170,10 +170,14 @@ add_library(lemma_config STATIC src/config/config.cpp)
 lemma_internal_target(lemma_config)
 target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input)
 
-add_library(lemma_extension STATIC src/extension/lua_host.cpp)
+add_library(lemma_extension_contract STATIC src/extension/commands.cpp)
+lemma_internal_target(lemma_extension_contract)
+target_link_libraries(lemma_extension_contract PRIVATE lemma_api)
+
+add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp)
 lemma_internal_target(lemma_extension)
 target_link_libraries(
-  lemma_extension PRIVATE lemma_base lemma_config lemma_input lemma_platform ${LEMMA_LUA_TARGET}
+  lemma_extension PRIVATE lemma_base lemma_config lemma_extension_contract lemma_input lemma_platform ${LEMMA_LUA_TARGET}
 )
 
 add_library(
@@ -196,6 +200,7 @@ target_link_libraries(
     lemma_base
     lemma_core
     lemma_diagnostic
+    lemma_extension_contract
     lemma_input
     lemma_platform
     lemma_protocol
@@ -282,6 +287,7 @@ if(LEMMA_BUILD_TESTS)
     lemma_unit_tests
     tests/api_test.cpp
     tests/config_test.cpp
+    tests/extension_commands_test.cpp
     tests/command_history_test.cpp
     tests/command_line_test.cpp
     tests/connection_output_test.cpp
@@ -439,6 +445,7 @@ if(LEMMA_BUILD_TESTS)
   endfunction()
 
   lemma_add_python_mux_test(configuration tests.mux.test_configuration)
+  lemma_add_python_mux_test(extensions tests.mux.test_extensions)
   lemma_add_python_mux_test(command_line tests.mux.test_command_line)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)

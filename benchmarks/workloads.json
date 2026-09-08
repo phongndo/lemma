@@ -423,20 +423,11 @@
     "scope": {
       "label": "AMD Ryzen 9 9950X 16-core 32-GiB box host",
       "policy": "Manual local gates use the nearest-rank statistic over raw samples. Shared CI validates the manifest and reports but does not enforce host-specific thresholds.",
-      "approved_host": {
-        "host_name": "box",
-        "model_identifier": "MS-7E61",
-        "cpu_model": "AMD Ryzen 9 9950X 16-Core Processor",
-        "physical_cpu_count": 16,
-        "memory_bytes": 32641343488
-      },
+      "approved_host": "box",
       "process_report_requirements": {
-        "system": "Linux",
-        "architecture": "x86_64",
         "build_profile": "release"
       },
       "micro_context_requirements": {
-        "num_cpus": 32,
         "library_build_type": "release"
       },
       "maximum_load_average_1m": 4.0

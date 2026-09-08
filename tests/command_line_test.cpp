@@ -79,6 +79,21 @@ TEST(CommandLineTest, ParsesSwitchAliasesWithoutTreatingThemAsNestedSessions) {
   }
 }
 
+TEST(CommandLineTest, ResolvesRegisteredCommandsUsingTheSameLiteralArgumentGrammar) {
+  const std::array commands{
+      extension::CommandDescriptor{.name = "project.open", .description = "Open"}};
+  const auto parsed = parse_command_line("project.open 'two words' '' $HOME", context, commands);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->kind, CommandLineActionKind::hosted);
+  EXPECT_EQ(parsed->hosted_command, "project.open");
+  EXPECT_EQ(parsed->arguments, (std::vector<std::string>{"two words", "", "$HOME"}));
+  EXPECT_EQ(parse_command_line("project.open", context).error(), CommandLineError::unknown_command);
+  EXPECT_EQ(parse_command_line("project.open 'unfinished", context, commands).error(),
+            CommandLineError::invalid_syntax);
+  EXPECT_EQ(parse_command_line("pane split --right", context, commands)->kind,
+            CommandLineActionKind::command);
+}
+
 TEST(CommandLineTest, RejectsUnknownMalformedAndUnclosedInput) {
   EXPECT_EQ(parse_command_line("frobnicate", context).error(), CommandLineError::unknown_command);
   EXPECT_EQ(parse_command_line("pane resize --left 0", context).error(),

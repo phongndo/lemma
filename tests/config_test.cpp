@@ -177,6 +177,45 @@ lemma.keymap.del("prefix", "%")
   EXPECT_EQ(std::get<input::EncodeAsKey>(rewritten.effect).key, input::PhysicalKey::enter);
 }
 
+TEST(ConfigurationHostTest, PublishesCommandMetadataWithTheConfigurationTransaction) {
+  TemporaryConfig file(R"(
+local lemma = require("lemma")
+lemma.command.register("project.open", {
+  description = "Open a project", timeout_ms = 1234,
+  handler = function(ctx, args) error("not executed during registration") end,
+})
+)");
+  ASSERT_TRUE(file.valid());
+  auto loaded = extension::load_configuration(file.path());
+  ASSERT_EQ(loaded.status, extension::ConfigurationStatus::loaded) << loaded.diagnostic;
+  ASSERT_EQ(loaded.commands.size(), 1);
+  EXPECT_EQ(loaded.commands.front().name, "project.open");
+  EXPECT_EQ(loaded.commands.front().description, "Open a project");
+  EXPECT_EQ(loaded.commands.front().timeout_ms, 1234);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ConfigurationHostTest, RejectsDuplicateOrInvalidCommandsWithoutPublishingConfiguration) {
+  for (const auto* const declaration :
+       {"lemma.command.register('pane', {description='bad', handler=function() end})",
+        "lemma.command.register('test.bad', {description='bad', timeout_ms=0, handler=function() "
+        "end})",
+        "lemma.command.register('test.bad', {description='bad', handler=42})",
+        "lemma.command.register('test.bad', {description='bad', extra=true, handler=function() "
+        "end})",
+        "for i=1,2 do lemma.command.register('test.bad', {description='bad', handler=function() "
+        "end}) end"}) {
+    TemporaryConfig file(
+        std::string("local lemma = require('lemma')\nlemma.setup({input={prefix='C-a'}})\n") +
+        declaration);
+    ASSERT_TRUE(file.valid());
+    const auto loaded = extension::load_configuration(file.path());
+    EXPECT_EQ(loaded.status, extension::ConfigurationStatus::invalid) << declaration;
+    EXPECT_EQ(loaded.generation, nullptr);
+    EXPECT_FALSE(loaded.host.active());
+  }
+}
+
 TEST(ConfigurationHostTest, RejectsTheWholeGenerationAfterALuaError) {
   TemporaryConfig file(R"(
 local lemma = require("lemma")

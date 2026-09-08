@@ -1,6 +1,10 @@
 #include "extension/lua_host.hpp"
 
+#include "extension/lua_commands.hpp"
+
+#include "api/json.hpp"
 #include "config/config.hpp"
+#include "extension/commands.hpp"
 #include "input/input_router.hpp"
 #include "lemma/limits.hpp"
 #include "platform/io.hpp"
@@ -60,6 +64,7 @@ struct LuaAllocator final {
 
 struct LuaConfiguration final {
   config::Configuration configuration;
+  LuaCommands commands;
 };
 
 [[nodiscard]] auto host_configuration(lua_State* const state) noexcept -> LuaConfiguration& {
@@ -623,6 +628,7 @@ void set_host_function(lua_State* const state, LuaConfiguration& configuration, 
 void install_lemma_module(lua_State* const state, LuaConfiguration& configuration) {
   lua_createtable(state, 0, 3);
   set_host_function(state, configuration, "setup", &config_setup);
+  install_commands(state, configuration.commands);
   lua_createtable(state, 0, 4);
   set_host_function(state, configuration, "set", &keymap_set);
   set_host_function(state, configuration, "del", &keymap_del);
@@ -742,24 +748,18 @@ void install_lemma_module(lua_State* const state, LuaConfiguration& configuratio
     return 1;
   }
   const auto encoded = config::encode(configuration.configuration);
-  if (!encoded.has_value() ||
-      !send_host_message(descriptor, HostMessageStatus::configured, *encoded)) {
+  const auto registration = encoded.has_value()
+                                ? encode_registration(*encoded, configuration.commands.descriptors)
+                                : std::nullopt;
+  if (!registration.has_value() ||
+      !send_host_message(descriptor, HostMessageStatus::configured, *registration)) {
     lua_close(state);
     return 1;
   }
 
-  // The loaded VM is the first extension-runtime generation. It remains isolated and resident for
-  // the daemon lifetime; later slices attach commands, events, and jobs to this same lease.
-  std::array<std::byte, 64> ignored{};
-  while (true) {
-    const auto received = ::read(descriptor, ignored.data(), ignored.size());
-    if (received > 0 || (received < 0 && errno == EINTR)) {
-      continue;
-    }
-    break;
-  }
+  const auto result = run_commands(state, configuration.commands, descriptor);
   lua_close(state);
-  return 0;
+  return result;
 }
 
 [[nodiscard]] auto set_close_on_exec(const int descriptor) noexcept -> bool {
@@ -937,6 +937,21 @@ auto HostProcess::operator=(HostProcess&& other) noexcept -> HostProcess& {
 
 HostProcess::~HostProcess() { reset(); }
 
+void HostProcess::terminate() noexcept {
+  if (descriptor_ >= 0) {
+    static_cast<void>(::shutdown(descriptor_, SHUT_RDWR));
+  }
+  if (process_ > 0) {
+    // A daemon child wake may already have reaped the host. Never signal a recycled PID/group.
+    const auto waited = ::waitpid(process_, nullptr, WNOHANG);
+    if (waited == 0) {
+      static_cast<void>(::kill(-process_, SIGKILL));
+    } else if (waited == process_ || (waited < 0 && errno == ECHILD)) {
+      process_ = -1;
+    }
+  }
+}
+
 void HostProcess::reset() noexcept {
   close_descriptor(descriptor_);
   if (process_ <= 0) {
@@ -999,7 +1014,25 @@ auto load_configuration(const std::optional<std::string_view> requested_path) no
     result.diagnostic = std::move(frame->payload);
     return result;
   }
-  const auto decoded = config::decode(frame->payload);
+  config::DecodeResult decoded;
+  try {
+    const auto registration = api::parse_json(frame->payload);
+    const auto* const configuration = registration.value.has_value()
+                                          ? api::json_member(*registration.value, "configuration")
+                                          : nullptr;
+    const auto* const commands = registration.value.has_value()
+                                     ? api::json_member(*registration.value, "commands")
+                                     : nullptr;
+    auto declarations = commands == nullptr ? std::nullopt : decode_commands(*commands);
+    if (registration.value.has_value() && configuration != nullptr && declarations.has_value() &&
+        registration.value->object.size() == 2U) {
+      decoded = config::decode(*configuration);
+      result.commands = std::move(*declarations);
+    }
+  } catch (...) {
+    decoded = {};
+    result.commands.clear();
+  }
   if (!decoded.configuration.has_value()) {
     result.status = ConfigurationStatus::invalid;
     result.diagnostic = "configuration runtime returned an invalid document";

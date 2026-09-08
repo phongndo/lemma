@@ -292,9 +292,14 @@ just performance-calibrate 3
 just performance-gate main
 ```
 
-`benchmarks/performance_hosts.json` pins its hardware identity, CPU policy, and `0-7` affinity.
-Calibration captures the unchanged checkout repeatedly and fails if the reviewed ratio and absolute
-noise floors do not contain the observed A/A spread; it never relaxes policy automatically. Linux
+`benchmarks/performance_hosts.json` is the host identity authority for both preflight and report
+validation; the workload manifest selects its named policy. It pins hardware identity, CPU policy,
+and `0-7` affinity, and admits reported memory at or above the approved minimum. Linux `MemTotal`
+is usable memory, not an exact installed-RAM identity, and can vary across boots. Fingerprints,
+including exact reported memory, must still agree across report types, paired captures, and
+before/after host checks. Calibration captures the unchanged checkout repeatedly and fails if the
+reviewed ratio and absolute noise floors do not contain the observed A/A spread; it never relaxes
+policy automatically. Linux
 process CPU evidence uses nanosecond runtime from `/proc/PID/schedstat`, not scheduler-tick-rounded
 `/proc/PID/stat` values. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
 diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers

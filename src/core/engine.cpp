@@ -1,5 +1,7 @@
 #include "core/engine.hpp"
 
+#include "extension/commands.hpp"
+
 #include "api/command.hpp"
 #include "api/json.hpp"
 #include "api/proc.hpp"
@@ -8850,14 +8852,22 @@ struct ProcOutputIds final {
   PaneId pane;
 };
 
+struct ConnectionProcOwner final {
+  std::size_t slot{limits::pending_connections_hard_max};
+  std::uint32_t generation{0};
+};
+
+struct ExtensionProcOwner final {
+  std::uint64_t invocation{0};
+};
+
 struct ProcExecutionState final {
   std::vector<CompiledProcStep> steps;
   std::vector<ProcOutputIds> outputs;
   std::vector<std::string> results;
   std::optional<ProcCommandWait> wait;
   PublicProcId id;
-  std::size_t owner_slot{limits::pending_connections_hard_max};
-  std::uint32_t owner_generation{0};
+  std::variant<ConnectionProcOwner, ExtensionProcOwner> owner;
   std::size_t retained_result_bytes{0};
   std::size_t next_command{0};
   bool continue_on_error{false};
@@ -9295,11 +9305,12 @@ void finish_public_output(PendingConnection& pending, std::string output,
 [[nodiscard]] auto owned_public_proc(PendingConnections& connections,
                                      const ProcExecutionState& execution) noexcept
     -> PendingConnection* {
-  if (execution.owner_slot >= connections.size()) {
+  const auto* const owner = std::get_if<ConnectionProcOwner>(&execution.owner);
+  if (owner == nullptr || owner->slot >= connections.size()) {
     return nullptr;
   }
-  auto* const pending = std::span(connections).subspan(execution.owner_slot, 1).front().get();
-  if (pending == nullptr || pending->generation != execution.owner_generation ||
+  auto* const pending = std::span(connections).subspan(owner->slot, 1).front().get();
+  if (pending == nullptr || pending->generation != owner->generation ||
       pending->state != PendingState::execute_public_proc || pending->proc != execution.id) {
     return nullptr;
   }
@@ -9313,11 +9324,11 @@ void finish_public_output(PendingConnection& pending, std::string output,
 
 // The reactor owns admitted Procs independently of transports. The connection slot and generation
 // are only a completion owner: closing or reusing that owner cancels the Proc before another step.
-// NOLINTNEXTLINE(bugprone-exception-escape)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 void service_public_procs(PublicProcExecutions& executions, PendingConnections& connections,
                           Sessions& sessions, PaneRuntimeStore& runtimes,
                           std::uint64_t& activity_order, PublicScratch& scratch,
-                          std::size_t& cursor) noexcept {
+                          std::size_t& cursor, extension::CommandRuntime& extensions) noexcept {
   for (std::size_t visited = 0; visited < executions.size(); ++visited) {
     const auto slot = (cursor + visited) % executions.size();
     auto& proc_slot = std::span(executions).subspan(slot, 1).front();
@@ -9325,28 +9336,38 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
       continue;
     }
     auto* const pending = owned_public_proc(connections, *proc_slot.execution);
-    if (pending == nullptr) {
+    const auto* const hosted = std::get_if<ExtensionProcOwner>(&proc_slot.execution->owner);
+    const auto invocation = hosted == nullptr ? 0U : hosted->invocation;
+    if (pending == nullptr && extensions.find(invocation) == nullptr) {
       proc_slot.execution.reset();
       continue;
     }
+    const auto complete = [&](std::string output) {
+      proc_slot.execution.reset();
+      if (pending != nullptr) {
+        pending->proc = {};
+        finish_public_output(*pending, std::move(output), PendingDisposition::keep_proc);
+      } else {
+        static_cast<void>(extensions.result(invocation, output));
+      }
+    };
     try {
       auto output = execute_public_proc_step(*proc_slot.execution, sessions, runtimes,
                                              activity_order, scratch);
       if (output.has_value()) {
-        pending->proc = {};
-        proc_slot.execution.reset();
-        finish_public_output(*pending, std::move(*output), PendingDisposition::keep_proc);
+        complete(std::move(*output));
       }
     } catch (...) {
       try {
-        auto output = public_proc_failure(*proc_slot.execution);
-        pending->proc = {};
-        proc_slot.execution.reset();
-        finish_public_output(*pending, std::move(output), PendingDisposition::keep_proc);
+        complete(public_proc_failure(*proc_slot.execution));
       } catch (...) {
-        pending->proc = {};
         proc_slot.execution.reset();
-        pending->state = PendingState::unused;
+        if (pending != nullptr) {
+          pending->proc = {};
+          pending->state = PendingState::unused;
+        } else {
+          extensions.channel().disconnect();
+        }
       }
     }
     cursor = (slot + 1U) % executions.size();
@@ -9589,8 +9610,8 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
   }
 }
 
-[[nodiscard]] auto admit_public_proc(PendingConnection& pending, PublicProcExecutions& executions,
-                                     ProcExecutionState execution) -> bool {
+[[nodiscard]] auto admit_owned_proc(PublicProcExecutions& executions, ProcExecutionState execution)
+    -> std::optional<PublicProcId> {
   for (std::size_t slot = 0; slot < executions.size(); ++slot) {
     auto& destination = std::span(executions).subspan(slot, 1).front();
     if (destination.execution != nullptr) {
@@ -9598,15 +9619,123 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
     }
     destination.generation = next_generation(destination.generation);
     execution.id = {.slot = static_cast<std::uint32_t>(slot), .generation = destination.generation};
-    execution.owner_slot = pending.slot;
-    execution.owner_generation = pending.generation;
     destination.execution = std::make_unique<ProcExecutionState>(std::move(execution));
-    pending.proc = destination.execution->id;
-    std::string{}.swap(pending.public_input);
-    pending.state = PendingState::execute_public_proc;
-    return true;
+    return destination.execution->id;
   }
-  return false;
+  return std::nullopt;
+}
+
+[[nodiscard]] auto admit_public_proc(PendingConnection& pending, PublicProcExecutions& executions,
+                                     ProcExecutionState execution) -> bool {
+  execution.owner = ConnectionProcOwner{.slot = pending.slot, .generation = pending.generation};
+  const auto admitted = admit_owned_proc(executions, std::move(execution));
+  if (!admitted.has_value()) {
+    return false;
+  }
+  pending.proc = *admitted;
+  std::string{}.swap(pending.public_input);
+  pending.state = PendingState::execute_public_proc;
+  return true;
+}
+
+[[nodiscard]] auto invocation_attachment(Sessions& sessions,
+                                         const extension::Invocation& invocation) noexcept
+    -> SessionRecord* {
+  auto* const session = sessions.get(invocation.context.session);
+  return session != nullptr && session->active && session->attachment_runtime.client >= 0 &&
+                 session->attachment_runtime.connection_id == invocation.context.connection
+             ? session
+             : nullptr;
+}
+
+void fail_hosted_commands(extension::CommandRuntime& extensions, Sessions& sessions,
+                          const std::string_view message) noexcept {
+  for (const auto& invocation : extensions.invocations()) {
+    if (invocation.id != 0) {
+      if (auto* const session = invocation_attachment(sessions, invocation); session != nullptr) {
+        publish_status_message(*session, StatusMessageKind::error, message);
+      }
+    }
+  }
+  extensions.fail();
+}
+
+// Invocations are attachment-generation owned. Validate that owner after input/detach processing
+// and before admitting or executing any extension Proc. A completed effect is never rolled back.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void service_hosted_commands(extension::CommandRuntime& extensions, Sessions& sessions,
+                             PublicProcExecutions& executions) noexcept {
+  if (extensions.channel().descriptor() < 0) {
+    fail_hosted_commands(extensions, sessions, "Error: Extension host unavailable");
+    return;
+  }
+  for (const auto& invocation : extensions.invocations()) {
+    if (invocation.id == 0) {
+      continue;
+    }
+    if (reactor_now() >= invocation.deadline) {
+      fail_hosted_commands(extensions, sessions, "Error: Extension command timed out");
+      return;
+    }
+    if (invocation.phase != extension::InvocationPhase::cancelling &&
+        invocation_attachment(sessions, invocation) == nullptr) {
+      extensions.cancel(invocation.id);
+    }
+  }
+  auto message = extensions.channel().receive();
+  if (!message.has_value()) {
+    if (extensions.channel().descriptor() < 0) {
+      fail_hosted_commands(extensions, sessions, "Error: Invalid extension response");
+    }
+    return;
+  }
+  auto* const invocation = extensions.find(message->invocation);
+  if (invocation == nullptr) {
+    if (message->kind == "complete") {
+      extensions.finish(message->invocation);
+    }
+    return; // A cancelled generation cannot submit more work, including already queued requests.
+  }
+  try {
+    if (message->kind == "proc" && invocation->phase == extension::InvocationPhase::running) {
+      auto prepared = prepare_public_proc(std::move(message->payload));
+      if (!prepared.has_value()) {
+        static_cast<void>(extensions.result(
+            invocation->id, proc_error(prepared.error().reason, prepared.error().index)));
+        return;
+      }
+      prepared->owner = ExtensionProcOwner{.invocation = invocation->id};
+      if (!admit_owned_proc(executions, std::move(*prepared)).has_value()) {
+        static_cast<void>(extensions.result(invocation->id, proc_error("capacity")));
+        return;
+      }
+      invocation->phase = extension::InvocationPhase::waiting_proc;
+    } else if (message->kind == "complete" &&
+               invocation->phase == extension::InvocationPhase::running) {
+      const auto ok = api::json_boolean(message->payload, "ok");
+      if (!ok.has_value()) {
+        fail_hosted_commands(extensions, sessions, "Error: Invalid extension response");
+        return;
+      }
+      if (!*ok) {
+        auto diagnostic = std::string("Error: ");
+        const auto error =
+            api::json_string(message->payload, "error").value_or("Extension command failed");
+        for (const char character : error.substr(0, 180)) {
+          diagnostic += character >= 32 && character < 127 ? character : '?';
+        }
+        if (auto* const session = invocation_attachment(sessions, *invocation);
+            session != nullptr) {
+          publish_status_message(*session, StatusMessageKind::error, diagnostic);
+        }
+      }
+      extensions.finish(invocation->id);
+    } else {
+      fail_hosted_commands(extensions, sessions, "Error: Invalid extension response");
+    }
+  } catch (...) {
+    fail_hosted_commands(extensions, sessions, "Error: Extension resource failure");
+  }
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -11583,11 +11712,13 @@ void apply_command_line_completion(CommandLineState& state, const CommandLineCom
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void complete_attachment_command_line(SessionRecord& session, Sessions& sessions) noexcept {
+void complete_attachment_command_line(SessionRecord& session, Sessions& sessions,
+                                      const extension::CommandRuntime& extensions) noexcept {
   auto& state = session.attachment.command_line;
   const auto query = command_line_completion_query(state.view(), state.cursor);
   constexpr auto candidate_capacity =
-      std::max(panes_per_session_max, static_cast<std::size_t>(limits::sessions_hard_max));
+      std::max(panes_per_session_max, static_cast<std::size_t>(limits::sessions_hard_max)) +
+      extension::commands_max;
   std::array<std::string_view, candidate_capacity> candidates{};
   std::array<std::array<char, 32>, panes_per_session_max> encoded{};
   std::size_t count = 0;
@@ -11622,6 +11753,11 @@ void complete_attachment_command_line(SessionRecord& session, Sessions& sessions
     const auto static_candidates = command_line_static_completions(query.kind);
     std::ranges::copy(static_candidates, candidates.begin());
     count = static_candidates.size();
+    if (query.kind == CommandLineCompletionKind::root) {
+      for (const auto& command : extensions.commands()) {
+        candidates[count++] = command.name;
+      }
+    }
   }
   const auto completion = complete_command_line(query.prefix, std::span(candidates).first(count));
   apply_command_line_completion(state, query, completion);
@@ -11779,7 +11915,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runtimes,
-                                      std::uint64_t& activity_order) noexcept {
+                                      std::uint64_t& activity_order,
+                                      extension::CommandRuntime& extensions) noexcept {
   for (auto& owner : sessions) {
     if (owner == nullptr || !owner->active || owner->attachment_runtime.client < 0) {
       continue;
@@ -11791,7 +11928,7 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
     }
     if (state.completion_requested) {
       try {
-        complete_attachment_command_line(session, sessions);
+        complete_attachment_command_line(session, sessions, extensions);
       } catch (...) {
         state.completion_requested = false;
         invalidate_command_line(session);
@@ -11810,12 +11947,26 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
     }
     try {
       const auto parsed = parse_command_line(
-          state.view(), {.session = session.id, .tab = tab->id, .pane = pane->id});
+          state.view(), {.session = session.id, .tab = tab->id, .pane = pane->id},
+          extensions.commands());
       if (!parsed.has_value()) {
         finish_command_line_error(session, command_line_message(parsed.error()));
         continue;
       }
       const auto& action = *parsed;
+      if (action.kind == CommandLineActionKind::hosted) {
+        if (extensions.start(action.hosted_command, action.arguments,
+                             {.session = session.id,
+                              .tab = tab->id,
+                              .pane = pane->id,
+                              .connection = session.attachment_runtime.connection_id},
+                             reactor_now())) {
+          reset_command_line(session);
+        } else {
+          finish_command_line_error(session, "Error: Extension capacity reached");
+        }
+        continue;
+      }
       if (action.kind == CommandLineActionKind::detach) {
         reset_command_line(session, false);
         handle_client_parse_result(session, runtimes, ParseResult::detach);
@@ -12207,6 +12358,7 @@ enum class DescriptorKind : std::uint8_t {
   client,
   pending,
   capacity_rejection,
+  extension_host,
 };
 
 struct DescriptorOwner final {
@@ -12244,11 +12396,15 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   PendingConnections pending_connections;
   PendingConnectionGenerations pending_generations{};
   PublicProcExecutions public_procs{};
+  extension::CommandRuntime extensions(environment.extension_descriptor,
+                                       environment.extension_commands, environment.stop_extension,
+                                       environment.extension_context);
+  bool service_extensions = !environment.extension_commands.empty();
   CapacityRejectionConnections capacity_rejections{};
   if (!child_reaper.valid() || !set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max = std::size_t{2} + limits::panes_hard_max +
+  constexpr auto descriptor_count_max = std::size_t{3} + limits::panes_hard_max +
                                         static_cast<std::size_t>(limits::sessions_hard_max) +
                                         limits::pending_connections_hard_max +
                                         capacity_rejection_connections_max;
@@ -12377,10 +12533,25 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .kind = DescriptorKind::capacity_rejection};
       ++descriptor_count;
     }
-    const auto poll_result =
-        reactor_poll(std::span(descriptors).first(descriptor_count),
-                     poll_timeout(sessions, runtimes, pending_connections, public_procs,
-                                  capacity_rejections, public_screen_work_pending));
+    if (extensions.channel().descriptor() >= 0) {
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = extensions.channel().descriptor(),
+          .events = extensions.channel().events(),
+          .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
+                                                                .tab = {},
+                                                                .pane = {},
+                                                                .connection = {},
+                                                                .auxiliary_slot = 0,
+                                                                .kind =
+                                                                    DescriptorKind::extension_host};
+      ++descriptor_count;
+    }
+    const auto timeout = poll_timeout(sessions, runtimes, pending_connections, public_procs,
+                                      capacity_rejections, public_screen_work_pending);
+    const auto poll_result = reactor_poll(
+        std::span(descriptors).first(descriptor_count),
+        service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout);
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -12461,7 +12632,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                               input_budget, &session_name_conflict, &sessions);
       }
     }
-    service_attachment_command_lines(sessions, runtimes, activity_order);
+    service_attachment_command_lines(sessions, runtimes, activity_order, extensions);
     std::array<SessionRecord*, static_cast<std::size_t>(limits::sessions_hard_max)>
         search_sessions{};
     for (auto& session : sessions) {
@@ -12501,6 +12672,18 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           process_pending_read(pending_connections, sessions, runtimes, activity_order,
                                public_procs, owner.auxiliary_slot);
         }
+      } else if (owner.kind == DescriptorKind::extension_host) {
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        if ((events & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+          extensions.channel().disconnect();
+        } else {
+          if ((events & POLLIN) != 0) {
+            extensions.channel().read_ready();
+          }
+          if ((events & POLLOUT) != 0) {
+            extensions.channel().write_ready();
+          }
+        }
       } else if (owner.kind == DescriptorKind::capacity_rejection) {
         const auto& rejection =
             std::span(capacity_rejections).subspan(owner.auxiliary_slot, 1).front();
@@ -12511,8 +12694,12 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
       }
     }
+    if (service_extensions) {
+      service_hosted_commands(extensions, sessions, public_procs);
+      service_extensions = extensions.channel().descriptor() >= 0;
+    }
     service_public_procs(public_procs, pending_connections, sessions, runtimes, activity_order,
-                         public_scratch, proc_cursor);
+                         public_scratch, proc_cursor, extensions);
 
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
@@ -12650,7 +12837,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .default_program = {},
           .default_cwd = {},
           .command_history_file = {},
-          .status_line = true};
+          .status_line = true,
+          .extension_commands = {}};
 }
 
 [[nodiscard]] auto

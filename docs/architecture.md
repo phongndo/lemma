@@ -50,7 +50,8 @@ destroy the Session.
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
 | `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
 | `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
-| `lemma_extension` | Isolated Lua host lifecycle and transactional configuration admission |
+| `lemma_extension_contract` | Native command declarations, bounded host channel, and invocation ownership |
+| `lemma_extension` | Isolated Lua host, coroutine callbacks, and transactional configuration/command admission |
 | `lemma_runtime` | Processes, PTYs, scheduling, input execution, resizing, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
@@ -60,7 +61,9 @@ destroy the Session.
 
 Core links no Lua VM, PTY, socket, process, or terminal-emulator owner. Runtime executes accepted
 semantic intent using those mechanisms. The daemon borrows one immutable compiled configuration
-generation; input routing and runtime operation never call into the host process.
+generation. Ordinary input routing and terminal operation never call into the host process.
+Explicit custom command invocations use nonblocking messages to the isolated host; the reactor
+never executes or synchronously waits for a Lua callback.
 
 ## Authority and ownership
 
@@ -76,6 +79,7 @@ Every mutable fact has one authoritative owner:
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
 | Attachment connection decoding, output progress, and transient message/frame deadlines | AttachmentRuntime |
 | Admitted Proc execution, waits, and owner-generation cancellation | Reactor Proc table |
+| Hosted command invocation, captured targets, deadline, and attachment-generation ownership | Reactor-owned native command runtime |
 | Frame buffers and physical presentation shadow | Render/runtime presentation |
 
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
@@ -128,9 +132,20 @@ atomically replaced on clean shutdown only after a successful load or confirmed 
 Attachment histories still diverge independently. A
 Session switch transfers one
 drained connection decoder and sequence to an existing detached Session, then forces a full redraw;
-it never creates a nested client or restarts the terminal process. The catalog is the sole
-projection boundary for command descriptors, and handlers at that boundary compile to bounded typed
-Lemma commands rather than introducing another execution path.
+it never creates a nested client or restarts the terminal process. Native and registered command descriptors share discovery at the command-line boundary. Native
+commands dispatch directly; hosted descriptors enqueue an invocation with concrete Session/Tab/Pane
+IDs and an attachment-generation owner. Lua callbacks yield Proc documents through `ctx:proc`.
+These enter the same validation, admission table, round-robin service, and Command executor as
+public Procs. A typed completion owner distinguishes public connections from hosted invocations;
+the latter are revoked before further execution when their originating attachment disappears or
+switches Sessions.
+
+The private host channel retains bounded partial-read/write progress and admits at most one record
+per reactor turn. Up to eight hosted invocations retain coroutine state in the host, not the daemon.
+Cancellation revokes Proc ownership immediately but retains the invocation deadline and slot until
+acknowledgement. Protocol failure or expiration terminates the host and removes hosted discovery,
+without changing compiled input policy or ordinary pane lifetime. This runtime channel is separate
+from the public lock-step CONTROL contract.
 
 Application input is distinct from mux commands. The daemon input policy resolves physical
 bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,

@@ -14,6 +14,69 @@ from typing import Any
 
 from mux_benchmark import host_fingerprint
 
+POLICY_PATH = Path(__file__).with_name("performance_hosts.json")
+IDENTITY_FIELDS = ("host_name", "model_identifier", "cpu_model", "physical_cpu_count")
+
+
+def load_policy(name: str, path: Path = POLICY_PATH) -> dict[str, Any]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"cannot read performance host policy {path}: {error}"
+        ) from error
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != 1
+        or not isinstance(document.get("hosts"), dict)
+    ):
+        raise ValueError("performance host policy must use schema 1")
+    policy = document["hosts"].get(name)
+    if not isinstance(policy, dict) or policy.get("host_name") != name:
+        raise ValueError(f"host {name!r} is not approved")
+    for field in (
+        "host_name",
+        "model_identifier",
+        "cpu_model",
+        "system",
+        "architecture",
+    ):
+        if not isinstance(policy.get(field), str) or not policy[field]:
+            raise ValueError(
+                f"performance host policy {field} must be a non-empty string"
+            )
+    for field in ("physical_cpu_count", "logical_cpu_count", "minimum_memory_bytes"):
+        value = policy.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(
+                f"performance host policy {field} must be a positive integer"
+            )
+    return policy
+
+
+def validate_fingerprint(fingerprint: Any, policy: dict[str, Any]) -> list[str]:
+    if not isinstance(fingerprint, dict) or set(fingerprint) != {
+        *IDENTITY_FIELDS,
+        "memory_bytes",
+    }:
+        return ["host fingerprint has invalid fields"]
+    failures: list[str] = []
+    for field in IDENTITY_FIELDS:
+        observed = fingerprint[field]
+        expected = policy[field]
+        if type(observed) is not type(expected) or observed != expected:
+            failures.append(
+                f"{field} mismatch: observed {observed!r}, expected {expected!r}"
+            )
+    memory = fingerprint["memory_bytes"]
+    if (
+        not isinstance(memory, int)
+        or isinstance(memory, bool)
+        or memory < policy["minimum_memory_bytes"]
+    ):
+        failures.append("reported memory is below the approved-host minimum or invalid")
+    return failures
+
 
 def read_values(pattern: str) -> list[str]:
     values: set[str] = set()
@@ -46,16 +109,11 @@ def host_snapshot() -> dict[str, Any]:
 
 
 def validate(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[str]:
-    failures: list[str] = []
-    fingerprint = snapshot["fingerprint"]
+    failures = validate_fingerprint(snapshot.get("fingerprint"), policy)
     exact = {
-        "host_name": fingerprint.get("host_name"),
         "system": snapshot.get("system"),
         "architecture": snapshot.get("architecture"),
-        "cpu_model": fingerprint.get("cpu_model"),
-        "physical_cpu_count": fingerprint.get("physical_cpu_count"),
         "logical_cpu_count": snapshot.get("logical_cpu_count"),
-        "model_identifier": fingerprint.get("model_identifier"),
         "scaling_governors": snapshot.get("scaling_governors"),
         "energy_performance_preferences": snapshot.get(
             "energy_performance_preferences"
@@ -66,9 +124,6 @@ def validate(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[str]:
             failures.append(
                 f"{field} mismatch: observed {observed!r}, expected {policy.get(field)!r}"
             )
-    memory = fingerprint.get("memory_bytes")
-    if not isinstance(memory, int) or memory < policy["minimum_memory_bytes"]:
-        failures.append("installed memory is below the approved-host minimum")
     load = snapshot.get("load_average")
     if (
         not isinstance(load, list)
@@ -81,26 +136,21 @@ def validate(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--policy", type=Path, default=Path("benchmarks/performance_hosts.json")
-    )
+    parser.add_argument("--policy", type=Path, default=POLICY_PATH)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
 
 def main() -> int:
     arguments = parse_args()
-    document = json.loads(arguments.policy.read_text(encoding="utf-8"))
-    if document.get("schema") != 1 or not isinstance(document.get("hosts"), dict):
-        raise SystemExit("performance host policy must use schema 1")
     snapshot = host_snapshot()
     name = snapshot["fingerprint"]["host_name"]
-    policy = document["hosts"].get(name)
-    failures = (
-        [f"host {name!r} is not approved"]
-        if not isinstance(policy, dict)
-        else validate(snapshot, policy)
-    )
+    policy = None
+    try:
+        policy = load_policy(name, arguments.policy)
+        failures = validate(snapshot, policy)
+    except ValueError as error:
+        failures = [str(error)]
     report = {
         "schema": 1,
         "suite": "lemma-performance-host",

@@ -18,6 +18,7 @@ from check_regression import (
     evaluate,
     load_object,
     process_check_samples,
+    require_scope,
     statistic,
 )
 
@@ -276,6 +277,7 @@ def main() -> int:
         require_manifest_identity(candidate_reports, manifest_sha256)
         base_micro, base_process, base_profile = baseline_reports
         cand_micro, cand_process, cand_profile = candidate_reports
+        require_scope(budgets, *baseline_reports)
         require_same_capture_scope(base_process, cand_process, "process")
         require_same_capture_scope(base_profile, cand_profile, "profile")
         base_context = base_micro.get("context", {})

@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from performance_host import load_policy, validate_fingerprint
+
 
 class BudgetError(ValueError):
     """The manifest or a benchmark report cannot support a budget decision."""
@@ -206,31 +208,11 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         )
     if not isinstance(micro_requirements, dict) or not micro_requirements:
         raise BudgetError("scope.micro_context_requirements must be a non-empty object")
-    approved_host = scope.get("approved_host")
-    required_host_fields = {
-        "host_name",
-        "model_identifier",
-        "cpu_model",
-        "physical_cpu_count",
-        "memory_bytes",
-    }
-    if (
-        not isinstance(approved_host, dict)
-        or set(approved_host) != required_host_fields
-    ):
-        raise BudgetError(
-            f"scope.approved_host must contain {sorted(required_host_fields)!r}"
-        )
-    for field in ("host_name", "model_identifier", "cpu_model"):
-        require_string(approved_host.get(field), f"scope.approved_host.{field}")
-    require_int(
-        approved_host.get("physical_cpu_count"),
-        "scope.approved_host.physical_cpu_count",
-        minimum=1,
-    )
-    require_int(
-        approved_host.get("memory_bytes"), "scope.approved_host.memory_bytes", minimum=1
-    )
+    host_name = require_string(scope.get("approved_host"), "scope.approved_host")
+    try:
+        approved_host = load_policy(host_name)
+    except ValueError as error:
+        raise BudgetError(str(error)) from error
     maximum_load = require_number(
         scope.get("maximum_load_average_1m"), "scope.maximum_load_average_1m"
     )
@@ -300,7 +282,7 @@ def budgets_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
                 limits_for_condition[name],
                 f"pane_profiles.conditions.{condition}.{name}",
             )
-    return budgets
+    return {**budgets, "scope": {**scope, "approved_host": approved_host}}
 
 
 def add_result(
@@ -332,7 +314,13 @@ def require_scope(
     profile_report: dict[str, Any],
 ) -> None:
     scope = budgets["scope"]
-    for field, expected in scope["process_report_requirements"].items():
+    expected_host = scope["approved_host"]
+    process_requirements = {
+        **scope["process_report_requirements"],
+        "system": expected_host["system"],
+        "architecture": expected_host["architecture"],
+    }
+    for field, expected in process_requirements.items():
         if (
             process_report.get(field) != expected
             or profile_report.get(field) != expected
@@ -343,17 +331,22 @@ def require_scope(
     context = micro_report.get("context")
     if not isinstance(context, dict):
         raise BudgetError("microbenchmark report has no context")
-    for field, expected in scope["micro_context_requirements"].items():
+    micro_requirements = {
+        **scope["micro_context_requirements"],
+        "num_cpus": expected_host["logical_cpu_count"],
+    }
+    for field, expected in micro_requirements.items():
         if context.get(field) != expected:
             raise BudgetError(
                 f"microbenchmark report is outside scope: {field} must be {expected!r}"
             )
 
-    expected_host = scope["approved_host"]
     for report, label in ((process_report, "process"), (profile_report, "profile")):
-        if report.get("host_fingerprint") != expected_host:
+        failures = validate_fingerprint(report.get("host_fingerprint"), expected_host)
+        if failures:
             raise BudgetError(
-                f"{label} report did not come from the approved pinned host"
+                f"{label} report did not come from the approved pinned host: "
+                + "; ".join(failures)
             )
     micro_host = {
         "host_name": context.get("host_name"),
@@ -370,10 +363,17 @@ def require_scope(
             minimum=1,
         ),
     }
-    if micro_host != expected_host:
+    failures = validate_fingerprint(micro_host, expected_host)
+    if failures:
         raise BudgetError(
-            "microbenchmark report did not come from the approved pinned host"
+            "microbenchmark report did not come from the approved pinned host: "
+            + "; ".join(failures)
         )
+    if (
+        micro_host != process_report["host_fingerprint"]
+        or micro_host != profile_report["host_fingerprint"]
+    ):
+        raise BudgetError("benchmark reports came from different host fingerprints")
     maximum_load = float(scope["maximum_load_average_1m"])
     micro_load = context.get("load_avg")
     if (

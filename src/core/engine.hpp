@@ -1,6 +1,8 @@
 #ifndef LEMMA_CORE_ENGINE_HPP
 #define LEMMA_CORE_ENGINE_HPP
 
+#include "extension/commands.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <optional>
@@ -64,6 +66,10 @@ struct ReactorEnvironment final {
   std::string_view default_cwd;
   std::string_view command_history_file;
   bool status_line{true};
+  int extension_descriptor{-1};
+  std::span<const extension::CommandDescriptor> extension_commands;
+  extension::StopHost stop_extension{nullptr};
+  void* extension_context{nullptr};
 
   [[nodiscard]] constexpr auto valid() const noexcept -> bool {
     return poll != nullptr && now != nullptr && send != nullptr;
