@@ -326,11 +326,11 @@ class LemmaServer:
         return result
 
     def session_state(self, name: str) -> SessionState | None:
-        # Keep the outer PTY flowing while observing daemon state. The attached client may be
-        # emitting setup or frame bytes, and a test observer must not accidentally become a slow
-        # client merely because it is polling topology.
+        # Keep every live outer PTY flowing while observing daemon state. A client can switch
+        # away from its original session, so filtering by that name can stop draining its redraw
+        # while polling the destination and accidentally turn the observer into a slow client.
         for client in self.clients:
-            if client.session == name and client.running:
+            if client.running:
                 client.drain(0.002)
 
         inspected = self.command("proc", "session", "inspect", "--session", name)

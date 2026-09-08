@@ -225,6 +225,15 @@ class ExtensionMuxTest(unittest.TestCase):
         self.title("stale-rejected")
 
     def test_session_switch_cancels_source_invocation(self) -> None:
+        # Force the switch redraw to need ongoing PTY reads on Linux too; Darwin can
+        # exhaust its output queue at the default geometry. Polling the destination
+        # must keep draining the client that was originally attached to the source.
+        self.client.resize(300, 150)
+        self.server.wait_for_state(
+            self.session.name,
+            lambda state: (state.columns, state.rows) == (300, 150),
+            "large viewport before switching sessions",
+        )
         source = self.session
         pane = source.state().focused_pane
         target = self.server.create_session("destination", attach=False)
