@@ -279,6 +279,10 @@ if(LEMMA_BUILD_TESTS)
   add_test(NAME benchmark.probe COMMAND lemma_benchmark_probe --self-test)
   find_package(GTest CONFIG REQUIRED)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME benchmark.command-probe
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/support/process_probe_test.py"
+      "$<TARGET_FILE:lemma_benchmark_probe>" "$<TARGET_FILE:lemma_test_pty_peer>")
+  set_tests_properties(benchmark.command-probe PROPERTIES TIMEOUT 30)
   include(GoogleTest)
 
   # Fast pure/component invariants. The developer entry point runs this binary once; CTest still

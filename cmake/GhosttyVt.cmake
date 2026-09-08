@@ -129,7 +129,22 @@ function(lemma_add_pinned_ghostty)
     message(FATAL_ERROR "unsupported Ghostty optimization mode in PIN.json: ${optimize}")
   endif()
 
-  set(root "${CMAKE_BINARY_DIR}/_deps/ghostty/${pinned_commit}")
+  file(SHA256 "${pin_file}" pin_identity)
+  set(root "${CMAKE_BINARY_DIR}/_deps/ghostty/${pinned_commit}-${pin_identity}")
+  set(patch_preparer "${CMAKE_SOURCE_DIR}/cmake/PrepareGhosttySource.cmake")
+  set(source_preparation_command "${CMAKE_COMMAND}" ${pin_validation_args} -P "${pin_validator}")
+  if(GHOSTTY_PATCH_FILES)
+    set(source_dir "${root}/source")
+    set(source_preparation_command
+      "${CMAKE_COMMAND}" ${pin_validation_args}
+      "-DGHOSTTY_PATCHED_SOURCE_DIR=${source_dir}" -P "${patch_preparer}")
+    execute_process(COMMAND ${source_preparation_command} RESULT_VARIABLE preparation_result)
+    if(NOT preparation_result EQUAL 0)
+      message(FATAL_ERROR "failed to prepare patched Ghostty source")
+    endif()
+  endif()
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${pin_file}" ${GHOSTTY_PATCH_FILES} "${patch_preparer}")
   set(prefix "${root}/${CMAKE_BUILD_TYPE}")
   set(local_cache "${root}/zig-cache/local-${CMAKE_BUILD_TYPE}")
   set(global_cache "${root}/zig-cache/global")
@@ -150,7 +165,7 @@ function(lemma_add_pinned_ghostty)
   add_custom_command(
     OUTPUT "${static_library}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${local_cache}" "${global_cache}"
-    COMMAND "${CMAKE_COMMAND}" ${pin_validation_args} -P "${pin_validator}"
+    COMMAND ${source_preparation_command}
     COMMAND
       "${ZIG_EXECUTABLE}" build
       ${zig_system_args}
@@ -167,6 +182,8 @@ function(lemma_add_pinned_ghostty)
     DEPENDS
       "${pin_file}"
       "${pin_validator}"
+      "${patch_preparer}"
+      ${GHOSTTY_PATCH_FILES}
       "${source_dir}/build.zig"
       "${source_dir}/build.zig.zon"
     COMMENT "Building pinned libghostty-vt ${pinned_commit} (${optimize})"

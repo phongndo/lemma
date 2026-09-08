@@ -50,6 +50,7 @@ rm -rf third_party/ghostty/zig-out
 cmake --build --preset release --target \
   lemma_benchmarks lemma_test_server lemma_test_cli lemma_test_pty_peer lemma_benchmark_probe
 ./build/release/lemma_benchmark_probe --self-test
+python3 "${harness_root}/tests/support/process_probe_test.py" "${benchmark_probe}" "${benchmark_peer}"
 sleep "${LEMMA_BENCH_COOLDOWN_SECONDS:-30}"
 
 ./build/release/lemma_benchmarks \

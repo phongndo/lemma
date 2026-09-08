@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -122,6 +123,119 @@ class GhosttyPinValidationTests(unittest.TestCase):
             lock["nodes"]["ghosttySource"]["locked"]["rev"],
             pin["commit"],
         )
+
+    def install_patch(self, content: str | None = None) -> Path:
+        patch = self.root / "patches" / "test.patch"
+        patch.parent.mkdir(exist_ok=True)
+        patch.write_text(
+            content
+            if content is not None
+            else "--- a/build.zig\n+++ b/build.zig\n@@ -1 +1 @@\n-/* test */\n+/* patched */\n",
+            encoding="utf-8",
+        )
+        pin = json.loads(self.pin_file.read_text(encoding="utf-8"))
+        pin["patches"] = [
+            {
+                "file": "patches/test.patch",
+                "sha256": hashlib.sha256(patch.read_bytes()).hexdigest(),
+            }
+        ]
+        self.pin_file.write_text(json.dumps(pin), encoding="utf-8")
+        return patch
+
+    def prepare_source(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "cmake",
+                f"-DGHOSTTY_PIN_FILE={self.pin_file}",
+                f"-DGHOSTTY_SOURCE_DIR={self.source}",
+                "-DGHOSTTY_GIT_EXECUTABLE=git",
+                f"-DGHOSTTY_PATCHED_SOURCE_DIR={self.root / 'prepared'}",
+                "-P",
+                str(ROOT / "cmake" / "PrepareGhosttySource.cmake"),
+            ],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_patch_applies_only_to_private_copy_and_is_reusable(self) -> None:
+        self.init_source_repo()
+        self.install_patch()
+        for _ in range(2):
+            result = self.prepare_source()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (self.source / "build.zig").read_text(encoding="utf-8"),
+                "/* test */\n",
+            )
+            self.assertEqual(
+                (self.root / "prepared" / "build.zig").read_text(encoding="utf-8"),
+                "/* patched */\n",
+            )
+            self.assertFalse((self.root / "prepared" / ".git").exists())
+
+    def test_changed_patch_is_rejected_even_with_prepared_cache(self) -> None:
+        self.init_source_repo()
+        patch = self.install_patch()
+        self.assertEqual(self.prepare_source().returncode, 0)
+        patch.write_text("tampered\n", encoding="utf-8")
+        result = self.prepare_source()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("patch hash mismatch", result.stderr)
+
+    def test_missing_patch_is_rejected(self) -> None:
+        self.init_source_repo()
+        self.install_patch().unlink()
+        result = self.prepare_source()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing Ghostty patch", result.stderr)
+
+    def test_failed_patch_does_not_publish_prepared_source(self) -> None:
+        self.init_source_repo()
+        self.install_patch(
+            "--- a/build.zig\n+++ b/build.zig\n@@ -1 +1 @@\n-wrong base\n+patched\n"
+        )
+        result = self.prepare_source()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Ghostty patch failed", result.stderr)
+        self.assertFalse((self.root / "prepared" / "build.zig").exists())
+        self.assertFalse((self.root / "prepared.tmp").exists())
+
+    def test_changed_pin_rebuilds_prepared_source(self) -> None:
+        self.init_source_repo()
+        self.install_patch()
+        self.assertEqual(self.prepare_source().returncode, 0)
+        self.install_patch(
+            "--- a/build.zig\n+++ b/build.zig\n@@ -1 +1 @@\n-/* test */\n+/* replacement */\n"
+        )
+        result = self.prepare_source()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.root / "prepared" / "build.zig").read_text(encoding="utf-8"),
+            "/* replacement */\n",
+        )
+
+    def test_non_array_patches_are_rejected(self) -> None:
+        commit = self.init_source_repo()
+        self.pin_file.write_text(
+            json.dumps({"commit": commit, "patches": "patches/test.patch"}),
+            encoding="utf-8",
+        )
+        result = self.prepare_source()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("patches must be an array", result.stderr)
+
+    def test_patch_path_cannot_escape_metadata(self) -> None:
+        self.init_source_repo()
+        self.install_patch()
+        pin = json.loads(self.pin_file.read_text(encoding="utf-8"))
+        pin["patches"][0]["file"] = "../test.patch"
+        self.pin_file.write_text(json.dumps(pin), encoding="utf-8")
+        result = self.prepare_source()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid Ghostty patch path", result.stderr)
 
     def test_dirty_checkout_is_rejected(self) -> None:
         self.init_source_repo(dirty=True)

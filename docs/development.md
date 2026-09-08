@@ -257,7 +257,8 @@ nix develop .#benchmarks --command scripts/ci/memory smoke
 `benchmarks/workloads.json` is the sole scenario, suite, sample-policy, and terminal-lab authority.
 Native C++ owns microbenchmark and process timing loops. Python may select adapters, launch isolated
 subjects, verify completion, retain raw reports, and analyze them; it must not timestamp a measured
-interaction. The headless report orders a direct-PTY baseline before Lemma, tmux, Zellij, and Herdr.
+interaction. Repeated warm-scroll commands use sequence-numbered, delimited completion markers;
+a redraw of a previous completion cannot finish the next sample. The headless report orders a direct-PTY baseline before Lemma, tmux, Zellij, and Herdr.
 Execution randomizes workload blocks and subjects while direct controls bracket each supported block.
 
 Process latency endpoints are deliberately distinct:
@@ -306,8 +307,9 @@ diagnostics and absolute-target evidence rather than paired blockers because fra
 make their rank unstable.
 
 The gate holds a host-wide lock, validates host state before and after capture, and builds the
-baseline and current checkout with the current checkout's manifest, harness, and Nix toolchain. The
-candidate-owned PTY fixture and native probe are built once and shared by both revisions so a harness
+baseline and current checkout with the current checkout's manifest, harness, and Nix toolchain.
+Each subject supplies its own pinned Ghostty source and offline Zig dependencies so dependency
+upgrades compare the actual baseline and candidate. The candidate-owned PTY fixture and native probe are built once and shared by both revisions so a harness
 improvement cannot make an older baseline inexpressible. All evidence remains under
 `build/performance/`. Paired regressions block independently of stricter absolute product targets, so
 an existing target miss cannot authorize further degradation.
@@ -385,6 +387,9 @@ borrowed views with explicit lifetimes.
 For an upgrade, update every pin together, inspect the upstream API and semantic changes, review
 `third_party/ghostty-metadata/PATCHES.md`, then run terminal, mux, sanitizer, and relevant benchmark
 or resource checks. A local patch must document why it exists and the condition for removing it.
+`PIN.json` records the ordered patch files and their SHA-256 hashes. Both Nix and submodule builds
+validate the original source and apply these patches to a private build-tree copy, never to the
+submodule or Nix store. The complete pin manifest identifies source and archive caches.
 
 ## Documentation
 

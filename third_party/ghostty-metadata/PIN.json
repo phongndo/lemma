@@ -1,7 +1,13 @@
 {
   "schema_version": 1,
   "repository": "https://github.com/ghostty-org/ghostty.git",
-  "commit": "82232ecde55405559dec29c5466cb9e39938cb41",
+  "commit": "b0c421fcd2e290629d4285c181b52fe2f2095f06",
+  "patches": [
+    {
+      "file": "patches/resize-viewport.patch",
+      "sha256": "756618188f3933a3ceb1e2881bc2829e49dcee1b40676243fbc10bf3772641ab"
+    }
+  ],
   "zig_version": "0.16.0",
   "expected_version": "0.1.0-dev",
   "build_options": {

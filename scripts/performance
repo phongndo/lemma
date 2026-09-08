@@ -76,11 +76,25 @@ capture() {
   local source_root="$1"
   local destination="$2"
   mkdir -p "${destination}"
+  # Keep the candidate toolchain/harness, but build each subject's actual Ghostty pin and
+  # offline dependencies. Inheriting the candidate pin makes dependency-upgrade gates fail
+  # validation (or compare the wrong dependency) before the baseline can be measured.
+  local dependency_environment
+  dependency_environment="$(nix develop "${source_root}#benchmarks" --command python3 -c '
+import os
+for key in ("LEMMA_GHOSTTY_SOURCE_DIR", "LEMMA_GHOSTTY_NIX_SOURCE_REV", "LEMMA_GHOSTTY_ZIG_SYSTEM_DIR"):
+    value = os.environ[key]
+    if not value or "\n" in value:
+        raise SystemExit(f"invalid dependency environment: {key}")
+    print(f"{key}={value}")
+')"
+  local -a ghostty_environment
+  mapfile -t ghostty_environment <<< "${dependency_environment}"
   (
     cd "${source_root}"
     taskset -c "${affinity}" \
       nix develop "${root}#benchmarks" --command \
-      env LEMMA_BENCHMARK_HARNESS_ROOT="${root}" \
+      env "${ghostty_environment[@]}" LEMMA_BENCHMARK_HARNESS_ROOT="${root}" \
       LEMMA_BENCHMARK_MANIFEST="${manifest}" \
       LEMMA_BENCHMARK_PEER="${shared_peer}" \
       LEMMA_BENCHMARK_PROBE="${shared_probe}" \

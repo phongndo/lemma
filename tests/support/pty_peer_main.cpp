@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -1051,7 +1052,8 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   }
 }
 
-[[nodiscard]] auto run_warm_scroll() noexcept -> int {
+[[nodiscard]] auto
+run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") noexcept -> int {
   std::array<char, 81> line{};
   line.fill('x');
   std::span(line).subspan(79, 1).front() = '\r';
@@ -1061,7 +1063,7 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
       return 1;
     }
   }
-  const bool written = write_all("__LEMMA_WARM_SCROLL_DONE__\r\n");
+  const bool written = write_all(std::string(marker) + "\r\n");
   return written ? 0 : 1;
 }
 
@@ -1069,11 +1071,13 @@ extern "C" void observe_winch([[maybe_unused]] const int signal_number) noexcept
   if (!write_all("__LEMMA_WARM_SCROLL_READY__\r\n")) {
     return 1;
   }
+  std::size_t iteration = 0;
   std::array<char, 1> trigger{};
   while (true) {
     const auto count = ::read(STDIN_FILENO, trigger.data(), trigger.size());
     if (count > 0) {
-      if (run_warm_scroll() != 0) {
+      const auto marker = "__LEMMA_WARM_SCROLL_DONE__" + std::to_string(iteration++) + "|";
+      if (run_warm_scroll(marker) != 0) {
         return 1;
       }
       continue;

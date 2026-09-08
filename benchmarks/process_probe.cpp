@@ -604,6 +604,9 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
   latencies.reserve(repetitions);
   outer_bytes.reserve(repetitions);
   for (std::size_t index = 0; index < repetitions; ++index) {
+    // A redraw of an earlier completion must not acknowledge this command. The delimiter
+    // also prevents iteration 1 from matching iteration 10.
+    const auto completion = std::string(marker) + std::to_string(index) + "|";
     const auto started_ns = monotonic_ns();
     if (!write_all(outer_descriptor, command,
                    std::chrono::steady_clock::now() + interaction_timeout)) {
@@ -611,7 +614,7 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
                 << '\n';
       return 1;
     }
-    const auto [latency, bytes] = read_outer_marker(outer_descriptor, marker, started_ns);
+    const auto [latency, bytes] = read_outer_marker(outer_descriptor, completion, started_ns);
     if (latency == 0) {
       std::cerr << "command probe marker failed at iteration " << index << " errno=" << errno
                 << '\n';

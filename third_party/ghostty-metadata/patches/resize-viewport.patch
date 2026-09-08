@@ -1,0 +1,24 @@
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1248,7 +1248,20 @@
+ /// TODO: docs
+ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+     defer self.assertIntegrity();
+-
++
++    // Intermediate growth/reflow can put a historical viewport pin inside
++    // the new active area before the final viewport fixup. grow() validates
++    // integrity along the way, so keep the viewport active throughout resize
++    // and restore its bounded absolute row afterwards. Do this in the page
++    // owner: callers must not switch screens through the VT parser to resize.
++    const viewport_row: ?usize = switch (self.viewport) {
++        .active => null,
++        .top => 0,
++        .pin => self.viewportRowOffset(),
++    };
++    self.scroll(.active);
++    defer if (viewport_row) |row| self.scroll(.{ .row = row });
++
+     // Resizing forces all nodes to be decompressed today so we need to
+     // reschedule compression.
+     // TODO(mitchellh): Deferred reflow on non-viewport/non-active pages.

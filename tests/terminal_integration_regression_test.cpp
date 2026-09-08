@@ -90,6 +90,42 @@ TEST(TerminalResizeRegressionTest, ResizesAlternateScreenWithHistoricalPrimaryVi
   EXPECT_EQ(primary_after->offset, primary_before->offset);
 }
 
+// Every split point is exercised; assertion macros inflate the nested-loop complexity.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalResizeRegressionTest, PreservesFragmentedChildSequences) {
+  constexpr std::array<std::string_view, 4> sequences{
+      "\x1B[31mX",
+      "\x1B]2;child title\x1B\\",
+      "\xE7\x95\x8C",
+      "\x1B]2;child title\a",
+  };
+  for (const auto sequence : sequences) {
+    for (std::size_t split = 1; split < sequence.size(); ++split) {
+      SCOPED_TRACE(testing::Message() << "sequence=" << sequence << " split=" << split);
+      auto expected = make_terminal();
+      auto actual = make_terminal();
+      write_terminal(expected, "\x1B[?1049h");
+      write_terminal(actual, "\x1B[?1049h");
+      ASSERT_TRUE(expected.resize({.columns = 81, .rows = 25}).has_value());
+      write_terminal(expected, sequence);
+      write_terminal(actual, sequence.substr(0, split));
+      ASSERT_TRUE(actual.resize({.columns = 81, .rows = 25}).has_value());
+      write_terminal(actual, sequence.substr(split));
+      std::array<std::byte, 32768> expected_output{};
+      std::array<std::byte, 32768> actual_output{};
+      const auto expected_size = expected.format_screen(vt::ScreenFormat::vt, expected_output);
+      const auto actual_size = actual.format_screen(vt::ScreenFormat::vt, actual_output);
+      ASSERT_TRUE(expected_size.has_value());
+      ASSERT_TRUE(actual_size.has_value());
+      EXPECT_EQ(output_text(std::span(actual_output).first(*actual_size)),
+                output_text(std::span(expected_output).first(*expected_size)));
+      EXPECT_EQ(actual.title(), expected.title());
+      EXPECT_EQ(actual.take_effects().title_changes, expected.take_effects().title_changes);
+      EXPECT_FALSE(actual.integrity_failed());
+    }
+  }
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(TerminalRenderRegressionTest, ComposedReflowPreservesCombiningMarkAfterWideGrapheme) {
   vt::TerminalOptions options;

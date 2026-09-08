@@ -10,7 +10,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     ghosttySource = {
-      url = "github:ghostty-org/ghostty/82232ecde55405559dec29c5466cb9e39938cb41";
+      url = "github:ghostty-org/ghostty/b0c421fcd2e290629d4285c181b52fe2f2095f06";
       flake = false;
     };
     herdrSource = {
@@ -86,6 +86,7 @@
                 pkgs.cmake
                 pkgs.ninja
                 pkgs.pkg-config
+                pkgs.patch
                 zigPackage
               ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
                 pkgs.darwin.cctools

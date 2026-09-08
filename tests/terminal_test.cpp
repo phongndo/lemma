@@ -1331,6 +1331,42 @@ TEST(TerminalTest, ProjectsIncrementalSelectionAndCopyCursorHighlight) {
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B[2 q"));
 }
 
+TEST(TerminalTest, RowSelectionIncludesEndpointsAndDoesNotLeakToOtherRows) {
+  TerminalOptions options;
+  options.size = {.columns = 4, .rows = 2};
+  options.theme = default_theme();
+  options.theme->selection_background = RgbColor{.red = 10, .green = 20, .blue = 30};
+  auto terminal = make_terminal(options);
+  write_text(terminal, "ABCD\r\nEFGH");
+  std::array<std::byte, 8'192> output{};
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 3, .row = 0})
+          .value_or(false));
+  auto rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto ansi = std::string_view(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[0mABC\x1B[0;48;2;10;20;30mD"));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[0mEFGH"));
+
+  ASSERT_TRUE(
+      terminal.select(SelectionUnit::cell, {.space = PointSpace::viewport, .column = 0, .row = 1})
+          .value_or(false));
+  rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  ansi = std::string_view(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[0mABCD"));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[0;48;2;10;20;30mE\x1B[0mFGH"));
+
+  terminal.clear_selection();
+  rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  ansi = std::string_view(reinterpret_cast<const char*>(output.data()), rendered->bytes);
+  EXPECT_THAT(ansi, testing::Not(testing::HasSubstr("48;2;10;20;30")));
+}
+
 TEST(TerminalTest, TracksQuotaAllocatorUsage) {
   auto terminal = make_terminal();
   const auto stats = terminal.allocation_stats();

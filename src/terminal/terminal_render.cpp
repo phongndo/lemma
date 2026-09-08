@@ -259,6 +259,32 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
   };
 }
 
+struct SelectedColumns final {
+  std::size_t begin{0};
+  std::size_t end{0};
+
+  [[nodiscard]] auto contains(const std::size_t column) const noexcept -> bool {
+    return column >= begin && column < end;
+  }
+};
+
+[[nodiscard]] auto selected_columns(const GhosttyRenderStateRowIterator row) noexcept
+    -> std::expected<SelectedColumns, Error> {
+  GhosttyRenderStateRowSelection selection = GHOSTTY_INIT_SIZED(GhosttyRenderStateRowSelection);
+  const auto result =
+      ghostty_render_state_row_get(row, GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION, &selection);
+  if (result == GHOSTTY_NO_VALUE) {
+    return SelectedColumns{};
+  }
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  return SelectedColumns{
+      .begin = selection.start_x,
+      .end = static_cast<std::size_t>(selection.end_x) + 1U,
+  };
+}
+
 [[nodiscard]] auto append_color(AnsiWriter& writer, const AnsiColor color,
                                 const std::string_view prefix) noexcept -> bool {
   if (color.tag == AnsiColorTag::none) {
@@ -486,6 +512,10 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
 
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   std::uint64_t row_hash = hash_initial;
+  const auto selection = selected_columns(row_iterator);
+  if (!selection.has_value()) {
+    return std::unexpected(selection.error());
+  }
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
@@ -515,13 +545,7 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
     if (!style.has_value()) {
       return std::unexpected(style.error());
     }
-    bool selected = false;
-    result = ghostty_render_state_row_cells_get(
-        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
-    apply_selection_highlight(*style, selected, session_theme);
+    apply_selection_highlight(*style, selection->contains(cell_count), session_theme);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
@@ -614,6 +638,10 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
   std::size_t trailing_blank_start = std::numeric_limits<std::size_t>::max();
   AnsiStyle trailing_blank_style{};
   bool trailing_blank_changed = false;
+  const auto selection = selected_columns(row_iterator);
+  if (!selection.has_value()) {
+    return std::unexpected(selection.error());
+  }
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
@@ -644,12 +672,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (!style.has_value()) {
       return std::unexpected(style.error());
     }
-    bool selected = false;
-    result = ghostty_render_state_row_cells_get(
-        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &selected);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
+    const bool selected = selection->contains(cell_count);
     apply_selection_highlight(*style, selected, session_theme);
 
     std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
