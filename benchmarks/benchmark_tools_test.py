@@ -47,17 +47,21 @@ from mux_benchmark import (
     TmuxRuntime,
     ZellijRuntime,
     benchmark_environment,
+    build_profile,
     git_provenance,
     install_attach_shell_startup,
     interaction_marker,
     interaction_visible_token,
     lifecycle_sentinel_arguments,
+    linux_cpu_snapshot,
     linux_host_metadata,
     open_descriptor_snapshot,
     parse_linux_schedstat,
     percentile,
+    resource_snapshot,
     tui_redraw,
     wait_for_profile_shell,
+    workload_cpu,
 )
 from mux_benchmark import (
     summary as latency_summary,
@@ -71,6 +75,95 @@ class LinuxResourceTest(unittest.TestCase):
         self.assertEqual(parse_linux_schedstat("123456789 42 7\n"), 123456789)
         with self.assertRaisesRegex(ValueError, "schedstat"):
             parse_linux_schedstat("123 invalid 7\n")
+
+
+class EfficiencyAccountingTest(unittest.TestCase):
+    def test_cpu_includes_worker_threads(self) -> None:
+        with (
+            mock.patch("mux_benchmark.platform.system", return_value="Linux"),
+            mock.patch.object(
+                Path,
+                "iterdir",
+                return_value=iter([Path("/proc/10/task/10"), Path("/proc/10/task/11")]),
+            ),
+            mock.patch.object(Path, "read_text", side_effect=["100 0 1", "900 0 1"]),
+        ):
+            self.assertEqual(linux_cpu_snapshot({10})["cpu_time_ns"], 1000)
+
+    def test_two_pane_profile_really_splits(self) -> None:
+        runtime = mock.Mock(spec=TmuxRuntime)
+        client = mock.Mock()
+        with (
+            mock.patch("mux_benchmark.wait_for_profile_shell"),
+            mock.patch("mux_benchmark.wait_for_profile_panes") as wait,
+            mock.patch("mux_benchmark.send_prefix") as send,
+        ):
+            build_profile(runtime, client, 2)
+        send.assert_called_once_with(client, b"%")
+        wait.assert_called_once_with(runtime, client, "profile", 2)
+
+    def test_client_guardian_is_not_pane_memory(self) -> None:
+        with (
+            mock.patch(
+                "mux_benchmark.subprocess.run",
+                return_value=mock.Mock(
+                    stdout="10 20 100 0:00\n11 10 200 0:00\n20 1 300 0:00\n21 20 400 0:00\n"
+                ),
+            ),
+            mock.patch(
+                "mux_benchmark.process_group_snapshot",
+                side_effect=lambda pids, processes: {
+                    "available": True,
+                    "pids": sorted(pids),
+                },
+            ),
+        ):
+            result = resource_snapshot(
+                [10, 20], {"daemon": [10], "attached_client": [20]}
+            )
+        self.assertEqual(result["roles"]["attached_client"]["pids"], [20, 21])
+        self.assertEqual(result["roles"]["pane_or_mux_children"]["pids"], [11])
+
+    def test_zellij_profile_creates_panes_and_tabs(self) -> None:
+        runtime = mock.Mock(spec=ZellijRuntime)
+        client = mock.Mock()
+        with (
+            mock.patch("mux_benchmark.wait_for_profile_shell"),
+            mock.patch("mux_benchmark.wait_for_profile_panes") as wait,
+        ):
+            build_profile(runtime, client, 8)
+        self.assertEqual(runtime.session_command.call_count, 7)
+        runtime.session_command.assert_any_call("profile", "new-tab")
+        wait.assert_called_with(runtime, client, "profile", 8)
+
+    def test_workload_cpu_rejects_incomparable_endpoints(self) -> None:
+        start = {
+            "available": True,
+            "pids": [10],
+            "cpu_time_source": "native",
+            "cpu_time_ns": 100,
+        }
+        for changes in (
+            {"pids": [11]},
+            {"cpu_time_source": "ps time"},
+            {"cpu_time_ns": 99},
+            {"available": False},
+        ):
+            with (
+                self.subTest(changes=changes),
+                mock.patch(
+                    "mux_benchmark.runtime_resource_snapshot",
+                    return_value={"roles": {"daemon": {**start, **changes}}},
+                ),
+            ):
+                result = workload_cpu(mock.Mock(), {"roles": {"daemon": start}}, 2)
+                self.assertFalse(result["roles"]["daemon"]["available"])
+        with mock.patch(
+            "mux_benchmark.runtime_resource_snapshot",
+            return_value={"roles": {"daemon": {**start, "cpu_time_ns": 300}}},
+        ):
+            result = workload_cpu(mock.Mock(), {"roles": {"daemon": start}}, 2)
+        self.assertEqual(result["roles"]["daemon"]["cpu_ns_per_operation"], 100)
 
 
 class HostFingerprintTest(unittest.TestCase):

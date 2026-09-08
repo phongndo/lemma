@@ -521,14 +521,18 @@ def linux_cpu_snapshot(pids: set[int]) -> dict[str, Any]:
         cpu_time_ns = 0
         sampled = 0
         for pid in pids:
-            schedstat = Path(f"/proc/{pid}/schedstat").read_text(encoding="ascii")
-            cpu_time_ns += parse_linux_schedstat(schedstat)
+            # schedstat is per-thread, unlike /proc/PID/stat's process CPU fields.
+            # Include workers (notably Zellij's); these snapshots cover live threads only.
+            for task in Path(f"/proc/{pid}/task").iterdir():
+                cpu_time_ns += parse_linux_schedstat(
+                    (task / "schedstat").read_text(encoding="ascii")
+                )
             sampled += 1
     except (OSError, ValueError) as error:
         return {"available": False, "reason": str(error)}
     return {
         "available": sampled == len(pids),
-        "source": "/proc/PID/schedstat CPU runtime",
+        "source": "/proc/PID/task/TID/schedstat live-thread CPU runtime",
         "sampled_processes": sampled,
         "cpu_time_ns": cpu_time_ns,
     }
@@ -737,6 +741,23 @@ def resource_snapshot(
     classified: set[int] = set()
     for role, configured in (role_pids or {}).items():
         direct = {pid for pid in configured if pid in selected}
+        if role == "attached_client":
+            # Client-owned restoration guardians are mux overhead, not pane children.
+            # Some adapters launch their daemon from a client: stop at another role's
+            # root rather than absorbing that daemon and its pane subtree twice.
+            other_roots = {
+                pid
+                for other_role, roots in (role_pids or {}).items()
+                if other_role != role
+                for pid in roots
+            }
+            changed = True
+            while changed:
+                changed = False
+                for pid in selected.difference(direct, other_roots):
+                    if processes[pid][0] in direct:
+                        direct.add(pid)
+                        changed = True
         roles[role] = process_group_snapshot(direct, processes)
         classified.update(direct)
     unclassified = selected.difference(classified)
@@ -752,6 +773,46 @@ def resource_snapshot(
 
 def runtime_resource_snapshot(runtime: MuxRuntime) -> dict[str, Any]:
     return resource_snapshot(runtime.resource_roots(), runtime.resource_role_pids())
+
+
+def workload_cpu(
+    runtime: MuxRuntime, before: dict[str, Any], repetitions: int
+) -> dict[str, Any]:
+    """Batch CPU outside native latency timing; includes probe launch/settling, not setup.
+
+    Live-thread snapshots cannot account for threads that exit within the batch. Keep the
+    raw endpoints and reject a decreasing counter rather than fabricating zero CPU.
+    """
+    if repetitions <= 0:
+        raise ValueError("workload CPU requires positive repetitions")
+    after = runtime_resource_snapshot(runtime)
+    result: dict[str, Any] = {
+        "scope": "live process/thread CPU around native probe batch; excludes fixture setup",
+        "repetitions": repetitions,
+        "before": before,
+        "after": after,
+        "roles": {},
+    }
+    for role in before.get("roles", {}):
+        start = before["roles"][role]
+        end = after.get("roles", {}).get(role, {})
+        if (
+            start.get("available") is True
+            and end.get("available") is True
+            and start.get("pids") == end.get("pids")
+            and start.get("cpu_time_source") not in (None, "ps time")
+            and start.get("cpu_time_source") == end.get("cpu_time_source")
+            and end["cpu_time_ns"] >= start["cpu_time_ns"]
+        ):
+            elapsed = end["cpu_time_ns"] - start["cpu_time_ns"]
+            result["roles"][role] = {
+                "available": True,
+                "batch_cpu_ns": elapsed,
+                "cpu_ns_per_operation": elapsed / repetitions,
+            }
+        else:
+            result["roles"][role] = {"available": False}
+    return result
 
 
 def process_tree_diagnostic(root_pids: list[int]) -> str:
@@ -1113,6 +1174,14 @@ class LemmaRuntime:
         self.clients: list[PtyProcess] = []
         try:
             self._wait_ready()
+            # Capture daemon-owned helpers before any pane exists. Their lifetimes are fixed
+            # in these isolated fixtures; do not mislabel the forked Lua host as pane memory.
+            baseline = resource_snapshot([self.server.pid])
+            if baseline.get("available") is not True:
+                raise RuntimeError("cannot identify Lemma daemon helper processes")
+            self.helper_pids = [
+                pid for pid in baseline["pids"] if pid != self.server.pid
+            ]
         except BaseException:
             self.close()
             raise
@@ -1203,6 +1272,7 @@ class LemmaRuntime:
     def resource_role_pids(self) -> dict[str, list[int]]:
         return {
             "daemon": [self.server.pid],
+            "daemon_helpers": self.helper_pids,
             "attached_client": [
                 client.pid for client in self.clients if client.pid > 0
             ],
@@ -1537,6 +1607,16 @@ class ZellijRuntime:
         wait_for_startup_shell(self, client)
         return client
 
+    def session_command(
+        self, session: str, *arguments: str
+    ) -> subprocess.CompletedProcess[str]:
+        mapped = self.session_prefix + session.replace("_", "-")
+        return self._command("--session", mapped, "action", *arguments)
+
+    def pane_count(self, session: str) -> int:
+        panes = json.loads(self.session_command(session, "list-panes", "--json").stdout)
+        return sum(not pane["is_plugin"] for pane in panes)
+
     def _wait_for_session(self, mapped_session: str) -> None:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
@@ -1833,6 +1913,7 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         WARM_READY_MARKER, 60.0, visible_text=screen_renders_markers(runtime)
     )
     client.drain()
+    cpu_before = runtime_resource_snapshot(runtime)
 
     try:
         completed = subprocess.run(
@@ -1877,6 +1958,7 @@ def warm_scroll(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         **latencies,
         "outer_bytes": outer_bytes,
         "median_outer_bytes": percentile(outer_bytes, 0.50),
+        "workload_cpu": workload_cpu(runtime, cpu_before, repetitions),
     }
 
 
@@ -1887,6 +1969,7 @@ def attach_to_visible(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
     # and detaches cleanly first, proving canonical state is ready before the native probe forks.
     session = "attach_visible"
     runtime.start_detached_with_attach_marker(session)
+    cpu_before = runtime_resource_snapshot(runtime)
     completed = subprocess.run(
         [
             str(runtime.probe_path),
@@ -1923,6 +2006,11 @@ def attach_to_visible(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         **latencies,
         "outer_bytes": outer_bytes,
         "median_outer_bytes": percentile(outer_bytes, 0.50),
+        # The native probe owns the short-lived client; live-process snapshots cannot count it.
+        "workload_cpu": {
+            **workload_cpu(runtime, cpu_before, repetitions),
+            "excluded": "short-lived attached client owned by native probe",
+        },
     }
 
 
@@ -1934,7 +2022,9 @@ def latency_samples(
     repetitions: int,
     *,
     wait_for_peer_ready: bool = False,
+    runtime: MuxRuntime | None = None,
 ) -> dict[str, Any]:
+    cpu_before = runtime_resource_snapshot(runtime) if runtime is not None else None
     label_code = INTERACTION_LABEL_CODES.get(label)
     if label_code is None:
         raise ValueError(f"unknown interaction label: {label}")
@@ -1970,6 +2060,11 @@ def latency_samples(
     if not isinstance(outer_bytes, list) or len(outer_bytes) != repetitions:
         raise RuntimeError("native latency probe returned an invalid byte distribution")
     return {
+        **(
+            {"workload_cpu": workload_cpu(runtime, cpu_before, repetitions)}
+            if runtime is not None and cpu_before is not None
+            else {}
+        ),
         "observer": result["observer"],
         "clock": result["clock"],
         "key_to_pty": result["key_to_pty"],
@@ -2004,6 +2099,7 @@ def interactive_under_output(runtime: MuxRuntime, repetitions: int) -> dict[str,
                 "OUTPUT",
                 repetitions,
                 wait_for_peer_ready=True,
+                runtime=runtime,
             ),
         }
     finally:
@@ -2023,6 +2119,7 @@ def interactive_open_loop(runtime: MuxRuntime, repetitions: int) -> dict[str, An
             LATENCY_READY, 5.0, visible_text=screen_renders_markers(runtime)
         )
         client.drain(0.01)
+        cpu_before = runtime_resource_snapshot(runtime)
         completed = subprocess.run(
             [
                 str(runtime.probe_path),
@@ -2057,6 +2154,7 @@ def interactive_open_loop(runtime: MuxRuntime, repetitions: int) -> dict[str, An
             "status": "completed",
             "observer": measured["observer"],
             "clock": measured["clock"],
+            "workload_cpu": workload_cpu(runtime, cpu_before, repetitions),
             "offered_rate_hz": 120,
             "key_to_pty": measured["key_to_pty"],
             "key_to_outer_bytes": measured["key_to_outer_bytes"],
@@ -2083,7 +2181,14 @@ def tui_redraw(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         client.drain(0.01)
         return {
             "status": "completed",
-            **latency_samples(client, receipts, runtime.probe_path, "TUI", repetitions),
+            **latency_samples(
+                client,
+                receipts,
+                runtime.probe_path,
+                "TUI",
+                repetitions,
+                runtime=runtime,
+            ),
         }
     finally:
         receipts.close()
@@ -2104,6 +2209,7 @@ def tui_wheel_burst(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             visible_text=screen_renders_markers(runtime),
         )
         client.drain(0.01)
+        cpu_before = runtime_resource_snapshot(runtime)
 
         completed = subprocess.run(
             [
@@ -2139,6 +2245,7 @@ def tui_wheel_burst(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             "status": "completed",
             "observer": measured["observer"],
             "clock": measured["clock"],
+            "workload_cpu": workload_cpu(runtime, cpu_before, repetitions),
             "wheel_events_per_sample": TUI_WHEEL_BURST_SIZE,
             "key_to_pty": measured["key_to_pty"],
             "key_to_outer_bytes": measured["key_to_outer_bytes"],
@@ -2170,7 +2277,12 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         )
         responsive.drain(0.01)
         idle = latency_samples(
-            responsive, receipts, runtime.probe_path, "IDLE", repetitions
+            responsive,
+            receipts,
+            runtime.probe_path,
+            "IDLE",
+            repetitions,
+            runtime=runtime,
         )
 
         launch = (
@@ -2192,6 +2304,7 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             runtime.probe_path,
             "BLOCKED",
             repetitions,
+            runtime=runtime,
         )
         runtime.gate_path.touch(mode=0o600, exist_ok=False)
         try:
@@ -2333,6 +2446,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             runtime.probe_path,
             "CLIENT_IDLE",
             repetitions,
+            runtime=runtime,
         )
 
         blocked = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -2375,6 +2489,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             runtime.probe_path,
             "CLIENT_BLOCKED",
             repetitions,
+            runtime=runtime,
         )
         probe_output, probe_error = disconnect_probe.communicate(timeout=6.0)
         if disconnect_probe.returncode != 0:
@@ -2427,7 +2542,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
 
 
 def wait_for_profile_panes(
-    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     client: PtyProcess,
     session: str,
     panes: int,
@@ -2437,7 +2552,7 @@ def wait_for_profile_panes(
         client.drain(0.005)
         if isinstance(runtime, LemmaRuntime):
             reached = f", {panes} pane(s)," in runtime.command("list", session).stdout
-        elif isinstance(runtime, HerdrRuntime):
+        elif isinstance(runtime, (HerdrRuntime, ZellijRuntime)):
             reached = runtime.pane_count(session) == panes
         else:
             listing = runtime._command(
@@ -2455,7 +2570,7 @@ def send_prefix(client: PtyProcess, command: bytes) -> None:
 
 
 def wait_for_profile_shell(
-    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     client: PtyProcess,
     pane_index: int,
 ) -> None:
@@ -2468,7 +2583,7 @@ def wait_for_profile_shell(
 
 
 def launch_latency_peer(
-    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     client: PtyProcess,
     autonomous_output: bool,
     receipts: PtyReceiptChannel | None = None,
@@ -2489,13 +2604,37 @@ def launch_latency_peer(
 
 
 def build_profile(
-    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     client: PtyProcess,
     panes: int,
     session: str = "profile",
 ) -> None:
     pane_index = 1
     wait_for_profile_shell(runtime, client, pane_index)
+    if isinstance(runtime, ZellijRuntime):
+        for index in range(1, panes):
+            if index % 4 == 0:
+                runtime.session_command(session, "new-tab")
+            else:
+                runtime.session_command(
+                    session,
+                    "new-pane",
+                    "--direction",
+                    "right" if index % 4 == 1 else "down",
+                )
+            wait_for_profile_panes(runtime, client, session, index + 1)
+            wait_for_profile_shell(runtime, client, index + 1)
+        return
+    if panes == 2:
+        if isinstance(runtime, HerdrRuntime):
+            runtime.session_command(
+                session, "pane", "split", "--current", "--direction", "right", "--focus"
+            )
+        else:
+            send_prefix(client, b"%")
+        wait_for_profile_panes(runtime, client, session, 2)
+        wait_for_profile_shell(runtime, client, 2)
+        return
     tab_count = 1 if panes == 1 else panes // 4
     for tab_index in range(tab_count):
         if panes == 1:
@@ -2546,7 +2685,7 @@ def build_profile(
 
 
 def pane_profile(
-    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime,
+    runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     profile: str,
     panes: int,
     active: bool,
@@ -2569,6 +2708,7 @@ def pane_profile(
             f"{profile}_{'ACTIVE' if active else 'IDLE'}",
             repetitions,
             wait_for_peer_ready=active,
+            runtime=runtime,
         )
         return {
             "status": "completed",
@@ -2919,12 +3059,8 @@ def main() -> int:
     for fixture_executable in (arguments.peer, arguments.probe):
         if not fixture_executable.is_file():
             parser.error(f"missing executable: {fixture_executable}")
-    if arguments.mode == "profiles" and arguments.multiplexer not in {
-        "lemma",
-        "tmux",
-        "herdr",
-    }:
-        parser.error("pane profiles require --multiplexer lemma, tmux, or herdr")
+    if arguments.mode == "profiles" and arguments.multiplexer == "direct":
+        parser.error("pane profiles require a multiplexer")
     if arguments.trace_directory is not None:
         arguments.trace_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if any(arguments.trace_directory.glob("*.ltrace")):
@@ -3066,6 +3202,7 @@ def main() -> int:
 
         attach_samples: list[int] = []
         attach_bytes: list[int] = []
+        attach_cpu: list[dict[str, Any]] = []
         resources_after_workload: dict[str, Any] | None = None
         attach_failure: dict[str, Any] | None = None
         for repetition in range(arguments.repetitions):
@@ -3078,6 +3215,7 @@ def main() -> int:
                 break
             attach_samples.extend(result["samples_ns"])
             attach_bytes.extend(result["outer_bytes"])
+            attach_cpu.append(result["workload_cpu"])
             resources_after_workload = result.get("resources_after_workload")
         if attach_failure is not None:
             workloads[name] = classify_failure(name, attach_failure)
@@ -3089,6 +3227,7 @@ def main() -> int:
                 **summary(attach_samples),
                 "outer_bytes": attach_bytes,
                 "median_outer_bytes": percentile(attach_bytes, 0.50),
+                "workload_cpu_samples": attach_cpu,
                 "resources_after_workload": resources_after_workload,
             }
 
@@ -3096,6 +3235,7 @@ def main() -> int:
         "lemma",
         "tmux",
         "herdr",
+        "zellij",
     }:
         profile_suite = manifest["profile_suites"][arguments.intent]
         profile_definitions = {
@@ -3117,11 +3257,10 @@ def main() -> int:
                     active: bool = activity,
                 ) -> dict[str, Any]:
                     if not isinstance(
-                        runtime, (LemmaRuntime, TmuxRuntime, HerdrRuntime)
+                        runtime,
+                        (LemmaRuntime, TmuxRuntime, HerdrRuntime, ZellijRuntime),
                     ):
-                        raise TypeError(
-                            "pane profile requires Lemma, tmux, or Herdr runtime"
-                        )
+                        raise TypeError("pane profile requires a multiplexer runtime")
                     return pane_profile(
                         runtime, profile_id, pane_count, active, repetitions
                     )

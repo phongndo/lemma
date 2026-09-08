@@ -301,8 +301,12 @@ including exact reported memory, must still agree across report types, paired ca
 before/after host checks. Calibration captures the unchanged checkout repeatedly and fails if the
 reviewed ratio and absolute noise floors do not contain the observed A/A spread; it never relaxes
 policy automatically. Linux
-process CPU evidence uses nanosecond runtime from `/proc/PID/schedstat`, not scheduler-tick-rounded
-`/proc/PID/stat` values. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
+process CPU evidence sums nanosecond runtime across `/proc/PID/task/TID/schedstat`, not just the
+main thread or scheduler-tick-rounded `/proc/PID/stat` values. These are live-thread snapshots:
+threads that exit between endpoints can lose CPU accounting. Workload CPU is a batch average,
+not a latency percentile or an event-exact measurement; its interval excludes fixture setup but
+includes probe launch, settling, and resource census. Keep raw endpoints and CPU sources with the
+result, and do not compare unavailable or changing process populations as stable per-operation CPU. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
 diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
 make their rank unstable.
 
@@ -313,6 +317,38 @@ upgrades compare the actual baseline and candidate. The candidate-owned PTY fixt
 improvement cannot make an older baseline inexpressible. All evidence remains under
 `build/performance/`. Paired regressions block independently of stricter absolute product targets, so
 an existing target miss cannot authorize further degradation.
+
+### Interpreting targets
+
+Keep three distinct questions separate:
+
+| Budget or comparison | Purpose |
+| --- | --- |
+| Interactive input/echo and attach latency; blocked-PTY/client peer latency | Responsiveness and isolation at the named headless endpoint, not input-to-photon guarantees |
+| Idle CPU, wakeups, memory; native CPU and deterministic work/queue bounds | Resource efficiency and bounded behavior |
+| Warm-scroll completion and output-byte limits | Throughput and wire-efficiency product aspirations, not interactive frame deadlines |
+| Paired baseline/candidate checks | Prevent regressions independently of existing absolute-target misses |
+| Same-host, same-fixture comparisons with tmux, Zellij, and Herdr | Match or beat the best **supported** competitor separately for each workload and metric |
+
+The numeric absolute limits remain in `benchmarks/workloads.json`; they are not automatically
+competitor parity thresholds. In particular, the warm-scroll 18 ms median / 35 ms p95 limits must
+not be interpreted as feasible end-to-end deadlines without measuring the direct-PTY control. This
+fixture performs 25,000 separate row writes through a PTY, including line-discipline work. A direct
+control already over the target invalidates that interpretation; it does not prove the mux parser
+needs the entire measured elapsed time. Profile daemon and child CPU separately before optimizing.
+Changing write batching would change the fixture and requires fresh controls, not comparison with
+old results.
+
+For competitor goals, select the lowest valid latency, CPU, memory, or output-byte statistic for
+each workload rather than naming one universally fastest mux. Lower bytes do not necessarily mean
+lower CPU or latency. Use process-tree PSS/private memory alongside RSS and separate daemon/client
+roles from descendants. Lemma's `daemon_helpers` census is taken before panes exist, and
+`attached_client` includes descendant terminal-restoration guardians. The remaining
+`pane_or_mux_children` role is deliberately not called pane memory: other adapters can still
+have unclassified mux helpers. Active pane profiles drive the focused pane,
+not all panes simultaneously. Sparse scaling samples expose shape, not reliable tail latency.
+Do not relax absolute targets or paired blockers merely to turn an observed miss green; retain
+raw evidence and review a target change independently.
 
 ### Performance review requirement
 
