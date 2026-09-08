@@ -2,12 +2,14 @@
 #define LEMMA_EXTENSION_LUA_HOST_HPP
 
 #include "config/config.hpp"
+#include "extension/commands.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lemma::extension {
 
@@ -27,6 +29,9 @@ public:
   ~HostProcess();
 
   [[nodiscard]] auto active() const noexcept -> bool { return descriptor_ >= 0 && process_ > 0; }
+  [[nodiscard]] auto descriptor() const noexcept -> int { return descriptor_; }
+  // Nonblocking reactor failure path. Reaping remains with the daemon or destructor.
+  void terminate() noexcept;
 
   // Process creation is internal to the extension runtime; this value constructor only transfers
   // already-created descriptor and process ownership.
@@ -42,6 +47,7 @@ private:
 struct ConfigurationLoad final {
   HostProcess host;
   std::unique_ptr<const config::Generation> generation;
+  std::vector<CommandDescriptor> commands;
   std::string path;
   std::string diagnostic;
   ConfigurationStatus status{ConfigurationStatus::absent};

@@ -465,6 +465,14 @@ void release_owned_endpoint(void* const context) noexcept {
     reactor_environment.default_cwd = configured_runtime.generation->default_cwd();
     reactor_environment.command_history_file = configured_runtime.generation->history_file();
     reactor_environment.status_line = configured_runtime.generation->status_line();
+    if (!configured_runtime.commands.empty()) {
+      reactor_environment.extension_descriptor = configured_runtime.host.descriptor();
+      reactor_environment.extension_commands = configured_runtime.commands;
+      reactor_environment.stop_extension = [](void* context) noexcept {
+        static_cast<extension::HostProcess*>(context)->terminate();
+      };
+      reactor_environment.extension_context = &configured_runtime.host;
+    }
   }
   const auto result = core::run_server_with_environment(
       listener, &release_owned_endpoint, &endpoint, options.stop_requested,

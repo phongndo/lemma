@@ -1,13 +1,13 @@
-# Configuration runtime
+# Configuration and commands
 
 Lemma loads user configuration from Lua in a separate bounded host process. The daemon never
 executes Lua while routing input, processing PTY bytes, or composing frames. A successful load is
 validated and compiled into one immutable native configuration generation before any Session can
 use it.
 
-This is the initial extension-runtime surface. It covers the portable mux baseline shared by tmux,
-Zellij, WezTerm, Screen, and kitty: input policy, terminal history, native status UI, and launch
-defaults. Custom commands, events, jobs, and UI surfaces are not exposed yet.
+The extension surface covers compiled input policy, terminal history, native status UI, launch
+defaults, and asynchronous Lua commands in the interactive command line. Event subscriptions, job
+helpers, custom UI surfaces, dynamic routing contexts, and live reload are not exposed yet.
 
 ## Location and validation
 
@@ -32,8 +32,8 @@ lemma config check ./init.lua
 ```
 
 The host has a 64 MiB Lua allocation bound. Startup must produce a complete configuration within two
-seconds, the encoded native draft is bounded to 64 KiB, and at most 240 effective bindings are
-accepted. A syntax error, runtime error, unknown option, invalid binding, capacity failure, timeout,
+seconds, the combined encoded configuration and command declarations are bounded to 64 KiB, and at
+most 240 effective bindings are accepted. A syntax error, runtime error, unknown option, invalid binding, capacity failure, timeout,
 or host crash rejects the complete generation. Daemon startup then continues with built-in
 configuration.
 
@@ -186,8 +186,89 @@ select_tab_0 select_tab_1 select_tab_2 select_tab_3 select_tab_4
 select_tab_5 select_tab_6 select_tab_7 select_tab_8 select_tab_9
 ```
 
+## Custom commands
+
+Register commands during configuration loading, directly in `init.lua` or a required module:
+
+```lua
+local lemma = require("lemma")
+
+lemma.command.register("work.tests", {
+  description = "Open a tests tab",
+  timeout_ms = 30000,
+  handler = function(ctx, args)
+    local result = ctx:proc({
+      commands = {
+        {
+          command = "tab.new",
+          session = { id = ctx.session },
+          title = args[1] or "tests",
+          argv = { "just", "test" },
+        },
+      },
+    })
+    assert(result.ok, "Could not open tests tab")
+  end,
+})
+```
+
+Open `C-b :`, type `work.te`, press Tab to complete `work.tests`, then Enter. Arguments use the same
+literal quoting grammar as native commands: `work.tests 'unit tests'` passes one string. Commands
+are currently invokable only through the interactive command line, not keymaps or the public Proc
+catalog. They require the native status line to be enabled.
+
+`lemma.command.register(NAME, OPTIONS)` requires `description` and a function `handler(ctx, args)`.
+`timeout_ms` is optional. Unknown options, duplicate names, or invalid declarations reject the
+entire startup transaction, including configuration. Registration is not allowed from callbacks.
+Names must be qualified, such as `work.tests`: dot-separated segments begin with a lowercase ASCII
+letter and otherwise contain lowercase letters, digits, `_`, or `-`. This keeps extension commands
+separate from native command roots.
+
+`ctx.session`, `ctx.tab`, and `ctx.pane` are generational ID strings captured at invocation. Wrap them
+in `{ id = ctx.pane }` selectors as in the public API. They do not follow later focus changes, and
+normal stale-target checks apply. `args` is a one-based array of literal strings.
+
+`ctx:proc(DOCUMENT)` yields the callback until the daemon returns the complete
+`lemma.proc-result/v1` table. `schema = "lemma.proc/v1"` is supplied when omitted; all other fields,
+validation, backward references, ordering, partial completion, and `on_error` behavior are those of
+the [Automation API](api.md). Rejections are returned as results rather than thrown. A callback can
+inspect the result and submit another Proc. Returning completes the command; throwing publishes an
+error in the attachment's bounded message log and status row.
+
+Lua strings, integers, booleans, and ordinary tables represent JSON values. Contiguous, nonempty
+one-based tables become arrays; string-keyed and empty tables become objects. Omit empty optional
+arrays. Cycles, mixed or sparse tables, functions, and noninteger numbers cannot be submitted.
+JSON null results become Lua nil. Do not call `coroutine.yield` directly; use `ctx:proc`.
+
+Runtime bounds are:
+
+- 64 registered commands, with names up to 64 bytes and printable ASCII descriptions up to 256 bytes;
+- eight concurrent invocations, each with at most one outstanding Proc;
+- a default 30-second invocation deadline, configurable from 1 to 600,000 milliseconds, including
+  time spent waiting for Procs;
+- one million Lua instructions per coroutine resume, plus the host-wide Lua allocation bound;
+- 1 MiB per private runtime record, including its envelope, with a 2 MiB outgoing queue per peer;
+- one 16 KiB read and write attempt and at most one record decode per reactor turn.
+
+Callbacks share one host and cooperate by yielding through `ctx:proc`. A blocked native Lua call
+can delay other callbacks, but not ordinary pane input, PTY progress, or rendering. The daemon
+terminates the host on an invocation deadline. These bounds are not an OS security sandbox or an
+aggregate CPU quota; only load trusted code.
+
 ## Failure and lifetime
 
-The daemon owns the compiled configuration after publication. The Lua VM remains resident in its
-host process for the daemon lifetime, but it is not consulted by input routing. Closing the daemon's
-private lease closes the host. Invalid configuration never partially changes the native map.
+The daemon owns the compiled configuration after publication. Lua remains in its separate host,
+never on the input or render call stack. Only explicitly invoked custom commands require runtime
+host communication. The private host protocol does not change the public lock-step CONTROL API.
+
+An invocation belongs to the originating attachment generation. Detach, disconnect, or switching
+Sessions cancels its remaining Proc commands before further execution. Completed effects are not
+rolled back. Cancellation retains its bounded slot and deadline until the host acknowledges it, so
+a blocked callback cannot evade the watchdog by detaching.
+
+A callback error or instruction-budget failure ends that invocation without disabling other
+commands. Host crash, protocol failure, or deadline expiration removes custom command discovery and
+cancels outstanding invocations. Native bindings, compiled settings, Sessions, and ordinary pane
+processes remain usable. Host recovery requires a daemon restart; live reload is not implemented.
+Closing the daemon's private lease closes the host. Invalid startup configuration never partially
+changes the native map.

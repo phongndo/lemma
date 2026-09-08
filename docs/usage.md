@@ -191,8 +191,10 @@ switch work
 `switch SESSION` moves the live client connection to an existing detached Session without
 restarting the client. `attach SESSION` and `session switch SESSION` are aliases; none of these
 creates a nested Session. Session names are completed from the daemon's live Session registry.
-Commands and options come from one native discovery catalog. Lua custom command registration is not
-exposed; the palette currently contains native commands only.
+Native commands and registered Lua commands share command-line discovery and completion. Lua
+commands run asynchronously in the isolated host and submit ordinary Procs. See
+[Custom commands](extensions.md#custom-commands) for registration, invocation, bounds, and failure
+behavior.
 
 Command and copy-search prompts are hosted by the native status row. With
 `ui.status_line = false`, their bindings are intentionally inert rather than capturing invisible
