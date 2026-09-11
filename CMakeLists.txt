@@ -549,7 +549,9 @@ if(LEMMA_BUILD_TESTS)
   set_tests_properties(
     steady_state_allocation_audit
     PROPERTIES
-      TIMEOUT 30
+      # Fixed-work correctness audit, not a wall-clock performance gate. Leave headroom for
+      # sanitizer instrumentation on shared runners; allocation and work budgets stay exact.
+      TIMEOUT 120
       LABELS "allocation;extended;performance"
       RUN_SERIAL TRUE
   )
