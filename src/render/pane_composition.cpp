@@ -3,6 +3,8 @@
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "render/grid.hpp"
+#include "render/scene.hpp"
 #include "render/ui.hpp"
 
 #include <algorithm>
@@ -833,6 +835,15 @@ void invalidate_panes(const std::span<const PaneSurface> panes) noexcept {
   }
 }
 
+void invalidate_scene(const Scene scene) noexcept {
+  invalidate_panes(scene.panes);
+  for (const auto& surface : scene.grids) {
+    if (surface.grid != nullptr) {
+      surface.grid->invalidate_render_state();
+    }
+  }
+}
+
 void invalidate_pane_mode_projections(const std::span<const PaneSurface> panes) noexcept {
   for (const auto& pane : panes) {
     pane.terminal->invalidate_ansi_mode_projection();
@@ -865,18 +876,56 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
            pane.cursor_override_row < terminal_size.rows));
 }
 
+[[nodiscard]] auto rectangles_overlap(const PaneRectangle first,
+                                      const PaneRectangle second) noexcept -> bool {
+  const auto first_right = static_cast<std::uint32_t>(first.column) + first.columns;
+  const auto first_bottom = static_cast<std::uint32_t>(first.row) + first.rows;
+  const auto second_right = static_cast<std::uint32_t>(second.column) + second.columns;
+  const auto second_bottom = static_cast<std::uint32_t>(second.row) + second.rows;
+  return first.column < second_right && second.column < first_right && first.row < second_bottom &&
+         second.row < first_bottom;
+}
+
 [[nodiscard]] auto panes_overlap(const PaneSurface& first, const PaneSurface& second) noexcept
     -> bool {
-  const auto first_right = static_cast<std::uint32_t>(first.rectangle.column) +
-                           first.rectangle.columns + (first.border_right ? 1U : 0U);
-  const auto first_bottom = static_cast<std::uint32_t>(first.rectangle.row) + first.rectangle.rows +
-                            (first.border_bottom ? 1U : 0U);
-  const auto second_right = static_cast<std::uint32_t>(second.rectangle.column) +
-                            second.rectangle.columns + (second.border_right ? 1U : 0U);
-  const auto second_bottom = static_cast<std::uint32_t>(second.rectangle.row) +
-                             second.rectangle.rows + (second.border_bottom ? 1U : 0U);
-  return first.rectangle.column < second_right && second.rectangle.column < first_right &&
-         first.rectangle.row < second_bottom && second.rectangle.row < first_bottom;
+  auto first_rectangle = first.rectangle;
+  auto second_rectangle = second.rectangle;
+  first_rectangle.columns =
+      static_cast<std::uint16_t>(first_rectangle.columns + (first.border_right ? 1U : 0U));
+  first_rectangle.rows =
+      static_cast<std::uint16_t>(first_rectangle.rows + (first.border_bottom ? 1U : 0U));
+  second_rectangle.columns =
+      static_cast<std::uint16_t>(second_rectangle.columns + (second.border_right ? 1U : 0U));
+  second_rectangle.rows =
+      static_cast<std::uint16_t>(second_rectangle.rows + (second.border_bottom ? 1U : 0U));
+  return rectangles_overlap(first_rectangle, second_rectangle);
+}
+
+[[nodiscard]] auto valid_grid(const GridSurface& surface, const Viewport viewport) noexcept
+    -> bool {
+  if (surface.grid == nullptr || surface.rectangle.columns == 0 || surface.rectangle.rows == 0) {
+    return false;
+  }
+  const auto right =
+      static_cast<std::uint32_t>(surface.rectangle.column) + surface.rectangle.columns;
+  const auto bottom = static_cast<std::uint32_t>(surface.rectangle.row) + surface.rectangle.rows;
+  return right <= viewport.columns && bottom <= viewport.rows &&
+         surface.grid->columns() == surface.rectangle.columns &&
+         surface.grid->rows() == surface.rectangle.rows;
+}
+
+[[nodiscard]] auto fully_covered(const PaneRectangle rectangle,
+                                 const std::span<const GridSurface> covering) noexcept -> bool {
+  return std::ranges::any_of(covering, [rectangle](const GridSurface& surface) {
+    const auto right =
+        static_cast<std::uint32_t>(surface.rectangle.column) + surface.rectangle.columns;
+    const auto bottom = static_cast<std::uint32_t>(surface.rectangle.row) + surface.rectangle.rows;
+    const auto rectangle_right = static_cast<std::uint32_t>(rectangle.column) + rectangle.columns;
+    const auto rectangle_bottom = static_cast<std::uint32_t>(rectangle.row) + rectangle.rows;
+    return surface.opaque && surface.rectangle.column <= rectangle.column &&
+           surface.rectangle.row <= rectangle.row && right >= rectangle_right &&
+           bottom >= rectangle_bottom;
+  });
 }
 
 [[nodiscard]] constexpr auto valid_prompt_target(const StatusPromptTarget target) noexcept -> bool {
@@ -984,27 +1033,27 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
 
 // Composition validation deliberately keeps geometry, overlap, and focus checks in one pass.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto validate_composition(const std::span<const PaneSurface> panes,
-                                        const Viewport viewport, const Viewport content_viewport,
-                                        const StatusLine status,
+[[nodiscard]] auto validate_composition(const Scene scene, const Viewport viewport,
+                                        const Viewport content_viewport, const StatusLine status,
                                         const MessageView message_view) noexcept
     -> std::expected<bool, CompositionError> {
   if (!valid_viewport(viewport)) {
     return std::unexpected(CompositionError::invalid_viewport);
   }
-  if (panes.size() > limits::panes_hard_max) {
+  if (scene.panes.size() > limits::panes_hard_max ||
+      scene.grids.size() > limits::extension_surfaces_hard_max) {
     return std::unexpected(CompositionError::too_many_panes);
   }
   if (!valid_status(status) || !valid_message_view(message_view)) {
     return std::unexpected(CompositionError::invalid_status);
   }
   bool has_focus = false;
-  bool has_presented_focus = false;
-  for (auto current = panes.begin(); current != panes.end(); ++current) {
+  bool has_presented_pane_focus = false;
+  for (auto current = scene.panes.begin(); current != scene.panes.end(); ++current) {
     if (!valid_pane(*current, content_viewport)) {
       return std::unexpected(CompositionError::invalid_pane);
     }
-    for (auto previous = panes.begin(); previous != current; ++previous) {
+    for (auto previous = scene.panes.begin(); previous != current; ++previous) {
       if (panes_overlap(*previous, *current)) {
         return std::unexpected(CompositionError::invalid_pane);
       }
@@ -1013,10 +1062,18 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
       return std::unexpected(CompositionError::multiple_focused_panes);
     }
     has_focus = has_focus || current->focused;
-    has_presented_focus =
-        has_presented_focus || (current->focused && !current->presentation_suppressed);
+    has_presented_pane_focus =
+        has_presented_pane_focus || (current->focused && !current->presentation_suppressed &&
+                                     !fully_covered(current->rectangle, scene.grids));
   }
-  return has_presented_focus;
+  for (const auto& current : scene.grids) {
+    if (!valid_grid(current, content_viewport) || (current.focused && has_focus)) {
+      return std::unexpected(current.focused && has_focus ? CompositionError::multiple_focused_panes
+                                                          : CompositionError::invalid_pane);
+    }
+    has_focus = has_focus || current.focused;
+  }
+  return has_presented_pane_focus;
 }
 
 [[nodiscard]] auto begin_frame(const std::span<std::byte> output, std::size_t& used,
@@ -1060,35 +1117,135 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   return {};
 }
 
-[[nodiscard]] auto render_panes(const std::span<const PaneSurface> panes, const Viewport viewport,
-                                const std::span<std::byte> output, std::size_t& used,
-                                const bool force_full, const std::uint16_t column_offset,
-                                const std::uint16_t row_offset,
+[[nodiscard]] auto
+render_panes(const Scene scene, const Viewport viewport, const std::span<std::byte> output,
+             std::size_t& used, const bool force_full, const std::uint16_t column_offset,
+             const std::uint16_t row_offset, CompositionResult& composition) noexcept
+    -> std::expected<void, CompositionError> {
+  const bool allow_terminal_scroll = column_offset == 0 && row_offset == 0 && scene.grids.empty() &&
+                                     is_single_full_viewport(scene.panes, viewport);
+  const auto render_pass = [&](const bool focused) -> std::expected<void, CompositionError> {
+    for (const auto& pane : scene.panes) {
+      if (pane.focused != focused || pane.presentation_suppressed ||
+          fully_covered(pane.rectangle, scene.grids)) {
+        continue;
+      }
+      const bool repair_transparency =
+          std::ranges::any_of(scene.grids, [&](const GridSurface& grid) {
+            return !grid.opaque && grid.grid->damaged() &&
+                   rectangles_overlap(pane.rectangle, grid.rectangle);
+          });
+      const auto rendered =
+          render_surface(pane, output, used, force_full || repair_transparency,
+                         allow_terminal_scroll, column_offset, row_offset, composition);
+      if (!rendered.has_value()) {
+        invalidate_scene(scene);
+        return rendered;
+      }
+    }
+    return {};
+  };
+  const auto background = render_pass(false);
+  return background.has_value() ? render_pass(true) : background;
+}
+
+// Array indexes are bounded by the validated Scene span and fixed Surface maximum.
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
+[[nodiscard]] auto render_grids(const Scene scene, const std::span<std::byte> output,
+                                std::size_t& used, const bool force_full,
+                                const std::uint16_t column_offset, const std::uint16_t row_offset,
+                                const std::size_t pane_rows_rendered,
                                 CompositionResult& composition) noexcept
     -> std::expected<void, CompositionError> {
-  const bool allow_terminal_scroll =
-      column_offset == 0 && row_offset == 0 && is_single_full_viewport(panes, viewport);
-  for (const auto& pane : panes) {
-    if (!pane.focused && !pane.presentation_suppressed) {
-      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           column_offset, row_offset, composition);
-      if (!rendered.has_value()) {
-        invalidate_panes(panes);
-        return rendered;
+  std::array<bool, limits::extension_surfaces_hard_max> rendered_lower{};
+  for (std::size_t index = 0; index < scene.grids.size(); ++index) {
+    const auto& surface = scene.grids.subspan(index, 1).front();
+    if (fully_covered(surface.rectangle, scene.grids.subspan(index + 1U))) {
+      continue;
+    }
+    bool repair = force_full;
+    if (!repair) {
+      repair =
+          std::ranges::any_of(scene.grids.subspan(index + 1U), [&](const GridSurface& covering) {
+            return !covering.opaque && covering.grid->damaged() &&
+                   rectangles_overlap(surface.rectangle, covering.rectangle);
+          });
+    }
+    if (!repair && pane_rows_rendered > 0) {
+      repair = std::ranges::any_of(scene.panes, [&](const PaneSurface& pane) {
+        return rectangles_overlap(pane.rectangle, surface.rectangle);
+      });
+    }
+    if (!repair) {
+      for (std::size_t lower = 0; lower < index; ++lower) {
+        if (rendered_lower.at(lower) &&
+            rectangles_overlap(scene.grids.subspan(lower, 1).front().rectangle,
+                               surface.rectangle)) {
+          repair = true;
+          break;
+        }
       }
     }
-  }
-  for (const auto& pane : panes) {
-    if (pane.focused && !pane.presentation_suppressed) {
-      const auto rendered = render_surface(pane, output, used, force_full, allow_terminal_scroll,
-                                           column_offset, row_offset, composition);
-      if (!rendered.has_value()) {
-        invalidate_panes(panes);
-        return rendered;
-      }
+    const PaneRectangle physical{
+        .column = static_cast<std::uint16_t>(surface.rectangle.column + column_offset),
+        .row = static_cast<std::uint16_t>(surface.rectangle.row + row_offset),
+        .columns = surface.rectangle.columns,
+        .rows = surface.rectangle.rows,
+    };
+    const auto rendered = surface.grid->render_ansi(
+        output.subspan(used),
+        {.rectangle = physical, .force_full = repair, .opaque = surface.opaque});
+    if (!rendered.has_value()) {
+      invalidate_scene(scene);
+      return std::unexpected(rendered.error() == GridError::output_exhausted
+                                 ? CompositionError::output_exhausted
+                                 : CompositionError::invalid_pane);
     }
+    used += rendered->bytes;
+    composition.rows += rendered->rows;
+    rendered_lower.at(index) = rendered->rows > 0;
   }
   return {};
+}
+
+[[nodiscard]] auto project_scene_cursor(const Scene scene, const std::span<std::byte> output,
+                                        std::size_t& used, const std::uint16_t column_offset,
+                                        const std::uint16_t row_offset, const bool grids_rendered,
+                                        CompositionResult& composition) noexcept
+    -> std::expected<void, CompositionError> {
+  const auto focused_grid = std::ranges::find(scene.grids, true, &GridSurface::focused);
+  if (focused_grid != scene.grids.end()) {
+    const PaneRectangle physical{
+        .column = static_cast<std::uint16_t>(focused_grid->rectangle.column + column_offset),
+        .row = static_cast<std::uint16_t>(focused_grid->rectangle.row + row_offset),
+        .columns = focused_grid->rectangle.columns,
+        .rows = focused_grid->rectangle.rows,
+    };
+    const auto rendered =
+        focused_grid->grid->render_ansi(output.subspan(used), {.rectangle = physical,
+                                                               .focused = true,
+                                                               .project_cursor = true,
+                                                               .opaque = focused_grid->opaque});
+    if (!rendered.has_value()) {
+      invalidate_scene(scene);
+      return std::unexpected(rendered.error() == GridError::output_exhausted
+                                 ? CompositionError::output_exhausted
+                                 : CompositionError::invalid_pane);
+    }
+    used += rendered->bytes;
+    return {};
+  }
+  if (!grids_rendered) {
+    return {};
+  }
+  const auto focused_pane = std::ranges::find(scene.panes, true, &PaneSurface::focused);
+  if (focused_pane == scene.panes.end() || focused_pane->presentation_suppressed ||
+      fully_covered(focused_pane->rectangle, scene.grids)) {
+    return {};
+  }
+  focused_pane->terminal->invalidate_ansi_cursor_projection();
+  return render_surface(*focused_pane, output, used, false, false, column_offset, row_offset,
+                        composition);
 }
 
 [[nodiscard]] auto border_cell(const std::span<const PaneSurface> panes, const std::uint16_t row,
@@ -1236,21 +1393,26 @@ struct CompositionPolicy final {
   OuterModeProjection outer_modes{OuterModeProjection::neutral};
 };
 
-[[nodiscard]] auto composition_policy(const std::span<const PaneSurface> panes,
-                                      const Viewport viewport, const Viewport content_viewport,
-                                      const StatusLine status,
+[[nodiscard]] auto composition_policy(const Scene scene, const Viewport viewport,
+                                      const Viewport content_viewport, const StatusLine status,
                                       const MessageView message_view) noexcept
     -> std::expected<CompositionPolicy, CompositionError> {
   const auto validation =
-      validate_composition(panes, viewport, content_viewport, status, message_view);
+      validate_composition(scene, viewport, content_viewport, status, message_view);
   if (!validation.has_value()) {
     return std::unexpected(validation.error());
   }
-  if (!*validation || message_view.active) {
+  if (message_view.active) {
     return CompositionPolicy{};
   }
-  const auto focused = std::ranges::find(panes, true, &PaneSurface::focused);
-  if (focused == panes.end()) {
+  if (std::ranges::any_of(scene.grids, &GridSurface::focused)) {
+    return CompositionPolicy{.outer_modes = OuterModeProjection::button_mouse};
+  }
+  if (!*validation) {
+    return CompositionPolicy{};
+  }
+  const auto focused = std::ranges::find(scene.panes, true, &PaneSurface::focused);
+  if (focused == scene.panes.end()) {
     return CompositionPolicy{};
   }
   const auto tracking = focused->terminal->mouse_tracking();
@@ -1308,15 +1470,15 @@ struct CompositionPolicy final {
          (!project_outer_modes || projected()) && append(output, used, "\x1B[?2026l");
 }
 
-[[nodiscard]] auto finish_composition(const std::span<const PaneSurface> panes,
-                                      const StatusLine status, const Viewport viewport,
-                                      const std::span<std::byte> output, std::size_t used,
-                                      const bool force_full, const bool complete_frame,
+[[nodiscard]] auto finish_composition(const Scene scene, const StatusLine status,
+                                      const Viewport viewport, const std::span<std::byte> output,
+                                      std::size_t used, const bool force_full,
+                                      const bool complete_frame,
                                       const std::optional<OuterModeProjection> previous_outer_modes,
                                       CompositionResult composition) noexcept
     -> std::expected<CompositionResult, CompositionError> {
   if (!render_status_prompt_cursor(status, viewport, output, used)) {
-    invalidate_panes(panes);
+    invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
   // A pane-level repair does not make the protocol frame complete when suppression omitted a
@@ -1325,18 +1487,18 @@ struct CompositionPolicy final {
   composition.full = composition.full && complete_frame;
   const bool project_outer_modes = force_full || previous_outer_modes != composition.outer_modes;
   if (!finish_frame(output, used, composition.outer_modes, project_outer_modes)) {
-    invalidate_panes(panes);
+    invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
   // Neutral projection resets child-owned non-mouse modes after pane rendering. Invalidate those
   // physical shadows so a normally released synchronized pane restores its canonical modes.
   if (project_outer_modes && composition.outer_modes == OuterModeProjection::neutral) {
-    invalidate_pane_mode_projections(panes);
+    invalidate_pane_mode_projections(scene.panes);
   }
   // The status editor projects a steady block after pane rendering. The next frame must restore
   // the child's canonical blink mode even when no terminal damage occurred.
   if (status.prompting() && viewport.rows >= 2) {
-    invalidate_focused_cursor_projection(panes);
+    invalidate_focused_cursor_projection(scene.panes);
   }
   composition.bytes = used;
   return composition;
@@ -1377,7 +1539,7 @@ struct CompositionPolicy final {
 // Validation is a separate pass so malformed composition input cannot partially consume terminal
 // damage or alter retained pane state. The bounded branches preserve all-or-nothing composition.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
+[[nodiscard]] auto compose_scene(const Scene scene, const Viewport viewport,
                                  const std::span<std::byte> output, const bool force_full,
                                  const StatusLine status,
                                  const std::optional<OuterModeProjection> previous_outer_modes,
@@ -1391,46 +1553,72 @@ struct CompositionPolicy final {
       .rows = static_cast<std::uint16_t>(viewport.rows - status_rows),
   };
   const Viewport content_viewport{.columns = content.columns, .rows = content.rows};
-  const auto policy = composition_policy(panes, viewport, content_viewport, status, message_view);
+  const auto policy = composition_policy(scene, viewport, content_viewport, status, message_view);
   if (!policy.has_value()) {
     return std::unexpected(policy.error());
   }
 
   const bool complete_frame =
-      message_view.active || std::ranges::none_of(panes, &PaneSurface::presentation_suppressed);
+      message_view.active || std::ranges::all_of(scene.panes, [&](const PaneSurface& pane) {
+        return !pane.presentation_suppressed || fully_covered(pane.rectangle, scene.grids);
+      });
   const bool complete_full = force_full && complete_frame;
   std::size_t used = 0;
   if (!begin_frame(output, used, complete_full)) {
     return std::unexpected(CompositionError::output_exhausted);
   }
   CompositionResult composition{
-      .panes = message_view.active ? 0U : panes.size(),
+      .panes = message_view.active ? 0U : scene.panes.size(),
       .outer_modes = status.prompting() ? OuterModeProjection::button_mouse : policy->outer_modes,
       .full = complete_full,
   };
-  // Separators are outside every pane surface and can only change with a layout/full redraw.
-  // Re-emitting them for ordinary pane damage wastes bytes and CPU without changing presentation.
+  // Tiled separators remain Pane-owned Scene decoration and change only with layout/full redraw.
   if (force_full && !message_view.active &&
-      !draw_borders(panes, output, used, content.column, content.row)) {
+      !draw_borders(scene.panes, output, used, content.column, content.row)) {
+    invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
   if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
+    invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
   composition.status = has_visible_status(viewport, status) && (force_full || status.dirty);
   if (message_view.active) {
     if (!render_message_view(message_view, content, output, used)) {
+      invalidate_scene(scene);
       return std::unexpected(CompositionError::output_exhausted);
     }
   } else {
-    const auto rendered = render_panes(panes, content_viewport, output, used, force_full,
+    const auto rendered = render_panes(scene, content_viewport, output, used, force_full,
                                        content.column, content.row, composition);
     if (!rendered.has_value()) {
       return std::unexpected(rendered.error());
     }
+    const auto pane_rows_rendered = composition.rows;
+    const auto before_grids = used;
+    const auto grids = render_grids(scene, output, used, force_full, content.column, content.row,
+                                    pane_rows_rendered, composition);
+    if (!grids.has_value()) {
+      return std::unexpected(grids.error());
+    }
+    const auto cursor = project_scene_cursor(scene, output, used, content.column, content.row,
+                                             used != before_grids, composition);
+    if (!cursor.has_value()) {
+      return std::unexpected(cursor.error());
+    }
   }
-  return finish_composition(panes, status, viewport, output, used, force_full, complete_frame,
+  return finish_composition(scene, status, viewport, output, used, force_full, complete_frame,
                             previous_outer_modes, composition);
+}
+
+auto compose_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
+                   const std::span<std::byte> output, const bool force_full,
+                   const StatusLine status,
+                   const std::optional<OuterModeProjection> previous_outer_modes,
+                   const MessageView message_view) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
+  return compose_scene(Scene{.panes = panes, .grids = {}}, viewport, output, force_full, status,
+                       previous_outer_modes, message_view);
 }
 
 } // namespace lemma::render

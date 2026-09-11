@@ -139,6 +139,9 @@ public:
                                 SplitPaneOptions options = {}) noexcept -> SessionTransition;
   [[nodiscard]] auto resize_attachment(std::uint16_t columns, std::uint16_t rows) noexcept
       -> SessionTransition;
+  [[nodiscard]] auto resize_attachment(std::uint16_t columns, std::uint16_t rows,
+                                       PaneRectangle content_viewport) noexcept
+      -> SessionTransition;
   [[nodiscard]] auto runtime_failed(PaneId pane, ProcessExit process, bool child_exit) noexcept
       -> SessionTransition;
 

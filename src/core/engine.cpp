@@ -1,6 +1,8 @@
 #include "core/engine.hpp"
 
 #include "extension/commands.hpp"
+#include "extension/protocol.hpp"
+#include "extension/runtime.hpp"
 
 #include "api/command.hpp"
 #include "api/json.hpp"
@@ -23,6 +25,7 @@
 #include "lemma/assert.hpp"
 #include "lemma/command.hpp"
 #include "lemma/generational_store.hpp"
+#include "lemma/geometry.hpp"
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
@@ -32,6 +35,7 @@
 #include "protocol/attachment.hpp"
 #include "render/frame_buffer.hpp"
 #include "render/pane_composition.hpp"
+#include "render/scene.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1383,6 +1387,8 @@ void commit_layout_resize_plan(PaneResizePlan& plan, const std::size_t count) no
     -> LayoutResolutionStatus {
   LEMMA_ASSERT(proposed_layout == nullptr || !tab.zoomed);
   const render::PaneRectangle viewport{
+      .column = tab.layout_column,
+      .row = tab.layout_row,
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
@@ -1795,6 +1801,8 @@ void clear_status_message(SessionRecord& session, const bool redraw = true) noex
   }
 }
 
+// Status retention is clamped to the fixed entry array before access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 void publish_status_message(SessionRecord& session, const StatusMessageKind kind,
                             const std::string_view text) noexcept {
   if (text.empty()) {
@@ -2675,6 +2683,8 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
   return true;
 }
 
+// Command translation uses validated enum values and fixed lookup storage.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto copy_action_from_input(const input::InputCommand command) noexcept
     -> std::optional<CopyActionKind> {
   if (command == input::InputCommand::copy_selection) {
@@ -2952,9 +2962,13 @@ void service_copy_input_timeout(SessionRecord& session, PaneRuntimeStore& runtim
     return true;
   }
   const auto previous_suspended = tab.layout_suspended;
+  const auto previous_column = tab.layout_column;
+  const auto previous_row = tab.layout_row;
   const auto previous_columns = tab.layout_columns;
   const auto previous_rows = tab.layout_rows;
   tab.layout_suspended = false;
+  tab.layout_column = viewport.column;
+  tab.layout_row = viewport.row;
   tab.layout_columns = viewport.columns;
   tab.layout_rows = viewport.rows;
   if (resolve_session_layout(session, tab, runtimes)) {
@@ -2962,6 +2976,8 @@ void service_copy_input_timeout(SessionRecord& session, PaneRuntimeStore& runtim
   }
   if (session.active) {
     tab.layout_suspended = previous_suspended;
+    tab.layout_column = previous_column;
+    tab.layout_row = previous_row;
     tab.layout_columns = previous_columns;
     tab.layout_rows = previous_rows;
   }
@@ -3216,6 +3232,8 @@ enum class FocusDirection : std::uint8_t {
     -> std::optional<PaneId> {
   // Zoom resizes focused panes to the viewport, so derive stable tiled geometry from the tree.
   const render::PaneRectangle viewport{
+      .column = tab.layout_column,
+      .row = tab.layout_row,
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
@@ -3316,6 +3334,8 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
   }
   auto proposed_layout = tab.layout;
   const render::PaneRectangle viewport{
+      .column = tab.layout_column,
+      .row = tab.layout_row,
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
@@ -3341,6 +3361,8 @@ void focus_direction(SessionRecord& session, Tab& tab, PaneRuntimeStore& runtime
   }
   auto proposed_layout = tab.layout;
   const render::PaneRectangle viewport{
+      .column = tab.layout_column,
+      .row = tab.layout_row,
       .columns = tab.layout_columns,
       .rows = tab.layout_rows,
   };
@@ -4840,9 +4862,9 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
         .presentation_suppressed = runtime->presentation_gate.presentation_suppressed(),
         .border_right =
             static_cast<std::uint32_t>(pane->rectangle.column) + pane->rectangle.columns <
-            tab->layout_columns,
+            static_cast<std::uint32_t>(tab->layout_column) + tab->layout_columns,
         .border_bottom = static_cast<std::uint32_t>(pane->rectangle.row) + pane->rectangle.rows <
-                         tab->layout_rows,
+                         static_cast<std::uint32_t>(tab->layout_row) + tab->layout_rows,
     };
     ++count;
   }
@@ -5341,10 +5363,27 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
   return std::span(storage).first(forwarded.prefix_size + forwarded.current.size());
 }
 
+[[nodiscard]] constexpr auto input_command_focuses_pane(const input::InputCommand command) noexcept
+    -> bool {
+  return command == input::InputCommand::focus_left ||
+         command == input::InputCommand::focus_right || command == input::InputCommand::focus_up ||
+         command == input::InputCommand::focus_down || command == input::InputCommand::focus_next ||
+         command == input::InputCommand::focus_previous ||
+         command == input::InputCommand::next_tab || command == input::InputCommand::previous_tab ||
+         command == input::InputCommand::create_tab ||
+         command == input::InputCommand::split_left_right ||
+         command == input::InputCommand::split_top_bottom;
+}
+
+[[nodiscard]] auto route_surface_key(extension::Runtime& extensions, const SessionRecord& session,
+                                     const protocol::KeyInput& key,
+                                     std::span<const std::byte> text) noexcept -> bool;
+
 // One decoder-held input message is advanced monotonically. Context transitions and commands are
 // never replayed when the pane PTY queue applies backpressure.
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 [[nodiscard]] auto process_routed_legacy_input(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                               extension::Runtime& extensions,
                                                const std::span<const std::byte> message,
                                                std::size_t& input_budget,
                                                const SessionNameConflict name_conflict,
@@ -5414,6 +5453,9 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
       offset += routed.consumed;
       const auto dispatched = dispatch_input_command(session, runtimes, command->command,
                                                      name_conflict, name_conflict_context);
+      if (dispatched == ParseResult::keep && input_command_focuses_pane(command->command)) {
+        static_cast<void>(extensions.focus_pane(session.attachment.id));
+      }
       if (dispatched == ParseResult::detach) {
         return dispatched;
       }
@@ -5460,7 +5502,10 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
           return ParseResult::error;
         }
       }
-    } else {
+    } else if (!route_surface_key(extensions, session,
+                                  {.action = protocol::KeyInputAction::press,
+                                   .key = protocol::KeyInputKey::unidentified},
+                                  application_input)) {
       const auto queued = queue_application_bytes(session, runtimes, application_input);
       if (queued == InputQueueResult::full) {
         if (router_before.has_value()) {
@@ -5497,8 +5542,9 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
 // NOLINTBEGIN(readability-function-cognitive-complexity)
 [[nodiscard]] auto
 process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
-                         const protocol::KeyInput& key, const std::span<const std::byte> text,
-                         std::size_t& input_budget, const SessionNameConflict name_conflict,
+                         extension::Runtime& extensions, const protocol::KeyInput& key,
+                         const std::span<const std::byte> text, std::size_t& input_budget,
+                         const SessionNameConflict name_conflict,
                          void* const name_conflict_context) noexcept -> ParseResult {
   if (input_budget == 0U) {
     return ParseResult::yield;
@@ -5570,8 +5616,12 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       command != nullptr) {
     accept_input_route(session, runtimes, routed.presentation_changed,
                        routed.interaction_preemption_requested);
-    return dispatch_input_command(session, runtimes, command->command, name_conflict,
-                                  name_conflict_context);
+    const auto dispatched = dispatch_input_command(session, runtimes, command->command,
+                                                   name_conflict, name_conflict_context);
+    if (dispatched == ParseResult::keep && input_command_focuses_pane(command->command)) {
+      static_cast<void>(extensions.focus_pane(session.attachment.id));
+    }
+    return dispatched;
   }
   if (std::holds_alternative<input::ConsumedInput>(routed.effect)) {
     accept_input_route(session, runtimes, routed.presentation_changed,
@@ -5593,7 +5643,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
           (application.modifiers & protocol::key_input_modifier_control) != 0U);
     } else if (session.attachment.copy_mode.active()) {
       process_typed_copy_mode_input(session, runtimes, application, application_text);
-    } else {
+    } else if (!route_surface_key(extensions, session, application, application_text)) {
       const auto queued = queue_application_key(session, runtimes, application, application_text);
       if (queued == InputQueueResult::full) {
         session.input_router = router_before;
@@ -5646,9 +5696,18 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         process_typed_copy_mode_input(session, runtimes, key, text);
       }
     } else {
-      const auto queued = forward_current
-                              ? queue_application_key(session, runtimes, key, text, prefix)
-                              : queue_application_bytes(session, runtimes, prefix);
+      const bool surface_routed = route_surface_key(
+          extensions, session,
+          {.action = protocol::KeyInputAction::press, .key = protocol::KeyInputKey::unidentified},
+          prefix);
+      if (surface_routed && forward_current) {
+        static_cast<void>(route_surface_key(extensions, session, key, text));
+      }
+      auto queued = InputQueueResult::queued;
+      if (!surface_routed) {
+        queued = forward_current ? queue_application_key(session, runtimes, key, text, prefix)
+                                 : queue_application_bytes(session, runtimes, prefix);
+      }
       if (queued == InputQueueResult::full) {
         session.input_router = router_before;
         return ParseResult::backpressure;
@@ -5678,11 +5737,133 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
           session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab);
 }
 
+[[nodiscard]] auto route_surface_key(extension::Runtime& extensions, const SessionRecord& session,
+                                     const protocol::KeyInput& key,
+                                     const std::span<const std::byte> text) noexcept -> bool {
+  if (session.attachment.message_view.active || session.attachment.command_line.active ||
+      session.attachment.rename_prompt.active() || session.attachment.copy_mode.active()) {
+    return false;
+  }
+  const auto surface = extensions.focused_surface(session.attachment.id);
+  if (!surface.is_valid()) {
+    return false;
+  }
+  const auto owner = extensions.surface_owner(surface);
+  try {
+    std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
+                        std::to_string(extensions.event_sequence(owner)) +
+                        R"(,"event":"surface.key","surface":")" + std::to_string(surface.slot()) +
+                        ":" + std::to_string(surface.generation()) + R"(","action":)" +
+                        std::to_string(static_cast<std::uint8_t>(key.action)) + R"(,"key":)" +
+                        std::to_string(static_cast<std::uint8_t>(key.key)) + R"(,"modifiers":)" +
+                        std::to_string(key.modifiers) + R"(,"text":)";
+    // Input bytes and character storage have the same object representation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view encoded(reinterpret_cast<const char*>(text.data()), text.size());
+    if (!api::append_json_string(event, encoded)) {
+      static_cast<void>(extensions.disconnect(owner));
+      return true;
+    }
+    event += '}';
+    if (!extensions.send_event(owner, event)) {
+      static_cast<void>(extensions.disconnect(owner));
+    }
+  } catch (...) {
+    static_cast<void>(extensions.disconnect(owner));
+  }
+  return true;
+}
+
+[[nodiscard]] auto route_surface_paste(extension::Runtime& extensions, const SessionRecord& session,
+                                       const std::span<const std::byte> text) noexcept -> bool {
+  if (session.attachment.message_view.active || session.attachment.command_line.active ||
+      session.attachment.rename_prompt.active() || session.attachment.copy_mode.active()) {
+    return false;
+  }
+  const auto surface = extensions.focused_surface(session.attachment.id);
+  if (!surface.is_valid()) {
+    return false;
+  }
+  const auto owner = extensions.surface_owner(surface);
+  try {
+    std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
+                        std::to_string(extensions.event_sequence(owner)) +
+                        R"(,"event":"surface.paste","surface":")" + std::to_string(surface.slot()) +
+                        ":" + std::to_string(surface.generation()) + R"(","text":)";
+    // Input bytes and character storage have the same object representation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view encoded(reinterpret_cast<const char*>(text.data()), text.size());
+    if (!api::append_json_string(event, encoded)) {
+      static_cast<void>(extensions.disconnect(owner));
+      return true;
+    }
+    event += '}';
+    if (!extensions.send_event(owner, event)) {
+      static_cast<void>(extensions.disconnect(owner));
+    }
+  } catch (...) {
+    static_cast<void>(extensions.disconnect(owner));
+  }
+  return true;
+}
+
+[[nodiscard]] auto route_surface_mouse(extension::Runtime& extensions, SessionRecord& session,
+                                       const protocol::MouseInput& mouse,
+                                       const std::uint16_t content_row) noexcept -> bool {
+  const render::Viewport viewport{.columns = session.attachment.columns,
+                                  .rows = pane_rows(session.attachment.rows)};
+  auto target = extensions.captured_surface_pointer(session.attachment.id);
+  if (!target.is_valid()) {
+    target = extensions.surface_at(session.attachment.id, viewport, mouse.column, content_row);
+  }
+  if (!target.is_valid()) {
+    return false;
+  }
+  const auto owner = extensions.surface_owner(target);
+  const auto rectangle = extensions.surface_rectangle(target, viewport);
+  if (!owner.is_valid() || !rectangle.has_value()) {
+    return false;
+  }
+  if (mouse.action == protocol::MouseInputAction::press) {
+    extensions.capture_surface_pointer(session.attachment.id, target);
+    if (extensions.surface_focusable(target)) {
+      const auto focused = extensions.focus_surface(owner, target, viewport);
+      if (focused.status == extension::SurfaceOperationStatus::applied) {
+        schedule_frame(session, FrameUrgency::interactive, true);
+      }
+    }
+  }
+  try {
+    std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
+                        std::to_string(extensions.event_sequence(owner)) +
+                        R"(,"event":"surface.mouse","surface":")" + std::to_string(target.slot()) +
+                        ":" + std::to_string(target.generation()) + R"(","action":)" +
+                        std::to_string(static_cast<std::uint8_t>(mouse.action)) + R"(,"button":)" +
+                        std::to_string(static_cast<std::uint8_t>(mouse.button)) +
+                        R"(,"modifiers":)" + std::to_string(mouse.modifiers) + R"(,"column":)" +
+                        std::to_string(static_cast<std::int32_t>(mouse.column) -
+                                       static_cast<std::int32_t>(rectangle->column)) +
+                        R"(,"row":)" +
+                        std::to_string(static_cast<std::int32_t>(content_row) -
+                                       static_cast<std::int32_t>(rectangle->row)) +
+                        "}";
+    if (!extensions.send_event(owner, event)) {
+      static_cast<void>(extensions.disconnect(owner));
+    }
+  } catch (...) {
+    static_cast<void>(extensions.disconnect(owner));
+  }
+  if (mouse.action == protocol::MouseInputAction::release) {
+    extensions.release_surface_pointer(session.attachment.id);
+  }
+  return true;
+}
+
 // Packet dispatch exhaustively maps validated protocol messages to session transitions.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto parse_client_packets(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                        std::size_t& message_budget, std::size_t& geometry_budget,
-                                        std::size_t& input_budget,
+                                        extension::Runtime& extensions, std::size_t& message_budget,
+                                        std::size_t& geometry_budget, std::size_t& input_budget,
                                         const SessionNameConflict name_conflict,
                                         void* const name_conflict_context) noexcept -> ParseResult {
   while (true) {
@@ -5723,8 +5904,9 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       }
       break;
     case protocol::ClientMessageKind::input: {
-      const auto result = process_routed_legacy_input(
-          session, runtimes, message.input, input_budget, name_conflict, name_conflict_context);
+      const auto result =
+          process_routed_legacy_input(session, runtimes, extensions, message.input, input_budget,
+                                      name_conflict, name_conflict_context);
       if (result != ParseResult::keep) {
         return result;
       }
@@ -5732,14 +5914,17 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     case protocol::ClientMessageKind::key: {
       const auto result =
-          process_routed_key_input(session, runtimes, message.key, message.input, input_budget,
-                                   name_conflict, name_conflict_context);
+          process_routed_key_input(session, runtimes, extensions, message.key, message.input,
+                                   input_budget, name_conflict, name_conflict_context);
       if (result != ParseResult::keep) {
         return result;
       }
       break;
     }
     case protocol::ClientMessageKind::paste: {
+      if (route_surface_paste(extensions, session, message.input)) {
+        break;
+      }
       if (session.attachment.message_view.active) {
         break;
       }
@@ -5907,6 +6092,10 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       const auto content_row = message.mouse.row < status_rows
                                    ? std::uint16_t{0}
                                    : static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      if (!captured_continuation &&
+          route_surface_mouse(extensions, session, message.mouse, content_row)) {
+        break;
+      }
       if (captured_continuation &&
           session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
         if (message.mouse.action == protocol::MouseInputAction::motion) {
@@ -5956,6 +6145,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         break;
       }
       const render::PaneRectangle viewport{
+          .column = tab->layout_column,
+          .row = tab->layout_row,
           .columns = tab->layout_columns,
           .rows = tab->layout_rows,
       };
@@ -6054,6 +6245,9 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
         }
         if (pane == nullptr) {
           break;
+        }
+        if (message.mouse.action == protocol::MouseInputAction::press) {
+          static_cast<void>(extensions.focus_pane(session.attachment.id));
         }
       }
       auto* const runtime = find_pane_runtime(runtimes, session, *target_tab, *pane);
@@ -6230,12 +6424,13 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
 }
 
 [[nodiscard]] auto receive_client(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                  std::size_t& message_budget, std::size_t& geometry_budget,
-                                  std::size_t& input_budget,
+                                  extension::Runtime& extensions, std::size_t& message_budget,
+                                  std::size_t& geometry_budget, std::size_t& input_budget,
                                   const SessionNameConflict name_conflict,
                                   void* const name_conflict_context) noexcept -> ParseResult {
-  const auto buffered = parse_client_packets(session, runtimes, message_budget, geometry_budget,
-                                             input_budget, name_conflict, name_conflict_context);
+  const auto buffered =
+      parse_client_packets(session, runtimes, extensions, message_budget, geometry_budget,
+                           input_budget, name_conflict, name_conflict_context);
   if (buffered != ParseResult::keep) {
     return buffered;
   }
@@ -6256,8 +6451,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
            .has_value()) {
     return ParseResult::error;
   }
-  return parse_client_packets(session, runtimes, message_budget, geometry_budget, input_budget,
-                              name_conflict, name_conflict_context);
+  return parse_client_packets(session, runtimes, extensions, message_budget, geometry_budget,
+                              input_budget, name_conflict, name_conflict_context);
 }
 
 [[nodiscard]] auto advance_copy_search_cursor(PaneRuntime& runtime, vt::TerminalPoint& point,
@@ -6967,20 +7162,31 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto compose_session_frame(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                         const bool force_full,
+                                         extension::Runtime& extensions, const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
   if (session.attachment_runtime.clipboard_write.bytes != nullptr) {
     return queue_pending_clipboard_write(session, now);
   }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::StatusTab, render::status_tabs_max> status_storage{};
+  std::array<render::GridSurface, limits::extension_surfaces_hard_max> grid_storage{};
   MessageViewStorage message_storage;
   StatusContextStorage status_context_storage;
   const auto surfaces = collect_surfaces(session, runtimes, surface_storage);
   const auto message_view = collect_message_view(session, message_storage);
   const auto status =
       collect_status_line(session, runtimes, status_storage, status_context_storage);
+  const auto grids = extensions.collect_surfaces(
+      session.attachment.id,
+      {.columns = session.attachment.columns, .rows = pane_rows(session.attachment.rows)},
+      grid_storage);
+  if (extensions.focused_surface(session.attachment.id).is_valid()) {
+    for (auto& pane : std::span(surface_storage).first(surfaces.size())) {
+      pane.focused = false;
+    }
+  }
   std::uint64_t trace_correlation = 0;
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   trace_correlation = session.attachment_runtime.frame_trace_correlation;
@@ -6989,8 +7195,9 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_started,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
                                    surfaces.size());
-  const auto rendered = render::compose_retained_frame(
-      surfaces, {.columns = session.attachment.columns, .rows = session.attachment.rows},
+  const auto rendered = render::compose_retained_scene(
+      {.panes = surfaces, .grids = grids},
+      {.columns = session.attachment.columns, .rows = session.attachment.rows},
       session.attachment_runtime.frame, force_full, status, session.attachment_runtime.outer_modes,
       message_view);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
@@ -7500,6 +7707,7 @@ enum class PendingState : std::uint8_t {
   read_control_payload_size,
   read_control_payload,
   read_public_json,
+  read_extension,
   execute_public_proc,
   prepare_public_observer,
   observe,
@@ -7579,6 +7787,7 @@ struct PendingConnection final {
   bool public_connection{false};
   std::uint32_t slot{std::numeric_limits<std::uint32_t>::max()};
   protocol::ClientDecoder attach_decoder;
+  std::unique_ptr<extension::FramedPeer> extension_peer;
   protocol::Dimensions attach_dimensions{};
   std::optional<protocol::HostTerminalTheme> attach_host_theme;
   SessionId attach_session;
@@ -8857,8 +9066,13 @@ struct ConnectionProcOwner final {
   std::uint32_t generation{0};
 };
 
-struct ExtensionProcOwner final {
+struct HostedProcOwner final {
   std::uint64_t invocation{0};
+};
+
+struct RuntimeProcOwner final {
+  ExtensionGenerationId generation;
+  std::uint32_t request_id{0};
 };
 
 struct ProcExecutionState final {
@@ -8867,7 +9081,7 @@ struct ProcExecutionState final {
   std::vector<std::string> results;
   std::optional<ProcCommandWait> wait;
   PublicProcId id;
-  std::variant<ConnectionProcOwner, ExtensionProcOwner> owner;
+  std::variant<ConnectionProcOwner, HostedProcOwner, RuntimeProcOwner> owner;
   std::size_t retained_result_bytes{0};
   std::size_t next_command{0};
   bool continue_on_error{false};
@@ -9200,12 +9414,126 @@ encode_proc_result(const ProcExecutionState& state,
   return append_public(output, "]}\n") ? output : std::string{};
 }
 
+[[nodiscard]] constexpr auto surface_command(const api::CommandKind kind) noexcept -> bool {
+  return kind == api::CommandKind::surface_create || kind == api::CommandKind::surface_configure ||
+         kind == api::CommandKind::surface_focus || kind == api::CommandKind::surface_close;
+}
+
+// Structural Surface mutation, dependent Grid geometry, and Pane runtime resize commit together.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto execute_surface_command(const api::Command& request,
+                                           const RuntimeProcOwner& owner, Sessions& sessions,
+                                           PaneRuntimeStore& runtimes,
+                                           extension::Runtime& extensions) noexcept
+    -> PublicCommandExecution {
+  PublicCommandExecution execution;
+  auto* const session = sessions.get(extensions.session(owner.generation));
+  if (session == nullptr || !session->active ||
+      extensions.attachment(owner.generation) != session->attachment.id) {
+    execution.status = CommandStatus::stale_target;
+    return execution;
+  }
+  const render::Viewport viewport{.columns = session->attachment.columns,
+                                  .rows = pane_rows(session->attachment.rows)};
+  const bool changes_geometry = request.kind != api::CommandKind::surface_focus;
+  const auto previous_content = extensions.pane_viewport(session->attachment.id, viewport);
+  if (!previous_content.has_value() || !extensions.begin_surface_transaction(owner.generation)) {
+    execution.status = CommandStatus::failed;
+    return execution;
+  }
+  extension::SurfaceOperationResult operation;
+  if (request.kind == api::CommandKind::surface_create) {
+    operation = extensions.create_surface(owner.generation, request.surface_placement,
+                                          request.focusable, request.opaque, viewport);
+  } else if (request.kind == api::CommandKind::surface_configure) {
+    operation = extensions.configure_surface(owner.generation, request.surface.id,
+                                             request.surface_placement, viewport);
+  } else if (request.kind == api::CommandKind::surface_focus) {
+    operation = extensions.focus_surface(owner.generation, request.surface.id, viewport);
+  } else {
+    operation = extensions.close_surface(owner.generation, request.surface.id, viewport);
+  }
+  switch (operation.status) {
+  case extension::SurfaceOperationStatus::applied:
+    execution.status = CommandStatus::applied;
+    break;
+  case extension::SurfaceOperationStatus::no_effect:
+    execution.status = CommandStatus::no_effect;
+    break;
+  case extension::SurfaceOperationStatus::stale:
+    execution.status = CommandStatus::stale_target;
+    break;
+  case extension::SurfaceOperationStatus::wrong_owner:
+    execution.status = CommandStatus::wrong_owner;
+    break;
+  case extension::SurfaceOperationStatus::invalid:
+    execution.status = CommandStatus::invalid_command;
+    break;
+  case extension::SurfaceOperationStatus::capacity:
+    execution.status = CommandStatus::capacity;
+    break;
+  case extension::SurfaceOperationStatus::unavailable:
+    execution.status = CommandStatus::unavailable;
+    break;
+  }
+  if (operation.status != extension::SurfaceOperationStatus::applied) {
+    if (operation.status == extension::SurfaceOperationStatus::no_effect) {
+      extensions.commit_surface_transaction(owner.generation);
+    } else {
+      static_cast<void>(extensions.rollback_surface_transaction(owner.generation));
+    }
+  }
+  if (operation.status == extension::SurfaceOperationStatus::applied && changes_geometry) {
+    const auto content = extensions.pane_viewport(session->attachment.id, viewport);
+    if (!content.has_value() || !extensions.resize_surfaces(session->attachment.id, viewport)) {
+      static_cast<void>(extensions.rollback_surface_transaction(owner.generation));
+      execution.status = CommandStatus::failed;
+      return execution;
+    }
+    ProductionSessionRuntimeContext runtime_context{.session = session, .runtimes = &runtimes};
+    SessionMachine machine(*session, production_session_options(runtime_context));
+    const auto transition =
+        machine.resize_attachment(session->attachment.columns, session->attachment.rows, *content);
+    apply_session_change(*session, runtimes, transition.change);
+    if (transition.result.status != CommandStatus::applied &&
+        transition.result.status != CommandStatus::no_effect) {
+      static_cast<void>(extensions.rollback_surface_transaction(owner.generation));
+      const auto restored = machine.resize_attachment(session->attachment.columns,
+                                                      session->attachment.rows, *previous_content);
+      apply_session_change(*session, runtimes, restored.change);
+      execution.status = transition.result.status;
+      return execution;
+    }
+    extensions.commit_surface_transaction(owner.generation);
+  } else if (operation.status == extension::SurfaceOperationStatus::applied) {
+    extensions.commit_surface_transaction(owner.generation);
+  }
+  if (execution.status == CommandStatus::applied || execution.status == CommandStatus::no_effect) {
+    execution.session = session->id;
+    execution.session_revision = session->mutation_generation;
+    try {
+      execution.session_name = std::string(session->session_name());
+      if (operation.surface.is_valid()) {
+        execution.value_field = "surface";
+        execution.value_json = "\"" + std::to_string(operation.surface.slot()) + ":" +
+                               std::to_string(operation.surface.generation()) + "\"";
+      }
+    } catch (...) {
+      execution.session_name.clear();
+      execution.value_field.clear();
+      execution.value_json.clear();
+    }
+    schedule_frame(*session, FrameUrgency::state_change, true);
+  }
+  return execution;
+}
+
 // One call executes at most one already-validated Command from one admitted Proc.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRuntimeStore& runtimes,
-                         std::uint64_t& activity_order, PublicScratch& scratch_owner)
-    -> std::optional<std::string> {
+                         std::uint64_t& activity_order, PublicScratch& scratch_owner,
+                         extension::Runtime& extensions) -> std::optional<std::string> {
   const auto command_count = state.steps.size();
   if (state.next_command >= command_count) {
     return encode_proc_result(state);
@@ -9232,18 +9560,42 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
       return std::nullopt;
     }
     if (request.has_value()) {
-      auto scratch = std::span<std::byte>{};
-      if (request->kind == api::CommandKind::pane_capture) {
-        scratch = acquire_public_scratch(scratch_owner);
-      }
-      if (scratch.empty() && request->kind == api::CommandKind::pane_capture) {
-        execution.status = CommandStatus::failed;
+      const auto* const runtime_owner = std::get_if<RuntimeProcOwner>(&state.owner);
+      if (surface_command(request->kind)) {
+        if (runtime_owner == nullptr) {
+          execution.status = CommandStatus::unavailable;
+        } else {
+          execution =
+              execute_surface_command(*request, *runtime_owner, sessions, runtimes, extensions);
+        }
       } else {
-        execution =
-            PublicCommandExecutor::execute(*request, sessions, runtimes, activity_order, scratch);
+        auto scratch = std::span<std::byte>{};
+        if (request->kind == api::CommandKind::pane_capture) {
+          scratch = acquire_public_scratch(scratch_owner);
+        }
+        if (scratch.empty() && request->kind == api::CommandKind::pane_capture) {
+          execution.status = CommandStatus::failed;
+        } else {
+          execution =
+              PublicCommandExecutor::execute(*request, sessions, runtimes, activity_order, scratch);
+        }
       }
     } else {
       execution.error_reason = "unresolved_reference";
+    }
+  }
+  if (request.has_value() &&
+      (execution.status == CommandStatus::applied ||
+       execution.status == CommandStatus::no_effect) &&
+      execution.session.is_valid() &&
+      (request->kind == api::CommandKind::pane_focus ||
+       request->kind == api::CommandKind::tab_select ||
+       (request->kind == api::CommandKind::pane_split &&
+        request->focus == api::FocusPolicy::created) ||
+       (request->kind == api::CommandKind::tab_new &&
+        request->focus == api::FocusPolicy::created))) {
+    if (auto* const focused_session = sessions.get(execution.session); focused_session != nullptr) {
+      static_cast<void>(extensions.focus_pane(focused_session->attachment.id));
     }
   }
   const auto& result_command = request.has_value() ? *request : step.request;
@@ -9328,7 +9680,8 @@ void finish_public_output(PendingConnection& pending, std::string output,
 void service_public_procs(PublicProcExecutions& executions, PendingConnections& connections,
                           Sessions& sessions, PaneRuntimeStore& runtimes,
                           std::uint64_t& activity_order, PublicScratch& scratch,
-                          std::size_t& cursor, extension::CommandRuntime& extensions) noexcept {
+                          std::size_t& cursor, extension::CommandRuntime& hosted_extensions,
+                          extension::Runtime& extension_runtime) noexcept {
   for (std::size_t visited = 0; visited < executions.size(); ++visited) {
     const auto slot = (cursor + visited) % executions.size();
     auto& proc_slot = std::span(executions).subspan(slot, 1).front();
@@ -9336,24 +9689,31 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
       continue;
     }
     auto* const pending = owned_public_proc(connections, *proc_slot.execution);
-    const auto* const hosted = std::get_if<ExtensionProcOwner>(&proc_slot.execution->owner);
+    const auto* const hosted = std::get_if<HostedProcOwner>(&proc_slot.execution->owner);
+    const auto* const runtime = std::get_if<RuntimeProcOwner>(&proc_slot.execution->owner);
     const auto invocation = hosted == nullptr ? 0U : hosted->invocation;
-    if (pending == nullptr && extensions.find(invocation) == nullptr) {
+    const bool hosted_connected =
+        hosted != nullptr && hosted_extensions.find(invocation) != nullptr;
+    const bool runtime_connected =
+        runtime != nullptr && extension_runtime.connected(runtime->generation);
+    if (pending == nullptr && !hosted_connected && !runtime_connected) {
       proc_slot.execution.reset();
       continue;
     }
     const auto complete = [&](std::string output) {
-      proc_slot.execution.reset();
       if (pending != nullptr) {
         pending->proc = {};
         finish_public_output(*pending, std::move(output), PendingDisposition::keep_proc);
-      } else {
-        static_cast<void>(extensions.result(invocation, output));
+      } else if (hosted != nullptr) {
+        static_cast<void>(hosted_extensions.result(invocation, output));
+      } else if (runtime != nullptr) {
+        extension_runtime.complete_proc(runtime->generation, runtime->request_id, output);
       }
+      proc_slot.execution.reset();
     };
     try {
       auto output = execute_public_proc_step(*proc_slot.execution, sessions, runtimes,
-                                             activity_order, scratch);
+                                             activity_order, scratch, extension_runtime);
       if (output.has_value()) {
         complete(std::move(*output));
       }
@@ -9365,8 +9725,10 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
         if (pending != nullptr) {
           pending->proc = {};
           pending->state = PendingState::unused;
-        } else {
-          extensions.channel().disconnect();
+        } else if (hosted != nullptr) {
+          hosted_extensions.channel().disconnect();
+        } else if (runtime != nullptr) {
+          static_cast<void>(extension_runtime.disconnect(runtime->generation));
         }
       }
     }
@@ -9497,6 +9859,36 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
                              api::CaptureWrap::rendered, target.runtime->observation_generation,
                              formatted.truncated, text) &&
          append_public(output, "}\n");
+}
+
+[[nodiscard]] auto append_extension_screen_event(std::string& output, const std::uint32_t sequence,
+                                                 const ObservedPane target,
+                                                 const std::span<std::byte> scratch) -> bool {
+  if (target.session == nullptr || target.pane == nullptr || target.runtime == nullptr) {
+    return false;
+  }
+  const auto formatted = format_public_visible(target.runtime->terminal, vt::ScreenFormat::plain,
+                                               api::CaptureWrap::rendered, 0, scratch);
+  const auto at_prompt = target.runtime->terminal.cursor_at_prompt();
+  if (!formatted.result.has_value() || !at_prompt.has_value() ||
+      !append_public(output, R"({"schema":"lemma.event/v1","sequence":)") ||
+      !append_public_number(output, sequence) ||
+      !append_public(output, R"(,"event":"pane.screen","session":)") ||
+      !append_public_id(output, target.session->id) || !append_public(output, R"(,"pane":)") ||
+      !append_public_id(output, target.pane->id) || !append_public(output, R"(,"generation":)") ||
+      !append_public_number(output, target.runtime->observation_generation) ||
+      !append_public(output, R"(,"cursor_at_prompt":)") ||
+      !append_public(output, *at_prompt ? "true" : "false")) {
+    return false;
+  }
+  // Byte payloads and character storage have the same object representation.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(scratch.data()), *formatted.result);
+  return append_public(output, R"(,"capture":)") &&
+         api::append_capture(output, api::CaptureSource::visible, api::CaptureFormat::plain,
+                             api::CaptureWrap::rendered, target.runtime->observation_generation,
+                             formatted.truncated, text) &&
+         append_public(output, "}");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -9704,7 +10096,7 @@ void service_hosted_commands(extension::CommandRuntime& extensions, Sessions& se
             invocation->id, proc_error(prepared.error().reason, prepared.error().index)));
         return;
       }
-      prepared->owner = ExtensionProcOwner{.invocation = invocation->id};
+      prepared->owner = HostedProcOwner{.invocation = invocation->id};
       if (!admit_owned_proc(executions, std::move(*prepared)).has_value()) {
         static_cast<void>(extensions.result(invocation->id, proc_error("capacity")));
         return;
@@ -9736,6 +10128,68 @@ void service_hosted_commands(extension::CommandRuntime& extensions, Sessions& se
   } catch (...) {
     fail_hosted_commands(extensions, sessions, "Error: Extension resource failure");
   }
+}
+
+// Dispatch is exhaustive across the bounded extension record kinds and their independent lanes.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto process_extension_record(extension::Runtime& extensions,
+                                            PublicProcExecutions& executions, Sessions& sessions,
+                                            const std::size_t slot) noexcept -> bool {
+  const auto owner = extensions.owner_at(slot);
+  const auto record = extensions.receive(slot);
+  if (!owner.is_valid() || !record.has_value()) {
+    return false;
+  }
+  if (record->kind == extension::RecordKind::proc) {
+    if (!extensions.reserve_proc(owner, record->sequence)) {
+      static_cast<void>(extensions.send_error(owner, record->sequence, "proc_unavailable"));
+      extensions.consume(slot);
+      return true;
+    }
+    try {
+      // JSON bytes and character storage have the same object representation.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      const std::string_view json(reinterpret_cast<const char*>(record->payload.data()),
+                                  record->payload.size());
+      auto parsed = api::parse_json(json);
+      auto prepared = parsed.value.has_value()
+                          ? prepare_public_proc(std::move(*parsed.value))
+                          : std::expected<ProcExecutionState, ProcPrepareError>{std::unexpected(
+                                ProcPrepareError{.reason = "invalid_json", .index = std::nullopt})};
+      extensions.consume(slot);
+      if (!prepared.has_value()) {
+        extensions.complete_proc(owner, record->sequence,
+                                 proc_error(prepared.error().reason, prepared.error().index));
+        return true;
+      }
+      prepared->owner = RuntimeProcOwner{.generation = owner, .request_id = record->sequence};
+      if (!admit_owned_proc(executions, std::move(*prepared)).has_value()) {
+        extensions.complete_proc(owner, record->sequence, proc_error("capacity"));
+      }
+    } catch (...) {
+      extensions.consume(slot);
+      extensions.complete_proc(
+          owner, record->sequence,
+          R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"resource_failure"},"results":[]})");
+    }
+    return true;
+  }
+  if (record->kind == extension::RecordKind::surface_update) {
+    const auto updated = extensions.apply_surface_update(owner, record->payload);
+    extensions.consume(slot);
+    if (updated.status == extension::SurfaceOperationStatus::applied) {
+      if (auto* const session = sessions.get(extensions.session(owner));
+          session != nullptr && session->active) {
+        schedule_frame(*session, FrameUrgency::burst, false);
+      }
+    } else if (updated.status != extension::SurfaceOperationStatus::no_effect) {
+      static_cast<void>(extensions.send_error(
+          owner, record->sequence, extension::surface_operation_status_name(updated.status)));
+    }
+    return true;
+  }
+  static_cast<void>(extensions.disconnect(owner));
+  return true;
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -9934,6 +10388,118 @@ void prepare_public_document(PendingConnection& pending,
   return screen_work_pending;
 }
 
+struct ExtensionObservation final {
+  ExtensionGenerationId owner;
+  std::array<std::uint64_t, api::event_panes_max> terminal_generations{};
+  std::uint64_t session_revision{0};
+  std::size_t pane_cursor{0};
+};
+
+// One fair peer and at most one state or terminal Event is serialized per reactor turn.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void service_extension_observers(
+    extension::Runtime& extensions, Sessions& sessions, PaneRuntimeStore& runtimes,
+    PublicScratch& scratch_owner,
+    std::array<ExtensionObservation, limits::extension_sessions_hard_max>& observations,
+    std::size_t& cursor) noexcept {
+  std::array<extension::PeerView, limits::extension_sessions_hard_max> peers{};
+  const auto active = extensions.peer_views(peers);
+  if (active.empty()) {
+    cursor = 0;
+    return;
+  }
+  cursor %= active.size();
+  for (std::size_t visited = 0; visited < active.size(); ++visited) {
+    const auto peer = active.subspan((cursor + visited) % active.size(), 1).front();
+    if (!extensions.has_capability(peer.owner, extension::capability_observe)) {
+      continue;
+    }
+    LEMMA_ASSERT(peer.slot < observations.size());
+    auto& observed = std::span(observations).subspan(peer.slot, 1).front();
+    const auto* const subscription = extensions.subscription(peer.owner);
+    if (subscription == nullptr) {
+      continue;
+    }
+    auto* const session = sessions.get(extensions.session(peer.owner));
+    if (session == nullptr || !session->active) {
+      static_cast<void>(extensions.disconnect(peer.owner));
+      return;
+    }
+    const auto revision = session->mutation_generation;
+    if (observed.owner != peer.owner) {
+      // Start conservatively behind the admission snapshot. A mutation between snapshot encoding
+      // and this turn then yields a duplicate incremental Event rather than a lost transition.
+      observed = {.owner = peer.owner};
+    }
+    if (extensions.output_bytes(peer.owner) != 0) {
+      continue;
+    }
+    if (revision != observed.session_revision) {
+      try {
+        std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
+                            std::to_string(extensions.event_sequence(peer.owner)) +
+                            R"(,"event":"state.changed","sessions":)";
+        if (!append_sessions_snapshot(event, sessions, subscription->session) ||
+            !append_public(event, "}")) {
+          static_cast<void>(extensions.disconnect(peer.owner));
+          return;
+        }
+        if (extensions.send_event(peer.owner, event)) {
+          observed.session_revision = revision;
+        }
+        cursor = (cursor + visited + 1U) % active.size();
+        return;
+      } catch (...) {
+        static_cast<void>(extensions.disconnect(peer.owner));
+        return;
+      }
+    }
+    if (subscription->panes.empty()) {
+      continue;
+    }
+    const auto pane_index = observed.pane_cursor % subscription->panes.size();
+    observed.pane_cursor = (pane_index + 1U) % subscription->panes.size();
+    auto* const pane =
+        find_pane(*session, std::span(subscription->panes).subspan(pane_index, 1).front().id);
+    auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
+    if (runtime == nullptr ||
+        runtime->observation_generation ==
+            std::span(observed.terminal_generations).subspan(pane_index, 1).front()) {
+      continue;
+    }
+    try {
+      std::string event;
+      if (subscription->screen) {
+        const auto scratch = acquire_public_scratch(scratch_owner);
+        if (scratch.empty() ||
+            !append_extension_screen_event(event, extensions.event_sequence(peer.owner),
+                                           {.session = session, .pane = pane, .runtime = runtime},
+                                           scratch)) {
+          static_cast<void>(extensions.disconnect(peer.owner));
+          return;
+        }
+      } else if (!append_public(event, R"({"schema":"lemma.event/v1","sequence":)") ||
+                 !append_public_number(event, extensions.event_sequence(peer.owner)) ||
+                 !append_public(event, R"(,"event":"pane.terminal","session":)") ||
+                 !append_public_id(event, session->id) || !append_public(event, R"(,"pane":)") ||
+                 !append_public_id(event, pane->id) || !append_public(event, R"(,"generation":)") ||
+                 !append_public_number(event, runtime->observation_generation) ||
+                 !append_public(event, R"(,"changed":["screen"]})")) {
+        static_cast<void>(extensions.disconnect(peer.owner));
+        return;
+      }
+      if (extensions.send_event(peer.owner, event)) {
+        std::span(observed.terminal_generations).subspan(pane_index, 1).front() =
+            runtime->observation_generation;
+      }
+    } catch (...) {
+      static_cast<void>(extensions.disconnect(peer.owner));
+    }
+    cursor = (cursor + visited + 1U) % active.size();
+    return;
+  }
+}
+
 // Once setup capacity is occupied, a small independent pool reads only the protocol discriminator
 // needed to return a wire-compatible capacity response. These responders do not consume setup
 // slots, so an attach peer can receive its framed rejection even while every setup slot is busy.
@@ -10020,7 +10586,12 @@ void close_pending(PendingConnections& connections, const std::size_t slot,
     return;
   }
   release_attach_reservation(*owner, slot, sessions);
-  close_descriptor(owner->descriptor);
+  if (owner->extension_peer != nullptr) {
+    owner->descriptor = -1;
+    owner->extension_peer.reset();
+  } else {
+    close_descriptor(owner->descriptor);
+  }
   owner.reset();
 }
 
@@ -10772,6 +11343,18 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
       pending.state = PendingState::read_public_json;
       pending.field_size = 0;
       pending.field_target = 0;
+    } else if (pending.command == extension::protocol_magic.front()) {
+      try {
+        pending.extension_peer = std::make_unique<extension::FramedPeer>(pending.descriptor);
+      } catch (...) {
+        pending.state = PendingState::unused;
+        break;
+      }
+      if (!pending.extension_peer->prime(pending.command)) {
+        pending.state = PendingState::unused;
+        break;
+      }
+      pending.state = PendingState::read_extension;
     } else if (pending.command == protocol::attach_magic.front()) {
       if (!pending.attach_decoder.prepare().has_value()) {
         pending.state = PendingState::unused;
@@ -10981,6 +11564,7 @@ void complete_pending_field(PendingConnection& pending, Sessions& sessions,
     prepare_control_payload(pending, sessions, runtimes);
     break;
   case PendingState::read_public_json:
+  case PendingState::read_extension:
   case PendingState::execute_public_proc:
   case PendingState::prepare_public_observer:
   case PendingState::observe:
@@ -11046,11 +11630,73 @@ void process_public_read(PendingConnection& pending, PublicProcExecutions& execu
   pending.state = PendingState::unused;
 }
 
+// Admission validates and binds the complete first record before transferring descriptor ownership.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void process_extension_read(PendingConnections& connections, Sessions& sessions,
+                            PaneRuntimeStore& runtimes, extension::Runtime& extensions,
+                            PublicScratch& scratch_owner, const std::size_t slot) noexcept {
+  auto* const pending = std::span(connections).subspan(slot, 1).front().get();
+  LEMMA_ASSERT(pending != nullptr && pending->extension_peer != nullptr);
+  static_cast<void>(pending->extension_peer->read_ready());
+  const auto record = pending->extension_peer->receive();
+  if (!record.has_value()) {
+    if (!pending->extension_peer->connected()) {
+      close_pending(connections, slot, sessions);
+    }
+    return;
+  }
+  if (record->kind != extension::RecordKind::hello) {
+    close_pending(connections, slot, sessions);
+    return;
+  }
+  try {
+    // JSON bytes and character storage have the same object representation.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const std::string_view json(reinterpret_cast<const char*>(record->payload.data()),
+                                record->payload.size());
+    auto parsed = api::parse_json(json);
+    auto hello = parsed.value.has_value() ? extension::decode_hello(*parsed.value) : std::nullopt;
+    if (!hello.has_value() || !hello->subscription.session.has_value()) {
+      close_pending(connections, slot, sessions);
+      return;
+    }
+    auto* const target = public_session(sessions, *hello->subscription.session);
+    if (target == nullptr || !target->active || !target->attachment.id.is_valid()) {
+      close_pending(connections, slot, sessions);
+      return;
+    }
+    pending->subscription = hello->subscription;
+    const auto scratch =
+        hello->subscription.screen ? acquire_public_scratch(scratch_owner) : std::span<std::byte>{};
+    if (hello->subscription.screen && scratch.empty()) {
+      close_pending(connections, slot, sessions);
+      return;
+    }
+    auto snapshot = (hello->capabilities & extension::capability_observe) != 0
+                        ? encode_initial_snapshot(*pending, sessions, runtimes, scratch)
+                        : std::string{};
+    if ((hello->capabilities & extension::capability_observe) != 0 && snapshot.empty()) {
+      close_pending(connections, slot, sessions);
+      return;
+    }
+    pending->extension_peer->consume();
+    auto peer = std::move(*pending->extension_peer);
+    pending->extension_peer.reset();
+    pending->descriptor = -1;
+    static_cast<void>(extensions.admit(std::move(peer), std::move(*hello), target->id,
+                                       target->attachment.id, snapshot));
+    close_pending(connections, slot, sessions);
+  } catch (...) {
+    close_pending(connections, slot, sessions);
+  }
+}
+
 // The branches are the bounded outcomes of one nonblocking setup read.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                            PublicProcExecutions& executions, const std::size_t slot) noexcept {
+                            PublicProcExecutions& executions, extension::Runtime& extensions,
+                            PublicScratch& scratch_owner, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
@@ -11059,6 +11705,10 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
        ++operation) {
     if (pending->state == PendingState::execute_public_proc ||
         pending->state == PendingState::prepare_public_observer) {
+      return;
+    }
+    if (pending->state == PendingState::read_extension) {
+      process_extension_read(connections, sessions, runtimes, extensions, scratch_owner, slot);
       return;
     }
     if (pending->state == PendingState::read_public_json ||
@@ -11149,14 +11799,16 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
-                          PublicProcExecutions& executions, const std::size_t slot) noexcept {
+                          PublicProcExecutions& executions, extension::Runtime& extensions,
+                          PublicScratch& scratch_owner, const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   if (!pending->public_connection && reactor_now() >= pending->setup_deadline) {
     close_pending(connections, slot, sessions);
     return;
   }
-  process_pending_fields(connections, sessions, runtimes, activity_order, executions, slot);
+  process_pending_fields(connections, sessions, runtimes, activity_order, executions, extensions,
+                         scratch_owner, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -11164,6 +11816,7 @@ void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtim
 
 void handoff_attached_connection(PendingConnections& connections, const std::size_t slot,
                                  Sessions& sessions, PaneRuntimeStore& runtimes,
+                                 extension::Runtime& extensions,
                                  std::uint64_t& activity_order) noexcept {
   auto& owner = std::span(connections).subspan(slot, 1).front();
   LEMMA_ASSERT(owner != nullptr);
@@ -11202,7 +11855,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
   session->attachment_runtime.frame_trace_correlation = 0;
 #endif
-  if (!compose_session_frame(*session, runtimes, true, reactor_now())) {
+  if (!compose_session_frame(*session, runtimes, extensions, true, reactor_now())) {
     detach_attachment(*session, runtimes);
     return;
   }
@@ -11210,7 +11863,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   auto geometry_budget = client_geometry_messages_per_turn_max;
   auto input_budget = client_input_steps_per_turn_max;
   handle_client_parse_result(*session, runtimes,
-                             parse_client_packets(*session, runtimes, message_budget,
+                             parse_client_packets(*session, runtimes, extensions, message_budget,
                                                   geometry_budget, input_budget,
                                                   &session_name_conflict, &sessions));
 }
@@ -11229,7 +11882,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 [[nodiscard]] auto flush_pending_output(PendingConnections& connections, const std::size_t slot,
                                         std::size_t& global_budget, Sessions& sessions,
-                                        PaneRuntimeStore& runtimes,
+                                        PaneRuntimeStore& runtimes, extension::Runtime& extensions,
                                         std::uint64_t& activity_order) noexcept -> bool {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
@@ -11289,7 +11942,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
     return false;
   }
   if (disposition == PendingDisposition::attach) {
-    handoff_attached_connection(connections, slot, sessions, runtimes, activity_order);
+    handoff_attached_connection(connections, slot, sessions, runtimes, extensions, activity_order);
   } else {
     close_pending(connections, slot, sessions);
   }
@@ -11628,7 +12281,8 @@ void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtim
   }
 }
 
-void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes, const pollfd& events,
+void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes,
+                           extension::Runtime& extensions, const pollfd& events,
                            std::size_t& message_budget, std::size_t& geometry_budget,
                            std::size_t& input_budget, const SessionNameConflict name_conflict,
                            void* const name_conflict_context) noexcept {
@@ -11648,8 +12302,9 @@ void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes, c
        session.attachment_runtime.client_work_pending ||
        (events.revents & (POLLIN | POLLHUP | POLLERR)) != 0)) {
     handle_client_parse_result(session, runtimes,
-                               receive_client(session, runtimes, message_budget, geometry_budget,
-                                              input_budget, name_conflict, name_conflict_context));
+                               receive_client(session, runtimes, extensions, message_budget,
+                                              geometry_budget, input_budget, name_conflict,
+                                              name_conflict_context));
   }
 }
 
@@ -12172,7 +12827,69 @@ void release_expired_presentation_gates(Sessions& sessions, PaneRuntimeStore& ru
   }
 }
 
-void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
+struct ExtensionGeometryObservation final {
+  AttachmentId attachment;
+  TabId active_tab;
+  std::uint64_t generation{0};
+  std::uint16_t columns{0};
+  std::uint16_t rows{0};
+};
+
+// Geometry reconciliation bridges retained Surface constraints and fallible Pane runtime effects.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void reconcile_extension_geometry(
+    Sessions& sessions, PaneRuntimeStore& runtimes, extension::Runtime& extensions,
+    std::array<ExtensionGeometryObservation, limits::sessions_hard_max>& observations) noexcept {
+  for (auto& session : sessions) {
+    if (session == nullptr || !session->active) {
+      continue;
+    }
+    LEMMA_ASSERT(session->id.slot() < observations.size());
+    auto& observed = std::span(observations).subspan(session->id.slot(), 1).front();
+    const auto generation = extensions.geometry_generation(session->attachment.id);
+    if (observed.attachment == session->attachment.id &&
+        observed.active_tab == session->active_tab && observed.generation == generation &&
+        observed.columns == session->attachment.columns &&
+        observed.rows == session->attachment.rows) {
+      continue;
+    }
+    const render::Viewport viewport{.columns = session->attachment.columns,
+                                    .rows = pane_rows(session->attachment.rows)};
+    if (!extensions.resize_surfaces(session->attachment.id, viewport)) {
+      continue;
+    }
+    const auto content = extensions.pane_viewport(session->attachment.id, viewport);
+    if (!content.has_value()) {
+      continue;
+    }
+    auto* const tab = active_tab(*session);
+    if (tab == nullptr) {
+      continue;
+    }
+    if (tab->layout_column != content->column || tab->layout_row != content->row ||
+        tab->layout_columns != content->columns || tab->layout_rows != content->rows) {
+      ProductionSessionRuntimeContext runtime_context{.session = session.get(),
+                                                      .runtimes = &runtimes};
+      SessionMachine machine(*session, production_session_options(runtime_context));
+      const auto transition = machine.resize_attachment(session->attachment.columns,
+                                                        session->attachment.rows, *content);
+      apply_session_change(*session, runtimes, transition.change);
+      if (transition.result.status != CommandStatus::applied &&
+          transition.result.status != CommandStatus::no_effect) {
+        continue;
+      }
+    }
+    schedule_frame(*session, FrameUrgency::state_change, true);
+    observed = {.attachment = session->attachment.id,
+                .active_tab = session->active_tab,
+                .generation = generation,
+                .columns = session->attachment.columns,
+                .rows = session->attachment.rows};
+  }
+}
+
+void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
+                      extension::Runtime& extensions) noexcept {
   const auto now = reactor_now();
   for (auto& session : sessions) {
     if (session == nullptr || !session->active ||
@@ -12180,7 +12897,7 @@ void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
         !session->attachment_runtime.frame_scheduler.due(now, frame_sink_state(*session))) {
       continue;
     }
-    if (!compose_session_frame(*session, runtimes,
+    if (!compose_session_frame(*session, runtimes, extensions,
                                session->attachment_runtime.frame_scheduler.force_full(), now)) {
       detach_attachment(*session, runtimes);
     }
@@ -12359,6 +13076,7 @@ enum class DescriptorKind : std::uint8_t {
   pending,
   capacity_rejection,
   extension_host,
+  extension_peer,
 };
 
 struct DescriptorOwner final {
@@ -12399,19 +13117,23 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   extension::CommandRuntime extensions(environment.extension_descriptor,
                                        environment.extension_commands, environment.stop_extension,
                                        environment.extension_context);
+  extension::Runtime extension_runtime;
   bool service_extensions = !environment.extension_commands.empty();
   CapacityRejectionConnections capacity_rejections{};
   if (!child_reaper.valid() || !set_nonblocking(listener)) {
     return 1;
   }
-  constexpr auto descriptor_count_max = std::size_t{3} + limits::panes_hard_max +
-                                        static_cast<std::size_t>(limits::sessions_hard_max) +
-                                        limits::pending_connections_hard_max +
-                                        capacity_rejection_connections_max;
+  constexpr auto descriptor_count_max =
+      std::size_t{3} + limits::panes_hard_max +
+      static_cast<std::size_t>(limits::sessions_hard_max) + limits::pending_connections_hard_max +
+      capacity_rejection_connections_max + limits::extension_sessions_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
       client_flush_targets{};
+  std::array<ExtensionGeometryObservation, limits::sessions_hard_max>
+      extension_geometry_observations{};
+  std::array<ExtensionObservation, limits::extension_sessions_hard_max> extension_observations{};
   std::size_t pty_read_cursor = 0;
   std::size_t pty_flush_cursor = 0;
   std::size_t client_flush_cursor = 0;
@@ -12419,6 +13141,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t compression_cursor = 0;
   std::size_t proc_cursor = 0;
   std::size_t observer_cursor = 0;
+  std::size_t extension_observer_cursor = 0;
+  std::size_t extension_io_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
 
@@ -12430,6 +13154,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     expire_status_messages(sessions, reactor_now());
     const bool public_screen_work_pending = service_public_observers(
         pending_connections, sessions, runtimes, public_scratch, observer_cursor);
+    service_extension_observers(extension_runtime, sessions, runtimes, public_scratch,
+                                extension_observations, extension_observer_cursor);
     for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
       const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
       if (pending != nullptr && !pending->active()) {
@@ -12533,6 +13259,32 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .kind = DescriptorKind::capacity_rejection};
       ++descriptor_count;
     }
+    std::array<extension::PeerView, limits::extension_sessions_hard_max> extension_peers{};
+    const auto active_extension_peers = extension_runtime.peer_views(extension_peers);
+    if (!active_extension_peers.empty()) {
+      extension_io_cursor %= active_extension_peers.size();
+    }
+    for (std::size_t visited = 0; visited < active_extension_peers.size(); ++visited) {
+      const auto peer =
+          active_extension_peers
+              .subspan((extension_io_cursor + visited) % active_extension_peers.size(), 1)
+              .front();
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = peer.descriptor, .events = peer.events, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {.session = {},
+                                                                .tab = {},
+                                                                .pane = {},
+                                                                .connection = {},
+                                                                .auxiliary_slot = peer.slot,
+                                                                .kind =
+                                                                    DescriptorKind::extension_peer};
+      ++descriptor_count;
+    }
+    if (!active_extension_peers.empty()) {
+      // Four records are admitted per peer below; advance by the same stride so continuously ready
+      // low-numbered slots cannot consume every global record budget.
+      extension_io_cursor = (extension_io_cursor + 4U) % active_extension_peers.size();
+    }
     if (extensions.channel().descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
           .fd = extensions.channel().descriptor(),
@@ -12549,9 +13301,10 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     const auto timeout = poll_timeout(sessions, runtimes, pending_connections, public_procs,
                                       capacity_rejections, public_screen_work_pending);
-    const auto poll_result = reactor_poll(
-        std::span(descriptors).first(descriptor_count),
-        service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout);
+    const auto hosted_timeout =
+        service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
+    const auto poll_result = reactor_poll(std::span(descriptors).first(descriptor_count),
+                                          extension_runtime.buffered_work() ? 0 : hosted_timeout);
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -12628,8 +13381,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         auto& geometry_budget =
             std::span(client_geometry_budgets).subspan(session->id.slot(), 1).front();
         auto& input_budget = std::span(client_input_budgets).subspan(session->id.slot(), 1).front();
-        process_client_events(*session, runtimes, events, message_budget, geometry_budget,
-                              input_budget, &session_name_conflict, &sessions);
+        process_client_events(*session, runtimes, extension_runtime, events, message_budget,
+                              geometry_budget, input_budget, &session_name_conflict, &sessions);
       }
     }
     service_attachment_command_lines(sessions, runtimes, activity_order, extensions);
@@ -12651,6 +13404,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       }
     }
     search_cursor = (search_cursor + visited) % search_sessions.size();
+    std::size_t extension_read_budget = limits::extension_bytes_per_turn_max;
+    std::size_t extension_record_budget = limits::extension_records_per_turn_max;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::pending) {
@@ -12670,7 +13425,32 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                    pending->state != PendingState::prepare_public_observer &&
                    (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, activity_order,
-                               public_procs, owner.auxiliary_slot);
+                               public_procs, extension_runtime, public_scratch,
+                               owner.auxiliary_slot);
+        }
+      } else if (owner.kind == DescriptorKind::extension_peer) {
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        if ((events & POLLIN) != 0 &&
+            extension_read_budget >= limits::extension_io_bytes_per_turn_max) {
+          const auto received = extension_runtime.read_ready(owner.auxiliary_slot);
+          extension_read_budget -= std::min(received, extension_read_budget);
+        }
+        constexpr std::size_t records_per_peer_per_turn_max = 4;
+        for (std::size_t processed = 0;
+             processed < records_per_peer_per_turn_max && extension_record_budget > 0 &&
+             process_extension_record(extension_runtime, public_procs, sessions,
+                                      owner.auxiliary_slot);
+             ++processed) {
+          --extension_record_budget;
+        }
+        if ((events & POLLOUT) != 0) {
+          extension_runtime.write_ready(owner.auxiliary_slot);
+        }
+        if ((events & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+          const auto generation = extension_runtime.owner_at(owner.auxiliary_slot);
+          if (generation.is_valid()) {
+            static_cast<void>(extension_runtime.disconnect(generation));
+          }
         }
       } else if (owner.kind == DescriptorKind::extension_host) {
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
@@ -12699,7 +13479,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       service_extensions = extensions.channel().descriptor() >= 0;
     }
     service_public_procs(public_procs, pending_connections, sessions, runtimes, activity_order,
-                         public_scratch, proc_cursor, extensions);
+                         public_scratch, proc_cursor, extensions, extension_runtime);
+    std::array<AttachmentId, limits::extension_sessions_hard_max> affected_attachments{};
+    static_cast<void>(extension_runtime.reap_disconnected(affected_attachments));
 
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
@@ -12751,8 +13533,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         auto& geometry_budget =
             std::span(client_geometry_budgets).subspan(session->id.slot(), 1).front();
         auto& input_budget = std::span(client_input_budgets).subspan(session->id.slot(), 1).front();
-        process_client_events(*session, runtimes, no_events, message_budget, geometry_budget,
-                              input_budget, &session_name_conflict, &sessions);
+        process_client_events(*session, runtimes, extension_runtime, no_events, message_budget,
+                              geometry_budget, input_budget, &session_name_conflict, &sessions);
       }
     }
 
@@ -12770,7 +13552,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         }
         if ((events & (POLLOUT | POLLHUP | POLLERR)) != 0 &&
             flush_pending_output(pending_connections, owner.auxiliary_slot, pending_output_budget,
-                                 sessions, runtimes, activity_order)) {
+                                 sessions, runtimes, extension_runtime, activity_order)) {
           shutdown_after_outputs = true;
           break;
         }
@@ -12787,7 +13569,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
 
     run_due_scrollback_compression(sessions, runtimes, compression_cursor);
     release_expired_presentation_gates(sessions, runtimes);
-    queue_due_frames(sessions, runtimes);
+    reconcile_extension_geometry(sessions, runtimes, extension_runtime,
+                                 extension_geometry_observations);
+    queue_due_frames(sessions, runtimes, extension_runtime);
     // Attached frame writes are core-owned, daemon-wide bounded, and round-robin fair. Newly
     // composed and newly handed-off attach frames get one immediate attempt; a blocked frame is
     // retried only after poll reports write readiness or its progress deadline expires.

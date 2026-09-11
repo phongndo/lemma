@@ -35,6 +35,13 @@ namespace {
   return rows >= 2 ? static_cast<std::uint16_t>(rows - 1U) : rows;
 }
 
+[[nodiscard]] constexpr auto tab_viewport(const Tab& tab) noexcept -> PaneRectangle {
+  return {.column = tab.layout_column,
+          .row = tab.layout_row,
+          .columns = tab.layout_columns,
+          .rows = tab.layout_rows};
+}
+
 [[nodiscard]] constexpr auto next_generation(const std::uint32_t generation) noexcept
     -> std::uint32_t {
   return generation == std::numeric_limits<std::uint32_t>::max() ? 0U : generation + 1U;
@@ -251,6 +258,8 @@ void commit_projection(Session& session, const LayoutProjection& projection,
   }
   const auto status = request_projection(session, runtime, tab, *projection);
   if (status == RuntimeEffectStatus::applied) {
+    tab.layout_column = viewport.column;
+    tab.layout_row = viewport.row;
     tab.layout_columns = viewport.columns;
     tab.layout_rows = viewport.rows;
     tab.layout_suspended = false;
@@ -349,7 +358,7 @@ void reset_removed_tab_attachment(Session& session, const TabId tab) noexcept {
   if (!focus_candidate.has_value()) {
     return {.result = {.status = CommandStatus::failed}, .handled = true};
   }
-  const PaneRectangle viewport{.columns = tab.layout_columns, .rows = tab.layout_rows};
+  const auto viewport = tab_viewport(tab);
   const auto projection = proposed.project(viewport);
   if (!projection.has_value()) {
     return {.result = {.status = CommandStatus::failed}, .handled = true};
@@ -403,7 +412,7 @@ enum class FocusDirection : std::uint8_t {
 [[nodiscard]] auto pane_in_direction(const Session& session, const Tab& tab, const PaneId source,
                                      const FocusDirection direction) noexcept
     -> std::optional<PaneId> {
-  const PaneRectangle viewport{.columns = tab.layout_columns, .rows = tab.layout_rows};
+  const auto viewport = tab_viewport(tab);
   const auto projection = tab.layout.project(viewport);
   const auto current = projection.has_value() ? projection->rectangle(source) : std::nullopt;
   if (!projection.has_value() || !current.has_value()) {
@@ -472,7 +481,7 @@ enum class FocusDirection : std::uint8_t {
   }
   LayoutProjection projection;
   if (tab.zoomed) {
-    const PaneRectangle viewport{.columns = tab.layout_columns, .rows = tab.layout_rows};
+    const auto viewport = tab_viewport(tab);
     const auto resized = resize_candidate(session, runtime, tab, tab.layout, true, target, viewport,
                                           nullptr, projection);
     if (resized != RuntimeEffectStatus::applied) {
@@ -498,7 +507,7 @@ enum class FocusDirection : std::uint8_t {
 [[nodiscard]] auto layout_transition(Session& session, const SessionRuntimeEffects& runtime,
                                      Tab& tab, const PaneLayout& proposed) noexcept
     -> SessionTransition {
-  const PaneRectangle viewport{.columns = tab.layout_columns, .rows = tab.layout_rows};
+  const auto viewport = tab_viewport(tab);
   LayoutProjection projection;
   const auto resized = resize_candidate(session, runtime, tab, proposed, false, tab.focused_pane,
                                         viewport, nullptr, projection);
@@ -655,6 +664,8 @@ auto SessionMachine::create_tab(const CreateTabOptions options) noexcept -> Sess
   } catch (...) {
     return {.result = {.status = CommandStatus::unavailable}, .handled = true};
   }
+  tab->layout_column = pane->rectangle.column;
+  tab->layout_row = pane->rectangle.row;
   tab->layout_columns = pane->rectangle.columns;
   tab->layout_rows = pane->rectangle.rows;
   const SpawnPaneEffect spawn{
@@ -718,7 +729,7 @@ auto SessionMachine::split_pane(const TabId tab_id, const PaneId source, const S
   if (!proposed.split(source, pane_id, axis)) {
     return {.result = {.status = CommandStatus::unavailable}, .handled = true};
   }
-  const PaneRectangle viewport{.columns = tab->layout_columns, .rows = tab->layout_rows};
+  const auto viewport = tab_viewport(*tab);
   const auto projection = proposed.project(viewport);
   const auto rectangle = projection.has_value() ? projection->rectangle(pane_id) : std::nullopt;
   if (!projection.has_value() || !rectangle.has_value()) {
@@ -787,19 +798,28 @@ auto SessionMachine::split_pane(const TabId tab_id, const PaneId source, const S
 
 auto SessionMachine::resize_attachment(const std::uint16_t columns,
                                        const std::uint16_t rows) noexcept -> SessionTransition {
-  if (columns == 0 || rows == 0 || !options_.runtime.valid()) {
+  if (session_.attachment.columns == columns && session_.attachment.rows == rows) {
+    return {.result = {.status = CommandStatus::no_effect},
+            .change = {.frame_requested = true, .force_full_frame = true},
+            .handled = true};
+  }
+  return resize_attachment(columns, rows,
+                           PaneRectangle{.columns = columns, .rows = content_rows(rows)});
+}
+
+auto SessionMachine::resize_attachment(const std::uint16_t columns, const std::uint16_t rows,
+                                       const PaneRectangle viewport) noexcept -> SessionTransition {
+  const auto viewport_right = static_cast<std::uint32_t>(viewport.column) + viewport.columns;
+  const auto viewport_bottom = static_cast<std::uint32_t>(viewport.row) + viewport.rows;
+  if (columns == 0 || rows == 0 || viewport.columns == 0 || viewport.rows == 0 ||
+      viewport_right > columns || viewport_bottom > content_rows(rows) ||
+      !options_.runtime.valid()) {
     return {.result = {.status = CommandStatus::invalid_command}, .handled = true};
   }
   auto* const tab = active_tab(session_);
   if (tab == nullptr) {
     return {.result = {.status = CommandStatus::failed}, .handled = true};
   }
-  if (session_.attachment.columns == columns && session_.attachment.rows == rows) {
-    return {.result = {.status = CommandStatus::no_effect},
-            .change = {.frame_requested = true, .force_full_frame = true},
-            .handled = true};
-  }
-  const PaneRectangle viewport{.columns = columns, .rows = content_rows(rows)};
   // The unzoomed tree decides whether the physical viewport is representable. If it is, only the
   // currently visible zoomed Pane needs an immediate Runtime resize.
   if (!tab->layout.project(viewport).has_value()) {
@@ -827,6 +847,8 @@ auto SessionMachine::resize_attachment(const std::uint16_t columns,
   }
   session_.attachment.columns = columns;
   session_.attachment.rows = rows;
+  tab->layout_column = viewport.column;
+  tab->layout_row = viewport.row;
   tab->layout_columns = viewport.columns;
   tab->layout_rows = viewport.rows;
   tab->layout_suspended = false;
@@ -1011,7 +1033,7 @@ auto SessionMachine::dispatch(const Command& command) noexcept -> SessionTransit
       return {.result = {.status = CommandStatus::no_effect}, .handled = true};
     }
     const auto focused = desired ? pane->id : tab->focused_pane;
-    const PaneRectangle viewport{.columns = tab->layout_columns, .rows = tab->layout_rows};
+    const auto viewport = tab_viewport(*tab);
     LayoutProjection projection;
     const auto resized = resize_candidate(session_, options_.runtime, *tab, tab->layout, desired,
                                           focused, viewport, nullptr, projection);
@@ -1058,7 +1080,7 @@ auto SessionMachine::dispatch(const Command& command) noexcept -> SessionTransit
       return {.result = {.status = CommandStatus::stale_target}, .handled = true};
     }
     auto proposed = tab->layout;
-    const PaneRectangle viewport{.columns = tab->layout_columns, .rows = tab->layout_rows};
+    const auto viewport = tab_viewport(*tab);
     const auto status = proposed.resize_divider(
         {.first = pane->id,
          .second = peer->id,
@@ -1095,7 +1117,7 @@ auto SessionMachine::dispatch(const Command& command) noexcept -> SessionTransit
       direction = ResizeDirection::down;
     }
     auto proposed = tab->layout;
-    const PaneRectangle viewport{.columns = tab->layout_columns, .rows = tab->layout_rows};
+    const auto viewport = tab_viewport(*tab);
     const auto status = proposed.resize(pane->id, direction, viewport, amount);
     if (status == LayoutResizeStatus::no_effect) {
       return {.result = {.status = CommandStatus::no_effect}, .handled = true};
@@ -1246,7 +1268,16 @@ auto check_session_invariants(const Session& session) noexcept
       return SessionInvariantError::pane_layout_membership;
     }
     ++std::span(tab_panes).subspan(tab->id.slot(), 1).front();
-    if (pane.rectangle.columns == 0 || pane.rectangle.rows == 0) {
+    const auto pane_right =
+        static_cast<std::uint32_t>(pane.rectangle.column) + pane.rectangle.columns;
+    const auto pane_bottom = static_cast<std::uint32_t>(pane.rectangle.row) + pane.rectangle.rows;
+    const auto layout_right = static_cast<std::uint32_t>(tab->layout_column) + tab->layout_columns;
+    const auto layout_bottom = static_cast<std::uint32_t>(tab->layout_row) + tab->layout_rows;
+    const bool pane_presented = !tab->zoomed || pane.id == tab->focused_pane;
+    if (pane.rectangle.columns == 0 || pane.rectangle.rows == 0 ||
+        (pane_presented &&
+         (pane.rectangle.column < tab->layout_column || pane.rectangle.row < tab->layout_row ||
+          pane_right > layout_right || pane_bottom > layout_bottom))) {
       return SessionInvariantError::pane_rectangle;
     }
     if (pane.process_exit.has_value() && pane.exit_policy != PaneExitPolicy::hold) {
@@ -1314,6 +1345,10 @@ auto session_state_hash(const Session& session) noexcept -> std::uint64_t {
     hash = hash_mix(hash, id_code(tab.id));
     hash = hash_mix(hash, id_code(tab.focused_pane));
     hash = hash_mix(hash, id_code(tab.previous_pane));
+    hash = hash_mix(hash, tab.layout_column);
+    hash = hash_mix(hash, tab.layout_row);
+    hash = hash_mix(hash, tab.layout_columns);
+    hash = hash_mix(hash, tab.layout_rows);
     hash = hash_mix(hash, static_cast<std::uint64_t>(tab.zoomed));
     hash = hash_mix(hash, static_cast<std::uint64_t>(tab.layout_suspended));
     const auto snapshot = tab.layout.snapshot();

@@ -687,6 +687,8 @@ void install_lemma_module(lua_State* const state, LuaConfiguration& configuratio
   }
 }
 
+// Host header indexes address a fixed-size array.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto encode_header(const HostMessageStatus status, const std::size_t size) noexcept
     -> std::array<std::byte, host_header_bytes> {
   const auto bounded = static_cast<std::uint32_t>(size);
@@ -807,6 +809,8 @@ struct HostFrame final {
   std::string payload;
 };
 
+// Header accesses follow an exact-size read and payload allocation is caught locally.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto receive_host_frame(const int descriptor) noexcept -> std::optional<HostFrame> {
   const auto deadline = std::chrono::steady_clock::now() + startup_timeout;
   std::array<std::byte, host_header_bytes> header{};
@@ -976,7 +980,7 @@ void HostProcess::reset() noexcept {
   process_ = -1;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto load_configuration(const std::optional<std::string_view> requested_path) noexcept
     -> ConfigurationLoad {
   ConfigurationLoad result;

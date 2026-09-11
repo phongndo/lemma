@@ -8,8 +8,9 @@ Lua config ─> isolated host ─> validated draft ─> immutable native generat
                                                   │
 physical input ─> input policy ─┐                  │
 CLI / API / mouse ───────────────┴─> typed command ─> Core ─> Runtime
+extension ─> Proc / SurfaceUpdate ──────────────────────────┤
                                                             ├─> PTY/process
-PTY output ─> Ghostty terminal ─> render/composition ───────┴─> client
+PTY output ─> Ghostty terminal ─> retained Scene ───────────┴─> client
 ```
 
 ## Model
@@ -50,9 +51,9 @@ destroy the Session.
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
 | `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
 | `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
-| `lemma_extension_contract` | Native command declarations, bounded host channel, and invocation ownership |
-| `lemma_extension` | Isolated Lua host, coroutine callbacks, and transactional configuration/command admission |
-| `lemma_runtime` | Processes, PTYs, scheduling, input execution, resizing, and frame progress |
+| `lemma_extension_contract` | Lua command declarations plus the language-neutral framed extension protocol |
+| `lemma_extension` | Transitional isolated Lua host, coroutine callbacks, and configuration admission |
+| `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input execution, resizing, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
 | `lemma_protocol` | Bounded private attachment codec |
@@ -80,7 +81,8 @@ Every mutable fact has one authoritative owner:
 | Attachment connection decoding, output progress, and transient message/frame deadlines | AttachmentRuntime |
 | Admitted Proc execution, waits, and owner-generation cancellation | Reactor Proc table |
 | Hosted command invocation, captured targets, deadline, and attachment-generation ownership | Reactor-owned native command runtime |
-| Frame buffers and physical presentation shadow | Render/runtime presentation |
+| Extension connections, capabilities, generations, Surface IDs, retained Grids, and Surface focus | ExtensionRuntime |
+| Frame buffers, retained Scene composition, Grid damage, and physical presentation shadow | Scene/render runtime |
 
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
 authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
@@ -160,17 +162,21 @@ PTY bytes are parsed once into the Pane's canonical terminal:
 PTY -> Ghostty parse
           ├─> terminal responses -> ordered PTY write queue
           ├─> effects -> Lemma policy
-          └─> damage -> render -> pane composition -> attached client
+          └─> damage -> retained Scene composition -> attached client
 ```
 
 Terminal responses enter the Pane's ordered write queue before later accepted application input.
 Attach, resize, tab changes, and lag recovery can rebuild a complete ANSI frame from daemon-owned
 state. The client does not own a second terminal grid or PTY replay log.
 
+`Scene` composes ordered Pane projections and extension-owned retained Grids. It owns clipping,
+occlusion repair, damage, and cursor arbitration; extension code never enters composition. A docked
+Grid changes the Attachment's effective pane viewport while floats and overlays do not.
+
 Resize is coordinated in one direction:
 
 ```text
-Attachment geometry -> Core layout -> Pane geometry -> PTY size -> Ghostty size
+Attachment geometry -> Surface placement -> Core layout -> Pane geometry -> PTY size -> Ghostty size
 ```
 
 The child PTY receives the target dimensions before Ghostty parses output at those dimensions.

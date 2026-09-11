@@ -1,10 +1,16 @@
+#include "lemma/limits.hpp"
+#include "lemma/terminal/terminal.hpp"
+#include "render/grid.hpp"
 #include "render/pane_composition.hpp"
+#include "render/scene.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -926,6 +932,123 @@ TEST(PaneCompositionTest, RejectsOverlappingPaneRectanglesAndSeparatorsBeforeRen
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error(), CompositionError::invalid_pane);
   EXPECT_EQ(output.front(), std::byte{});
+}
+
+TEST(GridTest, AppliesRowsTransactionallyAndPreservesStateAfterInvalidPatch) {
+  auto created = Grid::create(10, 2);
+  ASSERT_TRUE(created.has_value());
+  auto grid = std::move(*created);
+  GridPatch valid;
+  valid.rows.push_back({.runs = {{.text = "valid", .column = 0, .style = 0}}, .row = 0});
+  const auto applied = grid.apply(std::move(valid));
+  ASSERT_TRUE(applied.has_value());
+  EXPECT_EQ(applied->changed_rows, 1U);
+  const auto generation = grid.generation();
+
+  GridPatch invalid;
+  invalid.rows.push_back({.runs = {{.text = "bad\x1b", .column = 0, .style = 0}}, .row = 0});
+  const auto rejected = grid.apply(std::move(invalid));
+  ASSERT_FALSE(rejected.has_value());
+  EXPECT_EQ(rejected.error(), GridError::invalid_run);
+  EXPECT_EQ(grid.generation(), generation);
+
+  std::array<std::byte, 4'096> output{};
+  const auto rendered =
+      grid.render_ansi(output, {.rectangle = {.columns = 10, .rows = 2}, .force_full = true});
+  ASSERT_TRUE(rendered.has_value());
+  EXPECT_THAT(as_text(std::span(output).first(rendered->bytes)), testing::HasSubstr("valid"));
+
+  auto resized = grid.resized(12, 3);
+  ASSERT_TRUE(resized.has_value());
+  std::ranges::fill(output, std::byte{});
+  const auto resized_rendered =
+      resized->render_ansi(output, {.rectangle = {.columns = 12, .rows = 3}, .force_full = true});
+  ASSERT_TRUE(resized_rendered.has_value());
+  EXPECT_THAT(as_text(std::span(output).first(resized_rendered->bytes)),
+              testing::HasSubstr("valid"));
+}
+
+TEST(GridTest, ReplacesRowsAndStyleTableInOneTransaction) {
+  auto created = Grid::create(5, 1);
+  ASSERT_TRUE(created.has_value());
+  auto grid = std::move(*created);
+  GridPatch initial;
+  initial.styles = std::vector<GridStyle>(2);
+  initial.rows.push_back({.runs = {{.text = "old", .column = 0, .style = 1}}, .row = 0});
+  ASSERT_TRUE(grid.apply(std::move(initial)).has_value());
+
+  GridPatch replacement;
+  replacement.styles = std::vector<GridStyle>(1);
+  replacement.rows.push_back({.runs = {{.text = "new", .column = 0, .style = 0}}, .row = 0});
+  EXPECT_TRUE(grid.apply(std::move(replacement)).has_value());
+}
+
+TEST(PaneCompositionTest, ComposesRetainedGridBesidePaneAndArbitratesGridCursor) {
+  auto terminal = make_terminal(5, 2);
+  write_text(terminal, "pane");
+  auto created = Grid::create(5, 2);
+  ASSERT_TRUE(created.has_value());
+  auto grid = std::move(*created);
+  GridPatch patch;
+  patch.rows.push_back({.runs = {{.text = "grid", .column = 0, .style = 0}}, .row = 0});
+  patch.cursor = GridCursor{.column = 4, .row = 0, .visible = true};
+  ASSERT_TRUE(grid.apply(std::move(patch)).has_value());
+  const std::array panes{PaneSurface{
+      .terminal = &terminal,
+      .rectangle = {.column = 0, .row = 0, .columns = 5, .rows = 2},
+  }};
+  const std::array grids{GridSurface{.grid = &grid,
+                                     .rectangle = {.column = 5, .row = 0, .columns = 5, .rows = 2},
+                                     .focused = true}};
+  std::array<std::byte, 8'192> output{};
+
+  const auto composed =
+      compose_scene({.panes = panes, .grids = grids}, {.columns = 10, .rows = 2}, output, true);
+
+  ASSERT_TRUE(composed.has_value());
+  const auto encoded = as_text(std::span(output).first(composed->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("pane"));
+  EXPECT_THAT(encoded, testing::HasSubstr("grid"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?25h"));
+
+  write_text(terminal, "x");
+  std::ranges::fill(output, std::byte{});
+  const auto incremental =
+      compose_scene({.panes = panes, .grids = grids}, {.columns = 10, .rows = 2}, output, false);
+  ASSERT_TRUE(incremental.has_value());
+  const auto incremental_encoded = as_text(std::span(output).first(incremental->bytes));
+  EXPECT_THAT(incremental_encoded, testing::HasSubstr("\x1B[1;10H"));
+  EXPECT_LT(incremental_encoded.find('x'), incremental_encoded.rfind("\x1B[1;10H"));
+}
+
+TEST(PaneCompositionTest, RepairsContentBelowTransparentGridDamage) {
+  auto terminal = make_terminal(5, 1);
+  write_text(terminal, "under");
+  auto created = Grid::create(5, 1);
+  ASSERT_TRUE(created.has_value());
+  auto grid = std::move(*created);
+  GridPatch initial;
+  initial.rows.push_back({.runs = {{.text = "TOP", .column = 0}}, .row = 0});
+  ASSERT_TRUE(grid.apply(std::move(initial)).has_value());
+  const std::array panes{
+      PaneSurface{.terminal = &terminal, .rectangle = {.columns = 5, .rows = 1}, .focused = true}};
+  const std::array grids{
+      GridSurface{.grid = &grid, .rectangle = {.columns = 5, .rows = 1}, .opaque = false}};
+  std::array<std::byte, 8'192> output{};
+  ASSERT_TRUE(
+      compose_scene({.panes = panes, .grids = grids}, {.columns = 5, .rows = 1}, output, true)
+          .has_value());
+
+  GridPatch cleared;
+  cleared.rows.push_back({.runs = {}, .row = 0});
+  ASSERT_TRUE(grid.apply(std::move(cleared)).has_value());
+  std::ranges::fill(output, std::byte{});
+  const auto repaired =
+      compose_scene({.panes = panes, .grids = grids}, {.columns = 5, .rows = 1}, output, false);
+  ASSERT_TRUE(repaired.has_value());
+  const auto encoded = as_text(std::span(output).first(repaired->bytes));
+  EXPECT_THAT(encoded, testing::HasSubstr("under"));
+  EXPECT_THAT(encoded, testing::Not(testing::HasSubstr("TOP")));
 }
 
 TEST(PaneCompositionTest, EnforcesPaneAndOutputBounds) {

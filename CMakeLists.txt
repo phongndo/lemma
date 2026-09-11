@@ -127,6 +127,7 @@ target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
 add_library(
   lemma_render STATIC
+  src/render/grid.cpp
   src/render/pane_composition.cpp
   src/render/frame_buffer.cpp
   src/render/ui.cpp
@@ -170,9 +171,13 @@ add_library(lemma_config STATIC src/config/config.cpp)
 lemma_internal_target(lemma_config)
 target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input)
 
-add_library(lemma_extension_contract STATIC src/extension/commands.cpp)
+add_library(
+  lemma_extension_contract STATIC
+  src/extension/commands.cpp
+  src/extension/protocol.cpp
+)
 lemma_internal_target(lemma_extension_contract)
-target_link_libraries(lemma_extension_contract PRIVATE lemma_api)
+target_link_libraries(lemma_extension_contract PRIVATE lemma_api lemma_platform)
 
 add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp)
 lemma_internal_target(lemma_extension)
@@ -191,6 +196,7 @@ add_library(
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
+  src/extension/runtime.cpp
 )
 lemma_internal_target(lemma_runtime)
 target_link_libraries(
@@ -292,6 +298,7 @@ if(LEMMA_BUILD_TESTS)
     tests/api_test.cpp
     tests/config_test.cpp
     tests/extension_commands_test.cpp
+    tests/extension_protocol_test.cpp
     tests/command_history_test.cpp
     tests/command_line_test.cpp
     tests/connection_output_test.cpp

@@ -43,6 +43,10 @@ enum class CommandKind : std::uint8_t {
   pane_capture,
   pane_wait,
   pane_kill,
+  surface_create,
+  surface_configure,
+  surface_focus,
+  surface_close,
 };
 
 enum class Direction : std::uint8_t {
@@ -189,6 +193,29 @@ struct PaneSelector final {
   [[nodiscard]] auto valid() const noexcept -> bool { return id.is_valid(); }
 };
 
+struct SurfaceSelector final {
+  SurfaceId id;
+
+  [[nodiscard]] auto valid() const noexcept -> bool { return id.is_valid(); }
+};
+
+enum class SurfacePlacementKind : std::uint8_t {
+  dock_left,
+  dock_right,
+  dock_top,
+  dock_bottom,
+  float_surface,
+  overlay,
+};
+
+struct SurfacePlacement final {
+  SurfacePlacementKind kind{SurfacePlacementKind::dock_right};
+  std::uint16_t column{0};
+  std::uint16_t row{0};
+  std::uint16_t columns{0};
+  std::uint16_t rows{0};
+};
+
 // One concrete public Command. Command-specific decoding guarantees that only the fields belonging
 // to kind are populated before this value crosses the daemon trust boundary.
 struct Command final {
@@ -197,6 +224,8 @@ struct Command final {
   TabSelector tab;
   PaneSelector pane;
   PaneSelector other;
+  SurfaceSelector surface;
+  SurfacePlacement surface_placement;
   std::string name;
   std::string working_directory;
   std::string title;
@@ -221,6 +250,8 @@ struct Command final {
   bool hold{false};
   bool enabled{false};
   bool environment_set{false};
+  bool focusable{true};
+  bool opaque{true};
 };
 
 [[nodiscard]] auto parse_input_key_name(std::string_view value) noexcept -> std::optional<InputKey>;

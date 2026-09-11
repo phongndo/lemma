@@ -1,4 +1,5 @@
 #include "core/client_frame_output.hpp"
+#include "extension/runtime.hpp"
 #include "input/input_router.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "render/frame_buffer.hpp"
@@ -9,6 +10,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
+#include <memory>
 #include <new>
 #include <print>
 #include <span>
@@ -116,6 +118,11 @@ int main() {
   constexpr std::string_view second = "\x1B[12;1H\x1B[1;34msteady-state beta  \xE2\x98\x83\x1B[0m";
 
   lemma::input::InputRouter input_router(lemma::input::default_input_map());
+  auto extension_runtime = std::make_unique<lemma::extension::Runtime>();
+  std::array<lemma::extension::PeerView, lemma::limits::extension_sessions_hard_max>
+      extension_peers{};
+  std::array<lemma::render::GridSurface, lemma::limits::extension_surfaces_hard_max>
+      extension_surfaces{};
   constexpr std::array routed_input{std::byte{'a'}};
   auto terminal_result = lemma::vt::Terminal::create({});
   if (!terminal_result.has_value()) {
@@ -168,8 +175,14 @@ int main() {
     const lemma::vt::TerminalSize resize = iteration % 2U == 0
                                                ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
                                                : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
+    const auto extension_peer_view = extension_runtime->peer_views(extension_peers);
+    const auto extension_surface_view =
+        extension_runtime->collect_surfaces({}, {.columns = 80, .rows = 24}, extension_surfaces);
+    const auto extension_viewport =
+        extension_runtime->pane_viewport({}, {.columns = 80, .rows = 24});
     if (routed.consumed != routed_input.size() || frame_bytes == 0 ||
-        !resize_terminal.resize(resize).has_value()) {
+        !resize_terminal.resize(resize).has_value() || !extension_peer_view.empty() ||
+        !extension_surface_view.empty() || !extension_viewport.has_value()) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }

@@ -89,6 +89,18 @@ struct TerminalTheme final {
 // Returns the concrete xterm-compatible theme used when TerminalOptions::theme is unset.
 [[nodiscard]] auto default_theme() noexcept -> TerminalTheme;
 
+struct TextMetrics final {
+  std::size_t codepoints{0};
+  std::size_t graphemes{0};
+  std::size_t columns{0};
+};
+
+// Validates one printable UTF-8 text run and measures it using Ghostty's canonical grapheme-width
+// rules. Control characters, malformed UTF-8, surrogates, and noncharacters are rejected so a
+// retained Grid cannot emit terminal control input or escape its resolved rectangle.
+[[nodiscard]] auto measure_grid_text(std::string_view text) noexcept
+    -> std::expected<TextMetrics, Error>;
+
 struct TerminalOptions final {
   TerminalSize size{};
   // Ghostty prunes scrollback at page granularity, so retained byte and line counts may exceed

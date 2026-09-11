@@ -311,6 +311,43 @@ TEST(ApiTest, DecodesIntrospectionInputCaptureAndFocusPolicies) {
   EXPECT_EQ(daemon.command->kind, CommandKind::daemon_inspect);
 }
 
+TEST(ApiTest, DecodesAndEncodesSurfaceLifecycleCommands) {
+  const auto create_document = parse_json(R"({
+    "command":"surface.create",
+    "placement":{"kind":"dock.right","size":24},
+    "focusable":false,
+    "opaque":true
+  })");
+  ASSERT_TRUE(create_document.value.has_value());
+  const auto create = decode_command(*create_document.value);
+  ASSERT_TRUE(create.command.has_value()) << create.error.reason;
+  EXPECT_EQ(create.command->kind, CommandKind::surface_create);
+  EXPECT_EQ(create.command->surface_placement.kind, SurfacePlacementKind::dock_right);
+  EXPECT_EQ(create.command->surface_placement.columns, 24U);
+  EXPECT_FALSE(create.command->focusable);
+  const auto encoded = encode_command(*create.command);
+  ASSERT_TRUE(encoded.has_value());
+  EXPECT_NE(encoded->find(R"("kind":"dock.right")"), std::string::npos);
+
+  const auto configure_document = parse_json(R"({
+    "command":"surface.configure",
+    "surface":{"id":"3:9"},
+    "placement":{"kind":"overlay","column":2,"row":3,"columns":10,"rows":4}
+  })");
+  ASSERT_TRUE(configure_document.value.has_value());
+  const auto configure = decode_command(*configure_document.value);
+  ASSERT_TRUE(configure.command.has_value()) << configure.error.reason;
+  EXPECT_EQ(configure.command->kind, CommandKind::surface_configure);
+  EXPECT_EQ(configure.command->surface.id, SurfaceId::from_parts(3, 9));
+  EXPECT_EQ(configure.command->surface_placement.kind, SurfacePlacementKind::overlay);
+  EXPECT_EQ(configure.command->surface_placement.rows, 4U);
+
+  const auto invalid =
+      parse_json(R"({"command":"surface.create","placement":{"kind":"dock.left","size":0}})");
+  ASSERT_TRUE(invalid.value.has_value());
+  EXPECT_FALSE(decode_command(*invalid.value).command.has_value());
+}
+
 TEST(ApiTest, RejectsExplicitZeroCaptureLines) {
   constexpr std::string_view invalid =
       R"({"command":"pane.capture","session":{"id":"0:1"},"pane":{"id":"0:1"},"lines":0})";

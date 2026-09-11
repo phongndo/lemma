@@ -1,0 +1,91 @@
+#ifndef LEMMA_EXTENSION_PROTOCOL_HPP
+#define LEMMA_EXTENSION_PROTOCOL_HPP
+
+#include "lemma/limits.hpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <vector>
+
+namespace lemma::extension {
+
+inline constexpr std::array<std::byte, 4> protocol_magic{std::byte{0x8a}, std::byte{'L'},
+                                                         std::byte{'M'}, std::byte{'E'}};
+inline constexpr std::uint8_t protocol_major = 1;
+inline constexpr std::uint8_t protocol_minor = 0;
+inline constexpr std::size_t protocol_header_bytes = 16;
+inline constexpr std::string_view protocol_schema = "lemma.extension/v1";
+inline constexpr std::string_view surface_update_schema = "lemma.surface-update/v1";
+
+enum class RecordKind : std::uint8_t {
+  hello = 1,
+  welcome = 2,
+  proc = 3,
+  proc_result = 4,
+  surface_update = 5,
+  event = 6,
+  error = 7,
+};
+
+struct Record final {
+  std::span<const std::byte> payload;
+  std::uint32_t sequence{0};
+  RecordKind kind{RecordKind::error};
+};
+
+[[nodiscard]] auto encode_header(RecordKind kind, std::size_t payload_bytes,
+                                 std::uint32_t sequence) noexcept
+    -> std::array<std::byte, protocol_header_bytes>;
+
+// One nonblocking, framed full-duplex extension connection. Payload views borrow input storage
+// until consume(); output retains exact partial-write progress. This transport knows no language or
+// extension execution model.
+class FramedPeer final {
+public:
+  explicit FramedPeer(int descriptor = -1) noexcept;
+  FramedPeer(const FramedPeer&) = delete;
+  auto operator=(const FramedPeer&) -> FramedPeer& = delete;
+  FramedPeer(FramedPeer&& other) noexcept;
+  auto operator=(FramedPeer&& other) noexcept -> FramedPeer&;
+  ~FramedPeer();
+
+  [[nodiscard]] auto descriptor() const noexcept -> int { return descriptor_; }
+  [[nodiscard]] auto events() const noexcept -> short;
+  [[nodiscard]] auto connected() const noexcept -> bool { return descriptor_ >= 0; }
+  [[nodiscard]] auto output_bytes() const noexcept -> std::size_t {
+    return output_.size() - output_offset_;
+  }
+
+  // Setup already consumed the protocol discriminator. Prime it before the first read.
+  [[nodiscard]] auto prime(std::byte first) noexcept -> bool;
+  [[nodiscard]] auto read_ready() noexcept -> std::size_t;
+  [[nodiscard]] auto buffered_record() const noexcept -> bool;
+  void write_ready(std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept;
+  [[nodiscard]] auto receive() noexcept -> std::optional<Record>;
+  void consume() noexcept;
+  [[nodiscard]] auto send(RecordKind kind, std::uint32_t sequence,
+                          std::span<const std::byte> payload) noexcept -> bool;
+  [[nodiscard]] auto send_json(RecordKind kind, std::uint32_t sequence,
+                               std::string_view payload) noexcept -> bool;
+  [[nodiscard]] auto release_descriptor() noexcept -> int;
+  void disconnect() noexcept;
+
+private:
+  [[nodiscard]] auto compact_input() noexcept -> bool;
+  [[nodiscard]] auto complete_record() noexcept -> std::optional<Record>;
+
+  int descriptor_{-1};
+  std::vector<std::byte> input_;
+  std::size_t input_offset_{0};
+  std::size_t record_bytes_{0};
+  std::vector<std::byte> output_;
+  std::size_t output_offset_{0};
+};
+
+} // namespace lemma::extension
+
+#endif // LEMMA_EXTENSION_PROTOCOL_HPP

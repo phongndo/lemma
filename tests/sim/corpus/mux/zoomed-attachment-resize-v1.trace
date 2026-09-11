@@ -1,0 +1,57 @@
+lemma-mux-trace-v1
+# corpus-kind: regression
+# description: resizing a zoomed tab must permit stale hidden-pane projection rectangles
+# source-trace: build/mux-sim-failures/mux-0x0.min.trace
+# fixed-at: 4a697bb0feecea06e40c4b71737f8ccc9f43050e
+op create-tab - - - - 0 0 applied applied
+check applied 1 9fde5dbbfabc38b7
+op create-tab - - - - 0 0 applied applied
+check applied 1 bb881e1dcd94cd8d
+op create-tab - - - - 0 0 applied applied
+check applied 1 56c28c41de9aafd9
+op create-tab - - - - 0 0 applied applied
+check applied 1 cbee8c0dcc926ef9
+op create-tab - - - - 0 0 applied applied
+check applied 1 24dca7c087290d87
+op create-tab - - - - 0 0 applied applied
+check applied 1 199fa60f16abe4f1
+op create-tab - - - - 0 0 applied applied
+check applied 1 068bbcec3992f431
+op create-tab - - - - 0 0 applied applied
+check applied 1 be7fa5d58251027d
+op create-tab - - - - 0 0 applied applied
+check applied 1 954f027265e5db7f
+op create-tab - - - - 0 0 applied applied
+check applied 1 29e521e2e1b1197d
+op create-tab - - - - 0 0 applied applied
+check applied 1 328c6de32bde5b79
+op create-tab - - - - 0 0 applied applied
+check applied 1 ad693d1119963421
+op create-tab - - - - 0 0 applied applied
+check applied 1 7dba19f6edb8acdf
+op create-tab - - - - 0 0 applied applied
+check applied 1 3dd4a5a1e41b7421
+op create-tab - - - - 0 0 applied applied
+check applied 1 802f456f1d8888b1
+op split 15:1 - 15:1 - 0 0 applied applied
+check applied 1 50b7e90021f3b3f1
+op split 12:1 - 12:1 - 0 0 applied applied
+check applied 1 fb87733e4f7e1589
+op split 1:1 - 1:1 - 0 0 applied applied
+check applied 1 637dc395e31f7d4f
+op split 6:1 - 6:1 - 0 0 applied applied
+check applied 1 500558875e89192d
+op split 11:1 - 11:1 - 0 1 applied applied
+check applied 1 fd2f796755ba26fe
+op split 11:1 - 20:1 - 0 0 applied applied
+check applied 1 9c00b0c7c0aa124e
+op split 4:1 - 4:1 - 0 0 applied applied
+check applied 1 988ea8824c0e636a
+op split 13:1 - 13:1 - 0 0 applied applied
+check applied 1 c26e34391dfdb990
+op zoom 13:1 - 23:1 - 0 0 applied applied
+check applied 1 61a466b28a7b35ff
+op select-tab 13:1 - - - 0 0 applied applied
+check applied 1 8b2b825e4532e416
+op attachment-resize - - - - 20 1000 applied applied
+check applied 1 b741ae30c0a2be30

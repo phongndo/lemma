@@ -1063,10 +1063,10 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
       return 1;
     }
   }
-  const bool written = write_all(std::string(marker) + "\r\n");
-  return written ? 0 : 1;
+  return write_all(marker) && write_all("\r\n") ? 0 : 1;
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_warm_scroll_loop() noexcept -> int {
   if (!write_all("__LEMMA_WARM_SCROLL_READY__\r\n")) {
     return 1;
@@ -1076,8 +1076,21 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
   while (true) {
     const auto count = ::read(STDIN_FILENO, trigger.data(), trigger.size());
     if (count > 0) {
-      const auto marker = "__LEMMA_WARM_SCROLL_DONE__" + std::to_string(iteration++) + "|";
-      if (run_warm_scroll(marker) != 0) {
+      std::array<char, 64> marker{};
+      constexpr std::string_view prefix = "__LEMMA_WARM_SCROLL_DONE__";
+      std::ranges::copy(prefix, marker.begin());
+      // std::to_chars expresses its bounded output range as a pointer pair.
+      // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      const auto encoded = std::to_chars(marker.begin() + prefix.size(), marker.end(), iteration++);
+      if (encoded.ec != std::errc{} || encoded.ptr == marker.end()) {
+        return 1;
+      }
+      *encoded.ptr = '|';
+      // encoded.ptr is within marker's to_chars range and leaves room for the delimiter.
+      const std::string_view marker_view(
+          marker.data(), static_cast<std::size_t>(encoded.ptr + 1 - marker.begin()));
+      // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      if (run_warm_scroll(marker_view) != 0) {
         return 1;
       }
       continue;
@@ -1087,6 +1100,7 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
     }
   }
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 } // namespace
 
