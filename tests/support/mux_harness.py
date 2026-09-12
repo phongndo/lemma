@@ -482,11 +482,15 @@ class LemmaServer:
             os.killpg(self.process.pid, number)
         except ProcessLookupError:
             pass
-        except PermissionError:
-            # Darwin reports EPERM for a group whose last member has become a
-            # zombie between poll and killpg. Do not hide a live-process error.
+        except PermissionError as error:
+            # Darwin can reject a dying process group before waitpid(WNOHANG)
+            # reports its leader's exit. Confirm reaping within the existing
+            # cleanup deadline; an actual live-process permission error still fails.
             if self.process.poll() is None:
-                raise
+                try:
+                    self.process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    raise error
 
     def close(self) -> None:
         for client in self.clients:
