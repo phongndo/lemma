@@ -97,6 +97,62 @@ TEST(ExtensionProtocolTest, RetainsMultipleBufferedRecordsAcrossConsumption) {
     EXPECT_EQ(next->sequence, 5U);
   }
 }
+
+TEST(ExtensionProtocolTest, ReadinessDoesNotClaimBufferedRecordAfterServiceBudget) {
+  SocketPair sockets;
+  FramedPeer peer(sockets.take_reader());
+  std::vector<std::byte> bytes;
+  for (std::uint32_t sequence = 1; sequence <= 5; ++sequence) {
+    const auto next = record(RecordKind::surface_update, sequence, "{}");
+    bytes.insert(bytes.end(), next.begin(), next.end());
+  }
+  ASSERT_EQ(::send(sockets.writer(), bytes.data(), bytes.size(), 0),
+            static_cast<ssize_t>(bytes.size()));
+  ASSERT_EQ(peer.read_ready(), bytes.size());
+  for (std::uint32_t sequence = 1; sequence <= 4; ++sequence) {
+    const auto next = peer.receive();
+    ASSERT_TRUE(next.has_value());
+    EXPECT_EQ(next.value_or(Record{}).sequence, sequence);
+    peer.consume();
+  }
+  const auto sixth = record(RecordKind::surface_update, 6, "{}");
+  ASSERT_EQ(::send(sockets.writer(), sixth.data(), sixth.size(), 0),
+            static_cast<ssize_t>(sixth.size()));
+  EXPECT_EQ(peer.read_ready(), 0U);
+  ASSERT_TRUE(peer.buffered_record());
+  const auto fifth = peer.receive();
+  ASSERT_TRUE(fifth.has_value());
+  EXPECT_EQ(fifth.value_or(Record{}).sequence, 5U);
+  peer.consume();
+  EXPECT_FALSE(peer.buffered_record());
+  EXPECT_EQ(peer.read_ready(), sixth.size());
+  const auto last = peer.receive();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last.value_or(Record{}).sequence, 6U);
+  peer.consume();
+  EXPECT_FALSE(peer.buffered_record());
+  EXPECT_FALSE(peer.receive().has_value());
+  EXPECT_EQ(peer.read_ready(), 0U);
+}
+
+TEST(ExtensionProtocolTest, FragmentedHeaderDoesNotScheduleBufferedWork) {
+  SocketPair sockets;
+  FramedPeer peer(sockets.take_reader());
+  const auto bytes = record(RecordKind::surface_update, 1, "{}");
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    ASSERT_EQ(::send(sockets.writer(), std::span(bytes).subspan(index).data(), 1, 0), 1);
+    ASSERT_EQ(peer.read_ready(), 1U);
+    if (index + 1U < bytes.size()) {
+      EXPECT_FALSE(peer.buffered_record());
+      EXPECT_FALSE(peer.receive().has_value());
+    }
+  }
+  EXPECT_TRUE(peer.buffered_record());
+  ASSERT_TRUE(peer.receive().has_value());
+  peer.consume();
+  EXPECT_FALSE(peer.buffered_record());
+}
+
 // NOLINTEND(readability-function-cognitive-complexity)
 
 TEST(ExtensionProtocolTest, RejectsInvalidBufferedHeaderWithoutWaitingForPayload) {

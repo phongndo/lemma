@@ -88,6 +88,79 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
 
+    def test_buffered_updates_progress_after_service_budget(self) -> None:
+        session = self.server.create_session(
+            "extension-buffered", attach=True, command=("/bin/cat",)
+        )
+        client = self.server.clients[0]
+        state = session.state()
+        peer = ExtensionPeer(str(self.server.socket_path))
+        self.addCleanup(peer.close)
+        peer.send(
+            HELLO,
+            1,
+            {
+                "schema": "lemma.extension/v1",
+                "name": "buffered",
+                "capabilities": ["proc", "surface"],
+                "events": {"schema": "lemma.events/v1", "session": {"id": state.id}},
+            },
+        )
+        peer.receive_matching(2, 1)
+        peer.send(
+            PROC,
+            2,
+            {
+                "schema": "lemma.proc/v1",
+                "commands": [
+                    {
+                        "command": "surface.create",
+                        "placement": {
+                            "kind": "overlay",
+                            "column": 0,
+                            "row": 0,
+                            "columns": 40,
+                            "rows": 8,
+                        },
+                    }
+                ],
+            },
+        )
+        created = peer.receive_matching(PROC_RESULT, 2)
+        self.assertTrue(created["ok"], created)
+        surface = created["results"][0]["result"]["surface"]
+        records = bytearray()
+        # More than one native read, with many complete records left after the
+        # four-record peer budget. Dependent row patches must all make progress.
+        for index in range(512):
+            payload = json.dumps(
+                {
+                    "schema": "lemma.surface-update/v1",
+                    "surface": surface,
+                    "rows": [
+                        {
+                            "row": index % 8,
+                            "runs": [
+                                {
+                                    "column": 0,
+                                    "text": f"row-{index % 8}-update-{index:04d}",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+            ).encode()
+            records.extend(
+                HEADER.pack(MAGIC, 1, 0, SURFACE_UPDATE, 0, len(payload), index + 3)
+            )
+            records.extend(payload)
+        peer.socket.sendall(records)
+        for index in range(504, 512):
+            client.expect_output(f"row-{index % 8}-update-{index:04d}")
+        client.send("\n" * 10 + "native-progress\n")
+        client.expect_output("native-progress")
+
     def test_docked_surface_input_proc_and_generation_cleanup(self) -> None:
         session = self.server.create_session(
             "extension-runtime", attach=True, command=("/bin/cat",)

@@ -132,7 +132,7 @@ auto FramedPeer::compact_input() noexcept -> bool {
 }
 
 auto FramedPeer::read_ready() noexcept -> std::size_t {
-  if (descriptor_ < 0 || complete_record().has_value()) {
+  if (descriptor_ < 0 || buffered_record()) {
     return 0;
   }
   static_cast<void>(compact_input());
