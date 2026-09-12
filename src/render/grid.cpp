@@ -1,5 +1,6 @@
 #include "render/grid.hpp"
 
+#include "lemma/geometry.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 
@@ -344,16 +345,11 @@ auto Grid::render_ansi(const std::span<std::byte> output, const GridRenderOption
   const bool cursor_changed = cursor_generation_ != presented_cursor_generation_;
   if (options.focused &&
       (options.force_full || options.project_cursor || cursor_changed || rendered_rows > 0)) {
-    if (cursor_.visible) {
-      if (!append_position(
-              output, used, static_cast<std::uint16_t>(options.rectangle.row + cursor_.row + 1U),
-              static_cast<std::uint16_t>(options.rectangle.column + cursor_.column + 1U)) ||
-          !append(output, used, "\x1b[0m\x1b[2 q\x1b[?25h")) {
-        return std::unexpected(GridError::output_exhausted);
-      }
-    } else if (!append(output, used, "\x1b[?25l")) {
-      return std::unexpected(GridError::output_exhausted);
+    const auto projected = render_cursor_ansi(output.subspan(used), options.rectangle);
+    if (!projected.has_value()) {
+      return std::unexpected(projected.error());
     }
+    used += projected->bytes;
   }
 
   for (auto& row : rows_) {
@@ -366,6 +362,36 @@ auto Grid::render_ansi(const std::span<std::byte> output, const GridRenderOption
                           .rows = rendered_rows,
                           .cursor_visible = options.focused && cursor_.visible,
                           .full = options.force_full};
+}
+
+auto Grid::render_cursor_ansi(const std::span<std::byte> output, const PaneRectangle rectangle,
+                              const bool unobscured) noexcept
+    -> std::expected<GridRenderResult, GridError> {
+  if (rectangle.columns != columns_ || rectangle.rows != rows_count_) {
+    return std::unexpected(GridError::invalid_dimensions);
+  }
+  std::size_t used = 0;
+  const bool visible = cursor_.visible && unobscured;
+  if (visible) {
+    if (!append_position(output, used, static_cast<std::uint16_t>(rectangle.row + cursor_.row + 1U),
+                         static_cast<std::uint16_t>(rectangle.column + cursor_.column + 1U)) ||
+        !append(output, used, "\x1b[0m\x1b[2 q\x1b[?25h")) {
+      return std::unexpected(GridError::output_exhausted);
+    }
+  } else if (!append(output, used, "\x1b[?25l")) {
+    return std::unexpected(GridError::output_exhausted);
+  }
+  presented_cursor_generation_ = cursor_generation_;
+  return GridRenderResult{.bytes = used, .rows = 0, .cursor_visible = visible, .full = false};
+}
+
+auto Grid::paints_cell(const std::uint16_t column, const std::uint16_t row) const noexcept -> bool {
+  if (column >= columns_ || row >= rows_count_) {
+    return false;
+  }
+  return std::ranges::any_of(rows_.at(row).runs, [column](const GridRun& run) {
+    return column >= run.column && column < static_cast<std::uint32_t>(run.column) + run.columns;
+  });
 }
 
 void Grid::invalidate_render_state() noexcept {

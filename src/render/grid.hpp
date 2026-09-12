@@ -118,6 +118,13 @@ public:
   [[nodiscard]] auto render_ansi(std::span<std::byte> output, GridRenderOptions options) noexcept
       -> std::expected<GridRenderResult, GridError>;
 
+  // Cursor projection never renders or acknowledges row content, including hidden damage.
+  [[nodiscard]] auto render_cursor_ansi(std::span<std::byte> output, PaneRectangle rectangle,
+                                        bool unobscured = true) noexcept
+      -> std::expected<GridRenderResult, GridError>;
+  [[nodiscard]] auto cursor() const noexcept -> GridCursor { return cursor_; }
+  [[nodiscard]] auto paints_cell(std::uint16_t column, std::uint16_t row) const noexcept -> bool;
+
   void invalidate_render_state() noexcept;
 
   [[nodiscard]] auto columns() const noexcept -> std::uint16_t { return columns_; }

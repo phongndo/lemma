@@ -1221,11 +1221,23 @@ render_panes(const Scene scene, const Viewport viewport, const std::span<std::by
         .columns = focused_grid->rectangle.columns,
         .rows = focused_grid->rectangle.rows,
     };
+    const auto cursor = focused_grid->grid->cursor();
+    const PaneRectangle point{
+        .column = static_cast<std::uint16_t>(focused_grid->rectangle.column + cursor.column),
+        .row = static_cast<std::uint16_t>(focused_grid->rectangle.row + cursor.row),
+        .columns = 1,
+        .rows = 1};
+    const auto higher =
+        scene.grids.subspan(static_cast<std::size_t>(focused_grid - scene.grids.begin()) + 1U);
+    const bool covered = std::ranges::any_of(higher, [point](const GridSurface& surface) {
+      return rectangles_overlap(point, surface.rectangle) &&
+             (surface.opaque ||
+              surface.grid->paints_cell(
+                  static_cast<std::uint16_t>(point.column - surface.rectangle.column),
+                  static_cast<std::uint16_t>(point.row - surface.rectangle.row)));
+    });
     const auto rendered =
-        focused_grid->grid->render_ansi(output.subspan(used), {.rectangle = physical,
-                                                               .focused = true,
-                                                               .project_cursor = true,
-                                                               .opaque = focused_grid->opaque});
+        focused_grid->grid->render_cursor_ansi(output.subspan(used), physical, !covered);
     if (!rendered.has_value()) {
       invalidate_scene(scene);
       return std::unexpected(rendered.error() == GridError::output_exhausted
