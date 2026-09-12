@@ -2,7 +2,7 @@ lemma-mux-trace-v1
 # corpus-kind: regression
 # description: resizing a zoomed tab must permit stale hidden-pane projection rectangles
 # source-trace: build/mux-sim-failures/mux-0x0.min.trace
-# fixed-at: 4a697bb0feecea06e40c4b71737f8ccc9f43050e
+# fixed-at: 6c453d642f76ecae7bf901623591260356deed92
 op create-tab - - - - 0 0 applied applied
 check applied 1 9fde5dbbfabc38b7
 op create-tab - - - - 0 0 applied applied

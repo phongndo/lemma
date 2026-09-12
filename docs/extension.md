@@ -31,9 +31,11 @@ Lemma state ── Event ──> extension ── Proc ──> Lemma state
 Extensions can observe Lemma state, present derived state, and request semantic mutations. They do
 not participate in terminal parsing, command execution, scheduling, or frame production.
 
-The same model must support small configuration helpers and large interfaces such as agent
-sidebars, process dashboards, notifications, session pickers, fuzzy finders, and custom floating
-terminal workflows without adding feature-specific extension APIs.
+The implemented v1 slice provides external framed connections, capability negotiation, Procs,
+Attachment-scoped retained Grid Surfaces, dock/float/overlay placement, and owner-directed input.
+It does not provide floating terminal Pane creation or a wholesale migration of native UI to
+Surfaces. Those are future native presentation work, not capabilities implied by floating Grids.
+The existing isolated Lua configuration and custom-command host remains supported independently.
 
 ## Boundary
 
@@ -71,7 +73,7 @@ The extension boundary is:
 PTY output -> Ghostty terminal -> damage ----┴----> Scene composition
 ```
 
-The hot path is closed. No extension code runs because:
+No extension code runs inside the daemon in response to:
 
 - a PTY produced bytes;
 - Ghostty reported damage;
@@ -80,8 +82,10 @@ The hot path is closed. No extension code runs because:
 - a socket became writable;
 - the scheduler needs to make progress.
 
-A slow, blocked, or crashed extension may make its own UI stale. It must not delay unrelated input,
-PTY progress, command execution, or presentation.
+A slow, blocked, or crashed extension may make its own UI stale. PTY progress and frame composition
+have no synchronous dependency on its execution. External processes still share CPU and memory,
+and the daemon still decodes and validates their messages. Bounded native work and measured
+responsiveness under declared workloads—not literal zero impact—are the isolation requirement.
 
 ## Model
 
@@ -195,8 +199,10 @@ Scene compositor
 attached client
 ```
 
-Intermediate presentation updates may be coalesced. The retained state is authoritative for that
-extension projection, so dropping superseded patches never requires dropping mux state or PTY bytes.
+Presentation of accepted updates may be coalesced; input patches are applied in record order.
+Each supplied row replaces that row's runs, not the entire Grid. Patches to different rows cannot
+supersede each other. Retained native state, rather than the latest input message alone, is the
+source for frame composition.
 
 ## Scene
 
@@ -218,9 +224,9 @@ A `PaneSurface` projects a real Pane and its Ghostty-owned terminal state.
 
 An `ExtensionSurface` projects an extension-owned Grid.
 
-A `NativeSurface` is Lemma-owned UI such as built-in command, status, message, picker, or recovery
-surfaces. Native and extension Surfaces should converge on the same layout and composition
-representation even when native code constructs its state without crossing an IPC boundary.
+`NativeSurface` in this diagram is a future convergence direction for Lemma-owned command,
+status, message, picker, and recovery UI. V1 has not migrated all native UI to retained Surfaces.
+Native code need not serialize its state across IPC to share composition machinery.
 
 The compositor owns final ordering, clipping, borders, cursor arbitration, damage aggregation, and
 terminal output. Extensions declare desired presentation; they never participate in composition.
@@ -271,13 +277,14 @@ Float and overlay placement do not reserve tiled viewport space. They may be opa
 transparent rows reveal the repaired lower Scene content wherever no run is present. Docked Surfaces
 must be opaque because their reserved viewport has no Pane backing to reveal.
 
-## Floating terminals
+## Floating terminals (deferred)
 
-A terminal is always a real Pane.
+A terminal is always a real Pane. V1 float placement applies only to Grid Surfaces; it does not
+add a command for creating a floating terminal Pane.
 
-Extensions do not emulate terminal semantics inside a Grid Surface. A custom floating shell,
-lazygit window, build terminal, REPL, or agent terminal is created through Proc as a Pane using the
-ordinary process, PTY, Ghostty, lifecycle, and input machinery.
+Any future floating shell, lazygit window, build terminal, REPL, or agent terminal must remain a
+real Pane created through Proc using the ordinary process, PTY, Ghostty, lifecycle, and input
+machinery, not terminal emulation inside a Grid.
 
 ```text
 Proc -> Pane -> PaneRuntime -> PTY
@@ -505,9 +512,10 @@ any language capable of speaking the versioned protocol.
 Configuration may declare how trusted extensions are discovered or launched, but packaging,
 distribution, and language-specific SDKs are frontend concerns rather than kernel concepts.
 
-## Native UI
+## Native UI convergence (deferred)
 
-Lemma should dogfood the Surface model where practical.
+This section describes a future direction, not shipped native-UI migration. Lemma should use the
+Surface model internally where practical.
 
 Built-in UI such as status, command entry, messages, completion, pickers, and transient notices
 should use the same native Scene, placement, clipping, focus, and composition machinery available
@@ -539,13 +547,12 @@ The implementation should preserve these properties:
 - Extension code never runs on PTY, input-routing, or composition stacks.
 - Surface content is retained so unchanged UI creates no extension work.
 - Surface updates mark bounded dirty regions rather than forcing full Scene redraws.
-- Multiple pending patches to the same Surface may be coalesced when intermediate states are not
-  externally observable.
+- Accepted patches may share a presentation frame; dependent input patches still apply in order.
 - Slow extension readers cannot block unrelated Proc execution, PTY progress, or Attachments.
 - Slow Surface writers cannot grow daemon memory without bound.
 - Hidden or fully occluded Surfaces do not require composition work until they can affect output.
-- A Surface update storm may make that Surface stale, be coalesced, or disconnect its owner; it
-  must not create unbounded scheduler work.
+- A Surface update storm may delay presentation or disconnect its owner on resource exhaustion;
+  it must not create unbounded scheduler work or silently discard dependent accepted patches.
 - Extension resource limits are explicit and observable.
 
 Performance tests should include:
@@ -561,8 +568,9 @@ extension update storm beside interactive Pane input
 many Surfaces with most hidden or unchanged
 ```
 
-A key acceptance criterion is that a hung extension has no measurable effect on unrelated PTY
-progress and that many idle extensions do not materially change interactive latency.
+Acceptance requires measured PTY progress and endpoint-specific interactive latency under declared
+idle, hung, and active extension workloads on the approved host. Idle helper microbenchmarks do not
+establish whole-reactor or end-to-end isolation.
 
 ## Failure
 
@@ -667,7 +675,7 @@ Those experiences should emerge from the generic primitives.
 8. Extension code never runs because a PTY produced bytes, a frame must render, or unrelated input
    arrived.
 9. Extension input is target-directed to focused owned Surfaces rather than globally intercepted.
-10. Native and extension UI converge on one retained Scene and one compositor.
+10. Native UI convergence is deferred; no extension code executes during native composition.
 11. Surface, Event, Proc, queue, payload, update, and retained-state work is explicitly bounded.
 12. Slow or malformed extensions cannot prevent unrelated PTY, command, or presentation progress.
 13. Extension ownership is generational; disconnect can clean up without executing extension code.
