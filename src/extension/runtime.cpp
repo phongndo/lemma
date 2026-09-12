@@ -182,16 +182,18 @@ template <typename Id> [[nodiscard]] auto id_text(const Id id) -> std::string {
         }
         const auto column = api::json_unsigned(encoded_run, "column");
         const auto text = api::json_string(encoded_run, "text");
-        const auto style = api::json_unsigned(encoded_run, "style").value_or(0);
-        if (!column.has_value() || *column > std::numeric_limits<std::uint16_t>::max() ||
-            !text.has_value() || text->empty() ||
-            text->size() > limits::surface_text_bytes_per_row_max ||
-            style > std::numeric_limits<std::uint16_t>::max()) {
+        const auto style = api::json_member(encoded_run, "style") == nullptr
+                               ? std::optional<std::uint64_t>{0}
+                               : api::json_unsigned(encoded_run, "style");
+        if (!style.has_value() || !column.has_value() ||
+            *column > std::numeric_limits<std::uint16_t>::max() || !text.has_value() ||
+            text->empty() || text->size() > limits::surface_text_bytes_per_row_max ||
+            *style > std::numeric_limits<std::uint16_t>::max()) {
           return std::nullopt;
         }
         row_patch.runs.push_back({.text = std::string(*text),
                                   .column = static_cast<std::uint16_t>(*column),
-                                  .style = static_cast<std::uint16_t>(style)});
+                                  .style = static_cast<std::uint16_t>(*style)});
       }
       patch.rows.push_back(std::move(row_patch));
     }
@@ -207,15 +209,17 @@ template <typename Id> [[nodiscard]] auto id_text(const Id id) -> std::string {
     }
     const auto column = api::json_unsigned(*cursor, "column");
     const auto row = api::json_unsigned(*cursor, "row");
-    const auto visible = api::json_boolean(*cursor, "visible").value_or(false);
-    if (!column.has_value() || !row.has_value() ||
+    const auto visible = api::json_member(*cursor, "visible") == nullptr
+                             ? std::optional<bool>{false}
+                             : api::json_boolean(*cursor, "visible");
+    if (!visible.has_value() || !column.has_value() || !row.has_value() ||
         *column > std::numeric_limits<std::uint16_t>::max() ||
         *row > std::numeric_limits<std::uint16_t>::max()) {
       return std::nullopt;
     }
     patch.cursor = render::GridCursor{.column = static_cast<std::uint16_t>(*column),
                                       .row = static_cast<std::uint16_t>(*row),
-                                      .visible = visible};
+                                      .visible = *visible};
   }
   return patch;
 }
@@ -247,6 +251,15 @@ template <typename Id> [[nodiscard]] auto id_text(const Id id) -> std::string {
     return capability_proc;
   }
   return capability == "surface" ? capability_surface : std::uint8_t{0};
+}
+
+[[nodiscard]] auto valid_native_scope(const Hello& hello, const SessionId session,
+                                      const AttachmentId attachment) noexcept -> bool {
+  if (attachment.is_valid() && attachment.slot() >= limits::sessions_hard_max) {
+    return false;
+  }
+  return (hello.capabilities & (capability_observe | capability_surface)) == 0 ||
+         (session.is_valid() && attachment.is_valid());
 }
 
 [[nodiscard]] auto placement_size(const api::SurfacePlacement placement) noexcept -> std::uint16_t {
@@ -288,7 +301,7 @@ auto decode_hello(const api::JsonValue& document) -> std::optional<Hello> {
   const auto* const events = api::json_member(document, "events");
   if (events != nullptr) {
     const auto decoded = api::decode_event_subscription(*events);
-    if (!decoded.subscription.has_value()) {
+    if (!decoded.subscription.has_value() || !decoded.subscription->session.has_value()) {
       return std::nullopt;
     }
     result.subscription = *decoded.subscription;
@@ -299,6 +312,34 @@ auto decode_hello(const api::JsonValue& document) -> std::optional<Hello> {
     return std::nullopt;
   }
   return result;
+}
+
+auto append_input_payload(std::string& event, const std::span<const std::byte> bytes,
+                          const bool opaque) -> bool {
+  // JSON control-byte escaping is the worst expansion (6x); leave bounded room for metadata.
+  constexpr std::size_t metadata_bytes_max = 1024;
+  static_assert((limits::extension_input_bytes_max * 6U) + metadata_bytes_max <
+                limits::extension_record_bytes_max);
+  if (bytes.size() > limits::extension_input_bytes_max || event.size() > metadata_bytes_max) {
+    return false;
+  }
+  // Byte and character storage have the same object representation.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  if (!opaque && api::valid_utf8(text)) {
+    event += R"(,"text":)";
+    return api::append_json_string(event, text, limits::extension_record_bytes_max - 1U);
+  }
+  constexpr std::string_view digits = "0123456789abcdef";
+  event.reserve(event.size() + 16U + (bytes.size() * 2U));
+  event += R"(,"bytes_hex":")";
+  for (const auto byte : bytes) {
+    const auto value = std::to_integer<unsigned char>(byte);
+    event += digits.at(value >> 4U);
+    event += digits.at(value & 0x0fU);
+  }
+  event += '"';
+  return true;
 }
 
 Runtime::Peer* Runtime::peer(const ExtensionGenerationId owner) noexcept {
@@ -333,9 +374,13 @@ const Runtime::Surface* Runtime::surface(const SurfaceId id) const noexcept {
   return slot.generation == id.generation() && slot.surface.has_value() ? &*slot.surface : nullptr;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto Runtime::admit(FramedPeer transport, Hello hello, const SessionId session_id,
                     const AttachmentId attachment_id, std::string_view snapshot) noexcept
     -> std::optional<ExtensionGenerationId> {
+  if (!valid_native_scope(hello, session_id, attachment_id)) {
+    return std::nullopt;
+  }
   auto* const slot =
       std::ranges::find_if(peers_, [](const PeerSlot& value) { return !value.peer.has_value(); });
   if (slot == peers_.end() || !transport.connected()) {
@@ -351,9 +396,12 @@ auto Runtime::admit(FramedPeer transport, Hello hello, const SessionId session_i
                             .owner = owner,
                             .session = session_id,
                             .attachment = attachment_id});
-    auto welcome = std::string{R"({"schema":"lemma.extension-welcome/v1","owner":")"} +
-                   id_text(owner) + R"(","attachment":")" + id_text(attachment_id) +
-                   R"(","capabilities":[)";
+    auto welcome =
+        std::string{R"({"schema":"lemma.extension-welcome/v1","owner":")"} + id_text(owner) + '"';
+    if (attachment_id.is_valid()) {
+      welcome += R"(,"attachment":")" + id_text(attachment_id) + '"';
+    }
+    welcome += R"(,"capabilities":[)";
     bool separator = false;
     for (const auto [bit, name] :
          std::array{std::pair{capability_observe, std::string_view{"observe"}},
@@ -377,7 +425,10 @@ auto Runtime::admit(FramedPeer transport, Hello hello, const SessionId session_i
                std::to_string(limits::surface_retained_bytes_aggregate_max) + R"(,"styles":)" +
                std::to_string(limits::surface_styles_max) + R"(,"runs_per_row":)" +
                std::to_string(limits::surface_runs_per_row_max) + R"(,"text_bytes_per_row":)" +
-               std::to_string(limits::surface_text_bytes_per_row_max) + "}}";
+               std::to_string(limits::surface_text_bytes_per_row_max) + R"(,"input_bytes":)" +
+               std::to_string(limits::extension_input_bytes_max) + R"(,"columns":)" +
+               std::to_string(limits::terminal_columns_hard_max) + R"(,"rows":)" +
+               std::to_string(limits::terminal_rows_hard_max) + "}}";
     if (!slot->peer->transport.send_json(RecordKind::welcome, 1, welcome)) {
       slot->peer.reset();
       return std::nullopt;
@@ -433,10 +484,6 @@ void Runtime::write_ready(const std::size_t slot, const std::size_t bytes_max) n
   if (slot < peers_.size() && peers_.at(slot).peer.has_value()) {
     auto& found = *peers_.at(slot).peer;
     found.transport.write_ready(bytes_max);
-    if (found.transport.output_bytes() == 0) {
-      found.event_records_queued = 0;
-      found.event_bytes_queued = 0;
-    }
     flush_surface_events(found);
   }
 }
@@ -468,6 +515,12 @@ auto Runtime::output_bytes(const ExtensionGenerationId owner) const noexcept -> 
   return found == nullptr ? 0 : found->transport.output_bytes();
 }
 
+auto Runtime::output_accounting(const ExtensionGenerationId owner) const noexcept
+    -> OutputAccounting {
+  const auto* const found = peer(owner);
+  return found == nullptr ? OutputAccounting{} : found->transport.output_accounting();
+}
+
 auto Runtime::event_sequence(const ExtensionGenerationId owner) const noexcept -> std::uint32_t {
   const auto* const found = peer(owner);
   return found == nullptr ? 0 : found->next_event_sequence;
@@ -476,7 +529,8 @@ auto Runtime::event_sequence(const ExtensionGenerationId owner) const noexcept -
 auto Runtime::has_capability(const ExtensionGenerationId owner,
                              const std::uint8_t capability) const noexcept -> bool {
   const auto* const found = peer(owner);
-  return found != nullptr && (found->hello.capabilities & capability) == capability;
+  return found != nullptr && found->transport.connected() &&
+         (found->hello.capabilities & capability) == capability;
 }
 
 auto Runtime::subscription(const ExtensionGenerationId owner) const noexcept
@@ -500,13 +554,11 @@ auto Runtime::reserve_proc(const ExtensionGenerationId owner,
   auto* const found = peer(owner);
   constexpr auto result_reserve = api::json_bytes_max + protocol_header_bytes;
   if (found == nullptr || !has_capability(owner, capability_proc) || request_id == 0 ||
-      std::ranges::find(found->procs, request_id) != found->procs.end() ||
-      found->transport.output_bytes() >
-          limits::extension_output_bytes_per_owner_max - result_reserve) {
+      std::ranges::find(found->procs, request_id) != found->procs.end()) {
     return false;
   }
   auto* const slot = std::ranges::find(found->procs, 0U);
-  if (slot == found->procs.end()) {
+  if (slot == found->procs.end() || !found->transport.reserve_output(result_reserve)) {
     return false;
   }
   *slot = request_id;
@@ -516,13 +568,19 @@ auto Runtime::reserve_proc(const ExtensionGenerationId owner,
 void Runtime::complete_proc(const ExtensionGenerationId owner, const std::uint32_t request_id,
                             const std::string_view result) noexcept {
   auto* const found = peer(owner);
-  if (found == nullptr) {
+  if (found == nullptr || !found->transport.connected() || request_id == 0) {
     return;
   }
   auto* const slot = std::ranges::find(found->procs, request_id);
   if (slot == found->procs.end()) {
     return;
   }
+  if (result.size() > api::json_bytes_max) {
+    found->transport.disconnect();
+    return;
+  }
+  // Single reactor owner: converting reserved storage to queued bytes admits no intervening output.
+  found->transport.release_output(api::json_bytes_max + protocol_header_bytes);
   *slot = 0;
   if (!found->transport.send_json(RecordKind::proc_result, request_id, result)) {
     found->transport.disconnect();
@@ -612,19 +670,21 @@ void Runtime::replace_surface(const std::size_t slot, std::optional<Surface> rep
 auto Runtime::send_event(const ExtensionGenerationId owner, const std::string_view event) noexcept
     -> bool {
   auto* const found = peer(owner);
-  const auto record_bytes = protocol_header_bytes + event.size();
-  if (found == nullptr || found->event_records_queued >= limits::extension_interaction_events_max ||
-      record_bytes > limits::extension_interaction_bytes_per_owner_max -
-                         std::min(found->event_bytes_queued,
-                                  limits::extension_interaction_bytes_per_owner_max) ||
-      !found->transport.send_json(RecordKind::event, found->next_event_sequence, event)) {
-    if (found != nullptr) {
-      found->transport.disconnect();
-    }
+  if (found == nullptr) {
     return false;
   }
-  ++found->event_records_queued;
-  found->event_bytes_queued += record_bytes;
+  const auto record_bytes = protocol_header_bytes + event.size();
+  const auto accounting = found->transport.output_accounting();
+  if (accounting.event_records >= limits::extension_interaction_events_max ||
+      record_bytes > limits::extension_interaction_bytes_per_owner_max - accounting.event_bytes) {
+    found->transport.disconnect();
+    return false;
+  }
+  // Queue pressure cannot revoke a Proc's reserved result. The caller retains/rejects this Event;
+  // transport failure and the Event lane's own overflow policy remain distinct.
+  if (!found->transport.send_json(RecordKind::event, found->next_event_sequence, event)) {
+    return false;
+  }
   found->next_event_sequence =
       found->next_event_sequence == std::numeric_limits<std::uint32_t>::max()
           ? 1U
@@ -711,21 +771,9 @@ void Runtime::flush_surface_events(Peer& found) noexcept {
                  std::to_string(pending.rows);
       }
       event += '}';
-      const auto record_bytes = protocol_header_bytes + event.size();
-      if (found.event_records_queued >= limits::extension_interaction_events_max ||
-          record_bytes > limits::extension_interaction_bytes_per_owner_max -
-                             std::min(found.event_bytes_queued,
-                                      limits::extension_interaction_bytes_per_owner_max) ||
-          !found.transport.send_json(RecordKind::event, found.next_event_sequence, event)) {
-        found.transport.disconnect();
+      if (!send_event(found.owner, event)) {
         break;
       }
-      ++found.event_records_queued;
-      found.event_bytes_queued += record_bytes;
-      found.next_event_sequence =
-          found.next_event_sequence == std::numeric_limits<std::uint32_t>::max()
-              ? 1U
-              : found.next_event_sequence + 1U;
     }
   } catch (const std::bad_alloc&) {
     found.transport.disconnect();
@@ -750,96 +798,104 @@ auto Runtime::pane_viewport(const AttachmentId attachment_id,
   if (surface_count_ == 0) {
     return PaneRectangle{.columns = viewport.columns, .rows = viewport.rows};
   }
-  std::uint32_t left = 0;
-  std::uint32_t right = 0;
-  std::uint32_t top = 0;
-  std::uint32_t bottom = 0;
+  if (viewport.columns == 0 || viewport.rows == 0) {
+    return std::nullopt;
+  }
+  return resolve_layout(attachment_id, viewport).pane;
+}
+
+// One projection for geometry, composition, and hit testing. Docks that cannot leave at least one
+// Pane cell are suspended in stable slot order; floats outside the viewport are suspended whole.
+// Suspension changes neither the declared placement nor the retained Grid.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto Runtime::resolve_layout(const AttachmentId attachment_id,
+                             const render::Viewport viewport) const noexcept -> SurfaceLayout {
+  SurfaceLayout layout{.pane = {.columns = viewport.columns, .rows = viewport.rows}};
+  std::uint16_t left = 0;
+  std::uint16_t right = 0;
+  std::uint16_t top = 0;
+  std::uint16_t bottom = 0;
   for (const auto& slot : surfaces_) {
     if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
       continue;
     }
     const auto& placement = slot.surface->placement;
-    switch (placement.kind) {
-    case api::SurfacePlacementKind::dock_left:
-      left += placement_size(placement);
-      break;
+    auto& rectangle = layout.rectangles.at(slot.surface->id.slot());
+    const auto size = placement_size(placement);
+    if (dock_placement(placement.kind)) {
+      const bool horizontal = placement.kind == api::SurfacePlacementKind::dock_left ||
+                              placement.kind == api::SurfacePlacementKind::dock_right;
+      const auto available = horizontal ? layout.pane.columns : layout.pane.rows;
+      if (size == 0 || size >= available) {
+        continue;
+      }
+      switch (placement.kind) {
+      case api::SurfacePlacementKind::dock_left:
+        rectangle = PaneRectangle{.column = left, .columns = size};
+        left += size;
+        break;
+      case api::SurfacePlacementKind::dock_right:
+        rectangle = PaneRectangle{.column = right, .columns = size};
+        right += size;
+        break;
+      case api::SurfacePlacementKind::dock_top:
+        rectangle = PaneRectangle{.row = top, .columns = viewport.columns, .rows = size};
+        top += size;
+        break;
+      case api::SurfacePlacementKind::dock_bottom:
+        rectangle = PaneRectangle{.row = bottom, .columns = viewport.columns, .rows = size};
+        bottom += size;
+        break;
+      case api::SurfacePlacementKind::float_surface:
+      case api::SurfacePlacementKind::overlay:
+        break;
+      }
+      layout.pane = {.column = left,
+                     .row = top,
+                     .columns = static_cast<std::uint16_t>(viewport.columns - left - right),
+                     .rows = static_cast<std::uint16_t>(viewport.rows - top - bottom)};
+    } else if (placement.columns != 0 && placement.rows != 0 &&
+               static_cast<std::uint32_t>(placement.column) + placement.columns <=
+                   viewport.columns &&
+               static_cast<std::uint32_t>(placement.row) + placement.rows <= viewport.rows) {
+      rectangle = PaneRectangle{.column = placement.column,
+                                .row = placement.row,
+                                .columns = placement.columns,
+                                .rows = placement.rows};
+    }
+  }
+  for (const auto& slot : surfaces_) {
+    if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
+      continue;
+    }
+    auto& rectangle = layout.rectangles.at(slot.surface->id.slot());
+    if (!rectangle.has_value()) {
+      continue;
+    }
+    switch (slot.surface->placement.kind) {
     case api::SurfacePlacementKind::dock_right:
-      right += placement_size(placement);
-      break;
-    case api::SurfacePlacementKind::dock_top:
-      top += placement_size(placement);
+      rectangle->column += layout.pane.column + layout.pane.columns;
+      [[fallthrough]];
+    case api::SurfacePlacementKind::dock_left:
+      rectangle->row = top;
+      rectangle->rows = layout.pane.rows;
       break;
     case api::SurfacePlacementKind::dock_bottom:
-      bottom += placement_size(placement);
+      rectangle->row += layout.pane.row + layout.pane.rows;
       break;
+    case api::SurfacePlacementKind::dock_top:
     case api::SurfacePlacementKind::float_surface:
     case api::SurfacePlacementKind::overlay:
       break;
     }
   }
-  if (left + right >= viewport.columns || top + bottom >= viewport.rows) {
-    return std::nullopt;
-  }
-  return PaneRectangle{.column = static_cast<std::uint16_t>(left),
-                       .row = static_cast<std::uint16_t>(top),
-                       .columns = static_cast<std::uint16_t>(viewport.columns - left - right),
-                       .rows = static_cast<std::uint16_t>(viewport.rows - top - bottom)};
+  return layout;
 }
 
 auto Runtime::resolved_rectangle(const Surface& target,
                                  const render::Viewport viewport) const noexcept
     -> std::optional<PaneRectangle> {
-  const auto pane = pane_viewport(target.attachment, viewport);
-  if (!pane.has_value()) {
-    return std::nullopt;
-  }
-  std::uint32_t before = 0;
-  for (const auto& slot : surfaces_) {
-    if (!slot.surface.has_value() || slot.surface->attachment != target.attachment ||
-        slot.surface->id == target.id || slot.surface->id.slot() > target.id.slot() ||
-        slot.surface->placement.kind != target.placement.kind) {
-      continue;
-    }
-    before += placement_size(slot.surface->placement);
-  }
-  const auto size = placement_size(target.placement);
-  switch (target.placement.kind) {
-  case api::SurfacePlacementKind::dock_left:
-    return PaneRectangle{.column = static_cast<std::uint16_t>(before),
-                         .row = pane->row,
-                         .columns = static_cast<std::uint16_t>(size),
-                         .rows = pane->rows};
-  case api::SurfacePlacementKind::dock_right:
-    return PaneRectangle{.column =
-                             static_cast<std::uint16_t>(pane->column + pane->columns + before),
-                         .row = pane->row,
-                         .columns = static_cast<std::uint16_t>(size),
-                         .rows = pane->rows};
-  case api::SurfacePlacementKind::dock_top:
-    return PaneRectangle{.column = 0,
-                         .row = static_cast<std::uint16_t>(before),
-                         .columns = viewport.columns,
-                         .rows = static_cast<std::uint16_t>(size)};
-  case api::SurfacePlacementKind::dock_bottom:
-    return PaneRectangle{.column = 0,
-                         .row = static_cast<std::uint16_t>(pane->row + pane->rows + before),
-                         .columns = viewport.columns,
-                         .rows = static_cast<std::uint16_t>(size)};
-  case api::SurfacePlacementKind::float_surface:
-  case api::SurfacePlacementKind::overlay: {
-    const auto right =
-        static_cast<std::uint32_t>(target.placement.column) + target.placement.columns;
-    const auto bottom = static_cast<std::uint32_t>(target.placement.row) + target.placement.rows;
-    if (right > viewport.columns || bottom > viewport.rows) {
-      return std::nullopt;
-    }
-    return PaneRectangle{.column = target.placement.column,
-                         .row = target.placement.row,
-                         .columns = target.placement.columns,
-                         .rows = target.placement.rows};
-  }
-  }
-  return std::nullopt;
+  return resolve_layout(target.attachment, viewport).rectangles.at(target.id.slot());
 }
 
 auto Runtime::create_surface(const ExtensionGenerationId owner,
@@ -997,7 +1053,7 @@ auto Runtime::focus_surface(const ExtensionGenerationId owner, const SurfaceId i
   if (found->owner != owner) {
     return surface_operation(SurfaceOperationStatus::wrong_owner);
   }
-  if (!found->focusable) {
+  if (!found->focusable || !resolved_rectangle(*found, viewport).has_value()) {
     return surface_operation(SurfaceOperationStatus::unavailable);
   }
   auto& focused = focused_surfaces_.at(found->attachment.slot());
@@ -1081,6 +1137,7 @@ auto Runtime::resize_surfaces(const AttachmentId attachment_id,
   if (surface_count_ == 0) {
     return true;
   }
+  const auto layout = resolve_layout(attachment_id, viewport);
   std::array<std::optional<render::Grid>, limits::extension_surfaces_hard_max> replacements{};
   auto proposed_bytes = retained_surface_bytes_;
   for (std::size_t index = 0; index < surfaces_.size(); ++index) {
@@ -1088,9 +1145,9 @@ auto Runtime::resize_surfaces(const AttachmentId attachment_id,
     if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
       continue;
     }
-    const auto rectangle = resolved_rectangle(*slot.surface, viewport);
+    const auto rectangle = layout.rectangles.at(index);
     if (!rectangle.has_value()) {
-      return false;
+      continue;
     }
     if (slot.surface->grid.columns() == rectangle->columns &&
         slot.surface->grid.rows() == rectangle->rows) {
@@ -1125,6 +1182,14 @@ auto Runtime::resize_surfaces(const AttachmentId attachment_id,
     }
   }
   retained_surface_bytes_ = proposed_bytes;
+  const auto focused = focused_surface(attachment_id);
+  if (focused.is_valid() && !layout.rectangles.at(focused.slot()).has_value()) {
+    static_cast<void>(focus_pane(attachment_id));
+  }
+  const auto captured = captured_surface_pointer(attachment_id);
+  if (captured.is_valid() && !layout.rectangles.at(captured.slot()).has_value()) {
+    release_surface_pointer(attachment_id);
+  }
   for (auto& slot : peers_) {
     if (slot.peer.has_value()) {
       flush_surface_events(*slot.peer);
@@ -1140,12 +1205,13 @@ auto Runtime::collect_surfaces(
   if (surface_count_ == 0) {
     return {};
   }
+  const auto layout = resolve_layout(attachment_id, viewport);
   std::size_t count = 0;
   for (auto& slot : surfaces_) {
     if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
       continue;
     }
-    const auto rectangle = resolved_rectangle(*slot.surface, viewport);
+    const auto rectangle = layout.rectangles.at(slot.surface->id.slot());
     if (!rectangle.has_value() || slot.surface->grid.columns() != rectangle->columns ||
         slot.surface->grid.rows() != rectangle->rows) {
       continue;
@@ -1164,7 +1230,10 @@ auto Runtime::focused_surface(const AttachmentId attachment_id) const noexcept -
     return {};
   }
   const auto id = focused_surfaces_.at(attachment_id.slot());
-  return surface(id) != nullptr ? id : SurfaceId{};
+  const auto* const found = surface(id);
+  return found != nullptr && found->attachment == attachment_id && connected(found->owner)
+             ? id
+             : SurfaceId{};
 }
 
 auto Runtime::focus_pane(const AttachmentId attachment_id) noexcept -> bool {
@@ -1195,7 +1264,8 @@ auto Runtime::surface_at(const AttachmentId attachment_id, const render::Viewpor
     return {};
   }
   for (const auto& slot : surfaces_ | std::views::reverse) {
-    if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
+    if (!slot.surface.has_value() || slot.surface->attachment != attachment_id ||
+        !connected(slot.surface->owner)) {
       continue;
     }
     const auto rectangle = resolved_rectangle(*slot.surface, viewport);
@@ -1225,8 +1295,9 @@ auto Runtime::surface_focusable(const SurfaceId id) const noexcept -> bool {
 
 void Runtime::capture_surface_pointer(const AttachmentId attachment_id,
                                       const SurfaceId id) noexcept {
+  const auto* const found = surface(id);
   if (attachment_id.is_valid() && attachment_id.slot() < captured_surfaces_.size() &&
-      surface(id) != nullptr) {
+      found != nullptr && found->attachment == attachment_id && connected(found->owner)) {
     captured_surfaces_.at(attachment_id.slot()) = id;
   }
 }
@@ -1237,12 +1308,23 @@ auto Runtime::captured_surface_pointer(const AttachmentId attachment_id) const n
     return {};
   }
   const auto id = captured_surfaces_.at(attachment_id.slot());
-  return surface(id) != nullptr ? id : SurfaceId{};
+  const auto* const found = surface(id);
+  return found != nullptr && found->attachment == attachment_id && connected(found->owner)
+             ? id
+             : SurfaceId{};
 }
 
 void Runtime::release_surface_pointer(const AttachmentId attachment_id) noexcept {
-  if (attachment_id.is_valid() && attachment_id.slot() < captured_surfaces_.size()) {
+  if (captured_surface_pointer(attachment_id).is_valid()) {
     captured_surfaces_.at(attachment_id.slot()) = {};
+  }
+}
+
+void Runtime::revoke_session(const SessionId session_id) noexcept {
+  for (auto& slot : peers_) {
+    if (slot.peer.has_value() && slot.peer->session == session_id) {
+      static_cast<void>(disconnect(slot.peer->owner));
+    }
   }
 }
 

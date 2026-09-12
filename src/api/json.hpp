@@ -44,6 +44,7 @@ struct JsonParseResult final {
   std::size_t error_offset{0};
 };
 
+[[nodiscard]] auto valid_utf8(std::string_view value) noexcept -> bool;
 [[nodiscard]] auto parse_json(std::string_view input) -> JsonParseResult;
 [[nodiscard]] auto json_member(const JsonValue& object, std::string_view key) noexcept
     -> const JsonValue*;

@@ -1,5 +1,6 @@
 #include "extension/protocol.hpp"
 
+#include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "platform/io.hpp"
 
@@ -79,7 +80,10 @@ FramedPeer::FramedPeer(FramedPeer&& other) noexcept
     : descriptor_(std::exchange(other.descriptor_, -1)), input_(std::move(other.input_)),
       input_offset_(std::exchange(other.input_offset_, 0)),
       record_bytes_(std::exchange(other.record_bytes_, 0)), output_(std::move(other.output_)),
-      output_offset_(std::exchange(other.output_offset_, 0)) {}
+      output_offset_(std::exchange(other.output_offset_, 0)),
+      accounting_(std::exchange(other.accounting_, {})),
+      output_record_remaining_(std::exchange(other.output_record_remaining_, 0)),
+      output_record_kind_(other.output_record_kind_) {}
 
 auto FramedPeer::operator=(FramedPeer&& other) noexcept -> FramedPeer& {
   if (this == &other) {
@@ -92,6 +96,9 @@ auto FramedPeer::operator=(FramedPeer&& other) noexcept -> FramedPeer& {
   record_bytes_ = std::exchange(other.record_bytes_, 0);
   output_ = std::move(other.output_);
   output_offset_ = std::exchange(other.output_offset_, 0);
+  accounting_ = std::exchange(other.accounting_, {});
+  output_record_remaining_ = std::exchange(other.output_record_remaining_, 0);
+  output_record_kind_ = other.output_record_kind_;
   return *this;
 }
 
@@ -180,6 +187,35 @@ auto FramedPeer::buffered_record() const noexcept -> bool {
   return available.size() >= protocol_header_bytes + payload_bytes;
 }
 
+// The queue contains only locally encoded complete records. A partial front record retains its
+// kind/remaining length, so no extra per-record metadata or payload scanning is needed.
+void FramedPeer::consume_output(std::size_t bytes) noexcept {
+  while (bytes != 0) {
+    if (output_record_remaining_ == 0) {
+      const auto header = std::span<const std::byte>(output_)
+                              .subspan(output_offset_)
+                              .first<protocol_header_bytes>();
+      output_record_remaining_ = protocol_header_bytes + decode_u32(header.subspan<8, 4>());
+      output_record_kind_ =
+          static_cast<RecordKind>(std::to_integer<std::uint8_t>(header.subspan<6, 1>().front()));
+    }
+    const auto consumed = std::min(bytes, output_record_remaining_);
+    if (output_record_kind_ == RecordKind::event) {
+      accounting_.event_bytes -= consumed;
+      if (consumed == output_record_remaining_) {
+        --accounting_.event_records;
+      }
+    }
+    output_offset_ += consumed;
+    output_record_remaining_ -= consumed;
+    bytes -= consumed;
+  }
+  if (output_offset_ == output_.size()) {
+    output_.clear();
+    output_offset_ = 0;
+  }
+}
+
 void FramedPeer::write_ready(const std::size_t bytes_max) noexcept {
   if (descriptor_ < 0 || output_offset_ == output_.size() || bytes_max == 0) {
     return;
@@ -188,11 +224,7 @@ void FramedPeer::write_ready(const std::size_t bytes_max) noexcept {
   const auto sent =
       ::send(descriptor_, remaining.data(), std::min(remaining.size(), bytes_max), MSG_NOSIGNAL);
   if (sent > 0) {
-    output_offset_ += static_cast<std::size_t>(sent);
-    if (output_offset_ == output_.size()) {
-      output_.clear();
-      output_offset_ = 0;
-    }
+    consume_output(static_cast<std::size_t>(sent));
   } else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
     disconnect();
   }
@@ -245,6 +277,49 @@ void FramedPeer::consume() noexcept {
   }
 }
 
+// Shrinking the byte vector cannot allocate or throw.
+// NOLINTNEXTLINE(bugprone-exception-escape)
+void FramedPeer::compact_output() noexcept {
+  if (output_offset_ > 0) {
+    const auto queued = output_bytes();
+    std::ranges::move(std::span(output_).subspan(output_offset_), output_.begin());
+    output_.resize(queued);
+    output_offset_ = 0;
+  }
+}
+
+void FramedPeer::grow_output(const std::size_t required) {
+  if (required > output_.capacity()) {
+    output_.reserve(std::min(limits::extension_output_bytes_per_owner_max,
+                             std::max(required, output_.capacity() * 2U)));
+  }
+}
+
+auto FramedPeer::reserve_output(const std::size_t framed_bytes) noexcept -> bool {
+  const auto committed = output_bytes() + accounting_.reserved_bytes;
+  if (!connected() || framed_bytes < protocol_header_bytes ||
+      framed_bytes > protocol_header_bytes + limits::extension_record_bytes_max ||
+      framed_bytes > limits::extension_output_bytes_per_owner_max - committed) {
+    return false;
+  }
+  try {
+    compact_output();
+    grow_output(committed + framed_bytes);
+    accounting_.reserved_bytes += framed_bytes;
+    ++accounting_.reserved_records;
+    return true;
+  } catch (...) {
+    disconnect();
+    return false;
+  }
+}
+
+void FramedPeer::release_output(const std::size_t framed_bytes) noexcept {
+  LEMMA_ASSERT(accounting_.reserved_records > 0 && framed_bytes <= accounting_.reserved_bytes);
+  accounting_.reserved_bytes -= framed_bytes;
+  --accounting_.reserved_records;
+}
+
 auto FramedPeer::send(const RecordKind kind, const std::uint32_t sequence,
                       const std::span<const std::byte> payload) noexcept -> bool {
   if (descriptor_ < 0 || payload.size() > limits::extension_record_bytes_max || sequence == 0) {
@@ -256,18 +331,21 @@ auto FramedPeer::send(const RecordKind kind, const std::uint32_t sequence,
   }
   const auto queued = output_.size() - output_offset_;
   const auto added = header.size() + payload.size();
-  if (added > limits::extension_output_bytes_per_owner_max -
-                  std::min(queued, limits::extension_output_bytes_per_owner_max)) {
+  if (added > limits::extension_output_bytes_per_owner_max - queued - accounting_.reserved_bytes ||
+      (kind == RecordKind::event &&
+       (accounting_.event_records >= limits::extension_interaction_events_max ||
+        added > limits::extension_interaction_bytes_per_owner_max - accounting_.event_bytes))) {
     return false;
   }
   try {
-    if (output_offset_ > 0) {
-      std::ranges::move(std::span(output_).subspan(output_offset_), output_.begin());
-      output_.resize(queued);
-      output_offset_ = 0;
-    }
+    compact_output();
+    grow_output(queued + accounting_.reserved_bytes + added);
     output_.insert(output_.end(), header.begin(), header.end());
     output_.insert(output_.end(), payload.begin(), payload.end());
+    if (kind == RecordKind::event) {
+      accounting_.event_bytes += added;
+      ++accounting_.event_records;
+    }
     return true;
   } catch (...) {
     disconnect();
@@ -291,6 +369,8 @@ void FramedPeer::disconnect() noexcept {
   record_bytes_ = 0;
   output_.clear();
   output_offset_ = 0;
+  accounting_ = {};
+  output_record_remaining_ = 0;
 }
 
 } // namespace lemma::extension

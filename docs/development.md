@@ -140,14 +140,15 @@ dependency abort that cannot return through the normal failure trace. Scheduled 
 `LEMMA_MUX_CAMPAIGN_OPERATIONS` bound the local equivalent.
 
 Parser fuzz targets are opt-in and retain checked-in seeds for the Lemma-owned attachment, host
-input, and public JSON boundaries:
+input, extension framing, and public JSON boundaries:
 
 ```sh
 scripts/ci/configure sanitizers -DLEMMA_BUILD_TESTS=OFF -DLEMMA_BUILD_BENCHMARKS=OFF -DLEMMA_BUILD_FUZZERS=ON
-cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host_input_parser_fuzz lemma_api_json_fuzz
+cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host_input_parser_fuzz lemma_api_json_fuzz lemma_extension_framing_fuzz
 ./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
 ./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
 ./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
+./build/sanitizers/lemma_extension_framing_fuzz -runs=0 fuzz/corpus/extension
 ```
 
 Linux links libFuzzer for mutation runs. The sanitizer lane replays the checked-in seed corpora,

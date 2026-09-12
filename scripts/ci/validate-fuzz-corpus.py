@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path("fuzz/corpus")
 REGISTRY = ROOT / "regressions.json"
-TARGETS = {"attachment", "host-input", "api"}
+TARGETS = {"attachment", "host-input", "api", "extension"}
 
 
 def fail(message: str) -> None:

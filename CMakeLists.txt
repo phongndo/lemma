@@ -581,6 +581,12 @@ if(LEMMA_BUILD_FUZZERS)
     lemma_host_input_parser_fuzz fuzz/host_input_parser_fuzz.cpp lemma_client
   )
   lemma_add_fuzzer(lemma_api_json_fuzz fuzz/api_json_fuzz.cpp lemma_api)
+  lemma_add_fuzzer(
+    lemma_extension_framing_fuzz fuzz/extension_framing_fuzz.cpp lemma_base lemma_platform
+  )
+  # Compile the production decoder with libFuzzer coverage too, not just the harness. Linking the
+  # ordinary static library gives sanitizer checks but no decoder-guided mutation feedback.
+  target_sources(lemma_extension_framing_fuzz PRIVATE src/extension/protocol.cpp)
 endif()
 
 if(LEMMA_BUILD_BENCHMARKS)

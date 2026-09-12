@@ -812,6 +812,7 @@ struct AttachmentRuntime final {
     client_close_state = ConnectionCloseState::none;
     client_close_reason = protocol::DisconnectReason::protocol_error;
     retained_input_offset.reset();
+    surface_paste.reset();
     pending_routed_input_size = 0;
     status_message_deadline.reset();
     frame_scheduler.cancel();
@@ -842,6 +843,11 @@ struct AttachmentRuntime final {
   ConnectionCloseState client_close_state{ConnectionCloseState::none};
   protocol::DisconnectReason client_close_reason{protocol::DisconnectReason::protocol_error};
   std::optional<std::size_t> retained_input_offset;
+  struct SurfacePasteProgress final {
+    SurfaceId surface;
+    std::size_t offset{0};
+  };
+  std::optional<SurfacePasteProgress> surface_paste;
   std::optional<ReactorClock::time_point> status_message_deadline;
   std::array<std::byte, input::deferred_input_bytes_max + 1U> pending_routed_input{};
   std::uint8_t pending_routed_input_size{0};
@@ -5312,7 +5318,18 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
 }
 
+[[nodiscard]] constexpr auto command_focuses_pane(const CommandKind command) noexcept -> bool {
+  return command == CommandKind::focus_left || command == CommandKind::focus_right ||
+         command == CommandKind::focus_up || command == CommandKind::focus_down ||
+         command == CommandKind::focus_next || command == CommandKind::focus_previous ||
+         command == CommandKind::focus_pane || command == CommandKind::next_tab ||
+         command == CommandKind::previous_tab || command == CommandKind::select_tab ||
+         command == CommandKind::create_tab || command == CommandKind::split_left_right ||
+         command == CommandKind::split_top_bottom;
+}
+
 [[nodiscard]] auto dispatch_input_command(SessionRecord& session, PaneRuntimeStore& runtimes,
+                                          extension::Runtime& extensions,
                                           const input::InputCommand input_command,
                                           const SessionNameConflict name_conflict,
                                           void* const name_conflict_context) noexcept
@@ -5343,6 +5360,9 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
   }
   const auto result =
       dispatch_session_command(session, runtimes, *command, name_conflict, name_conflict_context);
+  if (result.succeeded() && command_focuses_pane(command->kind)) {
+    static_cast<void>(extensions.focus_pane(session.attachment.id));
+  }
   return result.status == CommandStatus::detach_requested || !session.active ? ParseResult::detach
                                                                              : ParseResult::keep;
 }
@@ -5361,18 +5381,6 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
       forwarded.current,
       std::span(storage).subspan(forwarded.prefix_size, forwarded.current.size()).begin());
   return std::span(storage).first(forwarded.prefix_size + forwarded.current.size());
-}
-
-[[nodiscard]] constexpr auto input_command_focuses_pane(const input::InputCommand command) noexcept
-    -> bool {
-  return command == input::InputCommand::focus_left ||
-         command == input::InputCommand::focus_right || command == input::InputCommand::focus_up ||
-         command == input::InputCommand::focus_down || command == input::InputCommand::focus_next ||
-         command == input::InputCommand::focus_previous ||
-         command == input::InputCommand::next_tab || command == input::InputCommand::previous_tab ||
-         command == input::InputCommand::create_tab ||
-         command == input::InputCommand::split_left_right ||
-         command == input::InputCommand::split_top_bottom;
 }
 
 [[nodiscard]] auto route_surface_key(extension::Runtime& extensions, const SessionRecord& session,
@@ -5451,11 +5459,8 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
       accept_input_route(session, runtimes, routed.presentation_changed,
                          routed.interaction_preemption_requested);
       offset += routed.consumed;
-      const auto dispatched = dispatch_input_command(session, runtimes, command->command,
-                                                     name_conflict, name_conflict_context);
-      if (dispatched == ParseResult::keep && input_command_focuses_pane(command->command)) {
-        static_cast<void>(extensions.focus_pane(session.attachment.id));
-      }
+      const auto dispatched = dispatch_input_command(
+          session, runtimes, extensions, command->command, name_conflict, name_conflict_context);
       if (dispatched == ParseResult::detach) {
         return dispatched;
       }
@@ -5616,12 +5621,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       command != nullptr) {
     accept_input_route(session, runtimes, routed.presentation_changed,
                        routed.interaction_preemption_requested);
-    const auto dispatched = dispatch_input_command(session, runtimes, command->command,
-                                                   name_conflict, name_conflict_context);
-    if (dispatched == ParseResult::keep && input_command_focuses_pane(command->command)) {
-      static_cast<void>(extensions.focus_pane(session.attachment.id));
-    }
-    return dispatched;
+    return dispatch_input_command(session, runtimes, extensions, command->command, name_conflict,
+                                  name_conflict_context);
   }
   if (std::holds_alternative<input::ConsumedInput>(routed.effect)) {
     accept_input_route(session, runtimes, routed.presentation_changed,
@@ -5756,11 +5757,10 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                         ":" + std::to_string(surface.generation()) + R"(","action":)" +
                         std::to_string(static_cast<std::uint8_t>(key.action)) + R"(,"key":)" +
                         std::to_string(static_cast<std::uint8_t>(key.key)) + R"(,"modifiers":)" +
-                        std::to_string(key.modifiers) + R"(,"text":)";
-    // Input bytes and character storage have the same object representation.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    const std::string_view encoded(reinterpret_cast<const char*>(text.data()), text.size());
-    if (!api::append_json_string(event, encoded)) {
+                        std::to_string(key.modifiers);
+    static_assert(protocol::legacy_input_message_bytes_max <= limits::extension_input_bytes_max);
+    static_assert(protocol::key_input_text_bytes_max <= limits::extension_input_bytes_max);
+    if (!extension::append_input_payload(event, text, false)) {
       static_cast<void>(extensions.disconnect(owner));
       return true;
     }
@@ -5774,37 +5774,58 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
-[[nodiscard]] auto route_surface_paste(extension::Runtime& extensions, const SessionRecord& session,
-                                       const std::span<const std::byte> text) noexcept -> bool {
-  if (session.attachment.message_view.active || session.attachment.command_line.active ||
-      session.attachment.rename_prompt.active() || session.attachment.copy_mode.active()) {
-    return false;
+[[nodiscard]] auto route_surface_paste(extension::Runtime& extensions, SessionRecord& session,
+                                       const std::span<const std::byte> text) noexcept
+    -> std::optional<ParseResult> {
+  auto& progress = session.attachment_runtime.surface_paste;
+  if (!progress.has_value()) {
+    if (session.attachment.message_view.active || session.attachment.command_line.active ||
+        session.attachment.rename_prompt.active() || session.attachment.copy_mode.active()) {
+      return std::nullopt;
+    }
+    const auto surface = extensions.focused_surface(session.attachment.id);
+    if (!surface.is_valid()) {
+      return std::nullopt;
+    }
+    progress = {.surface = surface};
   }
-  const auto surface = extensions.focused_surface(session.attachment.id);
-  if (!surface.is_valid()) {
-    return false;
-  }
+  const auto surface = progress->surface;
   const auto owner = extensions.surface_owner(surface);
+  if (!extensions.connected(owner) || extensions.attachment(owner) != session.attachment.id) {
+    // A paste already routed to an owner must never leak its suffix into native Pane input.
+    progress.reset();
+    return ParseResult::keep;
+  }
+  // The accepted key-record bound is not a paste production quantum. Hex encoding doubles the
+  // bytes; reserve half the write quantum for framing and other output instead of outrunning it.
+  constexpr auto chunk_bytes_max = limits::extension_io_bytes_per_turn_max / 4U;
+  static_assert(chunk_bytes_max <= limits::extension_input_bytes_max);
+  const auto chunk = text.subspan(progress->offset)
+                         .first(std::min(text.size() - progress->offset, chunk_bytes_max));
   try {
     std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
                         std::to_string(extensions.event_sequence(owner)) +
                         R"(,"event":"surface.paste","surface":")" + std::to_string(surface.slot()) +
-                        ":" + std::to_string(surface.generation()) + R"(","text":)";
-    // Input bytes and character storage have the same object representation.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    const std::string_view encoded(reinterpret_cast<const char*>(text.data()), text.size());
-    if (!api::append_json_string(event, encoded)) {
+                        ":" + std::to_string(surface.generation()) + '"';
+    if (!extension::append_input_payload(event, chunk, true)) {
       static_cast<void>(extensions.disconnect(owner));
-      return true;
-    }
-    event += '}';
-    if (!extensions.send_event(owner, event)) {
-      static_cast<void>(extensions.disconnect(owner));
+    } else {
+      event += '}';
+      if (!extensions.send_event(owner, event)) {
+        static_cast<void>(extensions.disconnect(owner));
+      }
     }
   } catch (...) {
     static_cast<void>(extensions.disconnect(owner));
   }
-  return true;
+  progress->offset += chunk.size();
+  if (progress->offset < text.size() && extensions.connected(owner)) {
+    // At most one bounded encoding per client turn, allowing socket output and native input to
+    // progress between chunks even for the maximum-size attachment paste.
+    return ParseResult::yield;
+  }
+  progress.reset();
+  return ParseResult::keep;
 }
 
 [[nodiscard]] auto route_surface_mouse(extension::Runtime& extensions, SessionRecord& session,
@@ -5922,7 +5943,11 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       break;
     }
     case protocol::ClientMessageKind::paste: {
-      if (route_surface_paste(extensions, session, message.input)) {
+      if (const auto routed = route_surface_paste(extensions, session, message.input);
+          routed.has_value()) {
+        if (*routed != ParseResult::keep) {
+          return *routed;
+        }
         break;
       }
       if (session.attachment.message_view.active) {
@@ -7658,12 +7683,14 @@ void reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
   }
 }
 
-void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes) noexcept {
+void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes,
+                               extension::Runtime& extensions) noexcept {
   for (auto& session : sessions) {
     if (session != nullptr && !session->active &&
         session->attachment_runtime.pending_attach_slot ==
             std::numeric_limits<std::uint32_t>::max()) {
       const auto id = session->id;
+      extensions.revoke_session(id);
       runtimes.erase_session(id);
       const bool erased = sessions.erase(id);
       LEMMA_ASSERT(erased);
@@ -7746,6 +7773,14 @@ struct PublicObservedPaneState final {
   bool present{false};
   bool process_exited{false};
 };
+
+struct ExtensionObservation final {
+  ExtensionGenerationId owner;
+  std::array<PublicObservedPaneState, api::event_panes_max> panes{};
+  std::uint64_t semantic_hash{0};
+  std::size_t pane_cursor{0};
+};
+using ExtensionObservations = std::array<ExtensionObservation, limits::extension_sessions_hard_max>;
 
 struct PendingConnection final {
   PendingConnection() = default;
@@ -9528,6 +9563,22 @@ encode_proc_result(const ProcExecutionState& state,
   return execution;
 }
 
+void handoff_public_focus(const api::Command& request, const PublicCommandExecution& execution,
+                          Sessions& sessions, extension::Runtime& extensions) noexcept {
+  if ((execution.status == CommandStatus::applied ||
+       execution.status == CommandStatus::no_effect) &&
+      execution.session.is_valid() &&
+      (request.kind == api::CommandKind::pane_focus ||
+       request.kind == api::CommandKind::tab_select ||
+       ((request.kind == api::CommandKind::pane_split ||
+         request.kind == api::CommandKind::tab_new) &&
+        request.focus == api::FocusPolicy::created))) {
+    if (auto* const focused_session = sessions.get(execution.session); focused_session != nullptr) {
+      static_cast<void>(extensions.focus_pane(focused_session->attachment.id));
+    }
+  }
+}
+
 // One call executes at most one already-validated Command from one admitted Proc.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -9584,19 +9635,8 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
       execution.error_reason = "unresolved_reference";
     }
   }
-  if (request.has_value() &&
-      (execution.status == CommandStatus::applied ||
-       execution.status == CommandStatus::no_effect) &&
-      execution.session.is_valid() &&
-      (request->kind == api::CommandKind::pane_focus ||
-       request->kind == api::CommandKind::tab_select ||
-       (request->kind == api::CommandKind::pane_split &&
-        request->focus == api::FocusPolicy::created) ||
-       (request->kind == api::CommandKind::tab_new &&
-        request->focus == api::FocusPolicy::created))) {
-    if (auto* const focused_session = sessions.get(execution.session); focused_session != nullptr) {
-      static_cast<void>(extensions.focus_pane(focused_session->attachment.id));
-    }
+  if (request.has_value()) {
+    handoff_public_focus(*request, execution, sessions, extensions);
   }
   const auto& result_command = request.has_value() ? *request : step.request;
   auto encoded = encode_command_result(result_command, execution, request.has_value());
@@ -9765,17 +9805,54 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
   return value;
 }
 
-[[nodiscard]] auto observed_pane(PendingConnection& pending, Sessions& sessions,
+[[nodiscard]] auto observed_pane(const api::EventSubscription& subscription, Sessions& sessions,
                                  PaneRuntimeStore& runtimes, const std::size_t index) noexcept
     -> ObservedPane {
-  if (!pending.subscription.session.has_value() || index >= pending.subscription.panes.size()) {
+  if (!subscription.session.has_value() || index >= subscription.panes.size()) {
     return {};
   }
-  auto* const session = public_session(sessions, *pending.subscription.session);
-  const auto pane_id = std::span(pending.subscription.panes).subspan(index, 1).front().id;
+  auto* const session = public_session(sessions, *subscription.session);
+  const auto pane_id = std::span(subscription.panes).subspan(index, 1).front().id;
   auto* const pane = session == nullptr ? nullptr : find_pane(*session, pane_id);
   auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
   return {.session = session, .pane = pane, .runtime = runtime};
+}
+
+enum class PaneObservationChange : std::uint8_t { none, closed, process, terminal };
+
+[[nodiscard]] auto pane_observation_change(const PublicObservedPaneState& observed,
+                                           const ObservedPane target) noexcept
+    -> PaneObservationChange {
+  if (target.pane == nullptr || target.runtime == nullptr) {
+    return observed.present ? PaneObservationChange::closed : PaneObservationChange::none;
+  }
+  const auto process = target.pane->process_exit.value_or(ProcessExit{});
+  if (!observed.present || target.pane->process_exit.has_value() != observed.process_exited ||
+      process.kind != observed.process.kind || process.value != observed.process.value) {
+    return PaneObservationChange::process;
+  }
+  return target.runtime->observation_generation != observed.terminal_generation
+             ? PaneObservationChange::terminal
+             : PaneObservationChange::none;
+}
+
+// Examine only the subscription's bounded (at most eight) stable IDs on an existing reactor wake.
+// Do not stop on an unchanged Pane: no future socket/timer wake is promised for a later changed ID.
+[[nodiscard]] auto
+next_changed_pane(const api::EventSubscription& subscription,
+                  const std::array<PublicObservedPaneState, api::event_panes_max>& observed,
+                  Sessions& sessions, PaneRuntimeStore& runtimes, std::size_t& cursor) noexcept
+    -> std::optional<std::size_t> {
+  for (std::size_t visited = 0; visited < subscription.panes.size(); ++visited) {
+    const auto index = cursor % subscription.panes.size();
+    cursor = (index + 1U) % subscription.panes.size();
+    if (pane_observation_change(std::span(observed).subspan(index, 1).front(),
+                                observed_pane(subscription, sessions, runtimes, index)) !=
+        PaneObservationChange::none) {
+      return index;
+    }
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] auto append_public_process(std::string& output, const Pane& pane,
@@ -9894,10 +9971,11 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto encode_initial_snapshot(PendingConnection& pending, Sessions& sessions,
                                            PaneRuntimeStore& runtimes,
-                                           const std::span<std::byte> scratch) -> std::string {
+                                           const std::span<std::byte> scratch,
+                                           const std::uint64_t sequence = 0) -> std::string {
   std::string output;
   try {
-    pending.event_sequence = 0;
+    pending.event_sequence = sequence;
     pending.observed_pane_cursor = 0;
     if (!append_event_header(output, pending, "snapshot") ||
         !append_public(output, R"(,"sessions":)") ||
@@ -9905,7 +9983,7 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
       return {};
     }
     if (pending.subscription.panes.size() == 1U) {
-      const auto target = observed_pane(pending, sessions, runtimes, 0);
+      const auto target = observed_pane(pending.subscription, sessions, runtimes, 0);
       auto& observed = pending.observed_panes.front();
       const bool present =
           target.session != nullptr && target.pane != nullptr && target.runtime != nullptr;
@@ -9960,7 +10038,7 @@ void service_public_procs(PublicProcExecutions& executions, PendingConnections& 
         if (index > 0 && !append_public(output, ",")) {
           return {};
         }
-        const auto target = observed_pane(pending, sessions, runtimes, index);
+        const auto target = observed_pane(pending.subscription, sessions, runtimes, index);
         auto& observed = std::span(pending.observed_panes).subspan(index, 1).front();
         const auto requested = std::span(pending.subscription.panes).subspan(index, 1).front().id;
         const bool present =
@@ -10313,11 +10391,12 @@ void prepare_public_document(PendingConnection& pending,
         }
         pending.observed_semantic_hash = hash;
       }
-      if (!pending.subscription.panes.empty()) {
-        const auto pane_index = pending.observed_pane_cursor % pending.subscription.panes.size();
-        pending.observed_pane_cursor = (pane_index + 1U) % pending.subscription.panes.size();
+      if (const auto changed = next_changed_pane(pending.subscription, pending.observed_panes,
+                                                 sessions, runtimes, pending.observed_pane_cursor);
+          changed.has_value()) {
+        const auto pane_index = *changed;
         auto& observed = pending.observed_panes.at(pane_index);
-        const auto target = observed_pane(pending, sessions, runtimes, pane_index);
+        const auto target = observed_pane(pending.subscription, sessions, runtimes, pane_index);
         const bool present = target.pane != nullptr && target.runtime != nullptr;
         if (!present && observed.present) {
           if (!append_event_header(output, pending, "pane.closed") ||
@@ -10331,8 +10410,7 @@ void prepare_public_document(PendingConnection& pending,
         } else if (present) {
           const auto process = target.pane->process_exit.value_or(ProcessExit{});
           const bool process_exited = target.pane->process_exit.has_value();
-          if (!observed.present || process_exited != observed.process_exited ||
-              process.kind != observed.process.kind || process.value != observed.process.value) {
+          if (pane_observation_change(observed, target) == PaneObservationChange::process) {
             if (!append_event_header(output, pending, "pane.process") ||
                 !append_public(output, R"(,"session":)") ||
                 !append_public_id(output, target.session->id) ||
@@ -10388,20 +10466,12 @@ void prepare_public_document(PendingConnection& pending,
   return screen_work_pending;
 }
 
-struct ExtensionObservation final {
-  ExtensionGenerationId owner;
-  std::array<std::uint64_t, api::event_panes_max> terminal_generations{};
-  std::uint64_t session_revision{0};
-  std::size_t pane_cursor{0};
-};
-
 // One fair peer and at most one state or terminal Event is serialized per reactor turn.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void service_extension_observers(
-    extension::Runtime& extensions, Sessions& sessions, PaneRuntimeStore& runtimes,
-    PublicScratch& scratch_owner,
-    std::array<ExtensionObservation, limits::extension_sessions_hard_max>& observations,
-    std::size_t& cursor) noexcept {
+void service_extension_observers(extension::Runtime& extensions, Sessions& sessions,
+                                 PaneRuntimeStore& runtimes, PublicScratch& scratch_owner,
+                                 ExtensionObservations& observations,
+                                 std::size_t& cursor) noexcept {
   std::array<extension::PeerView, limits::extension_sessions_hard_max> peers{};
   const auto active = extensions.peer_views(peers);
   if (active.empty()) {
@@ -10411,6 +10481,13 @@ void service_extension_observers(
   cursor %= active.size();
   for (std::size_t visited = 0; visited < active.size(); ++visited) {
     const auto peer = active.subspan((cursor + visited) % active.size(), 1).front();
+    const auto session_id = extensions.session(peer.owner);
+    auto* const session = sessions.get(session_id);
+    if (session_id.is_valid() && (session == nullptr || !session->active ||
+                                  session->attachment.id != extensions.attachment(peer.owner))) {
+      static_cast<void>(extensions.disconnect(peer.owner));
+      continue;
+    }
     if (!extensions.has_capability(peer.owner, extension::capability_observe)) {
       continue;
     }
@@ -10420,21 +10497,16 @@ void service_extension_observers(
     if (subscription == nullptr) {
       continue;
     }
-    auto* const session = sessions.get(extensions.session(peer.owner));
     if (session == nullptr || !session->active) {
       static_cast<void>(extensions.disconnect(peer.owner));
       return;
     }
-    const auto revision = session->mutation_generation;
-    if (observed.owner != peer.owner) {
-      // Start conservatively behind the admission snapshot. A mutation between snapshot encoding
-      // and this turn then yields a duplicate incremental Event rather than a lost transition.
-      observed = {.owner = peer.owner};
-    }
+    const auto hash = semantic_hash(sessions, subscription->session);
+    LEMMA_ASSERT(observed.owner == peer.owner);
     if (extensions.output_bytes(peer.owner) != 0) {
       continue;
     }
-    if (revision != observed.session_revision) {
+    if (hash != observed.semantic_hash) {
       try {
         std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
                             std::to_string(extensions.event_sequence(peer.owner)) +
@@ -10445,7 +10517,7 @@ void service_extension_observers(
           return;
         }
         if (extensions.send_event(peer.owner, event)) {
-          observed.session_revision = revision;
+          observed.semantic_hash = hash;
         }
         cursor = (cursor + visited + 1U) % active.size();
         return;
@@ -10454,22 +10526,35 @@ void service_extension_observers(
         return;
       }
     }
-    if (subscription->panes.empty()) {
+    const auto changed =
+        next_changed_pane(*subscription, observed.panes, sessions, runtimes, observed.pane_cursor);
+    if (!changed.has_value()) {
       continue;
     }
-    const auto pane_index = observed.pane_cursor % subscription->panes.size();
-    observed.pane_cursor = (pane_index + 1U) % subscription->panes.size();
-    auto* const pane =
-        find_pane(*session, std::span(subscription->panes).subspan(pane_index, 1).front().id);
-    auto* const runtime = pane == nullptr ? nullptr : find_pane_runtime(runtimes, *session, *pane);
-    if (runtime == nullptr ||
-        runtime->observation_generation ==
-            std::span(observed.terminal_generations).subspan(pane_index, 1).front()) {
-      continue;
-    }
+    const auto pane_index = *changed;
+    auto& pane_state = std::span(observed.panes).subspan(pane_index, 1).front();
+    const auto target = observed_pane(*subscription, sessions, runtimes, pane_index);
+    auto* const pane = target.pane;
+    auto* const runtime = target.runtime;
+    const auto change = pane_observation_change(pane_state, target);
     try {
       std::string event;
-      if (subscription->screen) {
+      if (change == PaneObservationChange::closed || change == PaneObservationChange::process) {
+        if (!append_public(event, R"({"schema":"lemma.event/v1","sequence":)") ||
+            !append_public_number(event, extensions.event_sequence(peer.owner)) ||
+            !append_public(event, change == PaneObservationChange::closed
+                                      ? R"(,"event":"pane.closed","pane":)"
+                                      : R"(,"event":"pane.process","pane":)") ||
+            !append_public_id(event, subscription->panes.at(pane_index).id) ||
+            (change == PaneObservationChange::process &&
+             (!append_public(event, R"(,"session":)") || !append_public_id(event, session->id) ||
+              !append_public(event, R"(,"process":)") ||
+              !append_public_process(event, *pane, *runtime))) ||
+            !append_public(event, "}")) {
+          static_cast<void>(extensions.disconnect(peer.owner));
+          return;
+        }
+      } else if (subscription->screen) {
         const auto scratch = acquire_public_scratch(scratch_owner);
         if (scratch.empty() ||
             !append_extension_screen_event(event, extensions.event_sequence(peer.owner),
@@ -10489,8 +10574,15 @@ void service_extension_observers(
         return;
       }
       if (extensions.send_event(peer.owner, event)) {
-        std::span(observed.terminal_generations).subspan(pane_index, 1).front() =
-            runtime->observation_generation;
+        if (change == PaneObservationChange::closed) {
+          pane_state = {};
+        } else if (change == PaneObservationChange::process) {
+          pane_state.present = true;
+          pane_state.process = pane->process_exit.value_or(ProcessExit{});
+          pane_state.process_exited = pane->process_exit.has_value();
+        } else {
+          pane_state.terminal_generation = runtime->observation_generation;
+        }
       }
     } catch (...) {
       static_cast<void>(extensions.disconnect(peer.owner));
@@ -11634,7 +11726,8 @@ void process_public_read(PendingConnection& pending, PublicProcExecutions& execu
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void process_extension_read(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, extension::Runtime& extensions,
-                            PublicScratch& scratch_owner, const std::size_t slot) noexcept {
+                            ExtensionObservations& observations, PublicScratch& scratch_owner,
+                            const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr && pending->extension_peer != nullptr);
   static_cast<void>(pending->extension_peer->read_ready());
@@ -11656,24 +11749,29 @@ void process_extension_read(PendingConnections& connections, Sessions& sessions,
                                 record->payload.size());
     auto parsed = api::parse_json(json);
     auto hello = parsed.value.has_value() ? extension::decode_hello(*parsed.value) : std::nullopt;
-    if (!hello.has_value() || !hello->subscription.session.has_value()) {
+    if (!hello.has_value()) {
       close_pending(connections, slot, sessions);
       return;
     }
-    auto* const target = public_session(sessions, *hello->subscription.session);
-    if (target == nullptr || !target->active || !target->attachment.id.is_valid()) {
+    auto* const target = hello->subscription.session.has_value()
+                             ? public_session(sessions, *hello->subscription.session)
+                             : nullptr;
+    if (hello->subscription.session.has_value() &&
+        (target == nullptr || !target->active || !target->attachment.id.is_valid())) {
       close_pending(connections, slot, sessions);
       return;
     }
     pending->subscription = hello->subscription;
-    const auto scratch =
-        hello->subscription.screen ? acquire_public_scratch(scratch_owner) : std::span<std::byte>{};
-    if (hello->subscription.screen && scratch.empty()) {
+    const bool observe = (hello->capabilities & extension::capability_observe) != 0;
+    const auto scratch = observe && hello->subscription.screen
+                             ? acquire_public_scratch(scratch_owner)
+                             : std::span<std::byte>{};
+    if (observe && hello->subscription.screen && scratch.empty()) {
       close_pending(connections, slot, sessions);
       return;
     }
     auto snapshot = (hello->capabilities & extension::capability_observe) != 0
-                        ? encode_initial_snapshot(*pending, sessions, runtimes, scratch)
+                        ? encode_initial_snapshot(*pending, sessions, runtimes, scratch, 1)
                         : std::string{};
     if ((hello->capabilities & extension::capability_observe) != 0 && snapshot.empty()) {
       close_pending(connections, slot, sessions);
@@ -11683,8 +11781,14 @@ void process_extension_read(PendingConnections& connections, Sessions& sessions,
     auto peer = std::move(*pending->extension_peer);
     pending->extension_peer.reset();
     pending->descriptor = -1;
-    static_cast<void>(extensions.admit(std::move(peer), std::move(*hello), target->id,
-                                       target->attachment.id, snapshot));
+    const auto admitted = extensions.admit(
+        std::move(peer), std::move(*hello), target != nullptr ? target->id : SessionId{},
+        target != nullptr ? target->attachment.id : AttachmentId{}, snapshot);
+    if (admitted.has_value()) {
+      observations.at(admitted->slot()) = {.owner = *admitted,
+                                           .panes = pending->observed_panes,
+                                           .semantic_hash = pending->observed_semantic_hash};
+    }
     close_pending(connections, slot, sessions);
   } catch (...) {
     close_pending(connections, slot, sessions);
@@ -11696,7 +11800,8 @@ void process_extension_read(PendingConnections& connections, Sessions& sessions,
 void process_pending_fields(PendingConnections& connections, Sessions& sessions,
                             PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
                             PublicProcExecutions& executions, extension::Runtime& extensions,
-                            PublicScratch& scratch_owner, const std::size_t slot) noexcept {
+                            ExtensionObservations& observations, PublicScratch& scratch_owner,
+                            const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   constexpr std::size_t operations_per_turn_max = 8;
@@ -11708,7 +11813,8 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
       return;
     }
     if (pending->state == PendingState::read_extension) {
-      process_extension_read(connections, sessions, runtimes, extensions, scratch_owner, slot);
+      process_extension_read(connections, sessions, runtimes, extensions, observations,
+                             scratch_owner, slot);
       return;
     }
     if (pending->state == PendingState::read_public_json ||
@@ -11800,7 +11906,8 @@ void process_pending_fields(PendingConnections& connections, Sessions& sessions,
 void process_pending_read(PendingConnections& connections, Sessions& sessions,
                           PaneRuntimeStore& runtimes, std::uint64_t& activity_order,
                           PublicProcExecutions& executions, extension::Runtime& extensions,
-                          PublicScratch& scratch_owner, const std::size_t slot) noexcept {
+                          ExtensionObservations& observations, PublicScratch& scratch_owner,
+                          const std::size_t slot) noexcept {
   auto* const pending = std::span(connections).subspan(slot, 1).front().get();
   LEMMA_ASSERT(pending != nullptr);
   if (!pending->public_connection && reactor_now() >= pending->setup_deadline) {
@@ -11808,7 +11915,7 @@ void process_pending_read(PendingConnections& connections, Sessions& sessions,
     return;
   }
   process_pending_fields(connections, sessions, runtimes, activity_order, executions, extensions,
-                         scratch_owner, slot);
+                         observations, scratch_owner, slot);
 }
 
 void handle_client_parse_result(SessionRecord& session, PaneRuntimeStore& runtimes,
@@ -12534,6 +12641,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   const auto full_redraw_generation = source_runtime.full_redraw_generation;
   const auto previous_outer_modes = source_runtime.outer_modes;
   const bool client_work_pending = source_runtime.client_work_pending;
+  const auto surface_paste = source_runtime.surface_paste;
   const int client = std::exchange(source_runtime.client, -1);
   auto decoder = std::move(source_runtime.decoder);
   source_runtime.decoder = {};
@@ -12549,6 +12657,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   target_runtime.full_redraw_generation = full_redraw_generation;
   target_runtime.outer_modes = previous_outer_modes;
   target_runtime.client_work_pending = client_work_pending;
+  target_runtime.surface_paste = surface_paste;
   target.connection_generation = next_generation(target.connection_generation);
   target_runtime.connection_id =
       ConnectionId::from_parts(target.id.slot(), target.connection_generation);
@@ -12571,7 +12680,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runtimes,
                                       std::uint64_t& activity_order,
-                                      extension::CommandRuntime& extensions) noexcept {
+                                      extension::CommandRuntime& extensions,
+                                      extension::Runtime& surface_runtime) noexcept {
   for (auto& owner : sessions) {
     if (owner == nullptr || !owner->active || owner->attachment_runtime.client < 0) {
       continue;
@@ -12641,6 +12751,7 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
       }
       const auto execution = PublicCommandExecutor::execute(action.command, sessions, runtimes,
                                                             activity_order, std::span<std::byte>{});
+      handoff_public_focus(action.command, execution, sessions, surface_runtime);
       if (execution.status == CommandStatus::applied ||
           execution.status == CommandStatus::no_effect) {
         reset_command_line(session);
@@ -13086,6 +13197,7 @@ struct DescriptorOwner final {
   ConnectionId connection;
   std::size_t auxiliary_slot{0};
   DescriptorKind kind{DescriptorKind::client};
+  ExtensionGenerationId extension_owner;
 };
 
 // The branches are the explicit bounded stages of the current single-owner reactor.
@@ -13171,7 +13283,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                .pane = {},
                                                .connection = {},
                                                .auxiliary_slot = 0,
-                                               .kind = DescriptorKind::child_reaper};
+                                               .kind = DescriptorKind::child_reaper,
+                                               .extension_owner = {}};
     for (const auto& session : sessions) {
       if (session == nullptr || !session->active) {
         continue;
@@ -13196,7 +13309,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                   .pane = address.pane,
                                                                   .connection = {},
                                                                   .auxiliary_slot = 0,
-                                                                  .kind = DescriptorKind::pane};
+                                                                  .kind = DescriptorKind::pane,
+                                                                  .extension_owner = {}};
         ++descriptor_count;
       }
       if (session->attachment_runtime.client >= 0) {
@@ -13217,7 +13331,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
             .pane = {},
             .connection = session->attachment_runtime.connection_id,
             .auxiliary_slot = 0,
-            .kind = DescriptorKind::client};
+            .kind = DescriptorKind::client,
+            .extension_owner = {}};
         ++descriptor_count;
       }
     }
@@ -13239,7 +13354,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .pane = {},
                                                                 .connection = {},
                                                                 .auxiliary_slot = slot,
-                                                                .kind = DescriptorKind::pending};
+                                                                .kind = DescriptorKind::pending,
+                                                                .extension_owner = {}};
       ++descriptor_count;
     }
     for (std::size_t slot = 0; slot < capacity_rejections.size(); ++slot) {
@@ -13256,7 +13372,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           .pane = {},
           .connection = {},
           .auxiliary_slot = slot,
-          .kind = DescriptorKind::capacity_rejection};
+          .kind = DescriptorKind::capacity_rejection,
+          .extension_owner = {}};
       ++descriptor_count;
     }
     std::array<extension::PeerView, limits::extension_sessions_hard_max> extension_peers{};
@@ -13277,7 +13394,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .connection = {},
                                                                 .auxiliary_slot = peer.slot,
                                                                 .kind =
-                                                                    DescriptorKind::extension_peer};
+                                                                    DescriptorKind::extension_peer,
+                                                                .extension_owner = peer.owner};
       ++descriptor_count;
     }
     if (!active_extension_peers.empty()) {
@@ -13296,7 +13414,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .connection = {},
                                                                 .auxiliary_slot = 0,
                                                                 .kind =
-                                                                    DescriptorKind::extension_host};
+                                                                    DescriptorKind::extension_host,
+                                                                .extension_owner = {}};
       ++descriptor_count;
     }
     const auto timeout = poll_timeout(sessions, runtimes, pending_connections, public_procs,
@@ -13385,7 +13504,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                               geometry_budget, input_budget, &session_name_conflict, &sessions);
       }
     }
-    service_attachment_command_lines(sessions, runtimes, activity_order, extensions);
+    service_attachment_command_lines(sessions, runtimes, activity_order, extensions,
+                                     extension_runtime);
     std::array<SessionRecord*, static_cast<std::size_t>(limits::sessions_hard_max)>
         search_sessions{};
     for (auto& session : sessions) {
@@ -13425,10 +13545,14 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                    pending->state != PendingState::prepare_public_observer &&
                    (events & (POLLIN | POLLHUP | POLLERR)) != 0) {
           process_pending_read(pending_connections, sessions, runtimes, activity_order,
-                               public_procs, extension_runtime, public_scratch,
-                               owner.auxiliary_slot);
+                               public_procs, extension_runtime, extension_observations,
+                               public_scratch, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::extension_peer) {
+        if (extension_runtime.owner_at(owner.auxiliary_slot) != owner.extension_owner ||
+            !extension_runtime.connected(owner.extension_owner)) {
+          continue;
+        }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         if ((events & POLLIN) != 0 &&
             extension_read_budget >= limits::extension_io_bytes_per_turn_max) {
@@ -13583,7 +13707,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     expire_pending_connections(pending_connections, sessions);
     expire_capacity_rejections(capacity_rejections);
     owned_a_session = owned_a_session || sessions.size() > 0;
-    reclaim_inactive_sessions(sessions, runtimes);
+    reclaim_inactive_sessions(sessions, runtimes, extension_runtime);
     if (owned_a_session && sessions.size() == 0) {
       for (std::size_t slot = 0; slot < pending_connections.size(); ++slot) {
         const auto& pending = std::span(pending_connections).subspan(slot, 1).front();
@@ -13605,7 +13729,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       accept_pending_connections(listener, pending_connections, pending_generations,
                                  capacity_rejections);
     }
-    reclaim_inactive_sessions(sessions, runtimes);
+    reclaim_inactive_sessions(sessions, runtimes, extension_runtime);
   }
 }
 

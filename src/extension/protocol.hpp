@@ -31,6 +31,15 @@ enum class RecordKind : std::uint8_t {
   error = 7,
 };
 
+struct OutputAccounting final {
+  std::size_t reserved_bytes{0};
+  std::size_t reserved_records{0};
+  std::size_t event_bytes{0};
+  std::size_t event_records{0};
+
+  auto operator==(const OutputAccounting&) const -> bool = default;
+};
+
 struct Record final {
   std::span<const std::byte> payload;
   std::uint32_t sequence{0};
@@ -60,6 +69,12 @@ public:
     return output_.size() - output_offset_;
   }
 
+  [[nodiscard]] auto output_accounting() const noexcept -> OutputAccounting { return accounting_; }
+  // The contiguous queue has no separate record-slot allocation. Reserve storage before admission;
+  // every producer preserves it until the owner converts or cancels its reservation.
+  [[nodiscard]] auto reserve_output(std::size_t framed_bytes) noexcept -> bool;
+  void release_output(std::size_t framed_bytes) noexcept;
+
   // Setup already consumed the protocol discriminator. Prime it before the first read.
   [[nodiscard]] auto prime(std::byte first) noexcept -> bool;
   [[nodiscard]] auto read_ready() noexcept -> std::size_t;
@@ -77,6 +92,9 @@ public:
 private:
   [[nodiscard]] auto compact_input() noexcept -> bool;
   [[nodiscard]] auto complete_record() noexcept -> std::optional<Record>;
+  void compact_output() noexcept;
+  void grow_output(std::size_t required);
+  void consume_output(std::size_t bytes) noexcept;
 
   int descriptor_{-1};
   std::vector<std::byte> input_;
@@ -84,6 +102,9 @@ private:
   std::size_t record_bytes_{0};
   std::vector<std::byte> output_;
   std::size_t output_offset_{0};
+  OutputAccounting accounting_;
+  std::size_t output_record_remaining_{0};
+  RecordKind output_record_kind_{RecordKind::error};
 };
 
 } // namespace lemma::extension

@@ -32,6 +32,11 @@ struct Hello final {
 
 [[nodiscard]] auto decode_hello(const api::JsonValue& document) -> std::optional<Hello>;
 
+// Append one lossless text or opaque-byte member; transport chunks need not end on UTF-8
+// boundaries.
+[[nodiscard]] auto append_input_payload(std::string& event, std::span<const std::byte> bytes,
+                                        bool opaque) -> bool;
+
 enum class SurfaceOperationStatus : std::uint8_t {
   applied,
   no_effect,
@@ -87,6 +92,8 @@ public:
   [[nodiscard]] auto owner_at(std::size_t slot) const noexcept -> ExtensionGenerationId;
   [[nodiscard]] auto connected(ExtensionGenerationId owner) const noexcept -> bool;
   [[nodiscard]] auto output_bytes(ExtensionGenerationId owner) const noexcept -> std::size_t;
+  [[nodiscard]] auto output_accounting(ExtensionGenerationId owner) const noexcept
+      -> OutputAccounting;
   [[nodiscard]] auto event_sequence(ExtensionGenerationId owner) const noexcept -> std::uint32_t;
   [[nodiscard]] auto has_capability(ExtensionGenerationId owner,
                                     std::uint8_t capability) const noexcept -> bool;
@@ -149,6 +156,8 @@ public:
   // Disconnect invalidates the generation and removes all owned projection state without invoking
   // extension code. The returned Attachment identifies geometry/focus that the reactor must repair.
   [[nodiscard]] auto disconnect(ExtensionGenerationId owner) noexcept -> AttachmentId;
+  // Semantic scope destruction, not client detach. Revokes peers regardless of capabilities.
+  void revoke_session(SessionId session) noexcept;
   [[nodiscard]] auto reap_disconnected(
       std::array<AttachmentId, limits::extension_sessions_hard_max>& affected) noexcept
       -> std::span<const AttachmentId>;
@@ -181,8 +190,6 @@ private:
     std::array<std::uint32_t, limits::extension_procs_per_owner_max> procs{};
     std::array<PendingSurfaceEvent, limits::extension_surfaces_per_owner_max * 2U> surface_events{};
     std::size_t surface_event_count{0};
-    std::size_t event_records_queued{0};
-    std::size_t event_bytes_queued{0};
     std::uint32_t next_event_sequence{2};
   };
 
@@ -228,6 +235,13 @@ private:
   [[nodiscard]] auto peer(ExtensionGenerationId owner) const noexcept -> const Peer*;
   [[nodiscard]] auto surface(SurfaceId id) noexcept -> Surface*;
   [[nodiscard]] auto surface(SurfaceId id) const noexcept -> const Surface*;
+  struct SurfaceLayout final {
+    PaneRectangle pane;
+    std::array<std::optional<PaneRectangle>, limits::extension_surfaces_hard_max> rectangles{};
+  };
+
+  [[nodiscard]] auto resolve_layout(AttachmentId attachment,
+                                    render::Viewport viewport) const noexcept -> SurfaceLayout;
   [[nodiscard]] auto resolved_rectangle(const Surface& target,
                                         render::Viewport viewport) const noexcept
       -> std::optional<PaneRectangle>;

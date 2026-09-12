@@ -277,6 +277,15 @@ Float and overlay placement do not reserve tiled viewport space. They may be opa
 transparent rows reveal the repaired lower Scene content wherever no run is present. Docked Surfaces
 must be opaque because their reserved viewport has no Pane backing to reveal.
 
+After terminal shrink, docks resolve in ascending Surface-slot order. A dock that cannot leave at
+least one Pane cell on its axis is suspended, reserving no space; later docks may still fit. A float
+or overlay extending outside the viewport is suspended whole, not clipped or moved. Suspension
+retains declared placement and Grid content, revokes focus and pointer capture to native Pane
+fallback, and does not block closing or repairing another Surface. Suspended Surfaces reappear when
+they fit again, without taking focus back. Creating or configuring a Surface requires that its new
+placement itself resolve visibly. Native layout minimums and fallible PTY resize still determine
+whether a structural transaction can commit; a rejected transaction retains prior Surface state.
+
 ## Floating terminals (deferred)
 
 A terminal is always a real Pane. V1 float placement applies only to Grid Surfaces; it does not
@@ -330,9 +339,24 @@ Extensions do not globally intercept every key by default.
 
 A focusable Surface receives input only while it owns Attachment focus. Mouse interaction may focus
 a Surface according to native Scene policy. Programmatic focus changes use a Proc so Attachment
-focus has one authoritative mutation path. `surface.mouse` columns and rows are zero-based offsets
+focus has one authoritative mutation path. Successful numbered/next/previous Tab selection, Pane
+focus, and creation with `focus=created` hand input back to the native Pane, regardless of whether
+the frontend is a key binding, command line, or Proc. Rejected operations and `focus=preserve`
+creation retain Surface focus. Native prompts temporarily take input without silently changing that
+semantic target; canceling a prompt returns to it. `surface.mouse` columns and rows are zero-based offsets
 from the Surface origin; pointer capture preserves delivery outside the Surface and reports signed
 out-of-bounds offsets.
+
+`surface.key` carries either `text` (complete valid UTF-8 Unicode, including escaped U+0000) or
+`bytes_hex` (opaque bytes encoded as lowercase hexadecimal), never both. Invalid or split UTF-8
+chunks use `bytes_hex`; reconstructing a raw stream means UTF-8-encoding `text` chunks and hex-decoding
+byte chunks in Event order. There is no lossy replacement or cross-record Unicode assumption.
+`surface.paste` always carries `bytes_hex`: paste is opaque, not a Unicode string. Input is chunked
+below the Welcome `input_bytes` bound (8192 bytes), which covers maximum-size legacy key records.
+Paste production uses at most 4096 bytes per turn, leaving framing headroom after hex encoding in
+the socket write quantum. Chunk boundaries are transport boundaries, not
+characters or complete paste boundaries. Hex and JSON escaping expansion fit the record limit;
+queue overflow policy remains separate from encoding validity.
 
 Lemma retains a native recovery path that extension UI cannot override. A malformed or unresponsive
 extension must never be able to permanently trap Attachment input.
@@ -412,9 +436,16 @@ ExtensionGeneration
     └── admitted work
 ```
 
-Disconnecting or replacing the owner invalidates the generation. Lemma can then close owned
-Surfaces, revoke focus, cancel owner-bound outstanding work, and release retained projection state
-without executing extension cleanup code.
+Disconnecting or replacing the extension connection invalidates its owner generation. Lemma then
+closes owned Surfaces, revokes focus, cancels owner-bound outstanding work, and releases retained
+projection state without executing extension cleanup code. Destroying the bound Session also revokes
+the extension connection and its resources, regardless of whether `observe` was granted. Slot reuse
+never transfers focus or pointer capture to a different Attachment generation.
+
+Ordinary terminal-client detach does not destroy the semantic Attachment: its Surfaces and Surface
+focus remain available on re-attach while the extension stays connected. Switching Sessions moves
+the client connection, not these resources; the destination uses its own Attachment focus and
+Surfaces. Switching back restores the source Attachment's retained presentation.
 
 Borrowed pointers never cross the boundary. Stable IDs do.
 
@@ -467,16 +498,58 @@ The first record must be Hello:
 }
 ```
 
-`events.session` binds V1 Surface ownership to that Session's Attachment. Lemma replies with one
-`lemma.extension-welcome/v1` record containing the generation, Attachment, granted capabilities,
-and limits. If `observe` was granted, an authoritative `snapshot` Event follows before incremental
+`observe` and `surface` require `events.session`, binding the connection to that Session's
+Attachment. A proc-only connection may omit `events` and has no Session or UI scope; its Commands
+carry their ordinary explicit selectors. When `events` is supplied (even without `observe`), it must
+select a live Session and binds connection lifetime to that scope. It does not grant observation.
+Lemma replies with one `lemma.extension-welcome/v1` record containing the generation, granted
+capabilities, and limits; `attachment` is present only for scoped connections. If `observe` was granted, an authoritative `snapshot` Event follows before incremental
 Events. Lemma retains no unbounded Event replay log.
+
+Observation starts from the snapshot's exact Pane presence, process outcome, and terminal
+generations. Incremental selection examines only the subscription's bounded stable Pane IDs on
+reactor activity, not a periodic full-pane scan. A later changed Pane cannot depend on an unrelated
+wake. Held-child exit produces `pane.process`; removal of a previously present selected Pane
+produces `pane.closed`. Observations describe committed current state, not every transient process
+transition. Destruction of the bound Session revokes the connection (EOF), rather than promising a
+final Event across that ownership boundary.
 
 Surface state is likewise reconstructible. Reconnection creates a new owner generation and
 re-establishes desired Surfaces from extension state rather than requiring daemon-retained plugin
 execution history. Structural Surface changes are ordinary `lemma.proc/v1` records. High-frequency
 content uses `lemma.surface-update/v1` records with optional style-table replacement, transactional
 row text runs, and cursor state; updates are validated completely before the retained Grid changes.
+
+### Correlation, ordering, and output admission
+
+ProcResult echoes the Proc header's nonzero sequence ID. An Error echoes the rejected input record's
+sequence (including a rejected SurfaceUpdate); it is not a ProcResult and does not imply execution.
+V1 admits at most one outstanding Proc per owner. Rejected Proc admission executes no commands.
+Admitted Procs retain their ordinary ordered, partial-completion semantics.
+
+Proc admission reserves one maximum-sized framed result in the bounded native output queue. Other
+output admissions cannot consume that reservation. Completion converts it to queued result bytes;
+ownership cancellation or disconnect releases it. This is not a delivery guarantee across transport
+failure and provides no exactly-once execution guarantee across reconnects. Event byte accounting
+includes headers and decrements as bytes are written; an Event occupies a record slot until its last
+byte drains, even when unrelated output keeps the queue nonempty.
+
+Records retain enqueue order on the single stream. Event sequence IDs belong to the Event lane, not
+the request-ID space. There is no global result-before-all-events ordering. Structural Surface events
+are retained until the owner's Proc result is enqueued. Callers must await a successful structural
+ProcResult before sending content updates that depend on its Surface ID or geometry. Surface updates
+are validated and applied in input order; a rejected update leaves the previous Grid intact and
+produces a correlated Error when output capacity permits. Successful updates have no separate
+acknowledgement record.
+
+Schema validity, negotiated limits, and current-state validity are distinct. Optional `style` and
+`cursor.visible` defaults apply only when absent; explicit nulls and wrong types are malformed.
+Welcome's `columns`/`rows` limits bound Grid dimensions and the maximum row-patch count. Row/column
+coordinates must fit the current Grid; style indices must exist in the retained or replacement
+table; row patches cannot repeat a row or overlap runs. `text_bytes_per_row` counts UTF-8 bytes,
+whereas JSON Schema string lengths count Unicode characters. The framing byte limit and the JSON
+parser's value/depth limits apply in addition to the schema. A syntactically valid update can still
+be rejected for stale ownership, current geometry, or retained-memory capacity.
 
 ## Configuration and extensions
 

@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <sys/socket.h>
@@ -286,6 +288,396 @@ TEST(ExtensionRuntimeTest, BoundsProcAndInteractionQueues) {
   }
   EXPECT_FALSE(runtime.send_event(owner, R"({"event":"surface.key"})"));
   EXPECT_FALSE(runtime.connected(owner));
+}
+
+TEST(ExtensionRuntimeTest, ProcReservationSurvivesMixedOutputPressure) {
+  SocketPair sockets;
+  Runtime runtime;
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "results", .subscription = {}, .capabilities = capability_proc},
+                    SessionId::from_parts(0, 1), AttachmentId::from_parts(0, 1), {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  const auto result = [](const std::size_t size) {
+    std::string json =
+        R"({"schema":"lemma.proc-result/v1","ok":false,"results":[],"error":{"reason":")";
+    json.append(size - json.size() - 3U, 'x');
+    json += "\"}}";
+    return json;
+  };
+  const auto welcome = runtime.output_bytes(owner);
+  ASSERT_TRUE(runtime.reserve_proc(owner, 1));
+  runtime.complete_proc(owner, 1, result(api::json_bytes_max - welcome - 512U));
+  ASSERT_TRUE(runtime.reserve_proc(owner, 2));
+  EXPECT_EQ(runtime.output_accounting(owner).reserved_bytes,
+            api::json_bytes_max + protocol_header_bytes);
+  EXPECT_EQ(runtime.output_accounting(owner).reserved_records, 1U);
+  ASSERT_TRUE(runtime.send_event(
+      owner,
+      R"({"schema":"lemma.event/v1","sequence":2,"event":"surface.key","surface":"0:1","text":"x"})"));
+  ASSERT_TRUE(runtime.send_error(owner, 3, "invalid"));
+  // This error is valid, but its queue admission must not consume the result's reservation.
+  EXPECT_FALSE(runtime.send_error(owner, 4, std::string(512, 'x')));
+  ASSERT_TRUE(runtime.connected(owner));
+  const auto before = runtime.output_bytes(owner);
+  runtime.complete_proc(owner, 2, result(api::json_bytes_max));
+  EXPECT_TRUE(runtime.connected(owner));
+  EXPECT_EQ(runtime.output_bytes(owner), before + protocol_header_bytes + api::json_bytes_max);
+  EXPECT_LE(runtime.output_bytes(owner), limits::extension_output_bytes_per_owner_max);
+  EXPECT_EQ(runtime.output_accounting(owner).reserved_bytes, 0U);
+  EXPECT_EQ(runtime.output_accounting(owner).reserved_records, 0U);
+  FramedPeer reader(::dup(sockets.writer()));
+  std::size_t records = 0;
+  std::size_t results = 0;
+  for (std::size_t turn = 0; turn < 512U && records < 5U; ++turn) {
+    runtime.write_ready(owner.slot());
+    static_cast<void>(reader.read_ready());
+    while (const auto next = reader.receive()) {
+      ++records;
+      if (next->kind == RecordKind::proc_result) {
+        ++results;
+        if (next->sequence == 2U) {
+          const auto expected = result(api::json_bytes_max);
+          EXPECT_TRUE(std::ranges::equal(
+              next->payload, std::as_bytes(std::span(expected.data(), expected.size()))));
+        }
+      }
+      reader.consume();
+    }
+  }
+  EXPECT_EQ(records, 5U);
+  EXPECT_EQ(results, 2U);
+  EXPECT_EQ(runtime.output_bytes(owner), 0U);
+  EXPECT_EQ(runtime.output_accounting(owner), OutputAccounting{});
+}
+
+TEST(ExtensionRuntimeTest, DrainingEventsDoNotAccumulateWhileQueueStaysNonempty) {
+  SocketPair sockets;
+  Runtime runtime;
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "draining", .subscription = {}, .capabilities = capability_proc},
+                    SessionId::from_parts(0, 1), AttachmentId::from_parts(0, 1), {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  std::array<std::byte, 1024> received{};
+  const auto welcome = runtime.output_bytes(owner);
+  runtime.write_ready(owner.slot());
+  ASSERT_EQ(::recv(sockets.writer(), received.data(), received.size(), MSG_DONTWAIT),
+            static_cast<ssize_t>(welcome));
+  constexpr std::string_view event = R"({"event":"surface.key"})";
+  constexpr auto event_bytes = protocol_header_bytes + event.size();
+  ASSERT_TRUE(runtime.send_event(owner, event));
+  ASSERT_TRUE(runtime.send_error(owner, 1, "test"));
+  const auto batch = runtime.output_bytes(owner);
+  for (std::size_t index = 0; index < limits::extension_interaction_events_max * 2U; ++index) {
+    ASSERT_TRUE(runtime.send_event(owner, event));
+    runtime.write_ready(owner.slot(), batch);
+    ASSERT_EQ(runtime.output_bytes(owner), event_bytes);
+    EXPECT_EQ(runtime.output_accounting(owner).event_records, 1U);
+    EXPECT_EQ(runtime.output_accounting(owner).event_bytes, event_bytes);
+    ASSERT_EQ(::recv(sockets.writer(), received.data(), received.size(), MSG_DONTWAIT),
+              static_cast<ssize_t>(batch));
+    ASSERT_TRUE(runtime.send_error(owner, 1, "test"));
+    ASSERT_EQ(runtime.output_bytes(owner), batch);
+  }
+  EXPECT_TRUE(runtime.connected(owner));
+}
+
+TEST(ExtensionProtocolTest, OutputAccountingConservesPartialHeadersPayloadsAndMoves) {
+  SocketPair sockets;
+  FramedPeer original(sockets.take_reader());
+  constexpr auto reservation = protocol_header_bytes + limits::extension_record_bytes_max;
+  ASSERT_TRUE(original.reserve_output(reservation));
+  constexpr std::string_view error = R"({"error":"test"})";
+  constexpr std::string_view event = R"({"event":"test"})";
+  const std::string payload(257, 'x');
+  ASSERT_TRUE(original.send_json(RecordKind::error, 1, error));
+  ASSERT_TRUE(original.send_json(RecordKind::event, 2, payload));
+  ASSERT_TRUE(original.send_json(RecordKind::proc_result, 3, error));
+  ASSERT_TRUE(original.send_json(RecordKind::event, 4, event));
+  const auto total = original.output_bytes();
+  const auto first_begin = protocol_header_bytes + error.size();
+  const auto first_end = first_begin + protocol_header_bytes + payload.size();
+  const auto second_begin = first_end + protocol_header_bytes + error.size();
+  FramedPeer peer(std::move(original));
+  // The move contract explicitly resets accounting on the disconnected source.
+  // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+  EXPECT_EQ(original.output_accounting(), OutputAccounting{});
+  std::size_t sent = 0;
+  std::array<std::byte, 7> bytes{};
+  while (peer.output_bytes() != 0) {
+    const auto before = peer.output_bytes();
+    peer.write_ready(bytes.size());
+    const auto count = before - peer.output_bytes();
+    ASSERT_GT(count, 0U);
+    ASSERT_EQ(::recv(sockets.writer(), bytes.data(), bytes.size(), MSG_DONTWAIT),
+              static_cast<ssize_t>(count));
+    sent += count;
+    const auto first_remaining = first_end - std::clamp(sent, first_begin, first_end);
+    const auto second_remaining = total - std::clamp(sent, second_begin, total);
+    const auto accounting = peer.output_accounting();
+    EXPECT_EQ(accounting.event_bytes, first_remaining + second_remaining);
+    EXPECT_EQ(accounting.event_records, static_cast<std::size_t>(first_remaining > 0) +
+                                            static_cast<std::size_t>(second_remaining > 0));
+    EXPECT_EQ(accounting.reserved_bytes, reservation);
+    EXPECT_EQ(accounting.reserved_records, 1U);
+    EXPECT_EQ(peer.output_bytes() + sent, total);
+  }
+  peer.release_output(reservation);
+  EXPECT_EQ(peer.output_accounting(), OutputAccounting{});
+}
+
+TEST(ExtensionProtocolTest, EagainPreservesLedgerAndDisconnectCancelsReservations) {
+  SocketPair sockets;
+  FramedPeer peer(sockets.take_reader());
+  constexpr int buffer_bytes = 1024;
+  ASSERT_EQ(
+      ::setsockopt(peer.descriptor(), SOL_SOCKET, SO_SNDBUF, &buffer_bytes, sizeof(buffer_bytes)),
+      0);
+  constexpr auto reservation = protocol_header_bytes + limits::extension_record_bytes_max;
+  ASSERT_TRUE(peer.reserve_output(reservation));
+  ASSERT_TRUE(peer.send_json(RecordKind::event, 1, std::string(std::size_t{64} * 1024U, 'x')));
+  ASSERT_TRUE(peer.send_json(RecordKind::error, 2, std::string(std::size_t{64} * 1024U, 'y')));
+  bool blocked = false;
+  for (std::size_t turn = 0; turn < 256U && !blocked; ++turn) {
+    const auto before = peer.output_bytes();
+    const auto ledger = peer.output_accounting();
+    peer.write_ready();
+    blocked = before == peer.output_bytes();
+    if (blocked) {
+      EXPECT_EQ(peer.output_accounting(), ledger);
+    }
+  }
+  ASSERT_TRUE(blocked);
+  ASSERT_GT(peer.output_bytes(), 0U);
+  ASSERT_TRUE(peer.connected());
+  std::array<std::byte, std::size_t{16} * 1024U> bytes{};
+  for (std::size_t turn = 0; turn < 256U && peer.output_bytes() != 0; ++turn) {
+    static_cast<void>(::recv(sockets.writer(), bytes.data(), bytes.size(), MSG_DONTWAIT));
+    peer.write_ready();
+  }
+  EXPECT_EQ(peer.output_bytes(), 0U);
+  EXPECT_EQ(peer.output_accounting().event_bytes, 0U);
+  EXPECT_EQ(peer.output_accounting().event_records, 0U);
+  EXPECT_EQ(peer.output_accounting().reserved_records, 1U);
+  peer.disconnect();
+  EXPECT_EQ(peer.output_accounting(), OutputAccounting{});
+}
+
+TEST(ExtensionRuntimeTest, DisconnectCancelsAdmittedResultReservation) {
+  SocketPair sockets;
+  Runtime runtime;
+  const auto admitted = runtime.admit(
+      FramedPeer(sockets.take_reader()),
+      Hello{.name = "cancel", .subscription = {}, .capabilities = capability_proc}, {}, {}, {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  ASSERT_TRUE(runtime.reserve_proc(owner, 1));
+  EXPECT_EQ(runtime.output_accounting(owner).reserved_records, 1U);
+  static_cast<void>(runtime.disconnect(owner));
+  runtime.complete_proc(owner, 1, "{}");
+  EXPECT_EQ(runtime.output_accounting(owner), OutputAccounting{});
+  EXPECT_EQ(runtime.output_bytes(owner), 0U);
+  EXPECT_FALSE(runtime.reserve_proc(owner, 2));
+}
+
+TEST(ExtensionProtocolTest, InputEncodingPreservesTextBytesAndBounds) {
+  for (const bool opaque : {false, true}) {
+    for (const std::string_view text :
+         {std::string_view{"é🙂"}, std::string_view{"\xe2"}, std::string_view{"\x82\xac"},
+          std::string_view{"\xff\0x", 3}}) {
+      std::string event = "{";
+      // The encoder appends a member to an existing Event object.
+      event += R"("schema":"lemma.event/v1")";
+      ASSERT_TRUE(append_input_payload(event, std::as_bytes(std::span(text)), opaque));
+      event += '}';
+      const auto parsed = api::parse_json(event);
+      ASSERT_TRUE(parsed.value.has_value());
+      const auto document = parsed.value.value_or(api::JsonValue{});
+      if (!opaque && text == "é🙂") {
+        EXPECT_EQ(api::json_string(document, "text"), text);
+      } else {
+        EXPECT_FALSE(api::json_string(document, "text").has_value());
+        const auto hex = api::json_string(document, "bytes_hex");
+        ASSERT_TRUE(hex.has_value());
+        EXPECT_EQ(hex.value_or(std::string_view{}).size(), text.size() * 2U);
+      }
+    }
+  }
+  const std::string controls(limits::extension_input_bytes_max, '\0');
+  std::string escaped = R"({"event":"surface.key")";
+  ASSERT_TRUE(append_input_payload(escaped, std::as_bytes(std::span(controls)), false));
+  escaped += '}';
+  EXPECT_LT(escaped.size(), limits::extension_record_bytes_max);
+  const auto parsed = api::parse_json(escaped);
+  ASSERT_TRUE(parsed.value.has_value());
+  EXPECT_EQ(api::json_string(parsed.value.value_or(api::JsonValue{}), "text"), controls);
+  std::string rejected;
+  const std::string oversized(limits::extension_input_bytes_max + 1U, 'x');
+  EXPECT_FALSE(append_input_payload(rejected, std::as_bytes(std::span(oversized)), true));
+  EXPECT_TRUE(rejected.empty());
+}
+
+TEST(ExtensionRuntimeTest, CanRepairAndCloseSurfacesAfterViewportShrink) {
+  SocketPair sockets;
+  Runtime runtime;
+  constexpr auto attachment = AttachmentId::from_parts(0, 1);
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "shrink", .subscription = {}, .capabilities = capability_surface},
+                    SessionId::from_parts(0, 1), attachment, {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  constexpr render::Viewport large{.columns = 80, .rows = 24};
+  constexpr render::Viewport small{.columns = 30, .rows = 10};
+  const auto first = runtime.create_surface(
+      owner, {.kind = api::SurfacePlacementKind::dock_right, .columns = 35}, true, true, large);
+  const auto second = runtime.create_surface(
+      owner, {.kind = api::SurfacePlacementKind::dock_left, .columns = 35}, true, true, large);
+  ASSERT_EQ(first.status, SurfaceOperationStatus::applied);
+  ASSERT_EQ(second.status, SurfaceOperationStatus::applied);
+  const auto floating = runtime.create_surface(owner,
+                                               {.kind = api::SurfacePlacementKind::float_surface,
+                                                .column = 60,
+                                                .row = 15,
+                                                .columns = 10,
+                                                .rows = 2},
+                                               true, true, large);
+  ASSERT_EQ(floating.status, SurfaceOperationStatus::applied);
+  ASSERT_EQ(runtime.focus_surface(owner, floating.surface, large).status,
+            SurfaceOperationStatus::applied);
+  runtime.capture_surface_pointer(attachment, floating.surface);
+  ASSERT_TRUE(runtime.resize_surfaces(attachment, small));
+  EXPECT_EQ(runtime.pane_viewport(attachment, small), (PaneRectangle{.columns = 30, .rows = 10}));
+  EXPECT_FALSE(runtime.surface_rectangle(first.surface, small).has_value());
+  EXPECT_FALSE(runtime.surface_rectangle(second.surface, small).has_value());
+  EXPECT_FALSE(runtime.surface_rectangle(floating.surface, small).has_value());
+  EXPECT_FALSE(runtime.focused_surface(attachment).is_valid());
+  EXPECT_FALSE(runtime.captured_surface_pointer(attachment).is_valid());
+  EXPECT_EQ(runtime.focus_surface(owner, floating.surface, small).status,
+            SurfaceOperationStatus::unavailable);
+  ASSERT_TRUE(runtime.resize_surfaces(attachment, large));
+  EXPECT_EQ(runtime.pane_viewport(attachment, large),
+            (PaneRectangle{.column = 35, .columns = 10, .rows = 24}));
+  EXPECT_EQ(runtime.surface_rectangle(first.surface, large),
+            (PaneRectangle{.column = 45, .columns = 35, .rows = 24}));
+  EXPECT_TRUE(runtime.surface_rectangle(floating.surface, large).has_value());
+  EXPECT_FALSE(runtime.focused_surface(attachment).is_valid());
+  EXPECT_EQ(runtime
+                .configure_surface(owner, first.surface,
+                                   {.kind = api::SurfacePlacementKind::dock_right, .columns = 5},
+                                   small)
+                .status,
+            SurfaceOperationStatus::applied);
+  EXPECT_EQ(runtime.close_surface(owner, first.surface, small).status,
+            SurfaceOperationStatus::applied);
+  EXPECT_EQ(runtime.close_surface(owner, second.surface, small).status,
+            SurfaceOperationStatus::applied);
+}
+
+TEST(ExtensionRuntimeTest, SurfaceAdmissionRequiresValidNativeScope) {
+  for (const auto attachment :
+       std::array{AttachmentId{}, AttachmentId::from_parts(limits::sessions_hard_max, 1)}) {
+    SocketPair sockets;
+    Runtime runtime;
+    EXPECT_FALSE(
+        runtime
+            .admit(FramedPeer(sockets.take_reader()),
+                   Hello{.name = "scope", .subscription = {}, .capabilities = capability_surface},
+                   SessionId::from_parts(0, 1), attachment, {})
+            .has_value());
+  }
+}
+
+TEST(ExtensionRuntimeTest, SessionRevocationReleasesOnlyMatchingGeneration) {
+  SocketPair sockets;
+  Runtime runtime;
+  constexpr auto session = SessionId::from_parts(0, 1);
+  constexpr auto attachment = AttachmentId::from_parts(0, 1);
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "scope", .subscription = {}, .capabilities = capability_surface},
+                    session, attachment, {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  constexpr render::Viewport viewport{.columns = 20, .rows = 10};
+  constexpr api::SurfacePlacement overlay{
+      .kind = api::SurfacePlacementKind::overlay, .columns = 2, .rows = 1};
+  const auto created = runtime.create_surface(owner, overlay, true, true, viewport);
+  ASSERT_EQ(created.status, SurfaceOperationStatus::applied);
+  runtime.revoke_session(SessionId::from_parts(0, 2));
+  EXPECT_TRUE(runtime.connected(owner));
+  EXPECT_GT(runtime.retained_surface_bytes(), 0U);
+  runtime.revoke_session(session);
+  EXPECT_FALSE(runtime.connected(owner));
+  EXPECT_EQ(runtime.retained_surface_bytes(), 0U);
+  EXPECT_FALSE(runtime.surface_owner(created.surface).is_valid());
+}
+
+TEST(ExtensionRuntimeTest, FocusAndCaptureRequireFullAttachmentIdentity) {
+  SocketPair sockets;
+  Runtime runtime;
+  constexpr auto original = AttachmentId::from_parts(0, 1);
+  constexpr auto replacement = AttachmentId::from_parts(0, 2);
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "scope", .subscription = {}, .capabilities = capability_surface},
+                    SessionId::from_parts(0, 1), original, {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  constexpr render::Viewport viewport{.columns = 20, .rows = 10};
+  constexpr api::SurfacePlacement overlay{
+      .kind = api::SurfacePlacementKind::overlay, .columns = 2, .rows = 1};
+  const auto created = runtime.create_surface(owner, overlay, true, true, viewport);
+  ASSERT_EQ(created.status, SurfaceOperationStatus::applied);
+  ASSERT_EQ(runtime.focus_surface(owner, created.surface, viewport).status,
+            SurfaceOperationStatus::applied);
+  runtime.capture_surface_pointer(original, created.surface);
+  EXPECT_EQ(runtime.focused_surface(original), created.surface);
+  EXPECT_EQ(runtime.captured_surface_pointer(original), created.surface);
+  EXPECT_FALSE(runtime.focused_surface(replacement).is_valid());
+  EXPECT_FALSE(runtime.captured_surface_pointer(replacement).is_valid());
+  EXPECT_FALSE(runtime.focus_pane(replacement));
+  runtime.release_surface_pointer(replacement);
+  EXPECT_EQ(runtime.focused_surface(original), created.surface);
+  EXPECT_EQ(runtime.captured_surface_pointer(original), created.surface);
+  runtime.release_surface_pointer(original);
+  runtime.capture_surface_pointer(replacement, created.surface);
+  EXPECT_FALSE(runtime.captured_surface_pointer(original).is_valid());
+}
+
+TEST(ExtensionRuntimeTest, DisconnectedTransportCannotRetainInputOwnership) {
+  SocketPair sockets;
+  Runtime runtime;
+  constexpr auto attachment = AttachmentId::from_parts(0, 1);
+  const auto admitted =
+      runtime.admit(FramedPeer(sockets.take_reader()),
+                    Hello{.name = "scope", .subscription = {}, .capabilities = capability_surface},
+                    SessionId::from_parts(0, 1), attachment, {});
+  ASSERT_TRUE(admitted.has_value());
+  const auto owner = admitted.value_or(ExtensionGenerationId{});
+  constexpr render::Viewport viewport{.columns = 20, .rows = 10};
+  constexpr api::SurfacePlacement overlay{
+      .kind = api::SurfacePlacementKind::overlay, .columns = 2, .rows = 1};
+  const auto created = runtime.create_surface(owner, overlay, true, true, viewport);
+  ASSERT_EQ(created.status, SurfaceOperationStatus::applied);
+  ASSERT_EQ(runtime.focus_surface(owner, created.surface, viewport).status,
+            SurfaceOperationStatus::applied);
+  runtime.capture_surface_pointer(attachment, created.surface);
+  // Fail the transport without yet running reactor reclamation.
+  ASSERT_EQ(::shutdown(sockets.writer(), SHUT_RDWR), 0);
+  EXPECT_EQ(runtime.read_ready(owner.slot()), 0U);
+  ASSERT_FALSE(runtime.connected(owner));
+  EXPECT_FALSE(runtime.focused_surface(attachment).is_valid());
+  EXPECT_FALSE(runtime.captured_surface_pointer(attachment).is_valid());
+  EXPECT_FALSE(runtime.surface_at(attachment, viewport, 0, 0).is_valid());
+  EXPECT_EQ(runtime.create_surface(owner, overlay, true, true, viewport).status,
+            SurfaceOperationStatus::unavailable);
+  std::array<AttachmentId, limits::extension_sessions_hard_max> affected{};
+  EXPECT_EQ(runtime.reap_disconnected(affected).size(), 1U);
+  EXPECT_EQ(runtime.retained_surface_bytes(), 0U);
 }
 
 TEST(ExtensionRuntimeTest, EnforcesSurfaceOwnershipCapacityAndGenerationCleanup) {

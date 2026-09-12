@@ -25,6 +25,7 @@ inline constexpr std::size_t extension_records_per_turn_max = 16;
 inline constexpr std::size_t extension_bytes_per_turn_max = std::size_t{256} * 1'024U;
 inline constexpr std::size_t extension_output_bytes_per_owner_max =
     std::size_t{2} * 1'024U * 1'024U;
+inline constexpr std::size_t extension_input_bytes_max = std::size_t{8} * 1'024U;
 inline constexpr std::size_t extension_interaction_events_max = 64;
 inline constexpr std::size_t extension_interaction_bytes_per_owner_max =
     std::size_t{1} * 1'024U * 1'024U;
