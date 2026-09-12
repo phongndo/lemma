@@ -65,21 +65,66 @@ else
   ./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
 fi
 
-# Generate the stress seed outside the test process so a sanitizer crash cannot lose its replay
-# identity. The operation count, rather than wall time, keeps this merge-blocking run bounded.
-mux_seed="$(od -An -N8 -tu8 /dev/urandom | tr -d '[:space:]')"
+# Select the stress seed outside the test process so a sanitizer crash cannot lose its replay
+# identity. An explicit override reproduces a reported history; otherwise every run gets a new
+# seed. The operation count, rather than wall time, keeps this merge-blocking run bounded.
+if [[ -n "${LEMMA_MUX_SIM_SEED:-}" ]]; then
+  mux_seed="${LEMMA_MUX_SIM_SEED}"
+else
+  mux_seed="$(od -An -N8 -tu8 /dev/urandom | tr -d '[:space:]')"
+fi
 readonly mux_seed
+readonly mux_operations="${LEMMA_MUX_SIM_OPERATIONS:-16384}"
+if [[ ! "${mux_seed}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+  printf 'LEMMA_MUX_SIM_SEED must be an unsigned decimal or hexadecimal integer\n' >&2
+  exit 2
+fi
+if [[ ! "${mux_operations}" =~ ^[1-9][0-9]*$ ]] || ((10#${mux_operations} > 16384)); then
+  printf 'LEMMA_MUX_SIM_OPERATIONS must be in [1, 16384]\n' >&2
+  exit 2
+fi
 readonly mux_artifact_dir="build/sanitizers/mux-sim-artifacts"
 readonly mux_trace="${mux_artifact_dir}/mux-${mux_seed}.trace"
 readonly mux_coverage="${mux_artifact_dir}/mux-${mux_seed}.coverage.json"
+readonly mux_diagnostics="${mux_artifact_dir}/mux-${mux_seed}.log"
+readonly mux_provenance="${mux_artifact_dir}/mux-${mux_seed}.provenance.txt"
 mkdir -p "${mux_artifact_dir}"
-printf 'deterministic mux stress seed: %s\n' "${mux_seed}"
-LEMMA_MUX_SIM_SEED="${mux_seed}" LEMMA_MUX_SIM_OPERATIONS=16384 \
+{
+  printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+  printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+  printf 'index_tree=%s\n' "$(git write-tree)"
+  printf 'system=%s\n' "$(uname -a)"
+  printf 'seed=%s\noperations=%s\n' "${mux_seed}" "${mux_operations}"
+  printf 'ASAN_OPTIONS=%s\nUBSAN_OPTIONS=%s\n' "${ASAN_OPTIONS}" "${UBSAN_OPTIONS}"
+  printf 'command='
+  printf '%q ' env LEMMA_MUX_SIM_SEED="${mux_seed}" \
+    LEMMA_MUX_SIM_OPERATIONS="${mux_operations}" LEMMA_MUX_SIM_TRACE_OUT="${mux_trace}" \
+    LEMMA_MUX_SIM_COVERAGE_OUT="${mux_coverage}" \
+    ./build/sanitizers/lemma_core_sim_tests \
+    --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
+    --gtest_brief=1
+  printf '\n'
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum ./build/sanitizers/lemma_core_sim_tests
+  else
+    shasum -a 256 ./build/sanitizers/lemma_core_sim_tests
+  fi
+  clang++ --version
+} >"${mux_provenance}"
+printf 'deterministic mux stress seed: %s (operations=%s)\n' "${mux_seed}" "${mux_operations}"
+set +e
+LEMMA_MUX_SIM_SEED="${mux_seed}" LEMMA_MUX_SIM_OPERATIONS="${mux_operations}" \
   LEMMA_MUX_SIM_TRACE_OUT="${mux_trace}" \
   LEMMA_MUX_SIM_COVERAGE_OUT="${mux_coverage}" \
   ./build/sanitizers/lemma_core_sim_tests \
   --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
-  --gtest_brief=1
-rm -f "${mux_trace}"
+  --gtest_brief=1 2>&1 | tee "${mux_diagnostics}"
+mux_status="${PIPESTATUS[0]}"
+set -e
+if ((mux_status != 0)); then
+  printf 'mux simulation failed; evidence retained under %s\n' "${mux_artifact_dir}" >&2
+  exit "${mux_status}"
+fi
+rm -f "${mux_trace}" "${mux_diagnostics}"
 
 ./build/sanitizers/lemma --help >/dev/null

@@ -1906,12 +1906,14 @@ TEST(MuxSimulationTest, GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants) 
   if (configured) {
     WorldCoverage configured_world;
     SimRuntimeCoverage configured_runtime;
-    ASSERT_TRUE(run_mux_world(selected_seed, selected_operations, nullptr, &configured_world,
-                              &configured_runtime, configured_trace_output()));
+    const auto generated =
+        run_mux_world(selected_seed, selected_operations, nullptr, &configured_world,
+                      &configured_runtime, configured_trace_output());
     std::string coverage_error;
-    ASSERT_TRUE(write_coverage_report(selected_seed, selected_operations, configured_world,
-                                      configured_runtime, coverage_error))
-        << coverage_error;
+    const bool coverage_written = write_coverage_report(
+        selected_seed, selected_operations, configured_world, configured_runtime, coverage_error);
+    ASSERT_TRUE(generated);
+    ASSERT_TRUE(coverage_written) << coverage_error;
     return;
   }
 
