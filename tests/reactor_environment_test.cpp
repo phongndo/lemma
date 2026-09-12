@@ -353,11 +353,18 @@ void release_listener(void* const context) noexcept {
   return result;
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(ReactorEnvironmentTest, ReportedReadinessHasExactBytesAndSynchronousClosure) {
   const auto connection = connected_listener();
   ASSERT_TRUE(connection.has_value());
   const auto connected = connection.value_or(ConnectedListener{});
   const auto accepted = ::accept(connected.listener, nullptr, nullptr);
+  if (accepted < 0) {
+    static_cast<void>(::close(connected.client));
+    static_cast<void>(::close(connected.listener));
+    FAIL() << "accept failed";
+  }
   ScriptedReactor script{.now = {}, .client = connected.client};
   pollfd pending{.fd = accepted, .events = POLLIN, .revents = 0};
   constexpr std::string_view fragment = "fragment-boundary";
@@ -378,11 +385,18 @@ TEST(ReactorEnvironmentTest, ReportedReadinessHasExactBytesAndSynchronousClosure
   EXPECT_EQ(closed, 0);
 }
 
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(ReactorEnvironmentTest, ResponseCollectionWaitsForRecordBoundary) {
   const auto connection = connected_listener();
   ASSERT_TRUE(connection.has_value());
   const auto connected = connection.value_or(ConnectedListener{});
   const auto accepted = ::accept(connected.listener, nullptr, nullptr);
+  if (accepted < 0) {
+    static_cast<void>(::close(connected.client));
+    static_cast<void>(::close(connected.listener));
+    FAIL() << "accept failed";
+  }
   constexpr std::string_view prefix = R"({"schema":"lemma.proc-result/v1","status":"applied")";
   constexpr std::string_view suffix = "}\n";
   ScriptedReactor script{.now = {}, .client = connected.client};
