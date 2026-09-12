@@ -191,6 +191,8 @@ add_library(
   src/core/command_history.cpp
   src/core/command_line.cpp
   src/core/engine.cpp
+  src/core/engine_projection.cpp
+  src/core/engine_state.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
