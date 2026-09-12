@@ -8,14 +8,14 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace lemma::core {
@@ -26,37 +26,18 @@ struct ConnectedListener final {
   int client{-1};
 };
 
-[[nodiscard]] auto connected_listener() noexcept -> std::optional<ConnectedListener> {
-  const auto listener = ::socket(AF_INET, SOCK_STREAM, 0);
+[[nodiscard]] auto connect_listener(const sockaddr* const address, const socklen_t size) noexcept
+    -> std::optional<ConnectedListener> {
+  const auto listener = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (listener < 0) {
     return std::nullopt;
   }
-  constexpr int enabled = 1;
-  if (::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) != 0) {
+  if (::bind(listener, address, size) != 0 || ::listen(listener, 1) != 0) {
     static_cast<void>(::close(listener));
     return std::nullopt;
   }
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = 0;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  // POSIX socket APIs require the protocol-specific address through their generic address type.
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (::bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-      ::listen(listener, 1) != 0) {
-    static_cast<void>(::close(listener));
-    return std::nullopt;
-  }
-  socklen_t address_size = sizeof(address);
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &address_size) != 0) {
-    static_cast<void>(::close(listener));
-    return std::nullopt;
-  }
-  const auto client = ::socket(AF_INET, SOCK_STREAM, 0);
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  const auto* const generic_address = reinterpret_cast<const sockaddr*>(&address);
-  if (client < 0 || ::connect(client, generic_address, sizeof(address)) != 0) {
+  const auto client = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (client < 0 || ::connect(client, address, size) != 0) {
     if (client >= 0) {
       static_cast<void>(::close(client));
     }
@@ -64,6 +45,29 @@ struct ConnectedListener final {
     return std::nullopt;
   }
   return ConnectedListener{.listener = listener, .client = client};
+}
+
+[[nodiscard]] auto connected_listener() noexcept -> std::optional<ConnectedListener> {
+  // Use the production transport. TCP delivery/FIN depends on host scheduling even on loopback;
+  // declaring it ready and advancing virtual time makes host latency look like reactor work.
+  auto directory = std::to_array("/tmp/lemma-reactor-XXXXXX");
+  if (::mkdtemp(directory.data()) == nullptr) {
+    return std::nullopt;
+  }
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  const auto path = std::span(address.sun_path);
+  constexpr auto suffix = std::to_array("/socket");
+  static_assert(directory.size() + suffix.size() <= sizeof(address.sun_path));
+  std::ranges::copy(std::span(directory).first(directory.size() - 1U), path.begin());
+  std::ranges::copy(suffix, path.subspan(directory.size() - 1U).begin());
+  // POSIX takes the protocol-specific address through its generic address type.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* const generic_address = reinterpret_cast<const sockaddr*>(&address);
+  const auto result = connect_listener(generic_address, sizeof(address));
+  static_cast<void>(::unlink(path.data()));
+  static_cast<void>(::rmdir(directory.data()));
+  return result;
 }
 
 enum class ScriptMode : std::uint8_t {
@@ -181,7 +185,7 @@ thread_local ScriptedReactor* active_script = nullptr;
     return -1;
   }
   const std::string_view response(script.response.data(), script.response_size);
-  if (response.contains(R"("schema":"lemma.proc-result/v1")") &&
+  if (response.ends_with('\n') && response.contains(R"("schema":"lemma.proc-result/v1")") &&
       response.contains(R"("status":"applied")")) {
     script.stop = true;
   } else if (script.polls > 32U) {
@@ -210,9 +214,8 @@ thread_local ScriptedReactor* active_script = nullptr;
   auto* const pending = pending_descriptor(script, descriptors);
   if (script.stage == script.fragment_count + 1U && pending != nullptr &&
       (pending->events & POLLIN) != 0) {
-    // A successful local send does not guarantee that every byte is visible to the next recv on
-    // every kernel. Keep reporting the production descriptor's requested read readiness until the
-    // parser has consumed the final fragment and asks to flush its response.
+    // Proc execution may need a turn after the last request fragment. The Unix transport has
+    // already delivered that fragment; this is not a retry loop for host TCP delivery.
     pending->revents = POLLIN;
     return 1;
   }
@@ -246,8 +249,7 @@ thread_local ScriptedReactor* active_script = nullptr;
   std::byte byte{};
   const auto received = ::recv(script.client, &byte, 1, MSG_DONTWAIT);
   if (received == 0 || (received < 0 && errno == ECONNRESET)) {
-    // A TCP peer may report an unread/incomplete request timeout as either EOF or reset depending
-    // on the host kernel. Both prove that the production connection was closed.
+    // Both EOF and reset represent a closed production connection.
     script.timeout_closed_peer = true;
     script.stop = true;
   }
@@ -349,6 +351,53 @@ void release_listener(void* const context) noexcept {
       environment);
   active_script = nullptr;
   return result;
+}
+
+TEST(ReactorEnvironmentTest, ReportedReadinessHasExactBytesAndSynchronousClosure) {
+  const auto connection = connected_listener();
+  ASSERT_TRUE(connection.has_value());
+  const auto connected = connection.value_or(ConnectedListener{});
+  const auto accepted = ::accept(connected.listener, nullptr, nullptr);
+  ScriptedReactor script{.now = {}, .client = connected.client};
+  pollfd pending{.fd = accepted, .events = POLLIN, .revents = 0};
+  constexpr std::string_view fragment = "fragment-boundary";
+  std::array<char, fragment.size()> received{};
+  bool exact = accepted >= 0;
+  for (std::size_t index = 0; index < 64U && exact; ++index) {
+    exact = send_fragment(script, pending, fragment) && pending.revents == POLLIN &&
+            ::recv(accepted, received.data(), received.size(), MSG_DONTWAIT) ==
+                static_cast<ssize_t>(fragment.size()) &&
+            std::string_view(received.data(), received.size()) == fragment;
+  }
+  static_cast<void>(::close(accepted));
+  char byte = 0;
+  const auto closed = ::recv(connected.client, &byte, 1, MSG_DONTWAIT);
+  static_cast<void>(::close(connected.client));
+  static_cast<void>(::close(connected.listener));
+  EXPECT_TRUE(exact);
+  EXPECT_EQ(closed, 0);
+}
+
+TEST(ReactorEnvironmentTest, ResponseCollectionWaitsForRecordBoundary) {
+  const auto connection = connected_listener();
+  ASSERT_TRUE(connection.has_value());
+  const auto connected = connection.value_or(ConnectedListener{});
+  const auto accepted = ::accept(connected.listener, nullptr, nullptr);
+  constexpr std::string_view prefix = R"({"schema":"lemma.proc-result/v1","status":"applied")";
+  constexpr std::string_view suffix = "}\n";
+  ScriptedReactor script{.now = {}, .client = connected.client};
+  EXPECT_EQ(::send(accepted, prefix.data(), prefix.size(), MSG_NOSIGNAL),
+            static_cast<ssize_t>(prefix.size()));
+  EXPECT_EQ(collect_response(script), 0);
+  EXPECT_FALSE(script.stop);
+  EXPECT_EQ(::send(accepted, suffix.data(), suffix.size(), MSG_NOSIGNAL),
+            static_cast<ssize_t>(suffix.size()));
+  EXPECT_EQ(collect_response(script), 0);
+  EXPECT_TRUE(script.stop);
+  EXPECT_EQ(script.response_size, prefix.size() + suffix.size());
+  static_cast<void>(::close(accepted));
+  static_cast<void>(::close(connected.client));
+  static_cast<void>(::close(connected.listener));
 }
 
 TEST(ReactorEnvironmentTest, ProductionEnvironmentIsComplete) {
