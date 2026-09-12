@@ -820,7 +820,35 @@ public:
 
   [[nodiscard]] auto check_all_invariants() const -> std::optional<std::string> {
     if (const auto invariant = core::check_session_invariants(session_); invariant.has_value()) {
-      return std::string(core::session_invariant_name(*invariant));
+      std::ostringstream diagnostic;
+      diagnostic << core::session_invariant_name(*invariant)
+                 << "; attachment=" << session_.attachment.columns << 'x'
+                 << session_.attachment.rows;
+      for (const auto& tab_slot : session_.tabs) {
+        if (tab_slot.tab == nullptr) {
+          continue;
+        }
+        const auto& tab = *tab_slot.tab;
+        diagnostic << "; tab=" << tab.id.slot() << ':' << tab.id.generation()
+                   << " layout=" << tab.layout_column << ',' << tab.layout_row << '+'
+                   << tab.layout_columns << 'x' << tab.layout_rows
+                   << " focus=" << tab.focused_pane.slot() << ':' << tab.focused_pane.generation()
+                   << " previous=" << tab.previous_pane.slot() << ':'
+                   << tab.previous_pane.generation() << " zoom=" << tab.zoomed
+                   << " suspended=" << tab.layout_suspended;
+      }
+      for (const auto& pane_slot : session_.panes) {
+        if (pane_slot.pane == nullptr) {
+          continue;
+        }
+        const auto& pane = *pane_slot.pane;
+        diagnostic << "; pane=" << pane.id.slot() << ':' << pane.id.generation()
+                   << " tab=" << pane.tab.slot() << ':' << pane.tab.generation()
+                   << " rectangle=" << pane.rectangle.column << ',' << pane.rectangle.row << '+'
+                   << pane.rectangle.columns << 'x' << pane.rectangle.rows
+                   << " exited=" << pane.process_exit.has_value();
+      }
+      return diagnostic.str();
     }
     return runtime_.validate(session_);
   }
@@ -1798,6 +1826,25 @@ TEST(MuxSimulationTest, ConsistencyLossFailsClosedWithoutBreakingSemanticOrRunti
   EXPECT_EQ(transition.result.status, CommandStatus::failed);
   EXPECT_TRUE(transition.mutated);
   EXPECT_FALSE(world.check_all_invariants().has_value());
+}
+
+TEST(MuxSimulationTest, RejectedResizeSuspendsLayoutAfterClosingZoomedPane) {
+  const std::array operations{
+      MuxTraceEntry{.operation = {.kind = MuxOperationKind::split,
+                                  .tab = TabId::from_parts(0, 1),
+                                  .pane = PaneId::from_parts(0, 1)}},
+      MuxTraceEntry{.operation = {.kind = MuxOperationKind::zoom,
+                                  .tab = TabId::from_parts(0, 1),
+                                  .pane = PaneId::from_parts(1, 1)}},
+      MuxTraceEntry{.operation = {.kind = MuxOperationKind::attachment_resize,
+                                  .argument_0 = 3,
+                                  .argument_1 = 1}},
+      MuxTraceEntry{.operation = {.kind = MuxOperationKind::child_exit,
+                                  .tab = TabId::from_parts(0, 1),
+                                  .pane = PaneId::from_parts(1, 1),
+                                  .resize_outcome = RuntimeEffectStatus::rejected}},
+  };
+  EXPECT_TRUE(run_mux_trace("rejected-zoomed-child-exit.trace", operations));
 }
 
 // GoogleTest assertions inflate the measured branch count.

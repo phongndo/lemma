@@ -1180,8 +1180,10 @@ auto session_invariant_name(const SessionInvariantError error) noexcept -> std::
     return "Pane owning Tab does not resolve";
   case SessionInvariantError::pane_layout_membership:
     return "Pane and layout membership differ";
-  case SessionInvariantError::pane_rectangle:
-    return "Pane rectangle is empty";
+  case SessionInvariantError::pane_rectangle_empty:
+    return "Pane rectangle has zero width or height";
+  case SessionInvariantError::pane_rectangle_out_of_bounds:
+    return "presented Pane rectangle is outside its layout viewport";
   case SessionInvariantError::layout_invalid:
     return "Pane layout is invalid";
   case SessionInvariantError::focused_pane:
@@ -1273,12 +1275,15 @@ auto check_session_invariants(const Session& session) noexcept
     const auto pane_bottom = static_cast<std::uint32_t>(pane.rectangle.row) + pane.rectangle.rows;
     const auto layout_right = static_cast<std::uint32_t>(tab->layout_column) + tab->layout_columns;
     const auto layout_bottom = static_cast<std::uint32_t>(tab->layout_row) + tab->layout_rows;
-    const bool pane_presented = !tab->zoomed || pane.id == tab->focused_pane;
-    if (pane.rectangle.columns == 0 || pane.rectangle.rows == 0 ||
-        (pane_presented &&
-         (pane.rectangle.column < tab->layout_column || pane.rectangle.row < tab->layout_row ||
-          pane_right > layout_right || pane_bottom > layout_bottom))) {
-      return SessionInvariantError::pane_rectangle;
+    if (pane.rectangle.columns == 0 || pane.rectangle.rows == 0) {
+      return SessionInvariantError::pane_rectangle_empty;
+    }
+    const bool pane_presented =
+        !tab->layout_suspended && (!tab->zoomed || pane.id == tab->focused_pane);
+    if (pane_presented &&
+        (pane.rectangle.column < tab->layout_column || pane.rectangle.row < tab->layout_row ||
+         pane_right > layout_right || pane_bottom > layout_bottom)) {
+      return SessionInvariantError::pane_rectangle_out_of_bounds;
     }
     if (pane.process_exit.has_value() && pane.exit_policy != PaneExitPolicy::hold) {
       return SessionInvariantError::process_exit_policy;
