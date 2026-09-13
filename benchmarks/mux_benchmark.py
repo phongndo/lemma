@@ -1386,7 +1386,8 @@ class LemmaRuntime:
             "probe": executable_provenance(self.probe_path),
             "extension_fixture": (
                 executable_provenance(self.extension_fixture_path)
-                if self.extension_fixture_path is not None
+                if self.extension_fixture_mode is not None
+                and self.extension_fixture_path is not None
                 else None
             ),
         }
