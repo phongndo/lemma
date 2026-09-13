@@ -109,6 +109,7 @@ add_library(
   src/terminal/terminal_input.cpp
   src/terminal/terminal_render.cpp
   src/terminal/terminal_selection.cpp
+  src/terminal/terminal_measure.cpp
 )
 lemma_internal_target(lemma_terminal)
 target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
