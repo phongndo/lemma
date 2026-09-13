@@ -66,8 +66,71 @@ from mux_benchmark import (
 from mux_benchmark import (
     summary as latency_summary,
 )
+from ownership_census import record_sizes
 from performance_host import validate as validate_host
 from terminal_lab import validate_samples
+
+
+class OwnershipCensusTest(unittest.TestCase):
+    # Reviewed declarations and sizes from a Release Clang dump, independent of TARGETS.
+    LAYOUTS: ClassVar[dict[str, tuple[str, int]]] = {
+        "pane_semantic": ("struct lemma::core::Pane", 48),
+        "pane_runtime": ("struct lemma::core::engine_detail::PaneRuntime", 232),
+        "pane_runtime_store": (
+            "class lemma::core::engine_detail::PaneRuntimeStore",
+            528,
+        ),
+        "tab_inline": ("struct lemma::core::Tab", 2656),
+        "session_inline": ("struct lemma::core::Session", 85152),
+        "attachment_semantic": ("struct lemma::core::Attachment", 13984),
+        "attachment_runtime": (
+            "struct lemma::core::engine_detail::AttachmentRuntime",
+            9096,
+        ),
+        "session_record": ("struct lemma::core::engine_detail::SessionRecord", 95200),
+        "copy_mode_semantic": ("struct lemma::core::CopyModeState", 544),
+        "copy_mode_runtime": (
+            "struct lemma::core::engine_detail::CopyModeRuntimeState",
+            176,
+        ),
+        "pending_connection": (
+            "struct lemma::core::engine_detail::PendingConnection",
+            144216,
+        ),
+        "descriptor_owner": ("struct lemma::core::engine_detail::DescriptorOwner", 56),
+        "pty_write_queue_inline": ("class lemma::core::PanePtyWriteQueue", 32),
+        "client_decoder_inline": ("class lemma::protocol::ClientDecoder", 8312),
+        "connection_output_inline": ("class lemma::core::ConnectionOutput", 65552),
+        "client_frame_output_inline": ("class lemma::core::ClientFrameOutput", 400),
+        "frame_buffer_inline": ("class lemma::render::FrameBuffer", 40),
+        "terminal_impl_inline": ("struct lemma::vt::Terminal::Impl", 84304),
+        "terminal_quota_allocator_inline": (
+            "class lemma::vt::detail::QuotaAllocator",
+            64,
+        ),
+    }
+
+    def layout_dump(self, *, omit: str | None = None) -> str:
+        return "\n".join(
+            f"*** Dumping AST Record Layout\n"
+            f"         0 | {declaration}\n"
+            f"           | [sizeof={size}, dsize={size}, align=8,\n"
+            f"           |  nvsize={size}, nvalign=8]\n"
+            for label, (declaration, size) in self.LAYOUTS.items()
+            if label != omit
+        )
+
+    def test_current_owner_declarations(self) -> None:
+        self.assertEqual(
+            record_sizes(self.layout_dump()),
+            {label: size for label, (_, size) in self.LAYOUTS.items()},
+        )
+
+    def test_missing_owner_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError, "^record layout dump omitted targets: pane_runtime$"
+        ):
+            record_sizes(self.layout_dump(omit="pane_runtime"))
 
 
 class LinuxResourceTest(unittest.TestCase):

@@ -301,8 +301,7 @@ static_assert(sizeof(SessionRecord) <= std::size_t{96} * 1'024U);
 [[nodiscard]] auto reactor_input_map() noexcept -> const input::CompiledInputMap&;
 [[nodiscard]] auto reactor_status_line() noexcept -> bool;
 
-[[nodiscard]] constexpr auto pane_rows(const std::uint16_t viewport_rows) noexcept
-    -> std::uint16_t {
+[[nodiscard]] inline auto pane_rows(const std::uint16_t viewport_rows) noexcept -> std::uint16_t {
   return reactor_status_line() && viewport_rows >= 2
              ? static_cast<std::uint16_t>(viewport_rows - 1U)
              : viewport_rows;
