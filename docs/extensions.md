@@ -1,276 +1,242 @@
-# Configuration and commands
+# Runtime extensions
 
-Lemma loads user configuration from Lua in a separate bounded host process. The daemon never
-executes Lua while routing input, processing PTY bytes, or composing frames. A successful load is
-validated and compiled into one immutable native configuration generation before any Session can
-use it.
+Extensions are external programs that compose three primitives:
 
-This transitional Lua host covers compiled input policy, terminal history, native status UI,
-launch defaults, and asynchronous Lua commands in the interactive command line. It does not expose
-Event subscriptions, custom UI Surfaces, dynamic routing contexts, or live reload. Language-neutral
-runtime extensions use `lemma.extension/v1` as documented in [Extensions](extension.md); new runtime
-capabilities do not depend on Lua callbacks.
-
-## Location and validation
-
-The default file is:
+| Primitive | Purpose |
+| --- | --- |
+| Proc | Request an authoritative change through the [Automation API](api.md) |
+| Event | Observe committed state or interaction with an owned Surface |
+| Surface | Present extension-owned state as a retained Grid |
 
 ```text
-$XDG_CONFIG_HOME/lemma/init.lua
+Lemma state -> Event -> extension state -> Surface update -> native Scene -> user
+                  ^             |                                           |
+                  |             +-> Proc -> Lemma state                      |
+                  +---------------- owned interaction Event <---------------+
 ```
 
-If `XDG_CONFIG_HOME` is unset or not absolute, Lemma uses:
+V1 supports full-duplex framed connections, capability negotiation, Procs, Attachment-scoped Grids,
+dock/float/overlay placement, and owner-directed input. A Surface is not a Pane, PTY, or terminal
+emulator. A terminal remains a real Pane using the ordinary process, Ghostty, and lifecycle machinery.
+Floating terminal creation, shared/Session-scoped Surfaces, and wholesale native-UI replacement are
+not supported.
+
+Runtime extensions can use any language that speaks the protocol. The separate
+[Lua configuration and custom-command host](configuration.md) remains supported; it does not
+provide runtime-extension discovery or launch declarations.
+
+## Boundary and trust
+
+The daemon owns mux and terminal state. Extensions own their application state and refer to Lemma
+objects by stable IDs, never borrowed Core pointers. For example, filtering a picker changes
+extension state and its Surface; selecting or killing a real Session submits a Proc.
+
+Extension code never runs on the daemon's PTY, input-routing, scheduling, or composition stacks.
+Native Scene code owns geometry, ordering, clipping, borders, occlusion repair, damage aggregation,
+cursor arbitration, and terminal output. A slow extension can make its own UI stale, but PTY progress
+and composition have no synchronous dependency on it.
+
+Protocol isolation is not an OS sandbox. Extensions execute with the user's permissions and should
+be trusted. They share host CPU and memory, and their messages still require native decoding and
+validation; isolation means bounded work and measured responsiveness, not literal zero impact.
+
+V1 negotiates these capabilities:
+
+| Capability | Grants |
+| --- | --- |
+| `observe` | Selected state Events, snapshots, and optional bounded screen projections |
+| `proc` | Proc submission |
+| `surface` | Surface lifecycle/content and scoped interaction Events |
+
+Surface input goes only to its owner, not to every observer. Lemma retains a native recovery path
+that extension UI cannot override.
+
+## Connection and framing
+
+Connect to the ordinary [daemon Unix endpoint](api.md#direct-connections). V1 multiplexes Proc and
+SurfaceUpdate requests with ProcResult, Event, and Error responses on one full-duplex stream.
+The connection owns one `ExtensionGenerationId`.
+
+Every record has a 16-byte network-byte-order header; the initial magic byte selects this protocol:
 
 ```text
-$HOME/.config/lemma/init.lua
+0..3   magic       8a 4c 4d 45 ("LME" after the discriminator)
+4      major       1
+5      minor       0
+6      kind        Hello=1 Welcome=2 Proc=3 ProcResult=4 SurfaceUpdate=5 Event=6 Error=7
+7      flags       0
+8..11  payload     unsigned JSON payload byte length
+12..15 sequence    nonzero unsigned request or record ID
 ```
 
-`LEMMA_CONFIG` selects another file. Lemma does not start the host when the default file is absent.
-Validate a file without starting or changing the daemon:
+Payloads are UTF-8 JSON. Unknown versions, kinds, flags, invalid lengths, zero sequence IDs,
+malformed JSON, duplicate keys, or records using an ungranted capability are rejected.
+`lemma api schema --json` exposes the payload schemas; Welcome supplies negotiated resource limits,
+including `record_bytes`. Framing and parser limits apply in addition to JSON Schema validity.
 
-```sh
-lemma config check
-lemma config check ./init.lua
+The first record is Hello. This [example](../examples/extension-hello.json) binds to an existing
+Session named `example`; send it as a framed Hello, not as a CONTROL JSON line:
+
+```json example=../examples/extension-hello.json
+{
+  "schema": "lemma.extension/v1",
+  "name": "project-sidebar",
+  "capabilities": ["observe", "proc", "surface"],
+  "events": {
+    "schema": "lemma.events/v1",
+    "session": {"name": "example"}
+  }
+}
 ```
 
-The host has a 64 MiB Lua allocation bound. Startup must produce a complete configuration within two
-seconds, the combined encoded configuration and command declarations are bounded to 64 KiB, and at
-most 240 effective bindings are accepted. A syntax error, runtime error, unknown option, invalid binding, capacity failure, timeout,
-or host crash rejects the complete generation. Daemon startup then continues with built-in
-configuration.
+`observe` and `surface` require `events.session`, selecting that Session's Attachment. A proc-only
+connection may omit `events` and have no Session/UI scope; its Commands use ordinary explicit
+selectors. Supplying `events`, even without `observe`, requires a live Session and binds connection
+lifetime to it. This alone does not grant observation.
 
-Configuration and modules execute with the user's operating-system permissions. Only load code you
-trust. `require()` searches beside `init.lua` before the ordinary Lua module path.
+Lemma replies with one `lemma.extension-welcome/v1` record containing the generation, granted
+capabilities, and limits. `attachment` is present only for scoped connections. When `observe` is
+granted, an authoritative `snapshot` follows before incremental Events.
 
-## API
+## Ordering and admission
 
-```lua
-local lemma = require("lemma")
-local keymap = lemma.keymap
-local ctx = lemma.context
+ProcResult echoes the Proc header's sequence ID. Error echoes the rejected record's sequence,
+including a rejected SurfaceUpdate; it is not a ProcResult and does not imply execution.
+V1 admits at most one outstanding Proc per owner. Rejected admission executes no Commands;
+admitted Procs retain ordinary ordered, non-atomic, partial-completion semantics.
 
-lemma.setup({
-  input = {
-    preset = "none",
-    prefix = false,
-  },
-  terminal = {
-    scrollback_lines = 100000,
-  },
-  ui = {
-    status_line = false,
-  },
-  launch = {
-    default_cwd = "/work/project",
-    default_program = { "/bin/sh", "-l" },
-  },
-  history = {
-    file = "/home/me/.local/state/lemma/command-history",
-  },
-})
+Admission reserves one maximum-sized framed result in the bounded output queue. Other admissions
+cannot consume that reservation. Completion converts it to queued bytes; ownership cancellation or
+disconnect releases it. This is not a delivery guarantee across transport failure, nor an
+exactly-once execution guarantee across reconnects.
 
-ctx.set("resize", {
-  label = "RESIZE",
-  lifetime = "persistent",
-  unbound = "consume",
-})
+Records retain enqueue order on the single stream. Event sequence IDs belong to a separate lane,
+not the request-ID space. There is no global result-before-all-events ordering. Structural Surface
+Events are retained until their owner's Proc result is enqueued. **Await a successful structural
+ProcResult before sending content that depends on its Surface ID or geometry.** Read the result to
+learn whether a request succeeded; use Events to observe committed consequences and other actors.
 
-keymap.set("normal", "Cmd-d", "split_left_right")
-keymap.set("normal", "M-r", ctx.push("resize"))
-keymap.set("resize", "q", ctx.pop())
-keymap.del("normal", "Cmd-c")
-```
+Surface updates apply in input order. A rejected update leaves the previous Grid intact and
+produces a correlated Error when output capacity permits. Successful updates have no separate
+acknowledgement. Presentation may coalesce updates; dependent accepted patches are not discarded.
 
-All `lemma.setup()` groups and fields are optional:
+## Observation and lifetime
 
-- `input.preset` is `"default"` or `"none"`. The default preset seeds ordinary context and binding
-  declarations; `none` retains the routing-context slots but starts with no bindings. Both are
-  validated and compiled through the same path. Selecting a preset resets its prefix to `C-b` or no
-  prefix respectively, and `input.prefix` in the same table can override it.
-- `input.prefix` is any valid key chord, or `false` for no prefix. A configured prefix enters the
-  one-shot `prefix` context. Direct bindings in `normal` do not require a prefix.
-- `terminal.scrollback_lines` is a nonnegative integer up to 10,000,000, or `false` for the native
-  memory-bounded default.
-- `ui.status_line` enables or disables the native one-row status line. Disabling it gives the full
-  viewport to panes and makes status-hosted command-line and copy-search bindings inert.
-- `launch.default_cwd` is empty or an absolute path. It applies when creation does not specify
-  `--cwd`.
-- `launch.default_program` is an exact argv array, not a shell command. It is bounded to 64
-  arguments and 4 KiB including terminators. An empty array selects the account login shell.
-  Explicit creation arguments after `--` take precedence.
-- `history.file` is empty by default, which keeps command history in memory only. An absolute path
-  enables best-effort loading at daemon startup and atomic saving on clean shutdown. The parent
-  directory must already exist; malformed, oversized, missing, or inaccessible files load as empty.
-  Missing files may be created, but failed reads and malformed existing files are not replaced on
-  shutdown.
+Observation starts from the snapshot's exact Pane presence, process outcome, and terminal
+generations. Incremental selection examines only the subscription's bounded stable Pane IDs on
+reactor activity, not a periodic full-pane scan. A changed Pane does not depend on an unrelated wake.
+Held-child exit produces `pane.process`; removal of a previously present selected Pane produces
+`pane.closed`. Events describe committed current state, not every transient process transition.
+There is no Event replay log.
 
-`lemma.keymap.set(CONTEXT, KEY, ACTION[, DISPOSITION])` replaces or adds one binding. `ACTION`
-may be a command string or one of these native-policy descriptors:
+Every Surface has a generational `SurfaceId` and belongs to the Attachment and owner generation
+selected at admission. Disconnect or connection replacement invalidates that generation, closes
+its Surfaces, revokes focus, cancels remaining owned work, and releases retained state without an
+extension cleanup callback. Completed Proc effects are not rolled back. Slot reuse never transfers
+focus or pointer capture to a different Attachment generation.
 
-```lua
-lemma.context.push("resize")                   -- push another routing context
-lemma.context.push("prefix", { defer = true })  -- retain trigger bytes for replay
-lemma.context.pop()                             -- pop the current transient context
-lemma.keymap.replay()                           -- replay a deferred trigger
-lemma.keymap.send("Home")                       -- encode a physical key for the pane
-```
+Destroying a bound Session revokes the connection and its resources whether or not `observe` was
+granted. Clients receive EOF; a final Event across that ownership boundary is not guaranteed.
+Reconnection creates a new owner generation: rebuild desired Surfaces from private extension state
+and fresh authoritative snapshots rather than expecting old IDs or retained execution history.
 
-`DISPOSITION` applies to command strings: `"retain"` is the default and `"base"` returns from
-transient contexts before invocation. `lemma.keymap.del(CONTEXT, KEY)` removes one seeded or
-previously configured binding. Repeated declarations use the last declaration.
+Ordinary terminal-client detach does not destroy the semantic Attachment. Its Surfaces and Surface
+focus remain available on re-attach while the extension stays connected. Switching Sessions moves
+the client connection, not these resources; switching back restores the source Attachment's retained
+presentation.
 
-`lemma.context.push()` and `lemma.context.pop()` change routing state only. Semantic interactions
-still use commands such as `enter_copy_mode`, `copy_leave`, `begin_rename_tab`,
-`begin_command_line`, and `command_line_cancel` so Core remains authoritative for their state and
-invariants.
+## Grid updates
 
-`lemma.context.set(CONTEXT, OPTIONS)` configures `label`, `lifetime` (`"persistent"` or
-`"one_shot"`), unbound behavior (`"forward"`, `"consume"`, `"replay"`, or `"retry"`), and whether
-the context `preempts` another Attachment interaction. A nonempty active label replaces the normal
-Session/Tab status row as flat text; callers need not add badge padding. `retry` leaves a one-shot
-context and routes the unmatched key through its base context.
+A Surface contains a bounded retained Grid: dimensions, row text runs, styles, cursor state, and
+damage generation. It is presentation state, not terminal truth. Use Proc for `surface.create`,
+`surface.configure`, `surface.focus`, and `surface.close`, because these change authoritative
+Attachment state and can affect Pane geometry.
 
-The bounded routing contexts are:
+High-frequency content uses `lemma.surface-update/v1`: optional style-table replacement, row text
+runs, and cursor state. Each supplied row replaces that row's runs, not the whole Grid. Different
+row patches cannot supersede each other. The complete update is validated before retained state
+changes; rejected updates cannot leave partial content.
 
-- `normal`: ordinary pane input;
-- `prefix`: the conventional one-shot command context;
-- `resize`: resize policy;
-- `copy`: copy navigation and selection;
-- `copy_go`: the default `g` one-shot grammar;
-- `copy_search`: editable search query input;
-- `copy_searching`: an in-progress bounded search;
-- `rename`: session and tab prompt editing;
-- `command_line`: interactive command-line editing, completion, and history;
-- `messages`: read-only navigation of the bounded Attachment message log.
+Schema validity, negotiated limits, and current-state validity are distinct:
 
-Core owns the commands and interaction state, but not their keys. Resize transitions, copy
-navigation/search, rename editing, prefix replay, and pane key rewrites all come from the compiled
-configuration. An explicit `preset = "none"` configuration can recreate the complete shipped
-policy. After publication the router cannot distinguish a seeded binding from a user binding.
+- `style` and `cursor.visible` defaults apply only when absent; nulls and wrong types are malformed.
+- Welcome's `columns`/`rows` limits bound Grid dimensions and maximum row-patch count.
+- Coordinates must fit the current Grid; style indices must exist in its retained or replacement
+  table. Row patches cannot repeat a row or overlap runs.
+- `text_bytes_per_row` counts UTF-8 bytes; JSON Schema string lengths count Unicode characters.
+- Framing bytes and parser value/depth bounds still apply. A schema-valid update may be rejected
+  for stale ownership, current geometry, or retained-memory capacity.
 
-Key names use printable ASCII or structured names. Modifiers are `C-`, `S-`, `M-`/`A-`, and
-`Super-`/`Cmd-`/`Command-`/`Win-`/`D-`. Named keys are `Space`, `Enter`, `Tab`, `Backspace`,
-`Escape`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `Insert`, `Delete`, `PageUp`, `PageDown`,
-and `F1` through `F12`. Super/Cmd and other non-terminal chords work for structured keyboard
-clients; legacy byte-stream terminals cannot report chords they do not encode.
+## Placement
 
-Commands are:
+Placements are `dock.left`, `dock.right`, `dock.top`, `dock.bottom`, `float`, and `overlay`.
+Core still owns tiled terminal layout; extension Surfaces compose around or above it, not as
+synthetic Panes.
 
-```text
-detach
-split_left_right split_top_bottom
-resize_left resize_right resize_up resize_down
-focus_left focus_right focus_up focus_down focus_next focus_previous
-close_pane toggle_zoom
-enter_copy_mode enter_copy_search_forward enter_copy_search_backward copy_selection
-copy_cancel_or_leave copy_leave copy_cancel_selection
-copy_move_left copy_move_down copy_move_up copy_move_right
-copy_word_left copy_word_right copy_word_end
-copy_line_start copy_line_first_nonblank copy_line_end
-copy_history_top copy_history_bottom
-copy_viewport_top copy_viewport_middle copy_viewport_bottom
-copy_half_page_up copy_half_page_down copy_page_up copy_page_down
-copy_visual_character copy_visual_line copy_visual_block copy_swap_endpoint
-copy_repeat_search copy_reverse_search copy_cancel_search copy_commit_search copy_query_backspace
-rename_cancel rename_commit rename_backspace rename_delete
-rename_cursor_left rename_cursor_right rename_cursor_home rename_cursor_end
-rename_clear rename_delete_word
-create_tab next_tab previous_tab close_tab
-begin_rename_session begin_rename_tab begin_command_line move_tab_left move_tab_right
-show_messages message_view_leave message_view_previous message_view_next
-message_view_page_previous message_view_page_next message_view_history_start message_view_history_end
-command_line_cancel command_line_commit command_line_complete
-command_line_history_previous command_line_history_next
-command_line_backspace command_line_delete command_line_cursor_left command_line_cursor_right
-command_line_cursor_home command_line_cursor_end command_line_clear command_line_delete_word
-swap_pane_left swap_pane_right swap_pane_up swap_pane_down
-select_tab_0 select_tab_1 select_tab_2 select_tab_3 select_tab_4
-select_tab_5 select_tab_6 select_tab_7 select_tab_8 select_tab_9
-```
+Docks reserve Attachment viewport space. Structural changes resolve Surface placement, then Core
+layout, Pane geometry, and dependent PTY/Ghostty resize. The extension declares constraints; native
+code resolves geometry and commits the transaction. A rejected transaction retains prior Surface
+state.
 
-## Custom commands
+Floats and overlays reserve no tiled space. They can be opaque or transparent: missing runs in
+transparent rows reveal repaired lower Scene content. Docks must be opaque because their reserved
+space has no Pane backing.
 
-Register commands during configuration loading, directly in `init.lua` or a required module:
+After terminal shrink, docks resolve in ascending Surface-slot order. A dock that cannot leave at
+least one Pane cell on its axis is suspended and reserves no space; later docks may still fit.
+Floats/overlays extending beyond the viewport are suspended whole, not clipped or moved. Suspension
+retains placement and content, revokes focus/pointer capture to native Pane fallback, and does not
+block closing or repairing another Surface. A suspended Surface reappears when it fits, without
+retaking focus. Creating or configuring a Surface requires its new placement to resolve visibly;
+native layout minimums and fallible PTY resize can still reject the structural transaction.
 
-```lua
-local lemma = require("lemma")
+## Focus and input
 
-lemma.command.register("work.tests", {
-  description = "Open a tests tab",
-  timeout_ms = 30000,
-  handler = function(ctx, args)
-    local result = ctx:proc({
-      commands = {
-        {
-          command = "tab.new",
-          session = { id = ctx.session },
-          title = args[1] or "tests",
-          argv = { "just", "test" },
-        },
-      },
-    })
-    assert(result.ok, "Could not open tests tab")
-  end,
-})
-```
+A focusable Surface receives input only while it owns Attachment focus. Mouse interaction may focus
+it according to native Scene policy; programmatic focus uses Proc. Successful numbered/next/previous
+Tab selection, Pane focus, and creation with `focus=created` return input to the native Pane,
+regardless of frontend. Rejected operations and `focus=preserve` creation retain Surface focus.
+Native prompts temporarily take input without changing that semantic target; canceling returns to it.
 
-Open `C-b :`, type `work.te`, press Tab to complete `work.tests`, then Enter. Arguments use the same
-literal quoting grammar as native commands: `work.tests 'unit tests'` passes one string. Commands
-are currently invokable only through the interactive command line, not keymaps or the public Proc
-catalog. They require the native status line to be enabled.
+Surface interaction Events include `surface.resized`, `surface.focused`, `surface.blurred`,
+`surface.closed`, `surface.key`, `surface.mouse`, and `surface.paste`. Local picker queries, selected
+rows, and scrolling belong to the extension, not Core.
 
-`lemma.command.register(NAME, OPTIONS)` requires `description` and a function `handler(ctx, args)`.
-`timeout_ms` is optional. Unknown options, duplicate names, or invalid declarations reject the
-entire startup transaction, including configuration. Registration is not allowed from callbacks.
-Names must be qualified, such as `work.tests`: dot-separated segments begin with a lowercase ASCII
-letter and otherwise contain lowercase letters, digits, `_`, or `-`. This keeps extension commands
-separate from native command roots.
+`surface.mouse` coordinates are zero-based offsets from the Surface origin. Pointer capture preserves
+delivery outside the Surface and reports signed out-of-bounds offsets.
 
-`ctx.session`, `ctx.tab`, and `ctx.pane` are generational ID strings captured at invocation. Wrap them
-in `{ id = ctx.pane }` selectors as in the public API. They do not follow later focus changes, and
-normal stale-target checks apply. `args` is a one-based array of literal strings.
+`surface.key` carries either `text` (complete valid UTF-8, including escaped U+0000) or `bytes_hex`
+(opaque bytes as lowercase hexadecimal), never both. Invalid or split UTF-8 chunks use `bytes_hex`.
+Reconstruct a raw stream by UTF-8-encoding text and hex-decoding bytes in Event order; there is no
+lossy replacement or cross-record Unicode assumption. `surface.paste` always uses `bytes_hex`.
 
-`ctx:proc(DOCUMENT)` yields the callback until the daemon returns the complete
-`lemma.proc-result/v1` table. `schema = "lemma.proc/v1"` is supplied when omitted; all other fields,
-validation, backward references, ordering, partial completion, and `on_error` behavior are those of
-the [Automation API](api.md). Rejections are returned as results rather than thrown. A callback can
-inspect the result and submit another Proc. Returning completes the command; throwing publishes an
-error in the attachment's bounded message log and status row.
+Input is chunked below Welcome's `input_bytes` bound (8192 bytes), covering maximum-size legacy key
+records. Paste production uses at most 4096 bytes per turn, leaving framing headroom after hex
+encoding in the write quantum. Chunks are transport boundaries, not characters or complete pastes.
+Hex/JSON expansion fits the record bound; queue overflow remains a separate policy.
 
-Lua strings, integers, booleans, and ordinary tables represent JSON values. Contiguous, nonempty
-one-based tables become arrays; string-keyed and empty tables become objects. Omit empty optional
-arrays. Cycles, mixed or sparse tables, functions, and noninteger numbers cannot be submitted.
-JSON null results become Lua nil. Do not call `coroutine.yield` directly; use `ctx:proc`.
+## Backpressure and failure
 
-Runtime bounds are:
+Welcome reports per-owner and aggregate peer, Surface, retained input/output, and per-turn service
+limits. Accounting derives from peer-owned input, records, queues, Events, and Proc reservations.
+Event bytes include framing and decrement as written; a record occupies its Event slot until its
+last byte drains, even while unrelated output keeps the queue nonempty.
 
-- 64 registered commands, with names up to 64 bytes and printable ASCII descriptions up to 256 bytes;
-- eight concurrent invocations, each with at most one outstanding Proc;
-- a default 30-second invocation deadline, configurable from 1 to 600,000 milliseconds, including
-  time spent waiting for Procs;
-- one million Lua instructions per coroutine resume, plus the host-wide Lua allocation bound;
-- 1 MiB per private runtime record, including its envelope, with a 2 MiB outgoing queue per peer;
-- one 16 KiB read and write attempt and at most one record decode per reactor turn.
+Global turn budgets charge socket reads/writes, record count, and complete framed bytes before
+parsing or structural application. Rotating peer order prevents a low slot from owning successive
+budgets. Slow peers cannot grow memory without bound or block unrelated Procs, PTYs, or Attachments.
+An update storm can delay presentation or disconnect its owner on resource exhaustion, but cannot
+create unbounded scheduling work or silently drop dependent accepted patches.
 
-Callbacks share one host and cooperate by yielding through `ctx:proc`. A blocked native Lua call
-can delay other callbacks, but not ordinary pane input, PTY progress, or rendering. The daemon
-terminates the host on an invocation deadline. These bounds are not an OS security sandbox or an
-aggregate CPU quota; only load trusted code.
+Unchanged retained content creates no extension work. Hidden or fully occluded Surfaces need no
+composition work until they affect output. With no damage or Events, idle extensions should add no
+per-byte, per-cell, or per-frame work beyond bounded connection bookkeeping. Validate isolation
+with the [extension performance gate](performance.md#extension-isolation), not idle-helper timings
+alone.
 
-## Failure and lifetime
+Crash, protocol failure, or disconnect cleans up the failed owner as described above. Native UI,
+Sessions, Panes, terminal state, and unrelated extensions remain usable. A malformed content update
+is rejected transactionally; extension code never participates in Core lifecycle transitions.
 
-The daemon owns the compiled configuration after publication. Lua remains in its separate host,
-never on the input or render call stack. Only explicitly invoked custom commands require runtime
-host communication. The private host protocol does not change the public lock-step CONTROL API.
-
-An invocation belongs to the originating attachment generation. Detach, disconnect, or switching
-Sessions cancels its remaining Proc commands before further execution. Completed effects are not
-rolled back. Cancellation retains its bounded slot and deadline until the host acknowledges it, so
-a blocked callback cannot evade the watchdog by detaching.
-
-A callback error or instruction-budget failure ends that invocation without disabling other
-commands. Host crash, protocol failure, or deadline expiration removes custom command discovery and
-cancels outstanding invocations. Native bindings, compiled settings, Sessions, and ordinary pane
-processes remain usable. Host recovery requires a daemon restart; live reload is not implemented.
-Closing the daemon's private lease closes the host. Invalid startup configuration never partially
-changes the native map.
+For executable boundary coverage, see the [runtime tests](../tests/mux/test_extension_runtime.py)
+and [Surface conformance corpus](../tests/mux/fixtures/extension_conformance.json).

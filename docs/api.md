@@ -24,20 +24,11 @@ lemma proc DOMAIN COMMAND --help
 The JSON form is the authoritative JSON Schema 2020-12 document for Commands, Procs, results,
 subscriptions, and Events. It is embedded in the binary and requires no running daemon.
 
-The current Command catalog is:
-
-```text
-daemon   inspect
-session  start list inspect rename kill
-tab      new list inspect select move rename kill
-pane     split list inspect focus swap resize zoom input capture wait kill
-surface  create configure focus close (extension-session owners only)
-```
-
-The same schema also defines `lemma.extension/v1`, Surface updates, and extension interaction
-Events. The framed, full-duplex runtime transport and ownership rules are documented in
-[Extensions](extension.md). Surface lifecycle Commands are rejected outside an admitted extension
-generation because their owner and Attachment scope come from that connection.
+`lemma api schema` summarizes ordinary Commands; `--json` also includes the extension-only
+Surface Commands, `lemma.extension/v1`, Surface updates, and interaction Events. See
+[Runtime extensions](extensions.md) for the framed transport and ownership rules. Surface lifecycle
+Commands are rejected outside an admitted extension generation because their owner and Attachment
+scope come from that connection.
 
 ## One-Command Procs
 
@@ -73,25 +64,31 @@ without a condition it waits for child-process completion.
 
 ## Multi-Command Procs
 
-A Proc document contains at most 64 Commands:
+A Proc contains at most 64 Commands. This [runnable job](../examples/job.json) starts a held Pane,
+waits for its process, captures output, and cleans up only its own Session. `on_error: continue`
+keeps capture and cleanup reachable after an unexpected exit or timeout; still inspect every result.
 
-```json
+```json example=../examples/job.json
 {
   "schema": "lemma.proc/v1",
-  "on_error": "stop",
+  "on_error": "continue",
   "commands": [
-    {"id":"work", "command":"session.start", "name":"work"},
-    {"id":"tests", "command":"tab.new", "session":{"result":"work"},
-     "focus":"preserve", "argv":["just","test"]},
-    {"command":"pane.wait", "pane":{"result":"tests"}, "timeout_ms":120000},
-    {"command":"session.kill", "session":{"result":"work"}}
+    {"id":"job", "command":"session.start", "name":"example-job",
+     "hold":true, "argv":["/bin/echo", "hello from Lemma"]},
+    {"command":"pane.wait", "pane":{"result":"job"},
+     "exit_code":0, "timeout_ms":5000},
+    {"command":"pane.capture", "pane":{"result":"job"},
+     "source":"recent", "lines":20},
+    {"command":"session.kill", "session":{"result":"job"}}
   ]
 }
 ```
 
+From the checkout:
+
 ```sh
-lemma proc --file proc.json
-lemma proc --stdin < proc.json
+lemma proc --file examples/job.json
+lemma proc --stdin < examples/job.json
 ```
 
 Before executing anything, the daemon validates and compiles the complete envelope, every Command,

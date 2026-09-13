@@ -1,14 +1,28 @@
 # Lemma
 
+Lemma is a terminal multiplexer focused on performance and extensibility. It prioritizes responsive
+terminal interaction and low resource overhead as workloads, panes, and clients scale.
+
+Keep the daemon's `Session -> Tab -> Pane` kernel small. Projects, worktrees, and agent workflows
+compose the public API rather than become kernel objects. Extensions run as external programs,
+observing Events, submitting Procs, and presenting UI through Surfaces; terminal parsing and frame
+composition stay native and independent of extension execution.
+
+## Working in the repository
+
 Read only the code, tests, and documentation relevant to the change. Public documentation defines
 the supported contract; code defines current implementation reality.
 
 Use:
 
-- `docs/usage.md` for user behavior;
-- `docs/api.md` for automation contracts;
-- `docs/architecture.md` for ownership and data flow; and
-- `docs/development.md` for design quality and verification.
+- [Usage](docs/usage.md) for user behavior;
+- [Configuration](docs/configuration.md) for Lua settings, keymaps, and custom commands;
+- [Automation API](docs/api.md) for Proc and Event contracts;
+- [Runtime extensions](docs/extensions.md) for external processes and Surfaces;
+- [Architecture](docs/architecture.md) for ownership and data flow;
+- [Performance](docs/performance.md) for hot-path changes and measurement requirements;
+- [Development](docs/development.md) for verification and dependency upgrades; and
+- [Documentation](docs/development.md#documentation) when changing docs or examples.
 
 ## Design
 
@@ -24,16 +38,5 @@ Do not create plans, roadmaps, TODO documents, or historical reports unless requ
 
 ## Verification
 
-Use repository commands:
-
-```sh
-just build
-just test
-just fmt
-just lint
-just check
-just ci-check
-```
-
-Run focused checks while developing and `just check` before completion. Do not ignore failing
-verification or claim success without stating what was run.
+Use repository entry points (`just --list`, `./test --help`). Run focused checks while developing
+and `just check` before completion. Report commands actually run and any failing or blocked checks.

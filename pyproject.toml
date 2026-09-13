@@ -6,6 +6,9 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "jsonschema==4.26.0",
+    "markdown-it-py==4.2.0",
+    "referencing==0.37.0",
     "ruff==0.16.1",
     "ty==0.0.67",
 ]

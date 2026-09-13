@@ -108,6 +108,18 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
 
+    def test_documented_hello_negotiates_and_observes_its_session(self) -> None:
+        self.server.create_session("example", attach=False, command=("/bin/cat",))
+        example = Path(__file__).resolve().parents[2] / "examples/extension-hello.json"
+        peer = ExtensionPeer(str(self.server.socket_path))
+        self.addCleanup(peer.close)
+        peer.send(HELLO, 1, json.loads(example.read_text()))
+        welcome = peer.receive_matching(2, 1)
+        self.assertEqual(welcome["schema"], "lemma.extension-welcome/v1")
+        self.assertEqual(set(welcome["capabilities"]), {"observe", "proc", "surface"})
+        self.assertIn("attachment", welcome)
+        self.assertEqual(peer.receive_matching(EVENT)["event"], "snapshot")
+
     def test_independent_surface_update_conformance_corpus(self) -> None:
         session = self.server.create_session(
             "conformance", attach=False, command=("/bin/cat",)

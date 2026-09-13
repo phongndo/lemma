@@ -44,6 +44,25 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: scripts/ci/changes.py
 
+  # Any source rename/deletion can invalidate a documentation link, so this cheap
+  # lane is unconditional and does not require a native build or submodule checkout.
+  docs:
+    name: Documentation contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Check documentation
+        run: nix develop .#ci --command just docs-check
+
   python:
     name: Python quality
     needs: changes
@@ -316,6 +335,7 @@ jobs:
     name: CI gate
     needs:
       - changes
+      - docs
       - python
       - ci-contracts
       - shellcheck
@@ -333,6 +353,7 @@ jobs:
       - name: Require every selected lane
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
           PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
           PYTHON_RESULT: ${{ needs.python.result }}
           AUTOMATION_SELECTED: ${{ needs.changes.outputs.automation }}
@@ -355,6 +376,7 @@ jobs:
 
           failed=0
           for entry in \
+            "docs:true:$DOCS_RESULT" \
             "python:$PYTHON_SELECTED:$PYTHON_RESULT" \
             "ci-contracts:$AUTOMATION_SELECTED:$CI_CONTRACTS_RESULT" \
             "shellcheck:$AUTOMATION_SELECTED:$SHELLCHECK_RESULT" \

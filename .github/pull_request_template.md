@@ -1,6 +1,6 @@
 ## Change
 
-<!-- What behavior changes, and why? -->
+<!-- What behavior changes, and why? Which contracts/docs/examples changed, or why are none affected? -->
 
 ## Verification
 
@@ -9,8 +9,9 @@
 ## Performance review
 
 <!-- Required for changes to input routing, PTY parsing/writes, rendering/composition, layout
-projection, resize, scheduling, or client output. Otherwise state why this is not applicable.
-See docs/development.md#performance-review-requirement. -->
+projection, resize, scheduling, or client output. Otherwise state why this is not applicable. -->
+
+[Performance review requirement](../docs/performance.md#performance-review-requirement)
 
 - Affected multiplier (bytes / events / panes / frames / clients):
 - Baseline revision and candidate revision / working-diff identity:

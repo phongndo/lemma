@@ -35,12 +35,15 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         if path.endswith((".py", ".pyi")) or _is(path, "pyproject.toml", "uv.lock"):
             result["python"] = True
 
-        # Production, test, and benchmark sources select the independent C++
-        # format, build/test, clang-tidy, clangd, and sanitizer jobs.
+        # Native contract inputs include the embedded schema and canonical runnable
+        # examples. Markdown copies are checked separately by the unconditional docs job.
+        # Select the independent C++ format, build/test, analysis, and sanitizer jobs.
         if path.startswith(
             (
                 "apps/",
                 "benchmarks/",
+                "examples/",
+                "schema/",
                 "include/",
                 "src/",
                 "tests/",
@@ -137,7 +140,8 @@ def write_summary(paths: list[str] | None, result: dict[str, bool]) -> None:
         return
 
     selected = (
-        ", ".join(lane for lane in LANES if result[lane]) or "none (documentation-only)"
+        ", ".join(lane for lane in LANES if result[lane])
+        or "none (documentation checks run unconditionally)"
     )
     path_summary = (
         "full validation fallback" if paths is None else f"{len(paths)} changed path(s)"

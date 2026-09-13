@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import unittest
 from collections.abc import Iterable
 from pathlib import Path
@@ -46,7 +47,31 @@ class CiChangesTests(unittest.TestCase):
         )
 
     def test_unrelated_documentation_selects_no_expensive_lane(self):
-        self.assertEqual(self.selected("README.md", "docs/development.md"), set())
+        self.assertEqual(
+            self.selected(
+                "README.md", "AGENTS.md", "docs/development.md", "docs/configuration.md"
+            ),
+            set(),
+        )
+
+    def test_schema_only_change_selects_native_contract_tests(self):
+        self.assertEqual(self.selected("schema/lemma-api-v1.schema.json"), {"cpp"})
+
+    def test_canonical_example_changes_select_native_contract_tests(self):
+        for path in ("examples/job.json", "examples/configuration.lua"):
+            with self.subTest(path=path):
+                self.assertEqual(self.selected(path), {"cpp"})
+
+    def test_documentation_gate_is_unconditional_and_merge_blocking(self):
+        workflow = (ROOT / ".github/workflows/quality.yml").read_text()
+        self.assertIn("\n  docs:\n", workflow)
+        job = re.split(r"\n  [a-z-]+:\n", workflow.split("\n  docs:\n", 1)[1])[0]
+        self.assertIsNone(re.search(r"(?m)^    (?:if|needs):", job))
+        self.assertIn("just docs-check", job)
+        gate = workflow.split("\n  gate:\n", 1)[1]
+        self.assertIn("      - docs\n", gate)
+        self.assertIn("DOCS_RESULT: ${{ needs.docs.result }}", gate)
+        self.assertIn('"docs:true:$DOCS_RESULT"', gate)
 
     def test_test_change_selects_only_cpp_correctness(self):
         self.assertEqual(self.selected("tests/core_test.cpp"), {"cpp"})

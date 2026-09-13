@@ -17,11 +17,9 @@ lemma
 lemma pane split --right
 ```
 
-`just run [args...]` is the canonical development entry point. The development shell's `lemma`
-command delegates to the same runner: both configure only when required and incrementally build
-only the `lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies its
-invocation directory when `--cwd` is omitted; other arguments reach `build/dev/lemma` unchanged.
-The `dev` profile uses optimization, debug symbols, enabled invariants, and frame pointers.
+`just run [args...]` is the canonical development entry point; the shell's `lemma` alias uses the
+same runner. For bare `lemma`, `lemma new`, and `lemma start`, it supplies the invocation directory
+when `--cwd` is omitted. See [Development](development.md#workflow) for build profiles and caching.
 
 Each checkout or git worktree receives a stable private development runtime namespace. Rebuilding
 the binary automatically replaces an older daemon in that namespace, so development commands do
@@ -41,35 +39,14 @@ git submodule update --init --depth 1 third_party/ghostty
 
 ## Configuration
 
-Lemma loads `$XDG_CONFIG_HOME/lemma/init.lua` (or `~/.config/lemma/init.lua`) in an isolated Lua
-host. A valid file compiles into immutable native settings before the daemon accepts Sessions. An
-invalid file is rejected as one transaction and the daemon continues with built-in defaults.
-
-```lua
-local lemma = require("lemma")
-
-lemma.setup({
-  input = { preset = "none", prefix = false },
-  terminal = { scrollback_lines = 100000 },
-  ui = { status_line = false },
-  launch = {
-    default_cwd = "/work/project",
-    default_program = { "/bin/sh", "-l" },
-  },
-})
-lemma.keymap.set("normal", "Cmd-d", "split_left_right")
-lemma.keymap.del("normal", "Cmd-c")
-```
-
-Validate configuration without changing a daemon:
+Use [Configuration](configuration.md) to customize keys, terminal history, status UI, launch
+defaults, and Lua commands. Start with its [complete example](configuration.md#api) and validate
+without changing a daemon:
 
 ```sh
 lemma config check
 lemma config check ./init.lua
 ```
-
-See [Configuration runtime](extensions.md) for key syntax, commands, bounds, trust, and failure
-behavior.
 
 ## Sessions, tabs, and panes
 
@@ -168,14 +145,10 @@ input, immediately restoring Session and Tab status. Repeated failures restart t
 Each Attachment retains the latest 16 status messages. `C-b ~` opens a timestamped, read-only
 full-pane view with the newest messages at the bottom while the status row reads `LOG`. Use `k`/Up
 and `j`/Down, PageUp/PageDown,
-`g`/Home, and `G`/End to navigate; use `q`, Escape, Enter, `C-c`, or `C-g` to leave. The log has a
-general information/error representation, although command-line failures are its first producer.
+`g`/Home, and `G`/End to navigate; use `q`, Escape, Enter, `C-c`, or `C-g` to leave.
 
-Command history is separately limited to 16 entries. It is memory-only by default. Configure an
-absolute `history.file` path to load it when the daemon starts and save it atomically when the daemon
-exits cleanly; the parent directory must already exist. Missing files may be created, while failed
-reads or malformed existing files are left untouched at shutdown. Loaded history seeds new
-Attachments.
+Command history is separately limited to 16 entries and is memory-only by default. See
+[`history.file`](configuration.md#api) for persistence and failure behavior.
 
 The grammar is the human, mutating subset of `lemma proc`: omit `proc` and omit selectors for the
 current Session, Tab, and Pane. Quotes and backslashes group literal text without shell expansion.
@@ -193,7 +166,7 @@ restarting the client. `attach SESSION` and `session switch SESSION` are aliases
 creates a nested Session. Session names are completed from the daemon's live Session registry.
 Native commands and registered Lua commands share command-line discovery and completion. Lua
 commands run asynchronously in the isolated host and submit ordinary Procs. See
-[Custom commands](extensions.md#custom-commands) for registration, invocation, bounds, and failure
+[Custom commands](configuration.md#custom-commands) for registration, invocation, bounds, and failure
 behavior.
 
 Command and copy-search prompts are hosted by the native status row. With

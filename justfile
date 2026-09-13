@@ -135,8 +135,13 @@ lsp:
 python-check:
     {{ nix }} scripts/ci/python
 
-# Run formatting, lint, LSP diagnostics, build, and tests.
-check: build fmt-check lint lsp-check test python-check
+# Check local documentation links, catalogs, schemas, and canonical example snippets.
+docs-check:
+    {{ nix }} uv run --locked python -m unittest tools.test_docs
+    {{ nix }} uv run --locked python tools/check_docs.py
+
+# Run documentation checks, formatting, lint, LSP diagnostics, build, and tests.
+check: docs-check build fmt-check lint lsp-check test python-check
 
 # Check the merge-blocking formatter lane.
 ci-format:
@@ -187,7 +192,7 @@ ci-workflows:
     {{ nix }} scripts/ci/workflows
 
 # Reproduce every merge-blocking CI lane locally in a safe sequence.
-ci-check:
+ci-check: docs-check
     {{ nix }} scripts/ci/cpp
     {{ nix }} scripts/ci/sanitizers
     {{ nix }} scripts/ci/python

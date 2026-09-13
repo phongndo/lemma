@@ -1,146 +1,97 @@
 # Development
 
-## Design quality
-
-Lemma treats performance as a product property, not post-hoc tuning. Prefer designs with one clear
-owner, direct data flow, bounded work, and few states. Encode invariants in types and construction so
-invalid states are difficult or impossible to represent. Preserve ordering and failure semantics at
-boundaries. Add abstraction or hot-path complexity only when it makes the system simpler or
-measured evidence justifies it.
-
-Apply these principles:
-
-1. **Make the correct state representable.** Use types, construction, and ownership instead of
-   comments and defensive synchronization.
-2. **Keep one authority per fact.** Derive views rather than maintaining competing state.
-3. **Bound operational behavior.** Storage, work, queues, retries, waiting, and failure need explicit
-   limits.
-4. **Prefer the direct design.** Fewer owners, transitions, copies, and abstraction layers are easier
-   to reason about and usually faster.
-5. **Keep the fast path simple.** Avoid filesystem work, process inspection, allocation, formatting,
-   and redundant terminal queries in per-byte, event, pane, frame, or client paths.
-6. **Measure consequential costs.** Benchmarks justify complexity; they do not substitute for
-   correctness.
-
-Elegance is not the number of abstractions. It is how few states and transitions are needed to
-express the complete behavior.
+Use this document for contributor workflow, testing, dependency upgrades, and documentation changes.
+[AGENTS.md](../AGENTS.md) carries product/design priorities; [Architecture](architecture.md) explains
+ownership and boundaries. Hot-path changes also require the
+[performance review workflow](performance.md#performance-review-requirement).
 
 ## Workflow
 
-Enter the development environment and use the shared development runner:
+Follow [Build and run](usage.md#build-and-run) to enter the Nix environment. `just run [args...]`
+and the shell's `lemma` alias share the isolated development runner. It configures `build/dev` only
+when toolchain/configuration inputs change and incrementally builds the `lemma` target. The `dev`
+profile uses `-O1`, debug symbols, invariants, and frame pointers. Release is explicit for packaging,
+production validation, and performance measurement.
 
-```sh
-nix develop
-just run --version
-just run pane split --right
+C/C++ outputs are path-normalized into the user's shared ccache, so matching compilations can be
+reused across worktrees and after removing `build/`. `just clean` preserves the cache;
+`just clean-cache` explicitly clears it.
 
-# The shell command is an ergonomic alias for the same runner.
-lemma --version
-lemma pane split --right
-```
-
-`just run [args...]` is the canonical explicit entry point. Both forms configure `build/dev` only
-when its toolchain or configuration inputs change and issue an incremental build of only the
-`lemma` target. For bare `lemma`, `lemma new`, and `lemma start`, the runner supplies the directory
-where it was invoked when `--cwd` is omitted; it otherwise executes that checkout's exact binary
-with unchanged arguments. The `dev` profile uses `-O1`, debug symbols, enabled invariants, and frame
-pointers. C and C++ outputs are path-normalized into the user's shared ccache, so matching
-compilations are reusable across worktrees even after removing `build/`; `just clean` preserves that
-cache, while `just clean-cache` explicitly clears it. A path-derived runtime namespace isolates every
-worktree, and the runner replaces a daemon whose executable predates the current build.
-
-Common verification commands:
+Use focused checks while working and `just check` before completion:
 
 ```sh
 ./test unit
 ./test mux resize
-./test mux pane-lifecycle
 just test              # fast native and real-mux tests
 just fmt               # format C++, Nix, and Python
-just fmt-check
-just lint
-just lsp-check
-just python-check
-just check             # build, formatting, analysis, tests, and Python checks
-just ci-check          # all merge-blocking CI lanes
+just docs-check        # local links, catalogs, schemas, and example synchronization
+just check             # build, formatting, analysis, tests, Python, and documentation checks
+just ci-check          # all merge-blocking CI lanes, including sanitizers
 ```
 
-The verification profile defaults to `debug`. Release is explicit and remains the authority for
-production validation, packaging, and performance measurements (`just bench`, `just mux-bench`,
-`nix build .#lemma`). Run a focused check while working and `just check` before completing a
-substantial change.
+The verification profile defaults to `debug`. `just --list` describes individual checks and
+`./test --help` lists current test selectors. Report commands actually run and any failing or blocked
+checks; a previously passing revision is not evidence for the current change.
 
 ## Tests
 
-The default suite separates deterministic component behavior from real process behavior:
-
 | Tier | Responsibility |
 | --- | --- |
-| Native unit | Core values, commands, layout, protocol, queues, configuration, and input policy |
-| Terminal boundary | Ghostty adapter, rendering, input encoding, effects, resize, and selection |
+| Native unit | Core values, commands, layout, protocol, queues, configuration, input policy |
+| Terminal boundary | Ghostty adapter, rendering, encoding, effects, resize, selection |
 | Component integration | Process-opening platform boundaries |
-| Python mux | Real daemon, client, PTY, child process, lifecycle, API, and terminal consequences |
-| Simulation/stress | Deterministic Core and Ghostty worlds, real-mux state machines, history, and allocation evidence |
+| Python mux | Real daemon, client, PTY, child process, lifecycle, API, terminal consequences |
+| Simulation/stress | Deterministic Core/Ghostty worlds, real-mux state machines, history, allocations |
 
-Use the repository entry point:
+Use native tests for pure invariants and Python when a contract requires real descriptors, PTYs,
+processes, or the daemon. Tests should name one failure domain, synchronize on observable state with
+bounded deadlines, and report enough state to diagnose timeouts. The
+[mux harness](../tests/support/mux_harness.py) uses stable Pane/Tab IDs for semantic identity and
+observes PIDs only for real process lifetime assertions.
+
+CTest is the CI integration surface. Cheap tests run in parallel; process tests are serialized where
+contention changes behavior. Stress, resource, allocation, and paid model work remain outside the
+common edit loop.
+
+### Simulation and replay
 
 ```sh
-./test
-./test unit
-./test layout
-./test protocol
-./test input            # Lua configuration generation and native settings/input policy
-./test queues
-./test terminal
-./test component
 ./test sim
-./test mux
-./test mux resize
-./test mux agent
-./test stress
-./test extended
-```
-
-Core, protocol, presentation, composition, and Ghostty simulation failures print an exact replay
-command. The worlds compare fragmented streams, generated resize/input/effect histories, composed
-output replay, blocked-client recovery, and multi-pane incremental/full convergence. The mux world
-runs the production `SessionMachine` against a simulated Runtime, injects spawn/resize/child faults,
-and records joint operation × outcome × fault × state signatures plus transition pairs. Curated
-seeds must cover every operation and required capacity, stale-generation, held-child, rollback, and
-geometry bucket. The scripted reactor world executes the production reactor while controlling
-readiness, request fragmentation, outbound `EAGAIN`, child wake ordering, and all monotonic time.
-Generated mux histories are concrete, versioned operation/effect traces; replay does not invoke the
-generator.
-Seeds and traces can be selected directly:
-
-```sh
 LEMMA_SIM_SEED=0x1234 LEMMA_SIM_OPERATIONS=4096 ./test sim
 LEMMA_MUX_SIM_SEED=0x1234 LEMMA_MUX_SIM_OPERATIONS=4096 ./test sim
 LEMMA_MUX_SIM_TRACE=path/to/failure.min.trace ./test sim
 ```
 
-Set `LEMMA_MUX_SIM_TRACE_OUT=path/to/trace` with a configured mux seed to retain the concrete trace
-as it executes, including the operation that is in progress if a sanitizer aborts. Ordinary mux
-failures write the complete trace and a bounded deterministic reduction under
-`build/mux-sim-failures/`. After confirming a minimized failure is fixed, promote it with
-`scripts/promote-mux-trace path/to/failure.min.trace regression-name 'one-line bug description'`.
-Promotion replays the concrete operations without stale failure checkpoints, records the fixed
-outcomes and discovery metadata atomically, and publishes the trace under
-`tests/sim/corpus/mux/`. Every simulation run replays that permanent corpus and validates its recorded
-command outcomes and state checkpoints. Corpus metadata distinguishes `characterization` (generated or curated coverage,
-with `introduced-at`) from `regression` (a discovered bug, with `fixed-at`). Both require a description
-and source trace. Characterization entries are not evidence of bug discovery; recorded checkpoints
-supplement, rather than replace, the simulation's independent semantic invariants. Promotion marks
-an entry as a regression: use it only for a genuine finding whose broken behavior and fix have been
-confirmed.
+Core, protocol, presentation, composition, and Ghostty worlds print exact replay commands on
+failure. The mux world executes the production SessionMachine against simulated Runtime effects;
+its concrete, versioned operation/effect histories replay without invoking the generator. Curated
+coverage and independent semantic invariants live with [simulation tests](../tests/sim/).
 
-Use `LEMMA_SIM_TRACE=1` with a non-mux replay command to stream completed operations before a
-dependency abort that cannot return through the normal failure trace. Scheduled CI runs
-`scripts/ci/mux-sim-campaign`; `LEMMA_MUX_CAMPAIGN_SEEDS` and
-`LEMMA_MUX_CAMPAIGN_OPERATIONS` bound the local equivalent.
+Set `LEMMA_MUX_SIM_TRACE_OUT=path/to/trace` with a configured mux seed to retain the in-progress trace,
+including the operation active at a sanitizer abort. Ordinary failures write the complete trace and
+a bounded deterministic reduction under `build/mux-sim-failures/`. Use `LEMMA_SIM_TRACE=1` for non-mux
+replays to stream completed operations before a dependency abort.
 
-Parser fuzz targets are opt-in and retain checked-in seeds for the Lemma-owned attachment, host
-input, extension framing, and public JSON boundaries:
+After reproducing and fixing a genuine finding:
+
+```sh
+scripts/promote-mux-trace path/to/failure.min.trace regression-name 'one-line bug description'
+```
+
+Promotion replays without stale checkpoints, records fixed outcomes and discovery metadata atomically,
+and publishes into [the permanent corpus](../tests/sim/corpus/mux/). Every simulation run replays it
+and checks recorded command outcomes/state. `characterization` entries record `introduced-at`;
+`regression` entries record `fixed-at`. Both require a description and source trace. Characterization
+coverage is not bug-discovery evidence, and checkpoints supplement rather than replace independent
+invariants. Promote a regression only after confirming both the broken behavior and the fix.
+
+Scheduled [mux-sim-campaign](../scripts/ci/mux-sim-campaign) runs longer campaigns; use
+`LEMMA_MUX_CAMPAIGN_SEEDS` and `LEMMA_MUX_CAMPAIGN_OPERATIONS` to bound a local equivalent.
+
+### Fuzzing
+
+Parser fuzz targets cover Lemma-owned attachment, host-input, extension-framing, and public JSON
+boundaries. To replay checked-in corpora:
 
 ```sh
 scripts/ci/configure sanitizers -DLEMMA_BUILD_TESTS=OFF -DLEMMA_BUILD_BENCHMARKS=OFF -DLEMMA_BUILD_FUZZERS=ON
@@ -151,292 +102,113 @@ cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host
 ./build/sanitizers/lemma_extension_framing_fuzz -runs=0 fuzz/corpus/extension
 ```
 
-Linux links libFuzzer for mutation runs. The sanitizer lane replays the checked-in seed corpora,
-runs each target for a bounded mutation interval with its protocol dictionary, then runs a longer
-mux simulation with a seed generated outside the test process. The scheduled
-`scripts/ci/fuzz-campaign` retains evolved corpora and minimized failure artifacts. After fixing a
-genuine finding, use
-`scripts/promote-fuzz-input TARGET INPUT CORPUS_NAME 'one-line bug description'`; promotion first
-replays the input, then records its SHA-256, source, fixing revision, and regression provenance in
-`fuzz/corpus/regressions.json`. Darwin replays the same corpora under ASan/UBSan because Xcode Clang
-does not ship a libFuzzer runtime.
+Linux links libFuzzer for mutation runs. The [sanitizer lane](../scripts/ci/sanitizers) replays seeds,
+runs bounded mutation with protocol dictionaries, then a longer mux simulation with an externally
+generated seed. Darwin replays the same seeds under ASan/UBSan because Xcode Clang lacks libFuzzer.
+Scheduled [fuzz-campaign](../scripts/ci/fuzz-campaign) retains evolved corpora and minimized failures.
 
-Tests should name one failure domain, synchronize on observable state with bounded deadlines, and
-report enough state to diagnose a timeout. The mux harness uses structured Session/Pane inspection:
-stable PaneId and TabId values own semantic identity, while PID is observed only for real process
-lifetime assertions. Use native tests for pure invariants and Python only when the contract requires
-real descriptors, PTYs, processes, or the daemon.
+After confirming a fix, run
+`scripts/promote-fuzz-input TARGET INPUT CORPUS_NAME 'one-line bug description'`. Promotion replays
+the input and records its SHA-256, source, fixing revision, and regression provenance in
+[regressions.json](../fuzz/corpus/regressions.json).
 
 ### Detector validation
 
-Use bounded source fault injection to check that the tests can reject plausible implementation
-mistakes, not just pass the current implementation:
+Use bounded source-fault injection to test whether checks reject plausible implementation mistakes:
 
 ```sh
-nix develop --command just detection-check
-nix develop --command just detection-check --case partial-write --case stale-id
+just detection-check
+just detection-check --case partial-write --case stale-id
 ```
 
-The opt-in runner copies the current working diff and nonignored new files into a temporary detached
-worktree. It never mutates the source checkout and removes the temporary worktree on exit. Each case
-first requires a passing control, then changes exactly one production source anchor, rebuilds, and
-requires an assertion failure from the selected test or an observed allocation-budget failure.
-Build errors, missing/skipped tests, crashes, timeouts, and unrelated failures do not count as
-successful detection. The current cases cover child wake registration, partial-write suffix loss,
-real slave-PTY resize delivery, stale generation acceptance, and steady-state allocation.
+The opt-in runner copies the current diff and nonignored new files into a temporary detached
+worktree; it never mutates the source checkout and removes the worktree on exit. Each case requires
+a passing control, then changes exactly one production source anchor and requires an assertion or
+observed allocation-budget failure. Build errors, missing/skipped tests, crashes, timeouts, and
+unrelated failures do not count as detection. Changed or ambiguous anchors fail closed for review.
 
-Logs, source fingerprints, the working patch, exact substitutions, and detector results remain under
-`build/detection-*/`. `--output DIRECTORY` selects a new artifact directory; `--timeout SECONDS`
-bounds each native build/check. A changed or ambiguous source anchor fails closed and must be
-reviewed, not silently skipped. These deliberately selected faults are not a mutation-coverage score
-or evidence that all bugs in those domains are caught. The runner's own contract tests run in
-`just python-check`; source mutation runs remain outside the common edit loop.
-
-To validate actual performance rejection, use a clean tracked checkout on the approved host:
-
-```sh
-nix develop .#benchmarks --command just detection-check --performance
-```
-
-This first requires an unchanged A/A paired gate to pass, then adds bounded, non-elidable CPU work
-to production command dispatch in the isolated candidate. It runs the complete manual paired gate
-again and requires `command_dispatch_cpu_p95` to fail its paired threshold. An absolute product-target
-miss, host-policy rejection, or capture failure is not successful detection. Raw samples are never
-edited. The normal host lock, policy, affinity, provenance, and before/after validation remain in
-force. Each gate permits at least four hours; this expensive check is manual and separate from native
-fault checks. A successful run validates rejection of this slowdown, not every workload or threshold.
+Use `just detection-check --help` for current cases and bounds. Logs, fingerprints, patch,
+substitutions, and results remain under `build/detection-*/` or a new `--output` directory. Selected
+faults are not a mutation-coverage score. Runner contract tests are in `just python-check`; source
+mutation runs remain opt-in. Timing rejection has a separate
+[performance detector workflow](performance.md#validate-the-performance-detector).
 
 ### Coding-agent skill benchmark
 
-Run the local behavioral comparison interactively and choose the agent provider, model, and thinking
-level at startup, or pass them explicitly:
-
 ```sh
 just skill-bench
-just skill-bench --provider xai --model grok-4.6 --thinking low
-just skill-bench --provider xai --model grok-4.6 --repetitions 3 --case cold-failure
+just skill-bench --help
 ```
 
-The benchmark gives each run an isolated workspace and Lemma runtime, randomizes paired baseline and
-skill order, verifies terminal consequences externally, and writes raw traces plus JSON and Markdown
-reports under `build/agent-skill-benchmark/`. Baseline runs cannot fetch the embedded skill through
-`lemma skill`. Model calls may incur provider charges; this benchmark is local and is not a CI gate.
+The interactive local benchmark selects provider, model, and thinking level. It uses isolated
+workspaces/runtimes, randomizes paired baseline/skill order, verifies terminal consequences
+externally, and writes raw traces and JSON/Markdown reports under `build/agent-skill-benchmark/`.
+Baseline runs cannot fetch the embedded skill through `lemma skill`. Model calls may incur provider
+charges; this is not a CI gate.
 
-Pi is the built-in adapter. For another coding agent, pass an executable with `--adapter PATH`. The
-benchmark invokes it as `PATH REQUEST.json` in the isolated workspace with the benchmark environment.
-The request uses `lemma.agent-skill-benchmark-request/v1` and supplies the prompt, optional skill path,
-provider, model, thinking level, and timeout. The executable must print one JSON object using
-`lemma.agent-skill-benchmark-result/v1` with `returncode`, `final_text`, normalized `tool_calls` and
-`tool_results` arrays, and `skill_loaded`; `usage` is optional. This adapter boundary keeps scenarios
-and scoring independent of any one agent harness.
+Pi is the built-in adapter. Another agent can supply `--adapter PATH`, invoked as `PATH REQUEST.json`
+in the isolated workspace with its environment. The `lemma.agent-skill-benchmark-request/v1` request
+provides prompt, optional skill path, provider, model, thinking level, and timeout. The executable
+prints one `lemma.agent-skill-benchmark-result/v1` JSON object containing `returncode`, `final_text`,
+normalized `tool_calls`/`tool_results` arrays, and `skill_loaded`; `usage` is optional. See the
+[benchmark implementation](../tools/benchmark_lemma_skill.py) and its
+[contract tests](../tools/test_ci_agent_skill_benchmark.py).
 
-CTest remains the CI integration surface. Cheap tests run in parallel; process tests are serialized
-where host contention changes the behavior under test. Stress, resource, and allocation work stays
-outside the common edit loop.
+## CI and Python tooling
 
-## Performance and resources
+Python tooling uses uv, Ruff, and ty: `uv sync --locked` installs the pinned environment and
+`just python-check` validates it. Python stays outside native measurement loops.
 
-Run short native benchmarks with:
+[quality.yml](../.github/workflows/quality.yml) owns merge-blocking jobs. Documentation checks run
+on every change, including source renames/deletions that could break links. Other lanes are selected
+by [changed paths](../scripts/ci/changes.py). Schema and executable example changes select native
+contract tests; Markdown-only edits do not select expensive C++ lanes.
 
-```sh
-./bench
-./bench terminal
-./bench layout
-./bench protocol
-./bench mux
-```
+[extended.yml](../.github/workflows/extended.yml) owns the platform matrix and scheduled simulation,
+fuzz, and benchmark sweeps. Only successful trusted `main` jobs publish build caches; pull requests
+and merge groups restore without writing. Local lane equivalents live in [scripts/ci](../scripts/ci/);
+`just ci-check` runs the merge-blocking set in a safe sequence.
 
-Use the benchmark shell for the complete subject comparison, dedicated-host budgets, and memory
-census:
+## Ghostty upgrades
 
-```sh
-nix develop .#benchmarks --command ./bench extended
-nix develop .#benchmarks --command scripts/ci/regression-budgets
-nix develop .#benchmarks --command scripts/ci/memory smoke
-```
+Ghostty owns terminal semantics. Update these pins together:
 
-`benchmarks/workloads.json` is the sole scenario, suite, sample-policy, and terminal-lab authority.
-Native C++ owns microbenchmark and process timing loops. Python may select adapters, launch isolated
-subjects, verify completion, retain raw reports, and analyze them; it must not timestamp a measured
-interaction. Repeated warm-scroll commands use sequence-numbered, delimited completion markers;
-a redraw of a previous completion cannot finish the next sample. The headless report orders a direct-PTY baseline before Lemma, tmux, Zellij, and Herdr.
-Execution randomizes workload blocks and subjects while direct controls bracket each supported block.
+- [PIN.json](../third_party/ghostty-metadata/PIN.json);
+- [flake.lock](../flake.lock) and [flake.nix](../flake.nix); and
+- the `third_party/ghostty` submodule used for non-Nix builds.
 
-Process latency endpoints are deliberately distinct:
-
-```text
-key_to_pty          injected outer-PTY input to fixture receipt
-key_to_outer_bytes  injected outer-PTY input to matching bytes emitted toward the host terminal
-input_to_photon     external terminal-lab HID event to measured display change
-```
-
-Only the final endpoint is user-visible latency. A smoke report explicitly marks sparse p95 and p99
-statistics invalid. Reports retain raw distributions, source and manifest identity, executable
-SHA-256 values, and failures or unsupported capabilities as outcomes rather than samples. Cross-
-subject validation permits only the subject/workload failure signatures reviewed in the manifest;
-new adapter or competitor failures fail validation. Generated reports live under `build/` and are
-not checked-in documentation.
-
-A performance comparison must use the same build profile, fixture, work, completion condition, and
-host. Distinguish CPU time, elapsed time, outer bytes, physical footprint, RSS, descriptors, and
-wakeups. Shared-runner timing is diagnostic evidence, not a stable regression gate. Its scheduled
-diagnostic sweep covers pane counts 1, 2, 4, 8, 16, 32, and the supported maximum to expose scaling
-knees. Scheduled memory evidence also sweeps 1, 2, 4, 8, and 16 sessions and workspaces plus
-1, 10, and 100 lifecycle churn cycles. Merge-blocking `scripts/ci/deterministic-budgets` enforces
-zero steady-state allocations and reviewed exact bounds for routed bytes, composed frames, retained
-queue depth, wire amplification, flushes, writer attempts, reactor polls, readiness events, outbound
-sends, backpressure recovery, partial writes, and child wakeups.
-
-For now, `box` is the approved performance host and the paired gate is invoked manually:
-
-```sh
-just performance-calibrate 3
-just performance-gate main
-just performance-extension
-```
-
-`benchmarks/performance_hosts.json` is the host identity authority for both preflight and report
-validation; the workload manifest selects its named policy. It pins hardware identity, CPU policy,
-and `0-7` affinity, and admits reported memory at or above the approved minimum. Linux `MemTotal`
-is usable memory, not an exact installed-RAM identity, and can vary across boots. Fingerprints,
-including exact reported memory, must still agree across report types, paired captures, and
-before/after host checks. Calibration captures the unchanged checkout repeatedly and fails if the
-reviewed ratio and absolute noise floors do not contain the observed A/A spread; it never relaxes
-policy automatically. Linux
-process CPU evidence sums nanosecond runtime across `/proc/PID/task/TID/schedstat`, not just the
-main thread or scheduler-tick-rounded `/proc/PID/stat` values. These are live-thread snapshots:
-threads that exit between endpoints can lose CPU accounting. Workload CPU is a batch average,
-not a latency percentile or an event-exact measurement; its interval excludes fixture setup but
-includes probe launch, settling, and resource census. Keep raw endpoints and CPU sources with the
-result, and do not compare unavailable or changing process populations as stable per-operation CPU.
-The extension gate pairs the same candidate with extensions off and with several external processes:
-idle peers, mostly hidden retained Surfaces, bounded row changes, update storms, incomplete
-near-limit producers, a non-reading maximum-paste owner, and focused or docked process crashes. It
-reports daemon and external-process resources separately and requires pane output after cleanup.
-At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
-diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
-make their rank unstable.
-
-The gate holds a host-wide lock, validates host state before and after capture, and builds the
-baseline and current checkout with the current checkout's manifest, harness, and Nix toolchain.
-Each subject supplies its own pinned Ghostty source and offline Zig dependencies so dependency
-upgrades compare the actual baseline and candidate. The candidate-owned PTY fixture and native probe are built once and shared by both revisions so a harness
-improvement cannot make an older baseline inexpressible. All evidence remains under
-`build/performance/`. Paired regressions block independently of stricter absolute product targets, so
-an existing target miss cannot authorize further degradation.
-
-### Interpreting targets
-
-Keep three distinct questions separate:
-
-| Budget or comparison | Purpose |
-| --- | --- |
-| Interactive input/echo and attach latency; blocked-PTY/client peer latency | Responsiveness and isolation at the named headless endpoint, not input-to-photon guarantees |
-| Idle CPU, wakeups, memory; native CPU and deterministic work/queue bounds | Resource efficiency and bounded behavior |
-| Warm-scroll completion and output-byte limits | Throughput and wire-efficiency product aspirations, not interactive frame deadlines |
-| Paired baseline/candidate checks | Prevent regressions independently of existing absolute-target misses |
-| Same-host, same-fixture comparisons with tmux, Zellij, and Herdr | Match or beat the best **supported** competitor separately for each workload and metric |
-
-The numeric absolute limits remain in `benchmarks/workloads.json`; they are not automatically
-competitor parity thresholds. In particular, the warm-scroll 18 ms median / 35 ms p95 limits must
-not be interpreted as feasible end-to-end deadlines without measuring the direct-PTY control. This
-fixture performs 25,000 separate row writes through a PTY, including line-discipline work. A direct
-control already over the target invalidates that interpretation; it does not prove the mux parser
-needs the entire measured elapsed time. Profile daemon and child CPU separately before optimizing.
-Changing write batching would change the fixture and requires fresh controls, not comparison with
-old results.
-
-For competitor goals, select the lowest valid latency, CPU, memory, or output-byte statistic for
-each workload rather than naming one universally fastest mux. Lower bytes do not necessarily mean
-lower CPU or latency. Use process-tree PSS/private memory alongside RSS and separate daemon/client
-roles from descendants. Lemma's `daemon_helpers` census is taken before panes exist, and
-`attached_client` includes descendant terminal-restoration guardians. The remaining
-`pane_or_mux_children` role is deliberately not called pane memory: other adapters can still
-have unclassified mux helpers. Active pane profiles drive the focused pane,
-not all panes simultaneously. Sparse scaling samples expose shape, not reliable tail latency.
-Do not relax absolute targets or paired blockers merely to turn an observed miss green; retain
-raw evidence and review a target change independently.
-
-### Performance review requirement
-
-Changes to input routing, PTY parsing/writes, rendering/composition, layout projection, resize,
-scheduling, or client output require dedicated-host paired-gate evidence before approval. The author
-must identify the affected multiplier (bytes, events, panes, frames, or clients) and provide:
-
-- the reviewed baseline revision, candidate revision/working-diff identity, and Release profile;
-- the approved host and retained artifact location, including `paired-regression.json`, raw
-  distributions, and before/after host checks;
-- the paired result and any separate absolute-target misses; and
-- relevant correctness tests and deterministic allocation/work-budget results.
-
-The reviewer must verify that the evidence covers the actual candidate being approved. A hot-path
-change without this evidence is not ready for approval; shared-runner smoke timings or a previously
-passing revision are not substitutes. Documentation-only and test-only edits do not require a timing
-capture. This is a documented review requirement, not an automated merge-blocking evidence check.
-
-Host-dependent gates remain manual through `scripts/performance`; no GitHub workflow executes
-candidate code on a persistent self-hosted runner. Any future automation must preserve the same host
-lock, policy validation, CPU affinity, candidate-owned fixtures, and before/after state checks, while
-adding a base-controlled review boundary or a disposable runner before untrusted code can execute.
-
-The GUI-ready lab contract is `benchmarks/terminal_lab.schema.json`. Hardware-photodiode and
-software-pixel captures remain separate methods and are ingested with `benchmarks/terminal_lab.py`;
-every run identifies the Ghostty, Kitty, or WezTerm executable and configuration, display refresh
-profile, sensor position, randomized input jitter, and direct or mux subject.
-
-Measure before and after changes to input routing, PTY parsing or writes, rendering, composition,
-layout projection, resize, scheduling, or client output. State which multiplier the change affects:
-bytes, events, panes, frames, or clients.
-
-## Python tooling
-
-Python support and benchmark code uses uv, Ruff, and ty:
-
-```sh
-uv sync --locked
-just python-check
-```
-
-Keep Python outside native microbenchmark loops. Python may launch workloads, verify completion,
-collect samples, and report distributions.
-
-## CI
-
-`.github/workflows/quality.yml` contains merge-blocking formatting, build/test, clang-tidy, clangd,
-Python, sanitizer, and workflow checks selected by changed paths. `.github/workflows/extended.yml`
-runs the platform matrix plus scheduled simulation, fuzz, and benchmark sweeps.
-
-Build caches share an OS, architecture, profile, and dependency fingerprint across workflows.
-Each successful trusted writer saves an immutable snapshot keyed by commit, run ID, and run attempt,
-so concurrent workflows and reruns cannot contend for the same key. Readers prefer snapshots of the
-same commit, then the newest compatible dependency cache. Only successful `main` jobs publish;
-pull requests and merge groups restore without writing. GitHub's cache quota and eviction policy
-bound retained snapshots.
-
-The local equivalents live under `scripts/ci/`; `just ci-check` runs the merge-blocking set in a
-safe sequence.
-
-## Ghostty boundary
-
-Ghostty owns terminal semantics and is pinned by:
-
-- `third_party/ghostty-metadata/PIN.json`
-- `flake.lock` and `flake.nix`
-- the `third_party/ghostty` submodule for non-Nix builds
-
-Only `lemma_terminal` may include Ghostty headers. Lemma-facing code uses Lemma-owned value types and
-borrowed views with explicit lifetimes.
-
-For an upgrade, update every pin together, inspect the upstream API and semantic changes, review
-`third_party/ghostty-metadata/PATCHES.md`, then run terminal, mux, sanitizer, and relevant benchmark
-or resource checks. A local patch must document why it exists and the condition for removing it.
-`PIN.json` records the ordered patch files and their SHA-256 hashes. Both Nix and submodule builds
-validate the original source and apply these patches to a private build-tree copy, never to the
-submodule or Nix store. The complete pin manifest identifies source and archive caches.
+Inspect upstream API/semantic changes and [PATCHES.md](../third_party/ghostty-metadata/PATCHES.md),
+then run terminal, mux, sanitizer, and relevant benchmark/resource checks. A local patch documents
+why it exists and when to remove it. `PIN.json` owns ordered patch files and SHA-256 hashes. Nix and
+submodule builds validate original source and apply patches to a private build-tree copy, never the
+submodule or Nix store. The complete pin manifest identifies source/archive caches.
 
 ## Documentation
 
-Documentation describes current behavior, public contracts, and hard invariants. The binary help
-and embedded JSON Schema own exact CLI and API grammar. Generated measurements stay under `build/`.
-Design history, migration reports, plans, and roadmaps belong in version control history or the
-issue tracker rather than the documentation set.
+Maintain current supported behavior, contracts, boundaries, and durable rationale—not a record of
+work performed. Keep each subject in one home; link instead of repeating its definition. Exact CLI
+and JSON grammar belong to binary help and the embedded [schema](../schema/lemma-api-v1.schema.json).
+Local implementation rationale belongs beside its code.
+
+When behavior changes, update its documentation and examples in the same change. Replace or delete
+superseded text rather than append corrections. Resolve docs/code disagreements explicitly: a bug
+is not permission to silently rewrite a supported contract. The behavior-change author owns this
+maintenance; a change with no documentation impact needs no ceremonial prose edit.
+
+Use Markdown links for paths readers should follow, including AGENTS.md pointers. `just docs-check`
+checks local files/heading anchors and native keymap-catalog parity. It parses and schema-validates
+JSON examples, and requires fenced blocks marked `example=../examples/FILE` to match their canonical
+[example files](../examples/) exactly. Edit the example file, then synchronize its displayed block.
+All example files must be referenced by a marked block. This prevents editing the displayed copy
+without changing the tested input.
+
+The mux suite loads Lua examples through `lemma config check`, exercises the configuration and
+custom command, executes the JSON job, and admits the extension Hello. Example changes therefore
+select native tests. Other fences are illustrative: no documentation check executes arbitrary shell
+commands, attaches to user Sessions, runs performance captures, or calls paid models. Link/schema
+checks do not prove prose or runtime semantics correct; retain behavioral tests and review.
+
+Generated measurements and disposable research stay under `build/`. Proposals belong in issues or
+PR discussions; completed-work summaries and migration history belong in version control history.
+Preserve accepted constraints in current docs or code, but remove obsolete designs rather than
+create an archive inside `docs/`.

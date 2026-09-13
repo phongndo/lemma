@@ -6,6 +6,7 @@ import socket
 import subprocess
 import time
 import unittest
+from pathlib import Path
 from typing import Any
 
 from tests.support.mux_harness import LemmaServer
@@ -75,6 +76,20 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         removed = self.server.command("inspect", "missing")
         self.assertEqual(removed.status, 2, removed.output)
         self.assertIn("invalid lemma command or arguments: inspect", removed.output)
+
+    def test_documented_job_runs_captures_and_cleans_up(self) -> None:
+        example = Path(__file__).resolve().parents[2] / "examples/job.json"
+        status, result = self.json_command("proc", "--file", str(example), unwrap=False)
+        self.assertEqual(status, 0, result)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["schema"], "lemma.proc-result/v1")
+        self.assertEqual(
+            [entry["result"]["status"] for entry in result["results"]],
+            ["applied"] * 4,
+        )
+        self.assertIn(
+            "hello from Lemma", result["results"][2]["result"]["capture"]["text"]
+        )
 
     def test_coding_agent_skill_is_valid_and_teaches_a_safe_job_workflow(self) -> None:
         result = self.server.command("skill")

@@ -1,59 +1,60 @@
 # Architecture
 
-Lemma is one C++23 executable with client, daemon, and control roles. One per-user daemon owns all
-live mux and terminal state. Clients are replaceable input and presentation edges.
+Lemma is one C++23 executable with client, daemon, and control roles. One per-user daemon owns
+all live mux and terminal state. Clients are replaceable input and presentation edges.
 
 ```text
-Lua config ─> isolated host ─> validated draft ─> immutable native generation
-                                                  │
-physical input ─> input policy ─┐                  │
-CLI / API / mouse ───────────────┴─> typed command ─> Core ─> Runtime
-extension ─> Proc / SurfaceUpdate ──────────────────────────┤
-                                                            ├─> PTY/process
-PTY output ─> Ghostty terminal ─> retained Scene ───────────┴─> client
+Lua config -> isolated host -> validated draft -> immutable native generation
+                                                       |
+physical input -> compiled input policy ----------------+
+CLI / API / mouse -> typed command -> Core -> Runtime -> PTY/process
+extension -> Proc / SurfaceUpdate -------------|
+PTY output -> Ghostty terminal -> retained Scene -> client
 ```
 
-## Model
+This document owns component boundaries and data flow. User behavior is in [Usage](usage.md),
+execution semantics in [Automation API](api.md), and external UI contracts in
+[Extensions](extensions.md).
 
-The kernel hierarchy is:
+## Model and lifetimes
 
-```text
-Session -> Tab -> Pane
-```
+The kernel hierarchy is `Session -> Tab -> Pane`:
 
 - A **Session** owns launch context, ordered Tabs, identity, lifecycle, and attachment policy.
-- A **Tab** owns a pane layout, focus, zoom, ordering, and title policy.
+- A **Tab** owns pane layout, focus, zoom, ordering, and title policy.
 - A **Pane** is the semantic identity of one process surface.
-- An **Attachment** is the current controller's view and interaction state for a Session.
+- An **Attachment** is the controller's view and interaction state for a Session.
 
-Projects, worktrees, tasks, and agent runs are not kernel objects. They can compose stable IDs
-through the public API.
+Projects, worktrees, tasks, and agent runs compose stable IDs through the public API rather than
+becoming kernel objects.
 
-Semantic identity is separate from external-resource lifetime:
+Semantic identities have different lifetimes from external resources:
 
 ```text
 Session != Attachment != AttachmentRuntime
 Pane    != PaneRuntime
 ```
 
-`PaneRuntime` owns the child process, PTY, terminal, write queue, and scheduling state for a Pane.
+`PaneRuntime` owns the child process, PTY, terminal, write queue, and scheduling state.
 `AttachmentRuntime` owns the replaceable client connection, decoder, retained output progress,
-presentation caches, and deadlines. Losing an AttachmentRuntime detaches the client; it does not
-destroy the Session.
+presentation caches, and deadlines. Losing it detaches the client; it does not destroy the Session
+or semantic Attachment. Stable IDs cross boundaries; borrowed references remain owner-local.
 
 ## Components
+
+[Build targets](../CMakeLists.txt) define the dependency boundaries:
 
 | Component | Responsibility |
 | --- | --- |
 | `lemma_app` | CLI grammar and executable role selection |
-| `lemma_daemon` | Endpoint ownership, connection admission, and the reactor |
-| `lemma_api` | Public Proc, nested Command, Event, JSON, and schema values |
+| `lemma_daemon` | Endpoint ownership, connection admission, and reactor |
+| `lemma_api` | Public Proc, Command, Event, JSON, and schema values |
 | `lemma_core` | Session/Tab/Pane semantics, commands, layout, and copy policy |
-| `lemma_input` | Compiled physical keymaps and per-Attachment input contexts |
-| `lemma_config` | Bounded configuration values, wire validation, and native generation compilation |
-| `lemma_extension_contract` | Lua command declarations plus the language-neutral framed extension protocol |
-| `lemma_extension` | Transitional isolated Lua host, coroutine callbacks, and configuration admission |
-| `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input execution, resizing, and frame progress |
+| `lemma_input` | Compiled physical keymaps and per-Attachment routing contexts |
+| `lemma_config` | Configuration values, validation, and native generation compilation |
+| `lemma_extension_contract` | Lua command declarations and language-neutral extension protocol |
+| `lemma_extension` | Isolated Lua host, coroutine callbacks, and configuration admission |
+| `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input, resize, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
 | `lemma_protocol` | Bounded private attachment codec |
@@ -61,100 +62,57 @@ destroy the Session.
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |
 
 Core links no Lua VM, PTY, socket, process, or terminal-emulator owner. Runtime executes accepted
-semantic intent using those mechanisms. The daemon borrows one immutable compiled configuration
-generation. Ordinary input routing and terminal operation never call into the host process.
-Explicit custom command invocations use nonblocking messages to the isolated host; the reactor
-never executes or synchronously waits for a Lua callback.
+semantic intent using those mechanisms. Ghostty representations remain private to `lemma_terminal`;
+Lemma-facing types and borrowed views make lifetimes explicit.
 
-## Authority and ownership
+## Authority
 
-Every mutable fact has one authoritative owner:
-
-| State | Owner |
+| Mutable state | Authoritative owner |
 | --- | --- |
 | Sessions, Tabs, Panes, layout, focus, zoom, stable IDs | Core |
-| Attachment view plus copy, rename, command-line editor, bounded command history, and message log | Core |
-| All key bindings, context options, transitions, and transient routing state | Input policy |
-| Lua VM and uncommitted configuration draft | Extension host process |
+| Attachment view, copy/editor state, command history, and message log | Core |
+| Key bindings, context options, transitions, and transient routing state | Input policy |
+| Lua VM, coroutine state, and uncommitted configuration draft | Isolated host process |
 | Processes, PTYs, descriptors, polling, clocks | Runtime |
 | Canonical screen, history, modes, cursor, selection primitives | Ghostty behind `vt::Terminal` |
-| Attachment connection decoding, output progress, and transient message/frame deadlines | AttachmentRuntime |
+| Connection decoding, output progress, and transient frame/message deadlines | AttachmentRuntime |
 | Admitted Proc execution, waits, and owner-generation cancellation | Reactor Proc table |
-| Hosted command invocation, captured targets, deadline, and attachment-generation ownership | Reactor-owned native command runtime |
-| Extension connections, capabilities, generations, Surface IDs, retained Grids, and Surface focus | ExtensionRuntime |
-| Frame buffers, retained Scene composition, Grid damage, and physical presentation shadow | Scene/render runtime |
+| Hosted command invocation, captured targets, deadline, and attachment-generation owner | Reactor-owned command runtime |
+| Extension capabilities, generations, Surface IDs, retained Grids, and Surface focus | ExtensionRuntime |
+| Frame buffers, Scene composition, damage, and physical presentation shadow | Scene/render runtime |
 
-A projection may be cached for presentation, but it remains bounded, invalidatable, and
-authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
-references remain owner-local. Extension aggregate accounting is likewise a bounded projection of
-peer-owned input, record, output, Event, and Proc-reservation state; it is not a second mutable
-resource ledger. The reactor rotates extension peer service and charges complete framed bytes,
-record count, socket reads, and actual socket writes against global turn budgets.
+Presentation caches are bounded, invalidatable projections, reconstructible from their owners.
+Extension aggregate resource accounting is likewise derived from peer-owned transport and reservation
+state, not a competing mutable ledger. Slow peers cannot prevent unrelated PTY progress; queues and
+per-turn work have explicit bounds.
 
-The shipped interaction policy is configuration data, not a privileged routing path. The default
-preset and an equivalent explicit user policy compile into the same immutable representation. Core
-implements semantic commands such as resizing or moving a copy selection; configuration alone
-selects the keys and routing-context transitions that invoke them.
+## Mutation and configuration
 
-## Commands
+Every semantic mutation uses a typed command and result. CLI syntax and backward result references
+are frontend representations, not Core state. Proc admission validates the complete request once;
+execution resolves concrete generational IDs and checks lifetime and ownership immediately before
+each Command. Closing an owner revokes its remaining work.
 
-Keyboard and mouse interaction use direct typed input commands. Agent execution enters through a
-Proc containing one to 64 ordered Commands:
+Lifecycle transitions go through [`SessionMachine`](../src/core/session_machine.cpp). Core stages
+fallible semantic owners, Runtime executes a bounded spawn/resize/retire effect batch, and Core
+publishes only after required effects succeed. Rejected effects do not publish partial Core state.
+Events observe committed state and never provide a second mutation path.
 
-```text
-CLI / CONTROL -> Proc admission -> compiled Command -> Command executor -> Core command / Runtime intent
-                     │                    │                   │
-                     │                    │                   └─> lemma.command-result/v1
-                     │                    └─> at most one per reactor turn
-                     └─> validate all Commands and backward references once
-```
+The interactive command line is another typed frontend using the same executor. One native catalog
+owns command paths and completion metadata. A Session switch transfers a drained connection decoder
+and sequence, then forces a full redraw; it does not create a nested client. The status renderer owns
+interaction chrome; pane composition does not overlay command or copy-search prompts.
 
-`lemma.proc/v1` is the sole public execution request. CLI syntax and backward result references are
-frontend representations rather than Core state. Before admission, Proc validation checks every
-Command and reference. Execution resolves references to concrete generational IDs and performs
-authoritative lifetime and ownership checks immediately before each Command. Closing an owning
-connection invalidates its generation and cancels the Proc before another Command.
+The daemon borrows one immutable compiled configuration generation. Shipped and user-declared input
+policies compile through the same path: Core owns semantic commands; configuration chooses their keys
+and routing transitions. Ordinary input, PTY processing, and composition never call into Lua.
 
-Lifecycle commands run through the deterministic `SessionMachine`: Core stages fallible semantic
-owners, Runtime executes a bounded typed spawn/resize/retire effect batch, and Core publishes the
-transition only after required effects succeed. Events observe committed state and never provide
-another mutation path. The deterministic mux harness records concrete targets, arguments, and
-Runtime outcomes at this boundary. Versioned traces therefore replay without the generator, and
-recorded result/state checkpoints turn minimized failures into permanent regression corpus entries.
-
-The interactive command line is another typed frontend, not another command executor. One native
-catalog owns command paths and completion metadata. The attachment-owned editor parses its bounded
-human grammar, fills omitted targets with current stable IDs, and dispatches the resulting typed
-commands through the same executor used by Proc. While editing, the status row contains only the
-command prompt. A failed submission closes the prompt and projects its typed result as a left-aligned
-status message rather than exposing JSON. One monotonic AttachmentRuntime deadline expires that
-projection after 1.5 seconds, while input can dismiss it immediately; the bounded Attachment message
-log remains available through a synthetic read-only full-pane projection. The status renderer is
-the sole owner of interaction chrome: active routing contexts and search prompts replace normal
-Session/Tab status, while pane composition contains no mode-overlay path. Command history remains a
-separate bounded fact. An optional configured file seeds the daemon-wide initial history and is
-atomically replaced on clean shutdown only after a successful load or confirmed absence; live
-Attachment histories still diverge independently. A
-Session switch transfers one
-drained connection decoder and sequence to an existing detached Session, then forces a full redraw;
-it never creates a nested client or restarts the terminal process. Native and registered command descriptors share discovery at the command-line boundary. Native
-commands dispatch directly; hosted descriptors enqueue an invocation with concrete Session/Tab/Pane
-IDs and an attachment-generation owner. Lua callbacks yield Proc documents through `ctx:proc`.
-These enter the same validation, admission table, round-robin service, and Command executor as
-public Procs. A typed completion owner distinguishes public connections from hosted invocations;
-the latter are revoked before further execution when their originating attachment disappears or
-switches Sessions.
-
-The private host channel retains bounded partial-read/write progress and admits at most one record
-per reactor turn. Up to eight hosted invocations retain coroutine state in the host, not the daemon.
-Cancellation revokes Proc ownership immediately but retains the invocation deadline and slot until
-acknowledgement. Protocol failure or expiration terminates the host and removes hosted discovery,
-without changing compiled input policy or ordinary pane lifetime. This runtime channel is separate
-from the public lock-step CONTROL contract.
-
-Application input is distinct from mux commands. The daemon input policy resolves physical
-bindings; Runtime then asks the target Pane's Ghostty terminal to encode mode-dependent keyboard,
-paste, focus, and mouse input.
+Explicit hosted commands communicate asynchronously with the isolated host. Callbacks yield Procs
+through `ctx:proc`; those use ordinary validation, admission, and round-robin execution. Their typed
+completion owner is the originating attachment generation, revoked on detach or Session switch.
+Cancellation keeps the invocation slot and deadline until acknowledgement so a blocked callback cannot
+escape its watchdog. Host failure removes hosted commands without changing compiled input policy or
+pane lifetime. See [Configuration](configuration.md#failure-and-lifetime) for the public behavior.
 
 ## Terminal and presentation flow
 
@@ -163,39 +121,23 @@ PTY bytes are parsed once into the Pane's canonical terminal:
 
 ```text
 PTY -> Ghostty parse
-          ├─> terminal responses -> ordered PTY write queue
-          ├─> effects -> Lemma policy
-          └─> damage -> retained Scene composition -> attached client
+          |-> terminal responses -> ordered PTY write queue
+          |-> effects -> Lemma policy
+          +-> damage -> retained Scene composition -> attached client
 ```
 
-Terminal responses enter the Pane's ordered write queue before later accepted application input.
-Attach, resize, tab changes, and lag recovery can rebuild a complete ANSI frame from daemon-owned
-state. The client does not own a second terminal grid or PTY replay log.
+Terminal responses enter the ordered write queue before later accepted application input.
+Mode-dependent keyboard, paste, focus, and mouse encoding comes from the target Pane's Ghostty
+terminal. Attach, resize, tab changes, and lag recovery can reconstruct a full ANSI frame from
+daemon-owned state; the client owns neither a second terminal grid nor a PTY replay log.
 
-`Scene` composes ordered Pane projections and extension-owned retained Grids. It owns clipping,
-occlusion repair, damage, and cursor arbitration; extension code never enters composition. A docked
-Grid changes the Attachment's effective pane viewport while floats and overlays do not.
-
-Resize is coordinated in one direction:
+Scene composes Pane projections and extension-owned retained Grids. Native code owns clipping,
+occlusion repair, damage, and cursor arbitration. Extension code never enters composition.
 
 ```text
 Attachment geometry -> Surface placement -> Core layout -> Pane geometry -> PTY size -> Ghostty size
 ```
 
-The child PTY receives the target dimensions before Ghostty parses output at those dimensions.
-Multi-pane resize publishes semantic geometry only after the dependent runtime work succeeds.
-
-## Invariants
-
-1. The daemon is the sole authority for mux state and Pane terminal truth.
-2. `Session -> Tab -> Pane` is the only kernel hierarchy.
-3. Semantic objects and runtime resources have distinct identities and lifetimes.
-4. Every mutable fact has one owner; other representations are derived.
-5. Every semantic mutation uses a typed command and typed result.
-6. Ghostty representations remain private to `lemma_terminal`.
-7. Required PTY-response, application-input, and presentation ordering is explicit.
-8. Queues, payloads, loops, timeouts, and retained presentation work are bounded.
-9. Slow or malformed clients and observers cannot prevent unrelated PTY progress.
-10. Visible state is reconstructible without retaining an unbounded event, frame, or PTY-byte log.
-11. Session lifecycle transitions preserve the complete semantic and Core/Runtime ownership
-    invariants after every atomic operation; rejected effects do not publish partial Core state.
+Docks change the effective pane viewport; floats and overlays do not. The child PTY receives target
+dimensions before Ghostty parses output at those dimensions. Multi-pane resize publishes semantic
+geometry only after dependent runtime work succeeds.

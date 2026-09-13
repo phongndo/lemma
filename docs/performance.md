@@ -1,0 +1,177 @@
+# Performance and resources
+
+Use this document when changing hot paths, running comparisons, or reviewing performance evidence.
+Product/design priorities live in [AGENTS.md](../AGENTS.md#design); ordinary build and test workflow
+is in [Development](development.md).
+
+## Performance review requirement
+
+Changes to input routing, PTY parsing/writes, rendering/composition, layout projection, resize,
+scheduling, or client output require dedicated-host paired-gate evidence before approval. Identify
+the affected multiplier (bytes, events, panes, frames, or clients) and provide:
+
+- the reviewed baseline revision, candidate revision/working-diff identity, and Release profile;
+- the approved host and retained artifact location, including `paired-regression.json`, raw
+  distributions, and before/after host checks;
+- the paired result and any separate absolute-target misses; and
+- relevant correctness tests and deterministic allocation/work-budget results.
+
+Reviewers must verify that evidence covers the actual candidate being approved. Shared-runner smoke
+timings and a previously passing revision are not substitutes. Documentation-only and test-only edits
+do not require a timing capture. This is a review requirement, not an automated merge-blocking
+candidate-evidence check.
+
+Host-dependent gates run manually through [scripts/performance](../scripts/performance). No GitHub
+workflow executes candidate code on a persistent self-hosted runner. Automation would require a
+base-controlled review boundary or disposable runner, while preserving the host lock, policy checks,
+CPU affinity, candidate-owned fixtures, and before/after host validation.
+
+## Run measurements
+
+Short native benchmarks always use Release:
+
+```sh
+./bench
+./bench terminal
+./bench layout
+./bench protocol
+./bench mux
+```
+
+Use the benchmark shell for cross-subject comparisons, dedicated-host budgets, and memory census:
+
+```sh
+nix develop .#benchmarks --command ./bench extended
+nix develop .#benchmarks --command scripts/ci/regression-budgets
+nix develop .#benchmarks --command scripts/ci/memory smoke
+```
+
+The manual paired workflow is:
+
+```sh
+just performance-calibrate 3
+just performance-gate main
+just performance-extension
+```
+
+[workloads.json](../benchmarks/workloads.json) owns scenarios, suites, numeric targets, sample
+policies, and terminal-lab selection. [performance_hosts.json](../benchmarks/performance_hosts.json)
+owns approved hardware and CPU policy for both preflight and report validation. Consult those
+manifests rather than copying thresholds or host settings into another document.
+
+## Measurement semantics
+
+Native C++ owns timing loops. Python may select adapters, launch isolated subjects, verify
+completion, retain raw reports, and analyze results; it must not timestamp a measured interaction.
+Repeated warm-scroll commands use sequence-numbered, delimited completion markers, so a redraw of
+an earlier completion cannot finish a later sample. Execution randomizes workload blocks and
+subjects, with direct controls bracketing each supported block.
+
+Latency endpoints are deliberately distinct:
+
+```text
+key_to_pty          injected outer-PTY input to fixture receipt
+key_to_outer_bytes  injected outer-PTY input to matching bytes emitted toward the host terminal
+input_to_photon     external terminal-lab HID event to measured display change
+```
+
+Only the last is user-visible latency. Compare the same build profile, fixture, work, completion
+condition, and host. Distinguish CPU time, elapsed time, output bytes, physical footprint, RSS,
+descriptors, and wakeups. Shared-runner timing is diagnostic, not a stable regression gate.
+
+Reports retain raw distributions, source/manifest identity, executable SHA-256 values, and failures
+or unsupported capabilities as outcomes rather than samples. Cross-subject validation admits only
+failure signatures reviewed in the manifest; new adapter/competitor failures fail validation.
+Sparse smoke p95/p99 statistics are marked invalid. Scaling sweeps expose shape and contention
+knees, not reliable tail latency. Generated evidence stays under `build/`.
+
+The merge-blocking [deterministic budgets](../scripts/ci/deterministic-budgets) enforce zero
+steady-state allocations and reviewed work/queue bounds independently of timing: routed bytes,
+frames, wire amplification, flushes, writes, polls, readiness, sends, recovery, and child wakeups.
+
+## Paired gate and calibration
+
+The gate holds a host-wide lock and validates host state before and after capture. It builds the
+baseline and candidate with the candidate's manifest, harness, and Nix toolchain. Each subject uses
+its own pinned Ghostty source and offline Zig dependencies; the candidate-owned PTY fixture and
+native probe are built once and shared. This compares actual dependency upgrades without requiring
+an old revision to contain a newer harness. Evidence stays under `build/performance/`.
+
+Host fingerprints must agree across report types, paired captures, and before/after checks.
+Linux `MemTotal` is usable memory, not exact installed RAM, and can vary across boots. Host policy
+admits memory at or above the approved minimum, but exact reported memory still participates in
+within-run fingerprint agreement.
+
+Calibration repeats the unchanged checkout and rejects noise outside the reviewed ratio and
+absolute floors; it never relaxes policy automatically. Paired regressions block independently of
+stricter absolute product targets. An existing target miss cannot authorize further degradation.
+
+Linux process CPU evidence sums nanosecond runtime across `/proc/PID/task/TID/schedstat`, not just
+the main thread or scheduler-tick-rounded `/proc/PID/stat` values. Live-thread snapshots can lose
+accounting for threads that exit between endpoints. Workload CPU is a batch average, not a latency
+percentile or event-exact measurement. Its interval excludes fixture setup but includes probe
+launch, settling, and resource census. Keep raw endpoints and CPU sources, and do not compare
+unavailable or changing process populations as stable per-operation CPU.
+
+## Extension isolation
+
+`just performance-extension` pairs the same candidate with extensions off and with external
+workloads: idle peers, mostly hidden retained Surfaces, bounded row changes, update storms,
+incomplete near-limit producers, a non-reading maximum-paste owner, and focused/docked crashes.
+Daemon and extension-process resources are reported separately; pane output must continue after
+cleanup. Idle helper microbenchmarks do not establish whole-reactor or endpoint-specific isolation.
+
+At the gate's 100 process samples, nearest-rank p99 endpoints are diagnostics and absolute-target
+evidence, not paired blockers: frame-cadence outliers make their rank unstable.
+
+## Interpret targets
+
+| Question | Evidence |
+| --- | --- |
+| Is interaction responsive and isolated from blocked peers? | Input/echo, attach, blocked-PTY/client latency at the named headless endpoint |
+| Is resource use bounded and efficient? | Idle CPU, wakeups, memory, native CPU, deterministic work/queue bounds |
+| Is output efficient? | Warm-scroll completion and byte limits, not interactive frame deadlines |
+| Did this change regress? | Paired baseline/candidate checks independent of absolute-target misses |
+| Does Lemma match competitors? | Same-host, same-fixture comparison with the best supported subject for each workload and metric |
+
+Absolute targets in the workload manifest are not automatically competitor-parity thresholds.
+Warm-scroll limits must not be interpreted as feasible end-to-end deadlines without measuring the
+direct-PTY control. The fixture makes many separate row writes through a PTY, including line-discipline
+work. A control already over target invalidates that interpretation; it does not establish that
+parsing consumes all measured elapsed time. Profile daemon and child CPU separately. Changing write
+batching changes the fixture and requires fresh controls, not comparison with old results.
+
+Select the lowest valid latency, CPU, memory, or byte statistic per workload rather than naming one
+universally fastest mux. Lower bytes need not mean lower CPU or latency. Use process-tree PSS/private
+memory alongside RSS and separate daemon/client roles from descendants. Lemma's `daemon_helpers`
+census occurs before panes exist; `attached_client` includes descendant terminal-restoration
+guardians. `pane_or_mux_children` can contain unclassified helpers and is not equivalent to pane
+memory. Active pane profiles drive the focused pane, not every pane simultaneously.
+
+Retain raw evidence and review target changes independently. Do not relax absolute targets or paired
+blockers merely to turn an observed miss green.
+
+## Validate the performance detector
+
+On a clean tracked checkout on the approved host:
+
+```sh
+nix develop .#benchmarks --command just detection-check --performance
+```
+
+The detector first requires an unchanged A/A paired gate to pass, then adds bounded non-elidable CPU
+work to production command dispatch in an isolated candidate. It runs the complete paired gate again
+and requires `command_dispatch_cpu_p95` to fail its paired threshold. An absolute-target miss,
+host-policy rejection, or capture failure is not successful detection; raw samples are never edited.
+Normal host locking, policy, affinity, provenance, and before/after checks remain in force. Each gate
+permits at least four hours. This expensive manual check is separate from
+[native source-fault checks](development.md#detector-validation); passing validates this slowdown,
+not every workload or threshold.
+
+## Display measurements
+
+The GUI-ready contract is [terminal_lab.schema.json](../benchmarks/terminal_lab.schema.json).
+Hardware-photodiode and software-pixel methods stay separate and are ingested with
+[terminal_lab.py](../benchmarks/terminal_lab.py). Each run identifies the Ghostty, Kitty, or WezTerm
+executable/configuration, display refresh profile, sensor position, randomized input jitter, and
+direct or mux subject.
