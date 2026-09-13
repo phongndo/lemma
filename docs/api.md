@@ -31,7 +31,13 @@ daemon   inspect
 session  start list inspect rename kill
 tab      new list inspect select move rename kill
 pane     split list inspect focus swap resize zoom input capture wait kill
+surface  create configure focus close (extension-session owners only)
 ```
+
+The same schema also defines `lemma.extension/v1`, Surface updates, and extension interaction
+Events. The framed, full-duplex runtime transport and ownership rules are documented in
+[Extensions](extension.md). Surface lifecycle Commands are rejected outside an admitted extension
+generation because their owner and Attachment scope come from that connection.
 
 ## One-Command Procs
 

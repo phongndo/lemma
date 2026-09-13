@@ -70,8 +70,7 @@ jobs:
         with:
           name: mux-simulation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            build/debug/mux-sim-artifacts/*.coverage.json
-            build/debug/mux-sim-artifacts/*.trace
+            build/debug/mux-sim-artifacts
             build/mux-sim-failures
           if-no-files-found: ignore
           retention-days: 14

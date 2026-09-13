@@ -107,6 +107,90 @@ template <typename Id>
   return id.has_value() ? std::optional{PaneSelector{.id = *id}} : std::nullopt;
 }
 
+[[nodiscard]] auto decode_surface_selector(const JsonValue& document)
+    -> std::optional<SurfaceSelector> {
+  const auto* const value = json_member(document, "surface");
+  if (value == nullptr || value->kind != JsonKind::object || value->object.size() != 1U ||
+      unknown_field(*value, {"id"}).has_value()) {
+    return std::nullopt;
+  }
+  const auto id_text = json_string(*value, "id");
+  const auto id = id_text.has_value() ? parse_id<SurfaceId>(*id_text) : std::nullopt;
+  return id.has_value() ? std::optional{SurfaceSelector{.id = *id}} : std::nullopt;
+}
+
+[[nodiscard]] auto decode_dock_placement(const JsonValue& value, const std::string_view kind)
+    -> std::optional<SurfacePlacement> {
+  if (unknown_field(value, {"kind", "size"}).has_value() || value.object.size() != 2U) {
+    return std::nullopt;
+  }
+  auto placement_kind = SurfacePlacementKind::dock_left;
+  if (kind == "dock.left") {
+    placement_kind = SurfacePlacementKind::dock_left;
+  } else if (kind == "dock.right") {
+    placement_kind = SurfacePlacementKind::dock_right;
+  } else if (kind == "dock.top") {
+    placement_kind = SurfacePlacementKind::dock_top;
+  } else if (kind == "dock.bottom") {
+    placement_kind = SurfacePlacementKind::dock_bottom;
+  } else {
+    return std::nullopt;
+  }
+  const bool horizontal = placement_kind == SurfacePlacementKind::dock_left ||
+                          placement_kind == SurfacePlacementKind::dock_right;
+  const auto size = json_unsigned(value, "size");
+  const auto maximum =
+      horizontal ? limits::terminal_columns_hard_max : limits::terminal_rows_hard_max;
+  if (!size.has_value() || *size == 0 || *size > maximum) {
+    return std::nullopt;
+  }
+  return horizontal
+             ? SurfacePlacement{.kind = placement_kind,
+                                .columns = static_cast<std::uint16_t>(*size)}
+             : SurfacePlacement{.kind = placement_kind, .rows = static_cast<std::uint16_t>(*size)};
+}
+
+[[nodiscard]] auto decode_floating_placement(const JsonValue& value, const std::string_view kind)
+    -> std::optional<SurfacePlacement> {
+  if ((kind != "float" && kind != "overlay") ||
+      unknown_field(value, {"kind", "column", "row", "columns", "rows"}).has_value() ||
+      value.object.size() != 5U) {
+    return std::nullopt;
+  }
+  const auto column = json_unsigned(value, "column");
+  const auto row = json_unsigned(value, "row");
+  const auto columns = json_unsigned(value, "columns");
+  const auto rows = json_unsigned(value, "rows");
+  if (!column.has_value() || !row.has_value() || !columns.has_value() || !rows.has_value() ||
+      *column > std::numeric_limits<std::uint16_t>::max() ||
+      *row > std::numeric_limits<std::uint16_t>::max() || *columns == 0 ||
+      *columns > limits::terminal_columns_hard_max || *rows == 0 ||
+      *rows > limits::terminal_rows_hard_max) {
+    return std::nullopt;
+  }
+  return SurfacePlacement{
+      .kind = kind == "float" ? SurfacePlacementKind::float_surface : SurfacePlacementKind::overlay,
+      .column = static_cast<std::uint16_t>(*column),
+      .row = static_cast<std::uint16_t>(*row),
+      .columns = static_cast<std::uint16_t>(*columns),
+      .rows = static_cast<std::uint16_t>(*rows),
+  };
+}
+
+[[nodiscard]] auto decode_surface_placement(const JsonValue& document)
+    -> std::optional<SurfacePlacement> {
+  const auto* const value = json_member(document, "placement");
+  if (value == nullptr || value->kind != JsonKind::object) {
+    return std::nullopt;
+  }
+  const auto kind = json_string(*value, "kind");
+  if (!kind.has_value()) {
+    return std::nullopt;
+  }
+  const auto dock = decode_dock_placement(*value, *kind);
+  return dock.has_value() ? dock : decode_floating_placement(*value, *kind);
+}
+
 [[nodiscard]] auto decode_arguments(const JsonValue& document, Command& command) -> bool {
   const auto* const value = json_member(document, "argv");
   if (value == nullptr) {
@@ -427,6 +511,14 @@ auto command_name(const CommandKind kind) noexcept -> std::string_view {
     return "pane.wait";
   case CommandKind::pane_kill:
     return "pane.kill";
+  case CommandKind::surface_create:
+    return "surface.create";
+  case CommandKind::surface_configure:
+    return "surface.configure";
+  case CommandKind::surface_focus:
+    return "surface.focus";
+  case CommandKind::surface_close:
+    return "surface.close";
   }
   return {};
 }
@@ -476,6 +568,66 @@ auto command_name(const CommandKind kind) noexcept -> std::string_view {
     output += field;
     output += R"(":{"id":")" + std::to_string(selector.id.slot()) + ":" +
               std::to_string(selector.id.generation()) + "\"}";
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+[[nodiscard]] auto append_selector(std::string& output, const std::string_view field,
+                                   const SurfaceSelector& selector) -> bool {
+  if (!selector.id.is_valid()) {
+    return false;
+  }
+  try {
+    output += ",\"";
+    output += field;
+    output += R"(\":{\"id\":\")" + std::to_string(selector.id.slot()) + ":" +
+              std::to_string(selector.id.generation()) + "\"}";
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+[[nodiscard]] constexpr auto surface_placement_name(const SurfacePlacementKind kind) noexcept
+    -> std::string_view {
+  switch (kind) {
+  case SurfacePlacementKind::dock_left:
+    return "dock.left";
+  case SurfacePlacementKind::dock_right:
+    return "dock.right";
+  case SurfacePlacementKind::dock_top:
+    return "dock.top";
+  case SurfacePlacementKind::dock_bottom:
+    return "dock.bottom";
+  case SurfacePlacementKind::float_surface:
+    return "float";
+  case SurfacePlacementKind::overlay:
+    return "overlay";
+  }
+  return {};
+}
+
+[[nodiscard]] auto append_surface_placement(std::string& output, const SurfacePlacement placement)
+    -> bool {
+  try {
+    output += R"(,"placement":{"kind":)";
+    if (!append_json_string(output, surface_placement_name(placement.kind))) {
+      return false;
+    }
+    if (placement.kind == SurfacePlacementKind::dock_left ||
+        placement.kind == SurfacePlacementKind::dock_right) {
+      output += R"(,"size":)" + std::to_string(placement.columns) + "}";
+    } else if (placement.kind == SurfacePlacementKind::dock_top ||
+               placement.kind == SurfacePlacementKind::dock_bottom) {
+      output += R"(,"size":)" + std::to_string(placement.rows) + "}";
+    } else {
+      output += R"(,"column":)" + std::to_string(placement.column) + R"(,"row":)" +
+                std::to_string(placement.row) + R"(,"columns":)" +
+                std::to_string(placement.columns) + R"(,"rows":)" + std::to_string(placement.rows) +
+                "}";
+    }
     return true;
   } catch (...) {
     return false;
@@ -658,9 +810,13 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
     if (!append_json_string(output, command_name(command.kind))) {
       return std::nullopt;
     }
+    const bool surface_command = command.kind == CommandKind::surface_create ||
+                                 command.kind == CommandKind::surface_configure ||
+                                 command.kind == CommandKind::surface_focus ||
+                                 command.kind == CommandKind::surface_close;
     const bool has_session = command.kind != CommandKind::daemon_inspect &&
                              command.kind != CommandKind::session_list &&
-                             command.kind != CommandKind::session_start;
+                             command.kind != CommandKind::session_start && !surface_command;
     if (has_session && !append_selector(output, "session", command.session)) {
       return std::nullopt;
     }
@@ -788,6 +944,25 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
       }
       if (command.wait_timeout_milliseconds != wait_timeout_default_milliseconds) {
         output += R"(,"timeout_ms":)" + std::to_string(command.wait_timeout_milliseconds);
+      }
+    }
+    if ((command.kind == CommandKind::surface_configure ||
+         command.kind == CommandKind::surface_focus ||
+         command.kind == CommandKind::surface_close) &&
+        !append_selector(output, "surface", command.surface)) {
+      return std::nullopt;
+    }
+    if ((command.kind == CommandKind::surface_create ||
+         command.kind == CommandKind::surface_configure) &&
+        !append_surface_placement(output, command.surface_placement)) {
+      return std::nullopt;
+    }
+    if (command.kind == CommandKind::surface_create) {
+      if (!command.focusable) {
+        output += R"(,"focusable":false)";
+      }
+      if (!command.opaque) {
+        output += R"(,"opaque":false)";
       }
     }
     output += "}";
@@ -1249,6 +1424,57 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
       }
       command.wait_timeout_milliseconds = static_cast<std::uint32_t>(*value);
     }
+  } else if (*name == "surface.create") {
+    if (auto rejected = reject_unknown({"command", "placement", "focusable", "opaque"});
+        rejected.has_value()) {
+      return *rejected;
+    }
+    command.kind = CommandKind::surface_create;
+    const auto placement = decode_surface_placement(document);
+    if (!placement.has_value()) {
+      return failure("invalid_field", "placement");
+    }
+    command.surface_placement = *placement;
+    if (const auto* const focusable = json_member(document, "focusable"); focusable != nullptr) {
+      const auto value = json_boolean(document, "focusable");
+      if (!value.has_value()) {
+        return failure("invalid_field", "focusable");
+      }
+      command.focusable = *value;
+    }
+    if (const auto* const opaque = json_member(document, "opaque"); opaque != nullptr) {
+      const auto value = json_boolean(document, "opaque");
+      if (!value.has_value()) {
+        return failure("invalid_field", "opaque");
+      }
+      command.opaque = *value;
+    }
+  } else if (*name == "surface.configure") {
+    if (auto rejected = reject_unknown({"command", "surface", "placement"}); rejected.has_value()) {
+      return *rejected;
+    }
+    command.kind = CommandKind::surface_configure;
+    const auto surface = decode_surface_selector(document);
+    const auto placement = decode_surface_placement(document);
+    if (!surface.has_value()) {
+      return failure("invalid_selector", "surface");
+    }
+    if (!placement.has_value()) {
+      return failure("invalid_field", "placement");
+    }
+    command.surface = *surface;
+    command.surface_placement = *placement;
+  } else if (*name == "surface.focus" || *name == "surface.close") {
+    if (auto rejected = reject_unknown({"command", "surface"}); rejected.has_value()) {
+      return *rejected;
+    }
+    command.kind =
+        *name == "surface.focus" ? CommandKind::surface_focus : CommandKind::surface_close;
+    const auto surface = decode_surface_selector(document);
+    if (!surface.has_value()) {
+      return failure("invalid_selector", "surface");
+    }
+    command.surface = *surface;
   } else {
     return failure("unknown_command", "command");
   }

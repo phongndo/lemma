@@ -120,6 +120,21 @@ exact(
     iterations * int(policy["required_routed_input_bytes_per_iteration"]),
 )
 exact(
+    "extension_accounting_scans",
+    int(report["extension_accounting_scans"]),
+    iterations * int(policy["required_extension_accounting_scans_per_iteration"]),
+)
+exact(
+    "active_extension_peers",
+    int(report["active_extension_peers"]),
+    int(policy["required_active_extension_peers"]),
+)
+exact(
+    "active_extension_surfaces",
+    int(report["active_extension_surfaces"]),
+    int(policy["required_active_extension_surfaces"]),
+)
+exact(
     "frames_composed",
     frames,
     iterations * int(policy["required_frames_per_iteration"]),

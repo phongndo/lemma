@@ -140,14 +140,15 @@ dependency abort that cannot return through the normal failure trace. Scheduled 
 `LEMMA_MUX_CAMPAIGN_OPERATIONS` bound the local equivalent.
 
 Parser fuzz targets are opt-in and retain checked-in seeds for the Lemma-owned attachment, host
-input, and public JSON boundaries:
+input, extension framing, and public JSON boundaries:
 
 ```sh
 scripts/ci/configure sanitizers -DLEMMA_BUILD_TESTS=OFF -DLEMMA_BUILD_BENCHMARKS=OFF -DLEMMA_BUILD_FUZZERS=ON
-cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host_input_parser_fuzz lemma_api_json_fuzz
+cmake --build build/sanitizers --target lemma_attachment_decoder_fuzz lemma_host_input_parser_fuzz lemma_api_json_fuzz lemma_extension_framing_fuzz
 ./build/sanitizers/lemma_attachment_decoder_fuzz -runs=0 fuzz/corpus/attachment
 ./build/sanitizers/lemma_host_input_parser_fuzz -runs=0 fuzz/corpus/host-input
 ./build/sanitizers/lemma_api_json_fuzz -runs=0 fuzz/corpus/api
+./build/sanitizers/lemma_extension_framing_fuzz -runs=0 fuzz/corpus/extension
 ```
 
 Linux links libFuzzer for mutation runs. The sanitizer lane replays the checked-in seed corpora,
@@ -291,6 +292,7 @@ For now, `box` is the approved performance host and the paired gate is invoked m
 ```sh
 just performance-calibrate 3
 just performance-gate main
+just performance-extension
 ```
 
 `benchmarks/performance_hosts.json` is the host identity authority for both preflight and report
@@ -306,7 +308,12 @@ main thread or scheduler-tick-rounded `/proc/PID/stat` values. These are live-th
 threads that exit between endpoints can lose CPU accounting. Workload CPU is a batch average,
 not a latency percentile or an event-exact measurement; its interval excludes fixture setup but
 includes probe launch, settling, and resource census. Keep raw endpoints and CPU sources with the
-result, and do not compare unavailable or changing process populations as stable per-operation CPU. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
+result, and do not compare unavailable or changing process populations as stable per-operation CPU.
+The extension gate pairs the same candidate with extensions off and with several external processes:
+idle peers, mostly hidden retained Surfaces, bounded row changes, update storms, incomplete
+near-limit producers, a non-reading maximum-paste owner, and focused or docked process crashes. It
+reports daemon and external-process resources separately and requires pane output after cleanup.
+At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
 diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
 make their rank unstable.
 

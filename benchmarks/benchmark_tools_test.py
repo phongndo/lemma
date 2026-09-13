@@ -196,6 +196,23 @@ core id: 1
 
 
 class LemmaBenchmarkAdapterTest(unittest.TestCase):
+    def test_disabled_extension_fixture_is_not_part_of_binary_provenance(self) -> None:
+        runtime = object.__new__(LemmaRuntime)
+        runtime.server_path = Path("/server")
+        runtime.cli_path = Path("/cli")
+        runtime.peer_path = Path("/peer")
+        runtime.probe_path = Path("/probe")
+        runtime.extension_fixture_mode = None
+        runtime.extension_fixture_path = Path("/baseline/without/fixture.py")
+
+        with mock.patch(
+            "mux_benchmark.executable_provenance", side_effect=lambda path: str(path)
+        ) as provenance:
+            result = runtime.binary_provenance()
+
+        self.assertNotIn("extension_fixture", result)
+        self.assertEqual(provenance.call_count, 4)
+
     def test_lifecycle_sentinel_uses_the_built_quiescent_peer(self) -> None:
         peer = Path("/fixture/lemma_test_pty_peer")
 

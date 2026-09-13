@@ -17,6 +17,7 @@ BUILD = ROOT / "build" / PROFILE
 MUX_DOMAINS: dict[str, tuple[str, bool]] = {
     "configuration": ("tests.mux.test_configuration", True),
     "extensions": ("tests.mux.test_extensions", True),
+    "extension-runtime": ("tests.mux.test_extension_runtime", True),
     "command-line": ("tests.mux.test_command_line", True),
     "pane-lifecycle": ("tests.mux.test_pane_lifecycle", True),
     "session-lifecycle": ("tests.mux.test_session_lifecycle", True),

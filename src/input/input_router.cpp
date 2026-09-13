@@ -185,6 +185,8 @@ struct EncodedPrefix final {
   std::uint8_t size{0};
 };
 
+// Prefix size is checked against fixed storage before each access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] constexpr auto encode_prefix(const InputChord prefix) noexcept
     -> std::optional<EncodedPrefix> {
   if (!chord_valid(prefix) || prefix.kind != ChordKind::byte ||
@@ -802,6 +804,8 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
 
 InputMapConfiguration::InputMapConfiguration() noexcept { reset(InputMapPreset::defaults); }
 
+// The context enum and label bounds are validated before fixed-storage access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 auto InputMapConfiguration::set_context(const ConfiguredInputContext selected,
                                         const ContextOptions options) noexcept -> bool {
   const auto index = static_cast<std::size_t>(selected);
@@ -872,6 +876,8 @@ auto InputMapConfiguration::send(const ConfiguredInputContext context, const Inp
                      .encoded_modifiers = modifiers});
 }
 
+// Binding count is maintained within the fixed binding array.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 auto InputMapConfiguration::unbind(const ConfiguredInputContext context,
                                    const InputChord chord) noexcept -> bool {
   for (std::size_t index = 0; index < binding_count; ++index) {
@@ -930,7 +936,7 @@ auto InputMapConfiguration::set_prefix(const std::optional<InputChord> chord) no
 
 // The shipped policy is ordinary bounded configuration data. The compiler below has no preset or
 // built-in binding branch, so an equivalent user draft produces the same native map.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
   bindings = {};
   contexts = {};
@@ -1293,7 +1299,7 @@ void InputMapConfiguration::reset(const InputMapPreset selected) noexcept {
   }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto compile_input_map(const InputMapConfiguration& configuration) noexcept
     -> std::expected<CompiledInputMap, InputMapError> {
   if (configuration.binding_count > configuration.bindings.size() ||

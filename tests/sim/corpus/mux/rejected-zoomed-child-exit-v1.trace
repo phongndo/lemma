@@ -1,0 +1,13 @@
+lemma-mux-trace-v1
+# corpus-kind: regression
+# description: rejected layout repair after a zoomed Pane exits must retain a valid suspended layout
+# source-trace: GitHub artifact 10297419178:sanitizers/mux-sim-artifacts/mux-16274383668880884721.trace
+# fixed-at: 55d47f86838e255c23809ed365652b96079ec59c
+op split 0:1 - 0:1 - 0 0 applied applied
+check applied 1 ea5103d516702a0c
+op zoom 0:1 - 1:1 - 0 0 applied applied
+check applied 1 ddc9967fd9ca8353
+op attachment-resize - - - - 3 1 applied applied
+check applied 1 004c7aae37e4118d
+op child-exit 0:1 - 1:1 - 0 0 applied rejected
+check applied 1 b9012c3f5becbff4

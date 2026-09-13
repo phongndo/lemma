@@ -131,6 +131,8 @@ struct Tab final {
   TabId id;
   PaneLayout layout;
   // Inactive tabs retain their last usable geometry while continuing to process PTY output.
+  std::uint16_t layout_column{0};
+  std::uint16_t layout_row{0};
   std::uint16_t layout_columns{80};
   std::uint16_t layout_rows{24};
   PaneId focused_pane;

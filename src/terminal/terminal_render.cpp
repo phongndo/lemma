@@ -13,6 +13,7 @@
 #include <expected>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -1112,6 +1113,12 @@ auto Terminal::render_ansi_impl(const std::span<std::byte> output, const bool fo
       .rows = rendered_rows,
       .scrolled_rows = scrolled_rows,
       .full = full,
+      .cursor =
+          (!composed || focused) && presented_cursor_visible
+              ? std::optional{AnsiCursorPosition{
+                    .column = static_cast<std::uint16_t>(origin_column + presented_cursor_column),
+                    .row = static_cast<std::uint16_t>(origin_row + presented_cursor_row)}}
+              : std::nullopt,
   };
 }
 

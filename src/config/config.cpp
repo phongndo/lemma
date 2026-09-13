@@ -39,7 +39,7 @@ using input::PhysicalKey;
   });
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 [[nodiscard]] constexpr auto physical_key(const std::string_view name) noexcept
     -> std::optional<PhysicalKey> {
   if (name == "Enter") {
@@ -175,6 +175,8 @@ using input::PhysicalKey;
   return std::nullopt;
 }
 
+// Fixed-capacity configuration indexes are validated before access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto runtime_options_valid(const Configuration& configuration) noexcept -> bool {
   if (configuration.terminal.scrollback_lines.has_value() &&
       *configuration.terminal.scrollback_lines > limits::terminal_scrollback_lines_hard_max) {
@@ -396,12 +398,14 @@ auto parse_command(const std::string_view value) noexcept -> std::optional<Input
 
 auto command_name(const InputCommand command) noexcept -> std::string_view {
   const auto index = static_cast<std::size_t>(command);
-  return index < command_names.size() ? command_names.at(index) : std::string_view{};
+  return index < command_names.size() ? std::span(command_names).subspan(index, 1).front()
+                                      : std::string_view{};
 }
 
 auto context_name(const ConfiguredInputContext context) noexcept -> std::string_view {
   const auto index = static_cast<std::size_t>(context);
-  return index < context_names.size() ? context_names.at(index) : std::string_view{};
+  return index < context_names.size() ? std::span(context_names).subspan(index, 1).front()
+                                      : std::string_view{};
 }
 
 auto error_name(const Error error) noexcept -> std::string_view {
@@ -738,7 +742,7 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
   }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
   if (!known_members(document,
                      {"schema", "preset", "prefix", "contexts", "bindings", "scrollback_lines",

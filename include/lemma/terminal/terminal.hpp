@@ -89,6 +89,18 @@ struct TerminalTheme final {
 // Returns the concrete xterm-compatible theme used when TerminalOptions::theme is unset.
 [[nodiscard]] auto default_theme() noexcept -> TerminalTheme;
 
+struct TextMetrics final {
+  std::size_t codepoints{0};
+  std::size_t graphemes{0};
+  std::size_t columns{0};
+};
+
+// Validates one printable UTF-8 text run and measures it using Ghostty's canonical grapheme-width
+// rules. Control characters, malformed UTF-8, surrogates, and noncharacters are rejected so a
+// retained Grid cannot emit terminal control input or escape its resolved rectangle.
+[[nodiscard]] auto measure_grid_text(std::string_view text) noexcept
+    -> std::expected<TextMetrics, Error>;
+
 struct TerminalOptions final {
   TerminalSize size{};
   // Ghostty prunes scrollback at page granularity, so retained byte and line counts may exceed
@@ -121,11 +133,19 @@ struct EffectBatch final {
   bool pty_response_overflowed{false};
 };
 
+struct AnsiCursorPosition final {
+  std::uint16_t column{0};
+  std::uint16_t row{0};
+};
+
 struct AnsiRenderResult final {
   std::size_t bytes{0};
   std::size_t rows{0};
   std::int32_t scrolled_rows{0};
   bool full{false};
+  // Visible cursor actually presented, including native overrides, in zero-based output
+  // coordinates. Composition can arbitrate coverage without querying or rendering again.
+  std::optional<AnsiCursorPosition> cursor;
 };
 
 // The pinned Ghostty cell retains one base codepoint plus at most 64 grapheme suffix codepoints.

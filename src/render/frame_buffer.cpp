@@ -1,6 +1,7 @@
 #include "render/frame_buffer.hpp"
 
 #include "render/pane_composition.hpp"
+#include "render/scene.hpp"
 
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
@@ -138,14 +139,22 @@ void FrameBuffer::release() noexcept {
   return std::span<const std::byte>(storage_.get(), capacity_).first(bytes);
 }
 
+[[nodiscard]] auto compose_retained_scene(
+    const Scene scene, const Viewport viewport, FrameBuffer& frame, const bool force_full,
+    const StatusLine status, const std::optional<OuterModeProjection> previous_outer_modes,
+    const MessageView message_view) noexcept -> std::expected<CompositionResult, CompositionError> {
+  return compose_scene(scene, viewport, frame.writable(), force_full, status, previous_outer_modes,
+                       message_view);
+}
+
 [[nodiscard]] auto
 compose_retained_frame(const std::span<const PaneSurface> panes, const Viewport viewport,
                        FrameBuffer& frame, const bool force_full, const StatusLine status,
                        const std::optional<OuterModeProjection> previous_outer_modes,
                        const MessageView message_view) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  return compose_frame(panes, viewport, frame.writable(), force_full, status, previous_outer_modes,
-                       message_view);
+  return compose_retained_scene(Scene{.panes = panes, .grids = {}}, viewport, frame, force_full,
+                                status, previous_outer_modes, message_view);
 }
 
 [[nodiscard]] auto compose_retained_single_pane(vt::Terminal& terminal, FrameBuffer& frame,

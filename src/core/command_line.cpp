@@ -68,6 +68,8 @@ struct CatalogCompletions final {
   }
 };
 
+// Catalog and completion storage are fixed and bounded.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] constexpr auto discover_catalog_completions(const std::string_view parent) noexcept
     -> CatalogCompletions {
   CatalogCompletions completions;
@@ -562,6 +564,8 @@ void assign_launch(api::Command& command, LaunchOptions options) {
                    std::unexpected(CommandLineError::unknown_command)};
 }
 
+// The caller bounds end by line size and completion storage is checked before access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto simple_completion_words(const std::string_view line, const std::size_t end,
                                            std::array<std::string_view, 8>& storage) noexcept
     -> std::span<const std::string_view> {
@@ -662,7 +666,7 @@ launch_completion_kind(const std::span<const std::string_view> words,
   return std::unexpected(CommandLineError::unknown_command);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 [[nodiscard]] auto command_line_completion_query(const std::string_view line,
                                                  const std::size_t cursor) noexcept
     -> CommandLineCompletionQuery {

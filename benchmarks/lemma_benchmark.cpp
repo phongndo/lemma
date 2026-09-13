@@ -1,26 +1,35 @@
 #include "core/layout.hpp"
+#include "extension/protocol.hpp"
+#include "extension/runtime.hpp"
 #include "input/input_router.hpp"
 #include "lemma/command.hpp"
+#include "lemma/geometry.hpp"
+#include "lemma/id.hpp"
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
+#include "render/grid.hpp"
 #include "render/pane_composition.hpp"
+#include "render/scene.hpp"
 
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
-#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -762,6 +771,97 @@ void benchmark_terminal_multiple_panes(benchmark::State& state) {
       benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
 }
 
+void benchmark_idle_extension_runtime(benchmark::State& state) {
+  auto runtime = std::make_unique<extension::Runtime>();
+  std::vector<int> writers;
+  const auto peer_count = static_cast<std::size_t>(state.range(0));
+  for (std::size_t index = 0; index < peer_count; ++index) {
+    std::array<int, 2> descriptors{-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors.data()) != 0) {
+      state.SkipWithError("failed to create idle extension peer");
+      return;
+    }
+    const auto admitted = runtime->admit(
+        extension::FramedPeer(descriptors.at(0)),
+        extension::Hello{
+            .name = "idle", .subscription = {}, .capabilities = extension::capability_proc},
+        SessionId::from_parts(0, 1), AttachmentId::from_parts(0, 1), {});
+    if (!admitted.has_value()) {
+      static_cast<void>(::close(descriptors.at(1)));
+      state.SkipWithError("failed to admit idle extension peer");
+      return;
+    }
+    writers.push_back(descriptors.at(1));
+  }
+  std::array<extension::PeerView, limits::extension_sessions_hard_max> peers{};
+  std::array<render::GridSurface, limits::extension_surfaces_hard_max> surfaces{};
+  for ([[maybe_unused]] const auto iteration : state) {
+    const auto active = runtime->peer_views(peers);
+    const auto projected = runtime->collect_surfaces({}, {.columns = 120, .rows = 40}, surfaces);
+    const auto viewport = runtime->pane_viewport({}, {.columns = 120, .rows = 40});
+    const auto buffered = runtime->buffered_work();
+    auto observed =
+        active.size() + projected.size() + (viewport.has_value() ? 1U : 0U) + (buffered ? 1U : 0U);
+    benchmark::DoNotOptimize(observed);
+  }
+  for (const auto writer : writers) {
+    static_cast<void>(::close(writer));
+  }
+}
+
+void benchmark_scene_grid_row_updates(benchmark::State& state) {
+  constexpr render::Viewport viewport{.columns = 120, .rows = 40};
+  vt::TerminalOptions options;
+  options.size = {.columns = 100, .rows = viewport.rows};
+  auto terminal_result = vt::Terminal::create(options);
+  auto grid_result = render::Grid::create(20, viewport.rows);
+  if (!terminal_result.has_value() || !grid_result.has_value()) {
+    state.SkipWithError("failed to create Scene benchmark state");
+    return;
+  }
+  auto terminal = std::move(*terminal_result);
+  auto grid = std::move(*grid_result);
+  render::GridPatch initial;
+  initial.rows.push_back({.runs = {{.text = "surface", .column = 0}}, .row = 0});
+  if (!grid.apply(std::move(initial)).has_value()) {
+    state.SkipWithError("failed to populate benchmark Grid");
+    return;
+  }
+  const std::array panes{render::PaneSurface{
+      .terminal = &terminal,
+      .rectangle = {.columns = options.size.columns, .rows = options.size.rows},
+      .focused = true,
+  }};
+  const std::array grids{render::GridSurface{
+      .grid = &grid,
+      .rectangle = {.column = options.size.columns, .columns = 20, .rows = viewport.rows},
+  }};
+  std::array<std::byte, std::size_t{256} * 1'024U> frame{};
+  if (!render::compose_scene({.panes = panes, .grids = grids}, viewport, frame, true).has_value()) {
+    state.SkipWithError("failed to compose initial Scene");
+    return;
+  }
+  bool alternate = false;
+  std::uint64_t output_bytes = 0;
+  for ([[maybe_unused]] const auto iteration : state) {
+    render::GridPatch patch;
+    patch.rows.push_back(
+        {.runs = {{.text = alternate ? "surface-a" : "surface-b", .column = 0}}, .row = 20});
+    alternate = !alternate;
+    auto applied = grid.apply(std::move(patch));
+    auto rendered = render::compose_scene({.panes = panes, .grids = grids}, viewport, frame, false);
+    benchmark::DoNotOptimize(applied);
+    benchmark::DoNotOptimize(rendered);
+    if (!applied.has_value() || !rendered.has_value()) {
+      state.SkipWithError("failed to apply or compose Grid update");
+      return;
+    }
+    output_bytes += rendered->bytes;
+  }
+  state.counters["frame_bytes"] =
+      benchmark::Counter(static_cast<double>(output_bytes), benchmark::Counter::kAvgIterations);
+}
+
 void benchmark_terminal_full_frames(benchmark::State& state) {
   auto result = vt::Terminal::create({});
   if (!result.has_value()) {
@@ -818,6 +918,8 @@ BENCHMARK(benchmark_terminal_ansi_scroll_operations);
 BENCHMARK(benchmark_terminal_viewport_wheel_frames);
 BENCHMARK(benchmark_terminal_visible_capture)->Arg(23)->Arg(200);
 BENCHMARK(benchmark_terminal_multiple_panes)->Arg(1)->Arg(4)->Arg(16)->Arg(64);
+BENCHMARK(benchmark_idle_extension_runtime)->Arg(0)->Arg(1)->Arg(32);
+BENCHMARK(benchmark_scene_grid_row_updates);
 BENCHMARK(benchmark_terminal_full_frames);
 
 } // namespace
