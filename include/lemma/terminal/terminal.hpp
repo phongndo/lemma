@@ -133,11 +133,19 @@ struct EffectBatch final {
   bool pty_response_overflowed{false};
 };
 
+struct AnsiCursorPosition final {
+  std::uint16_t column{0};
+  std::uint16_t row{0};
+};
+
 struct AnsiRenderResult final {
   std::size_t bytes{0};
   std::size_t rows{0};
   std::int32_t scrolled_rows{0};
   bool full{false};
+  // Visible cursor actually presented, including native overrides, in zero-based output
+  // coordinates. Composition can arbitrate coverage without querying or rendering again.
+  std::optional<AnsiCursorPosition> cursor;
 };
 
 // The pinned Ghostty cell retains one base codepoint plus at most 64 grapheme suffix codepoints.

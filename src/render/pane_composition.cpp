@@ -1093,7 +1093,8 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
                                   std::size_t& used, const bool force_full,
                                   const bool allow_terminal_scroll,
                                   const std::uint16_t column_offset, const std::uint16_t row_offset,
-                                  CompositionResult& composition) noexcept
+                                  CompositionResult& composition,
+                                  std::optional<vt::AnsiCursorPosition>& pane_cursor) noexcept
     -> std::expected<void, CompositionError> {
   const vt::PaneRenderOptions options{
       .column = static_cast<std::uint16_t>(pane.rectangle.column + column_offset),
@@ -1114,13 +1115,17 @@ void invalidate_focused_cursor_projection(const std::span<const PaneSurface> pan
   used += rendered->bytes;
   composition.rows += rendered->rows;
   composition.full = composition.full || rendered->full;
+  if (pane.focused) {
+    pane_cursor = rendered->cursor;
+  }
   return {};
 }
 
-[[nodiscard]] auto
-render_panes(const Scene scene, const Viewport viewport, const std::span<std::byte> output,
-             std::size_t& used, const bool force_full, const std::uint16_t column_offset,
-             const std::uint16_t row_offset, CompositionResult& composition) noexcept
+[[nodiscard]] auto render_panes(const Scene scene, const Viewport viewport,
+                                const std::span<std::byte> output, std::size_t& used,
+                                const bool force_full, const std::uint16_t column_offset,
+                                const std::uint16_t row_offset, CompositionResult& composition,
+                                std::optional<vt::AnsiCursorPosition>& pane_cursor) noexcept
     -> std::expected<void, CompositionError> {
   const bool allow_terminal_scroll = column_offset == 0 && row_offset == 0 && scene.grids.empty() &&
                                      is_single_full_viewport(scene.panes, viewport);
@@ -1135,9 +1140,9 @@ render_panes(const Scene scene, const Viewport viewport, const std::span<std::by
             return !grid.opaque && grid.grid->damaged() &&
                    rectangles_overlap(pane.rectangle, grid.rectangle);
           });
-      const auto rendered =
-          render_surface(pane, output, used, force_full || repair_transparency,
-                         allow_terminal_scroll, column_offset, row_offset, composition);
+      const auto rendered = render_surface(pane, output, used, force_full || repair_transparency,
+                                           allow_terminal_scroll, column_offset, row_offset,
+                                           composition, pane_cursor);
       if (!rendered.has_value()) {
         invalidate_scene(scene);
         return rendered;
@@ -1208,10 +1213,22 @@ render_panes(const Scene scene, const Viewport viewport, const std::span<std::by
   return {};
 }
 
-[[nodiscard]] auto project_scene_cursor(const Scene scene, const std::span<std::byte> output,
-                                        std::size_t& used, const std::uint16_t column_offset,
-                                        const std::uint16_t row_offset, const bool grids_rendered,
-                                        CompositionResult& composition) noexcept
+[[nodiscard]] auto cursor_covered(const PaneRectangle point,
+                                  const std::span<const GridSurface> higher) noexcept -> bool {
+  return std::ranges::any_of(higher, [point](const GridSurface& surface) {
+    return rectangles_overlap(point, surface.rectangle) &&
+           (surface.opaque ||
+            surface.grid->paints_cell(
+                static_cast<std::uint16_t>(point.column - surface.rectangle.column),
+                static_cast<std::uint16_t>(point.row - surface.rectangle.row)));
+  });
+}
+
+[[nodiscard]] auto
+project_scene_cursor(const Scene scene, const std::span<std::byte> output, std::size_t& used,
+                     const std::uint16_t column_offset, const std::uint16_t row_offset,
+                     const bool grids_rendered,
+                     const std::optional<vt::AnsiCursorPosition> pane_cursor) noexcept
     -> std::expected<void, CompositionError> {
   const auto focused_grid = std::ranges::find(scene.grids, true, &GridSurface::focused);
   if (focused_grid != scene.grids.end()) {
@@ -1229,15 +1246,8 @@ render_panes(const Scene scene, const Viewport viewport, const std::span<std::by
         .rows = 1};
     const auto higher =
         scene.grids.subspan(static_cast<std::size_t>(focused_grid - scene.grids.begin()) + 1U);
-    const bool covered = std::ranges::any_of(higher, [point](const GridSurface& surface) {
-      return rectangles_overlap(point, surface.rectangle) &&
-             (surface.opaque ||
-              surface.grid->paints_cell(
-                  static_cast<std::uint16_t>(point.column - surface.rectangle.column),
-                  static_cast<std::uint16_t>(point.row - surface.rectangle.row)));
-    });
-    const auto rendered =
-        focused_grid->grid->render_cursor_ansi(output.subspan(used), physical, !covered);
+    const auto rendered = focused_grid->grid->render_cursor_ansi(output.subspan(used), physical,
+                                                                 !cursor_covered(point, higher));
     if (!rendered.has_value()) {
       invalidate_scene(scene);
       return std::unexpected(rendered.error() == GridError::output_exhausted
@@ -1247,17 +1257,26 @@ render_panes(const Scene scene, const Viewport viewport, const std::span<std::by
     used += rendered->bytes;
     return {};
   }
-  if (!grids_rendered) {
+  if (scene.grids.empty() || !pane_cursor.has_value()) {
     return {};
   }
-  const auto focused_pane = std::ranges::find(scene.panes, true, &PaneSurface::focused);
-  if (focused_pane == scene.panes.end() || focused_pane->presentation_suppressed ||
-      fully_covered(focused_pane->rectangle, scene.grids)) {
-    return {};
+  // Coverage is retained Scene state, not frame damage. The Pane has already projected its
+  // actual cursor (including copy-mode overrides) and its color/blink policy. Grids only move
+  // the output position; do not render the terminal again merely to restore it.
+  const PaneRectangle point{.column =
+                                static_cast<std::uint16_t>(pane_cursor->column - column_offset),
+                            .row = static_cast<std::uint16_t>(pane_cursor->row - row_offset),
+                            .columns = 1,
+                            .rows = 1};
+  const bool covered = cursor_covered(point, scene.grids);
+  if ((covered && !append(output, used, "\x1B[?25l")) ||
+      (!covered && grids_rendered &&
+       !append_position(output, used, static_cast<std::uint16_t>(pane_cursor->row + 1U),
+                        static_cast<std::uint16_t>(pane_cursor->column + 1U)))) {
+    invalidate_scene(scene);
+    return std::unexpected(CompositionError::output_exhausted);
   }
-  focused_pane->terminal->invalidate_ansi_cursor_projection();
-  return render_surface(*focused_pane, output, used, false, false, column_offset, row_offset,
-                        composition);
+  return {};
 }
 
 [[nodiscard]] auto border_cell(const std::span<const PaneSurface> panes, const std::uint16_t row,
@@ -1601,8 +1620,9 @@ struct CompositionPolicy final {
       return std::unexpected(CompositionError::output_exhausted);
     }
   } else {
+    std::optional<vt::AnsiCursorPosition> pane_cursor;
     const auto rendered = render_panes(scene, content_viewport, output, used, force_full,
-                                       content.column, content.row, composition);
+                                       content.column, content.row, composition, pane_cursor);
     if (!rendered.has_value()) {
       return std::unexpected(rendered.error());
     }
@@ -1614,7 +1634,7 @@ struct CompositionPolicy final {
       return std::unexpected(grids.error());
     }
     const auto cursor = project_scene_cursor(scene, output, used, content.column, content.row,
-                                             used != before_grids, composition);
+                                             used != before_grids, pane_cursor);
     if (!cursor.has_value()) {
       return std::unexpected(cursor.error());
     }
