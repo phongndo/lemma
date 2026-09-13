@@ -3,6 +3,7 @@
 #include "api/command.hpp"
 #include "api/json.hpp"
 #include "extension/protocol.hpp"
+#include "lemma/assert.hpp"
 #include "lemma/geometry.hpp"
 #include "lemma/id.hpp"
 #include "lemma/limits.hpp"
@@ -415,11 +416,22 @@ auto Runtime::admit(FramedPeer transport, Hello hello, const SessionId session_i
       welcome += '"';
       separator = true;
     }
-    welcome += R"(],"limits":{"surfaces":)" +
-               std::to_string(limits::extension_surfaces_per_owner_max) + R"(,"procs":)" +
-               std::to_string(limits::extension_procs_per_owner_max) + R"(,"record_bytes":)" +
-               std::to_string(limits::extension_record_bytes_max) + R"(,"output_bytes":)" +
+    welcome += R"(],"limits":{"peers":)" + std::to_string(limits::extension_sessions_hard_max) +
+               R"(,"surfaces":)" + std::to_string(limits::extension_surfaces_per_owner_max) +
+               R"(,"surfaces_aggregate":)" + std::to_string(limits::extension_surfaces_hard_max) +
+               R"(,"procs":)" + std::to_string(limits::extension_procs_per_owner_max) +
+               R"(,"record_bytes":)" + std::to_string(limits::extension_record_bytes_max) +
+               R"(,"input_bytes_aggregate":)" +
+               std::to_string(limits::extension_input_bytes_aggregate_max) + R"(,"output_bytes":)" +
                std::to_string(limits::extension_output_bytes_per_owner_max) +
+               R"(,"output_bytes_aggregate":)" +
+               std::to_string(limits::extension_output_bytes_aggregate_max) +
+               R"(,"read_bytes_per_turn":)" + std::to_string(limits::extension_bytes_per_turn_max) +
+               R"(,"record_work_bytes_per_turn":)" +
+               std::to_string(limits::extension_record_work_bytes_per_turn_max) +
+               R"(,"records_per_turn":)" + std::to_string(limits::extension_records_per_turn_max) +
+               R"(,"write_bytes_per_turn":)" +
+               std::to_string(limits::extension_output_bytes_per_turn_max) +
                R"(,"surface_bytes":)" + std::to_string(limits::surface_retained_bytes_max) +
                R"(,"surface_bytes_aggregate":)" +
                std::to_string(limits::surface_retained_bytes_aggregate_max) + R"(,"styles":)" +
@@ -468,10 +480,18 @@ auto Runtime::peer_views(std::array<PeerView, limits::extension_sessions_hard_ma
   return std::span(storage).first(count);
 }
 
-auto Runtime::read_ready(const std::size_t slot) noexcept -> std::size_t {
+auto Runtime::read_ready(const std::size_t slot, const std::size_t bytes_max) noexcept
+    -> std::size_t {
   return slot < peers_.size() && peers_.at(slot).peer.has_value()
-             ? peers_.at(slot).peer->transport.read_ready()
+             ? peers_.at(slot).peer->transport.read_ready(bytes_max)
              : 0;
+}
+
+auto Runtime::buffered_record_bytes(const std::size_t slot) const noexcept
+    -> std::optional<std::size_t> {
+  return slot < peers_.size() && peers_.at(slot).peer.has_value()
+             ? peers_.at(slot).peer->transport.buffered_record_bytes()
+             : std::nullopt;
 }
 
 auto Runtime::buffered_work() const noexcept -> bool {
@@ -480,12 +500,15 @@ auto Runtime::buffered_work() const noexcept -> bool {
          });
 }
 
-void Runtime::write_ready(const std::size_t slot, const std::size_t bytes_max) noexcept {
-  if (slot < peers_.size() && peers_.at(slot).peer.has_value()) {
-    auto& found = *peers_.at(slot).peer;
-    found.transport.write_ready(bytes_max);
-    flush_surface_events(found);
+auto Runtime::write_ready(const std::size_t slot, const std::size_t bytes_max) noexcept
+    -> std::size_t {
+  if (slot >= peers_.size() || !peers_.at(slot).peer.has_value()) {
+    return 0;
   }
+  auto& found = *peers_.at(slot).peer;
+  const auto written = found.transport.write_ready(bytes_max);
+  flush_surface_events(found);
+  return written;
 }
 
 auto Runtime::receive(const std::size_t slot) noexcept -> std::optional<Record> {
@@ -547,6 +570,35 @@ auto Runtime::session(const ExtensionGenerationId owner) const noexcept -> Sessi
 auto Runtime::attachment(const ExtensionGenerationId owner) const noexcept -> AttachmentId {
   const auto* const found = peer(owner);
   return found == nullptr ? AttachmentId{} : found->attachment;
+}
+
+auto Runtime::accounting() const noexcept -> RuntimeAccounting {
+  RuntimeAccounting result{};
+  result.peers = peer_count_;
+  result.surfaces = surface_count_;
+  result.retained_surface_bytes = retained_surface_bytes_;
+  for (const auto& slot : peers_) {
+    if (!slot.peer.has_value()) {
+      continue;
+    }
+    const auto& transport = slot.peer->transport;
+    const auto output = transport.output_accounting();
+    result.input_bytes += transport.input_bytes();
+    result.output_bytes += transport.output_bytes();
+    result.buffered_records += static_cast<std::size_t>(transport.buffered_record());
+    result.output.reserved_bytes += output.reserved_bytes;
+    result.output.reserved_records += output.reserved_records;
+    result.output.event_bytes += output.event_bytes;
+    result.output.event_records += output.event_records;
+  }
+  LEMMA_ASSERT(result.peers <= limits::extension_sessions_hard_max);
+  LEMMA_ASSERT(result.input_bytes <= limits::extension_input_bytes_aggregate_max);
+  LEMMA_ASSERT(result.output_bytes + result.output.reserved_bytes <=
+               limits::extension_output_bytes_aggregate_max);
+  LEMMA_ASSERT(result.buffered_records <= result.peers);
+  LEMMA_ASSERT(result.surfaces <= limits::extension_surfaces_hard_max);
+  LEMMA_ASSERT(result.retained_surface_bytes <= limits::surface_retained_bytes_aggregate_max);
+  return result;
 }
 
 auto Runtime::reserve_proc(const ExtensionGenerationId owner,

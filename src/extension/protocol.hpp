@@ -17,7 +17,7 @@ inline constexpr std::array<std::byte, 4> protocol_magic{std::byte{0x8a}, std::b
                                                          std::byte{'M'}, std::byte{'E'}};
 inline constexpr std::uint8_t protocol_major = 1;
 inline constexpr std::uint8_t protocol_minor = 0;
-inline constexpr std::size_t protocol_header_bytes = 16;
+inline constexpr std::size_t protocol_header_bytes = limits::extension_record_header_bytes;
 inline constexpr std::string_view protocol_schema = "lemma.extension/v1";
 inline constexpr std::string_view surface_update_schema = "lemma.surface-update/v1";
 
@@ -65,6 +65,9 @@ public:
   [[nodiscard]] auto descriptor() const noexcept -> int { return descriptor_; }
   [[nodiscard]] auto events() const noexcept -> short;
   [[nodiscard]] auto connected() const noexcept -> bool { return descriptor_ >= 0; }
+  [[nodiscard]] auto input_bytes() const noexcept -> std::size_t {
+    return input_.size() - input_offset_;
+  }
   [[nodiscard]] auto output_bytes() const noexcept -> std::size_t {
     return output_.size() - output_offset_;
   }
@@ -77,9 +80,13 @@ public:
 
   // Setup already consumed the protocol discriminator. Prime it before the first read.
   [[nodiscard]] auto prime(std::byte first) noexcept -> bool;
-  [[nodiscard]] auto read_ready() noexcept -> std::size_t;
+  [[nodiscard]] auto
+  read_ready(std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept
+      -> std::size_t;
   [[nodiscard]] auto buffered_record() const noexcept -> bool;
-  void write_ready(std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept;
+  [[nodiscard]] auto buffered_record_bytes() const noexcept -> std::optional<std::size_t>;
+  auto write_ready(std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept
+      -> std::size_t;
   [[nodiscard]] auto receive() noexcept -> std::optional<Record>;
   void consume() noexcept;
   [[nodiscard]] auto send(RecordKind kind, std::uint32_t sequence,

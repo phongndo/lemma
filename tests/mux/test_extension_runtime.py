@@ -30,10 +30,20 @@ class ExtensionPeer:
     def close(self) -> None:
         self.socket.close()
 
-    def send(self, kind: int, sequence: int, document: dict[str, Any]) -> None:
+    @staticmethod
+    def encode(kind: int, sequence: int, document: dict[str, Any]) -> bytes:
         payload = json.dumps(document, separators=(",", ":")).encode()
+        return HEADER.pack(MAGIC, 1, 0, kind, 0, len(payload), sequence) + payload
+
+    def send(self, kind: int, sequence: int, document: dict[str, Any]) -> None:
+        self.socket.sendall(self.encode(kind, sequence, document))
+
+    def send_batch(self, records: list[tuple[int, int, dict[str, Any]]]) -> None:
         self.socket.sendall(
-            HEADER.pack(MAGIC, 1, 0, kind, 0, len(payload), sequence) + payload
+            b"".join(
+                self.encode(kind, sequence, document)
+                for kind, sequence, document in records
+            )
         )
 
     def receive(self) -> tuple[int, int, dict[str, Any]]:
@@ -394,6 +404,234 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         )
         self.assertTrue(peer.receive_matching(PROC_RESULT, 4)["ok"])
 
+    def test_global_extension_service_is_fair_across_buffered_structural_work(
+        self,
+    ) -> None:
+        session = self.server.create_session("global-fairness", command=("/bin/cat",))
+        state = session.state()
+        client = session.require_client()
+        peers: list[ExtensionPeer] = []
+        surfaces: list[str] = []
+        for index in range(32):
+            peer = ExtensionPeer(str(self.server.socket_path))
+            peers.append(peer)
+            self.addCleanup(peer.close)
+            peer.send(
+                HELLO,
+                1,
+                {
+                    "schema": "lemma.extension/v1",
+                    "name": f"fair-{index}",
+                    "capabilities": ["observe", "proc", "surface"],
+                    "events": {
+                        "schema": "lemma.events/v1",
+                        "session": {"id": state.id},
+                        "panes": [{"id": state.focused.id}],
+                        "screen": True,
+                    },
+                },
+            )
+            peer.receive_matching(2, 1)
+            peer.receive_matching(EVENT)
+            placement = (
+                {"kind": "dock.right", "size": 2}
+                if index == 0
+                else {
+                    "kind": "overlay",
+                    "column": index % 8,
+                    "row": index % 4,
+                    "columns": 8,
+                    "rows": 1,
+                }
+            )
+            peer.send(
+                PROC,
+                2,
+                {
+                    "schema": "lemma.proc/v1",
+                    "commands": [
+                        {
+                            "command": "surface.create",
+                            "placement": placement,
+                            "opaque": index % 2 == 0,
+                        }
+                    ],
+                },
+            )
+            result, _ = peer.receive_proc_before_surface_event(2, "surface.resized")
+            self.assertTrue(result["ok"], result)
+            surfaces.append(result["results"][0]["result"]["surface"])
+
+        for index, (peer, surface) in enumerate(zip(peers, surfaces, strict=True)):
+            updates = []
+            for sequence in range(10, 14):
+                document: dict[str, Any] = {
+                    "schema": "lemma.surface-update/v1",
+                    "surface": surface,
+                    "rows": [
+                        {
+                            "row": 0,
+                            "runs": [{"column": 0, "text": f"{index:02d}-{sequence}"}],
+                        }
+                    ],
+                }
+                if index == 0 and sequence == 10:
+                    # One near-limit complete record pays the global parse/validation budget and
+                    # is rejected without preventing small records on other peers from progressing.
+                    document = {
+                        "schema": "lemma.surface-update/v1",
+                        "surface": surface,
+                        "padding": "x" * 900_000,
+                    }
+                updates.append((SURFACE_UPDATE, sequence, document))
+            updates.append(
+                (
+                    PROC,
+                    14,
+                    {
+                        "schema": "lemma.proc/v1",
+                        "commands": [{"command": "session.list"}],
+                    },
+                )
+            )
+            peer.send_batch(updates)
+
+        marker = "GLOBAL_FAIRNESS_PTY"
+        client.send((marker + "\n").encode())
+        session.pane().expect_output(marker)
+        for index, peer in enumerate(peers):
+            barrier = False
+            observed = False
+            rejected = False
+            for _ in range(64):
+                kind, sequence, document = peer.receive()
+                barrier = barrier or (
+                    kind == PROC_RESULT
+                    and sequence == 14
+                    and document.get("ok") is True
+                )
+                rejected = rejected or (kind == 7 and sequence == 10)
+                observed = observed or (
+                    kind == EVENT
+                    and document.get("event") == "pane.screen"
+                    and marker in json.dumps(document)
+                )
+                if barrier and observed and (index != 0 or rejected):
+                    break
+            self.assertTrue(barrier, f"peer {index} did not cross its Proc barrier")
+            self.assertTrue(observed, f"peer {index} did not observe terminal progress")
+            self.assertEqual(rejected, index == 0)
+
+        for peer in peers:
+            peer.close()
+
+        def restored() -> bool | None:
+            panes = self.server.require_command(
+                "proc", "pane", "list", "--session", session.name
+            )
+            pane = json.loads(panes.output)["results"][0]["result"]["panes"][0]
+            return True if pane["columns"] == 80 else None
+
+        wait_until("global extension cleanup repair", restored)
+
+    def test_blocked_paste_owner_does_not_starve_other_peers_or_pane(self) -> None:
+        session = self.server.create_session("blocked-extension", command=("/bin/cat",))
+        state = session.state()
+        client = session.require_client()
+        blocked = ExtensionPeer(str(self.server.socket_path))
+        self.addCleanup(blocked.close)
+        blocked.send(
+            HELLO,
+            1,
+            {
+                "schema": "lemma.extension/v1",
+                "name": "blocked",
+                "capabilities": ["proc", "surface"],
+                "events": {"schema": "lemma.events/v1", "session": {"id": state.id}},
+            },
+        )
+        blocked.receive_matching(2, 1)
+        blocked.send(
+            PROC,
+            2,
+            {
+                "schema": "lemma.proc/v1",
+                "commands": [
+                    {
+                        "command": "surface.create",
+                        "placement": {"kind": "dock.right", "size": 8},
+                    }
+                ],
+            },
+        )
+        created, _ = blocked.receive_proc_before_surface_event(2, "surface.resized")
+        surface = created["results"][0]["result"]["surface"]
+        blocked.send(
+            PROC,
+            3,
+            {
+                "schema": "lemma.proc/v1",
+                "commands": [{"command": "surface.focus", "surface": {"id": surface}}],
+            },
+        )
+        blocked.receive_proc_before_surface_event(3, "surface.focused")
+
+        others: list[ExtensionPeer] = []
+        for index in range(4):
+            peer = ExtensionPeer(str(self.server.socket_path))
+            others.append(peer)
+            self.addCleanup(peer.close)
+            peer.send(
+                HELLO,
+                1,
+                {
+                    "schema": "lemma.extension/v1",
+                    "name": f"other-{index}",
+                    "capabilities": ["proc"],
+                },
+            )
+            peer.receive_matching(2, 1)
+
+        data = b"x" * (1024 * 1024)
+        with ThreadPoolExecutor(max_workers=1) as sender:
+            paste = sender.submit(
+                client.send, b"\x1b[200~" + data + b"\x1b[201~", timeout=5.0
+            )
+            for sequence in range(2, 10):
+                for peer in others:
+                    peer.send(
+                        PROC,
+                        sequence,
+                        {
+                            "schema": "lemma.proc/v1",
+                            "commands": [{"command": "session.list"}],
+                        },
+                    )
+                    result = peer.receive_matching(PROC_RESULT, sequence)
+                    self.assertTrue(result["ok"], result)
+                # Keep the independent physical client writable; only the extension reader is
+                # intentionally blocked in this fixture.
+                client.drain(0.01)
+            paste.result(timeout=5.0)
+            client.drain(0.01)
+
+        # The peer has not drained any paste Event. Its kernel socket may still absorb the bounded
+        # daemon queue, so disconnect explicitly rather than relying on platform buffer size.
+        blocked.close()
+
+        marker = "AFTER_BLOCKED_EXTENSION"
+        client.send((marker + "\n").encode())
+        session.pane().expect_output(marker)
+
+        def restored() -> bool | None:
+            panes = self.server.require_command(
+                "proc", "pane", "list", "--session", session.name
+            )
+            pane = json.loads(panes.output)["results"][0]["result"]["panes"][0]
+            return True if pane["columns"] == 80 else None
+
+        wait_until("blocked extension cleanup repair", restored)
+
     def test_process_exit_and_pane_closure_are_observed(self) -> None:
         self.server.require_command(
             "proc", "session", "start", "process-events", "--hold", "--", "/bin/sh"
@@ -575,6 +813,31 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                             continue
                         welcome = peer.receive_matching(2, 1)
                         self.assertEqual(welcome["capabilities"], capabilities)
+                        self.assertEqual(
+                            {
+                                key: welcome["limits"][key]
+                                for key in [
+                                    "peers",
+                                    "surfaces_aggregate",
+                                    "input_bytes_aggregate",
+                                    "output_bytes_aggregate",
+                                    "read_bytes_per_turn",
+                                    "record_work_bytes_per_turn",
+                                    "records_per_turn",
+                                    "write_bytes_per_turn",
+                                ]
+                            },
+                            {
+                                "peers": 32,
+                                "surfaces_aggregate": 128,
+                                "input_bytes_aggregate": 33_554_944,
+                                "output_bytes_aggregate": 67_108_864,
+                                "read_bytes_per_turn": 262_144,
+                                "record_work_bytes_per_turn": 1_048_832,
+                                "records_per_turn": 16,
+                                "write_bytes_per_turn": 524_288,
+                            },
+                        )
                         if scoped:
                             self.assertRegex(
                                 welcome["attachment"], r"^[0-9]+:[1-9][0-9]*$"

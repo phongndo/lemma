@@ -86,7 +86,10 @@ Every mutable fact has one authoritative owner:
 
 A projection may be cached for presentation, but it remains bounded, invalidatable, and
 authoritatively reconstructible. Stable IDs cross component and trust boundaries; borrowed
-references remain owner-local.
+references remain owner-local. Extension aggregate accounting is likewise a bounded projection of
+peer-owned input, record, output, Event, and Proc-reservation state; it is not a second mutable
+resource ledger. The reactor rotates extension peer service and charges complete framed bytes,
+record count, socket reads, and actual socket writes against global turn budgets.
 
 The shipped interaction policy is configuration data, not a privileged routing path. The default
 preset and an equivalent explicit user policy compile into the same immutable representation. Core

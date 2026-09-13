@@ -942,6 +942,9 @@
       "maximum_writer_attempts_per_frame": 2,
       "maximum_wire_overhead_bytes_per_frame": 24,
       "required_routed_input_bytes_per_iteration": 1,
+      "required_extension_accounting_scans_per_iteration": 1,
+      "required_active_extension_peers": 1,
+      "required_active_extension_surfaces": 1,
       "required_frames_per_iteration": 1,
       "required_flush_calls_per_iteration": 1
     },

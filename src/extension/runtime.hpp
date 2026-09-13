@@ -66,6 +66,18 @@ struct PeerView final {
   std::size_t slot{0};
 };
 
+struct RuntimeAccounting final {
+  OutputAccounting output;
+  std::size_t input_bytes{0};
+  std::size_t output_bytes{0};
+  std::size_t buffered_records{0};
+  std::size_t peers{0};
+  std::size_t surfaces{0};
+  std::size_t retained_surface_bytes{0};
+
+  auto operator==(const RuntimeAccounting&) const -> bool = default;
+};
+
 // Reactor-owned authority for language-neutral extension sessions and attachment-local Surfaces.
 // The reactor remains the only caller; no synchronization or extension callback enters this module.
 class Runtime final {
@@ -83,10 +95,17 @@ public:
   [[nodiscard]] auto
   peer_views(std::array<PeerView, limits::extension_sessions_hard_max>& storage) const noexcept
       -> std::span<const PeerView>;
-  [[nodiscard]] auto read_ready(std::size_t slot) noexcept -> std::size_t;
+  [[nodiscard]] auto
+  read_ready(std::size_t slot,
+             std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept
+      -> std::size_t;
+  [[nodiscard]] auto buffered_record_bytes(std::size_t slot) const noexcept
+      -> std::optional<std::size_t>;
   [[nodiscard]] auto buffered_work() const noexcept -> bool;
-  void write_ready(std::size_t slot,
-                   std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept;
+  [[nodiscard]] auto
+  write_ready(std::size_t slot,
+              std::size_t bytes_max = limits::extension_io_bytes_per_turn_max) noexcept
+      -> std::size_t;
   [[nodiscard]] auto receive(std::size_t slot) noexcept -> std::optional<Record>;
   void consume(std::size_t slot) noexcept;
   [[nodiscard]] auto owner_at(std::size_t slot) const noexcept -> ExtensionGenerationId;
@@ -101,6 +120,7 @@ public:
       -> const api::EventSubscription*;
   [[nodiscard]] auto session(ExtensionGenerationId owner) const noexcept -> SessionId;
   [[nodiscard]] auto attachment(ExtensionGenerationId owner) const noexcept -> AttachmentId;
+  [[nodiscard]] auto accounting() const noexcept -> RuntimeAccounting;
 
   [[nodiscard]] auto reserve_proc(ExtensionGenerationId owner, std::uint32_t request_id) noexcept
       -> bool;

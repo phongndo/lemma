@@ -84,6 +84,8 @@ TEST(ExtensionProtocolTest, RetainsMultipleBufferedRecordsAcrossConsumption) {
             static_cast<ssize_t>(bytes.size()));
 
   EXPECT_EQ(peer.read_ready(), bytes.size());
+  EXPECT_EQ(peer.buffered_record_bytes(),
+            protocol_header_bytes + std::string_view{R"({"one":1})"}.size());
   const auto first = peer.receive();
   EXPECT_TRUE(first.has_value());
   if (first.has_value()) {
@@ -92,12 +94,28 @@ TEST(ExtensionProtocolTest, RetainsMultipleBufferedRecordsAcrossConsumption) {
   }
   peer.consume();
   EXPECT_TRUE(peer.buffered_record());
+  EXPECT_EQ(peer.buffered_record_bytes(), second.size());
   const auto next = peer.receive();
   EXPECT_TRUE(next.has_value());
   if (next.has_value()) {
     EXPECT_EQ(next->kind, RecordKind::surface_update);
     EXPECT_EQ(next->sequence, 5U);
   }
+}
+
+TEST(ExtensionProtocolTest, ReadReadyHonorsCallerByteBudget) {
+  SocketPair sockets;
+  FramedPeer peer(sockets.take_reader());
+  const auto bytes = record(RecordKind::proc, 3, R"({"bounded":true})");
+  ASSERT_EQ(::send(sockets.writer(), bytes.data(), bytes.size(), 0),
+            static_cast<ssize_t>(bytes.size()));
+
+  EXPECT_EQ(peer.read_ready(0), 0U);
+  EXPECT_EQ(peer.read_ready(5), 5U);
+  EXPECT_EQ(peer.input_bytes(), 5U);
+  EXPECT_FALSE(peer.buffered_record());
+  EXPECT_EQ(peer.read_ready(bytes.size() - 5U), bytes.size() - 5U);
+  EXPECT_TRUE(peer.buffered_record());
 }
 
 TEST(ExtensionProtocolTest, ReadinessDoesNotClaimBufferedRecordAfterServiceBudget) {
@@ -244,6 +262,58 @@ TEST(ExtensionProtocolTest, BoundsQueuedOutputWithoutDisconnectingThePeer) {
   EXPECT_TRUE(peer.connected());
 }
 
+TEST(ExtensionRuntimeTest, AccountsAggregateTransportProjectionAndCleanupState) {
+  SocketPair first_sockets;
+  SocketPair second_sockets;
+  Runtime runtime;
+  constexpr auto capabilities = capability_proc | capability_surface;
+  const auto first =
+      runtime.admit(FramedPeer(first_sockets.take_reader()),
+                    Hello{.name = "first", .subscription = {}, .capabilities = capabilities},
+                    SessionId::from_parts(0, 1), AttachmentId::from_parts(0, 1), {});
+  const auto second =
+      runtime.admit(FramedPeer(second_sockets.take_reader()),
+                    Hello{.name = "second", .subscription = {}, .capabilities = capabilities},
+                    SessionId::from_parts(1, 1), AttachmentId::from_parts(1, 1), {});
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  const auto first_owner = first.value_or(ExtensionGenerationId{});
+  const auto second_owner = second.value_or(ExtensionGenerationId{});
+  const auto input = record(RecordKind::surface_update, 2, "{}");
+  ASSERT_EQ(::send(first_sockets.writer(), input.data(), input.size(), 0),
+            static_cast<ssize_t>(input.size()));
+  ASSERT_EQ(runtime.read_ready(first_owner.slot()), input.size());
+  ASSERT_TRUE(runtime.reserve_proc(second_owner, 7));
+  constexpr render::Viewport viewport{.columns = 80, .rows = 24};
+  const auto surface =
+      runtime.create_surface(first_owner,
+                             api::SurfacePlacement{.kind = api::SurfacePlacementKind::overlay,
+                                                   .column = 0,
+                                                   .row = 0,
+                                                   .columns = 4,
+                                                   .rows = 2},
+                             true, true, viewport);
+  ASSERT_EQ(surface.status, SurfaceOperationStatus::applied);
+
+  const auto accounting = runtime.accounting();
+  EXPECT_EQ(accounting.peers, 2U);
+  EXPECT_EQ(accounting.input_bytes, input.size());
+  EXPECT_EQ(accounting.buffered_records, 1U);
+  EXPECT_EQ(accounting.output_bytes,
+            runtime.output_bytes(first_owner) + runtime.output_bytes(second_owner));
+  EXPECT_EQ(accounting.output.reserved_records, 1U);
+  EXPECT_EQ(accounting.output.reserved_bytes, api::json_bytes_max + protocol_header_bytes);
+  EXPECT_EQ(accounting.surfaces, 1U);
+  EXPECT_EQ(accounting.retained_surface_bytes, runtime.retained_surface_bytes());
+  EXPECT_LE(accounting.input_bytes, limits::extension_input_bytes_aggregate_max);
+  EXPECT_LE(accounting.output_bytes + accounting.output.reserved_bytes,
+            limits::extension_output_bytes_aggregate_max);
+
+  static_cast<void>(runtime.disconnect(first_owner));
+  static_cast<void>(runtime.disconnect(second_owner));
+  EXPECT_EQ(runtime.accounting(), RuntimeAccounting{});
+}
+
 TEST(ExtensionRuntimeTest, ValidatesHelloCapabilitiesAndObservationScope) {
   const auto valid = decode_hello_text(
       R"({"schema":"lemma.extension/v1","name":"worker","capabilities":["proc"]})");
@@ -331,7 +401,7 @@ TEST(ExtensionRuntimeTest, ProcReservationSurvivesMixedOutputPressure) {
   std::size_t records = 0;
   std::size_t results = 0;
   for (std::size_t turn = 0; turn < 512U && records < 5U; ++turn) {
-    runtime.write_ready(owner.slot());
+    static_cast<void>(runtime.write_ready(owner.slot()));
     static_cast<void>(reader.read_ready());
     while (const auto next = reader.receive()) {
       ++records;
@@ -363,7 +433,7 @@ TEST(ExtensionRuntimeTest, DrainingEventsDoNotAccumulateWhileQueueStaysNonempty)
   const auto owner = admitted.value_or(ExtensionGenerationId{});
   std::array<std::byte, 1024> received{};
   const auto welcome = runtime.output_bytes(owner);
-  runtime.write_ready(owner.slot());
+  static_cast<void>(runtime.write_ready(owner.slot()));
   ASSERT_EQ(::recv(sockets.writer(), received.data(), received.size(), MSG_DONTWAIT),
             static_cast<ssize_t>(welcome));
   constexpr std::string_view event = R"({"event":"surface.key"})";
@@ -373,7 +443,7 @@ TEST(ExtensionRuntimeTest, DrainingEventsDoNotAccumulateWhileQueueStaysNonempty)
   const auto batch = runtime.output_bytes(owner);
   for (std::size_t index = 0; index < limits::extension_interaction_events_max * 2U; ++index) {
     ASSERT_TRUE(runtime.send_event(owner, event));
-    runtime.write_ready(owner.slot(), batch);
+    static_cast<void>(runtime.write_ready(owner.slot(), batch));
     ASSERT_EQ(runtime.output_bytes(owner), event_bytes);
     EXPECT_EQ(runtime.output_accounting(owner).event_records, 1U);
     EXPECT_EQ(runtime.output_accounting(owner).event_bytes, event_bytes);
@@ -409,8 +479,8 @@ TEST(ExtensionProtocolTest, OutputAccountingConservesPartialHeadersPayloadsAndMo
   std::array<std::byte, 7> bytes{};
   while (peer.output_bytes() != 0) {
     const auto before = peer.output_bytes();
-    peer.write_ready(bytes.size());
-    const auto count = before - peer.output_bytes();
+    const auto count = peer.write_ready(bytes.size());
+    EXPECT_EQ(count, before - peer.output_bytes());
     ASSERT_GT(count, 0U);
     ASSERT_EQ(::recv(sockets.writer(), bytes.data(), bytes.size(), MSG_DONTWAIT),
               static_cast<ssize_t>(count));

@@ -138,8 +138,8 @@ auto FramedPeer::compact_input() noexcept -> bool {
   return true;
 }
 
-auto FramedPeer::read_ready() noexcept -> std::size_t {
-  if (descriptor_ < 0 || buffered_record()) {
+auto FramedPeer::read_ready(const std::size_t bytes_max) noexcept -> std::size_t {
+  if (descriptor_ < 0 || buffered_record() || bytes_max == 0) {
     return 0;
   }
   static_cast<void>(compact_input());
@@ -149,7 +149,7 @@ auto FramedPeer::read_ready() noexcept -> std::size_t {
     return 0;
   }
   std::array<std::byte, limits::extension_io_bytes_per_turn_max> buffer{};
-  const auto requested = std::min(buffer.size(), retained_max - input_.size());
+  const auto requested = std::min({buffer.size(), bytes_max, retained_max - input_.size()});
   const auto received = ::recv(descriptor_, buffer.data(), requested, 0);
   if (received > 0) {
     try {
@@ -169,9 +169,16 @@ auto FramedPeer::read_ready() noexcept -> std::size_t {
 }
 
 auto FramedPeer::buffered_record() const noexcept -> bool {
+  return buffered_record_bytes().has_value();
+}
+
+auto FramedPeer::buffered_record_bytes() const noexcept -> std::optional<std::size_t> {
   const auto available = std::span<const std::byte>(input_).subspan(input_offset_);
-  if (record_bytes_ != 0 || available.size() < protocol_header_bytes) {
-    return record_bytes_ != 0;
+  if (record_bytes_ != 0) {
+    return record_bytes_;
+  }
+  if (available.size() < protocol_header_bytes) {
+    return std::nullopt;
   }
   const auto header = available.first<protocol_header_bytes>();
   const auto payload_bytes = decode_u32(header.subspan<8, 4>());
@@ -182,9 +189,10 @@ auto FramedPeer::buffered_record() const noexcept -> bool {
       !valid_kind(std::to_integer<std::uint8_t>(header.subspan<6, 1>().front())) ||
       header.subspan<7, 1>().front() != std::byte{0} || sequence == 0 ||
       payload_bytes > limits::extension_record_bytes_max) {
-    return true;
+    return protocol_header_bytes;
   }
-  return available.size() >= protocol_header_bytes + payload_bytes;
+  const auto record_bytes = protocol_header_bytes + static_cast<std::size_t>(payload_bytes);
+  return available.size() >= record_bytes ? std::optional{record_bytes} : std::nullopt;
 }
 
 // The queue contains only locally encoded complete records. A partial front record retains its
@@ -216,18 +224,22 @@ void FramedPeer::consume_output(std::size_t bytes) noexcept {
   }
 }
 
-void FramedPeer::write_ready(const std::size_t bytes_max) noexcept {
+auto FramedPeer::write_ready(const std::size_t bytes_max) noexcept -> std::size_t {
   if (descriptor_ < 0 || output_offset_ == output_.size() || bytes_max == 0) {
-    return;
+    return 0;
   }
   const auto remaining = std::span(output_).subspan(output_offset_);
   const auto sent =
       ::send(descriptor_, remaining.data(), std::min(remaining.size(), bytes_max), MSG_NOSIGNAL);
   if (sent > 0) {
-    consume_output(static_cast<std::size_t>(sent));
-  } else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+    const auto written = static_cast<std::size_t>(sent);
+    consume_output(written);
+    return written;
+  }
+  if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
     disconnect();
   }
+  return 0;
 }
 
 auto FramedPeer::complete_record() noexcept -> std::optional<Record> {

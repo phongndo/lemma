@@ -1,6 +1,9 @@
+#include "api/command.hpp"
 #include "core/client_frame_output.hpp"
+#include "extension/protocol.hpp"
 #include "extension/runtime.hpp"
 #include "input/input_router.hpp"
+#include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "render/frame_buffer.hpp"
 
@@ -14,8 +17,12 @@
 #include <new>
 #include <print>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
+
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 
@@ -119,6 +126,51 @@ int main() {
 
   lemma::input::InputRouter input_router(lemma::input::default_input_map());
   auto extension_runtime = std::make_unique<lemma::extension::Runtime>();
+  std::array<int, 2> extension_sockets{-1, -1};
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, extension_sockets.data()) != 0) {
+    return 2;
+  }
+  const auto extension_session = lemma::SessionId::from_parts(0, 1);
+  const auto extension_attachment = lemma::AttachmentId::from_parts(0, 1);
+  const auto extension_owner = extension_runtime->admit(
+      lemma::extension::FramedPeer(std::exchange(extension_sockets.front(), -1)),
+      lemma::extension::Hello{.name = "allocation-audit",
+                              .subscription = {},
+                              .capabilities = lemma::extension::capability_surface},
+      extension_session, extension_attachment, {});
+  if (!extension_owner.has_value()) {
+    return 2;
+  }
+  const auto extension_surface = extension_runtime->create_surface(
+      *extension_owner,
+      lemma::api::SurfacePlacement{.kind = lemma::api::SurfacePlacementKind::overlay,
+                                   .column = 0,
+                                   .row = 0,
+                                   .columns = 8,
+                                   .rows = 1},
+      true, true, {.columns = 80, .rows = 24});
+  if (extension_surface.status != lemma::extension::SurfaceOperationStatus::applied) {
+    return 2;
+  }
+  const auto surface_update = std::string(R"({"schema":"lemma.surface-update/v1","surface":")") +
+                              std::to_string(extension_surface.surface.slot()) + ":" +
+                              std::to_string(extension_surface.surface.generation()) +
+                              R"(","rows":[{"row":0,"runs":[{"column":0,"text":"idle"}]}]})";
+  if (extension_runtime
+          ->apply_surface_update(*extension_owner, std::as_bytes(std::span(surface_update)))
+          .status != lemma::extension::SurfaceOperationStatus::applied) {
+    return 2;
+  }
+  std::array<std::byte, std::size_t{16} * 1'024U> extension_output{};
+  for (std::size_t turn = 0; turn < 64U && extension_runtime->output_bytes(*extension_owner) != 0;
+       ++turn) {
+    static_cast<void>(extension_runtime->write_ready(extension_owner->slot()));
+    static_cast<void>(::recv(extension_sockets.back(), extension_output.data(),
+                             extension_output.size(), MSG_DONTWAIT));
+  }
+  if (extension_runtime->output_bytes(*extension_owner) != 0) {
+    return 2;
+  }
   std::array<lemma::extension::PeerView, lemma::limits::extension_sessions_hard_max>
       extension_peers{};
   std::array<lemma::render::GridSurface, lemma::limits::extension_surfaces_hard_max>
@@ -168,6 +220,7 @@ int main() {
   std::size_t flush_calls = 0;
   std::size_t maximum_frame_bytes = 0;
   std::size_t maximum_queued_messages = 0;
+  std::size_t extension_accounting_scans = 0;
   for (std::size_t iteration = 0; iteration < audited_iterations; ++iteration) {
     const auto routed = input_router.route_legacy(routed_input, routed_input.size());
     const auto frame_bytes =
@@ -176,18 +229,22 @@ int main() {
                                                ? lemma::vt::TerminalSize{.columns = 100, .rows = 24}
                                                : lemma::vt::TerminalSize{.columns = 80, .rows = 24};
     const auto extension_peer_view = extension_runtime->peer_views(extension_peers);
-    const auto extension_surface_view =
-        extension_runtime->collect_surfaces({}, {.columns = 80, .rows = 24}, extension_surfaces);
+    const auto extension_surface_view = extension_runtime->collect_surfaces(
+        extension_attachment, {.columns = 80, .rows = 24}, extension_surfaces);
     const auto extension_viewport =
-        extension_runtime->pane_viewport({}, {.columns = 80, .rows = 24});
+        extension_runtime->pane_viewport(extension_attachment, {.columns = 80, .rows = 24});
+    const auto extension_accounting = extension_runtime->accounting();
     if (routed.consumed != routed_input.size() || frame_bytes == 0 ||
-        !resize_terminal.resize(resize).has_value() || !extension_peer_view.empty() ||
-        !extension_surface_view.empty() || !extension_viewport.has_value()) {
+        !resize_terminal.resize(resize).has_value() || extension_peer_view.size() != 1U ||
+        extension_surface_view.size() != 1U || !extension_viewport.has_value() ||
+        extension_accounting.peers != 1U || extension_accounting.surfaces != 1U ||
+        extension_accounting.input_bytes != 0 || extension_accounting.output_bytes != 0) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }
     routed_input_bytes += routed.consumed;
     ++frames_composed;
+    ++extension_accounting_scans;
     composed_frame_bytes += frame_bytes;
     maximum_frame_bytes = std::max(maximum_frame_bytes, frame_bytes);
     lemma::core::ClientFrameOutput output;
@@ -214,6 +271,7 @@ int main() {
     }
   }
   audit_enabled.store(false, std::memory_order_release);
+  static_cast<void>(::close(std::exchange(extension_sockets.back(), -1)));
 
   const auto terminal_after = terminal.allocation_stats();
   const auto resize_terminal_after = resize_terminal.allocation_stats();
@@ -226,7 +284,8 @@ int main() {
       routed_input_bytes == audited_iterations && frames_composed == audited_iterations &&
       flush_calls == audited_iterations && frame_messages_queued >= frames_composed &&
       write_audit.attempts >= frame_messages_queued &&
-      write_audit.attempts <= frame_messages_queued * 3U;
+      write_audit.attempts <= frame_messages_queued * 3U &&
+      extension_accounting_scans == audited_iterations;
   const bool passed =
       general_allocations == 0 && general_bytes == 0 && terminal_allocations == 0 && work_bounded;
   std::println(R"({{
@@ -239,6 +298,9 @@ int main() {
   "general_allocation_calls": {},
   "general_allocation_bytes": {},
   "terminal_quota_allocation_calls": {},
+  "extension_accounting_scans": {},
+  "active_extension_peers": 1,
+  "active_extension_surfaces": 1,
   "routed_input_bytes": {},
   "frames_composed": {},
   "composed_frame_bytes": {},
@@ -252,8 +314,9 @@ int main() {
 }})",
                passed ? "passed" : "failed", warmup_iterations, audited_iterations,
                audited_iterations, general_allocations, general_bytes, terminal_allocations,
-               routed_input_bytes, frames_composed, composed_frame_bytes, frame_messages_queued,
-               flush_calls, write_audit.attempts, maximum_frame_bytes, maximum_queued_messages,
-               write_audit.maximum_attempt_bytes, write_audit.bytes);
+               extension_accounting_scans, routed_input_bytes, frames_composed,
+               composed_frame_bytes, frame_messages_queued, flush_calls, write_audit.attempts,
+               maximum_frame_bytes, maximum_queued_messages, write_audit.maximum_attempt_bytes,
+               write_audit.bytes);
   return passed ? 0 : 1;
 }

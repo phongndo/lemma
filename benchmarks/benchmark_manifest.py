@@ -221,6 +221,9 @@ def validate_manifest(manifest: Any) -> None:
         "maximum_writer_attempts_per_frame",
         "maximum_wire_overhead_bytes_per_frame",
         "required_routed_input_bytes_per_iteration",
+        "required_extension_accounting_scans_per_iteration",
+        "required_active_extension_peers",
+        "required_active_extension_surfaces",
         "required_frames_per_iteration",
         "required_flush_calls_per_iteration",
     }

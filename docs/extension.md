@@ -482,7 +482,11 @@ Every record has a 16-byte network-byte-order header:
 A payload is UTF-8 JSON and cannot exceed the `record_bytes` limit returned by Welcome. Unknown
 versions, kinds, flags, invalid lengths, zero sequence IDs, malformed JSON, duplicate object keys,
 or records sent on an ungranted capability are rejected. Reads, writes, records serviced per turn,
-outstanding Procs, queued output, retained Surface bytes, rows, runs, and styles are bounded.
+parsed record bytes, outstanding Procs, queued output, retained Surface bytes, rows, runs, and styles
+are bounded. Welcome reports both per-owner resource limits and aggregate peer, Surface, input,
+output, and per-turn service limits. Aggregate transport accounting is derived from each peer's
+retained input, complete record, queued output, Event, and Proc-reservation state rather than kept as
+a competing mutable ledger.
 
 The first record must be Hello:
 
@@ -622,6 +626,9 @@ The implementation should preserve these properties:
 - Surface updates mark bounded dirty regions rather than forcing full Scene redraws.
 - Accepted patches may share a presentation frame; dependent input patches still apply in order.
 - Slow extension readers cannot block unrelated Proc execution, PTY progress, or Attachments.
+- Global turn budgets cover socket reads and writes, record count, and complete framed bytes charged
+  before parsing or structural application; a rotating peer order prevents a low slot from owning
+  successive budgets.
 - Slow Surface writers cannot grow daemon memory without bound.
 - Hidden or fully occluded Surfaces do not require composition work until they can affect output.
 - A Surface update storm may delay presentation or disconnect its owner on resource exhaustion;

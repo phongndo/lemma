@@ -7615,10 +7615,16 @@ void service_hosted_commands(extension::CommandRuntime& extensions, Sessions& se
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto process_extension_record(extension::Runtime& extensions,
                                             PublicProcExecutions& executions, Sessions& sessions,
-                                            const std::size_t slot) noexcept -> bool {
+                                            const std::size_t slot,
+                                            std::size_t& work_bytes_remaining) noexcept -> bool {
   const auto owner = extensions.owner_at(slot);
+  const auto work_bytes = extensions.buffered_record_bytes(slot);
+  if (!owner.is_valid() || !work_bytes.has_value() || *work_bytes > work_bytes_remaining) {
+    return false;
+  }
+  work_bytes_remaining -= *work_bytes;
   const auto record = extensions.receive(slot);
-  if (!owner.is_valid() || !record.has_value()) {
+  if (!record.has_value()) {
     return false;
   }
   if (record->kind == extension::RecordKind::proc) {
@@ -10523,9 +10529,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       ++descriptor_count;
     }
     if (!active_extension_peers.empty()) {
-      // Four records are admitted per peer below; advance by the same stride so continuously ready
-      // low-numbered slots cannot consume every global record budget.
-      extension_io_cursor = (extension_io_cursor + 4U) % active_extension_peers.size();
+      // Advance by one so a continuously readable peer cannot repeatedly own the global byte
+      // budget when the active peer count shares a factor with the per-peer record allowance.
+      extension_io_cursor = (extension_io_cursor + 1U) % active_extension_peers.size();
     }
     if (extensions.channel().descriptor() >= 0) {
       std::span(descriptors).subspan(descriptor_count, 1).front() = {
@@ -10650,6 +10656,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     search_cursor = (search_cursor + visited) % search_sessions.size();
     std::size_t extension_read_budget = limits::extension_bytes_per_turn_max;
     std::size_t extension_record_budget = limits::extension_records_per_turn_max;
+    std::size_t extension_record_work_budget = limits::extension_record_work_bytes_per_turn_max;
+    std::size_t extension_output_budget = limits::extension_output_bytes_per_turn_max;
     for (std::size_t index = 1; index < descriptor_count; ++index) {
       const auto owner = std::span(owners).subspan(index, 1).front();
       if (owner.kind == DescriptorKind::pending) {
@@ -10678,21 +10686,25 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
           continue;
         }
         const auto events = std::span(descriptors).subspan(index, 1).front().revents;
-        if ((events & POLLIN) != 0 &&
-            extension_read_budget >= limits::extension_io_bytes_per_turn_max) {
-          const auto received = extension_runtime.read_ready(owner.auxiliary_slot);
+        if ((events & POLLIN) != 0 && extension_read_budget > 0) {
+          const auto received = extension_runtime.read_ready(
+              owner.auxiliary_slot,
+              std::min(limits::extension_io_bytes_per_turn_max, extension_read_budget));
           extension_read_budget -= std::min(received, extension_read_budget);
         }
         constexpr std::size_t records_per_peer_per_turn_max = 4;
         for (std::size_t processed = 0;
              processed < records_per_peer_per_turn_max && extension_record_budget > 0 &&
              process_extension_record(extension_runtime, public_procs, sessions,
-                                      owner.auxiliary_slot);
+                                      owner.auxiliary_slot, extension_record_work_budget);
              ++processed) {
           --extension_record_budget;
         }
-        if ((events & POLLOUT) != 0) {
-          extension_runtime.write_ready(owner.auxiliary_slot);
+        if ((events & POLLOUT) != 0 && extension_output_budget > 0) {
+          const auto written = extension_runtime.write_ready(
+              owner.auxiliary_slot,
+              std::min(limits::extension_io_bytes_per_turn_max, extension_output_budget));
+          extension_output_budget -= std::min(written, extension_output_budget);
         }
         if ((events & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
           const auto generation = extension_runtime.owner_at(owner.auxiliary_slot);
