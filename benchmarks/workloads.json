@@ -405,6 +405,25 @@
         "lemma"
       ],
       "completion_endpoint": "pty_receipt_and_outer_bytes"
+    },
+    {
+      "id": "extension_isolation",
+      "input": "an external extension either retains a maximum-size paste without reading, crashes while focused, or crashes while docked",
+      "completion": "the extension process exits and a unique marker reaches pane output through the restored projection",
+      "metrics": [
+        "paste_submit_ns",
+        "other_peer_proc_completions",
+        "cleanup_to_outer_bytes_ns",
+        "process_tree_cpu_ns",
+        "process_tree_rss_bytes",
+        "process_tree_wakeups"
+      ],
+      "cli_mode": "extension-isolation",
+      "fixture": "external-extension-isolation",
+      "subjects": [
+        "lemma"
+      ],
+      "completion_endpoint": "outer_bytes_after_extension_cleanup"
     }
   ],
   "latency_trace": {
@@ -956,6 +975,61 @@
       "required_blocked_sends": 1,
       "required_partial_sends": 1,
       "required_child_wakeups": 1
+    }
+  },
+  "extension_performance": {
+    "schema": 1,
+    "status": "reviewed",
+    "approved_host": "box",
+    "minimum_repetitions": 100,
+    "fixtures": {
+      "idle-peers": {
+        "processes": 8,
+        "peers_per_process": 1
+      },
+      "idle-surfaces": {
+        "processes": 8,
+        "peers_per_process": 1,
+        "surfaces_per_process": 8
+      },
+      "changing-rows": {
+        "processes": 4,
+        "surfaces_per_process": 1,
+        "update_period_ms": 20
+      },
+      "storm": {
+        "processes": 8,
+        "surfaces_per_process": 1,
+        "update_period_ms": 20
+      },
+      "slow-producer": {
+        "processes": 8,
+        "declared_payload_bytes_per_process": 1048576,
+        "initial_retained_input_bytes_per_process": 1047568,
+        "slow_tail_bytes_per_process": 1024,
+        "byte_period_ms": 50
+      },
+      "blocked-reader": {
+        "processes": 1,
+        "paste_bytes": 1048576
+      },
+      "crash-focused": {
+        "processes": 1
+      },
+      "crash-docked": {
+        "processes": 1
+      }
+    },
+    "limits": {
+      "idle_daemon_cpu_p95_ns_per_second": 10000000,
+      "idle_daemon_wakeups_p95_per_second": 50,
+      "idle_daemon_rss_increase_bytes": 16777216,
+      "interactive_key_to_outer_bytes_p95_maximum_ratio": 3.0,
+      "slow_producer_key_to_outer_bytes_p95_maximum_ratio": 1.5,
+      "minimum_storm_outer_bytes_per_second": 1,
+      "maximum_paste_submit_ns": 1000000000,
+      "minimum_blocked_other_peer_proc_completions": 1,
+      "maximum_cleanup_to_outer_bytes_ns": 1000000000
     }
   },
   "paired_regression": {

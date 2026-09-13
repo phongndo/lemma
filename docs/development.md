@@ -292,6 +292,7 @@ For now, `box` is the approved performance host and the paired gate is invoked m
 ```sh
 just performance-calibrate 3
 just performance-gate main
+just performance-extension
 ```
 
 `benchmarks/performance_hosts.json` is the host identity authority for both preflight and report
@@ -307,7 +308,12 @@ main thread or scheduler-tick-rounded `/proc/PID/stat` values. These are live-th
 threads that exit between endpoints can lose CPU accounting. Workload CPU is a batch average,
 not a latency percentile or an event-exact measurement; its interval excludes fixture setup but
 includes probe launch, settling, and resource census. Keep raw endpoints and CPU sources with the
-result, and do not compare unavailable or changing process populations as stable per-operation CPU. At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
+result, and do not compare unavailable or changing process populations as stable per-operation CPU.
+The extension gate pairs the same candidate with extensions off and with several external processes:
+idle peers, mostly hidden retained Surfaces, bounded row changes, update storms, incomplete
+near-limit producers, a non-reading maximum-paste owner, and focused or docked process crashes. It
+reports daemon and external-process resources separately and requires pane output after cleanup.
+At the gate's 100 process samples, nearest-rank p99 endpoints remain explicit
 diagnostics and absolute-target evidence rather than paired blockers because frame-cadence outliers
 make their rank unstable.
 

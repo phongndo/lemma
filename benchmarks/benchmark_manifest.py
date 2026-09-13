@@ -239,6 +239,63 @@ def validate_manifest(manifest: Any) -> None:
             raise ManifestError(
                 f"deterministic_budgets.steady_state.{field} is invalid"
             )
+    extension = manifest.get("extension_performance")
+    extension_fixtures = (
+        extension.get("fixtures") if isinstance(extension, dict) else None
+    )
+    extension_limits = extension.get("limits") if isinstance(extension, dict) else None
+    if (
+        not isinstance(extension, dict)
+        or extension.get("schema") != 1
+        or extension.get("status") != "reviewed"
+        or extension.get("approved_host") != "box"
+        or not isinstance(extension.get("minimum_repetitions"), int)
+        or extension["minimum_repetitions"] < 20
+        or not isinstance(extension_fixtures, dict)
+        or set(extension_fixtures)
+        != {
+            "idle-peers",
+            "idle-surfaces",
+            "changing-rows",
+            "storm",
+            "slow-producer",
+            "blocked-reader",
+            "crash-focused",
+            "crash-docked",
+        }
+        or not isinstance(extension_limits, dict)
+    ):
+        raise ManifestError("extension_performance must be a reviewed schema-1 policy")
+    for name, fixture in extension_fixtures.items():
+        if not isinstance(fixture, dict) or not fixture:
+            raise ManifestError(f"extension_performance.fixtures.{name} is invalid")
+        for field, value in fixture.items():
+            if (
+                not isinstance(field, str)
+                or not isinstance(value, int)
+                or isinstance(value, bool)
+                or value <= 0
+            ):
+                raise ManifestError(
+                    f"extension_performance.fixtures.{name}.{field} is invalid"
+                )
+    expected_extension_limits = {
+        "idle_daemon_cpu_p95_ns_per_second",
+        "idle_daemon_wakeups_p95_per_second",
+        "idle_daemon_rss_increase_bytes",
+        "interactive_key_to_outer_bytes_p95_maximum_ratio",
+        "slow_producer_key_to_outer_bytes_p95_maximum_ratio",
+        "minimum_storm_outer_bytes_per_second",
+        "maximum_paste_submit_ns",
+        "minimum_blocked_other_peer_proc_completions",
+        "maximum_cleanup_to_outer_bytes_ns",
+    }
+    if set(extension_limits) != expected_extension_limits:
+        raise ManifestError("extension_performance.limits fields are incomplete")
+    for field, value in extension_limits.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            raise ManifestError(f"extension_performance.limits.{field} is invalid")
+
     reactor_fields = {
         "test",
         "maximum_poll_calls",

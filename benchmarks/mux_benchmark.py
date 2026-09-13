@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import ctypes
 import hashlib
 import json
@@ -91,6 +92,16 @@ ATTACH_STARTUP_SHELLS = {
     "nu",
     "nushell",
 }
+EXTENSION_FIXTURE_MODES = (
+    "idle-peers",
+    "idle-surfaces",
+    "changing-rows",
+    "storm",
+    "blocked-reader",
+    "slow-producer",
+    "crash-focused",
+    "crash-docked",
+)
 HERDR_BENCHMARK_CONFIG = """onboarding = false
 
 [update]
@@ -1151,6 +1162,9 @@ class LemmaRuntime:
         peer: Path,
         probe: Path,
         trace_directory: Path | None = None,
+        extension_fixture_mode: str | None = None,
+        extension_fixture_path: Path | None = None,
+        extension_fixture_process_count: int = 0,
     ) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="lemma-benchmark-")
         root = Path(self.temporary.name)
@@ -1161,6 +1175,16 @@ class LemmaRuntime:
         self.cli_path = cli.resolve()
         self.peer_path = peer.resolve()
         self.probe_path = probe.resolve()
+        self.extension_fixture_mode = extension_fixture_mode
+        self.extension_fixture_path = (
+            extension_fixture_path.resolve()
+            if extension_fixture_path is not None
+            else None
+        )
+        self.extension_fixture_process_count = extension_fixture_process_count
+        self.extension_processes: list[subprocess.Popen[str]] = []
+        self.extension_logs: list[Path] = []
+        self.extension_fixture_ready: list[dict[str, Any]] = []
         self.environment = benchmark_environment(root)
         if trace_directory is not None:
             self.environment["LEMMA_LATENCY_TRACE"] = str(trace_directory.resolve())
@@ -1243,7 +1267,74 @@ class LemmaRuntime:
         self.start_detached(session)
         client = self.attach(session)
         wait_for_startup_shell(self, client)
+        self._start_extension_fixture(session)
         return client
+
+    def _start_extension_fixture(self, session: str) -> None:
+        mode: str | None = getattr(self, "extension_fixture_mode", None)
+        if mode is None or getattr(self, "extension_processes", []):
+            return
+        if self.extension_fixture_path is None:
+            raise RuntimeError("extension fixture path is unavailable")
+        default_counts = {
+            "idle-peers": 8,
+            "idle-surfaces": 8,
+            "changing-rows": 4,
+            "storm": 8,
+            "blocked-reader": 1,
+            "slow-producer": 8,
+            "crash-focused": 1,
+            "crash-docked": 1,
+        }
+        process_count = (
+            self.extension_fixture_process_count
+            if self.extension_fixture_process_count > 0
+            else default_counts[mode]
+        )
+        for index in range(process_count):
+            log_path = Path(self.temporary.name) / f"extension-fixture-{index}.log"
+            self.extension_logs.append(log_path)
+            log = log_path.open("w", encoding="utf-8")
+            command = [
+                sys.executable,
+                str(self.extension_fixture_path),
+                "--mode",
+                mode,
+                "--socket",
+                str(self.socket_path),
+                "--session",
+                session,
+                "--name-prefix",
+                f"p{index}-",
+            ]
+            if process_count > 1:
+                command.extend(["--peers", "1"])
+            process = subprocess.Popen(
+                command,
+                env=self.environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                text=True,
+                start_new_session=True,
+            )
+            log.close()
+            self.extension_processes.append(process)
+            assert process.stdout is not None
+            readable, _, _ = select.select([process.stdout], [], [], 15.0)
+            if not readable:
+                raise TimeoutError("extension fixture did not become ready")
+            line = process.stdout.readline()
+            try:
+                ready = json.loads(line)
+            except json.JSONDecodeError as error:
+                details = log_path.read_text(encoding="utf-8")
+                raise RuntimeError(
+                    f"invalid extension fixture readiness: {line!r}; stderr={details!r}"
+                ) from error
+            if ready.get("status") != "ready" or ready.get("mode") != mode:
+                raise RuntimeError(f"extension fixture setup failed: {ready}")
+            self.extension_fixture_ready.append(ready)
 
     def start_detached(self, session: str) -> None:
         self.command("start", session)
@@ -1263,10 +1354,16 @@ class LemmaRuntime:
             time.sleep(0.005)
         raise TimeoutError("Lemma validation client did not detach")
 
+    def live_extension_processes(self) -> list[subprocess.Popen[str]]:
+        return [
+            process for process in self.extension_processes if process.poll() is None
+        ]
+
     def resource_roots(self) -> list[int]:
         return [
             self.server.pid,
             *(client.pid for client in self.clients if client.pid > 0),
+            *(process.pid for process in self.live_extension_processes()),
         ]
 
     def resource_role_pids(self) -> dict[str, list[int]]:
@@ -1276,6 +1373,9 @@ class LemmaRuntime:
             "attached_client": [
                 client.pid for client in self.clients if client.pid > 0
             ],
+            "extension_fixture": [
+                process.pid for process in self.live_extension_processes()
+            ],
         }
 
     def binary_provenance(self) -> dict[str, Any]:
@@ -1284,9 +1384,31 @@ class LemmaRuntime:
             "cli": executable_provenance(self.cli_path),
             "workload": executable_provenance(self.peer_path),
             "probe": executable_provenance(self.probe_path),
+            "extension_fixture": (
+                executable_provenance(self.extension_fixture_path)
+                if self.extension_fixture_path is not None
+                else None
+            ),
         }
 
+    def stop_extension_fixture(self, *, crash: bool = False) -> None:
+        for process in self.live_extension_processes():
+            try:
+                os.killpg(process.pid, signal.SIGKILL if crash else signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        for process in self.live_extension_processes():
+            process.wait(timeout=2.0)
+
     def close(self) -> None:
+        if self.live_extension_processes():
+            try:
+                self.stop_extension_fixture()
+            except subprocess.TimeoutExpired:
+                self.stop_extension_fixture(crash=True)
+        for process in self.extension_processes:
+            if process.stdout is not None:
+                process.stdout.close()
         for client in self.clients:
             client.close()
         self.clients.clear()
@@ -2541,6 +2663,76 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         receipts.close()
 
 
+def extension_isolation(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
+    if not isinstance(runtime, LemmaRuntime):
+        raise TypeError("extension-isolation workload requires Lemma")
+    mode = runtime.extension_fixture_mode
+    if mode not in {"blocked-reader", "crash-focused", "crash-docked"}:
+        raise ValueError("extension-isolation requires a blocked or crash fixture")
+
+    session = "extension_isolation"
+    runtime.start_detached(session)
+    client = runtime.attach(session)
+    wait_for_startup_shell(runtime, client)
+    client.write_all(b"exec /bin/cat\r", 2.0)
+    client.drain(0.1)
+    runtime._start_extension_fixture(session)
+    client.drain(0.1)
+
+    activity_before = runtime_resource_snapshot(runtime)
+    paste_submit_ns: int | None = None
+    paste_bytes = 0
+    if mode == "blocked-reader":
+        paste = b"\x1b[200~" + (b"x" * (1024 * 1024)) + b"\x1b[201~"
+        paste_bytes = 1024 * 1024
+        started = time.perf_counter_ns()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            submitted = executor.submit(client.write_all, paste, 15.0)
+            while not submitted.done():
+                client.drain(0.005)
+            submitted.result()
+        paste_submit_ns = time.perf_counter_ns() - started
+        client.drain(0.25)
+    else:
+        time.sleep(0.25)
+    activity_after = runtime_resource_snapshot(runtime)
+
+    marker = f"__LEMMA_EXTENSION_CLEANUP_{time.monotonic_ns():016x}__".encode()
+    cleanup_started = time.perf_counter_ns()
+    runtime.stop_extension_fixture(crash=mode.startswith("crash-"))
+    client.write_all(marker + b"\r", 2.0)
+    cleanup_output_bytes = len(client.read_until(marker, 5.0))
+    cleanup_ns = time.perf_counter_ns() - cleanup_started
+    telemetry: list[dict[str, Any]] = []
+    for process in runtime.extension_processes:
+        if process.stdout is None:
+            continue
+        line = process.stdout.readline()
+        if line:
+            try:
+                telemetry.append(json.loads(line))
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    f"invalid extension fixture telemetry: {line!r}"
+                ) from error
+
+    return {
+        "status": "completed",
+        "fixture": mode,
+        "repetitions": repetitions,
+        "paste_payload_bytes": paste_bytes,
+        "paste_submit_ns": paste_submit_ns,
+        "cleanup_to_outer_bytes_ns": cleanup_ns,
+        "cleanup_output_bytes": cleanup_output_bytes,
+        "fixture_telemetry": telemetry,
+        "activity_resources": {
+            "before": activity_before,
+            "after": activity_after,
+        },
+        "resources_after_cleanup": runtime_resource_snapshot(runtime),
+    }
+
+
 def wait_for_profile_panes(
     runtime: LemmaRuntime | TmuxRuntime | HerdrRuntime | ZellijRuntime,
     client: PtyProcess,
@@ -3020,6 +3212,13 @@ def main() -> int:
     parser.add_argument("--zellij", type=Path, default=Path("zellij"))
     parser.add_argument("--herdr", type=Path, default=Path("herdr"))
     parser.add_argument("--trace-directory", type=Path)
+    parser.add_argument("--extension-fixture", choices=EXTENSION_FIXTURE_MODES)
+    parser.add_argument(
+        "--extension-fixture-path",
+        type=Path,
+        default=Path("benchmarks/extension_fixture.py"),
+    )
+    parser.add_argument("--extension-fixture-processes", type=int, default=0)
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--allow-workload-failures",
@@ -3061,6 +3260,21 @@ def main() -> int:
             parser.error(f"missing executable: {fixture_executable}")
     if arguments.mode == "profiles" and arguments.multiplexer == "direct":
         parser.error("pane profiles require a multiplexer")
+    if arguments.extension_fixture is not None:
+        if arguments.multiplexer != "lemma":
+            parser.error("extension fixtures require the lemma multiplexer")
+        if not arguments.extension_fixture_path.is_file():
+            parser.error(
+                f"missing extension fixture: {arguments.extension_fixture_path}"
+            )
+        if not 0 <= arguments.extension_fixture_processes <= 32:
+            parser.error("extension fixture process count exceeds the peer limit")
+        if (
+            arguments.extension_fixture
+            in {"blocked-reader", "crash-focused", "crash-docked"}
+            and arguments.extension_fixture_processes > 1
+        ):
+            parser.error("blocked and crash fixtures require one extension process")
     if arguments.trace_directory is not None:
         arguments.trace_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         if any(arguments.trace_directory.glob("*.ltrace")):
@@ -3100,6 +3314,9 @@ def main() -> int:
                 arguments.peer,
                 arguments.probe,
                 arguments.trace_directory,
+                arguments.extension_fixture,
+                arguments.extension_fixture_path,
+                arguments.extension_fixture_processes,
             )
         if arguments.multiplexer == "tmux":
             assert tmux is not None
@@ -3130,6 +3347,8 @@ def main() -> int:
                 runtime, arguments.repetitions if repetitions is None else repetitions
             )
             result["resources_after_workload"] = runtime_resource_snapshot(runtime)
+            if isinstance(runtime, LemmaRuntime):
+                result["extension_fixture_ready"] = runtime.extension_fixture_ready
             if not binary_provenance:
                 binary_provenance = runtime.binary_provenance()
             return result
@@ -3163,6 +3382,7 @@ def main() -> int:
         "idle_resources": idle_resources,
         "blocked_pty": blocked_pty,
         "blocked_client": blocked_client,
+        "extension_isolation": extension_isolation,
         "component_resources": component_resources,
         "history_resources": history_resources,
         "lifecycle_churn": lifecycle_churn,
@@ -3336,6 +3556,8 @@ def main() -> int:
         "maximum_gate_load_average_1m": maximum_gate_load,
         "multiplexer": arguments.multiplexer,
         "multiplexer_version": runtime_version,
+        "extension_fixture": arguments.extension_fixture,
+        "extension_fixture_processes": arguments.extension_fixture_processes,
         "commit": commit,
         "worktree_dirty": worktree_dirty,
         "worktree_diff_sha256": worktree_diff_sha256,
