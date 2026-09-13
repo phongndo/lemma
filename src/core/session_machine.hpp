@@ -110,7 +110,8 @@ enum class SessionInvariantError : std::uint8_t {
   pane_slot_identity,
   pane_tab,
   pane_layout_membership,
-  pane_rectangle,
+  pane_rectangle_empty,
+  pane_rectangle_out_of_bounds,
   layout_invalid,
   focused_pane,
   previous_pane,
@@ -138,6 +139,9 @@ public:
   [[nodiscard]] auto split_pane(TabId tab, PaneId source, SplitAxis axis,
                                 SplitPaneOptions options = {}) noexcept -> SessionTransition;
   [[nodiscard]] auto resize_attachment(std::uint16_t columns, std::uint16_t rows) noexcept
+      -> SessionTransition;
+  [[nodiscard]] auto resize_attachment(std::uint16_t columns, std::uint16_t rows,
+                                       PaneRectangle content_viewport) noexcept
       -> SessionTransition;
   [[nodiscard]] auto runtime_failed(PaneId pane, ProcessExit process, bool child_exit) noexcept
       -> SessionTransition;

@@ -1,9 +1,8 @@
 #ifndef LEMMA_RENDER_PANE_COMPOSITION_HPP
 #define LEMMA_RENDER_PANE_COMPOSITION_HPP
 
-#include "lemma/geometry.hpp"
 #include "lemma/limits.hpp"
-#include "lemma/terminal/terminal.hpp"
+#include "render/scene.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,25 +16,6 @@ namespace lemma::render {
 inline constexpr std::size_t status_tabs_max = 16;
 inline constexpr std::size_t status_context_bytes_max = limits::search_query_bytes_max + 64U;
 inline constexpr std::size_t message_view_line_bytes_max = limits::status_message_bytes_max + 32U;
-
-struct Viewport final {
-  std::uint16_t columns{0};
-  std::uint16_t rows{0};
-};
-
-using PaneRectangle = lemma::PaneRectangle;
-
-struct PaneSurface final {
-  vt::Terminal* terminal{nullptr};
-  PaneRectangle rectangle{};
-  std::uint16_t cursor_override_column{0};
-  std::uint16_t cursor_override_row{0};
-  bool focused{false};
-  bool cursor_override{false};
-  bool presentation_suppressed{false};
-  bool border_right{false};
-  bool border_bottom{false};
-};
 
 struct StatusTab final {
   std::uint16_t number{0};
@@ -129,10 +109,17 @@ struct StatusTarget final {
                                            std::uint16_t column) noexcept
     -> std::optional<StatusTarget>;
 
-// Composes already-resolved content-area pane rectangles into one synchronized outer-terminal
-// update. A visible status line occupies the top row, and pane content and separators are offset
-// below it. The focused surface owns cursor and terminal modes unless a status prompt is active.
-// Callers must force a full frame after changing pane geometry.
+// Composes one already-resolved Scene into a synchronized outer-terminal update. A visible native
+// status line occupies the top row, and Scene coordinates are relative to the remaining content
+// viewport. The focused projection owns cursor and outer input modes. Geometry changes require a
+// full frame; retained Grid updates otherwise visit only damaged rows.
+[[nodiscard]] auto compose_scene(
+    Scene scene, Viewport viewport, std::span<std::byte> output, bool force_full,
+    StatusLine status = {}, std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
+    MessageView message_view = {}) noexcept -> std::expected<CompositionResult, CompositionError>;
+
+// Pane-only compatibility interface retained for focused tests and callers while all production
+// composition converges on Scene.
 [[nodiscard]] auto
 compose_frame(std::span<const PaneSurface> panes, Viewport viewport, std::span<std::byte> output,
               bool force_full, StatusLine status = {},

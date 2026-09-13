@@ -13,6 +13,38 @@ inline constexpr std::uint32_t panes_hard_max = 4'096;
 inline constexpr std::uint32_t clients_hard_max = 128;
 inline constexpr std::uint32_t layout_depth_hard_max = 64;
 
+// Runtime extensions are isolated peers. These limits bound both retained daemon state and work
+// admitted from continuously ready peers; they are part of the discoverable extension contract.
+inline constexpr std::size_t extension_sessions_hard_max = 32;
+inline constexpr std::size_t extension_surfaces_per_owner_max = 16;
+inline constexpr std::size_t extension_surfaces_hard_max = 128;
+inline constexpr std::size_t extension_procs_per_owner_max = 1;
+inline constexpr std::size_t extension_record_header_bytes = 16;
+inline constexpr std::size_t extension_record_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+inline constexpr std::size_t extension_io_bytes_per_turn_max = std::size_t{16} * 1'024U;
+inline constexpr std::size_t extension_records_per_turn_max = 16;
+inline constexpr std::size_t extension_bytes_per_turn_max = std::size_t{256} * 1'024U;
+inline constexpr std::size_t extension_record_work_bytes_per_turn_max =
+    extension_record_bytes_max + (extension_records_per_turn_max * extension_record_header_bytes);
+inline constexpr std::size_t extension_output_bytes_per_turn_max =
+    extension_sessions_hard_max * extension_io_bytes_per_turn_max;
+inline constexpr std::size_t extension_output_bytes_per_owner_max =
+    std::size_t{2} * 1'024U * 1'024U;
+inline constexpr std::size_t extension_input_bytes_max = std::size_t{8} * 1'024U;
+inline constexpr std::size_t extension_interaction_events_max = 64;
+inline constexpr std::size_t extension_interaction_bytes_per_owner_max =
+    std::size_t{1} * 1'024U * 1'024U;
+inline constexpr std::size_t extension_input_bytes_aggregate_max =
+    extension_sessions_hard_max * (extension_record_bytes_max + extension_record_header_bytes);
+inline constexpr std::size_t extension_output_bytes_aggregate_max =
+    extension_sessions_hard_max * extension_output_bytes_per_owner_max;
+inline constexpr std::size_t surface_styles_max = 64;
+inline constexpr std::size_t surface_runs_per_row_max = 256;
+inline constexpr std::size_t surface_text_bytes_per_row_max = std::size_t{16} * 1'024U;
+inline constexpr std::size_t surface_retained_bytes_max = std::size_t{4} * 1'024U * 1'024U;
+inline constexpr std::size_t surface_retained_bytes_aggregate_max =
+    std::size_t{64} * 1'024U * 1'024U;
+
 // Session launch semantics own these bounds. Protocol codecs reuse them rather than defining the
 // semantic model's storage limits.
 inline constexpr std::size_t session_name_bytes_max = 32;

@@ -109,6 +109,7 @@ add_library(
   src/terminal/terminal_input.cpp
   src/terminal/terminal_render.cpp
   src/terminal/terminal_selection.cpp
+  src/terminal/terminal_measure.cpp
 )
 lemma_internal_target(lemma_terminal)
 target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
@@ -127,6 +128,7 @@ target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
 add_library(
   lemma_render STATIC
+  src/render/grid.cpp
   src/render/pane_composition.cpp
   src/render/frame_buffer.cpp
   src/render/ui.cpp
@@ -170,9 +172,13 @@ add_library(lemma_config STATIC src/config/config.cpp)
 lemma_internal_target(lemma_config)
 target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input)
 
-add_library(lemma_extension_contract STATIC src/extension/commands.cpp)
+add_library(
+  lemma_extension_contract STATIC
+  src/extension/commands.cpp
+  src/extension/protocol.cpp
+)
 lemma_internal_target(lemma_extension_contract)
-target_link_libraries(lemma_extension_contract PRIVATE lemma_api)
+target_link_libraries(lemma_extension_contract PRIVATE lemma_api lemma_platform)
 
 add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp)
 lemma_internal_target(lemma_extension)
@@ -186,11 +192,14 @@ add_library(
   src/core/command_history.cpp
   src/core/command_line.cpp
   src/core/engine.cpp
+  src/core/engine_projection.cpp
+  src/core/engine_state.cpp
   src/core/frame_scheduler.cpp
   src/core/input.cpp
   src/core/pty_writer.cpp
   src/core/presentation_gate.cpp
   src/core/terminal_resize.cpp
+  src/extension/runtime.cpp
 )
 lemma_internal_target(lemma_runtime)
 target_link_libraries(
@@ -292,6 +301,7 @@ if(LEMMA_BUILD_TESTS)
     tests/api_test.cpp
     tests/config_test.cpp
     tests/extension_commands_test.cpp
+    tests/extension_protocol_test.cpp
     tests/command_history_test.cpp
     tests/command_line_test.cpp
     tests/connection_output_test.cpp
@@ -542,7 +552,9 @@ if(LEMMA_BUILD_TESTS)
   set_tests_properties(
     steady_state_allocation_audit
     PROPERTIES
-      TIMEOUT 30
+      # Fixed-work correctness audit, not a wall-clock performance gate. Leave headroom for
+      # sanitizer instrumentation on shared runners; allocation and work budgets stay exact.
+      TIMEOUT 120
       LABELS "allocation;extended;performance"
       RUN_SERIAL TRUE
   )
@@ -572,6 +584,12 @@ if(LEMMA_BUILD_FUZZERS)
     lemma_host_input_parser_fuzz fuzz/host_input_parser_fuzz.cpp lemma_client
   )
   lemma_add_fuzzer(lemma_api_json_fuzz fuzz/api_json_fuzz.cpp lemma_api)
+  lemma_add_fuzzer(
+    lemma_extension_framing_fuzz fuzz/extension_framing_fuzz.cpp lemma_base lemma_platform
+  )
+  # Compile the production decoder with libFuzzer coverage too, not just the harness. Linking the
+  # ordinary static library gives sanitizer checks but no decoder-guided mutation feedback.
+  target_sources(lemma_extension_framing_fuzz PRIVATE src/extension/protocol.cpp)
 endif()
 
 if(LEMMA_BUILD_BENCHMARKS)

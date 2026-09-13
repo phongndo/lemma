@@ -102,6 +102,8 @@ private:
   return size;
 }
 
+// File limits and indexes are validated before bounded storage access.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] auto parse_history_file(const std::string_view contents) noexcept
     -> std::optional<CommandLineHistory> {
   if (!contents.starts_with(history_header)) {

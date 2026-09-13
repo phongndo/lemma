@@ -7,7 +7,11 @@
     { "$ref": "#/$defs/proc" },
     { "$ref": "#/$defs/procResult" },
     { "$ref": "#/$defs/subscription" },
-    { "$ref": "#/$defs/event" }
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/extensionHello" },
+    { "$ref": "#/$defs/extensionWelcome" },
+    { "$ref": "#/$defs/surfaceUpdate" },
+    { "$ref": "#/$defs/extensionError" }
   ],
   "$defs": {
     "id": {
@@ -35,6 +39,37 @@
       "required": ["id"],
       "properties": { "id": { "$ref": "#/$defs/id" } },
       "additionalProperties": false
+    },
+    "surfaceSelector": {
+      "type": "object",
+      "required": ["id"],
+      "properties": { "id": { "$ref": "#/$defs/id" } },
+      "additionalProperties": false
+    },
+    "surfacePlacement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "size"],
+          "properties": {
+            "kind": { "enum": ["dock.left", "dock.right", "dock.top", "dock.bottom"] },
+            "size": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "column", "row", "columns", "rows"],
+          "properties": {
+            "kind": { "enum": ["float", "overlay"] },
+            "column": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "row": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "columns": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "rows": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "resultReference": {
       "type": "object",
@@ -477,6 +512,7 @@
         },
         "tab": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
+        "surface": { "$ref": "#/$defs/id" },
         "terminal_generation": { "type": "integer", "minimum": 1 },
         "condition": { "enum": ["process-exit", "exit-code", "signal", "contains", "prompt"] },
         "process": { "$ref": "#/$defs/eventProcess" },
@@ -843,6 +879,36 @@
             }
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["command", "placement"],
+          "properties": {
+            "command": { "const": "surface.create" },
+            "placement": { "$ref": "#/$defs/surfacePlacement" },
+            "focusable": { "type": "boolean", "default": true },
+            "opaque": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["command", "surface", "placement"],
+          "properties": {
+            "command": { "const": "surface.configure" },
+            "surface": { "$ref": "#/$defs/surfaceSelector" },
+            "placement": { "$ref": "#/$defs/surfacePlacement" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["command", "surface"],
+          "properties": {
+            "command": { "enum": ["surface.focus", "surface.close"] },
+            "surface": { "$ref": "#/$defs/surfaceSelector" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -947,10 +1013,19 @@
       "properties": {
         "schema": { "const": "lemma.event/v1" },
         "sequence": { "type": "integer", "minimum": 0 },
-        "event": { "enum": ["snapshot", "state.changed", "pane.terminal", "pane.screen", "pane.process", "pane.closed"] },
+        "event": { "enum": ["snapshot", "state.changed", "pane.terminal", "pane.screen", "pane.process", "pane.closed", "surface.key", "surface.mouse", "surface.paste", "surface.resized", "surface.focused", "surface.blurred", "surface.closed"] },
         "sessions": { "type": "array" },
         "session": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
+        "surface": { "$ref": "#/$defs/id" },
+        "action": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "key": { "type": "integer", "minimum": 0, "maximum": 58 },
+        "modifiers": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "column": { "type": "integer", "minimum": -65535, "maximum": 65535 },
+        "row": { "type": "integer", "minimum": -65535, "maximum": 65535 },
+        "columns": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "button": { "type": "integer", "minimum": 0, "maximum": 255 },
         "panes": {
           "type": "array",
           "maxItems": 8,
@@ -966,8 +1041,166 @@
           "items": { "enum": ["screen", "cursor", "prompt", "title", "pwd"] }
         },
         "text": { "type": "string" },
+        "bytes_hex": { "type": "string", "pattern": "^(?:[0-9a-f]{2})*$", "maxLength": 16384 },
         "capture": { "$ref": "#/$defs/capture" },
         "process": { "$ref": "#/$defs/eventProcess" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "event": { "const": "surface.key" } } },
+          "then": { "oneOf": [
+            { "required": ["text"], "not": { "required": ["bytes_hex"] } },
+            { "required": ["bytes_hex"], "not": { "required": ["text"] } }
+          ] }
+        },
+        {
+          "if": { "properties": { "event": { "const": "surface.paste" } } },
+          "then": { "required": ["bytes_hex"], "not": { "required": ["text"] } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "extensionHello": {
+      "title": "Lemma extension Hello v1",
+      "type": "object",
+      "required": ["schema", "name", "capabilities"],
+      "properties": {
+        "schema": { "const": "lemma.extension/v1" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["observe", "proc", "surface"] }
+        },
+        "events": { "$ref": "#/$defs/subscription", "required": ["session"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "capabilities": { "contains": { "enum": ["observe", "surface"] } } } },
+          "then": { "required": ["events"] }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "extensionWelcome": {
+      "title": "Lemma extension Welcome v1",
+      "type": "object",
+      "required": ["schema", "owner", "capabilities", "limits"],
+      "allOf": [
+        {
+          "if": { "properties": { "capabilities": { "contains": { "enum": ["observe", "surface"] } } } },
+          "then": { "required": ["attachment"] }
+        }
+      ],
+      "properties": {
+        "schema": { "const": "lemma.extension-welcome/v1" },
+        "owner": { "$ref": "#/$defs/id" },
+        "attachment": { "$ref": "#/$defs/id" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["observe", "proc", "surface"] }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["surfaces", "procs", "record_bytes", "output_bytes", "surface_bytes", "surface_bytes_aggregate", "styles", "runs_per_row", "text_bytes_per_row", "input_bytes", "columns", "rows"],
+          "properties": {
+            "surfaces": { "type": "integer", "minimum": 1 },
+            "procs": { "type": "integer", "minimum": 1 },
+            "record_bytes": { "type": "integer", "minimum": 1 },
+            "output_bytes": { "type": "integer", "minimum": 1 },
+            "surface_bytes": { "type": "integer", "minimum": 1 },
+            "surface_bytes_aggregate": { "type": "integer", "minimum": 1 },
+            "styles": { "type": "integer", "minimum": 1 },
+            "runs_per_row": { "type": "integer", "minimum": 1 },
+            "text_bytes_per_row": { "type": "integer", "minimum": 1 },
+            "input_bytes": { "type": "integer", "minimum": 1 },
+            "columns": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "rows": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "gridColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "gridStyle": {
+      "type": "object",
+      "properties": {
+        "foreground": { "$ref": "#/$defs/gridColor" },
+        "background": { "$ref": "#/$defs/gridColor" },
+        "bold": { "type": "boolean" },
+        "faint": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "underline": { "type": "boolean" },
+        "inverse": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "surfaceUpdate": {
+      "title": "Lemma Surface update v1",
+      "type": "object",
+      "required": ["schema", "surface"],
+      "minProperties": 3,
+      "properties": {
+        "schema": { "const": "lemma.surface-update/v1" },
+        "surface": { "$ref": "#/$defs/id" },
+        "styles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/gridStyle" }
+        },
+        "rows": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "required": ["row", "runs"],
+            "properties": {
+              "row": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "runs": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {
+                  "type": "object",
+                  "required": ["column", "text"],
+                  "properties": {
+                    "column": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                    "text": { "type": "string", "minLength": 1, "maxLength": 16384 },
+                    "style": { "type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "Syntax bound; the index must also exist in the retained or replacement style table." }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "cursor": {
+          "type": "object",
+          "required": ["column", "row"],
+          "properties": {
+            "column": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "row": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "visible": { "type": "boolean", "default": false }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "extensionError": {
+      "title": "Lemma extension error v1",
+      "type": "object",
+      "required": ["schema", "reason"],
+      "properties": {
+        "schema": { "const": "lemma.extension-error/v1" },
+        "reason": { "type": "string" }
       },
       "additionalProperties": false
     }

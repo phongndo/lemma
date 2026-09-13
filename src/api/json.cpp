@@ -13,13 +13,12 @@
 #include <utility>
 
 namespace lemma::api {
-namespace {
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto valid_utf8(const std::string_view value) -> bool {
+auto valid_utf8(const std::string_view value) noexcept -> bool {
   std::size_t offset = 0;
   while (offset < value.size()) {
-    const auto leading = static_cast<unsigned char>(value.substr(offset, 1).front());
+    const auto leading = static_cast<unsigned char>(std::span(value).subspan(offset, 1).front());
     if (leading <= 0x7fU) {
       ++offset;
       continue;
@@ -46,7 +45,8 @@ namespace {
       return false;
     }
     for (std::size_t index = 1; index <= continuation_count; ++index) {
-      const auto byte = static_cast<unsigned char>(value.substr(offset + index, 1).front());
+      const auto byte =
+          static_cast<unsigned char>(std::span(value).subspan(offset + index, 1).front());
       if ((byte & 0xc0U) != 0x80U) {
         return false;
       }
@@ -60,6 +60,8 @@ namespace {
   }
   return true;
 }
+
+namespace {
 
 [[nodiscard]] auto append_utf8(std::string& output, const std::uint32_t codepoint) -> bool {
   if (codepoint <= 0x7fU) {

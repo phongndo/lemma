@@ -95,6 +95,10 @@ performance-gate baseline="HEAD" output="":
 performance-calibrate captures="3" output="":
     {{ nix }} scripts/performance calibrate "{{ captures }}" "{{ output }}"
 
+# Compare the current Release build with extensions off and under reviewed external workloads.
+performance-extension output="":
+    {{ nix }} scripts/performance extension "{{ output }}"
+
 # Format C++, Nix, and Python files in place.
 fmt:
     {{ nix }} bash -c "find {{ cpp_files }} -type f \

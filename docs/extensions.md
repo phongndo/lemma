@@ -5,9 +5,11 @@ executes Lua while routing input, processing PTY bytes, or composing frames. A s
 validated and compiled into one immutable native configuration generation before any Session can
 use it.
 
-The extension surface covers compiled input policy, terminal history, native status UI, launch
-defaults, and asynchronous Lua commands in the interactive command line. Event subscriptions, job
-helpers, custom UI surfaces, dynamic routing contexts, and live reload are not exposed yet.
+This transitional Lua host covers compiled input policy, terminal history, native status UI,
+launch defaults, and asynchronous Lua commands in the interactive command line. It does not expose
+Event subscriptions, custom UI Surfaces, dynamic routing contexts, or live reload. Language-neutral
+runtime extensions use `lemma.extension/v1` as documented in [Extensions](extension.md); new runtime
+capabilities do not depend on Lua callbacks.
 
 ## Location and validation
 

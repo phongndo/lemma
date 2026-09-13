@@ -52,12 +52,16 @@ struct TabIdTag final {};
 struct PaneIdTag final {};
 struct AttachmentIdTag final {};
 struct ConnectionIdTag final {};
+struct ExtensionGenerationIdTag final {};
+struct SurfaceIdTag final {};
 
 using SessionId = GenerationalId<SessionIdTag>;
 using TabId = GenerationalId<TabIdTag>;
 using PaneId = GenerationalId<PaneIdTag>;
 using AttachmentId = GenerationalId<AttachmentIdTag>;
 using ConnectionId = GenerationalId<ConnectionIdTag>;
+using ExtensionGenerationId = GenerationalId<ExtensionGenerationIdTag>;
+using SurfaceId = GenerationalId<SurfaceIdTag>;
 
 } // namespace lemma
 

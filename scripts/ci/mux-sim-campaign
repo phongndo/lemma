@@ -22,6 +22,18 @@ scripts/ci/configure "${profile}" \
 cmake --build "build/${profile}" --target lemma_core_sim_tests
 rm -rf "${artifact_dir}"
 mkdir -p "${artifact_dir}"
+{
+  printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+  printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+  printf 'index_tree=%s\n' "$(git write-tree)"
+  printf 'system=%s\nseed_count=%s\noperations=%s\n' "$(uname -a)" "${seed_count}" "${operations}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${binary}"
+  else
+    shasum -a 256 "${binary}"
+  fi
+  clang++ --version
+} >"${artifact_dir}/campaign.provenance.txt"
 
 "${binary}" \
   --gtest_filter=MuxSimulationTest.ReplaysCheckedInCorpus \
@@ -31,17 +43,26 @@ for ((index = 0; index < seed_count; ++index)); do
   seed="$(od -An -N8 -tu8 /dev/urandom | tr -d '[:space:]')"
   trace="${artifact_dir}/mux-${seed}.trace"
   coverage="${artifact_dir}/mux-${seed}.coverage.json"
+  diagnostics="${artifact_dir}/mux-${seed}.log"
   printf 'mux simulation campaign %s/%s seed=%s operations=%s\n' \
     "$((index + 1))" "${seed_count}" "${seed}" "${operations}"
+  {
+    printf '%q ' env LEMMA_MUX_SIM_SEED="${seed}" \
+      LEMMA_MUX_SIM_OPERATIONS="${operations}" LEMMA_MUX_SIM_TRACE_OUT="${trace}" \
+      LEMMA_MUX_SIM_COVERAGE_OUT="${coverage}" "${binary}" \
+      --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
+      --gtest_brief=1
+    printf '\n'
+  } >>"${artifact_dir}/campaign.commands.txt"
   if ! LEMMA_MUX_SIM_SEED="${seed}" \
     LEMMA_MUX_SIM_OPERATIONS="${operations}" \
     LEMMA_MUX_SIM_TRACE_OUT="${trace}" \
     LEMMA_MUX_SIM_COVERAGE_OUT="${coverage}" \
     "${binary}" \
     --gtest_filter=MuxSimulationTest.GeneratedCommandsAndRuntimeFaultsPreserveAllInvariants \
-    --gtest_brief=1; then
-    printf 'replay artifact retained at %s\n' "${trace}" >&2
+    --gtest_brief=1 2>&1 | tee "${diagnostics}"; then
+    printf 'replay artifacts retained under %s\n' "${artifact_dir}" >&2
     exit 1
   fi
-  rm -f "${trace}"
+  rm -f "${trace}" "${diagnostics}"
 done
