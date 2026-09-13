@@ -65,10 +65,16 @@ def workload(report: dict[str, Any], case: str) -> dict[str, Any]:
 def idle_metrics(report: dict[str, Any], case: str) -> dict[str, Any]:
     result = workload(report, case)
     daemon = nested(result, "roles", "daemon")
+    daemon_wakeups = nested(daemon, "wakeups")
     return {
         "daemon_cpu_p95_ns": nested(daemon, "cpu_time", "p95_ns"),
         "daemon_rss_p95_bytes": nested(daemon, "rss", "p95_bytes"),
-        "daemon_wakeups_p95": nested(daemon, "wakeups", "p95_count"),
+        "daemon_wakeups_p95": (
+            daemon_wakeups.get("p95_count")
+            if daemon_wakeups.get("available") is True
+            else None
+        ),
+        "daemon_wakeups_reason": daemon_wakeups.get("reason"),
         "total_cpu_p95_ns": nested(result, "cpu_time", "p95_ns"),
         "total_rss_p95_bytes": nested(result, "rss", "p95_bytes"),
         "outer_bytes_per_second_p50": nested(
@@ -218,11 +224,12 @@ def evaluate(
             selected["daemon_cpu_p95_ns"],
             limits["idle_daemon_cpu_p95_ns_per_second"],
         )
-        check(
-            f"{case}.daemon_wakeups_p95",
-            selected["daemon_wakeups_p95"],
-            limits["idle_daemon_wakeups_p95_per_second"],
-        )
+        if selected["daemon_wakeups_p95"] is not None:
+            check(
+                f"{case}.daemon_wakeups_p95",
+                selected["daemon_wakeups_p95"],
+                limits["idle_daemon_wakeups_p95_per_second"],
+            )
         check(
             f"{case}.daemon_rss_increase_bytes",
             selected["daemon_rss_p95_bytes"] - control_idle["daemon_rss_p95_bytes"],
