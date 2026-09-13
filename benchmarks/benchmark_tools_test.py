@@ -210,7 +210,7 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
         ) as provenance:
             result = runtime.binary_provenance()
 
-        self.assertIsNone(result["extension_fixture"])
+        self.assertNotIn("extension_fixture", result)
         self.assertEqual(provenance.call_count, 4)
 
     def test_lifecycle_sentinel_uses_the_built_quiescent_peer(self) -> None:

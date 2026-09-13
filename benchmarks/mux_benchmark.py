@@ -1379,18 +1379,20 @@ class LemmaRuntime:
         }
 
     def binary_provenance(self) -> dict[str, Any]:
-        return {
+        result = {
             "server": executable_provenance(self.server_path),
             "cli": executable_provenance(self.cli_path),
             "workload": executable_provenance(self.peer_path),
             "probe": executable_provenance(self.probe_path),
-            "extension_fixture": (
-                executable_provenance(self.extension_fixture_path)
-                if self.extension_fixture_mode is not None
-                and self.extension_fixture_path is not None
-                else None
-            ),
         }
+        if (
+            self.extension_fixture_mode is not None
+            and self.extension_fixture_path is not None
+        ):
+            result["extension_fixture"] = executable_provenance(
+                self.extension_fixture_path
+            )
+        return result
 
     def stop_extension_fixture(self, *, crash: bool = False) -> None:
         for process in self.live_extension_processes():
