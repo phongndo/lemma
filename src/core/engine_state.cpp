@@ -8,7 +8,7 @@
 #include "platform/io.hpp"
 #include "protocol/attachment.hpp"
 
-#include <csignal>
+#include <csignal> // IWYU pragma: keep -- owns SIGHUP on POSIX Clang
 #include <cstddef>
 #include <cstdint>
 #include <limits>

@@ -28,9 +28,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <charconv>
-#include <csignal> // IWYU pragma: keep -- owns SIGHUP on POSIX Clang
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
