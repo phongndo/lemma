@@ -2,6 +2,7 @@
 #define LEMMA_DAEMON_SERVER_HPP
 
 #include "api/command.hpp"
+#include "api/json.hpp"
 #include "lemma/id.hpp"
 
 #include <cstddef>
@@ -48,6 +49,15 @@ struct ServeOptions final {
 // Connects to the selected daemon. Ownership of the returned descriptor transfers to the caller;
 // -1 means the daemon is unavailable.
 [[nodiscard]] auto open_server_connection(const RuntimeEndpoint& endpoint) -> int;
+
+struct ProcResponse final {
+  api::JsonValue document;
+  int exit_status{1};
+};
+
+// Executes one Command through the same Proc transport without formatting its response.
+[[nodiscard]] auto execute_command(const RuntimeEndpoint& endpoint, const api::Command& command)
+    -> ProcResponse;
 [[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, std::string_view document) -> int;
 [[nodiscard]] auto run_proc(const RuntimeEndpoint& endpoint, const api::Command& command) -> int;
 

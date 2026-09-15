@@ -1298,52 +1298,86 @@ template <typename Id>
   return open_connection(std::string(endpoint.socket_path()));
 }
 
-auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) -> int {
+namespace {
+
+[[nodiscard]] auto proc_error(const std::string_view reason, const int exit_status)
+    -> ProcResponse {
+  api::JsonValue document{.kind = api::JsonKind::object, .string = {}, .array = {}, .object = {}};
+  document.object.push_back({.key = "schema",
+                             .value = {.kind = api::JsonKind::string,
+                                       .string = std::string(api::proc_result_schema),
+                                       .array = {},
+                                       .object = {}}});
+  document.object.push_back(
+      {.key = "ok",
+       .value = {.kind = api::JsonKind::boolean, .string = {}, .array = {}, .object = {}}});
+  api::JsonValue error{.kind = api::JsonKind::object, .string = {}, .array = {}, .object = {}};
+  error.object.push_back({.key = "reason",
+                          .value = {.kind = api::JsonKind::string,
+                                    .string = std::string(reason),
+                                    .array = {},
+                                    .object = {}}});
+  document.object.push_back({.key = "error", .value = std::move(error)});
+  document.object.push_back(
+      {.key = "results",
+       .value = {.kind = api::JsonKind::array, .string = {}, .array = {}, .object = {}}});
+  return {.document = std::move(document), .exit_status = exit_status};
+}
+
+[[nodiscard]] auto request_proc(const RuntimeEndpoint& endpoint, const std::string_view document)
+    -> ProcResponse {
   auto parsed = api::parse_json(document);
   if (!parsed.value.has_value()) {
-    constexpr std::string_view error =
-        R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"invalid_json"},"results":[]}
-)";
-    static_cast<void>(write_text(STDOUT_FILENO, error));
-    return 2;
+    return proc_error("invalid_json", 2);
   }
   std::string compact;
   if (!api::append_json_value(compact, *parsed.value)) {
-    return 2;
+    return proc_error("invalid_json", 2);
   }
   const auto policy = proc_request_policy(*parsed.value);
   if (policy.starts_session && !ensure_server(std::string(endpoint.socket_path()))) {
     static_cast<void>(write_text(STDERR_FILENO, "failed to start lemma daemon\n"));
-    return 1;
+    return proc_error("unavailable", 1);
   }
   auto result = invoke_public_request(endpoint, std::move(compact), policy.response_timeout);
   if (!result.has_value()) {
-    constexpr std::string_view unavailable =
-        R"({"schema":"lemma.proc-result/v1","ok":false,"error":{"reason":"unavailable"},"results":[]}
-)";
-    static_cast<void>(write_text(STDOUT_FILENO, unavailable));
-    return 1;
-  }
-  std::string encoded;
-  if (!api::append_json_value(encoded, *result) || !write_text(STDOUT_FILENO, encoded) ||
-      !write_text(STDOUT_FILENO, "\n")) {
-    return 1;
+    return proc_error("unavailable", 1);
   }
   const auto ok = api::json_boolean(*result, "ok");
   const auto partial = api::json_boolean(*result, "partial").value_or(false);
+  auto status = ok.value_or(false) ? 0 : 1;
   if (api::json_member(*result, "error") != nullptr && !partial) {
-    return 2;
+    status = 2;
   }
-  return ok.has_value() && *ok ? 0 : 1;
+  return {.document = std::move(*result), .exit_status = status};
+}
+
+[[nodiscard]] auto print_proc_response(const ProcResponse& response) -> int {
+  std::string encoded;
+  return api::append_json_value(encoded, response.document) && write_text(STDOUT_FILENO, encoded) &&
+                 write_text(STDOUT_FILENO, "\n")
+             ? response.exit_status
+             : 1;
+}
+
+} // namespace
+
+auto run_proc(const RuntimeEndpoint& endpoint, const std::string_view document) -> int {
+  return print_proc_response(request_proc(endpoint, document));
+}
+
+auto execute_command(const RuntimeEndpoint& endpoint, const api::Command& command) -> ProcResponse {
+  auto concrete = command;
+  if (!add_command_launch_context(concrete)) {
+    return proc_error("launch_failed", 1);
+  }
+  const auto document = encode_single_command_proc(concrete);
+  return document.has_value() ? request_proc(endpoint, *document)
+                              : proc_error("invalid_command", 2);
 }
 
 auto run_proc(const RuntimeEndpoint& endpoint, const api::Command& command) -> int {
-  auto concrete = command;
-  if (!add_command_launch_context(concrete)) {
-    return 1;
-  }
-  const auto document = encode_single_command_proc(concrete);
-  return document.has_value() ? run_proc(endpoint, *document) : 2;
+  return print_proc_response(execute_command(endpoint, command));
 }
 
 // Creation reports each bounded setup and daemon outcome without publishing partial client state.

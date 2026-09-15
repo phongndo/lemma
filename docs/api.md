@@ -8,8 +8,9 @@ Event   immutable asynchronous observation
 ```
 
 A Proc is the only execution request. It contains bounded Commands such as `pane.split`, and every
-Command produces a nested `lemma.command-result/v1` result. Shell automation should use `lemma proc`
-and `lemma events`. Dedicated clients use the same JSON contracts over the per-user Unix endpoint.
+Command produces a nested `lemma.command-result/v1` result. Shell automation can use basic pane
+commands with `--json`, resource commands, `lemma proc`, and `lemma events`. Dedicated clients use
+the same JSON contracts over the per-user Unix endpoint.
 Within this control API, `action` is reserved and defines no request, result, Proc member, or CLI
 namespace in v1.
 
@@ -32,16 +33,23 @@ scope come from that connection.
 
 ## One-Command Procs
 
-The direct CLI form builds a one-Command `lemma.proc/v1` request:
+The direct CLI forms build a one-Command `lemma.proc/v1` request:
 
 ```sh
-lemma proc session start work --cwd "$PWD"
-lemma proc tab new --session work --title tests --focus preserve -- just test
-lemma proc pane split --session work --pane 0:1 --right --focus preserve
-lemma proc pane input --session work --pane 0:1 --paste 'just test' --key enter
-lemma proc pane capture --session work --pane 0:1 --source recent --lines 100
-lemma proc pane wait --session work --pane 0:1 --timeout 30s
+lemma session start work --cwd "$PWD"
+lemma tab new --session work --title tests --focus preserve -- just test
+lemma split --json --session work --pane 0:1 --right --focus preserve
+lemma send --json --session work --pane 0:1 --paste 'just test' --key enter
+lemma capture --json --session work --pane 0:1 --source recent --lines 100
+lemma wait --json --session work --pane 0:1 --timeout 30s
 ```
+
+`split`, `send`, `wait`, `capture`, `focus`, `zoom`, `swap`, and `resize` are basic pane verbs.
+They share targeting, validation, and execution with resource commands; `send` uses `pane.input`.
+Without `--json`, they provide the [readable output described in Usage](usage.md#sessions-tabs-and-panes).
+`lemma pane COMMAND` and `lemma proc pane COMMAND` retain canonical JSON output by default.
+The existing text-only `pane send --text TEXT` spelling remains available; ordered text, paste,
+and keys use `pane input` or the basic `send` verb.
 
 Inside a Lemma pane, the CLI may infer omitted targets from `LEMMA_SESSION_ID`, `LEMMA_TAB_ID`, and
 `LEMMA_PANE_ID`. This is a CLI convenience: the Command sent to the daemon always contains concrete
@@ -51,7 +59,8 @@ Session names and one-based Tab positions are discovery conveniences. Persistent
 retain returned generational IDs. Tab and Pane IDs are Session-scoped. Pane listings expose PID
 inside process metadata for lifetime observation only; PID is not a Pane selector or identity.
 
-`lemma proc DOMAIN COMMAND` prints one `lemma.proc-result/v1` value whose single `results` entry
+Resource commands, basic pane commands with `--json`, and `lemma proc DOMAIN COMMAND` print one
+`lemma.proc-result/v1` value whose single `results` entry
 wraps a `lemma.command-result/v1` result. Successful Command statuses are `applied` and `no_effect`.
 Other statuses include `stale`, `wrong_owner`, `conflict`, `capacity`, `unavailable`, and `failed`.
 Results include the relevant stable IDs and, where applicable, the current Session revision or

@@ -59,23 +59,256 @@ class AgentInterfaceMuxTest(unittest.TestCase):
     def test_root_help_prioritizes_daily_commands(self) -> None:
         help_result = self.server.command("--help")
         self.assertEqual(help_result.status, 0, help_result.output)
-        self.assertIn(
-            "Usage:\n"
-            "  lemma                                  Create a numbered Session and attach\n"
-            "  lemma new [NAME] [OPTIONS]             Create a Session and attach\n",
-            help_result.output,
+        self.assertIn("Usage:\n  lemma [command] [options]\n", help_result.output)
+        self.assertEqual(
+            [line for line in help_result.output.splitlines() if line.endswith(":")],
+            ["Usage:", "Basic:", "Resources:", "Automation:", "Other:"],
         )
-        self.assertIn(
-            "  lemma list | ls                        List Sessions and their status\n",
-            help_result.output,
+        basic = help_result.output.split("Basic:\n", 1)[1].split("\nResources:", 1)[0]
+        self.assertEqual(
+            [line.split()[0] for line in basic.splitlines() if line.strip()],
+            [
+                "new",
+                "start",
+                "attach",
+                "ls,",
+                "split",
+                "send",
+                "wait",
+                "capture",
+                "focus",
+                "zoom",
+                "swap",
+                "resize",
+                "rename",
+                "kill",
+            ],
         )
-        self.assertIn("Automation:\n  lemma proc ...", help_result.output)
-        self.assertNotIn("Sessions:\n", help_result.output)
+        self.assertIn("Send text or key presses to a pane's running program", basic)
+        self.assertIn("Print text from a pane's screen or scrollback", basic)
+        self.assertIn("Running lemma without a command creates", help_result.output)
         self.assertNotIn("lemma inspect", help_result.output)
 
         removed = self.server.command("inspect", "missing")
         self.assertEqual(removed.status, 2, removed.output)
         self.assertIn("invalid lemma command or arguments: inspect", removed.output)
+
+    def public_command(
+        self, *arguments: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.server.cli_path), str(self.server.socket_path), *arguments],
+            env=self.server.environment if environment is None else environment,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+
+    def test_basic_help_explains_behavior_and_uses_the_invoked_spelling(self) -> None:
+        for name in (
+            "split",
+            "send",
+            "wait",
+            "capture",
+            "focus",
+            "zoom",
+            "swap",
+            "resize",
+        ):
+            with self.subTest(command=name):
+                result = self.server.command(name, "--help")
+                self.assertEqual(result.status, 0, result.output)
+                self.assertIn(f"Usage:\n  lemma {name} ", result.output)
+                self.assertIn("Example", result.output)
+                self.assertIn("--json", result.output)
+                self.assertIn("Outside Lemma, provide --session", result.output)
+                self.assertNotIn("lemma proc pane", result.output)
+                self.assertEqual(
+                    self.server.command("help", name).output, result.output
+                )
+        send = self.server.command("send", "--help").output
+        self.assertIn("launch a process directly or press Enter automatically", send)
+        self.assertIn("lemma send --paste 'just test' --key enter", send)
+        capture = self.server.command("capture", "--help").output
+        self.assertIn("text, not an image screenshot", capture)
+        wait = self.server.command("wait", "--help").output
+        self.assertIn("any process exit succeeds", wait)
+        for name in ("new", "start", "attach", "rename", "kill", "ls"):
+            self.assertIn("Usage:", self.server.command(name, "--help").output)
+        self.assertIn("--cwd", self.server.command("start", "--help").output)
+        self.assertIn(
+            "lemma pane capture", self.server.command("help", "pane", "capture").output
+        )
+        self.assertIn(
+            "lemma proc pane capture",
+            self.server.command("proc", "pane", "capture", "--help").output,
+        )
+        self.assertIn(
+            "Pane Commands", self.server.command("proc", "pane", "--help").output
+        )
+
+    def test_basic_send_wait_capture_share_the_structured_execution_path(self) -> None:
+        status, started = self.json_command(
+            "proc",
+            "session",
+            "start",
+            "basic-input",
+            "--hold",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf '__READY__\\n'; IFS= read -r value; printf 'received:<%s>\\n' \"$value\"",
+        )
+        self.assertEqual(status, 0, started)
+        target = ("--session", "basic-input", "--pane", started["pane"])
+        ready = self.public_command(
+            "wait", *target, "--contains", "__READY__", "--timeout", "2s"
+        )
+        self.assertEqual((ready.returncode, ready.stdout, ready.stderr), (0, "", ""))
+        # Option-looking input stays opaque; it must not become CLI flags or help.
+        sent = self.public_command(
+            "send",
+            *target,
+            "--text",
+            "--session",
+            "--paste",
+            "--json",
+            "--text",
+            "--help",
+        )
+        self.assertEqual((sent.returncode, sent.stdout, sent.stderr), (0, "", ""))
+        status, entered = self.json_command("send", *target, "--json", "--key", "enter")
+        self.assertEqual(status, 0, entered)
+        self.assertEqual(entered["command"], "pane.input")
+        exited = self.public_command(
+            "wait", *target, "--exit-code", "0", "--timeout", "2s"
+        )
+        self.assertEqual((exited.returncode, exited.stdout, exited.stderr), (0, "", ""))
+        capture = self.public_command(
+            "capture", *target, "--source", "recent", "--lines", "100"
+        )
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        self.assertEqual(capture.stderr, "")
+        self.assertIn("received:<--session--json--help>", capture.stdout)
+        status, structured = self.json_command(
+            "capture",
+            *target,
+            "--json",
+            "--source",
+            "recent",
+            "--lines",
+            "100",
+            unwrap=False,
+        )
+        self.assertEqual(status, 0, structured)
+        self.assertEqual(structured["schema"], "lemma.proc-result/v1")
+        self.assertEqual(len(structured["results"]), 1)
+        self.assertEqual(
+            capture.stdout, structured["results"][0]["result"]["capture"]["text"]
+        )
+        rejected = self.public_command("send", *target, "--text", "after-exit")
+        self.assertEqual(rejected.returncode, 1)
+        self.assertEqual(rejected.stdout, "")
+        self.assertIn("input_unavailable", rejected.stderr)
+
+    def test_basic_layout_verbs_apply_to_stable_pane_ids(self) -> None:
+        self.server.require_command("start", "basic-layout", "--", "/bin/sh")
+        target = ("--session", "basic-layout", "--pane", "0:1")
+        split = self.public_command(
+            "split", *target, "--right", "--focus", "preserve", "--", "/bin/sh"
+        )
+        self.assertEqual(split.returncode, 0, split.stderr)
+        self.assertEqual(split.stderr, "")
+        self.assertRegex(split.stdout, r"^\d+:\d+\n$")
+        pane = split.stdout.strip()
+        status, before = self.json_command(
+            "proc", "tab", "inspect", "--session", "basic-layout", "--tab", "0:1"
+        )
+        self.assertEqual(status, 0, before)
+        self.assertEqual(before["tab_state"]["focused_pane"], "0:1")
+        for arguments in (
+            ("focus", "--session", "basic-layout", "--pane", pane),
+            ("zoom", *target, "--on"),
+            ("zoom", *target, "--off"),
+            ("resize", *target, "right", "3"),
+            ("swap", *target, pane),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.public_command(*arguments)
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr), (0, "", "")
+                )
+        status, after = self.json_command(
+            "proc", "tab", "inspect", "--session", "basic-layout", "--tab", "0:1"
+        )
+        self.assertEqual(status, 0, after)
+        self.assertFalse(after["tab_state"]["zoomed"])
+        self.assertNotEqual(before["tab_state"]["layout"], after["tab_state"]["layout"])
+        status, focused = self.json_command("focus", *target, "--json")
+        self.assertEqual(status, 0, focused)
+        self.assertEqual(focused["command"], "pane.focus")
+
+    def test_basic_split_preserves_exact_argv_after_separator(self) -> None:
+        self.server.require_command("start", "basic-argv", "--", "/bin/sh")
+        status, split = self.json_command(
+            "split",
+            "--session",
+            "basic-argv",
+            "--pane",
+            "0:1",
+            "--json",
+            "--down",
+            "--hold",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf '%s\\n' \"$@\"",
+            "sh",
+            "--session",
+            "--json",
+            "--help",
+        )
+        self.assertEqual(status, 0, split)
+        self.assertEqual(split["command"], "pane.split")
+        target = ("--session", "basic-argv", "--pane", split["pane"])
+        waited = self.public_command(
+            "wait", *target, "--exit-code", "0", "--timeout", "2s"
+        )
+        self.assertEqual(waited.returncode, 0, waited.stderr)
+        capture = self.public_command("capture", *target)
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        self.assertIn("--session\n--json\n--help", capture.stdout)
+
+    def test_basic_commands_reject_invalid_input_before_execution(self) -> None:
+        self.server.require_command("start", "basic-invalid", "--", "/bin/sh")
+        target = ("--session", "basic-invalid", "--pane", "0:1")
+        for arguments in (
+            ("capture",),
+            ("capture", "--session", "basic-invalid"),
+            ("capture", *target, "--json", "--json"),
+            ("capture", *target, "--pane", "1:1"),
+            ("capture", *target, "--source", "last-command", "--lines", "10"),
+            ("send", *target, "--text", "must-not-be-sent", "--unknown"),
+            ("send", *target, "--key", "not-a-key"),
+            ("wait", *target, "--contains", "x", "--until-prompt"),
+            ("split", *target, "--left"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.public_command(*arguments)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("invalid lemma", result.stderr)
+        capture = self.public_command("capture", *target)
+        self.assertNotIn("must-not-be-sent", capture.stdout)
+        for name in ("capture", "wait", "send", "focus"):
+            suffix = ("--text", "x") if name == "send" else ()
+            result = self.public_command(
+                name, "--session", "basic-invalid", "--pane", "63:99", *suffix
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("stale", result.stderr)
 
     def test_documented_job_runs_captures_and_cleans_up(self) -> None:
         example = Path(__file__).resolve().parents[2] / "examples/job.json"
@@ -451,6 +684,14 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         waited = waited_proc["results"][0]["result"]
         self.assertEqual(waited["condition"], "process-exit")
         self.assertEqual(waited["process"], {"state": "exited", "code": 6})
+        basic = self.public_command("wait", environment=environment)
+        self.assertEqual((basic.returncode, basic.stdout, basic.stderr), (0, "", ""))
+        required = self.public_command(
+            "wait", "--exit-code", "0", environment=environment
+        )
+        self.assertEqual(required.returncode, 1)
+        self.assertEqual(required.stdout, "")
+        self.assertIn("unexpected_exit", required.stderr)
 
     def test_wait_command_preserves_persistent_control_lockstep(self) -> None:
         status, started = self.json_command(
@@ -530,8 +771,19 @@ class AgentInterfaceMuxTest(unittest.TestCase):
         self.assertEqual(timed_out["status"], "failed")
         self.assertEqual(timed_out["error"]["reason"], "timeout")
 
-        removed = self.server.command("wait", "0:1", "--session", "wait-state")
-        self.assertEqual(removed.status, 2, removed.output)
+        timed_out = self.public_command(
+            "wait",
+            "0:1",
+            "--session",
+            "wait-state",
+            "--contains",
+            "never",
+            "--timeout",
+            "10ms",
+        )
+        self.assertEqual(timed_out.returncode, 1)
+        self.assertEqual(timed_out.stdout, "")
+        self.assertIn("timeout", timed_out.stderr)
 
         invalid = self.server.command(
             "proc",

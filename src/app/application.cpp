@@ -1,6 +1,7 @@
 #include "app/application.hpp"
 
 #include "api/command.hpp"
+#include "api/json.hpp"
 #include "api/proc.hpp"
 #include "api/schema.hpp"
 #include "app/proc.hpp"
@@ -11,6 +12,7 @@
 #include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "lemma/version.hpp"
+#include "platform/io.hpp"
 
 #include <algorithm>
 #include <array>
@@ -121,28 +123,37 @@ template <typename Integer>
   constexpr std::string_view usage =
       "Lemma terminal multiplexer\n\n"
       "Usage:\n"
-      "  lemma                                  Create a numbered Session and attach\n"
-      "  lemma new [NAME] [OPTIONS]             Create a Session and attach\n"
-      "  lemma start [NAME] [OPTIONS]           Create a detached Session\n"
-      "  lemma attach [NAME]                    Attach to a Session\n"
-      "  lemma list | ls                        List Sessions and their status\n"
-      "  lemma rename OLD NEW                   Rename a Session\n"
-      "  lemma kill NAME                        Kill a Session\n\n"
+      "  lemma [command] [options]\n\n"
+      "Basic:\n"
+      "  new           Create a session and attach to it\n"
+      "  start         Create a session without attaching\n"
+      "  attach        Connect to an existing session\n"
+      "  ls, list      Show sessions and their status\n"
+      "  split         Split a pane to open another terminal\n"
+      "  send          Send text or key presses to a pane's running program\n"
+      "  wait          Wait for process exit, matching output, or a shell prompt\n"
+      "  capture       Print text from a pane's screen or scrollback\n"
+      "  focus         Move keyboard focus to a pane\n"
+      "  zoom          Expand a pane to fill its tab, or restore the layout\n"
+      "  swap          Exchange the positions of two panes\n"
+      "  resize        Move the divider between panes\n"
+      "  rename        Change a session's name\n"
+      "  kill          End a session and stop its programs\n\n"
+      "Resources:\n"
+      "  session       Manage sessions\n"
+      "  tab           Manage tabs\n"
+      "  pane          Manage panes\n\n"
       "Automation:\n"
-      "  lemma proc ...                         Execute structured commands\n"
-      "  lemma events [OPTIONS]                 Stream structured observations\n\n"
-      "Other commands:\n"
-      "  lemma config check [FILE]              Validate configuration\n"
-      "  lemma api schema [--json]              Show the automation contract\n"
-      "  lemma skill                            Print the coding-agent guide\n"
-      "  lemma version                          Show version information\n"
-      "  lemma help                             Show this help\n\n"
-      "Options for new and start:\n"
-      "  --cwd DIR                              Set the initial working directory\n"
-      "  --hold                                 Keep the Pane after its process exits\n"
-      "  -- COMMAND [ARGUMENTS...]              Execute directly without a shell\n\n"
-      "Use `lemma proc --help` to explore automation commands.\n"
-      "Use `lemma proc DOMAIN COMMAND --help` for exact grammar.\n";
+      "  proc          Execute ordered commands\n"
+      "  events        Stream observations\n"
+      "  api           Inspect the automation contract\n\n"
+      "Other:\n"
+      "  config        Validate configuration\n"
+      "  skill         Print the coding-agent guide\n"
+      "  version       Show version information\n"
+      "  help          Show help\n\n"
+      "Running lemma without a command creates a numbered session and attaches.\n"
+      "Use `lemma <command> --help` for options and examples.\n";
   return write_fragment(stream, usage) ? 0 : 1;
 }
 
@@ -190,13 +201,16 @@ Lemma's hierarchy is `Session -> Tab -> Pane`. Use **closed-loop control**: insp
 wait -> verify -> clean up. Operate through typed CLI Procs, not terminal prefix keys or private RPC.
 
 ```text
-one Command        -> lemma proc DOMAIN COMMAND
+basic pane Command -> lemma split|send|wait|capture|focus|zoom|swap|resize --json
+resource Command   -> lemma DOMAIN COMMAND (also lemma proc DOMAIN COMMAND)
 ordered Commands   -> lemma proc --file FILE or lemma proc --stdin
 observation stream -> lemma events
 exact contract      -> lemma proc DOMAIN COMMAND --help / lemma api schema --json
 ```
 
-Installed CLI help and schema match the running binary. Keep discovery at that public boundary.
+Installed CLI help and schema match the running binary. Use `lemma COMMAND --help` for basic verbs.
+Basic pane verbs have readable defaults; add `--json` for the canonical Proc result. Resource and
+`proc` forms always return JSON. `send` executes `pane.input`; it does not launch a process directly.
 
 ## Closed-loop workflow
 
@@ -206,7 +220,7 @@ Installed CLI help and schema match the running binary. Keep discovery at that p
 2. **Execute:** use one direct Command for one interaction. Use one ordered Proc with result
    references when later Commands consume IDs from earlier ones. Preserve focus in user-owned
    Sessions unless the user requested a focus change.
-3. **Wait:** synchronize with a bounded `pane.wait`, never a guessed sleep.
+3. **Wait:** synchronize with bounded `lemma wait --json` (the `pane.wait` Command), never a guessed sleep.
 4. **Verify:** inspect `ok`, `partial`, and every nested result. Separately verify the returned child
    process `state`, `code`, or `signal`; Command success is not process success.
 5. **Clean up:** capture only the bounded output needed, then remove only task-created resources
@@ -243,11 +257,11 @@ Installed CLI help and schema match the running binary. Keep discovery at that p
 Inside a Lemma pane, omitted targets refer to the original current context:
 
 ```sh
-lemma proc session inspect
-lemma proc pane split --right --focus preserve --hold -- just test
+lemma session inspect
+lemma split --json --right --focus preserve --hold -- just test
 # Read the created Pane ID from results[0].result.pane, then target it explicitly:
-lemma proc pane wait --session "$LEMMA_SESSION_ID" --pane NEW_PANE_ID --exit-code 0 --timeout 2m
-lemma proc pane capture --session "$LEMMA_SESSION_ID" --pane NEW_PANE_ID \
+lemma wait --json --session "$LEMMA_SESSION_ID" --pane NEW_PANE_ID --exit-code 0 --timeout 2m
+lemma capture --json --session "$LEMMA_SESSION_ID" --pane NEW_PANE_ID \
   --source recent --lines 200 --wrap logical
 ```
 
@@ -256,8 +270,8 @@ For an existing interactive Pane, use one ordered `pane.input` batch. Read its r
 generation:
 
 ```sh
-lemma proc pane input --session SESSION_ID --pane PANE_ID --paste 'COMMAND' --key enter
-lemma proc pane wait --session SESSION_ID --pane PANE_ID \
+lemma send --json --session SESSION_ID --pane PANE_ID --paste 'COMMAND' --key enter
+lemma wait --json --session SESSION_ID --pane PANE_ID \
   --contains UNIQUE_OUTPUT --after-generation GENERATION --timeout 30s
 ```
 
@@ -331,8 +345,83 @@ struct SurfaceArguments final {
   return value == "-h" || value == "--help";
 }
 
+[[nodiscard]] constexpr auto basic_pane_operation(const std::string_view name) noexcept
+    -> std::string_view {
+  if (name == "send") {
+    return "input";
+  }
+  return name == "split" || name == "wait" || name == "capture" || name == "focus" ||
+                 name == "zoom" || name == "swap" || name == "resize"
+             ? name
+             : std::string_view{};
+}
+
 [[nodiscard]] constexpr auto proc_domain(const std::string_view value) noexcept -> bool {
   return value == "daemon" || value == "session" || value == "tab" || value == "pane";
+}
+
+[[nodiscard]] auto cli_operation(std::span<char*> arguments) noexcept -> std::string_view {
+  if (arguments.empty()) {
+    return {};
+  }
+  if (std::string_view(arguments.front()) == "proc" && arguments.size() > 1U &&
+      proc_domain(arguments.subspan(1, 1).front())) {
+    arguments = arguments.subspan(1);
+  }
+  const std::string_view command(arguments.front());
+  if (proc_domain(command)) {
+    return arguments.size() > 1U ? std::string_view(arguments.subspan(1, 1).front())
+                                 : std::string_view{};
+  }
+  if (const auto operation = basic_pane_operation(command); !operation.empty()) {
+    return operation;
+  }
+  // Basic new creates a Session; the resource new operation creates a Tab.
+  return command == "new" ? std::string_view{"start"} : command;
+}
+
+[[nodiscard]] constexpr auto cli_option_takes_value(const std::string_view option,
+                                                    const std::string_view operation) noexcept
+    -> bool {
+  constexpr std::array selectors{"--session", "--tab", "--pane", "--if-session-revision"};
+  if (std::ranges::find(selectors, option) != selectors.end()) {
+    return true;
+  }
+  // Only this operation's options own a following value. Other option-like words can be
+  // positional titles, and must not consume selectors or help flags that follow them.
+  constexpr std::array options{
+      std::pair{"start", "--cwd"},      std::pair{"start", "-c"},
+      std::pair{"new", "--cwd"},        std::pair{"new", "-c"},
+      std::pair{"new", "--title"},      std::pair{"new", "--focus"},
+      std::pair{"split", "--cwd"},      std::pair{"split", "-c"},
+      std::pair{"split", "--focus"},    std::pair{"input", "--text"},
+      std::pair{"input", "--paste"},    std::pair{"input", "--key"},
+      std::pair{"send", "--text"},      std::pair{"capture", "--source"},
+      std::pair{"capture", "--format"}, std::pair{"capture", "--wrap"},
+      std::pair{"capture", "--lines"},  std::pair{"wait", "--timeout"},
+      std::pair{"wait", "--exit-code"}, std::pair{"wait", "--signal"},
+      std::pair{"wait", "--contains"},  std::pair{"wait", "--after-generation"},
+      std::pair{"proc", "--file"}};
+  return std::ranges::any_of(options, [=](const auto& entry) {
+    return entry.first == operation && entry.second == option;
+  });
+}
+
+[[nodiscard]] auto has_help_option(const std::span<char*> arguments) noexcept -> bool {
+  const auto operation = cli_operation(arguments);
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    const std::string_view value(arguments.subspan(index, 1).front());
+    if (value == "--") {
+      return false;
+    }
+    if (help_flag(value)) {
+      return true;
+    }
+    if (cli_option_takes_value(value, operation) && index + 1U < arguments.size()) {
+      ++index;
+    }
+  }
+  return false;
 }
 
 // Branches mirror the complete public Command CLI grammar.
@@ -429,7 +518,10 @@ struct SurfaceArguments final {
            "(--right|--down) [--focus created|preserve] [--cwd DIR] [--hold] "
            "[-- COMMAND [ARGUMENTS...]]\n\n"
            "Split the target Pane and return the new Pane ID. COMMAND is exact argv.\n"
-           "Long-running programs do not need --hold; --hold retains final output after exit.\n";
+           "Long-running programs do not need --hold; --hold retains final output after exit.\n\n"
+           "Examples (inside Lemma):\n"
+           "  lemma proc pane split --right\n"
+           "  lemma proc pane split --down --hold -- just test\n";
   }
   if (operation == "inspect") {
     return "Usage:\n"
@@ -440,7 +532,9 @@ struct SurfaceArguments final {
     return operation == "focus"
                ? "Usage:\n"
                  "  lemma proc pane focus [--session NAME|ID] [PANE | --pane ID]\n\n"
-                 "Focus one Pane by stable ID.\n"
+                 "Move keyboard focus to a Pane by stable ID.\n\n"
+                 "Example (inside Lemma):\n"
+                 "  lemma proc pane focus --pane 1:1\n"
                : "Usage:\n"
                  "  lemma proc pane kill [--session NAME|ID] [PANE | --pane ID]\n\n"
                  "Kill one Pane and its process.\n";
@@ -448,7 +542,10 @@ struct SurfaceArguments final {
   if (operation == "swap") {
     return "Usage:\n"
            "  lemma proc pane swap [--session NAME|ID] [PANE | --pane ID] OTHER_PANE\n\n"
-           "Swap two Panes in the same Tab while their stable IDs continue to identify them.\n";
+           "Exchange the positions of two Panes in the same Tab; their stable IDs do not "
+           "change.\n\n"
+           "Example (inside Lemma):\n"
+           "  lemma proc pane swap --pane 0:1 1:1\n";
   }
   if (operation == "resize") {
     return "Usage:\n"
@@ -457,18 +554,30 @@ struct SurfaceArguments final {
            "Move the nearest matching divider in the requested direction by 1 to 100 cells.\n"
            "Direction moves the divider, not necessarily the target Pane: right/down grows the\n"
            "divider's left/top side, while left/up grows its right/bottom side. AMOUNT defaults\n"
-           "to 1; structural minimums may clamp or reject the resize.\n";
+           "to 1; structural minimums may clamp or reject the resize.\n\n"
+           "Example (inside Lemma):\n"
+           "  lemma proc pane resize right 5\n";
   }
   if (operation == "zoom") {
     return "Usage:\n"
            "  lemma proc pane zoom [--session NAME|ID] [PANE | --pane ID] (--on|--off)\n\n"
-           "Enable or disable zoom for the target Pane's Tab.\n";
+           "Expand the target Pane to fill its Tab with --on; restore the layout with --off.\n\n"
+           "Examples (inside Lemma):\n"
+           "  lemma proc pane zoom --on\n"
+           "  lemma proc pane zoom --off\n";
   }
   if (operation == "input") {
     return "Usage:\n"
            "  lemma proc pane input [--session NAME|ID] [PANE | --pane ID] "
            "(--text TEXT | --paste TEXT | --key [MODIFIER+]KEY)...\n\n"
-           "Atomically enqueue a bounded ordered application-input batch.\n";
+           "Send text, paste, or logical key presses to a Pane's running program. This does not\n"
+           "launch a process directly or press Enter automatically. Events are admitted as one\n"
+           "bounded ordered batch. --paste honors the program's bracketed-paste mode; --text\n"
+           "sends text without paste framing. Keys accept shift, control/ctrl, alt, and super.\n\n"
+           "Examples (inside Lemma):\n"
+           "  lemma proc pane input --paste 'just test' --key enter\n"
+           "  lemma proc pane input --key ctrl+c\n"
+           "  lemma proc pane input --text '--help'\n";
   }
   if (operation == "send") {
     return "Usage:\n"
@@ -480,27 +589,112 @@ struct SurfaceArguments final {
            "  lemma proc pane capture [--session NAME|ID] [PANE | --pane ID] [--lines N] "
            "[--source visible|recent|last-command] [--format plain|ansi] "
            "[--wrap rendered|logical]\n\n"
-           "Capture one bounded canonical terminal projection without moving its viewport. "
-           "--lines applies to visible and recent sources.\n";
+           "Read terminal text without sending input or moving the Pane's viewport. This is\n"
+           "text, not an image screenshot. --source defaults to visible (the current screen);\n"
+           "recent includes scrollback, and last-command uses shell integration. --lines bounds\n"
+           "visible/recent captures. --format defaults to plain; ansi retains terminal styling.\n\n"
+           "Examples (inside Lemma):\n"
+           "  lemma proc pane capture\n"
+           "  lemma proc pane capture --source recent --lines 100\n";
   }
   if (operation == "wait") {
     return "Usage:\n"
            "  lemma proc pane wait [--session NAME|ID] [PANE | --pane ID] [CONDITION] "
            "[--timeout DURATION]\n\n"
-           "Wait for the Pane child process to complete. Conditions may instead require "
-           "--exit-code N, --signal N, --contains TEXT, or --until-prompt. Terminal conditions "
-           "may use --after-generation N. The default timeout is 30s.\n";
+           "Block until the Pane's process exits, a condition matches, or the timeout expires.\n"
+           "Without a condition, any process exit succeeds; use --exit-code N or --signal N\n"
+           "to require a specific outcome. --contains TEXT matches terminal content;\n"
+           "--until-prompt requires a shell-integration prompt marker. Terminal conditions can\n"
+           "match existing state; use --after-generation N to require newer terminal state.\n"
+           "The default timeout is 30s. --session selects the containing Session, not a wait\n"
+           "for that Session to end. Use --hold at creation to retain output after process "
+           "exit.\n\n"
+           "Examples (inside Lemma):\n"
+           "  lemma proc pane wait --timeout 30s\n"
+           "  lemma proc pane wait --exit-code 0 --timeout 2m\n"
+           "  lemma proc pane wait --contains 'Ready' --timeout 10s\n";
   }
   return {};
 }
 
-[[nodiscard]] auto print_proc_command_help(const std::string_view text) noexcept -> int {
+[[nodiscard]] auto print_help_spelling(std::string_view text, const std::string_view original,
+                                       const std::string_view replacement) noexcept -> int {
+  for (auto offset = text.find(original); offset != std::string_view::npos;
+       offset = text.find(original)) {
+    auto prefix = text;
+    prefix.remove_suffix(text.size() - offset);
+    if (!write_fragment(stdout, prefix) || !write_fragment(stdout, replacement)) {
+      return 1;
+    }
+    text.remove_prefix(offset + original.size());
+  }
   return write_fragment(stdout, text) ? 0 : 1;
+}
+
+[[nodiscard]] auto print_basic_help(const std::string_view name) -> int {
+  const auto operation = basic_pane_operation(name);
+  const auto status = print_help_spelling(command_help("pane", operation),
+                                          "lemma proc pane " + std::string(operation),
+                                          "lemma " + std::string(name));
+  if (status != 0) {
+    return status;
+  }
+  constexpr std::string_view common =
+      "\nTargets:\n"
+      "  Inside Lemma, omitted targets use your current Session and Pane IDs.\n"
+      "  Outside Lemma, provide --session NAME|ID and --pane ID (or a positional Pane ID).\n"
+      "  Explicit selectors override current context; Pane IDs are Session-scoped.\n\n"
+      "Output:\n"
+      "  --json        Print the canonical Proc result instead of readable output.\n"
+      "  Exit status: 0 success, 1 execution failure, 2 invalid arguments/request.\n";
+  if (!write_fragment(stdout, common)) {
+    return 1;
+  }
+  std::string_view output = "  By default, succeed quietly; report failures on stderr.\n";
+  if (name == "capture") {
+    output = "  By default, print captured text to stdout.\n";
+  } else if (name == "split") {
+    output = "  By default, print the new Pane ID to stdout.\n";
+  }
+  return write_fragment(stdout, output) ? 0 : 1;
+}
+
+[[nodiscard]] auto print_basic_session_help(const std::string_view name) noexcept -> int {
+  if (name == "new" || name == "start") {
+    if (!write_fragment(stdout, "Usage:\n  lemma ") || !write_fragment(stdout, name)) {
+      return 1;
+    }
+    constexpr std::string_view options =
+        " [NAME] [--cwd DIR] [--hold] [-- COMMAND [ARGUMENTS...]]\n\n"
+        "Create a Session, optionally named. --cwd sets its initial directory; --hold keeps\n"
+        "the Pane and its output after the program exits. Arguments after -- run directly,\n"
+        "without shell interpretation. Omitted launch options use configured defaults.\n";
+    const std::string_view behavior = name == "new"
+                                          ? "new attaches immediately and requires a terminal.\n"
+                                          : "start leaves the Session running without attaching.\n";
+    return write_fragment(stdout, options) && write_fragment(stdout, behavior) &&
+                   write_fragment(stdout, "\nExamples:\n  lemma new work --cwd \"$PWD\"\n"
+                                          "  lemma start tests --hold -- just test\n")
+               ? 0
+               : 1;
+  }
+  std::string_view help = "Usage:\n  lemma list\n  lemma ls\n\nShow Sessions and their status.\n";
+  if (name == "attach") {
+    help = "Usage:\n  lemma attach [NAME]\n\nConnect to an existing Session. Without NAME, "
+           "select the most recently active detached Session.\n";
+  } else if (name == "rename") {
+    help = "Usage:\n  lemma rename OLD NEW\n\nChange a Session's name without stopping its "
+           "programs.\n";
+  } else if (name == "kill") {
+    help = "Usage:\n  lemma kill NAME\n\nEnd the named Session and stop all its programs.\n";
+  }
+  return write_fragment(stdout, help) ? 0 : 1;
 }
 
 // Branches format the complete command help catalog without adding parser state.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto print_command_help(const std::span<char*> arguments) noexcept -> int {
+[[nodiscard]] auto print_command_help(const std::span<char*> arguments,
+                                      const bool structured = true) noexcept -> int {
   constexpr std::string_view overview =
       "Lemma Proc command CLI\n\n"
       "Usage:\n"
@@ -573,7 +767,10 @@ struct SurfaceArguments final {
     const auto operation = std::string_view(arguments.back());
     const auto text = command_help(domain, operation);
     if (!text.empty()) {
-      return print_proc_command_help(text);
+      if (structured) {
+        return write_fragment(stdout, text) ? 0 : 1;
+      }
+      return print_help_spelling(text, "lemma proc ", "lemma ");
     }
     static_cast<void>(write_fragment(stderr, "unknown Lemma Command: "));
     static_cast<void>(write_fragment(stderr, domain));
@@ -584,11 +781,6 @@ struct SurfaceArguments final {
     return 2;
   }
   return write_fragment(stdout, overview) ? 0 : 1;
-}
-
-[[nodiscard]] auto is_config_check_help(const std::span<char*> arguments) noexcept -> bool {
-  return arguments.size() == 2U && std::string_view(arguments.front()) == "config" &&
-         std::string_view(arguments.back()) == "check";
 }
 
 [[nodiscard]] auto print_config_check_help() noexcept -> int {
@@ -604,7 +796,16 @@ struct SurfaceArguments final {
 [[nodiscard]] auto print_proc_help(const std::span<char*> arguments) noexcept -> int {
   if (arguments.size() >= 2U && proc_domain(arguments.subspan(1, 1).front())) {
     const auto target = arguments.subspan(1);
-    return print_command_help(target.first(std::min(target.size(), std::size_t{2})));
+    const auto count = target.size() > 1U && !help_flag(target.subspan(1, 1).front())
+                           ? std::size_t{2}
+                           : std::size_t{1};
+    return print_command_help(target.first(count));
+  }
+  if (arguments.size() >= 2U) {
+    const std::string_view option(arguments.subspan(1, 1).front());
+    if (!help_flag(option) && option != "--file" && option != "--stdin") {
+      return invalid_arguments("proc help");
+    }
   }
   constexpr std::string_view help =
       "Usage:\n"
@@ -617,18 +818,64 @@ struct SurfaceArguments final {
   return write_fragment(stdout, help) ? 0 : 1;
 }
 
-[[nodiscard]] auto print_contextual_help(const std::span<char*> arguments) noexcept -> int {
+[[nodiscard]] auto help_subcommand_matches(const std::span<char*> arguments,
+                                           const std::string_view subcommand) noexcept -> bool {
+  if (arguments.size() == 1U) {
+    return true;
+  }
+  const std::string_view next(arguments.subspan(1, 1).front());
+  return help_flag(next) || next == subcommand;
+}
+
+[[nodiscard]] auto print_other_help(const std::span<char*> arguments) noexcept -> int {
+  const std::string_view command(arguments.front());
+  if (command == "config") {
+    return help_subcommand_matches(arguments, "check") ? print_config_check_help()
+                                                       : invalid_arguments("config help");
+  }
+  if (command == "api") {
+    return help_subcommand_matches(arguments, "schema") ? print_api_schema_summary()
+                                                        : invalid_arguments("api help");
+  }
+  if (command == "help" || help_flag(command)) {
+    return print_usage(stdout);
+  }
+  std::string_view text;
+  if (command == "skill") {
+    text = "Usage:\n  lemma skill\n\nPrint the version-matched coding-agent guide as an Agent "
+           "Skills-compatible SKILL.md.\nSave it under a directory named lemma in your agent "
+           "host's skill location.\n";
+  } else if (command == "version" || command == "--version" || command == "-V") {
+    text = "Usage:\n  lemma version\n  lemma --version\n\nShow the Lemma version, automation "
+           "schema, and private protocol version.\n";
+  } else {
+    return invalid_arguments("help topic");
+  }
+  return write_fragment(stdout, text) ? 0 : 1;
+}
+
+[[nodiscard]] auto print_contextual_help(const std::span<char*> arguments) -> int {
   if (arguments.empty()) {
     return print_usage(stdout);
   }
   const std::string_view command(arguments.front());
+  if (!basic_pane_operation(command).empty()) {
+    return print_basic_help(command);
+  }
+  if (command == "new" || command == "start" || command == "attach" || command == "ls" ||
+      command == "list" || command == "rename" || command == "kill") {
+    return print_basic_session_help(command);
+  }
   if (command == "session" || command == "tab" || command == "pane") {
-    return print_command_help(arguments.first(std::min(arguments.size(), std::size_t{2})));
+    const auto count = arguments.size() > 1U && !help_flag(arguments.subspan(1, 1).front())
+                           ? std::min(arguments.size(), std::size_t{2})
+                           : std::size_t{1};
+    return print_command_help(arguments.first(count), false);
   }
   if (command == "proc") {
     return print_proc_help(arguments);
   }
-  if (command == "events" && arguments.size() == 1U) {
+  if (command == "events") {
     constexpr std::string_view help =
         "Usage:\n"
         "  lemma events [--session NAME|ID] [--pane ID ... [--screen]]\n\n"
@@ -637,10 +884,7 @@ struct SurfaceArguments final {
         "The stream is open-ended; bound it with the caller's timeout or cancellation mechanism.\n";
     return write_fragment(stdout, help) ? 0 : 1;
   }
-  if (is_config_check_help(arguments)) {
-    return print_config_check_help();
-  }
-  return print_usage(stdout);
+  return print_other_help(arguments);
 }
 
 [[nodiscard]] auto run_configuration(const std::span<char*> arguments) noexcept -> int {
@@ -811,6 +1055,7 @@ struct CommandCliArguments final {
   std::optional<api::TabSelector> tab;
   std::optional<api::PaneSelector> pane;
   std::optional<std::uint64_t> expected_session_revision;
+  bool json_output{false};
   bool valid{true};
 };
 
@@ -868,7 +1113,9 @@ struct CommandCliArguments final {
 // Target options are frontend conveniences. They are removed before command-specific parsing so
 // the Command crossing the socket contains only concrete selectors.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto parse_command_cli_arguments(const std::span<char*> arguments)
+[[nodiscard]] auto parse_command_cli_arguments(const std::span<char*> arguments,
+                                               const std::string_view operation,
+                                               const bool allow_json = false)
     -> CommandCliArguments {
   CommandCliArguments parsed;
   parsed.values.reserve(arguments.size());
@@ -898,8 +1145,15 @@ struct CommandCliArguments final {
       parsed.expected_session_revision =
           parse_integer<std::uint64_t>(arguments.subspan(++index, 1).front());
       parsed.valid = parsed.valid && parsed.expected_session_revision.value_or(0) > 0;
+    } else if (argument == "--json" && allow_json) {
+      parsed.valid = parsed.valid && !parsed.json_output;
+      parsed.json_output = true;
     } else {
       parsed.values.push_back(raw);
+      // Option values are opaque, even when they spell a selector, --json, or --help.
+      if (cli_option_takes_value(argument, operation) && index + 1U < arguments.size()) {
+        parsed.values.push_back(arguments.subspan(++index, 1).front());
+      }
     }
   }
   return parsed;
@@ -919,9 +1173,53 @@ struct CommandCliArguments final {
   return arguments.pane.has_value() ? arguments.pane : current_pane_selector();
 }
 
+void print_proc_failure(const api::JsonValue& failure) noexcept {
+  const auto* error = api::json_member(failure, "error");
+  const auto reason =
+      error == nullptr ? api::json_string(failure, "status") : api::json_string(*error, "reason");
+  static_cast<void>(write_fragment(stderr, "lemma: "));
+  static_cast<void>(write_fragment(stderr, reason.value_or("command failed")));
+  static_cast<void>(write_fragment(stderr, "\n"));
+}
+
+[[nodiscard]] auto print_basic_result(const api::CommandKind kind,
+                                      const api::JsonValue& result) noexcept -> int {
+  if (kind == api::CommandKind::pane_capture) {
+    const auto* capture = api::json_member(result, "capture");
+    const auto text = capture == nullptr ? std::nullopt : api::json_string(*capture, "text");
+    return text.has_value() && platform::write_text(STDOUT_FILENO, *text) ? 0 : 1;
+  }
+  if (kind == api::CommandKind::pane_split) {
+    const auto pane = api::json_string(result, "pane");
+    return pane.has_value() && platform::write_text(STDOUT_FILENO, *pane) &&
+                   platform::write_text(STDOUT_FILENO, "\n")
+               ? 0
+               : 1;
+  }
+  return 0;
+}
+
 [[nodiscard]] auto run_concrete_command(const daemon::RuntimeEndpoint& endpoint,
-                                        const api::Command& command) -> int {
-  return daemon::run_proc(endpoint, command);
+                                        const api::Command& command, const bool readable = false)
+    -> int {
+  if (!readable) {
+    return daemon::run_proc(endpoint, command);
+  }
+  const auto response = daemon::execute_command(endpoint, command);
+  const auto* entries = api::json_member(response.document, "results");
+  const auto* result =
+      entries != nullptr && entries->kind == api::JsonKind::array && entries->array.size() == 1U
+          ? api::json_member(entries->array.front(), "result")
+          : nullptr;
+  if (response.exit_status != 0) {
+    print_proc_failure(result == nullptr ? response.document : *result);
+    return response.exit_status;
+  }
+  if (result == nullptr) {
+    static_cast<void>(write_fragment(stderr, "lemma: invalid Proc response\n"));
+    return 1;
+  }
+  return print_basic_result(command.kind, *result);
 }
 
 [[nodiscard]] auto run_daemon_command(const daemon::RuntimeEndpoint& endpoint,
@@ -1145,8 +1443,11 @@ struct CommandCliArguments final {
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_pane_command(const daemon::RuntimeEndpoint& endpoint,
-                                    const std::string_view operation, CommandCliArguments arguments)
-    -> int {
+                                    const std::string_view operation, CommandCliArguments arguments,
+                                    const bool readable = false) -> int {
+  const auto execute = [&](const api::Command& command) {
+    return run_concrete_command(endpoint, command, readable && !arguments.json_output);
+  };
   if (!arguments.valid || arguments.tab.has_value()) {
     return invalid_arguments("proc pane");
   }
@@ -1159,7 +1460,7 @@ struct CommandCliArguments final {
   command.expected_session_revision = arguments.expected_session_revision;
   if (operation == "list" && arguments.values.empty() && !arguments.pane.has_value()) {
     command.kind = api::CommandKind::pane_list;
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
 
   auto target = concrete_pane(arguments);
@@ -1185,7 +1486,7 @@ struct CommandCliArguments final {
     } else if (operation == "focus") {
       command.kind = api::CommandKind::pane_focus;
     }
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "split") {
     if (values.empty()) {
@@ -1206,7 +1507,7 @@ struct CommandCliArguments final {
     for (const auto value : parsed->command) {
       command.arguments.emplace_back(value);
     }
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "swap") {
     if (values.size() != 1U) {
@@ -1218,7 +1519,7 @@ struct CommandCliArguments final {
     }
     command.kind = api::CommandKind::pane_swap;
     command.other = *other;
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "resize") {
     if (values.empty() || values.size() > 2U) {
@@ -1234,7 +1535,7 @@ struct CommandCliArguments final {
     command.kind = api::CommandKind::pane_resize;
     command.direction = *direction;
     command.amount = *amount;
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "zoom") {
     if (values.size() != 1U || (std::string_view(values.front()) != "--on" &&
@@ -1243,7 +1544,7 @@ struct CommandCliArguments final {
     }
     command.kind = api::CommandKind::pane_zoom;
     command.enabled = std::string_view(values.front()) == "--on";
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "send") {
     if (values.size() != 2U || std::string_view(values.front()) != "--text") {
@@ -1251,7 +1552,7 @@ struct CommandCliArguments final {
     }
     command.kind = api::CommandKind::pane_send;
     command.text = values.back();
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "input") {
     command.kind = api::CommandKind::pane_input;
@@ -1278,7 +1579,7 @@ struct CommandCliArguments final {
     if (command.input_events.empty() || command.input_events.size() > api::input_events_max) {
       return invalid_arguments("proc pane input");
     }
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "wait") {
     if (command.expected_session_revision.has_value()) {
@@ -1338,7 +1639,7 @@ struct CommandCliArguments final {
         command.after_terminal_generation != 0) {
       return invalid_arguments("proc pane wait");
     }
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   if (operation == "capture") {
     command.kind = api::CommandKind::pane_capture;
@@ -1394,7 +1695,7 @@ struct CommandCliArguments final {
     if (command.capture_source == api::CaptureSource::last_command && lines_seen) {
       return invalid_arguments("proc pane capture");
     }
-    return run_concrete_command(endpoint, command);
+    return execute(command);
   }
   return invalid_arguments("proc pane");
 }
@@ -1406,7 +1707,7 @@ struct CommandCliArguments final {
   }
   const std::string_view domain(arguments.front());
   const std::string_view operation(arguments.subspan(1, 1).front());
-  auto parsed = parse_command_cli_arguments(arguments.subspan(2));
+  auto parsed = parse_command_cli_arguments(arguments.subspan(2), operation);
   if (domain == "daemon") {
     return run_daemon_command(endpoint, operation, parsed);
   }
@@ -1848,15 +2149,18 @@ command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer =
   const auto command_arguments = arguments.subspan(1);
   const std::string_view command(command_arguments.front());
   if (command == "help" || command == "--help" || command == "-h") {
-    return command_arguments.size() == 1 ? print_usage(stdout) : invalid_arguments("help");
+    return print_contextual_help(command_arguments.subspan(1));
+  }
+  if (has_help_option(command_arguments)) {
+    return print_contextual_help(command_arguments);
   }
   if (command == "version" || command == "--version" || command == "-V") {
     return command_arguments.size() == 1 ? print_version() : invalid_arguments("version");
   }
-  const bool launch_separator = std::ranges::any_of(
-      command_arguments, [](const char* value) { return std::string_view(value) == "--"; });
-  if (!launch_separator && help_flag(command_arguments.back())) {
-    return print_contextual_help(command_arguments.first(command_arguments.size() - 1U));
+  if (const auto operation = basic_pane_operation(command); !operation.empty()) {
+    return run_pane_command(
+        endpoint, operation,
+        parse_command_cli_arguments(command_arguments.subspan(1), operation, true), true);
   }
   if (command == "attach" && command_arguments.size() <= 2) {
     const auto target = command_arguments.size() == 2 ? std::string_view(command_arguments.back())
@@ -1868,7 +2172,8 @@ command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer =
     return run_session_control(endpoint, command_arguments);
   }
   if (command == "session" || command == "tab" || command == "pane") {
-    return run_proc_command(endpoint, command_arguments);
+    return command_arguments.size() == 1U ? print_command_help(command_arguments, false)
+                                          : run_proc_command(endpoint, command_arguments);
   }
   if (command == "proc") {
     const auto proc_arguments = command_arguments.subspan(1);

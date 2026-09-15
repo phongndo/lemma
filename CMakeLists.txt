@@ -244,7 +244,7 @@ target_link_libraries(
 add_library(lemma_app STATIC src/app/application.cpp src/app/proc.cpp)
 lemma_internal_target(lemma_app)
 target_link_libraries(
-  lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_extension lemma_terminal
+  lemma_app PRIVATE lemma_api lemma_client lemma_daemon lemma_extension lemma_platform lemma_terminal
 )
 
 # Compatibility aggregate for existing tests and embedders. New internal code should depend on the
@@ -445,6 +445,7 @@ if(LEMMA_BUILD_TESTS)
         "${CMAKE_COMMAND}" -E env
         "LEMMA_TEST_SERVER=$<TARGET_FILE:lemma_test_server>"
         "LEMMA_TEST_CLI=$<TARGET_FILE:lemma_test_cli>"
+        "LEMMA_TEST_EXECUTABLE=$<TARGET_FILE:lemma>"
         "LEMMA_TEST_PTY_PEER=$<TARGET_FILE:lemma_test_pty_peer>"
         "${Python3_EXECUTABLE}" -m unittest -v "${module}"
     )
@@ -466,11 +467,13 @@ if(LEMMA_BUILD_TESTS)
   lemma_add_python_mux_test(resize tests.mux.test_resize)
   lemma_add_python_mux_test(terminal_boundary tests.mux.test_terminal_boundary)
   lemma_add_python_mux_test(agent tests.mux.test_agent)
+  lemma_add_python_mux_test(cli tests.mux.test_cli)
   lemma_add_python_mux_test(process_boundary tests.mux.test_process_boundary)
 
   add_custom_target(
     lemma_fast_test_binaries
     DEPENDS
+      lemma
       lemma_unit_tests
       lemma_terminal_boundary_tests
       lemma_component_integration_tests
