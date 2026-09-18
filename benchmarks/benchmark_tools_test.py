@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import runpy
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
@@ -27,6 +30,8 @@ from check_regression import (
     statistic,
     validate_comparative_check,
 )
+from compare_mux import main as comparison_main
+from compare_mux import run_subject_workload
 from compare_regression import (
     add_comparison,
     profile_values,
@@ -38,6 +43,7 @@ from latency_trace import input_paths
 from mux_benchmark import (
     ALT_SCREEN,
     ATTACH_VISIBLE_MARKER,
+    BLOCK_DONE,
     INTERACTION_LABEL_CODES,
     LATENCY_VISIBLE_ACK,
     SHELL_READY_MARKER,
@@ -47,6 +53,7 @@ from mux_benchmark import (
     TmuxRuntime,
     ZellijRuntime,
     benchmark_environment,
+    blocked_pty,
     build_profile,
     git_provenance,
     install_attach_shell_startup,
@@ -69,6 +76,8 @@ from mux_benchmark import (
 from ownership_census import record_sizes
 from performance_host import validate as validate_host
 from terminal_lab import validate_samples
+
+from tests.support.pty_process import PtyProcess
 
 
 class OwnershipCensusTest(unittest.TestCase):
@@ -443,6 +452,155 @@ class LemmaBenchmarkAdapterTest(unittest.TestCase):
                 "work",
             ],
         )
+
+
+class BlockedPtyWorkloadTest(unittest.TestCase):
+    def test_blocked_input_keeps_outer_output_flowing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            peer = root / "peer"
+            peer.write_text(
+                f"#!{sys.executable}\n"
+                "import os, sys, time, tty\n"
+                "from pathlib import Path\n"
+                "tty.setraw(0)\n"
+                "gate = Path(sys.argv[2])\n"
+                "remaining = int(sys.argv[3])\n"
+                "def emit(data):\n"
+                "    while data:\n"
+                "        data = data[os.write(1, data):]\n"
+                "emit(b'__LEMMA_PTY_READY__\\r\\n')\n"
+                "# A mux may redraw even when its pane does not read input.\n"
+                "while not gate.exists():\n"
+                "    emit(b'\\r' * 32768)\n"
+                "    if gate.with_name('probe').exists():\n"
+                "        emit(b'\\r' * (128 * 1024))\n"
+                "        gate.with_name('probe-output-finished').touch()\n"
+                "    time.sleep(0.001)\n"
+                "while remaining:\n"
+                "    emit(b'\\r' * 4096)\n"
+                "    data = os.read(0, min(4096, remaining))\n"
+                "    if not data or data != b'q' * len(data):\n"
+                "        raise SystemExit(1)\n"
+                "    remaining -= len(data)\n"
+                f"emit({BLOCK_DONE!r})\n"
+                "time.sleep(0.1)\n",
+                encoding="utf-8",
+            )
+            peer.chmod(0o700)
+            client = PtyProcess(["/bin/sh"], dict(os.environ))
+            runtime = mock.Mock()
+            runtime.multiplexer = "zellij"
+            runtime.peer_path = peer
+            runtime.gate_path = root / "gate"
+            runtime.receipt_path = root / "receipt.sock"
+            runtime.start_and_attach.side_effect = [client, mock.Mock()]
+            write_all = client.write_all
+
+            def probe(*args: Any, **kwargs: Any) -> dict[str, Any]:
+                if args[3] == "BLOCKED":
+                    (root / "probe").touch()
+                    deadline = time.monotonic() + 2.0
+                    while not (root / "probe-output-finished").exists():
+                        if time.monotonic() >= deadline:
+                            self.fail(
+                                "outer output stalled while the other client was measured"
+                            )
+                        time.sleep(0.005)
+                return {}
+
+            try:
+                with (
+                    mock.patch.object(
+                        client,
+                        "write_all",
+                        side_effect=lambda data, timeout: write_all(
+                            data, min(timeout, 2.0)
+                        ),
+                    ),
+                    mock.patch("mux_benchmark.latency_samples", side_effect=probe),
+                ):
+                    result = blocked_pty(runtime, 1)
+                self.assertEqual(result["status"], "completed")
+                self.assertTrue(result["client_backpressure_observed"])
+                self.assertGreater(result["bytes_before_backpressure"], 0)
+            finally:
+                client.close()
+
+
+class ComparisonEvidenceTest(unittest.TestCase):
+    def test_rejected_fragment_survives_failed_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "executable"
+            executable.touch()
+            output = root / "comparison.json"
+            arguments = ["compare_mux.py", "--output", str(output)]
+            for name in ("server", "cli", "peer", "probe"):
+                arguments.extend([f"--{name}", str(executable)])
+            fragments: list[Path] = []
+            failed = {"status": "failed", "error": "PTY write timed out"}
+
+            def reject_fragment(*args: Any) -> None:
+                destination = args[-1]
+                destination.write_text(json.dumps(failed), encoding="utf-8")
+                fragments.append(destination)
+                raise ValueError("unreviewed failure: PTY write timed out")
+
+            with (
+                mock.patch("sys.argv", arguments),
+                mock.patch("compare_mux.resolve_executable", return_value=executable),
+                mock.patch(
+                    "compare_mux.run_subject_workload", side_effect=reject_fragment
+                ),
+                mock.patch("sys.stderr"),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                comparison_main()
+
+            self.assertEqual(raised.exception.code, 2)
+            self.assertFalse(output.exists())
+            self.assertEqual(len(fragments), 1)
+            self.assertTrue(
+                fragments[0].is_file(), "failed comparison discarded its evidence"
+            )
+            self.assertTrue(fragments[0].is_relative_to(output.parent))
+            self.assertEqual(json.loads(fragments[0].read_text()), failed)
+            execution = json.loads((fragments[0].parent / "execution.json").read_text())
+            self.assertTrue(execution["execution_order"])
+            self.assertEqual(execution["seed"], 42)
+
+    def test_capture_failure_retains_stderr_without_a_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "harness.py"
+            harness.write_text(
+                "import sys; print('fixture failed before reporting', file=sys.stderr); sys.exit(7)",
+                encoding="utf-8",
+            )
+            destination = root / "fragment.json"
+            arguments = argparse.Namespace(
+                intent="smoke",
+                manifest=Path("benchmarks/workloads.json"),
+                peer=root / "peer",
+                probe=root / "probe",
+                repetitions=1,
+            )
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                run_subject_workload(
+                    harness,
+                    "zellij",
+                    {"cli_mode": "blocked-pty"},
+                    arguments,
+                    {"zellij": root / "zellij"},
+                    destination,
+                )
+            self.assertEqual(raised.exception.returncode, 7)
+            self.assertFalse(destination.exists())
+            self.assertIn(
+                "fixture failed before reporting",
+                destination.with_suffix(".stderr.log").read_text(),
+            )
 
 
 class BenchEntrypointTest(unittest.TestCase):

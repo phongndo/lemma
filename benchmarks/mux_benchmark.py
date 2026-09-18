@@ -38,7 +38,7 @@ from benchmarks.benchmark_manifest import (  # noqa: E402
     suite_workloads,
     workload_for_mode,
 )
-from tests.support.pty_process import PtyProcess  # noqa: E402
+from tests.support.pty_process import PtyOutputMonitor, PtyProcess  # noqa: E402
 
 # Repository scans include the Ghostty submodule and can exceed two seconds on
 # cold hosted runners. Metadata is outside the measured interaction.
@@ -2419,24 +2419,13 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             BLOCK_READY, 5.0, visible_text=screen_renders_markers(runtime)
         )
         payload = b"q" * PAYLOAD_SIZE
-        accepted = blocked.fill_until_stalled(payload)
-        if accepted <= 0:
-            raise RuntimeError("blocked PTY accepted no payload")
-
-        under_backpressure = latency_samples(
-            responsive,
-            receipts,
-            runtime.probe_path,
-            "BLOCKED",
-            repetitions,
-            runtime=runtime,
-        )
-        runtime.gate_path.touch(mode=0o600, exist_ok=False)
+        result: dict[str, Any] = {"payload_bytes": PAYLOAD_SIZE, "idle": idle}
         try:
-            blocked.write_all(payload[accepted:], 60.0)
-            blocked.read_until(
+            # Block pane input only, not its outer terminal. The monitor owns
+            # reads during filling, the other client's native probe, and recovery.
+            with PtyOutputMonitor(
+                blocked,
                 BLOCK_DONE,
-                60.0,
                 failure_markers=(
                     b"__LEMMA_PTY_FAILED__",
                     b"lost connection",
@@ -2444,29 +2433,44 @@ def blocked_pty(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
                     b"Received empty unknown from server",
                 ),
                 visible_text=screen_renders_markers(runtime),
-            )
-        except (RuntimeError, TimeoutError) as error:
+            ) as completion:
+                accepted = blocked.fill_until_stalled(payload)
+                result.update(
+                    bytes_before_backpressure=accepted,
+                    client_backpressure_observed=accepted < len(payload),
+                )
+                completion.check()
+                if accepted <= 0:
+                    raise RuntimeError("blocked PTY accepted no payload")
+
+                result["blocked_other_session"] = latency_samples(
+                    responsive,
+                    receipts,
+                    runtime.probe_path,
+                    "BLOCKED",
+                    repetitions,
+                    runtime=runtime,
+                )
+                runtime.gate_path.touch(mode=0o600, exist_ok=False)
+                try:
+                    blocked.write_all(payload[accepted:], 60.0)
+                except (OSError, RuntimeError, TimeoutError):
+                    # Prefer an observed peer failure over a secondary write
+                    # timeout or EIO, without accepting an unclassified timeout.
+                    completion.check()
+                    raise
+                completion.wait(60.0)
+        except (OSError, RuntimeError, TimeoutError) as error:
             raise WorkloadFailure(
                 str(error),
                 {
+                    **result,
                     "status": "failed",
                     "error": f"{type(error).__name__}: {error}",
-                    "payload_bytes": PAYLOAD_SIZE,
-                    "bytes_before_backpressure": accepted,
-                    "client_backpressure_observed": accepted < len(payload),
-                    "idle": idle,
-                    "blocked_other_session": under_backpressure,
                 },
             ) from error
 
-        return {
-            "status": "completed",
-            "payload_bytes": PAYLOAD_SIZE,
-            "bytes_before_backpressure": accepted,
-            "client_backpressure_observed": accepted < len(payload),
-            "idle": idle,
-            "blocked_other_session": under_backpressure,
-        }
+        return {**result, "status": "completed"}
     finally:
         receipts.close()
 

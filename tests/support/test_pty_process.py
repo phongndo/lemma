@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
-from tests.support.pty_process import AnsiScreenTracker, PtyProcess
+from tests.support.pty_process import (
+    FINAL_PTY_OUTPUT_BYTES,
+    AnsiScreenTracker,
+    PtyOutputMonitor,
+    PtyProcess,
+)
 
 LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[0m\x1b[?2026l\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l"
@@ -34,6 +42,84 @@ class AnsiScreenTrackerTest(unittest.TestCase):
 
         self.assertTrue(observed)
         self.assertFalse(tracker.contains(b"S0032X"))
+
+
+class PtyOutputMonitorTest(unittest.TestCase):
+    def start_peer(self, script: str) -> PtyProcess:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.output_finished = Path(temporary.name) / "output-finished"
+        process = PtyProcess(
+            [
+                sys.executable,
+                "-c",
+                "import os, sys, tty\n"
+                "from pathlib import Path\n"
+                "tty.setraw(0)\n"
+                "def emit(data):\n"
+                "    while data:\n"
+                "        data = data[os.write(1, data):]\n"
+                "emit(b'READY')\n"
+                "os.read(0, 1)\n" + script + "Path(sys.argv[1]).touch()\n",
+                str(self.output_finished),
+            ],
+            dict(os.environ),
+        )
+        self.addCleanup(process.close)
+        process.read_until(b"READY", 2.0)
+        return process
+
+    def test_retains_transient_visible_completion_and_keeps_draining(self) -> None:
+        process = self.start_peer(
+            "emit(b'\\x1b[1;1HS0030X')\n"
+            "emit(b'\\x1b[1;5H2\\x1b[1;1H      ')\n"
+            "emit(b'\\r' * (256 * 1024))\n"
+        )
+        with PtyOutputMonitor(process, b"S0032X", visible_text=True) as completion:
+            process.write_all(b"x", 2.0)
+            completion.wait(2.0)
+            # The child must be able to finish its flood after completion was
+            # observed, without the main thread reading this PTY.
+            self.wait_for_output()
+        self.assertLessEqual(len(process.output_tail), FINAL_PTY_OUTPUT_BYTES)
+        self.assertNotIn(b"S0032X", process.output_tail)
+        self.assertFalse(process.screen.contains(b"S0032X"))
+
+    def test_retains_fragmented_failure_and_drains_before_scope_exit(self) -> None:
+        process = self.start_peer(
+            "emit(b'lost con')\nemit(b'nection')\nemit(b'\\r' * (256 * 1024))\n"
+        )
+        with self.assertRaisesRegex(RuntimeError, "observed failure.*lost connection"):
+            with PtyOutputMonitor(
+                process, b"DONE", failure_markers=(b"lost connection",)
+            ) as completion:
+                process.write_all(b"x", 2.0)
+                self.wait_for_output()
+                completion.wait(2.0)
+        self.assertLessEqual(len(process.output_tail), FINAL_PTY_OUTPUT_BYTES)
+
+    def test_eof_cannot_complete_the_workload(self) -> None:
+        process = self.start_peer("emit(b'incomplete')\n")
+        with self.assertRaisesRegex(RuntimeError, "PTY closed before.*DONE"):
+            with PtyOutputMonitor(process, b"DONE") as completion:
+                process.write_all(b"x", 2.0)
+                completion.wait(2.0)
+
+    def test_timeout_returns_read_ownership(self) -> None:
+        process = self.start_peer("emit(b'LATER')\n")
+        with self.assertRaisesRegex(TimeoutError, "did not observe.*DONE"):
+            with PtyOutputMonitor(process, b"DONE") as completion:
+                completion.wait(0.02)
+        process.write_all(b"x", 2.0)
+        process.read_until(b"LATER", 2.0)
+
+    def wait_for_output(self) -> None:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self.output_finished.exists():
+                return
+            time.sleep(0.005)
+        self.fail("child could not finish writing while the monitor was active")
 
 
 class PtyProcessBufferingTest(unittest.TestCase):

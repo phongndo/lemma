@@ -198,12 +198,14 @@ def run_subject_workload(
         command.extend([f"--{subject}", str(executables[subject])])
     if subject not in {"direct", "lemma"}:
         command.append("--allow-workload-failures")
-    subprocess.run(
-        command,
-        check=True,
-        timeout=1_200.0,
-        stdout=subprocess.DEVNULL,
-    )
+    with destination.with_suffix(".stderr.log").open("w", encoding="utf-8") as stderr:
+        subprocess.run(
+            command,
+            check=True,
+            timeout=1_200.0,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
+        )
     report = json.loads(destination.read_text(encoding="utf-8"))
     validate_process_report(
         report,
@@ -244,6 +246,7 @@ def main() -> int:
         if not path.is_file():
             parser.error(f"missing executable: {path}")
 
+    fragment_root: Path | None = None
     try:
         manifest = load_manifest(arguments.manifest)
         if arguments.repetitions is None:
@@ -304,34 +307,55 @@ def main() -> int:
         direct_after_controls: dict[str, dict[str, Any]] = {}
         environment_valid = True
         workload_by_id = {workload["id"]: workload for workload in workloads}
-        with tempfile.TemporaryDirectory(prefix="mux-comparison-") as temporary:
-            root = Path(temporary)
-            for index, task in enumerate(execution_order):
-                subject = task["subject"]
-                workload = workload_by_id[task["workload"]]
-                fragment = run_subject_workload(
-                    harness,
-                    subject,
-                    workload,
-                    arguments,
-                    executables,
-                    root / f"{index:03d}-{subject}-{workload['id']}.json",
-                )
-                environment_valid = environment_valid and bool(
-                    fragment.get("environment_valid")
-                )
-                workload_result = fragment["workloads"][workload["id"]]
-                if subject == "direct" and task["phase"] == "after":
-                    direct_after_controls[workload["id"]] = workload_result
-                    continue
-                if subject not in reports:
-                    reports[subject] = {
-                        **fragment,
-                        "scenario_ids": [],
-                        "workloads": {},
-                    }
-                reports[subject]["scenario_ids"].append(workload["id"])
-                reports[subject]["workloads"][workload["id"]] = workload_result
+        evidence_directory = arguments.output.with_suffix(".fragments")
+        evidence_directory.mkdir(parents=True, exist_ok=True)
+        # Never overwrite an earlier attempt or delete a rejected fragment.
+        fragment_root = Path(tempfile.mkdtemp(prefix="run-", dir=evidence_directory))
+        print(f"comparison fragments: {fragment_root}", file=sys.stderr)
+        (fragment_root / "execution.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "run_intent": arguments.intent,
+                    "seed": arguments.seed,
+                    "repetitions": arguments.repetitions,
+                    "manifest_sha256": hashlib.sha256(
+                        arguments.manifest.read_bytes()
+                    ).hexdigest(),
+                    "execution_order": execution_order,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for index, task in enumerate(execution_order):
+            subject = task["subject"]
+            workload = workload_by_id[task["workload"]]
+            fragment = run_subject_workload(
+                harness,
+                subject,
+                workload,
+                arguments,
+                executables,
+                fragment_root / f"{index:03d}-{subject}-{workload['id']}.json",
+            )
+            environment_valid = environment_valid and bool(
+                fragment.get("environment_valid")
+            )
+            workload_result = fragment["workloads"][workload["id"]]
+            if subject == "direct" and task["phase"] == "after":
+                direct_after_controls[workload["id"]] = workload_result
+                continue
+            if subject not in reports:
+                reports[subject] = {
+                    **fragment,
+                    "scenario_ids": [],
+                    "workloads": {},
+                }
+            reports[subject]["scenario_ids"].append(workload["id"])
+            reports[subject]["workloads"][workload["id"]] = workload_result
         scenario_order = [workload["id"] for workload in workloads]
         for subject in subjects:
             report = reports[subject]
@@ -349,7 +373,12 @@ def main() -> int:
                 for identifier in scenario_order
             }
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
-        parser.error(str(error))
+        location = (
+            f"; comparison fragments retained in {fragment_root}"
+            if fragment_root
+            else ""
+        )
+        parser.error(f"{error}{location}")
 
     report = {
         "schema": 3,
@@ -364,6 +393,7 @@ def main() -> int:
         "manifest_sha256": hashlib.sha256(arguments.manifest.read_bytes()).hexdigest(),
         "seed": arguments.seed,
         "execution_order": execution_order,
+        "fragments_directory": str(fragment_root),
         "policy": (
             "Workload blocks are randomized, non-direct subjects are randomized within "
             "each block, and direct controls bracket every supported block; all use an "

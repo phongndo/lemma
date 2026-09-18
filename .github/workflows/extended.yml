@@ -133,6 +133,7 @@ jobs:
             build/release/benchmark-results.json
             build/release/mux-benchmark-results.json
             build/release/mux-comparison-results.json
+            build/release/mux-comparison-results.fragments
             build/release/mux-profile-results.json
             build/release/f3-memory-*.json
             build/release/f3-memory-*.txt

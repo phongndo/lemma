@@ -82,8 +82,17 @@ descriptors, and wakeups. Shared-runner timing is diagnostic, not a stable regre
 Reports retain raw distributions, source/manifest identity, executable SHA-256 values, and failures
 or unsupported capabilities as outcomes rather than samples. Cross-subject validation admits only
 failure signatures reviewed in the manifest; new adapter/competitor failures fail validation.
+Each comparison attempt retains its execution order, raw per-workload reports, and subprocess
+stderr in a unique run directory beside the requested output (`NAME.fragments/run-*`), including
+when capture or validation fails. The scheduled benchmark artifact includes these fragments.
 Sparse smoke p95/p99 statistics are marked invalid. Scaling sweeps expose shape and contention
 knees, not reliable tail latency. Generated evidence stays under `build/`.
+
+The blocked-PTY workload withholds pane reads, not host-terminal reads. A scoped reader consumes
+that client's output during input saturation, the other session's native latency probe, and
+payload recovery; completion still requires the full byte count and digest. Blocking terminal
+output is a separate workload. Results from captures that did not drain output are not comparable
+to this isolated blocked-input scenario.
 
 The merge-blocking [deterministic budgets](../scripts/ci/deterministic-budgets) enforce zero
 steady-state allocations and reviewed work/queue bounds independently of timing: routed bytes,

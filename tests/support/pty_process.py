@@ -10,9 +10,11 @@ import select
 import signal
 import struct
 import termios
+import threading
 import time
 from collections import deque
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 FINAL_PTY_OUTPUT_BYTES = 64 * 1024
 
@@ -189,6 +191,124 @@ class AnsiScreenTracker:
         return "\n".join(
             bytes(row).decode("ascii", errors="replace").rstrip() for row in self.cells
         )
+
+
+class PtyOutputMonitor:
+    """Own a PTY's reads until scope exit, retaining a completion or failure outcome.
+
+    The caller may write to the process or work with other clients, but must not
+    read, drain, resize, or close this process while the monitor is active. Output
+    keeps flowing even after the outcome is known; retention remains bounded.
+    This observes completion only, not a measured latency endpoint.
+    """
+
+    def __init__(
+        self,
+        process: PtyProcess,
+        marker: bytes,
+        *,
+        failure_markers: tuple[bytes, ...] = (),
+        visible_text: bool = False,
+    ) -> None:
+        self.process = process
+        self.marker = marker
+        self.failure_markers = failure_markers
+        self.visible_text = visible_text
+        self._stop = threading.Event()
+        self._finished = threading.Event()
+        self._error: Exception | None = None
+        self._thread = threading.Thread(target=self._run, name="pty-output-monitor")
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._stop.set()
+        # The only blocking operation in the reader is a bounded select; join
+        # before returning PTY/screen ownership, including on a writer failure.
+        self._thread.join()
+        if exception_type is None:
+            self.check()
+
+    def check(self) -> None:
+        if self._finished.is_set() and self._error is not None:
+            raise self._error
+
+    def wait(self, timeout: float) -> None:
+        if not self._finished.wait(timeout):
+            raise TimeoutError(
+                f"did not observe {self.marker!r}; tail={self.process.output_tail[-4096:]!r}"
+            )
+        self.check()
+
+    def _finish(self, error: Exception | None = None) -> None:
+        if not self._finished.is_set():
+            self._error = error
+            self._finished.set()
+
+    def _run(self) -> None:
+        retained = b""
+        retained_limit = FINAL_PTY_OUTPUT_BYTES + max(
+            len(marker) for marker in (self.marker, *self.failure_markers)
+        )
+        try:
+            while not self._stop.is_set():
+                from_pending = bool(self.process.pending_read)
+                if from_pending:
+                    data = self.process.pending_read
+                    self.process.pending_read = b""
+                else:
+                    readable, _, _ = select.select(
+                        [self.process.descriptor], [], [], 0.02
+                    )
+                    if not readable:
+                        continue
+                    try:
+                        data = os.read(self.process.descriptor, FINAL_PTY_OUTPUT_BYTES)
+                    except BlockingIOError:
+                        continue
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
+                        data = b""
+                    if not data:
+                        self._finish(
+                            RuntimeError(
+                                f"PTY closed before {self.marker!r}; "
+                                f"tail={self.process.output_tail[-4096:]!r}"
+                            )
+                        )
+                        return
+                retained = (retained + data)[-retained_limit:]
+                observed = False
+                if not from_pending:
+                    observed = self.process.screen.feed_observing(
+                        data, self.marker if self.visible_text else b""
+                    )
+                    self.process._retain_output(data)
+                for marker in self.failure_markers:
+                    if marker in retained:
+                        self._finish(
+                            RuntimeError(
+                                f"observed failure {marker!r} while waiting for {self.marker!r}; "
+                                f"tail={retained[-512:]!r}"
+                            )
+                        )
+                        break
+                if (
+                    self.marker in retained
+                    or observed
+                    or (self.visible_text and self.process.screen.contains(self.marker))
+                ):
+                    self._finish()
+        except Exception as error:
+            self._finish(error)
 
 
 class PtyProcess:

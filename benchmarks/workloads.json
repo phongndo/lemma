@@ -372,7 +372,7 @@
     },
     {
       "id": "blocked_pty",
-      "input": "a gated peer receives and verifies a 2 MiB payload while another session echoes unique tokens",
+      "input": "a gated peer receives and verifies a 2 MiB payload while another session echoes unique tokens; both clients' terminal output is continuously consumed",
       "completion": "the complete payload byte count and digest are rendered after the gate opens",
       "metrics": [
         "bytes_before_backpressure",
