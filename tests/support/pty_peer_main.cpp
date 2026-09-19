@@ -26,6 +26,8 @@ namespace {
 
 using namespace std::chrono_literals;
 
+constexpr std::chrono::milliseconds block_receive_idle_timeout{30s};
+
 [[nodiscard]] auto write_all(const std::string_view text) noexcept -> bool {
   std::size_t offset = 0;
   while (offset < text.size()) {
@@ -105,13 +107,17 @@ using namespace std::chrono_literals;
 }
 
 [[nodiscard]] auto read_exact_digest(const std::size_t expected, std::uint64_t& digest,
-                                     std::size_t& received) noexcept -> bool {
+                                     std::size_t& received,
+                                     const std::chrono::milliseconds idle_timeout) noexcept
+    -> bool {
   constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
   constexpr std::uint64_t prime = 1'099'511'628'211ULL;
   digest = offset_basis;
   received = 0;
   std::array<std::byte, std::size_t{16} * 1'024U> bytes{};
-  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  // The harness bounds the complete send/recovery operation. This guard detects
+  // stalled input, not a slow subject that is still delivering the payload.
+  auto deadline = std::chrono::steady_clock::now() + idle_timeout;
   while (received < expected && std::chrono::steady_clock::now() < deadline) {
     pollfd event{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
     const auto remaining = expected - received;
@@ -130,6 +136,7 @@ using namespace std::chrono_literals;
         digest *= prime;
       }
       received += size;
+      deadline = std::chrono::steady_clock::now() + idle_timeout;
       continue;
     }
     if (count < 0 && errno == EINTR) {
@@ -142,14 +149,15 @@ using namespace std::chrono_literals;
 
 void linger_for_render() noexcept { std::this_thread::sleep_for(250ms); }
 
-[[nodiscard]] auto run_block(const char* const gate, const std::size_t bytes) noexcept -> int {
+[[nodiscard]] auto run_block(const char* const gate, const std::size_t bytes,
+                             const std::chrono::milliseconds idle_timeout) noexcept -> int {
   if (bytes == 0 || bytes > std::size_t{8} * 1'024U * 1'024U || !enter_raw_input() ||
       !write_all("\r\n__LEMMA_PTY_READY__\r\n") || !wait_for_gate(gate)) {
     return 1;
   }
   std::uint64_t digest = 0;
   std::size_t received = 0;
-  if (!read_exact_digest(bytes, digest, received)) {
+  if (!read_exact_digest(bytes, digest, received, idle_timeout)) {
     std::array<char, 32> received_text{};
     const auto received_storage = std::span(received_text);
     const auto encoded =
@@ -1160,8 +1168,21 @@ int main(const int argc, char** const argv) {
     return run_tui_wheel(arguments.subspan(2, 1).front(),
                          parse_size(arguments.subspan(3, 1).front()));
   }
-  if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "block") {
-    return run_block(arguments.subspan(2, 1).front(), parse_size(arguments.subspan(3, 1).front()));
+  if ((arguments.size() == 4 || arguments.size() == 5) &&
+      std::string_view(arguments.subspan(1, 1).front()) == "block") {
+    auto idle_timeout = block_receive_idle_timeout;
+    if (arguments.size() == 5) {
+      // A shorter guard lets process tests exercise progress and stalling without
+      // waiting thirty seconds. Callers cannot raise the normal fixture bound.
+      const auto milliseconds = parse_size(arguments.subspan(4, 1).front());
+      if (milliseconds == 0 ||
+          milliseconds > static_cast<std::size_t>(block_receive_idle_timeout.count())) {
+        return 2;
+      }
+      idle_timeout = std::chrono::milliseconds{static_cast<std::int64_t>(milliseconds)};
+    }
+    return run_block(arguments.subspan(2, 1).front(), parse_size(arguments.subspan(3, 1).front()),
+                     idle_timeout);
   }
   if (arguments.size() == 4 && std::string_view(arguments.subspan(1, 1).front()) == "order") {
     return run_order(arguments.subspan(2, 1).front(), arguments.subspan(3, 1).front());

@@ -90,9 +90,10 @@ knees, not reliable tail latency. Generated evidence stays under `build/`.
 
 The blocked-PTY workload withholds pane reads, not host-terminal reads. A scoped reader consumes
 that client's output during input saturation, the other session's native latency probe, and
-payload recovery; completion still requires the full byte count and digest. Blocking terminal
-output is a separate workload. Results from captures that did not drain output are not comparable
-to this isolated blocked-input scenario.
+payload recovery; completion still requires the full byte count and digest. The fixture's receive
+guard measures time without progress, not total transfer time; the harness still imposes hard
+bounds on sending and completion. Blocking terminal output is a separate workload. Results from
+captures that did not drain output are not comparable to this isolated blocked-input scenario.
 
 The merge-blocking [deterministic budgets](../scripts/ci/deterministic-budgets) enforce zero
 steady-state allocations and reviewed work/queue bounds independently of timing: routed bytes,
