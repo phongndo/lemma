@@ -23,7 +23,7 @@ namespace lemma::diagnostic {
 namespace {
 
 TEST(LatencyTraceTest, DerivesSameNonzeroTokenAcrossFragmentedMarker) {
-  constexpr std::string_view marker = "__LEMMA_OUTPUT_0007_ABCDEFGH__";
+  constexpr std::string_view marker = "__LEMMA_OUTPUT_0007_ABCDEF__";
   const auto bytes = std::as_bytes(std::span(marker));
 
   const auto complete = latency_trace_marker_token(bytes);
@@ -36,7 +36,7 @@ TEST(LatencyTraceTest, DerivesSameNonzeroTokenAcrossFragmentedMarker) {
 
   LatencyTraceMarkerMatcher visible_matcher;
   constexpr std::string_view first = "\x1B[3GABCD";
-  constexpr std::string_view second = "EFGH\x1B[0m";
+  constexpr std::string_view second = "EF\x1B[0m";
   EXPECT_EQ(visible_matcher.observe_expected_visible(std::as_bytes(std::span(first)), complete),
             0U);
   EXPECT_EQ(visible_matcher.observe_expected_visible(std::as_bytes(std::span(second)), complete),
@@ -51,8 +51,24 @@ TEST(LatencyTraceTest, IgnoresOrdinaryOutputAndRecoversAfterOversizedCandidate) 
   std::ranges::fill(std::span(oversized).subspan(prefix.size()), std::byte{'x'});
 
   EXPECT_EQ(matcher.observe(oversized), 0U);
-  constexpr std::string_view marker = "__LEMMA_IDLE_0001_QWERTYUI__";
+  constexpr std::string_view marker = "__LEMMA_IDLE_0001_QWERTY__";
   EXPECT_NE(matcher.observe(std::as_bytes(std::span(marker))), 0U);
+}
+
+// Assertion macros inflate the two bounded fixture/split loops.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(LatencyTraceTest, RecognizesCurrentProbeMarkersAtEveryByteBoundary) {
+  for (const auto marker : {std::string_view{"__LEMMA_OUTPUT_0000_AAAAAA__"},
+                            std::string_view{"__LEMMA_OUTPUT_9999_YYYYJP__"}}) {
+    const auto bytes = std::as_bytes(std::span(marker));
+    const auto expected = latency_trace_marker_token(bytes);
+    ASSERT_NE(expected, 0U);
+    for (std::size_t split = 0; split < bytes.size(); ++split) {
+      LatencyTraceMarkerMatcher matcher;
+      EXPECT_EQ(matcher.observe(bytes.first(split)), 0U);
+      EXPECT_EQ(matcher.observe(bytes.subspan(split)), expected);
+    }
+  }
 }
 
 #ifdef LEMMA_ENABLE_LATENCY_TRACE

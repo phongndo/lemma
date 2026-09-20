@@ -395,21 +395,34 @@ struct SelectedColumns final {
   return hash;
 }
 
-[[nodiscard]] auto rendered_cell_hash(const AnsiStyle& style, const GhosttyCellWide wide,
-                                      const std::span<const std::uint8_t> grapheme) noexcept
-    -> std::uint64_t {
-  constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
-  auto hash = hash_style(hash_initial, style);
-  hash = hash_byte(hash, static_cast<std::uint8_t>(wide));
-  if (grapheme.empty()) {
-    hash = hash_byte(hash, 0);
-  } else {
-    for (const auto byte : grapheme) {
-      hash = hash_byte(hash, byte);
+// Row-local memoization of the existing hash prefix, not a second terminal/style authority.
+// Adjacent cells commonly share a projected style. Compare the complete value (after selection
+// and palette projection), then hash width and graphemes independently exactly as before.
+class RenderedCellHasher final {
+public:
+  [[nodiscard]] auto hash(const AnsiStyle& style, const GhosttyCellWide wide,
+                          const std::span<const std::uint8_t> grapheme) noexcept -> std::uint64_t {
+    if (!cached_.has_value() || cached_->style != style) {
+      constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
+      cached_ = HashedStyle{.style = style, .hash = hash_style(hash_initial, style)};
     }
+    auto result = hash_byte(cached_->hash, static_cast<std::uint8_t>(wide));
+    if (grapheme.empty()) {
+      return hash_byte(result, 0);
+    }
+    for (const auto byte : grapheme) {
+      result = hash_byte(result, byte);
+    }
+    return result;
   }
-  return hash;
-}
+
+private:
+  struct HashedStyle final {
+    AnsiStyle style;
+    std::uint64_t hash;
+  };
+  std::optional<HashedStyle> cached_;
+};
 
 } // namespace
 
@@ -513,6 +526,7 @@ struct SelectedColumns final {
 
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   std::uint64_t row_hash = hash_initial;
+  RenderedCellHasher cell_hasher;
   const auto selection = selected_columns(row_iterator);
   if (!selection.has_value()) {
     return std::unexpected(selection.error());
@@ -563,7 +577,7 @@ struct SelectedColumns final {
       return std::unexpected(detail::map_error(result));
     }
     const auto bytes = std::span(grapheme).first(grapheme_buffer.len);
-    row_hash = hash_u64(row_hash, rendered_cell_hash(*style, wide, bytes));
+    row_hash = hash_u64(row_hash, cell_hasher.hash(*style, wide, bytes));
     ++cell_count;
   }
   LEMMA_ASSERT(cell_count == options.size.columns);
@@ -632,6 +646,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
 
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   std::uint64_t row_hash = hash_initial;
+  RenderedCellHasher cell_hasher;
   AnsiStyle active_style{};
   bool active_style_valid = false;
   bool span_started = false;
@@ -692,7 +707,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     }
 
     const auto grapheme_bytes = std::span(grapheme).first(grapheme_buffer.len);
-    const auto cell_hash = rendered_cell_hash(*style, wide, grapheme_bytes);
+    const auto cell_hash = cell_hasher.hash(*style, wide, grapheme_bytes);
     row_hash = hash_u64(row_hash, cell_hash);
     const auto physical_index = (row_index * options.size.columns) + cell_count;
     LEMMA_ASSERT(physical_index < physical_cell_count);

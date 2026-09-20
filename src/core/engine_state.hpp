@@ -17,6 +17,10 @@
 #include "render/frame_buffer.hpp"
 #include "render/pane_composition.hpp"
 
+#ifdef LEMMA_ENABLE_LATENCY_TRACE
+#include "diagnostic/latency_trace.hpp"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>

@@ -1,3 +1,5 @@
+#include "diagnostic/latency_trace.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -883,7 +885,13 @@ void stop_child(const int descriptor, const pid_t child) noexcept {
     OuterTextDecoder decoder;
     decoder.append({encoded_outer.data(), encoded_outer.size()}, decoded_outer);
     const auto maximum_repetition_window = open_loop_send_window(10'000U, 8'333'000U);
-    return first == "__LEMMA_OUTPUT_0000_AAAAAA__" && last == "__LEMMA_OUTPUT_9999_YYYYJP__" &&
+    const auto first_token =
+        lemma::diagnostic::latency_trace_marker_token(std::as_bytes(std::span(first)));
+    const auto last_token =
+        lemma::diagnostic::latency_trace_marker_token(std::as_bytes(std::span(last)));
+    return first_token != 0 && last_token != 0 && first_token != last_token &&
+                   first == "__LEMMA_OUTPUT_0000_AAAAAA__" &&
+                   last == "__LEMMA_OUTPUT_9999_YYYYJP__" &&
                    generated_profile == "__LEMMA_P2_IDLE_0000_ZZZUCE__" &&
                    interaction_marker("OUTPUT", "OUT", 0).empty() &&
                    decoded_outer == "__LEMMA_OUTPUT_DONE__" &&

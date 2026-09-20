@@ -192,6 +192,26 @@ TEST(TerminalRenderRegressionTest, AnsiProjectionPreservesIndexedExplicitAndDefa
   EXPECT_THAT(ansi, testing::HasSubstr("\x1B]112\x1B\\"));
 }
 
+TEST(TerminalRenderRegressionTest, RepaintsRepeatedGlyphRunsWhenOnlyTheirStylesChange) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 16, .rows = 2};
+  auto terminal = make_terminal(options);
+  std::array<std::byte, std::size_t{16} * 1'024U> output{};
+  write_terminal(terminal, "\x1B[31mxxxx\x1B[32mxxxx\x1B[31mxxxx");
+  ASSERT_TRUE(terminal.render_ansi(output, true).has_value());
+
+  write_terminal(terminal, "\x1B[H\x1B[32mxxxx\x1B[31mxxxx\x1B[32mxxxx");
+  const auto changed = terminal.render_ansi(output);
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_EQ(changed->rows, 1U);
+  const auto ansi = output_text(std::span(output).first(changed->bytes));
+  EXPECT_THAT(ansi, testing::HasSubstr("\x1B[0;38;5;2mxxxx\x1B[0;38;5;1mxxxx\x1B[0;38;5;2mxxxx"));
+
+  const auto unchanged = terminal.render_ansi(output);
+  ASSERT_TRUE(unchanged.has_value());
+  EXPECT_EQ(unchanged->rows, 0U);
+}
+
 TEST(TerminalRenderRegressionTest, ProjectsUnqueriedExtendedPaletteEntriesAsRgb) {
   auto theme = vt::default_theme();
   theme.palette.at(200) = {.red = 10, .green = 20, .blue = 30};
