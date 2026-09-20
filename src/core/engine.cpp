@@ -380,7 +380,9 @@ drain_pty(const int pty, vt::Terminal& terminal, PresentationGate& presentation_
           [[maybe_unused]] diagnostic::LatencyTraceMarkerMatcher* const trace_matcher) noexcept
     -> PtyDrainResult {
   constexpr std::size_t reads_per_turn_max = 4;
-  std::array<std::byte, std::size_t{64} * 1'024U> output{};
+  // read() initializes the returned prefix; no consumer observes the unused capacity.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  std::array<std::byte, std::size_t{64} * 1'024U> output;
   PtyDrainResult drain{};
   bool capture_damage = capture_interactive_damage;
   for (std::size_t read_count = 0; read_count < reads_per_turn_max && global_budget > 0;
@@ -10113,7 +10115,9 @@ void run_due_scrollback_compression(Sessions& sessions, PaneRuntimeStore& runtim
                                     std::size_t& cursor) noexcept {
   constexpr std::size_t steps_per_turn_max = 8;
   const auto now = reactor_now();
-  std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> due{};
+  // Populate before incrementing count; only that prefix is visited, never unused slots.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+  std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> due;
   std::size_t count = 0;
   for (auto& session : sessions) {
     if (session == nullptr || !session->active) {
@@ -10854,7 +10858,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     // Writes are attempted only from retained queue bytes and are bounded both per pane and across
     // this turn. A hard descriptor error retires the pane; EAGAIN leaves all bytes queued.
     std::size_t pty_write_budget = std::size_t{1} * 1'024U * 1'024U;
-    std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes{};
+    // Only fully assigned entries below writable_pane_count are consumed.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+    std::array<PaneRuntime*, static_cast<std::size_t>(limits::panes_hard_max)> writable_panes;
     std::size_t writable_pane_count = 0;
     for (auto& session : sessions) {
       if (session == nullptr || !session->active) {
