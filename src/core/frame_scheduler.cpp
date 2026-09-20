@@ -1,5 +1,7 @@
 #include "core/frame_scheduler.hpp"
+#include "lemma/id.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 
@@ -40,11 +42,24 @@ void InteractiveDamageLatch::reset() noexcept {
 }
 
 void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, const TimePoint now,
-                             const FrameSinkState sink) noexcept {
+                             const FrameSinkState sink, const PaneId source) noexcept {
   if (sink == FrameSinkState::unavailable) {
     return;
   }
-  const auto candidate = urgency == FrameUrgency::burst ? burst_deadline(now) : now;
+  auto candidate = urgency == FrameUrgency::burst ? burst_deadline(now) : now;
+  if (urgency == FrameUrgency::interactive && source.is_valid()) {
+    // The input latch can be consumed by unrelated output already in this PTY. Coalesce its
+    // following response at one fixed short deadline without accelerating sibling Panes.
+    // Keep burst history, and do not arm a timer unless more damage actually arrives.
+    interactive_followup_ =
+        InteractiveFollowup{.source = source, .deadline = now + interactive_followup_delay};
+  } else if (urgency == FrameUrgency::burst && interactive_followup_.has_value()) {
+    if (now > interactive_followup_->deadline) {
+      interactive_followup_.reset();
+    } else if (source == interactive_followup_->source) {
+      candidate = std::min(candidate, interactive_followup_->deadline);
+    }
+  }
   if (!pending_ || candidate < deadline_) {
     deadline_ = candidate;
   }
@@ -77,7 +92,12 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
 
 [[nodiscard]] auto FrameScheduler::urgency() const noexcept -> FrameUrgency { return urgency_; }
 
-void FrameScheduler::complete() noexcept { clear_pending(); }
+void FrameScheduler::complete() noexcept {
+  if (interactive_followup_.has_value() && deadline_ == interactive_followup_->deadline) {
+    interactive_followup_.reset();
+  }
+  clear_pending();
+}
 
 void FrameScheduler::cancel() noexcept { reset(); }
 
@@ -102,6 +122,7 @@ void FrameScheduler::reset() noexcept {
   clear_pending();
   burst_started_at_ = {};
   last_burst_request_at_ = {};
+  interactive_followup_.reset();
   tracking_burst_ = false;
 }
 

@@ -279,6 +279,11 @@ struct CommandBinding final {
   CommandContextDisposition context{CommandContextDisposition::retain};
 };
 
+struct HostedCommandBinding final {
+  std::uint8_t index{0};
+  CommandContextDisposition context{CommandContextDisposition::retain};
+};
+
 struct PushContextBinding final {
   InputContextId context;
   std::array<std::byte, deferred_input_bytes_max> deferred{};
@@ -293,7 +298,7 @@ struct EncodeAsBinding final {
 };
 
 using BindingAction = std::variant<CommandBinding, PushContextBinding, PopContextBinding,
-                                   ForwardDeferredBinding, EncodeAsBinding>;
+                                   ForwardDeferredBinding, EncodeAsBinding, HostedCommandBinding>;
 
 enum class InputMapError : std::uint8_t {
   capacity,
@@ -402,6 +407,10 @@ struct RoutedCommand final {
   InputCommand command{InputCommand::detach};
 };
 
+struct RoutedHostedCommand final {
+  std::uint8_t index{0};
+};
+
 struct ForwardLegacyInput final {
   std::array<std::byte, deferred_input_bytes_max> prefix{};
   std::uint8_t prefix_size{0};
@@ -422,9 +431,10 @@ struct EncodeAsKey final {
   std::uint16_t modifiers{0};
 };
 
-using LegacyRouteEffect = std::variant<ConsumedInput, RoutedCommand, ForwardLegacyInput>;
+using LegacyRouteEffect =
+    std::variant<ConsumedInput, RoutedCommand, ForwardLegacyInput, RoutedHostedCommand>;
 using KeyRouteEffect = std::variant<ConsumedInput, RoutedCommand, ForwardCurrentKey, ForwardBytes,
-                                    ForwardBytesThenCurrentKey, EncodeAsKey>;
+                                    ForwardBytesThenCurrentKey, EncodeAsKey, RoutedHostedCommand>;
 
 struct LegacyRouteResult final {
   LegacyRouteEffect effect;
@@ -522,6 +532,7 @@ enum class ConfiguredBindingKind : std::uint8_t {
   pop_context,
   replay_deferred,
   send_key,
+  hosted_command,
 };
 
 struct ConfiguredBindingAction final {
@@ -532,6 +543,7 @@ struct ConfiguredBindingAction final {
   PhysicalKey encoded_key{PhysicalKey::unidentified};
   std::uint16_t encoded_modifiers{0};
   bool defer_chord{false};
+  std::uint8_t hosted_command{0};
 };
 
 struct ConfiguredBinding final {

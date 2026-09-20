@@ -11,6 +11,31 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
 
+    def test_short_pty_read_does_not_replay_the_previous_read_tail(self) -> None:
+        release = self.server.root / "short-read.gate"
+        finish = self.server.root / "short-read-finish.gate"
+        script = (
+            "printf '%16000s' x; "
+            "printf '\\033[2J\\033[H__LONG_READ_READY__'; "
+            f"while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done; "
+            "printf '\\033[2J\\033[H__SHORT_READ__'; "
+            f"while [ ! -e {shlex.quote(str(finish))} ]; do sleep 0.01; done"
+        )
+        session = self.server.create_session(
+            "short_pty_read", command=("/bin/sh", "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("__LONG_READ_READY__")
+
+        release.touch()
+        client.expect_output("__SHORT_READ__")
+        client.drain()
+        screen = client.screen_text()
+        self.assertIn("__SHORT_READ__", screen)
+        self.assertNotIn("__LONG_READ_READY__", screen)
+        session.pane().expect_alive()
+        finish.touch()
+
     def test_application_cursor_mode_changes_bytes_delivered_to_child(self) -> None:
         session = self.server.create_session("application_cursor")
         pane = session.pane()

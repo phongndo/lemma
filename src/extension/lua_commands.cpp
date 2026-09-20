@@ -2,6 +2,8 @@
 
 #include "api/json.hpp"
 #include "extension/commands.hpp"
+#include "extension/external_command.hpp"
+#include "lemma/limits.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <poll.h>
 
@@ -22,6 +25,9 @@ extern "C" {
 
 namespace lemma::extension {
 namespace {
+
+[[nodiscard]] auto from_lua(lua_State* state, int index, std::size_t depth, std::size_t& nodes,
+                            std::size_t& bytes) -> std::optional<api::JsonValue>;
 
 // The branches validate the closed registration grammar before retaining the callback.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -48,7 +54,8 @@ namespace {
     }
     const auto* const key = lua_tolstring(state, -2, &size);
     const std::string_view option(key, size);
-    if (option != "description" && option != "timeout_ms" && option != "handler") {
+    if (option != "description" && option != "timeout_ms" && option != "handler" &&
+        option != "argv") {
       return "unknown command option";
     }
     lua_pop(state, 1);
@@ -72,14 +79,42 @@ namespace {
     return "command timeout_ms must be between 1 and 600000";
   }
   lua_getfield(state, 2, "handler");
-  if (lua_type(state, -1) != LUA_TFUNCTION) {
-    return "command handler must be a function";
+  const auto handler_type = lua_type(state, -1);
+  lua_getfield(state, 2, "argv");
+  const auto argv_type = lua_type(state, -1);
+  const bool lua_handler = handler_type == LUA_TFUNCTION && argv_type == LUA_TNIL;
+  const bool external_program = handler_type == LUA_TNIL && argv_type == LUA_TTABLE;
+  if (!lua_handler && !external_program) {
+    return "command requires exactly one handler function or argv array";
   }
+  std::vector<std::string> program;
+  if (argv_type == LUA_TTABLE) {
+    std::size_t nodes = 0;
+    std::size_t bytes = 0;
+    const auto argv = from_lua(state, -1, 0, nodes, bytes);
+    if (!argv.has_value() || argv->kind != api::JsonKind::array || argv->array.empty() ||
+        argv->array.size() > limits::command_arguments_hard_max ||
+        bytes + argv->array.size() > limits::command_bytes_hard_max) {
+      return "command argv must be a nonempty bounded string array";
+    }
+    for (const auto& argument : argv->array) {
+      if (argument.kind != api::JsonKind::string || argument.string.contains('\0')) {
+        return "command argv must contain strings without NUL bytes";
+      }
+      program.push_back(argument.string);
+    }
+    if (program.front().empty()) {
+      return "command argv executable must not be empty";
+    }
+  }
+  lua_pop(state, 1);
   // No Lua error is raised while a C++ owning value is live in this helper.
   commands.descriptors.push_back({.name = std::string(name),
                                   .description = std::string(description),
                                   .timeout_ms = static_cast<std::uint32_t>(timeout)});
-  commands.callbacks.at(commands.descriptors.size() - 1U) = luaL_ref(state, LUA_REGISTRYINDEX);
+  const auto index = commands.descriptors.size() - 1U;
+  commands.programs.at(index) = std::move(program);
+  commands.callbacks.at(index) = luaL_ref(state, LUA_REGISTRYINDEX);
   return nullptr;
 }
 
@@ -223,6 +258,7 @@ struct Callback final {
   lua_State* thread{nullptr};
   std::uint64_t invocation{0};
   int reference{LUA_NOREF};
+  std::optional<ExternalCommand> external;
 };
 
 void release_callback(lua_State* const state, Callback& callback) noexcept {
@@ -277,20 +313,56 @@ void instruction_limit(lua_State* const state, [[maybe_unused]] lua_Debug* const
   return sent;
 }
 
+[[nodiscard]] auto start_external_callback(lua_State* const state, Callback& callback,
+                                           std::vector<std::string> arguments,
+                                           const CommandMessage& message, CommandChannel& channel)
+    -> bool {
+  const auto* const args = api::json_member(message.payload, "args");
+  if (args == nullptr || args->kind != api::JsonKind::array) {
+    return false;
+  }
+  for (const auto& argument : args->array) {
+    if (argument.kind != api::JsonKind::string) {
+      return false;
+    }
+    arguments.push_back(argument.string);
+  }
+  std::string context;
+  if (!api::append_json_value(context, message.payload)) {
+    return false;
+  }
+  callback.external.emplace();
+  callback.invocation = message.invocation;
+  if (!callback.external->start(arguments, context)) {
+    release_callback(state, callback);
+    return channel.send("complete", message.invocation,
+                        R"({"ok":false,"error":"external command launch failed"})");
+  }
+  return true;
+}
+
 [[nodiscard]] auto handle_message(lua_State* const state, LuaCommands& commands,
                                   std::array<Callback, invocations_max>& callbacks,
                                   const CommandMessage& message, CommandChannel& channel) -> bool {
   auto* slot = std::ranges::find_if(
       callbacks, [&](const auto& callback) { return callback.invocation == message.invocation; });
   if (message.kind == "cancel") {
-    if (slot != callbacks.end()) {
-      release_callback(state, *slot);
+    if (slot == callbacks.end()) {
+      return channel.send("complete", message.invocation, R"({"ok":true})");
     }
+    if (slot->external.has_value()) {
+      slot->external->cancel();
+      return true; // Retain invocation capacity until the child has actually exited.
+    }
+    release_callback(state, *slot);
     return channel.send("complete", message.invocation, R"({"ok":true})");
   }
   if (message.kind == "result") {
     if (slot == callbacks.end()) {
       return true;
+    }
+    if (slot->thread == nullptr) {
+      return false;
     }
     to_lua(slot->thread, message.payload);
     return resume_callback(state, *slot, 1, channel);
@@ -306,6 +378,10 @@ void instruction_limit(lua_State* const state, [[maybe_unused]] lua_Debug* const
                               [](const auto& callback) { return callback.invocation == 0; });
   if (command == commands.descriptors.end() || slot == callbacks.end()) {
     return false;
+  }
+  const auto index = static_cast<std::size_t>(command - commands.descriptors.begin());
+  if (!commands.programs.at(index).empty()) {
+    return start_external_callback(state, *slot, commands.programs.at(index), message, channel);
   }
   slot->thread = lua_newthread(state);
   slot->reference = luaL_ref(state, LUA_REGISTRYINDEX);
@@ -328,7 +404,8 @@ void install_commands(lua_State* const state, LuaCommands& commands) {
   constexpr auto wrapper = R"lua(
 local yield, type, error = coroutine.yield, type, error
 return function(handler, payload)
-  local ctx = { session = payload.session, tab = payload.tab, pane = payload.pane }
+  local ctx = { session = payload.session, tab = payload.tab, pane = payload.pane,
+                connection = payload.connection, endpoint = payload.endpoint }
   function ctx:proc(document)
     if type(document) ~= "table" then error("ctx:proc requires a Proc table") end
     if document.schema == nil then document.schema = "lemma.proc/v1" end
@@ -352,8 +429,21 @@ auto run_commands(lua_State* const state, LuaCommands& commands, const int descr
   std::array<Callback, invocations_max> callbacks{};
   try {
     while (channel.descriptor() >= 0) {
-      pollfd ready{.fd = channel.descriptor(), .events = channel.events(), .revents = 0};
-      const auto polled = ::poll(&ready, 1, channel.buffered() ? 0 : -1);
+      std::array<pollfd, invocations_max + 1U> descriptors{};
+      descriptors.front() = {.fd = channel.descriptor(), .events = channel.events(), .revents = 0};
+      int timeout = -1;
+      for (std::size_t index = 0; index < callbacks.size(); ++index) {
+        const auto& external = callbacks.at(index).external;
+        descriptors.at(index + 1U) = {.fd = external.has_value() ? external->descriptor() : -1,
+                                      .events = POLLIN,
+                                      .revents = 0};
+        if (external.has_value() && external->reaping()) {
+          timeout = 20;
+        }
+      }
+      const auto polled =
+          ::poll(descriptors.data(), descriptors.size(), channel.buffered() ? 0 : timeout);
+      const auto ready = descriptors.front();
       if (polled < 0 && errno == EINTR) {
         continue;
       }
@@ -366,6 +456,19 @@ auto run_commands(lua_State* const state, LuaCommands& commands, const int descr
       if (auto message = channel.receive();
           message.has_value() && !handle_message(state, commands, callbacks, *message, channel)) {
         return 1;
+      }
+      for (std::size_t index = 0; index < callbacks.size(); ++index) {
+        auto& callback = callbacks.at(index);
+        if (!callback.external.has_value()) {
+          continue;
+        }
+        if (const auto result = callback.external->service(descriptors.at(index + 1U).revents);
+            result.has_value()) {
+          if (!channel.send("complete", callback.invocation, *result)) {
+            return 1;
+          }
+          release_callback(state, callback);
+        }
       }
       if ((ready.revents & POLLOUT) != 0) {
         channel.write_ready();

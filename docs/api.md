@@ -71,6 +71,31 @@ an optional `phase` of `press`, `repeat`, or `release`; it defaults to `press`. 
 bounded visible, recent, or last-command projection. `pane.wait` is a finite Command;
 without a condition it waits for child-process completion.
 
+## Switching an Attachment
+
+`attachment.switch` transfers the one connected controller identified by `connection` to the selected
+`session`. It is a JSON Command (use a Proc document; there is no dedicated CLI shorthand):
+
+```json
+{"command":"attachment.switch","connection":"0:3","session":{"id":"1:2"}}
+```
+
+Configured commands receive `connection` in their [captured invocation context](configuration.md#custom-commands).
+It identifies a connection lifetime, not a Session name or OS PID. IDs are invalidated by detach and
+transfer, and cannot address a replacement after Session slot reuse. Use the returned `connection`
+after a successful transfer; switching to the same Session returns `no_effect` and the unchanged ID.
+
+The operation never steals another controller. An attached or reserved target returns `conflict`
+with reason `target_attached`; a stale source connection returns `stale` with reason
+`stale_connection`. Pending source frame or clipboard output returns retryable `conflict` with
+reason `output_pending`, without transferring anything. Retry that Command after output progresses,
+not an already-executed Proc prefix. `if_session_revision` checks the destination Session.
+
+Native code performs geometry, theme, connection, and input handoff through the same transition used
+by the native Session switcher. Tab and Pane selection compose as preceding `tab.select` and
+`pane.focus` Commands. As always, a Proc is ordered, not atomic. Switching cancels invocations tied
+to the old connection; an invocation performing its own switch may exit before consuming its result.
+
 ## Multi-Command Procs
 
 A Proc contains at most 64 Commands. This [runnable job](../examples/job.json) starts a held Pane,
@@ -83,7 +108,7 @@ keeps capture and cleanup reachable after an unexpected exit or timeout; still i
   "on_error": "continue",
   "commands": [
     {"id":"job", "command":"session.start", "name":"example-job",
-     "hold":true, "argv":["/bin/echo", "hello from Lemma"]},
+     "hold":true, "argv":["echo", "hello from Lemma"]},
     {"command":"pane.wait", "pane":{"result":"job"},
      "exit_code":0, "timeout_ms":5000},
     {"command":"pane.capture", "pane":{"result":"job"},

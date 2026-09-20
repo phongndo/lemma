@@ -180,7 +180,8 @@ add_library(
 lemma_internal_target(lemma_extension_contract)
 target_link_libraries(lemma_extension_contract PRIVATE lemma_api lemma_platform)
 
-add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp)
+add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp
+  src/extension/external_command.cpp)
 lemma_internal_target(lemma_extension)
 target_link_libraries(
   lemma_extension PRIVATE lemma_base lemma_config lemma_extension_contract lemma_input lemma_platform ${LEMMA_LUA_TARGET}
@@ -280,7 +281,7 @@ if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
 
   add_executable(lemma_benchmark_probe benchmarks/process_probe.cpp)
-  target_link_libraries(lemma_benchmark_probe PRIVATE lemma_warnings)
+  target_link_libraries(lemma_benchmark_probe PRIVATE lemma_warnings lemma_diagnostic)
 endif()
 
 if(LEMMA_BUILD_TESTS)

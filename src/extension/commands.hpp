@@ -3,6 +3,7 @@
 
 #include "api/json.hpp"
 #include "lemma/id.hpp"
+#include "lemma/limits.hpp"
 
 #include <array>
 #include <chrono>
@@ -16,7 +17,7 @@
 
 namespace lemma::extension {
 
-inline constexpr std::size_t commands_max = 64;
+inline constexpr std::size_t commands_max = limits::hosted_commands_hard_max;
 inline constexpr std::size_t invocations_max = 8;
 inline constexpr std::size_t command_name_bytes_max = 64;
 inline constexpr std::size_t command_description_bytes_max = 256;
@@ -90,7 +91,7 @@ using StopHost = void (*)(void*) noexcept;
 class CommandRuntime final {
 public:
   CommandRuntime(int descriptor, std::span<const CommandDescriptor> commands, StopHost stop,
-                 void* context) noexcept;
+                 void* context, int listener = -1) noexcept;
   [[nodiscard]] auto channel() noexcept -> CommandChannel& { return channel_; }
   [[nodiscard]] auto commands() const noexcept -> std::span<const CommandDescriptor>;
   [[nodiscard]] auto invocations() const noexcept -> std::span<const Invocation> { return slots_; }
@@ -112,6 +113,7 @@ private:
   std::uint64_t next_id_{0};
   StopHost stop_;
   void* stop_context_;
+  int listener_;
 };
 
 } // namespace lemma::extension

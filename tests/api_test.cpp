@@ -311,6 +311,36 @@ TEST(ApiTest, DecodesIntrospectionInputCaptureAndFocusPolicies) {
   EXPECT_EQ(daemon.command->kind, CommandKind::daemon_inspect);
 }
 
+// GTest assertions expand into branches; cases cover the closed selector grammar.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ApiTest, DecodesAndEncodesAttachmentSwitch) {
+  const auto document = parse_json(R"({"command":"attachment.switch","connection":"2:7",
+    "session":{"id":"3:8"},"if_session_revision":9})");
+  ASSERT_TRUE(document.value.has_value());
+  const auto decoded = decode_command(*document.value);
+  ASSERT_TRUE(decoded.command.has_value()) << decoded.error.reason;
+  EXPECT_EQ(decoded.command->kind, CommandKind::attachment_switch);
+  EXPECT_EQ(decoded.command->connection, ConnectionId::from_parts(2, 7));
+  const auto encoded = encode_command(*decoded.command);
+  ASSERT_TRUE(encoded.has_value());
+  const auto parsed = parse_json(*encoded);
+  ASSERT_TRUE(parsed.value.has_value());
+  const auto round_trip = decode_command(*parsed.value);
+  ASSERT_TRUE(round_trip.command.has_value());
+  EXPECT_EQ(round_trip.command->connection, decoded.command->connection);
+  EXPECT_EQ(round_trip.command->session.id, decoded.command->session.id);
+  for (
+      const auto* const invalid :
+      {R"({"command":"attachment.switch","session":{"name":"target"}})",
+       R"({"command":"attachment.switch","connection":"0:0","session":{"name":"target"}})",
+       R"({"command":"attachment.switch","connection":"0:1"})",
+       R"({"command":"attachment.switch","connection":"0:1","session":{"name":"target"},"steal":true})"}) {
+    const auto value = parse_json(invalid);
+    ASSERT_TRUE(value.value.has_value());
+    EXPECT_FALSE(decode_command(*value.value).command.has_value()) << invalid;
+  }
+}
+
 TEST(ApiTest, DecodesAndEncodesSurfaceLifecycleCommands) {
   const auto create_document = parse_json(R"({
     "command":"surface.create",

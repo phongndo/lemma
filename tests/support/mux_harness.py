@@ -244,7 +244,7 @@ class LemmaServer:
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(config),
             "ZDOTDIR": str(zdot),
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": os.environ.get("PATH", os.defpath),
             "TERM": "xterm-256color",
             "LANG": "C",
             "LC_ALL": "C",

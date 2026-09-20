@@ -73,7 +73,7 @@ volatile sig_atomic_t child_exit_wakeup_descriptor = -1;
 
 class ChildExitReaper final {
 public:
-  ChildExitReaper() noexcept {
+  explicit ChildExitReaper(extension::HostProcess* const host) noexcept : host_(host) {
     std::array<int, 2> created{};
     if (::pipe(created.data()) != 0) {
       return;
@@ -103,6 +103,28 @@ public:
   [[nodiscard]] auto read_descriptor() const noexcept -> int { return read_descriptor_; }
   [[nodiscard]] auto write_descriptor() const noexcept -> int { return write_descriptor_; }
 
+  [[nodiscard]] auto reap_process(int& status) const noexcept -> pid_t {
+    if (host_ == nullptr || !host_->active()) {
+      return ::waitpid(-1, &status, WNOHANG);
+    }
+    // Select without consuming an exit. A generic waitpid(-1) after checking a live host would
+    // race its exit and could release its process-group identity before revocation.
+    siginfo_t information{};
+    if (::waitid(P_ALL, 0, &information, WEXITED | WNOHANG | WNOWAIT) != 0) {
+      return -1;
+    }
+    if (information.si_pid == 0) {
+      return 0;
+    }
+    host_->reap_exited();
+    const auto process = ::waitpid(information.si_pid, &status, WNOHANG);
+    if (process < 0 && errno == ECHILD && !host_->active()) {
+      // The selected child was the host, consumed by its owner after revoking the group.
+      return ::waitpid(-1, &status, WNOHANG);
+    }
+    return process;
+  }
+
   void drain_wakeup() const noexcept {
     std::array<std::byte, 64> bytes{};
     while (true) {
@@ -118,6 +140,7 @@ public:
   }
 
 private:
+  extension::HostProcess* host_;
   int read_descriptor_{-1};
   int write_descriptor_{-1};
 };
@@ -144,7 +167,7 @@ void record_child_exit([[maybe_unused]] const int signal_number) noexcept {
   child_exit_pending = 0;
   reaper.drain_wakeup();
   int status = 0;
-  const auto process = ::waitpid(-1, &status, WNOHANG);
+  const auto process = reaper.reap_process(status);
   if (process > 0) {
     child_exit_pending = 1;
     return core::ChildExit{.process = static_cast<int>(process), .status = status};
@@ -433,7 +456,8 @@ void release_owned_endpoint(void* const context) noexcept {
     }
     static_cast<void>(write_text(STDERR_FILENO, "\n"));
   }
-  ChildExitReaper child_reaper;
+  ChildExitReaper child_reaper(configured_runtime.host.active() ? &configured_runtime.host
+                                                                : nullptr);
   struct sigaction child_action{};
   child_action.sa_handler = &record_child_exit;
   if (!child_reaper.valid() || sigemptyset(&child_action.sa_mask) != 0 ||

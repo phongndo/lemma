@@ -11,12 +11,29 @@
     { "$ref": "#/$defs/extensionHello" },
     { "$ref": "#/$defs/extensionWelcome" },
     { "$ref": "#/$defs/surfaceUpdate" },
-    { "$ref": "#/$defs/extensionError" }
+    { "$ref": "#/$defs/extensionError" },
+    { "$ref": "#/$defs/commandContext" }
   ],
   "$defs": {
     "id": {
       "type": "string",
       "pattern": "^[0-9]+:[1-9][0-9]*$"
+    },
+    "commandContext": {
+      "title": "Captured external command invocation v1",
+      "type": "object",
+      "required": ["schema", "command", "endpoint", "session", "tab", "pane", "connection", "args"],
+      "properties": {
+        "schema": { "const": "lemma.command-context/v1" },
+        "command": { "type": "string", "maxLength": 64 },
+        "endpoint": { "type": "string", "pattern": "^/" },
+        "session": { "$ref": "#/$defs/id" },
+        "tab": { "$ref": "#/$defs/id" },
+        "pane": { "$ref": "#/$defs/id" },
+        "connection": { "$ref": "#/$defs/id" },
+        "args": { "type": "array", "maxItems": 256, "items": { "type": "string" } }
+      },
+      "additionalProperties": false
     },
     "sessionSelector": {
       "type": "object",
@@ -513,6 +530,7 @@
         "tab": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
         "surface": { "$ref": "#/$defs/id" },
+        "connection": { "$ref": "#/$defs/id" },
         "terminal_generation": { "type": "integer", "minimum": 1 },
         "condition": { "enum": ["process-exit", "exit-code", "signal", "contains", "prompt"] },
         "process": { "$ref": "#/$defs/eventProcess" },
@@ -560,6 +578,17 @@
           "type": "object",
           "required": ["command"],
           "properties": { "command": { "enum": ["daemon.inspect", "session.list"] } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["command", "connection", "session"],
+          "properties": {
+            "command": { "const": "attachment.switch" },
+            "connection": { "$ref": "#/$defs/id" },
+            "session": { "$ref": "#/$defs/procSessionSelector" },
+            "if_session_revision": { "type": "integer", "minimum": 1 }
+          },
           "additionalProperties": false
         },
         {

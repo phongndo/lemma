@@ -53,7 +53,7 @@ or semantic Attachment. Stable IDs cross boundaries; borrowed references remain 
 | `lemma_input` | Compiled physical keymaps and per-Attachment routing contexts |
 | `lemma_config` | Configuration values, validation, and native generation compilation |
 | `lemma_extension_contract` | Lua command declarations and language-neutral extension protocol |
-| `lemma_extension` | Isolated Lua host, coroutine callbacks, and configuration admission |
+| `lemma_extension` | Isolated command host, Lua callbacks, external children, and configuration admission |
 | `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input, resize, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
@@ -107,7 +107,13 @@ The daemon borrows one immutable compiled configuration generation. Shipped and 
 policies compile through the same path: Core owns semantic commands; configuration chooses their keys
 and routing transitions. Ordinary input, PTY processing, and composition never call into Lua.
 
-Explicit hosted commands communicate asynchronously with the isolated host. Callbacks yield Procs
+Keybindings compile hosted names to bounded command indices. Routing captures invocation context and
+queues at most one invocation per Attachment; host service, not the input stack, launches it. The
+isolated host runs either a Lua coroutine or an argv-declared external child with bounded diagnostics.
+External children present UI through the ordinary extension endpoint and remain invocation-scoped.
+Connection generations are owned by the daemon's Session store, surviving Session slot reuse.
+
+Explicit hosted commands communicate asynchronously with the isolated host. Lua callbacks yield Procs
 through `ctx:proc`; those use ordinary validation, admission, and round-robin execution. Their typed
 completion owner is the originating attachment generation, revoked on detach or Session switch.
 Cancellation keeps the invocation slot and deadline until acknowledgement so a blocked callback cannot

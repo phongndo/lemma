@@ -194,6 +194,34 @@ lemma.command.register("project.open", {
   EXPECT_EQ(loaded.commands.front().timeout_ms, 1234);
 }
 
+TEST(ConfigurationHostTest, BindsBothCommandKindsToLegacyAndStructuredInput) {
+  TemporaryConfig file(R"(
+local lemma = require('lemma')
+lemma.command.register('test.lua', {description='Lua', handler=function() end})
+lemma.command.register('test.external', {description='External', argv={'cat', 'literal argument'}})
+lemma.keymap.set('normal', 'l', 'test.lua')
+lemma.keymap.set('normal', 'M-Left', 'test.external')
+)");
+  auto loaded = extension::load_configuration(file.path());
+  ASSERT_EQ(loaded.status, extension::ConfigurationStatus::loaded) << loaded.diagnostic;
+  ASSERT_EQ(loaded.commands.size(), 2U);
+  input::InputRouter router(loaded.generation->input_map());
+  constexpr std::array bytes{std::byte{'l'}};
+  const auto legacy = router.route_legacy(bytes, bytes.size());
+  ASSERT_TRUE(std::holds_alternative<input::RoutedHostedCommand>(legacy.effect));
+  EXPECT_EQ(std::get<input::RoutedHostedCommand>(legacy.effect).index, 0U);
+  input::KeyEvent key{.action = input::KeyAction::press,
+                      .key = input::PhysicalKey::arrow_left,
+                      .modifiers = input::key_modifier_alt,
+                      .unshifted_codepoint = 0,
+                      .text = {}};
+  const auto structured = router.route_key(key);
+  ASSERT_TRUE(std::holds_alternative<input::RoutedHostedCommand>(structured.effect));
+  EXPECT_EQ(std::get<input::RoutedHostedCommand>(structured.effect).index, 1U);
+  key.action = input::KeyAction::release;
+  EXPECT_TRUE(std::holds_alternative<input::ConsumedInput>(router.route_key(key).effect));
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(ConfigurationHostTest, RejectsDuplicateOrInvalidCommandsWithoutPublishingConfiguration) {
   for (const auto* const declaration :
@@ -201,6 +229,12 @@ TEST(ConfigurationHostTest, RejectsDuplicateOrInvalidCommandsWithoutPublishingCo
         "lemma.command.register('test.bad', {description='bad', timeout_ms=0, handler=function() "
         "end})",
         "lemma.command.register('test.bad', {description='bad', handler=42})",
+        "lemma.command.register('test.bad', {description='bad', argv={}})",
+        "lemma.command.register('test.bad', {description='bad', argv={'cat', 42}})",
+        "lemma.command.register('test.bad', {description='bad', argv={''}})",
+        "lemma.command.register('test.bad', {description='bad', argv={'cat'}, handler=function() "
+        "end})",
+        "lemma.keymap.set('normal', 'x', 'test.undeclared')",
         "lemma.command.register('test.bad', {description='bad', extra=true, handler=function() "
         "end})",
         "for i=1,2 do lemma.command.register('test.bad', {description='bad', handler=function() "

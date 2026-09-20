@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace lemma::extension {
@@ -249,8 +250,10 @@ auto CommandChannel::send(const std::string_view kind, const std::uint64_t invoc
 
 CommandRuntime::CommandRuntime(const int descriptor,
                                const std::span<const CommandDescriptor> commands,
-                               const StopHost stop, void* const context) noexcept
-    : channel_(descriptor), commands_(commands), stop_(stop), stop_context_(context) {}
+                               const StopHost stop, void* const context,
+                               const int listener) noexcept
+    : channel_(descriptor), commands_(commands), stop_(stop), stop_context_(context),
+      listener_(listener) {}
 
 auto CommandRuntime::commands() const noexcept -> std::span<const CommandDescriptor> {
   return channel_.descriptor() >= 0 ? commands_ : std::span<const CommandDescriptor>{};
@@ -279,12 +282,29 @@ auto CommandRuntime::start(const std::string_view command,
     return false;
   }
   try {
-    std::string payload = R"({"command":)";
+    std::string payload = R"({"schema":"lemma.command-context/v1","command":)";
     if (!api::append_json_string(payload, command)) {
       return false;
     }
+    sockaddr_un address{};
+    socklen_t address_size = sizeof(address);
+    std::string_view endpoint;
+    // POSIX sockets expose their family-specific address through sockaddr.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* const socket_address = reinterpret_cast<sockaddr*>(&address);
+    if (listener_ >= 0 && ::getsockname(listener_, socket_address, &address_size) == 0 &&
+        address.sun_family == AF_UNIX) {
+      const auto path = std::span(address.sun_path);
+      endpoint = {path.data(),
+                  static_cast<std::size_t>(std::ranges::find(path, '\0') - path.begin())};
+    }
+    payload += R"(,"endpoint":)";
+    if (!api::append_json_string(payload, endpoint)) {
+      return false;
+    }
     payload += R"(,"session":")" + id_text(context.session) + R"(","tab":")" +
-               id_text(context.tab) + R"(","pane":")" + id_text(context.pane) + R"(","args":[)";
+               id_text(context.tab) + R"(","pane":")" + id_text(context.pane) +
+               R"(","connection":")" + id_text(context.connection) + R"(","args":[)";
     for (const auto& argument : arguments) {
       if (&argument != arguments.data()) {
         payload += ',';

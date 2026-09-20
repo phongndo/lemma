@@ -32,6 +32,9 @@ public:
   [[nodiscard]] auto descriptor() const noexcept -> int { return descriptor_; }
   // Nonblocking reactor failure path. Reaping remains with the daemon or destructor.
   void terminate() noexcept;
+  // Must precede the daemon's general waitpid(-1): revoke descendants while the exited host's
+  // unreaped PID still protects its process-group identity, then release that PID.
+  void reap_exited() noexcept;
 
   // Process creation is internal to the extension runtime; this value constructor only transfers
   // already-created descriptor and process ownership.

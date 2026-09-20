@@ -346,11 +346,22 @@ command_binding_action(lua_State* const state, const int index,
   const char* const value = lua_tolstring(state, index, &size);
   const auto command = value == nullptr ? std::optional<input::InputCommand>{}
                                         : config::parse_command({value, size});
-  return command.has_value() ? std::optional{input::ConfiguredBindingAction{
-                                   .kind = input::ConfiguredBindingKind::command,
-                                   .command = *command,
-                                   .disposition = disposition}}
-                             : std::nullopt;
+  if (command.has_value()) {
+    return input::ConfiguredBindingAction{.kind = input::ConfiguredBindingKind::command,
+                                          .command = *command,
+                                          .disposition = disposition};
+  }
+  const auto& commands = host_configuration(state).commands.descriptors;
+  const auto found = std::ranges::find_if(commands, [&](const auto& descriptor) {
+    return value != nullptr && descriptor.name == std::string_view(value, size);
+  });
+  if (found == commands.end()) {
+    return std::nullopt;
+  }
+  return input::ConfiguredBindingAction{.kind = input::ConfiguredBindingKind::hosted_command,
+                                        .disposition = disposition,
+                                        .hosted_command =
+                                            static_cast<std::uint8_t>(found - commands.begin())};
 }
 
 [[nodiscard]] auto table_string_field(lua_State* const state, const int table,
@@ -907,10 +918,22 @@ enum class ProcessWait : std::uint8_t {
   unavailable,
 };
 
+[[nodiscard]] auto peek_process(const int process, siginfo_t& information) noexcept -> int {
+  while (true) {
+    information = {};
+    const auto result =
+        ::waitid(P_PID, static_cast<id_t>(process), &information, WEXITED | WNOHANG | WNOWAIT);
+    if (result == 0 || errno != EINTR) {
+      return result;
+    }
+  }
+}
+
 [[nodiscard]] auto wait_for_process_exit(const int process) noexcept -> ProcessWait {
   for (std::size_t attempt = 0; attempt < 50U; ++attempt) {
-    const auto waited = ::waitpid(process, nullptr, WNOHANG);
-    if (waited == process) {
+    siginfo_t information{};
+    const auto waited = peek_process(process, information);
+    if (waited == 0 && information.si_pid == process) {
       return ProcessWait::exited;
     }
     if (waited < 0 && errno == ECHILD) {
@@ -946,13 +969,33 @@ void HostProcess::terminate() noexcept {
     static_cast<void>(::shutdown(descriptor_, SHUT_RDWR));
   }
   if (process_ > 0) {
-    // A daemon child wake may already have reaped the host. Never signal a recycled PID/group.
-    const auto waited = ::waitpid(process_, nullptr, WNOHANG);
-    if (waited == 0) {
+    // Observe without reaping: even an exited host protects the group identity until waitpid.
+    siginfo_t information{};
+    if (peek_process(process_, information) == 0) {
       static_cast<void>(::kill(-process_, SIGKILL));
-    } else if (waited == process_ || (waited < 0 && errno == ECHILD)) {
+    } else if (errno == ECHILD) {
       process_ = -1;
     }
+  }
+}
+
+void HostProcess::reap_exited() noexcept {
+  if (process_ <= 0) {
+    return;
+  }
+  siginfo_t information{};
+  if (peek_process(process_, information) != 0) {
+    if (errno == ECHILD) {
+      process_ = -1;
+    }
+    return;
+  }
+  if (information.si_pid != process_) {
+    return;
+  }
+  const auto exited = std::exchange(process_, -1);
+  static_cast<void>(::kill(-exited, SIGKILL));
+  while (::waitpid(exited, nullptr, WNOHANG) < 0 && errno == EINTR) {
   }
 }
 
@@ -964,13 +1007,14 @@ void HostProcess::reset() noexcept {
   const auto initial_wait = wait_for_process_exit(process_);
   if (initial_wait != ProcessWait::running) {
     if (initial_wait == ProcessWait::exited) {
-      static_cast<void>(::kill(-process_, SIGTERM));
+      reap_exited();
     }
     process_ = -1;
     return;
   }
   static_cast<void>(::kill(-process_, SIGTERM));
   if (wait_for_process_exit(process_) != ProcessWait::running) {
+    reap_exited();
     process_ = -1;
     return;
   }
@@ -1041,6 +1085,15 @@ auto load_configuration(const std::optional<std::string_view> requested_path) no
     result.status = ConfigurationStatus::invalid;
     result.diagnostic = "configuration runtime returned an invalid document";
     return result;
+  }
+  const auto& input = decoded.configuration->input;
+  for (const auto& binding : std::span(input.bindings).first(input.binding_count)) {
+    if (binding.action.kind == input::ConfiguredBindingKind::hosted_command &&
+        binding.action.hosted_command >= result.commands.size()) {
+      result.status = ConfigurationStatus::invalid;
+      result.diagnostic = "input binding references an undeclared command";
+      return result;
+    }
   }
   auto compiled = config::compile(*decoded.configuration);
   if (!compiled.has_value()) {

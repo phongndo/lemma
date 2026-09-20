@@ -1,6 +1,7 @@
 #include "input/input_router.hpp"
 
 #include "lemma/assert.hpp"
+#include "lemma/limits.hpp"
 
 #include <algorithm>
 #include <array>
@@ -315,6 +316,11 @@ auto InputMapDraft::compile() const noexcept -> std::expected<CompiledInputMap, 
     if (const auto* const command = std::get_if<CommandBinding>(&source.action);
         command != nullptr &&
         (!command_valid(command->command) || !command_context_valid(command->context))) {
+      return std::unexpected(InputMapError::invalid_action);
+    }
+    if (const auto* const hosted = std::get_if<HostedCommandBinding>(&source.action);
+        hosted != nullptr && (hosted->index >= limits::hosted_commands_hard_max ||
+                              !command_context_valid(hosted->context))) {
       return std::unexpected(InputMapError::invalid_action);
     }
     if (const auto* const encoded = std::get_if<EncodeAsBinding>(&source.action);
@@ -675,6 +681,11 @@ auto InputRouter::route_legacy(const std::span<const std::byte> input,
           }
         } else if constexpr (std::is_same_v<Action, EncodeAsBinding>) {
           // Structured-key translation is not a legacy-byte effect.
+        } else if constexpr (std::is_same_v<Action, HostedCommandBinding>) {
+          if (action.context == CommandContextDisposition::base) {
+            return_to_base();
+          }
+          effect = RoutedHostedCommand{.index = action.index};
         }
       },
       matched->action);
@@ -769,6 +780,8 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
   bool preempt_interaction = false;
   KeyRouteEffect effect = ConsumedInput{};
   std::visit(
+      // Exhaustive native policy dispatch; the hosted branch only emits a bounded index.
+      // NOLINTNEXTLINE(readability-function-cognitive-complexity)
       [&](const auto& action) {
         using Action = std::decay_t<decltype(action)>;
         if constexpr (std::is_same_v<Action, CommandBinding>) {
@@ -794,6 +807,11 @@ auto InputRouter::route_key(const KeyEvent& event) noexcept -> KeyRouteResult {
             encoded_hold_modifiers_ = action.modifiers;
           }
           effect = EncodeAsKey{.key = action.key, .modifiers = action.modifiers};
+        } else if constexpr (std::is_same_v<Action, HostedCommandBinding>) {
+          if (action.context == CommandContextDisposition::base) {
+            return_to_base();
+          }
+          effect = RoutedHostedCommand{.index = action.index};
         }
       },
       matched->action);
@@ -1324,7 +1342,7 @@ auto compile_input_map(const InputMapConfiguration& configuration) noexcept
   for (const auto& configured :
        std::span(configuration.bindings).first(configuration.binding_count)) {
     if (configured.context >= ConfiguredInputContext::count ||
-        configured.action.kind > ConfiguredBindingKind::send_key) {
+        configured.action.kind > ConfiguredBindingKind::hosted_command) {
       return std::unexpected(InputMapError::invalid_options);
     }
     BindingAction action;
@@ -1336,6 +1354,14 @@ auto compile_input_map(const InputMapConfiguration& configuration) noexcept
         return std::unexpected(InputMapError::invalid_action);
       }
       action = invoke(configured.action.command, configured.action.disposition);
+      break;
+    case ConfiguredBindingKind::hosted_command:
+      if (configured.action.hosted_command >= limits::hosted_commands_hard_max ||
+          !command_context_valid(configured.action.disposition)) {
+        return std::unexpected(InputMapError::invalid_action);
+      }
+      action = HostedCommandBinding{.index = configured.action.hosted_command,
+                                    .context = configured.action.disposition};
       break;
     case ConfiguredBindingKind::push_context: {
       if (configured.action.target >= ConfiguredInputContext::count) {

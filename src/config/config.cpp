@@ -531,6 +531,12 @@ namespace {
   case input::ConfiguredBindingKind::command:
     appended = append_command_action(output, action);
     break;
+  case input::ConfiguredBindingKind::hosted_command:
+    appended = append_action_kind(output, "hosted");
+    output += R"(,"index":)" + std::to_string(action.hosted_command) + R"(,"disposition":)";
+    appended = appended && api::append_json_string(output, disposition_name(action.disposition),
+                                                   configuration_document_bytes_max);
+    break;
   case input::ConfiguredBindingKind::push_context:
     appended = append_push_action(output, action);
     break;
@@ -609,6 +615,17 @@ namespace {
   }
   if (*kind == "command") {
     return decode_command_action(value);
+  }
+  if (*kind == "hosted") {
+    const auto index = api::json_unsigned(value, "index");
+    const auto disposition = parse_disposition(api::json_string(value, "disposition").value_or(""));
+    if (!known_members(value, {"kind", "index", "disposition"}) || !index.has_value() ||
+        *index >= limits::hosted_commands_hard_max || !disposition.has_value()) {
+      return std::nullopt;
+    }
+    return input::ConfiguredBindingAction{.kind = input::ConfiguredBindingKind::hosted_command,
+                                          .disposition = *disposition,
+                                          .hosted_command = static_cast<std::uint8_t>(*index)};
   }
   if (*kind == "push") {
     return decode_push_action(value);

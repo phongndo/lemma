@@ -144,6 +144,7 @@ void AttachmentRuntime::reset_connection() noexcept {
   clipboard_write.reset();
   close_descriptor(client);
   connection_id = {};
+  hosted_command.reset();
   decoder.release();
   output.reset();
   frame.release();
