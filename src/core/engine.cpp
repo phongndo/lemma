@@ -2343,6 +2343,28 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
   return event;
 }
 
+template <typename Effect>
+[[nodiscard]] auto queue_hosted_command(SessionRecord& session, const Effect& effect) noexcept
+    -> bool {
+  const auto* const command = std::get_if<input::RoutedHostedCommand>(&effect);
+  if (command == nullptr) {
+    return false;
+  }
+  auto& runtime = session.attachment_runtime;
+  auto* const tab = active_tab(session);
+  if (runtime.hosted_command.has_value() || tab == nullptr) {
+    publish_status_message(session, StatusMessageKind::error, "Error: Extension capacity reached");
+    return true;
+  }
+  runtime.hosted_command =
+      AttachmentRuntime::PendingHostedCommand{.context = {.session = session.id,
+                                                          .tab = tab->id,
+                                                          .pane = tab->focused_pane,
+                                                          .connection = runtime.connection_id},
+                                              .index = command->index};
+  return true;
+}
+
 [[nodiscard]] auto route_copy_event(SessionRecord& session, PaneRuntimeStore& runtimes,
                                     input::KeyEvent event,
                                     const std::optional<std::uint8_t> query_byte) noexcept -> bool {
@@ -2377,6 +2399,7 @@ void pop_copy_query_codepoint(CopyModeState& state) noexcept {
     }
     return active;
   }
+  static_cast<void>(queue_hosted_command(session, routed.effect));
   return session.attachment.copy_mode.active();
 }
 
@@ -3934,6 +3957,7 @@ void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runti
     }
     const auto* const forwarded = std::get_if<input::ForwardLegacyInput>(&routed.effect);
     if (forwarded == nullptr) {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
       continue;
     }
     bool changed = false;
@@ -4015,6 +4039,8 @@ void process_message_view_input(SessionRecord& session,
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
         command != nullptr) {
       apply_message_view_input_command(session, command->command);
+    } else {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
     }
   }
 }
@@ -4201,6 +4227,7 @@ void process_command_line_input(SessionRecord& session,
     }
     const auto* forwarded = std::get_if<input::ForwardLegacyInput>(&routed.effect);
     if (forwarded == nullptr) {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
       continue;
     }
     bool changed = false;
@@ -4238,7 +4265,10 @@ void process_typed_command_line_input(SessionRecord& session, const std::span<co
   }
   ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
   SessionMachine machine(session, production_session_options(runtime_context));
-  const auto transition = machine.resize_attachment(columns, rows);
+  const auto transition =
+      reactor_status_line()
+          ? machine.resize_attachment(columns, rows)
+          : machine.resize_attachment(columns, rows, {.columns = columns, .rows = rows});
   apply_session_change(session, runtimes, transition.change);
   return transition.result.status == CommandStatus::applied ||
          transition.result.status == CommandStatus::no_effect;
@@ -4818,9 +4848,16 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
       continue;
     }
 
-    const auto& forwarded = std::get<input::ForwardLegacyInput>(routed.effect);
+    const auto* const forwarded = std::get_if<input::ForwardLegacyInput>(&routed.effect);
+    if (forwarded == nullptr) {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
+      accept_input_route(session, runtimes, routed.presentation_changed,
+                         routed.interaction_preemption_requested);
+      offset += routed.consumed;
+      continue;
+    }
     std::array<std::byte, input::deferred_input_bytes_max + 1U> storage{};
-    const auto application_input = materialize_legacy_input(forwarded, storage);
+    const auto application_input = materialize_legacy_input(*forwarded, storage);
     if (application_input.empty()) {
       return ParseResult::error;
     }
@@ -4909,6 +4946,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
         command != nullptr) {
       apply_message_view_input_command(session, command->command);
+    } else {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
     }
     return ParseResult::keep;
   }
@@ -4924,6 +4963,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     } else if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect)) {
       process_typed_command_line_input(
           session, text, (key.modifiers & protocol::key_input_modifier_control) != 0U);
+    } else {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
     }
     return ParseResult::keep;
   }
@@ -4940,6 +4981,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     } else if (std::holds_alternative<input::ForwardCurrentKey>(routed.effect)) {
       process_typed_rename_prompt_input(
           session, text, (key.modifiers & protocol::key_input_modifier_control) != 0U);
+    } else {
+      static_cast<void>(queue_hosted_command(session, routed.effect));
     }
     return ParseResult::keep;
   }
@@ -5013,6 +5056,10 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       prefix_storage = following->bytes;
       prefix = std::span(prefix_storage).first(following->size);
       forward_current = true;
+    } else if (queue_hosted_command(session, routed.effect)) {
+      accept_input_route(session, runtimes, routed.presentation_changed,
+                         routed.interaction_preemption_requested);
+      return ParseResult::keep;
     } else {
       return ParseResult::error;
     }
@@ -6140,6 +6187,65 @@ void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes,
                                    std::size_t one_based_position) noexcept
     -> std::optional<std::optional<TabId>>;
 
+enum class AttachmentTransferResult : std::uint8_t {
+  transferred,
+  deferred,
+  conflict,
+  capacity,
+  unavailable,
+  failed,
+};
+
+[[nodiscard]] auto transfer_attachment(SessionRecord& source, SessionRecord& target,
+                                       Sessions& sessions, PaneRuntimeStore& runtimes,
+                                       std::uint64_t& activity_order) noexcept
+    -> AttachmentTransferResult;
+
+[[nodiscard]] auto switch_attachment(const api::Command& request, Sessions& sessions,
+                                     SessionRecord& target, PaneRuntimeStore& runtimes,
+                                     std::uint64_t& activity_order, PublicCommandExecution& result)
+    -> CommandStatus {
+  SessionRecord* source = nullptr;
+  for (const auto& candidate : sessions) {
+    if (candidate != nullptr && candidate->active && candidate->attachment_runtime.client >= 0 &&
+        candidate->attachment_runtime.connection_id == request.connection) {
+      source = candidate.get();
+      break;
+    }
+  }
+  if (source == nullptr) {
+    result.error_reason = "stale_connection";
+    return CommandStatus::stale_target;
+  }
+  const bool unchanged = source == &target;
+  const auto transferred =
+      unchanged ? AttachmentTransferResult::transferred
+                : transfer_attachment(*source, target, sessions, runtimes, activity_order);
+  switch (transferred) {
+  case AttachmentTransferResult::transferred:
+    result.value_field = "connection";
+    result.session_revision = target.mutation_generation;
+    if (!append_public_id(result.value_json, target.attachment_runtime.connection_id)) {
+      return CommandStatus::failed;
+    }
+    return unchanged ? CommandStatus::no_effect : CommandStatus::applied;
+  case AttachmentTransferResult::deferred:
+    result.error_reason = "output_pending";
+    result.retryable = true;
+    return CommandStatus::conflict;
+  case AttachmentTransferResult::conflict:
+    result.error_reason = "target_attached";
+    return CommandStatus::conflict;
+  case AttachmentTransferResult::capacity:
+    return CommandStatus::capacity;
+  case AttachmentTransferResult::unavailable:
+    return CommandStatus::stale_target;
+  case AttachmentTransferResult::failed:
+    return CommandStatus::failed;
+  }
+  return CommandStatus::failed;
+}
+
 class PublicCommandExecutor final {
 public:
   [[nodiscard]] static auto execute(const api::Command& request, Sessions& sessions,
@@ -6277,6 +6383,11 @@ auto PublicCommandExecutor::execute(const api::Command& request, Sessions& sessi
     return result;
   }
 
+  if (request.kind == api::CommandKind::attachment_switch) {
+    result.status =
+        switch_attachment(request, sessions, *session, runtimes, activity_order, result);
+    return result;
+  }
   if (request.kind == api::CommandKind::session_inspect) {
     result.value_json = session_inspection(*session);
     result.value_field = "session_state";
@@ -8515,7 +8626,7 @@ void prepare_attach(PendingConnection& pending, Sessions& sessions, PaneRuntimeS
                               "lemma session is already attached");
     return;
   }
-  if (session->connection_generation == std::numeric_limits<std::uint32_t>::max()) {
+  if (!sessions.connection_available(session->id)) {
     finish_pending_disconnect(pending, protocol::DisconnectReason::capacity,
                               "attachment identity capacity exhausted");
     return;
@@ -9076,9 +9187,7 @@ void handoff_attached_connection(PendingConnections& connections, const std::siz
   if (activity_order < std::numeric_limits<std::uint64_t>::max()) {
     session->activity_order = ++activity_order;
   }
-  session->connection_generation = next_generation(session->connection_generation);
-  session->attachment_runtime.connection_id =
-      ConnectionId::from_parts(session->id.slot(), session->connection_generation);
+  session->attachment_runtime.connection_id = sessions.allocate_connection(session->id);
   session->attachment_runtime.output.reset();
   session->attachment_runtime.server_sequence = 2;
   session->attachment_runtime.full_redraw_generation = 0;
@@ -9657,15 +9766,6 @@ void complete_attachment_command_line(SessionRecord& session, Sessions& sessions
 }
 // NOLINTEND(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,cppcoreguidelines-pro-bounds-constant-array-index)
 
-enum class AttachmentTransferResult : std::uint8_t {
-  transferred,
-  deferred,
-  conflict,
-  capacity,
-  unavailable,
-  failed,
-};
-
 [[nodiscard]] constexpr auto command_line_message(const CommandLineError error) noexcept
     -> std::string_view {
   switch (error) {
@@ -9727,7 +9827,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
 }
 
 [[nodiscard]] auto transfer_attachment(SessionRecord& source, SessionRecord& target,
-                                       PaneRuntimeStore& runtimes,
+                                       Sessions& sessions, PaneRuntimeStore& runtimes,
                                        std::uint64_t& activity_order) noexcept
     -> AttachmentTransferResult {
   if (&source == &target) {
@@ -9746,7 +9846,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   if (source_runtime.output.busy() || source_runtime.clipboard_write.bytes != nullptr) {
     return AttachmentTransferResult::deferred;
   }
-  if (target.connection_generation == std::numeric_limits<std::uint32_t>::max()) {
+  if (!sessions.connection_available(target.id)) {
     return AttachmentTransferResult::capacity;
   }
   target_runtime.reset_connection();
@@ -9788,9 +9888,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   target_runtime.outer_modes = previous_outer_modes;
   target_runtime.client_work_pending = client_work_pending;
   target_runtime.surface_paste = surface_paste;
-  target.connection_generation = next_generation(target.connection_generation);
-  target_runtime.connection_id =
-      ConnectionId::from_parts(target.id.slot(), target.connection_generation);
+  target_runtime.connection_id = sessions.allocate_connection(target.id);
   target_runtime.status_valid = false;
   target_runtime.client_close_state = ConnectionCloseState::none;
   target.attachment.command_history = history;
@@ -9817,6 +9915,16 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
       continue;
     }
     auto& session = *owner;
+    if (const auto queued = std::exchange(session.attachment_runtime.hosted_command, std::nullopt);
+        queued.has_value()) {
+      const auto commands = extensions.commands();
+      if (queued->index >= commands.size() ||
+          !extensions.start(commands.subspan(queued->index, 1).front().name, {}, queued->context,
+                            reactor_now())) {
+        publish_status_message(session, StatusMessageKind::error,
+                               "Error: Extension unavailable or busy");
+      }
+    }
     auto& state = session.attachment.command_line;
     if (!state.active) {
       continue;
@@ -9869,9 +9977,9 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
       }
       if (action.kind == CommandLineActionKind::switch_session) {
         auto* const target = public_session(sessions, action.switch_session);
-        const auto transferred =
-            target == nullptr ? AttachmentTransferResult::unavailable
-                              : transfer_attachment(session, *target, runtimes, activity_order);
+        const auto transferred = target == nullptr ? AttachmentTransferResult::unavailable
+                                                   : transfer_attachment(session, *target, sessions,
+                                                                         runtimes, activity_order);
         if (transferred == AttachmentTransferResult::transferred ||
             transferred == AttachmentTransferResult::deferred) {
           continue;
@@ -10358,7 +10466,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   PublicProcExecutions public_procs{};
   extension::CommandRuntime extensions(environment.extension_descriptor,
                                        environment.extension_commands, environment.stop_extension,
-                                       environment.extension_context);
+                                       environment.extension_context, listener);
   extension::Runtime extension_runtime;
   bool service_extensions = !environment.extension_commands.empty();
   CapacityRejectionConnections capacity_rejections{};

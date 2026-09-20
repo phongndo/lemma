@@ -1289,6 +1289,23 @@ class MuxFixtureTest(unittest.TestCase):
                 SHELL_READY_MARKER.decode(), startup.read_text(encoding="utf-8")
             )
 
+    def test_benchmark_environment_preserves_toolchain_path_not_user_state(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.dict(
+                os.environ,
+                {"PATH": "/toolchain/bin", "LEMMA_CONFIG": "/user/config.lua"},
+            ),
+            mock.patch("mux_benchmark.account_login_shell", return_value="/bin/bash"),
+        ):
+            root = Path(directory)
+            environment = benchmark_environment(root)
+            self.assertEqual(environment["PATH"], "/toolchain/bin")
+            self.assertEqual(environment["HOME"], str(root / "home"))
+            self.assertNotIn("LEMMA_CONFIG", environment)
+
     def test_interaction_markers_are_unique_for_all_allowed_repetitions(self) -> None:
         markers = [
             interaction_marker(label, index)

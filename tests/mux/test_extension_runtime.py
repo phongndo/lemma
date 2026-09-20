@@ -109,7 +109,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.addCleanup(self.server.close)
 
     def test_documented_hello_negotiates_and_observes_its_session(self) -> None:
-        self.server.create_session("example", attach=False, command=("/bin/cat",))
+        self.server.create_session("example", attach=False, command=("cat",))
         example = Path(__file__).resolve().parents[2] / "examples/extension-hello.json"
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
@@ -122,7 +122,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
 
     def test_independent_surface_update_conformance_corpus(self) -> None:
         session = self.server.create_session(
-            "conformance", attach=False, command=("/bin/cat",)
+            "conformance", attach=False, command=("cat",)
         )
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
@@ -200,10 +200,10 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                 self.assertEqual(not errors, case["accepted"], errors)
 
     def test_semantic_focus_handoff_is_consistent(self) -> None:
-        session = self.server.create_session("focus-handoff", command=("/bin/cat",))
+        session = self.server.create_session("focus-handoff", command=("cat",))
         first = session.state()
         self.server.require_command(
-            "proc", "tab", "new", "--session", first.id, "--", "/bin/cat"
+            "proc", "tab", "new", "--session", first.id, "--", "cat"
         )
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
@@ -293,7 +293,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                 "--focus",
                 "preserve",
                 "--",
-                "/bin/cat",
+                "cat",
             ),
             ("proc", "pane", "focus", "--session", first.id, "--pane", "0:999999"),
         ]:
@@ -309,7 +309,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                 self.assertEqual(
                     (event["event"], event["text"]), ("surface.key", "preserved")
                 )
-        for command in ["tab new --focus preserve -- /bin/cat", "pane focus 0:999999"]:
+        for command in ["tab new --focus preserve -- cat", "pane focus 0:999999"]:
             with self.subTest(prompt=command):
                 focus()
                 client.prefix(":")
@@ -334,7 +334,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.assertEqual(event["text"], "rejected")
 
     def test_surface_paste_preserves_opaque_bytes_with_strict_json(self) -> None:
-        session = self.server.create_session("opaque-paste", command=("/bin/cat",))
+        session = self.server.create_session("opaque-paste", command=("cat",))
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
         peer.send(
@@ -419,7 +419,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
     def test_global_extension_service_is_fair_across_buffered_structural_work(
         self,
     ) -> None:
-        session = self.server.create_session("global-fairness", command=("/bin/cat",))
+        session = self.server.create_session("global-fairness", command=("cat",))
         state = session.state()
         client = session.require_client()
         peers: list[ExtensionPeer] = []
@@ -547,7 +547,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         wait_until("global extension cleanup repair", restored)
 
     def test_blocked_paste_owner_does_not_starve_other_peers_or_pane(self) -> None:
-        session = self.server.create_session("blocked-extension", command=("/bin/cat",))
+        session = self.server.create_session("blocked-extension", command=("cat",))
         state = session.state()
         client = session.require_client()
         blocked = ExtensionPeer(str(self.server.socket_path))
@@ -661,7 +661,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
             state.focused.id,
             "--right",
             "--",
-            "/bin/cat",
+            "cat",
         )
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
@@ -713,7 +713,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self,
     ) -> None:
         session = self.server.create_session(
-            "quiescent", attach=False, command=("/bin/cat",)
+            "quiescent", attach=False, command=("cat",)
         )
         first = session.state().focused
         gate = self.server.root / "observation-gate"
@@ -747,7 +747,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                 first.id,
                 "--down",
                 "--",
-                "/bin/cat",
+                "cat",
             )
             panes.append(
                 {"id": json.loads(result.output)["results"][0]["result"]["pane"]}
@@ -795,7 +795,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
 
     def test_capability_combinations_through_listener(self) -> None:
         session = self.server.create_session(
-            "capabilities", attach=False, command=("/bin/cat",)
+            "capabilities", attach=False, command=("cat",)
         )
         state = session.state()
         for mask in range(1, 8):
@@ -982,10 +982,8 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         geometry(80, 23, "CLEAN_PTY")
 
     def test_destroyed_surface_scope_cannot_capture_reused_attachment(self) -> None:
-        session = self.server.create_session(
-            "old-scope", attach=True, command=("/bin/cat",)
-        )
-        self.server.create_session("keep-daemon", attach=False, command=("/bin/cat",))
+        session = self.server.create_session("old-scope", attach=True, command=("cat",))
+        self.server.create_session("keep-daemon", attach=False, command=("cat",))
         original = session.state()
         client = session.require_client()
         peer = ExtensionPeer(str(self.server.socket_path))
@@ -1036,7 +1034,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.assertEqual(mouse["event"], "surface.mouse")
         session.destroy()
         replacement = self.server.create_session(
-            "new-scope", attach=True, command=("/bin/cat",)
+            "new-scope", attach=True, command=("cat",)
         )
         state = replacement.state()
         self.assertEqual(original.id.split(":")[0], state.id.split(":")[0])
@@ -1058,7 +1056,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
 
     def test_buffered_updates_progress_after_service_budget(self) -> None:
         session = self.server.create_session(
-            "extension-buffered", attach=True, command=("/bin/cat",)
+            "extension-buffered", attach=True, command=("cat",)
         )
         client = self.server.clients[0]
         state = session.state()
@@ -1131,7 +1129,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
 
     def test_docked_surface_input_proc_and_generation_cleanup(self) -> None:
         session = self.server.create_session(
-            "extension-runtime", attach=True, command=("/bin/cat",)
+            "extension-runtime", attach=True, command=("cat",)
         )
         client = self.server.clients[0]
         initial = self.server.session_state(session.name)
@@ -1292,7 +1290,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.assertEqual(reattached["text"], "reattached")
 
         target = self.server.create_session(
-            "switch-target", attach=False, command=("/bin/cat",)
+            "switch-target", attach=False, command=("cat",)
         )
         client.prefix(":")
         client.send("switch switch-target\r")

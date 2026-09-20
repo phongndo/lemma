@@ -24,4 +24,4 @@ extend-exclude = ["third_party"]
 select = ["E4", "E7", "E9", "F", "I", "RUF"]
 
 [tool.ty.src]
-include = ["bench", "benchmarks", "scripts", "test", "tests", "tools"]
+include = ["bench", "benchmarks", "extensions", "scripts", "test", "tests", "tools"]

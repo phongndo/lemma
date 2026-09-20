@@ -22,8 +22,46 @@ Floating terminal creation, shared/Session-scoped Surfaces, and wholesale native
 not supported.
 
 Runtime extensions can use any language that speaks the protocol. The separate
-[Lua configuration and custom-command host](configuration.md) remains supported; it does not
-provide runtime-extension discovery or launch declarations.
+[configuration and command host](configuration.md#external-command-programs) can declare and launch
+invocation-scoped programs through `argv` commands, discovered by command-line completion and
+invoked by name or keybinding. Persistent runtime services still manage their own launch/lifetime;
+there is no persistent-service registry or automatic restart policy.
+
+## Navigation picker
+
+The [standalone Python picker](../extensions/picker.py) is a complete Session/Tab/Pane workflow,
+not a terminal emulator. From the checkout, install it at the path used by this configuration:
+
+```sh
+mkdir -p "$HOME/.config/lemma"
+cp extensions/picker.py "$HOME/.config/lemma/picker.py"
+```
+
+Add this [configuration](../examples/picker.lua) to `init.lua` (adjust `argv` to use a different
+Python executable or installation path):
+
+```lua example=../examples/picker.lua
+local lemma = require("lemma")
+
+lemma.command.register("nav.pick", {
+  description = "Choose a Session, Tab, or Pane",
+  timeout_ms = 120000,
+  argv = { "python3", os.getenv("HOME") .. "/.config/lemma/picker.py" },
+})
+lemma.keymap.set("prefix", "p", "nav.pick")
+```
+
+`C-b p` opens the picker, as does `nav.pick` in the native command line. Up/Down or `k`/`j` select a
+row; Right/`l` descends from Sessions to Tabs to Panes; Left/`h` goes back. Enter selects the target,
+`r` refreshes the current listing, and Escape/`q` closes. IDs are retained rather than inferred from
+row positions at commit time. A stale or busy target is rejected; it cannot silently choose a
+replacement or steal another client. Titles use ASCII fallbacks in this dependency-free example.
+
+The picker discovers only the current level, subscribes to no terminal screens, and blocks on its
+owned input while idle. Closing, losing Surface focus, detaching, switching, or crashing releases its
+UI and returns control to native code. Each invocation starts a fresh helper; this is not a
+persistent sidebar or a general extension client library. The two-minute command deadline is also
+the configured host watchdog, so close the picker when finished.
 
 ## Boundary and trust
 

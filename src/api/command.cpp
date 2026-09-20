@@ -463,6 +463,8 @@ auto command_name(const CommandKind kind) noexcept -> std::string_view {
   switch (kind) {
   case CommandKind::daemon_inspect:
     return "daemon.inspect";
+  case CommandKind::attachment_switch:
+    return "attachment.switch";
   case CommandKind::session_list:
     return "session.list";
   case CommandKind::session_inspect:
@@ -826,6 +828,14 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
       }
       output += R"(,"if_session_revision":)" + std::to_string(*command.expected_session_revision);
     }
+    if (command.kind == CommandKind::attachment_switch) {
+      if (!command.connection.is_valid() ||
+          !append_string_field(output, "connection",
+                               std::to_string(command.connection.slot()) + ":" +
+                                   std::to_string(command.connection.generation()))) {
+        return std::nullopt;
+      }
+    }
     if (command.kind == CommandKind::session_start && !command.name.empty() &&
         !append_string_field(output, "name", command.name)) {
       return std::nullopt;
@@ -1002,6 +1012,21 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
       return *rejected;
     }
     command.kind = CommandKind::daemon_inspect;
+  } else if (*name == "attachment.switch") {
+    if (auto rejected = reject_unknown({"command", "connection", "session", "if_session_revision"});
+        rejected.has_value()) {
+      return *rejected;
+    }
+    command.kind = CommandKind::attachment_switch;
+    if (auto invalid = require_session(document, command); invalid.has_value()) {
+      return *invalid;
+    }
+    const auto text = json_string(document, "connection");
+    const auto connection = text.has_value() ? parse_id<ConnectionId>(*text) : std::nullopt;
+    if (!connection.has_value()) {
+      return failure("invalid_field", "connection");
+    }
+    command.connection = *connection;
   } else if (*name == "session.list") {
     if (auto rejected = reject_unknown({"command"}); rejected.has_value()) {
       return *rejected;

@@ -6,6 +6,7 @@
 #include "core/input.hpp"
 #include "core/presentation_gate.hpp"
 #include "core/session.hpp"
+#include "extension/commands.hpp"
 #include "input/input_router.hpp"
 #include "lemma/assert.hpp"
 #include "lemma/generational_store.hpp"
@@ -216,6 +217,11 @@ struct AttachmentRuntime final {
   CopyModeRuntimeState copy_mode;
   FrameScheduler frame_scheduler;
   ConnectionId connection_id;
+  struct PendingHostedCommand final {
+    extension::InvocationContext context;
+    std::uint8_t index{0};
+  };
+  std::optional<PendingHostedCommand> hosted_command;
   std::uint32_t server_sequence{2};
   std::uint32_t full_redraw_generation{0};
   std::uint32_t pending_attach_slot{std::numeric_limits<std::uint32_t>::max()};
@@ -258,7 +264,6 @@ struct SessionRecord final : Session {
   input::InputRouter interaction_router;
   AttachmentRuntime attachment_runtime;
   vt::TerminalTheme theme;
-  std::uint32_t connection_generation{0};
 };
 
 class Sessions final {
@@ -278,6 +283,14 @@ public:
   [[nodiscard]] auto get(const SessionId id) const noexcept -> const SessionRecord* {
     return sessions_.get(id);
   }
+  [[nodiscard]] auto connection_available(const SessionId id) const noexcept -> bool {
+    return get(id) != nullptr &&
+           connection_generations_.at(id.slot()) < std::numeric_limits<std::uint32_t>::max();
+  }
+  [[nodiscard]] auto allocate_connection(const SessionId id) noexcept -> ConnectionId {
+    LEMMA_ASSERT(connection_available(id));
+    return ConnectionId::from_parts(id.slot(), ++connection_generations_.at(id.slot()));
+  }
   [[nodiscard]] auto erase(const SessionId id) noexcept -> bool { return sessions_.erase(id); }
   [[nodiscard]] auto size() const noexcept -> std::size_t { return sessions_.size(); }
   [[nodiscard]] static constexpr auto capacity() noexcept -> std::size_t {
@@ -291,6 +304,8 @@ public:
 private:
   render::FrameCapacityBudget frame_capacity_budget_;
   Store sessions_;
+  // Connection identities must survive Session slot reuse, not just detach/reattach.
+  std::array<std::uint32_t, limits::sessions_hard_max> connection_generations_{};
 };
 
 static_assert(sizeof(PaneRuntimeStore) <= std::size_t{4} * 1'024U);

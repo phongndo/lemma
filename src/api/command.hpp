@@ -19,6 +19,7 @@ inline constexpr std::string_view event_schema = "lemma.event/v1";
 
 enum class CommandKind : std::uint8_t {
   daemon_inspect,
+  attachment_switch,
   session_list,
   session_inspect,
   session_start,
@@ -221,6 +222,7 @@ struct SurfacePlacement final {
 struct Command final {
   CommandKind kind{CommandKind::session_list};
   SessionSelector session;
+  ConnectionId connection;
   TabSelector tab;
   PaneSelector pane;
   PaneSelector other;

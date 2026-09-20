@@ -37,6 +37,7 @@ local clangdFiles = List(
 local pythonImpact = List(
   "bench",
   "benchmarks/**/*.py",
+  "extensions/**/*.py",
   "scripts/**/*.py",
   "scripts/dev-run",
   "test",
@@ -107,8 +108,8 @@ local fast = new Mapping<String, Step | Group> {
 
   ["ruff"] {
     glob = pythonImpact
-    check = "uv run --locked ruff check bench benchmarks scripts test tests tools conanfile.py && uv run --locked ruff format --check bench benchmarks scripts test tests tools conanfile.py"
-    fix = "uv run --locked ruff check --fix bench benchmarks scripts test tests tools conanfile.py && uv run --locked ruff format bench benchmarks scripts test tests tools conanfile.py"
+    check = "uv run --locked ruff check bench benchmarks extensions scripts test tests tools conanfile.py && uv run --locked ruff format --check bench benchmarks extensions scripts test tests tools conanfile.py"
+    fix = "uv run --locked ruff check --fix bench benchmarks extensions scripts test tests tools conanfile.py && uv run --locked ruff format bench benchmarks extensions scripts test tests tools conanfile.py"
   }
 
   ["uv-lock"] {

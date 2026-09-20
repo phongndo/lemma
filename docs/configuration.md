@@ -206,18 +206,22 @@ lemma.command.register("work.shell", {
 ```
 
 Open `C-b :`, type `work.sh`, press Tab to complete `work.shell`, then Enter. Arguments use the same
-literal quoting grammar as native commands: `work.shell 'my shell'` passes one string. Commands
-are invokable only through the interactive command line, not keymaps or the public Proc catalog.
-They require the native status line to be enabled.
+literal quoting grammar as native commands: `work.shell 'my shell'` passes one string. A registered
+command name is also a keymap action: after registering it, use
+`lemma.keymap.set("prefix", "s", "work.shell")`. Keybindings invoke with no arguments and capture
+context when the key is routed, not when the host later runs it. They work with the status line
+disabled; only the interactive command line requires that line. Registered commands are not public
+Proc commands. Register a command before referring to it in a keymap.
 
-`lemma.command.register(NAME, OPTIONS)` requires `description` and a function `handler(ctx, args)`.
-`timeout_ms` is optional. Unknown options, duplicate names, or invalid declarations reject the
+`lemma.command.register(NAME, OPTIONS)` requires `description` and exactly one of a function
+`handler(ctx, args)` or an `argv` array for an external program. `timeout_ms` is optional. Unknown options, duplicate names, or invalid declarations reject the
 entire startup transaction, including configuration. Registration is not allowed from callbacks.
 Names must be qualified, such as `work.shell`: dot-separated segments begin with a lowercase ASCII
 letter and otherwise contain lowercase letters, digits, `_`, or `-`. This keeps extension commands
 separate from native command roots.
 
-`ctx.session`, `ctx.tab`, and `ctx.pane` are generational ID strings captured at invocation. Wrap them
+`ctx.session`, `ctx.tab`, `ctx.pane`, and `ctx.connection` are generational ID strings captured at
+invocation. `ctx.endpoint` is the current daemon's Unix socket path. Wrap them
 in `{ id = ctx.pane }` selectors as in the public API. They do not follow later focus changes, and
 normal stale-target checks apply. `args` is a one-based array of literal strings.
 
@@ -233,10 +237,38 @@ one-based tables become arrays; string-keyed and empty tables become objects. Om
 arrays. Cycles, mixed or sparse tables, functions, and noninteger numbers cannot be submitted.
 JSON null results become Lua nil. Do not call `coroutine.yield` directly; use `ctx:proc`.
 
+### External command programs
+
+An `argv` declaration launches a fresh program in the isolated host on each invocation, without a
+shell. Invocation arguments are appended literally. The program inherits the host environment and
+working directory; executable lookup uses its `PATH`. The combined argument vector is bounded to
+256 entries and 65,535 bytes, including NUL terminators. `stdin` is `/dev/null`. `stdout` and `stderr`
+share a diagnostic pipe: more than 4 KiB terminates the child, and failures publish at most 180
+printable diagnostic bytes. UI belongs on Surfaces, not stdout.
+
+`LEMMA_COMMAND_CONTEXT` contains a `lemma.command-context/v1` JSON object with `command`, `args`,
+`endpoint`, `session`, `tab`, `pane`, and `connection`. The IDs and endpoint are the captured values
+above. Connect to that endpoint using the [runtime extension protocol](extensions.md), not a guessed
+production socket path. Program exit completes the invocation; a nonzero exit reports an error.
+External programs do not block Lua callbacks or each other while waiting for input. Reinvoking after
+a child crash launches a fresh child without restarting the host.
+
+These programs are invocation-scoped, not persistent extension services. Detach, disconnect, or
+Session switching kills the direct child and retains its invocation slot until exit is acknowledged.
+Programs must not daemonize or escape the host's process group. Host exit or the native watchdog
+revokes that group. As with Lua callbacks, a deadline expires the whole host, not just one command.
+A program's runtime connection is a separate owner: its Procs and Surfaces are revoked when the daemon
+observes that connection closing, not synchronously when host cancellation is requested. Effects
+already committed before closure are not rolled back.
+For a complete keybound program, see the [navigation picker](extensions.md#navigation-picker).
+
 Runtime bounds are:
 
 - 64 registered commands, with names up to 64 bytes and printable ASCII descriptions up to 256 bytes;
-- eight concurrent invocations, each with at most one outstanding Proc;
+- eight concurrent invocations; a Lua callback has at most one outstanding Proc, while an external
+  program's runtime connection has the separate bounds in [Runtime extensions](extensions.md);
+- one pending keybound invocation per Attachment per service turn; another reports capacity instead
+  of growing a queue;
 - a default 30-second invocation deadline, configurable from 1 to 600,000 milliseconds, including
   time spent waiting for Procs;
 - one million Lua instructions per coroutine resume, plus the host-wide Lua allocation bound;
@@ -255,12 +287,13 @@ never on the input or render call stack. Only explicitly invoked custom commands
 host communication. The private host protocol does not change the public lock-step CONTROL API.
 
 An invocation belongs to the originating attachment generation. Detach, disconnect, or switching
-Sessions cancels its remaining Proc commands before further execution. Completed effects are not
+Sessions cancels its remaining Lua-submitted Proc commands before further execution; external
+programs use the asynchronous termination and connection-closure rules above. Completed effects are not
 rolled back. Cancellation retains its bounded slot and deadline until the host acknowledges it, so
 a blocked callback cannot evade the watchdog by detaching.
 
-A callback error or instruction-budget failure ends that invocation without disabling other
-commands. Host crash, protocol failure, or deadline expiration removes custom command discovery and
+A callback error, instruction-budget failure, or external child exit ends that invocation without
+disabling other commands. Host crash, protocol failure, or deadline expiration removes custom command discovery and
 cancels outstanding invocations. Native bindings, compiled settings, Sessions, and ordinary pane
 processes remain usable. Host recovery requires a daemon restart; live reload is not implemented.
 Closing the daemon's private lease closes the host. Invalid startup configuration never partially

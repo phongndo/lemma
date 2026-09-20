@@ -4,6 +4,7 @@
 #include "extension/commands.hpp"
 
 #include <array>
+#include <string>
 #include <vector>
 
 struct lua_State;
@@ -13,6 +14,7 @@ namespace lemma::extension {
 struct LuaCommands final {
   std::vector<CommandDescriptor> descriptors;
   std::array<int, commands_max> callbacks{};
+  std::array<std::vector<std::string>, commands_max> programs{};
   int invocation_wrapper{0};
   bool published{false};
 };

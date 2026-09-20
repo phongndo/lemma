@@ -124,7 +124,7 @@ class PtyOutputMonitorTest(unittest.TestCase):
 
 class PtyProcessBufferingTest(unittest.TestCase):
     def test_later_children_do_not_inherit_another_clients_pty(self) -> None:
-        first = PtyProcess(["/bin/cat"], dict(os.environ))
+        first = PtyProcess(["cat"], dict(os.environ))
         self.addCleanup(first.close)
         script = (
             "import os\n"

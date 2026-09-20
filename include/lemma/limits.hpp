@@ -54,6 +54,7 @@ inline constexpr std::size_t environment_bytes_max = 65'535;
 inline constexpr std::size_t environment_entries_max = 256;
 inline constexpr std::size_t command_bytes_hard_max = 65'535;
 inline constexpr std::size_t command_arguments_hard_max = 256;
+inline constexpr std::size_t hosted_commands_hard_max = 64;
 inline constexpr std::size_t command_line_bytes_max = 512;
 inline constexpr std::size_t command_line_history_max = 16;
 inline constexpr std::size_t status_message_bytes_max = 256;

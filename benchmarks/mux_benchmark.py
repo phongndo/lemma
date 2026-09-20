@@ -409,7 +409,7 @@ def benchmark_environment(root: Path) -> dict[str, str]:
         "HOME": str(root / "home"),
         "XDG_CONFIG_HOME": str(root / "config"),
         "ZDOTDIR": str(root / "zdot"),
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": os.environ.get("PATH", os.defpath),
         "SHELL": account_shell,
         "TERM": "xterm-256color",
         "COLORTERM": "truecolor",
@@ -2681,7 +2681,7 @@ def extension_isolation(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]
     runtime.start_detached(session)
     client = runtime.attach(session)
     wait_for_startup_shell(runtime, client)
-    client.write_all(b"exec /bin/cat\r", 2.0)
+    client.write_all(b"exec cat\r", 2.0)
     client.drain(0.1)
     runtime._start_extension_fixture(session)
     client.drain(0.1)

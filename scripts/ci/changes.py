@@ -43,6 +43,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
                 "apps/",
                 "benchmarks/",
                 "examples/",
+                "extensions/",
                 "schema/",
                 "include/",
                 "src/",

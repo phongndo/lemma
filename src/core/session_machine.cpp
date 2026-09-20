@@ -811,9 +811,10 @@ auto SessionMachine::resize_attachment(const std::uint16_t columns, const std::u
                                        const PaneRectangle viewport) noexcept -> SessionTransition {
   const auto viewport_right = static_cast<std::uint32_t>(viewport.column) + viewport.columns;
   const auto viewport_bottom = static_cast<std::uint32_t>(viewport.row) + viewport.rows;
+  // Explicit content geometry is derived by native presentation policy (chrome and docks).
+  // Validate physical containment here, not an assumed one-row status line.
   if (columns == 0 || rows == 0 || viewport.columns == 0 || viewport.rows == 0 ||
-      viewport_right > columns || viewport_bottom > content_rows(rows) ||
-      !options_.runtime.valid()) {
+      viewport_right > columns || viewport_bottom > rows || !options_.runtime.valid()) {
     return {.result = {.status = CommandStatus::invalid_command}, .handled = true};
   }
   auto* const tab = active_tab(session_);
