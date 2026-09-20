@@ -1024,10 +1024,10 @@ resolve_session_layout(SessionRecord& session, Tab& tab, PaneRuntimeStore& runti
   return session.attachment_runtime.output.busy() ? FrameSinkState::blocked : FrameSinkState::ready;
 }
 
-void schedule_frame(SessionRecord& session, const FrameUrgency urgency,
-                    const bool force_full) noexcept {
+void schedule_frame(SessionRecord& session, const FrameUrgency urgency, const bool force_full,
+                    const PaneId source = {}) noexcept {
   session.attachment_runtime.frame_scheduler.request(urgency, force_full, reactor_now(),
-                                                     frame_sink_state(session));
+                                                     frame_sink_state(session), source);
 }
 
 struct ProductionSessionRuntimeContext final {
@@ -9576,7 +9576,7 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
   if (tab.id == session.active_tab && (!drained.presentation_deferred || drained.bell ||
                                        process_changed || damage.status_changed)) {
     schedule_frame(session, frame_urgency(drained, process_changed, damage),
-                   drained.damage_capture_failed || drained.force_full);
+                   drained.damage_capture_failed || drained.force_full, pane.id);
   } else if (damage.status_changed) {
     schedule_frame(session, FrameUrgency::state_change, false);
   }

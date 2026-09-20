@@ -1,4 +1,5 @@
 #include "core/frame_scheduler.hpp"
+#include "lemma/id.hpp"
 
 #include <chrono>
 
@@ -130,12 +131,122 @@ TEST(FrameSchedulerTest, DetachCancelsPendingDeadlineFullRedrawAndBurstHistory) 
   EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 57ms);
 }
 
-TEST(FrameSchedulerTest, NoClientDoesNotCreatePendingWorkOrAnIdleTimer) {
+void prepare_sustained_burst(FrameScheduler& scheduler) {
+  for (auto elapsed : {0ms, 9ms, 18ms, 27ms, 36ms, 45ms}) {
+    scheduler.request(FrameUrgency::burst, false, origin + elapsed, FrameSinkState::ready);
+    scheduler.complete();
+  }
+  scheduler.request(FrameUrgency::burst, false, origin + 54ms, FrameSinkState::ready);
+}
+
+// The real call sequence can spend the input latch on unrelated PTY output before its response.
+TEST(FrameSchedulerTest, BackgroundDamageCannotDelayFollowingInputResponseToDisplayCadence) {
+  const auto source = PaneId::from_parts(0, 1);
   FrameScheduler scheduler;
-  scheduler.request(FrameUrgency::interactive, true, origin, FrameSinkState::unavailable);
+  prepare_sustained_burst(scheduler);
+  InteractiveDamageLatch latch;
+  latch.await_write(0, 1);
+  latch.record_write(1);
+  ASSERT_TRUE(latch.consume());
+  const auto first_damage = origin + 55ms;
+  scheduler.request(FrameUrgency::interactive, false, first_damage, FrameSinkState::ready, source);
+  ASSERT_TRUE(scheduler.due(first_damage, FrameSinkState::ready));
+  scheduler.complete();
+
+  ASSERT_FALSE(latch.consume());
+  scheduler.request(FrameUrgency::burst, false, first_damage + 40us, FrameSinkState::ready, source);
+  const auto followup = first_damage + 1ms;
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), followup);
+  EXPECT_FALSE(scheduler.due(followup - 1us, FrameSinkState::ready));
+  EXPECT_TRUE(scheduler.due(followup, FrameSinkState::ready));
+  scheduler.complete();
+
+  // The short follow-up does not restart the sustained stream's history or create an idle timer.
+  EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
+  scheduler.request(FrameUrgency::burst, false, followup, FrameSinkState::ready, source);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready),
+            followup + FrameScheduler::sustained_burst_delay);
+}
+
+TEST(FrameSchedulerTest, InteractiveFollowupCoalescesDamageWithoutWakingBlockedOutput) {
+  const auto source = PaneId::from_parts(0, 1);
+  FrameScheduler scheduler;
+  prepare_sustained_burst(scheduler);
+  scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready, source);
+  scheduler.complete();
+  scheduler.request(FrameUrgency::burst, false, origin + 55040us, FrameSinkState::blocked, source);
+  scheduler.request(FrameUrgency::burst, false, origin + 56ms, FrameSinkState::blocked, source);
+  EXPECT_FALSE(scheduler.deadline(FrameSinkState::blocked).has_value());
+  EXPECT_TRUE(scheduler.force_full());
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 56ms);
+  EXPECT_TRUE(scheduler.due(origin + 58ms, FrameSinkState::ready));
+}
+
+TEST(FrameSchedulerTest, OutputAfterInteractiveRecoveryWindowKeepsDisplayCadence) {
+  const auto source = PaneId::from_parts(0, 1);
+  FrameScheduler scheduler;
+  prepare_sustained_burst(scheduler);
+  scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready, source);
+  scheduler.complete();
+
+  // A continuing stream must not get another short frame merely because input was just handled.
+  scheduler.request(FrameUrgency::burst, false, origin + 56100us, FrameSinkState::ready, source);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 72100us);
+}
+
+TEST(FrameSchedulerTest, ExpiredAndCancelledInteractiveFollowupsDoNotAccelerateLaterOutput) {
+  const auto source = PaneId::from_parts(0, 1);
+  FrameScheduler scheduler;
+  prepare_sustained_burst(scheduler);
+  scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready, source);
+  scheduler.complete();
+  EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
+  scheduler.request(FrameUrgency::burst, false, origin + 58ms, FrameSinkState::ready, source);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 74ms);
+
+  scheduler.request(FrameUrgency::interactive, false, origin + 59ms, FrameSinkState::ready, source);
+  scheduler.complete();
+  scheduler.cancel();
+  scheduler.request(FrameUrgency::burst, false, origin + 59500us, FrameSinkState::ready, source);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 61500us);
+}
+
+TEST(FrameSchedulerTest, InteractiveRecoveryDoesNotAccelerateSiblingOrReplacementPane) {
+  const auto source = PaneId::from_parts(0, 1);
+  for (const auto other : {PaneId::from_parts(1, 1), PaneId::from_parts(0, 2)}) {
+    FrameScheduler scheduler;
+    prepare_sustained_burst(scheduler);
+    scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready,
+                      source);
+    scheduler.complete();
+    scheduler.request(FrameUrgency::burst, false, origin + 55040us, FrameSinkState::ready, other);
+    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 71040us);
+
+    // Unrelated damage must not spend the source Pane's recovery opportunity either.
+    scheduler.request(FrameUrgency::burst, false, origin + 55080us, FrameSinkState::ready, source);
+    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 56ms);
+  }
+}
+
+TEST(FrameSchedulerTest, UnscopedInteractionDoesNotOpenPaneRecoveryWindow) {
+  FrameScheduler scheduler;
+  prepare_sustained_burst(scheduler);
+  scheduler.request(FrameUrgency::interactive, false, origin + 55ms, FrameSinkState::ready);
+  scheduler.complete();
+  scheduler.request(FrameUrgency::burst, false, origin + 55040us, FrameSinkState::ready,
+                    PaneId::from_parts(0, 1));
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 71040us);
+}
+
+TEST(FrameSchedulerTest, NoClientDoesNotCreatePendingWorkOrAnIdleTimer) {
+  const auto source = PaneId::from_parts(0, 1);
+  FrameScheduler scheduler;
+  scheduler.request(FrameUrgency::interactive, true, origin, FrameSinkState::unavailable, source);
 
   EXPECT_FALSE(scheduler.pending());
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
+  scheduler.request(FrameUrgency::burst, false, origin + 40us, FrameSinkState::ready, source);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 2040us);
 }
 
 } // namespace

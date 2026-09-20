@@ -1,6 +1,8 @@
 #ifndef LEMMA_CORE_FRAME_SCHEDULER_HPP
 #define LEMMA_CORE_FRAME_SCHEDULER_HPP
 
+#include "lemma/id.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -47,13 +49,19 @@ public:
   using TimePoint = Clock::time_point;
 
   // Preserve short-command completion while presenting long autonomous streams at display cadence.
-  // Interactive and state-change requests always bypass both delays.
+  // Interactive and state-change requests always bypass both delays. Subsequent burst damage
+  // from the same Pane can share one short follow-up deadline: unrelated PTY output may have
+  // spent its input latch. Unscoped UI interaction does not open a Pane recovery window.
+  // Only closely following damage participates; later stream output keeps display cadence.
+  // Burst damage neither extends this recovery window nor creates work without new damage.
+  static constexpr auto interactive_followup_delay = std::chrono::milliseconds(1);
   static constexpr auto burst_delay = std::chrono::milliseconds(2);
   static constexpr auto sustained_burst_delay = std::chrono::milliseconds(16);
   static constexpr auto sustained_burst_threshold = std::chrono::milliseconds(50);
   static constexpr auto burst_continuity_window = std::chrono::milliseconds(10);
 
-  void request(FrameUrgency urgency, bool force_full, TimePoint now, FrameSinkState sink) noexcept;
+  void request(FrameUrgency urgency, bool force_full, TimePoint now, FrameSinkState sink,
+               PaneId source = {}) noexcept;
 
   [[nodiscard]] auto deadline(FrameSinkState sink) const noexcept -> std::optional<TimePoint>;
   [[nodiscard]] auto due(TimePoint now, FrameSinkState sink) const noexcept -> bool;
@@ -65,6 +73,11 @@ public:
   void cancel() noexcept;
 
 private:
+  struct InteractiveFollowup final {
+    PaneId source;
+    TimePoint deadline;
+  };
+
   void clear_pending() noexcept;
   void reset() noexcept;
   [[nodiscard]] auto burst_deadline(TimePoint now) noexcept -> TimePoint;
@@ -72,6 +85,7 @@ private:
   TimePoint deadline_;
   TimePoint burst_started_at_;
   TimePoint last_burst_request_at_;
+  std::optional<InteractiveFollowup> interactive_followup_;
   FrameUrgency urgency_{FrameUrgency::burst};
   bool pending_{false};
   bool force_full_{false};
