@@ -183,7 +183,8 @@ auto ExternalCommand::service(const short events) -> std::optional<std::string> 
   return completion(status, waited > 0);
 }
 
-auto ExternalCommand::completion(const int status, const bool observed) -> std::string {
+// Darwin's wait-status macros require a non-const status to avoid casting away qualifiers.
+auto ExternalCommand::completion(int status, const bool observed) -> std::string {
   if (observed && WIFEXITED(status) && WEXITSTATUS(status) == 0 && output_bytes_ <= 4096U) {
     return R"({"ok":true})";
   }
