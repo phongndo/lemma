@@ -94,6 +94,7 @@ host. The [extension contract](extensions.md) defines lifecycle, observation, an
 | `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input, resize, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
+| `lemma_status` | Pure status-row projection and UI cells, without terminal-runtime dependencies |
 | `lemma_protocol` | Bounded private attachment codec |
 | `lemma_client` | Host input, outer-terminal presentation, and restoration |
 | `lemma_platform` | OS I/O, PTYs, and terminal mode mechanisms |

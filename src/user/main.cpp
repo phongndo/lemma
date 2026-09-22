@@ -2,7 +2,7 @@
 #include "extension/client.hpp"
 #include "extension/protocol.hpp"
 #include "lemma/limits.hpp"
-#include "render/pane_composition.hpp"
+#include "render/status_line.hpp"
 #include "render/ui.hpp"
 #include "user/session_manager.hpp"
 

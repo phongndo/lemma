@@ -126,16 +126,19 @@ add_library(lemma_protocol STATIC src/protocol/attachment.cpp)
 lemma_internal_target(lemma_protocol)
 target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
+add_library(lemma_status STATIC src/render/status_line.cpp src/render/ui.cpp)
+lemma_internal_target(lemma_status)
+target_link_libraries(lemma_status PRIVATE lemma_base)
+
 add_library(
   lemma_render STATIC
   src/render/grid.cpp
   src/render/pane_composition.cpp
   src/render/frame_buffer.cpp
-  src/render/ui.cpp
 )
 lemma_internal_target(lemma_render)
 target_link_libraries(
-  lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal
+  lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal lemma_status
 )
 
 add_library(
@@ -202,7 +205,7 @@ target_link_libraries(lemma_extension_client PRIVATE lemma_api lemma_extension_c
 
 add_executable(lemma-ui src/user/main.cpp src/user/session_manager.cpp)
 lemma_internal_target(lemma-ui)
-target_link_libraries(lemma-ui PRIVATE lemma_extension_client lemma_api lemma_render)
+target_link_libraries(lemma-ui PRIVATE lemma_extension_client lemma_api lemma_status)
 install(TARGETS lemma-ui RUNTIME DESTINATION bin)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

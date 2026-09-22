@@ -3,6 +3,7 @@
 #include "render/grid.hpp"
 #include "render/pane_composition.hpp"
 #include "render/scene.hpp"
+#include "render/status_line.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>

@@ -5,6 +5,7 @@
 #include "lemma/terminal/terminal.hpp"
 #include "render/pane_composition.hpp"
 #include "render/scene.hpp"
+#include "render/status_line.hpp"
 
 #include <cstddef>
 #include <expected>

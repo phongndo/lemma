@@ -394,7 +394,8 @@ class SessionPickerMuxTest(unittest.TestCase):
         bounds = self.picker_position()
         self.assertGreater(bounds[0], 5)
         self.assertLess(bounds[2] - bounds[1], 60)
-        self.client.send("not-found")
+        # The random parent paths can fuzzy-match words; none contains a question mark.
+        self.client.send("not-found?")
         self.expect_screen("No matches")
         self.assertEqual(self.picker_position(), bounds)
         # A directory in an unfocused pane still finds its containing Tab.

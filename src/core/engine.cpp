@@ -36,8 +36,8 @@
 #include "platform/pty.hpp"
 #include "protocol/attachment.hpp"
 #include "render/frame_buffer.hpp"
-#include "render/pane_composition.hpp"
 #include "render/scene.hpp"
+#include "render/status_line.hpp"
 
 #include <algorithm>
 #include <array>
@@ -6056,12 +6056,15 @@ void record_reaped_child(Sessions& sessions, PaneRuntimeStore& runtimes,
   // Already-closed panes are also daemon children and require no Core transition.
 }
 
-void reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
-                          const ChildReaper child_reaper) noexcept {
+[[nodiscard]] auto reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
+                                        const ChildReaper child_reaper) noexcept -> bool {
   LEMMA_ASSERT(child_reaper.valid());
+  bool reaped = false;
   while (const auto exited = child_reaper.reap(child_reaper.context)) {
     record_reaped_child(sessions, runtimes, *exited);
+    reaped = true;
   }
+  return reaped;
 }
 
 void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes,
@@ -10426,7 +10429,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    reap_exited_children(sessions, runtimes, child_reaper);
+    // Reaping may consume the only wakeup after PTY EOF. Run retirement and waiting Procs
+    // before sleeping again so the recorded exit becomes a published Core outcome.
+    const bool reaped_before_poll = reap_exited_children(sessions, runtimes, child_reaper);
     expire_status_messages(sessions, reactor_now());
     const bool public_screen_work_pending = service_public_observers(
         pending_connections, sessions, runtimes, public_scratch, observer_cursor);
@@ -10582,8 +10587,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .extension_owner = {}};
       ++descriptor_count;
     }
-    const auto timeout = poll_timeout(sessions, runtimes, pending_connections, public_procs,
-                                      capacity_rejections, public_screen_work_pending);
+    const auto timeout =
+        poll_timeout(sessions, runtimes, pending_connections, public_procs, capacity_rejections,
+                     public_screen_work_pending || reaped_before_poll);
     const auto hosted_timeout =
         service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
     const auto poll_result = reactor_poll(std::span(descriptors).first(descriptor_count),
@@ -10596,7 +10602,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     const auto child_reaper_events = std::span(descriptors).subspan(1, 1).front().revents;
     if ((child_reaper_events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-      reap_exited_children(sessions, runtimes, child_reaper);
+      static_cast<void>(reap_exited_children(sessions, runtimes, child_reaper));
     }
     expire_attached_client_frames(sessions, runtimes, reactor_now());
     expire_status_messages(sessions, reactor_now());
@@ -10715,11 +10721,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                public_scratch, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::extension_peer) {
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        // Sleeping extensions have no reactor work. Retained complete records still run when
+        // a previous turn exhausted its byte/record budget, even without fresh socket readiness.
+        if (events == 0 &&
+            !extension_runtime.buffered_record_bytes(owner.auxiliary_slot).has_value()) {
+          continue;
+        }
         if (extension_runtime.owner_at(owner.auxiliary_slot) != owner.extension_owner ||
             !extension_runtime.connected(owner.extension_owner)) {
           continue;
         }
-        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         if ((events & POLLIN) != 0 && extension_read_budget > 0) {
           const auto received = extension_runtime.read_ready(
               owner.auxiliary_slot,
