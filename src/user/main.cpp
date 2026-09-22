@@ -345,7 +345,8 @@ auto run_status(const std::string_view endpoint) -> int {
       descriptors.push_back({.fd = status->client.descriptor(), .events = POLLIN, .revents = 0});
       ready = ready || status->client.ready();
     }
-    const auto polled = ::poll(descriptors.data(), descriptors.size(), ready ? 0 : -1);
+    const auto polled =
+        ::poll(descriptors.data(), static_cast<nfds_t>(descriptors.size()), ready ? 0 : -1);
     if (polled < 0 && errno == EINTR) {
       continue;
     }

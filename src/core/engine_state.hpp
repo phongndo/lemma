@@ -288,12 +288,14 @@ public:
     return sessions_.get(id);
   }
   [[nodiscard]] auto connection_available(const SessionId id) const noexcept -> bool {
-    return get(id) != nullptr &&
-           connection_generations_.at(id.slot()) < std::numeric_limits<std::uint32_t>::max();
+    // A live Session proves the slot is within the generation array.
+    return get(id) != nullptr && std::span(connection_generations_).subspan(id.slot(), 1).front() <
+                                     std::numeric_limits<std::uint32_t>::max();
   }
   [[nodiscard]] auto allocate_connection(const SessionId id) noexcept -> ConnectionId {
     LEMMA_ASSERT(connection_available(id));
-    return ConnectionId::from_parts(id.slot(), ++connection_generations_.at(id.slot()));
+    return ConnectionId::from_parts(
+        id.slot(), ++std::span(connection_generations_).subspan(id.slot(), 1).front());
   }
   [[nodiscard]] auto erase(const SessionId id) noexcept -> bool { return sessions_.erase(id); }
   [[nodiscard]] auto size() const noexcept -> std::size_t { return sessions_.size(); }

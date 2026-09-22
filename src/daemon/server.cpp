@@ -493,11 +493,17 @@ void release_owned_endpoint(void* const context) noexcept {
       .server_lock = server_lock,
       .development_build_id_path = development_marker,
   };
-  extension::Services services(configured_runtime.generation != nullptr
-                                   ? configured_runtime.generation->extensions()
-                                   : std::span<const config::ExtensionConfiguration>{},
-                               path);
-  child_reaper.services(services);
+  std::optional<extension::Services> services;
+  try {
+    services.emplace(configured_runtime.generation != nullptr
+                         ? configured_runtime.generation->extensions()
+                         : std::span<const config::ExtensionConfiguration>{},
+                     path);
+  } catch (...) {
+    release_owned_endpoint(&endpoint);
+    return 1;
+  }
+  child_reaper.services(*services);
   child_exit_wakeup_descriptor = child_reaper.write_descriptor();
   auto reactor_environment = core::production_reactor_environment();
   if (configured_runtime.generation != nullptr) {

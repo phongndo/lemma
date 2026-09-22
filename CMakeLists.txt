@@ -159,6 +159,10 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_k
   COMMAND lemma_compile_keymap "${CMAKE_CURRENT_SOURCE_DIR}/src/user/keymap.lua"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc"
   DEPENDS lemma_compile_keymap src/user/keymap.lua)
+# Source analysis runs on fresh trees without building the application first.
+add_custom_target(lemma_analysis_inputs
+  DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc")
+add_dependencies(lemma_analysis_inputs zig_build_lib_vt)
 add_library(lemma_input STATIC src/input/input_router.cpp
   "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc")
 target_include_directories(lemma_input PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -490,7 +494,9 @@ if(LEMMA_BUILD_TESTS)
   endfunction()
 
   lemma_add_python_mux_test(configuration tests.mux.test_configuration)
-  lemma_add_python_mux_test(extensions tests.mux.test_extensions)
+  # Keep independent extension suites within the per-entry deadline under sanitizers.
+  lemma_add_python_mux_test(extensions.lua tests.mux.test_extensions.ExtensionMuxTest)
+  lemma_add_python_mux_test(extensions.picker tests.mux.test_extensions.PickerMuxTest)
   lemma_add_python_mux_test(user_extensions tests.mux.test_user_extensions)
   lemma_add_python_mux_test(command_line tests.mux.test_command_line)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)

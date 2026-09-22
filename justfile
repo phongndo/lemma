@@ -115,14 +115,17 @@ fmt-check:
     {{ nix }} nixpkgs-fmt --check flake.nix
     {{ nix }} uv run --locked ruff format --check {{ python_paths }}
 
+_analysis-inputs: configure
+    {{ nix }} cmake --build --preset {{ profile }} --target lemma_analysis_inputs
+
 # Run responsive clang-tidy checks in parallel; ci-lint adds the slower Static Analyzer.
-lint: configure
+lint: _analysis-inputs
     {{ nix }} bash -c "find apps src tests benchmarks -type f -name '*.cpp' -print0 | \
         xargs -0 -n 1 -P \"\${CLANG_TIDY_JOBS:-4}\" \
         clang-tidy --quiet -p build/{{ profile }}"
 
 # Check every public header and production translation unit through clangd in parallel.
-lsp-check: configure
+lsp-check: _analysis-inputs
     {{ nix }} bash -c "find apps include src -type f \
         \\( -name '*.hpp' -o -name '*.cpp' \\) -print0 | sort -z | \
         xargs -0 -n 1 -P \"\${CLANGD_JOBS:-4}\" cmake/check-clangd.sh"
