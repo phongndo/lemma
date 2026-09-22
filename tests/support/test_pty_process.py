@@ -24,6 +24,27 @@ LEMMA_OUTER_TERMINAL_RESTORE = (
 
 
 class AnsiScreenTrackerTest(unittest.TestCase):
+    def test_bounded_erase_preserves_neighbors_and_cursor(self) -> None:
+        tracker = AnsiScreenTracker(12, 1)
+        tracker.feed(b"leftxxxxkeep\x1b[1;5H\x1b[4X")
+        self.assertEqual(tracker.text(), "left    keep")
+        tracker.feed(b"!")
+        self.assertEqual(tracker.text(), "left!   keep")
+        tracker.feed(b"\x1b[1;12H\x1b[99X")
+        self.assertEqual(tracker.text(), "left!   kee")
+
+    def test_text_retains_presented_frame_until_synchronized_update_finishes(self) -> None:
+        tracker = AnsiScreenTracker(16, 1)
+        tracker.feed(b"Session")
+        tracker.feed(b"\x1b[?2026h\x1b[2J")
+        self.assertEqual(tracker.text(), "Session")
+        tracker.feed(b"\x1b[?2026h\x1b[HPane\x1b[?2026")
+        self.assertEqual(tracker.text(), "Session")
+        tracker.feed(b"l")
+        self.assertEqual(tracker.text(), "Pane")
+        tracker.feed(b"\x1b[?2026h\x1b[2J\x1b[?2026l")
+        self.assertEqual(tracker.text(), "")
+
     def test_finds_marker_across_fragmented_incremental_cell_updates(self) -> None:
         tracker = AnsiScreenTracker(80, 24)
         for fragment in (

@@ -32,6 +32,7 @@ class AnsiScreenTracker:
         self.observed_fixture_rows: deque[bytes] = deque(maxlen=64)
         self.state = "ground"
         self.csi = bytearray()
+        self.synchronized_text: str | None = None
 
     def resize(self, columns: int, rows: int) -> None:
         resized = [bytearray(b" " * columns) for _ in range(rows)]
@@ -107,6 +108,15 @@ class AnsiScreenTracker:
             self._erase_display(parameters[0])
         elif final == ord("K"):
             self._erase_line(parameters[0])
+        elif final == ord("X"):
+            end = min(self.columns, self.column + first)
+            self.cells[self.row][self.column : end] = b" " * (end - self.column)
+        elif final in (ord("h"), ord("l")) and self.csi.startswith(b"?"):
+            if 2026 in parameters:
+                if final == ord("h") and self.synchronized_text is None:
+                    self.synchronized_text = self.text()
+                elif final == ord("l"):
+                    self.synchronized_text = None
         elif final == ord("s"):
             self.saved = (self.row, self.column)
         elif final == ord("u"):
@@ -188,6 +198,10 @@ class AnsiScreenTracker:
         return self._feed(data, marker if marker else None)
 
     def text(self) -> str:
+        # UI assertions observe presented frames, never a partial clear/redraw. Marker
+        # observation stays separate so fixture completion can retain transient output.
+        if self.synchronized_text is not None:
+            return self.synchronized_text
         return "\n".join(
             bytes(row).decode("ascii", errors="replace").rstrip() for row in self.cells
         )
