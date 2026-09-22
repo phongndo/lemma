@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "hosts": {
-    "box": {
-      "host_name": "box",
+    "z": {
+      "host_name": "z",
       "system": "Linux",
       "architecture": "x86_64",
       "model_identifier": "MS-7E61",

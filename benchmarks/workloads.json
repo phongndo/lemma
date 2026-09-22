@@ -440,9 +440,9 @@
     "schema": 1,
     "status": "reviewed",
     "scope": {
-      "label": "AMD Ryzen 9 9950X 16-core 32-GiB box host",
+      "label": "AMD Ryzen 9 9950X 16-core 32-GiB z host",
       "policy": "Manual local gates use the nearest-rank statistic over raw samples. Shared CI validates the manifest and reports but does not enforce host-specific thresholds.",
-      "approved_host": "box",
+      "approved_host": "z",
       "process_report_requirements": {
         "build_profile": "release"
       },
@@ -980,7 +980,7 @@
   "extension_performance": {
     "schema": 1,
     "status": "reviewed",
-    "approved_host": "box",
+    "approved_host": "z",
     "minimum_repetitions": 100,
     "fixtures": {
       "idle-peers": {

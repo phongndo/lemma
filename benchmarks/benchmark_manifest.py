@@ -248,7 +248,7 @@ def validate_manifest(manifest: Any) -> None:
         not isinstance(extension, dict)
         or extension.get("schema") != 1
         or extension.get("status") != "reviewed"
-        or extension.get("approved_host") != "box"
+        or extension.get("approved_host") != "z"
         or not isinstance(extension.get("minimum_repetitions"), int)
         or extension["minimum_repetitions"] < 20
         or not isinstance(extension_fixtures, dict)

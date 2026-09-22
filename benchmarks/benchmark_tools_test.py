@@ -981,7 +981,7 @@ class RegressionScopeTest(unittest.TestCase):
         self.budgets = budgets_from_manifest(load_manifest())
         self.policy = json.loads(
             Path("benchmarks/performance_hosts.json").read_text(encoding="utf-8")
-        )["hosts"]["box"]
+        )["hosts"]["z"]
         self.fingerprint = {
             field: self.policy[field]
             for field in (
