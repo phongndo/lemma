@@ -1078,8 +1078,7 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
   // Fill the 500-column blocked-client screen without wrapping. Unlike a
   // repeated short line, dense changing rows cannot settle into an unchanged
   // screen or collapse into blank-tail erases before the socket saturates.
-  const auto flags = ::fcntl(STDOUT_FILENO, F_GETFL);
-  if (flags < 0 || ::fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) != 0) {
+  if (!make_output_nonblocking()) {
     return 1;
   }
   const auto deadline = std::chrono::steady_clock::now() + 10s;
@@ -1089,8 +1088,8 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
   std::uint32_t state = 1;
   while (std::chrono::steady_clock::now() < deadline) {
     for (auto& cell : std::span(line).first(499)) {
-      state = state * 1'664'525U + 1'013'904'223U;
-      cell = static_cast<char>(33U + (state >> 16U) % 94U);
+      state = (state * 1'664'525U) + 1'013'904'223U;
+      cell = static_cast<char>(33U + ((state >> 16U) % 94U));
     }
     if (!write_all_until({line.data(), line.size()}, deadline)) {
       return 1;
