@@ -4,11 +4,11 @@
 #include "lemma/limits.hpp"
 #include "render/pane_composition.hpp"
 #include "render/ui.hpp"
+#include "user/session_manager.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -21,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -375,276 +374,6 @@ auto run_status(const std::string_view endpoint) -> int {
     });
   }
 }
-struct SessionManager final {
-  ext::Client client;
-  ext::Client observer;
-  std::string connection;
-  std::string current;
-  std::string surface;
-  std::vector<JsonValue> sessions;
-  std::size_t selected{0};
-  std::size_t columns{0};
-  std::size_t rows{0};
-  bool creating{false};
-  std::string name;
-  std::string message{"j/k move | Enter switch | n new | q/Esc close"};
-
-  explicit SessionManager(const JsonValue& context)
-      : client(text(context, "endpoint"), hello(text(context, "session"), false)),
-        observer(
-            text(context, "endpoint"),
-            R"({"schema":"lemma.extension/v1","name":"session-manager","capabilities":["observe"],"events":{"schema":"lemma.events/v1"}})"),
-        connection(text(context, "connection")), current(text(context, "session")) {
-    const auto inspected =
-        command(client, R"({"command":"session.inspect","session":)" + selector(current) + '}');
-    const auto& geometry = member(member(inspected, "session_state"), "geometry");
-    columns = std::min<std::size_t>(76, number(geometry, "columns"));
-    rows = std::min<std::size_t>(14, number(geometry, "rows"));
-    const auto created = command(
-        client,
-        R"({"command":"surface.create","placement":{"kind":"float","column":0,"row":0,"columns":)" +
-            std::to_string(columns) + R"(,"rows":)" + std::to_string(rows) + "}}");
-    surface = text(created, "surface");
-    const auto listed = command(client, R"({"command":"session.list"})");
-    refresh(member(listed, "sessions"));
-    static_cast<void>(
-        command(client, R"({"command":"surface.focus","surface":)" + selector(surface) + '}'));
-  }
-
-  void refresh(const JsonValue& list) {
-    const std::string previous =
-        sessions.empty() ? current : std::string(text(sessions.at(selected), "id"));
-    sessions = list.array;
-    selected = 0;
-    for (std::size_t index = 0; index < sessions.size(); ++index) {
-      if (text(sessions.at(index), "id") == previous) {
-        selected = index;
-        break;
-      }
-    }
-    paint();
-  }
-
-  // Bounded UI projection/interaction branches have one owner.
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  void paint() {
-    if (columns == 0 || rows == 0) {
-      return;
-    }
-    std::string update = R"({"schema":"lemma.surface-update/v1","surface":)" +
-                         ext::json_quote(surface) + R"(,"styles":[{}, {"inverse":true}],"rows":[)";
-    const auto visible = rows > 2 ? rows - 2 : 0;
-    const auto start = selected >= visible && visible > 0 ? selected - visible + 1 : 0;
-    for (std::size_t row = 0; row < rows; ++row) {
-      std::string line;
-      bool active = false;
-      if (row == 0) {
-        line = "Sessions";
-      } else if (row + 1 == rows) {
-        line = creating ? "New session: " + name : message;
-      } else if (start + row - 1 < sessions.size()) {
-        const auto index = start + row - 1;
-        const auto& session = sessions.at(index);
-        active = index == selected;
-        line = std::string(active ? "> " : "  ") + std::string(text(session, "name"));
-        if (text(session, "id") == current) {
-          line += " (current)";
-        } else if (enabled(session, "attached")) {
-          line += " (attached)";
-        }
-      }
-      line = plain(line);
-      line.resize(columns, ' ');
-      if (row > 0) {
-        update += ',';
-      }
-      update += R"({"row":)" + std::to_string(row) + R"(,"runs":[{"column":0,"text":)" +
-                ext::json_quote(line) + R"(,"style":)" + (active ? "1}]}" : "0}]}");
-    }
-    update += "]}";
-    client.update(update);
-  }
-
-  auto select(const std::string_view id) -> bool {
-    if (id == current) {
-      return false;
-    }
-    const auto request = R"([{"command":"attachment.switch","connection":)" +
-                         ext::json_quote(connection) + R"(,"session":)" + selector(id) + "}]";
-    for (unsigned attempt = 0; attempt < 50U; ++attempt) {
-      const auto result = client.proc(request);
-      if (enabled(result, "ok")) {
-        return false;
-      }
-      const auto& results = member(result, "results").array;
-      const auto& failure = results.empty() ? result : member(results.back(), "result");
-      const auto* error = api::json_member(failure, "error");
-      const auto reason = error == nullptr ? text(failure, "status") : text(*error, "reason");
-      if (reason != "output_pending") {
-        message = "Cannot switch: " + std::string(reason);
-        paint();
-        return true;
-      }
-      static_cast<void>(::poll(nullptr, 0, 10));
-    }
-    message = "Output is busy; try again";
-    paint();
-    return true;
-  }
-
-  // Bounded UI projection/interaction branches have one owner.
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  auto key(const std::string_view value) -> bool {
-    if (creating) {
-      if (value == "escape" || value == "\x03" || value == "\x07") {
-        creating = false;
-        name.clear();
-      } else if (value == "backspace" || value == "\x7f" || value == "\b") {
-        if (!name.empty()) {
-          name.pop_back();
-        }
-      } else if (value == "enter" || value == "\r" || value == "\n") {
-        const auto result =
-            client.proc(R"([{"command":"session.start","name":)" + ext::json_quote(name) + "}]");
-        if (enabled(result, "ok")) {
-          const auto& created = member(member(result, "results").array.front(), "result");
-          return select(text(member(created, "session"), "id"));
-        }
-        message = "Session name unavailable or invalid";
-        creating = false;
-      } else if (value.size() == 1 && name.size() < lemma::limits::session_name_bytes_max &&
-                 ((value.front() >= 'a' && value.front() <= 'z') ||
-                  (value.front() >= 'A' && value.front() <= 'Z') ||
-                  (value.front() >= '0' && value.front() <= '9') || value == "_" || value == "-")) {
-        name += value;
-      }
-    } else if (value == "escape" || value == "q" || value == "\x03" || value == "\x07") {
-      return false;
-    } else if ((value == "down" || value == "j") && !sessions.empty()) {
-      selected = (selected + 1U) % sessions.size();
-    } else if ((value == "up" || value == "k") && !sessions.empty()) {
-      selected = (selected + sessions.size() - 1U) % sessions.size();
-    } else if ((value == "enter" || value == "\r" || value == "\n") && !sessions.empty()) {
-      return select(text(sessions.at(selected), "id"));
-    } else if (value == "n") {
-      creating = true;
-      name.clear();
-    }
-    paint();
-    return true;
-  }
-
-  // Dispatches the small public Surface event vocabulary.
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  auto event(const JsonValue& event, std::string& pending) -> bool {
-    if (text(event, "surface") != surface) {
-      return true;
-    }
-    const auto type = text(event, "event");
-    if (type == "surface.closed" || type == "surface.blurred") {
-      return false;
-    }
-    if (type == "surface.resized") {
-      columns = number(event, "columns");
-      rows = number(event, "rows");
-      paint();
-      return true;
-    }
-    if (type != "surface.key" || number(event, "action") == 0) {
-      return true;
-    }
-    const auto physical = number(event, "key");
-    std::string_view logical;
-    for (const auto& [code, key_name] :
-         std::array{std::pair{27U, "enter"}, std::pair{29U, "backspace"}, std::pair{30U, "escape"},
-                    std::pair{32U, "up"}, std::pair{33U, "down"}}) {
-      if (physical == code) {
-        logical = key_name;
-        break;
-      }
-    }
-    if (!logical.empty()) {
-      pending.clear();
-      return key(logical);
-    }
-    if (api::json_member(event, "text") != nullptr) {
-      pending += text(event, "text");
-    } else {
-      const auto hex = text(event, "bytes_hex");
-      for (std::size_t index = 0; index + 1U < hex.size(); index += 2) {
-        unsigned byte = 0;
-        const auto digits = hex.substr(index, 2);
-        // from_chars consumes the bounded iterator pair, not a C string.
-        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
-        const auto parsed = std::from_chars(digits.data(), std::to_address(digits.end()), byte, 16);
-        if (parsed.ec != std::errc{}) {
-          return false;
-        }
-        pending += static_cast<char>(byte);
-      }
-    }
-    return consume(pending);
-  }
-
-  auto consume(std::string& pending) -> bool {
-    while (!pending.empty()) {
-      std::string value(1, pending.front());
-      std::size_t consumed = 1;
-      if (pending.front() == '\x1b') {
-        if (pending == "\x1b" || pending == "\x1b[") {
-          break;
-        }
-        value = "escape";
-        if (pending.starts_with("\x1b[A")) {
-          value = "up";
-        } else if (pending.starts_with("\x1b[B")) {
-          value = "down";
-        }
-        consumed = std::min<std::size_t>(3, pending.size());
-      }
-      pending.erase(0, consumed);
-      if (!key(value)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Bounded event polling and dispatch, with no wakeup while idle.
-  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-  auto run() -> int {
-    std::string pending;
-    while (true) {
-      std::array<pollfd, 2> descriptors{
-          {{.fd = client.descriptor(), .events = POLLIN, .revents = 0},
-           {.fd = observer.descriptor(), .events = POLLIN, .revents = 0}}};
-      const auto idle_timeout = pending.empty() ? -1 : 50;
-      const auto timeout = client.ready() || observer.ready() ? 0 : idle_timeout;
-      const auto polled = ::poll(descriptors.data(), descriptors.size(), timeout);
-      if (polled < 0 && errno == EINTR) {
-        continue;
-      }
-      if (polled < 0) {
-        return 1;
-      }
-      if (polled == 0 && timeout == 50) {
-        return 0;
-      }
-      if (auto record = observer.next(0); record.has_value()) {
-        if (const auto* list = api::json_member(record->document, "sessions"); list != nullptr) {
-          refresh(*list);
-        }
-      }
-      const auto record = client.next(0);
-      if (!record.has_value()) {
-        continue;
-      }
-      if (!event(record->document, pending)) {
-        return 0;
-      }
-    }
-  }
-};
 
 } // namespace
 
@@ -661,7 +390,7 @@ int main(const int argc, char** argv) {
         context_text != nullptr) {
       const auto context = api::parse_json(context_text);
       if (context.value.has_value()) {
-        return SessionManager(*context.value).run();
+        return lemma::user::run_session_manager(*context.value);
       }
     }
     return 2;

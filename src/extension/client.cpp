@@ -172,6 +172,14 @@ void Client::update(const std::string_view content) {
   flush(Clock::now() + request_timeout);
 }
 
+auto Client::submit_proc(const std::string_view commands) -> std::uint32_t {
+  const auto sequence =
+      send(RecordKind::proc,
+           std::string{R"({"schema":"lemma.proc/v1","commands":)"} + std::string(commands) + '}');
+  flush(Clock::now() + request_timeout);
+  return sequence;
+}
+
 auto json_quote(const std::string_view value) -> std::string {
   std::string output;
   if (!api::append_json_string(output, value)) {

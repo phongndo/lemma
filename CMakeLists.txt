@@ -200,7 +200,7 @@ add_library(lemma_extension_client STATIC src/extension/client.cpp)
 lemma_internal_target(lemma_extension_client)
 target_link_libraries(lemma_extension_client PRIVATE lemma_api lemma_extension_contract lemma_platform)
 
-add_executable(lemma-ui src/user/main.cpp)
+add_executable(lemma-ui src/user/main.cpp src/user/session_manager.cpp)
 lemma_internal_target(lemma-ui)
 target_link_libraries(lemma-ui PRIVATE lemma_extension_client lemma_api lemma_render)
 install(TARGETS lemma-ui RUNTIME DESTINATION bin)

@@ -13,7 +13,12 @@ from tests.mux.test_extension_runtime import (
     PROC_RESULT,
     ExtensionPeer,
 )
-from tests.support.mux_harness import LemmaServer, wait_for_process_exit, wait_until
+from tests.support.mux_harness import (
+    Client,
+    LemmaServer,
+    wait_for_process_exit,
+    wait_until,
+)
 
 
 class UserExtensionsMuxTest(unittest.TestCase):
@@ -30,7 +35,7 @@ class UserExtensionsMuxTest(unittest.TestCase):
         self.assertIn("configuration rejected", server.logs())
         client.prefix("s")
         client.expect_output("Sessions")
-        client.send("q")
+        client.send(b"\x03")
         client.expect_output("fallback  |")
 
     def test_status_is_replaceable_and_pane_uses_the_released_row(self) -> None:
@@ -177,15 +182,15 @@ class UserExtensionsMuxTest(unittest.TestCase):
         client = first.require_client()
         client.prefix("s")
         client.expect_output("Sessions")
-        client.send("j\r")
+        client.send(b"\x0e\r")
         server.wait_for_state(
             target.name, lambda state: state.attached, "session manager switch"
         )
         client.expect_output("second  |")
         client.prefix("s")
         client.expect_output("Sessions")
-        client.send("n")
-        client.expect_output("New session:")
+        client.send(b"\x0f")
+        client.expect_output("New session")
         client.send("third\r")
         server.wait_for_state(
             "third", lambda state: state.attached, "session manager creation"
@@ -195,13 +200,13 @@ class UserExtensionsMuxTest(unittest.TestCase):
         client.prefix("s")
         client.expect_output("Sessions")
         # Current session is retained as the selection; the next entry is busy.
-        client.send("j\r")
+        client.send(b"\x0e\r")
         client.expect_output("Cannot switch:")
         self.assertTrue(busy.state().attached)
         third = server.session_state("third")
         assert third is not None
         self.assertTrue(third.attached)
-        client.send("q")
+        client.send(b"\x03")
         client.expect_output("third  |")
 
     def test_status_survives_command_host_failure_and_has_bounded_restart(self) -> None:
@@ -306,6 +311,274 @@ lemma.command.register('test.crash', {{description='crash', handler=function() o
         self.assertTrue(peer.receive_matching(PROC_RESULT, 3)["ok"])
         session.require_client().send("__PANE_FOCUS__\r")
         session.require_client().expect_output("__PANE_FOCUS__")
+
+
+class SessionPickerMuxTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.server = LemmaServer.from_environment()
+        self.addCleanup(self.server.close)
+        self.source = self.server.create_session("source", command=("cat",))
+        self.client = self.source.require_client()
+        self.peer = ExtensionPeer(str(self.server.socket_path))
+        self.addCleanup(self.peer.close)
+        self.peer.send(
+            HELLO,
+            1,
+            {
+                "schema": "lemma.extension/v1",
+                "name": "picker-test",
+                "capabilities": ["proc"],
+            },
+        )
+        self.peer.receive_matching(2, 1)
+        self.sequence = 1
+
+    def proc(self, command: str, **fields: object) -> dict:
+        self.sequence += 1
+        self.peer.send(
+            PROC,
+            self.sequence,
+            {"schema": "lemma.proc/v1", "commands": [{"command": command, **fields}]},
+        )
+        result = self.peer.receive_matching(PROC_RESULT, self.sequence)
+        self.assertTrue(result["ok"], result)
+        return result["results"][0]["result"]
+
+    def screen(self, client: Client | None = None) -> str:
+        client = client or self.client
+        client.drain(0.002)
+        return client.screen_text()
+
+    def expect_screen(self, marker: str, *, absent: bool = False) -> str:
+        return wait_until(
+            f"picker {'without' if absent else 'with'} {marker!r}",
+            lambda: screen if (marker in (screen := self.screen())) != absent else None,
+            diagnostics=self.client.diagnostics,
+        )
+
+    def open(self) -> None:
+        self.client.prefix("s")
+        self.expect_screen("Search...")
+
+    def test_browse_back_and_preview_preserve_focus_until_enter(self) -> None:
+        initial = self.source.state()
+        scope = {"id": initial.id}
+        tab = self.proc(
+            "tab.new", session=scope, title="editor", focus="preserve", argv=["cat"]
+        )
+        pane = self.proc(
+            "pane.split",
+            session=scope,
+            pane={"id": tab["pane"]},
+            direction="right",
+            focus="preserve",
+            argv=["cat"],
+        )
+        self.open()
+        self.client.send("source\t")
+        self.expect_screen("2 editor")
+        self.client.send(b"\x0e\t")
+        self.expect_screen("source / editor")
+        self.client.send(b"\x0e")
+        self.expect_screen("> 2 cat")
+        self.assertEqual(self.source.state().active_tab, initial.active_tab)
+        self.assertEqual(self.source.state().focused_pane, initial.focused_pane)
+        self.client.send(b"\x1b[Z\x1b[Z")
+        self.expect_screen("> source")
+        self.expect_screen("Sessions")
+        # Back restored the root query and the selected Session.
+        self.client.send(b"\t\x0e\t\x0e\r")
+        self.server.wait_for_state(
+            self.source.name,
+            lambda state: (
+                state.active_tab == tab["tab"] and state.focused_pane == pane["pane"]
+            ),
+            "Enter activates the browsed pane",
+        )
+        self.client.send("__CHOSEN_PANE__\r")
+        self.source.pane().expect_output("__CHOSEN_PANE__")
+
+    def test_multiword_search_paste_no_matches_and_exact_cross_session_target(
+        self,
+    ) -> None:
+        target = self.server.create_session("project", attach=False, command=("cat",))
+        scope = {"id": target.state().id}
+        tab = self.proc(
+            "tab.new", session=scope, title="editor", focus="preserve", argv=["cat"]
+        )
+        pane = self.proc(
+            "pane.split",
+            session=scope,
+            pane={"id": tab["pane"]},
+            direction="right",
+            focus="preserve",
+            argv=["cat"],
+        )
+        self.open()
+        self.client.send("doesnotexist\r")
+        self.expect_screen("No matches")
+        self.assertTrue(self.source.state().attached)
+        self.assertFalse(target.state().attached)
+        self.client.send(b"\x15\x1b[200~prj edtr 2 cat\r\x1b[201~")
+        self.expect_screen("project / editor / 2 cat")
+        self.assertFalse(target.state().attached)  # Pasted Enter is not activation.
+        self.client.send(b"\r")
+        self.server.wait_for_state(
+            target.name,
+            lambda state: (
+                state.attached
+                and state.active_tab == tab["tab"]
+                and state.focused_pane == pane["pane"]
+            ),
+            "search activates exact pane in another Session",
+        )
+        self.client.send("__DIRECT_PANE__\r")
+        self.client.expect_output("__DIRECT_PANE__")
+
+    def test_resize_moves_preview_and_preserves_query_selection_and_input(self) -> None:
+        target = self.server.create_session("remote", attach=False, command=("cat",))
+        self.client.resize(180, 40)
+        self.server.wait_for_state(
+            "source", lambda state: state.columns == 180, "wide terminal"
+        )
+        self.open()
+        self.client.send("remote")
+        self.expect_screen("> remote")
+        wide = self.expect_screen("1 shell")
+        # In a wide terminal the preview begins in the right half.
+        self.assertTrue(
+            any(line.find("1 shell") > 70 for line in wide.splitlines()), wide
+        )
+        self.client.resize(80, 24)
+        self.server.wait_for_state(
+            "source", lambda state: state.columns == 80, "narrow terminal"
+        )
+        narrow = self.expect_screen("1 shell")
+        self.assertTrue(
+            any(
+                i > 10 and 0 <= line.find("1 shell") < 25
+                for i, line in enumerate(narrow.splitlines())
+            ),
+            narrow,
+        )
+        self.expect_screen("> remote")
+        self.client.resize(30, 10)
+        self.server.wait_for_state(
+            "source", lambda state: state.rows == 10, "small terminal"
+        )
+        self.expect_screen("1 shell", absent=True)
+        self.client.resize(10, 1)
+        self.server.wait_for_state(
+            "source", lambda state: state.rows == 1, "tiny terminal"
+        )
+        self.expect_screen("Esc clos")
+        self.client.resize(180, 40)
+        self.server.wait_for_state(
+            "source", lambda state: state.rows == 40, "restored terminal"
+        )
+        self.expect_screen("> remote")
+        self.expect_screen("1 shell")
+        self.client.send(b"\r")
+        self.server.wait_for_state(
+            target.name, lambda state: state.attached, "resized selection activation"
+        )
+        self.client.send("__AFTER_RESIZE__\r")
+        self.client.expect_output("__AFTER_RESIZE__")
+
+    def test_removed_session_does_not_activate_a_replacement(self) -> None:
+        target = self.server.create_session("vanishing", attach=False, command=("cat",))
+        original = target.state().id
+        self.open()
+        self.client.send("vanishing")
+        self.expect_screen("> vanishing")
+        target.destroy()
+        replacement = self.server.create_session(
+            "vanishing", attach=False, command=("cat",)
+        )
+        self.assertNotEqual(original, replacement.state().id)
+        self.expect_screen("Selection disappeared")
+        self.client.send(b"\r\x03")
+        self.expect_screen("Sessions", absent=True)
+        self.client.send("__STILL_SOURCE__\r")
+        self.client.expect_output("__STILL_SOURCE__")
+        self.assertTrue(self.source.state().attached)
+        self.assertFalse(replacement.state().attached)
+
+    def test_native_tab_selection_after_growth_closes_picker(self) -> None:
+        scope = {"id": self.source.state().id}
+        tab = self.proc(
+            "tab.new", session=scope, title="native", focus="preserve", argv=["cat"]
+        )
+        self.open()
+        self.client.resize(180, 40)
+        self.server.wait_for_state(
+            "source", lambda state: state.rows == 40, "grown terminal"
+        )
+        self.expect_screen("Search...")
+        self.proc("tab.select", session=scope, tab={"id": tab["tab"]})
+        self.expect_screen("Sessions", absent=True)
+        self.client.send("__NATIVE_RECOVERY__\r")
+        self.client.expect_output("__NATIVE_RECOVERY__")
+
+    def test_preview_capture_and_maximum_terminal_fit_protocol_limits(self) -> None:
+        self.client.send("__CAPTURE_CONTENT__\r")
+        self.client.expect_output("__CAPTURE_CONTENT__")
+        self.client.resize(500, 200)
+        self.server.wait_for_state(
+            "source", lambda state: state.rows == 200, "maximum terminal"
+        )
+        self.open()
+        self.client.send("source 1 cat")
+        self.expect_screen("/ 1 cat")
+        wait_until(
+            "captured pane content inside the preview",
+            lambda: (
+                True
+                if any(
+                    line.find("__CAPTURE_CONTENT__") > 200
+                    for line in self.screen().splitlines()
+                )
+                else None
+            ),
+            diagnostics=self.client.diagnostics,
+        )
+        self.client.send(b"\x1b")
+        self.expect_screen("Sessions", absent=True)
+        self.client.send("__CLOSED_PICKER__\r")
+        self.client.expect_output("__CLOSED_PICKER__")
+
+    def test_busy_pane_search_does_not_change_other_clients_tab(self) -> None:
+        busy = self.server.create_session("busy", command=("cat",))
+        initial = busy.state()
+        scope = {"id": initial.id}
+        self.proc(
+            "tab.new", session=scope, title="hidden", focus="preserve", argv=["cat"]
+        )
+        self.open()
+        self.client.send("busy hidden cat")
+        self.expect_screen("busy / hidden / 1 cat")
+        self.client.send(b"\r")
+        self.expect_screen("Cannot switch: target_attached")
+        self.assertEqual(busy.state().active_tab, initial.active_tab)
+        self.assertEqual(busy.state().focused_pane, initial.focused_pane)
+        self.assertTrue(self.source.state().attached)
+
+    def test_closed_browsing_tab_returns_to_parent_without_choosing_replacement(
+        self,
+    ) -> None:
+        scope = {"id": self.source.state().id}
+        tab = self.proc(
+            "tab.new", session=scope, title="temporary", focus="preserve", argv=["cat"]
+        )
+        self.open()
+        self.client.send("temporary\t")
+        self.expect_screen("source / temporary")
+        self.proc("tab.kill", session=scope, tab={"id": tab["tab"]})
+        self.expect_screen("Tab closed")
+        self.expect_screen("1 shell")
+        self.client.send(b"\r")
+        self.expect_screen("Tab closed")
+        self.assertEqual(self.source.state().tabs, 1)
 
 
 if __name__ == "__main__":

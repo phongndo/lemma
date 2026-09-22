@@ -34,6 +34,9 @@ public:
   [[nodiscard]] auto ready() const noexcept -> bool;
   [[nodiscard]] auto next(int timeout_ms = -1) -> std::optional<ClientRecord>;
   [[nodiscard]] auto proc(std::string_view commands) -> api::JsonValue;
+  // Submit without waiting for the result; the caller drains next() and keeps at most one Proc
+  // outstanding on this connection. This lets a user UI fetch data without blocking its input.
+  [[nodiscard]] auto submit_proc(std::string_view commands) -> std::uint32_t;
   void update(std::string_view content);
 
 private:
