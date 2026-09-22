@@ -158,7 +158,8 @@ TEST_F(ReadinessTest, InterruptedWaitReturnsEintr) {
   struct sigaction previous{};
   struct sigaction action{};
   action.sa_handler = +[](int) {};
-  ::sigemptyset(&action.sa_mask);
+  // macOS exposes sigemptyset as a macro.
+  static_cast<void>(sigemptyset(&action.sa_mask));
   ASSERT_EQ(::sigaction(SIGALRM, &action, &previous), 0);
   static_cast<void>(::alarm(1));
   const auto result = readiness.wait(descriptors, identities, 2000);
