@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
@@ -79,9 +80,28 @@ struct Pane final {
   std::string id;
   std::string command;
   std::string cwd;
-  bool launch_cwd{false};
   bool inspected{false};
 };
+
+[[nodiscard]] auto directory_label(std::string_view value) -> std::string {
+  const auto* home = std::getenv("HOME");
+  if (home != nullptr) {
+    const std::string_view prefix(home);
+    if (!prefix.empty() && prefix != "/" && value.starts_with(prefix) &&
+        (value.size() == prefix.size() || value.at(prefix.size()) == '/')) {
+      return '~' + std::string(value.substr(prefix.size()));
+    }
+  }
+  return std::string(value);
+}
+
+[[nodiscard]] auto tail_label(std::string_view value, std::size_t width) -> std::string {
+  if (value.size() <= width) {
+    return std::string(value);
+  }
+  return width > 3 ? "..." + std::string(value.substr(value.size() - width + 3))
+                   : std::string(value.substr(0, width));
+}
 
 [[nodiscard]] auto process_label(const JsonValue& process) -> std::string {
   auto name = plain(text(process, "observed_title"));
@@ -99,23 +119,30 @@ struct Pane final {
 struct Tab final {
   std::string id;
   std::string title;
+  std::string focused;
   std::size_t position{0};
   std::vector<Pane> panes;
 };
 struct Session final {
   std::string id;
   std::string name;
+  std::string active_tab;
   std::uint64_t revision{0};
   std::size_t tab_count{0};
   bool attached{false};
   bool loaded{false};
   std::vector<Tab> tabs;
 };
+struct ContentSize final {
+  std::size_t width{40};
+  std::size_t rows{1};
+};
 struct Location final {
   Target scope;
   std::string query;
   std::size_t cursor{0};
   std::optional<Target> selected;
+  std::optional<ContentSize> size;
 };
 struct Match final {
   Target target;
@@ -129,21 +156,26 @@ struct Rectangle final {
   std::size_t y{0};
   std::size_t width{0};
   std::size_t height{0};
+  auto operator==(const Rectangle&) const -> bool = default;
 };
 struct Layout final {
   Rectangle surface;
   Rectangle list;
 };
 
-// Keep a compact list on large terminals and shrink it with the available space.
-[[nodiscard]] auto layout(std::size_t columns, std::size_t rows) -> Layout {
-  const auto width = std::clamp<std::size_t>(columns * 80 / 100, 1, 96);
-  const auto height = std::clamp<std::size_t>(rows * 85 / 100, 1, 18);
-  return {.surface = {.x = (columns - width) / 2,
-                      .y = (rows - height) / 2,
-                      .width = width,
-                      .height = height},
-          .list = {.x = 0, .y = 0, .width = width, .height = height > 1 ? height - 1 : height}};
+// Fit the unfiltered catalogue once per location, then clip only for terminal resizing.
+[[nodiscard]] auto layout(std::size_t columns, std::size_t rows, ContentSize content, bool message)
+    -> Layout {
+  const auto width = std::min(std::clamp<std::size_t>(columns * 80 / 100, 1, 96), content.width);
+  const auto height = std::min(std::clamp<std::size_t>(rows * 85 / 100, 1, 18),
+                               std::max<std::size_t>(1, content.rows) + 4 + (message ? 1 : 0));
+  return {
+      .surface = {.x = (columns - width) / 2,
+                  .y = (rows - height) / 2,
+                  .width = width,
+                  .height = height},
+      .list = {
+          .x = 0, .y = 0, .width = width, .height = message && height > 1 ? height - 1 : height}};
 }
 
 struct Cell final {
@@ -291,11 +323,13 @@ public:
         connection_(text(context, "connection")), current_(text(context, "session")) {
     const auto inspected =
         command(client_, R"({"command":"session.inspect","session":)" + selector(current_) + '}');
-    const auto& geometry = member(member(inspected, "session_state"), "geometry");
-    resize(number(geometry, "columns"), number(geometry, "rows"));
+    const auto& state = member(inspected, "session_state");
+    const auto& geometry = member(state, "geometry");
+    columns_ = number(geometry, "columns");
+    rows_ = number(geometry, "rows");
     const auto listed = command(client_, R"({"command":"session.list"})");
     reconcile(member(listed, "sessions"));
-    location_.selected = Target{.session = current_, .tab = {}, .pane = {}};
+    location_.selected = Target{.session = current_, .tab = text(state, "active_tab"), .pane = {}};
     paint();
     refocus();
   }
@@ -312,6 +346,8 @@ private:
   std::vector<Location> history_;
   std::vector<Match> matches_;
   std::size_t candidate_count_{0};
+  std::size_t label_width_{0};
+  std::size_t detail_width_{0};
   std::optional<Job> job_;
   Layout layout_;
   std::size_t columns_{0};
@@ -350,6 +386,8 @@ private:
     repairing_ = text(focused, "status") == "applied";
   }
   void resize(std::size_t columns, std::size_t rows);
+  [[nodiscard]] auto content_size() const -> ContentSize;
+  [[nodiscard]] auto catalogue_ready() const -> bool;
   void reconcile(const JsonValue& list);
   void rebuild(bool choose_first = false);
   void validate_location();
@@ -377,12 +415,15 @@ private:
 };
 
 void SessionManager::resize(std::size_t columns, std::size_t rows) {
-  if (columns == columns_ && rows == rows_) {
+  const auto content = location_.size.has_value() ? *location_.size : content_size();
+  const auto next = layout(columns, rows, content, !message_.empty());
+  if (!surface_.empty() && columns == columns_ && rows == rows_ &&
+      next.surface == layout_.surface && next.list == layout_.list) {
     return;
   }
   columns_ = columns;
   rows_ = rows;
-  layout_ = layout(columns, rows);
+  layout_ = next;
   const auto& rect = layout_.surface;
   const auto placement = R"({"kind":"float","column":)" + std::to_string(rect.x) + R"(,"row":)" +
                          std::to_string(rect.y) + R"(,"columns":)" + std::to_string(rect.width) +
@@ -401,6 +442,31 @@ void SessionManager::resize(std::size_t columns, std::size_t rows) {
   dirty_ = true;
 }
 
+auto SessionManager::content_size() const -> ContentSize {
+  auto count = candidate_count_;
+  if (location_.scope.tab.empty()) {
+    count = 0;
+    for (const auto& item : sessions_) {
+      count += item.tab_count;
+    }
+  }
+  return {.width = catalogue_ready()
+                       ? std::clamp<std::size_t>(label_width_ + detail_width_ + 6, 40, 96)
+                       : 48,
+          .rows = std::max<std::size_t>(1, count)};
+}
+
+auto SessionManager::catalogue_ready() const -> bool {
+  return std::ranges::all_of(sessions_, [this](const Session& item) {
+    if (!location_.scope.session.empty() && item.id != location_.scope.session) {
+      return true;
+    }
+    return item.loaded && std::ranges::all_of(item.tabs, [](const Tab& tab) {
+             return std::ranges::all_of(tab.panes, &Pane::inspected);
+           });
+  });
+}
+
 void SessionManager::reconcile(const JsonValue& list) {
   std::vector<Session> updated;
   for (const auto& value : list.array) {
@@ -411,6 +477,7 @@ void SessionManager::reconcile(const JsonValue& list) {
     item.loaded = item.loaded && item.revision == revision;
     item.id = id;
     item.name = text(value, "name");
+    item.active_tab = text(value, "active_tab");
     item.revision = revision;
     item.tab_count = number(value, "tabs");
     item.attached = enabled(value, "attached");
@@ -428,6 +495,8 @@ void SessionManager::reconcile(const JsonValue& list) {
 void SessionManager::add_match(Target target, std::string label, std::string detail,
                                const std::string& search) {
   ++candidate_count_;
+  label_width_ = std::max(label_width_, label.size());
+  detail_width_ = std::max(detail_width_, detail.size());
   auto matched = fuzzy(search, location_.query);
   if (!matched.has_value()) {
     return;
@@ -448,13 +517,8 @@ void SessionManager::validate_location() {
       std::ranges::find(item->tabs, location_.scope.tab, &Tab::id) != item->tabs.end()) {
     return;
   }
-  location_ = {.scope = {.session = item->id, .tab = {}, .pane = {}},
-               .query = {},
-               .cursor = 0,
-               .selected = std::nullopt};
-  if (!history_.empty() && history_.back().scope == location_.scope) {
-    history_.pop_back();
-  }
+  location_ = {};
+  history_.clear();
   lost_selection_ = true;
   message_ = "Tab closed; choose another result";
 }
@@ -467,44 +531,50 @@ void SessionManager::rebuild(bool choose_first) {
   const auto searching = location_.query.find_first_not_of(' ') != std::string::npos;
   matches_.clear();
   candidate_count_ = 0;
+  label_width_ = 0;
+  detail_width_ = 0;
   for (const auto& item : sessions_) {
     if (!location_.scope.session.empty() && item.id != location_.scope.session) {
       continue;
-    }
-    if (location_.scope.session.empty()) {
-      const std::string_view availability = item.attached ? " [attached]" : "";
-      const std::string suffix(item.id == current_ ? " *" : availability);
-      add_match({.session = item.id, .tab = {}, .pane = {}}, item.name + suffix,
-                std::to_string(item.tab_count) + (item.tab_count == 1 ? " tab" : " tabs"),
-                item.name);
     }
     for (const auto& tab : item.tabs) {
       if (!location_.scope.tab.empty() && tab.id != location_.scope.tab) {
         continue;
       }
-      const auto name = tab.title.empty() ? "tab " + std::to_string(tab.position) : tab.title;
-      const auto path = item.name + " / " + name;
+      const auto name = tab.title.empty() ? "tab" : tab.title;
+      const auto path = item.name + " / " + std::to_string(tab.position) + ':' + name;
       if (location_.scope.tab.empty()) {
-        const auto label = (location_.scope.session.empty() ? "  " : "") +
-                           std::to_string(tab.position) + " " + name;
-        add_match({.session = item.id, .tab = tab.id, .pane = {}}, searching ? path : label,
-                  std::to_string(tab.panes.size()) + (tab.panes.size() == 1 ? " pane" : " panes"),
-                  path);
-      }
-      if (!searching && location_.scope.tab.empty()) {
+        auto search = path;
+        for (const auto& pane : tab.panes) {
+          search += ' ' + pane.command + ' ' + pane.cwd;
+        }
+        const auto focused = std::ranges::find(tab.panes, tab.focused, &Pane::id);
+        const auto* pane = tab.panes.empty() ? nullptr : &tab.panes.front();
+        if (focused != tab.panes.end()) {
+          pane = &*focused;
+        }
+        auto detail = pane == nullptr ? std::string{} : directory_label(pane->cwd);
+        if (tab.panes.size() > 1) {
+          detail += (detail.empty() ? "" : "  ") + std::to_string(tab.panes.size()) + " panes";
+        }
+        if (item.attached && item.id != current_) {
+          detail += detail.empty() ? "[attached]" : "  [attached]";
+        }
+        const auto current = item.id == current_ && tab.id == item.active_tab;
+        add_match({.session = item.id, .tab = tab.id, .pane = {}}, path + (current ? " *" : ""),
+                  std::move(detail), search);
         continue;
       }
       for (std::size_t index = 0; index < tab.panes.size(); ++index) {
         const auto& pane = tab.panes.at(index);
         const auto label = std::to_string(index + 1) + " " + pane.command;
-        auto full = path;
-        full += " / ";
-        full += label;
-        const auto directory = pane.cwd + (pane.launch_cwd ? " (launch)" : "");
-        add_match({.session = item.id, .tab = tab.id, .pane = pane.id}, searching ? full : label,
-                  directory, full + ' ' + pane.cwd);
+        add_match({.session = item.id, .tab = tab.id, .pane = pane.id}, label,
+                  directory_label(pane.cwd), label + ' ' + pane.cwd);
       }
     }
+  }
+  if (!location_.size.has_value() && catalogue_ready()) {
+    location_.size = content_size();
   }
   if (searching) {
     std::ranges::stable_sort(
@@ -514,9 +584,12 @@ void SessionManager::rebuild(bool choose_first) {
     lost_selection_ = false;
     location_.selected.reset();
   } else if (previous.has_value() && selected() == nullptr) {
-    location_.selected.reset();
-    lost_selection_ = true;
-    message_ = "Selection disappeared; choose another result";
+    const auto* item = session(previous->session);
+    if (item == nullptr || item->loaded) {
+      location_.selected.reset();
+      lost_selection_ = true;
+      message_ = "Selection disappeared; choose another result";
+    }
   }
   if (!location_.selected.has_value() && !lost_selection_ && !matches_.empty()) {
     location_.selected = matches_.front().target;
@@ -543,7 +616,8 @@ void SessionManager::browse() {
   }
   const auto target = chosen->target;
   history_.push_back(location_);
-  location_ = {.scope = target, .query = {}, .cursor = 0, .selected = std::nullopt};
+  location_ = {
+      .scope = target, .query = {}, .cursor = 0, .selected = std::nullopt, .size = std::nullopt};
   message_.clear();
   rebuild(true);
 }
@@ -572,10 +646,9 @@ void SessionManager::fetch() {
   if (job_.has_value()) {
     return;
   }
-  const auto* choice = selected();
   std::vector<Session*> order;
-  if (choice != nullptr) {
-    if (auto* item = session(choice->target.session); item != nullptr) {
+  if (location_.selected.has_value()) {
+    if (auto* item = session(location_.selected->session); item != nullptr) {
       order.push_back(item);
     }
   }
@@ -628,6 +701,7 @@ void SessionManager::outline(Session& target, const JsonValue& result) {
   for (const auto& value : member(member(values.at(0), "result"), "tabs").array) {
     tabs.push_back({.id = text(value, "id"),
                     .title = plain(text(value, "title")),
+                    .focused = text(value, "focused_pane"),
                     .position = number(value, "position"),
                     .panes = {}});
   }
@@ -655,8 +729,7 @@ void SessionManager::metadata(Session& target, const JsonValue& result) {
       }
       const auto& process = member(info, "process");
       found->cwd = plain(text(member(member(info, "terminal"), "pwd"), "value"));
-      found->launch_cwd = found->cwd.empty();
-      if (found->launch_cwd) {
+      if (found->cwd.empty()) {
         found->cwd = plain(text(member(process, "launch"), "cwd"));
       }
       found->command = process_label(process);
@@ -697,14 +770,16 @@ void SessionManager::reply(const ext::ClientRecord& record) {
 // border labels inherit the terminal theme; only selection supplies a contrasting background.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void SessionManager::paint() {
+  resize(columns_, rows_);
   Grid grid(layout_.surface.width, layout_.surface.height);
   const auto& list = layout_.list;
-  std::string title = "Sessions";
+  std::string title = "Session";
   if (const auto* item = session(location_.scope.session); item != nullptr) {
-    title = item->name;
+    title += " / " + item->name;
     for (const auto& tab : item->tabs) {
       if (tab.id == location_.scope.tab) {
-        title += " / " + (tab.title.empty() ? "tab " + std::to_string(tab.position) : tab.title);
+        title +=
+            " / " + std::to_string(tab.position) + ':' + (tab.title.empty() ? "tab" : tab.title);
       }
     }
   }
@@ -730,23 +805,25 @@ void SessionManager::paint() {
     const auto visible = list.height - 4;
     const auto selected_row = selected_index();
     const auto start = selected_row >= visible ? selected_row - visible + 1 : 0;
+    const auto available = list.width - 4;
+    const auto label_space =
+        detail_width_ == 0
+            ? available
+            : std::min(label_width_, available - std::min(detail_width_, available / 2) - 2);
     for (std::size_t row = 0; row < visible && start + row < matches_.size(); ++row) {
       const auto& match = matches_.at(start + row);
       const bool active = location_.selected == match.target;
       const auto style = active ? 3U : 0U;
       grid.put(1, row + 3, std::string(list.width - 2, ' '), list.width - 2, style);
-      const auto available = list.width - 4;
-      const auto detail_width =
-          match.detail.empty() ? 0 : std::min(available / 3, match.detail.size());
-      grid.put(2, row + 3, match.label, available - (detail_width == 0 ? 0 : detail_width + 1),
-               style, match.highlights);
-      if (detail_width != 0) {
-        grid.put(list.width - detail_width - 2, row + 3, match.detail, detail_width,
+      grid.put(2, row + 3, match.label, label_space, style, match.highlights);
+      if (!match.detail.empty()) {
+        const auto detail_space = available - label_space - 2;
+        grid.put(4 + label_space, row + 3, tail_label(match.detail, detail_space), detail_space,
                  active ? 3U : 1U);
       }
     }
     if (matches_.empty()) {
-      grid.put(3, 3, "No matches", list.width - 5, 1);
+      grid.put(2, 3, catalogue_ready() ? "No matches" : "Loading...", list.width - 4, 1);
     }
   } else {
     grid.put(0, 0, "Esc close", list.width, 1);
@@ -879,6 +956,9 @@ auto SessionManager::activate() -> bool {
 
 // Query editing operates only on bounded, printable display text; transport chunks are not keys.
 void SessionManager::edit(std::string_view value) {
+  if (!location_.size.has_value()) {
+    location_.size = content_size();
+  }
   auto& query = creating_ ? new_name_ : location_.query;
   auto& cursor = creating_ ? new_cursor_ : location_.cursor;
   const auto limit = creating_ ? limits::session_name_bytes_max : limits::search_query_bytes_max;
@@ -901,6 +981,9 @@ void SessionManager::edit(std::string_view value) {
 // Explicit editor/navigation actions keep printable j/k/n/q available to fuzzy queries.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto SessionManager::key(std::string_view value) -> bool {
+  if (!location_.size.has_value()) {
+    location_.size = content_size();
+  }
   auto& query = creating_ ? new_name_ : location_.query;
   auto& cursor = creating_ ? new_cursor_ : location_.cursor;
   if (value == "escape" || value == "\x03" || value == "\x07") {

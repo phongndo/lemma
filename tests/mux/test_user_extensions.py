@@ -34,7 +34,7 @@ class UserExtensionsMuxTest(unittest.TestCase):
         client.expect_output("fallback  |")
         self.assertIn("configuration rejected", server.logs())
         client.prefix("s")
-        client.expect_output("Sessions")
+        client.expect_output("Session")
         client.send(b"\x03")
         client.expect_output("fallback  |")
 
@@ -181,14 +181,15 @@ class UserExtensionsMuxTest(unittest.TestCase):
         target = server.create_session("second", attach=False, command=("cat",))
         client = first.require_client()
         client.prefix("s")
-        client.expect_output("Sessions")
+        client.expect_output("Session")
+        client.expect_output("second /")
         client.send("second\r")
         server.wait_for_state(
             target.name, lambda state: state.attached, "session manager switch"
         )
         client.expect_output("second  |")
         client.prefix("s")
-        client.expect_output("Sessions")
+        client.expect_output("Session")
         client.send(b"\x0f")
         client.expect_output("New session")
         client.send("third\r")
@@ -198,7 +199,8 @@ class UserExtensionsMuxTest(unittest.TestCase):
         client.expect_output("third  |")
         busy = server.create_session("busy", command=("cat",))
         client.prefix("s")
-        client.expect_output("Sessions")
+        client.expect_output("Session")
+        client.expect_output("busy /")
         client.send("busy\r")
         client.expect_output("Cannot switch:")
         self.assertTrue(busy.state().attached)
@@ -357,7 +359,64 @@ class SessionPickerMuxTest(unittest.TestCase):
 
     def open(self) -> None:
         self.client.prefix("s")
-        self.expect_screen("Sessions")
+        self.expect_screen("Session")
+
+    def picker_position(self) -> tuple[int, int, int]:
+        lines = self.screen().splitlines()
+        title_row = next(i for i, line in enumerate(lines) if "Session" in line)
+        prompt = lines[title_row + 1]
+        # The prompt and its count track both edges without depending on Unicode borders.
+        return title_row, prompt.index(">"), len(prompt.rstrip())
+
+    def test_directories_and_fitted_size_survive_filtering_and_back(self) -> None:
+        target = self.server.create_session("project", attach=False, command=("cat",))
+        scope = {"id": target.state().id}
+        alpha = self.server.root / "home" / "alpha"
+        beta = self.server.root / "home" / "beta"
+        alpha.mkdir()
+        beta.mkdir()
+        tab = self.proc(
+            "tab.new", session=scope, title="editor", cwd=str(alpha), argv=["cat"]
+        )
+        pane = self.proc(
+            "pane.split",
+            session=scope,
+            pane={"id": tab["pane"]},
+            direction="right",
+            cwd=str(beta),
+            argv=["cat"],
+        )
+        self.proc("pane.focus", session=scope, pane={"id": pane["pane"]})
+        self.open()
+        self.expect_screen("~/beta  2 panes")
+        bounds = self.picker_position()
+        self.assertGreater(bounds[0], 5)
+        self.assertLess(bounds[2] - bounds[1], 60)
+        self.client.send("not-found")
+        self.expect_screen("No matches")
+        self.assertEqual(self.picker_position(), bounds)
+        # A directory in an unfocused pane still finds its containing Tab.
+        self.client.send(b"\x15alpha")
+        self.expect_screen("1/3")
+        self.expect_screen("project / 2:editor")
+        self.assertEqual(self.picker_position(), bounds)
+        self.client.send(b"\t")
+        panes = self.expect_screen("~/alpha")
+        self.assertIn("~/beta", panes)
+        pane_bounds = self.picker_position()
+        self.client.send("alpha")
+        self.expect_screen("1/2")
+        self.assertEqual(self.picker_position(), pane_bounds)
+        self.client.send(b"\x1b[Z")
+        self.expect_screen("> alpha")
+        self.assertEqual(self.picker_position(), bounds)
+        self.assertFalse(target.state().attached)
+        self.client.send(b"\talpha\r")
+        self.server.wait_for_state(
+            target.name,
+            lambda state: state.attached and state.focused_pane == tab["pane"],
+            "directory search activates the chosen pane after browsing back",
+        )
 
     def test_root_shows_tabs_and_activates_one_without_search_or_browsing(self) -> None:
         target = self.server.create_session("project", attach=False, command=("cat",))
@@ -370,11 +429,13 @@ class SessionPickerMuxTest(unittest.TestCase):
             argv=["cat"],
         )
         self.open()
-        self.expect_screen("2 editor")
-        self.expect_screen("5/5")
+        screen = self.expect_screen("project / 2:editor")
+        self.expect_screen("3/3")
+        self.assertNotIn("1 pane", screen)
+        self.assertNotIn("1 tab", screen)
         self.assertEqual(target.state().active_tab, initial.active_tab)
-        # source, its shell Tab, project, its shell Tab, then its editor Tab.
-        self.client.send(b"\x0e\x0e\x0e\x0e\r")
+        # source's shell Tab, project's shell Tab, then project's editor Tab.
+        self.client.send(b"\x0e\x0e\r")
         self.server.wait_for_state(
             target.name,
             lambda state: (
@@ -397,10 +458,10 @@ class SessionPickerMuxTest(unittest.TestCase):
                 title="editor",
             )
         self.open()
-        self.expect_screen("4/4")
+        self.expect_screen("2/2")
         self.client.send("prj edtr")
-        self.expect_screen("project / editor")
-        self.expect_screen("2/6")
+        self.expect_screen("project / 1:editor")
+        self.expect_screen("1/2")
         self.client.send(b"\r")
         self.server.wait_for_state(
             target.name,
@@ -424,19 +485,18 @@ class SessionPickerMuxTest(unittest.TestCase):
             argv=["cat"],
         )
         self.open()
-        self.client.send("source\t")
-        self.expect_screen("2 editor")
-        self.client.send(b"\x0e\t")
-        self.expect_screen("source / editor")
+        self.expect_screen("source / 2:editor")
+        self.client.send("editor\t")
+        self.expect_screen("Session / source / 2:editor")
         self.client.send(b"\x0e")
         self.expect_screen("2 cat")
         self.assertEqual(self.source.state().active_tab, initial.active_tab)
         self.assertEqual(self.source.state().focused_pane, initial.focused_pane)
-        self.client.send(b"\x1b[Z\x1b[Z")
-        self.expect_screen("> source")
-        self.expect_screen("Sessions")
-        # Back restored the root query and the selected Session.
-        self.client.send(b"\t\x0e\t\x0e\r")
+        self.client.send(b"\x1b[Z")
+        self.expect_screen("> editor")
+        self.expect_screen("Session")
+        # Back restored the root query and the selected Tab.
+        self.client.send(b"\t\x0e\r")
         self.server.wait_for_state(
             self.source.name,
             lambda state: (
@@ -447,7 +507,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.client.send("__CHOSEN_PANE__\r")
         self.source.pane().expect_output("__CHOSEN_PANE__")
 
-    def test_multiword_search_paste_no_matches_and_exact_cross_session_target(
+    def test_multiword_search_paste_and_pane_selection_across_sessions(
         self,
     ) -> None:
         target = self.server.create_session("project", attach=False, command=("cat",))
@@ -468,10 +528,12 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.expect_screen("No matches")
         self.assertTrue(self.source.state().attached)
         self.assertFalse(target.state().attached)
-        self.client.send(b"\x15\x1b[200~prj edtr 2 cat\r\x1b[201~")
-        self.expect_screen("project / editor / 2 cat")
+        self.client.send(b"\x15\x1b[200~prj edtr cat\r\x1b[201~")
+        self.expect_screen("project / 2:editor")
         self.assertFalse(target.state().attached)  # Pasted Enter is not activation.
-        self.client.send(b"\r")
+        self.client.send(b"\t")
+        self.expect_screen("2 cat")
+        self.client.send("2 cat\r")
         self.server.wait_for_state(
             target.name,
             lambda state: (
@@ -493,14 +555,14 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.open()
         self.client.send("remote")
         self.expect_screen("> remote")
-        wide = self.expect_screen("3/6")
+        wide = self.expect_screen("1/2")
         self.assertNotIn("1 shell", wide)
         self.assertNotIn("Search...", wide)
         self.client.resize(80, 24)
         self.server.wait_for_state(
             "source", lambda state: state.columns == 80, "narrow terminal"
         )
-        narrow = self.expect_screen("3/6")
+        narrow = self.expect_screen("1/2")
         self.assertNotIn("1 shell", narrow)
         self.expect_screen("> remote")
         self.client.resize(30, 10)
@@ -518,7 +580,7 @@ class SessionPickerMuxTest(unittest.TestCase):
             "source", lambda state: state.rows == 40, "restored terminal"
         )
         self.expect_screen("> remote")
-        self.expect_screen("3/6")
+        self.expect_screen("1/2")
         self.client.send(b"\r")
         self.server.wait_for_state(
             target.name, lambda state: state.attached, "resized selection activation"
@@ -531,7 +593,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         original = target.state().id
         self.open()
         self.client.send("vanishing")
-        self.expect_screen("> vanishing")
+        self.expect_screen("vanishing / 1:shell")
         target.destroy()
         replacement = self.server.create_session(
             "vanishing", attach=False, command=("cat",)
@@ -539,7 +601,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.assertNotEqual(original, replacement.state().id)
         self.expect_screen("Selection disappeared")
         self.client.send(b"\r\x03")
-        self.expect_screen("Sessions", absent=True)
+        self.expect_screen("Session", absent=True)
         self.client.send("__STILL_SOURCE__\r")
         self.client.expect_output("__STILL_SOURCE__")
         self.assertTrue(self.source.state().attached)
@@ -555,9 +617,9 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.server.wait_for_state(
             "source", lambda state: state.rows == 40, "grown terminal"
         )
-        self.expect_screen("Sessions")
+        self.expect_screen("Session")
         self.proc("tab.select", session=scope, tab={"id": tab["tab"]})
-        self.expect_screen("Sessions", absent=True)
+        self.expect_screen("Session", absent=True)
         self.client.send("__NATIVE_RECOVERY__\r")
         self.client.expect_output("__NATIVE_RECOVERY__")
 
@@ -568,10 +630,10 @@ class SessionPickerMuxTest(unittest.TestCase):
         )
         self.open()
         self.client.send("source 1 cat")
-        self.expect_screen("/ 1 cat")
-        self.expect_screen("1/3")
+        self.expect_screen("source / 1:shell")
+        self.expect_screen("1/1")
         self.client.send(b"\x1b")
-        self.expect_screen("Sessions", absent=True)
+        self.expect_screen("Session", absent=True)
         self.client.send("__CLOSED_PICKER__\r")
         self.client.expect_output("__CLOSED_PICKER__")
 
@@ -584,7 +646,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         )
         self.open()
         self.client.send("busy hidden cat")
-        self.expect_screen("busy / hidden / 1 cat")
+        self.expect_screen("busy / 2:hidden")
         self.client.send(b"\r")
         self.expect_screen("Cannot switch: target_attached")
         self.assertEqual(busy.state().active_tab, initial.active_tab)
@@ -600,10 +662,10 @@ class SessionPickerMuxTest(unittest.TestCase):
         )
         self.open()
         self.client.send("temporary\t")
-        self.expect_screen("source / temporary")
+        self.expect_screen("source / 2:temporary")
         self.proc("tab.kill", session=scope, tab={"id": tab["tab"]})
         self.expect_screen("Tab closed")
-        self.expect_screen("1 shell")
+        self.expect_screen("source / 1:shell")
         self.client.send(b"\r")
         self.expect_screen("Tab closed")
         self.assertEqual(self.source.state().tabs, 1)

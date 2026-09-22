@@ -31,22 +31,26 @@ below. Both paths use the same public protocol, capabilities, ownership, and res
 Lemma installs `lemma-ui` beside the main executable. Its statusline and session manager speak the
 public framed protocol; they have no private access to Core. The statusline owns a nonfocusable
 one-row top dock, renders tab labels and native editor state, and implements tab click/drag behavior.
-The session manager opens with `C-b s` or `session.manager` in the command line. With an empty query,
-the root lists Sessions with their Tabs indented beneath them, including tab names, positions, and
-pane counts. Both Session and Tab rows can be activated directly. Browsing a Session narrows the
-list to its Tabs; browsing a Tab shows its Panes. Typing searches descendants of the current location;
-at the root, a process name can find a Pane in any Session. Space-separated terms all must match
-the Session/Tab path, observed process name, or directory. Matching is case-insensitive ASCII
-subsequence scoring with word-boundary and consecutive-match bonuses, not fzf's extended query
-grammar. Labels currently use ASCII display fallbacks for non-ASCII text. Pane labels use their
-ordinal and observed process name (falling back to the launch executable), not a separate title.
+The session manager opens with `C-b s` or `session.manager` in the command line. The **Session**
+picker lists one row per Tab: `session / position:title`, followed by the focused Pane's directory.
+There are no separate Session header rows. Pane counts appear only for Tabs with multiple Panes;
+`*` marks the current Tab and `[attached]` marks another client's Session.
+
+Typing filters Tabs by Session name, Tab position/title, or any contained Pane's process name or
+directory. A process or directory match selects its containing Tab. Tab opens that Tab's Pane
+list, where search matches Pane ordinals, process names, and directories. Shift-Tab returns to
+the Tab list with its query and selection restored. Space-separated terms all must match.
+Matching is case-insensitive ASCII subsequence scoring with word-boundary and consecutive-match
+bonuses, not fzf's extended query grammar. Labels currently use ASCII display fallbacks for
+non-ASCII text. Pane labels use their ordinal and observed process name (falling back to the
+launch executable), not a separate title.
 
 | Key | Action |
 | --- | --- |
 | Up/Down or Ctrl-P/Ctrl-N | Select a result without changing terminal focus |
-| Tab | Browse the selected Session or Tab |
-| Shift-Tab | Return, restoring the previous query and selection |
-| Enter | Activate the Session, Tab, or exact Pane |
+| Tab | Show the selected Tab's Panes |
+| Shift-Tab | Return, restoring the previous query, selection, and popup size |
+| Enter | Activate the Tab or exact Pane, switching Sessions when needed |
 | Escape or Ctrl-C | Close; in the creation prompt, return to search |
 | Ctrl-O | Open the named Session creation prompt |
 | Ctrl-R | Refresh metadata |
@@ -54,16 +58,19 @@ ordinal and observed process name (falling back to the launch executable), not a
 Printable keys, including `j`, `k`, `n`, and `q`, belong to the query. Left/Right, Home/End,
 Backspace/Delete, Ctrl-U, and Ctrl-W edit it. Pasted text cannot activate a result. Removed
 selections require a fresh choice; busy destinations cannot take another client's connection.
-Selecting a Session preserves its active Tab and focused Pane. The manager has a ten-minute
-invocation deadline.
+Opening a Tab preserves its focused Pane. The manager has a ten-minute invocation deadline.
 
-The centered float is capped at 96 columns and 18 rows, shrinking to 80% of terminal columns and
-85% of rows on smaller terminals. Its size stays fixed while filtering, and longer lists scroll
-with the selection. The fill and border label use terminal-default backgrounds. Its title is
-centered above an empty search prompt; the prompt row shows matching/total candidate counts.
-A highlighted row indicates selection. There is no preview or keyboard-hint footer. Resizing
-preserves the query, browsing location, and selected identity. A directory marked `(launch)` is
-the launch directory, used when no current OSC 7 directory is available.
+The centered float fits the initial unfiltered list, capped at 96 columns and 18 rows and at
+80% of terminal columns and 85% of rows. It retains its size while filtering; longer lists scroll
+with the selection. Initial metadata arrives asynchronously. If typing begins before discovery
+finishes, the popup keeps its initial footprint. Browsing Panes fits that list separately.
+Terminal resizing preserves the query, browsing location, and selected identity.
+
+The fill and border label use terminal-default backgrounds. The centered title sits above an
+empty search prompt with matching/total candidate counts. Rows align directories beside the
+labels instead of pushing details to the right border. Directories use OSC 7 when available,
+otherwise the launch directory; the user's home is abbreviated to `~`, and clipped paths retain
+their ending. A highlighted row indicates selection. There is no preview or keyboard-hint footer.
 
 Catalogue reads run asynchronously on a separate connection from input. Search uses cached
 metadata, Surface updates retain unchanged rows, and idle helpers wait for Events. The picker
