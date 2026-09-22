@@ -371,7 +371,9 @@ class SessionPickerMuxTest(unittest.TestCase):
     def test_directories_and_fitted_size_survive_filtering_and_back(self) -> None:
         target = self.server.create_session("project", attach=False, command=("cat",))
         scope = {"id": target.state().id}
-        alpha = self.server.root / "home" / "alpha"
+        # Full paths are searchable; punctuation keeps the query from matching
+        # an accidental subsequence in the shared random temporary directory.
+        alpha = self.server.root / "home" / "alpha!"
         beta = self.server.root / "home" / "beta"
         alpha.mkdir()
         beta.mkdir()
@@ -396,22 +398,22 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.expect_screen("No matches")
         self.assertEqual(self.picker_position(), bounds)
         # A directory in an unfocused pane still finds its containing Tab.
-        self.client.send(b"\x15alpha")
+        self.client.send(b"\x15alpha!")
         self.expect_screen("1/3")
         self.expect_screen("project / 2:editor")
         self.assertEqual(self.picker_position(), bounds)
         self.client.send(b"\t")
-        panes = self.expect_screen("~/alpha")
+        panes = self.expect_screen("~/alpha!")
         self.assertIn("~/beta", panes)
         pane_bounds = self.picker_position()
-        self.client.send("alpha")
+        self.client.send("alpha!")
         self.expect_screen("1/2")
         self.assertEqual(self.picker_position(), pane_bounds)
         self.client.send(b"\x1b[Z")
-        self.expect_screen("> alpha")
+        self.expect_screen("> alpha!")
         self.assertEqual(self.picker_position(), bounds)
         self.assertFalse(target.state().attached)
-        self.client.send(b"\talpha\r")
+        self.client.send(b"\talpha!\r")
         self.server.wait_for_state(
             target.name,
             lambda state: state.attached and state.focused_pane == tab["pane"],

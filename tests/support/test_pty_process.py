@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import pty
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.support.pty_process import (
     FINAL_PTY_OUTPUT_BYTES,
@@ -123,6 +125,28 @@ class PtyOutputMonitorTest(unittest.TestCase):
 
 
 class PtyProcessBufferingTest(unittest.TestCase):
+    def test_resize_waits_for_child_process_group_creation(self) -> None:
+        def delayed_fork() -> tuple[int, int]:
+            master, slave = os.openpty()
+            pid = os.fork()
+            if pid == 0:
+                os.close(master)
+                # Pin the forkpty race: the parent returns before login_tty creates
+                # the child's process group, as on a busy sanitizer runner.
+                time.sleep(0.1)
+                os.login_tty(slave)
+                return 0, -1
+            os.close(slave)
+            return pid, master
+
+        with patch.object(pty, "fork", delayed_fork):
+            process = PtyProcess(
+                [sys.executable, "-c", "import time; time.sleep(5)"], dict(os.environ)
+            )
+        self.addCleanup(process.close)
+        process.resize(60, 12)
+        self.assertEqual(os.getpgid(process.pid), process.pid)
+
     def test_later_children_do_not_inherit_another_clients_pty(self) -> None:
         first = PtyProcess(["cat"], dict(os.environ))
         self.addCleanup(first.close)
