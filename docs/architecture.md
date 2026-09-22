@@ -124,6 +124,11 @@ Extension aggregate resource accounting is likewise derived from peer-owned tran
 state, not a competing mutable ledger. Slow peers cannot prevent unrelated PTY progress; queues and
 per-turn work have explicit bounds.
 
+On Linux, the reactor retains level-triggered epoll registration for stable descriptor lifetimes;
+other platforms use poll. Watches derive their identity from existing owner generations and are
+rebuilt on membership or lifetime changes, including descriptor-number reuse. Readiness never
+changes dispatch order or byte budgets. Unsupported descriptors fall back to poll.
+
 ## Mutation and configuration
 
 Every semantic mutation uses a typed command and result. CLI syntax and backward result references

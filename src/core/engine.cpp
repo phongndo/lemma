@@ -34,6 +34,7 @@
 #include "lemma/terminal/terminal.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
+#include "platform/readiness.hpp"
 #include "protocol/attachment.hpp"
 #include "render/frame_buffer.hpp"
 #include "render/scene.hpp"
@@ -10367,6 +10368,59 @@ struct DescriptorOwner final {
   ExtensionGenerationId extension_owner;
 };
 
+template <typename Tag>
+[[nodiscard]] auto readiness_id(const GenerationalId<Tag> id) noexcept -> std::uint64_t {
+  return (static_cast<std::uint64_t>(id.generation()) << 32U) | id.slot();
+}
+
+[[nodiscard]] auto readiness_identity(const DescriptorOwner& owner,
+                                      const PendingConnectionGenerations& pending) noexcept
+    -> platform::ReadinessIdentity {
+  const auto domain = static_cast<std::uint64_t>(owner.kind) + 2U;
+  switch (owner.kind) {
+  case DescriptorKind::pane:
+    return {.domain = domain,
+            .owner = readiness_id(owner.session),
+            .generation = readiness_id(owner.pane)};
+  case DescriptorKind::client:
+    return {.domain = domain,
+            .owner = readiness_id(owner.session),
+            .generation = readiness_id(owner.connection)};
+  case DescriptorKind::pending:
+    return {.domain = domain,
+            .owner = owner.auxiliary_slot,
+            .generation = std::span(pending).subspan(owner.auxiliary_slot, 1).front()};
+  case DescriptorKind::extension_peer:
+    return {.domain = domain, .owner = readiness_id(owner.extension_owner), .generation = 0};
+  case DescriptorKind::capacity_rejection:
+    // Rare rejection slots have no lifetime generation. Use ordinary poll for these turns.
+    return {};
+  case DescriptorKind::child_reaper:
+  case DescriptorKind::extension_host:
+    return {.domain = domain, .owner = 0, .generation = 0};
+  }
+  return {};
+}
+
+[[nodiscard]] auto
+collect_readiness_identities(const std::span<const DescriptorOwner> owners,
+                             const PendingConnectionGenerations& pending,
+                             std::vector<platform::ReadinessIdentity>& storage) noexcept
+    -> std::span<const platform::ReadinessIdentity> {
+  try {
+    storage.resize(owners.size());
+  } catch (...) {
+    return {}; // Allocation failure selects poll for this turn.
+  }
+  storage.front() = {
+      .domain = 1, .owner = 0, .generation = 0}; // Listener lifetime is the entire reactor run.
+  for (std::size_t index = 1; index < owners.size(); ++index) {
+    std::span(storage).subspan(index, 1).front() =
+        readiness_identity(owners.subspan(index, 1).front(), pending);
+  }
+  return storage;
+}
+
 // The branches are the explicit bounded stages of the current single-owner reactor.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
@@ -10408,6 +10462,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       capacity_rejection_connections_max + limits::extension_sessions_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
+  platform::Readiness readiness(environment.poll == &production_poll ? descriptor_count_max : 0);
+  std::vector<platform::ReadinessIdentity> readiness_identities;
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
       client_flush_targets{};
   std::array<ExtensionGeometryObservation, limits::sessions_hard_max>
@@ -10594,8 +10650,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                      public_screen_work_pending || reaped_work_pending);
     const auto hosted_timeout =
         service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
-    const auto poll_result = reactor_poll(std::span(descriptors).first(descriptor_count),
-                                          extension_runtime.buffered_work() ? 0 : hosted_timeout);
+    const auto ready_descriptors = std::span(descriptors).first(descriptor_count);
+    const auto ready_timeout = extension_runtime.buffered_work() ? 0 : hosted_timeout;
+    int poll_result = 0;
+    if (readiness.uses_native_wait()) {
+      const auto identities = collect_readiness_identities(
+          std::span(owners).first(descriptor_count), pending_generations, readiness_identities);
+      poll_result = readiness.wait(ready_descriptors, identities, ready_timeout);
+    } else {
+      poll_result = reactor_poll(ready_descriptors, ready_timeout);
+    }
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;

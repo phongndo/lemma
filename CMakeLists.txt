@@ -131,6 +131,7 @@ target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty
 add_library(
   lemma_platform STATIC
   src/platform/io.cpp
+  src/platform/readiness.cpp
   src/platform/pty.cpp
   src/platform/terminal_mode.cpp
 )
@@ -412,7 +413,7 @@ if(LEMMA_BUILD_TESTS)
   gtest_discover_tests(lemma_terminal_boundary_tests PROPERTIES LABELS "terminal-unit")
 
   # Real platform-process contracts remain native but are never presented as pure unit tests.
-  add_executable(lemma_component_integration_tests tests/platform_test.cpp)
+  add_executable(lemma_component_integration_tests tests/platform_test.cpp tests/readiness_test.cpp)
   lemma_internal_target(lemma_component_integration_tests)
   target_link_libraries(
     lemma_component_integration_tests
