@@ -1328,13 +1328,10 @@ template <typename Id>
     return value;
   }
   for (const auto& session : sessions) {
-    if (session == nullptr || !session->active) {
-      continue;
+    if (session != nullptr && session->active &&
+        (!filter.has_value() || filter->name == session->session_name())) {
+      mix_session(*session);
     }
-    if (filter.has_value() && filter->name != session->session_name()) {
-      continue;
-    }
-    mix_session(*session);
   }
   return value;
 }
