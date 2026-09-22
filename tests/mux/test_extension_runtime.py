@@ -419,6 +419,12 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
     def test_global_extension_service_is_fair_across_buffered_structural_work(
         self,
     ) -> None:
+        # Exercise the full public peer budget without the shipped status observer occupying it.
+        self.server.close()
+        self.server = LemmaServer.from_environment(
+            config_text='require("lemma").extension.set("statusline", false)'
+        )
+        self.addCleanup(self.server.close)
         session = self.server.create_session("global-fairness", command=("cat",))
         state = session.state()
         client = session.require_client()

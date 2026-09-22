@@ -1,7 +1,8 @@
 # Architecture
 
-Lemma is one C++23 executable with client, daemon, and control roles. One per-user daemon owns
-all live mux and terminal state. Clients are replaceable input and presentation edges.
+Lemma's main C++23 executable has client, daemon, and control roles; the separate `lemma-ui`
+executable supplies the shipped user interface. One per-user daemon owns all live mux and terminal
+state. Clients are replaceable input and presentation edges.
 
 ```text
 Lua config -> isolated host -> validated draft -> immutable native generation
@@ -40,6 +41,40 @@ Pane    != PaneRuntime
 presentation caches, and deadlines. Losing it detaches the client; it does not destroy the Session
 or semantic Attachment. Stable IDs cross boundaries; borrowed references remain owner-local.
 
+## Core and user layers
+
+The architectural split is between native mux mechanisms and user-layer behavior. The native layer
+spans Core, Runtime, Input, Terminal, and Scene; it is broader than the `lemma_core` build target.
+It owns Session/Tab/Pane semantics, processes and PTYs, terminal state, layout, input routing, frame
+scheduling, composition, and bounded extension admission and cleanup. Extensions compose these
+mechanisms through Procs, Events, and Surfaces. Extend the native interface when a demonstrated mux
+capability requires it; keep workflow-specific state and policy in the user layer.
+
+Statusline content and interaction, session-manager presentation, navigation, and project or agent
+workflows belong in the user layer. Shipped UI should be replaceable first-party extensions using
+the same public interface as user-installed extensions. A session manager chooses what to display
+and which Commands to submit; native code remains authoritative for creating, destroying, attaching,
+and switching Sessions. A statusline supplies retained content; native code reserves its space and
+composes it with Panes. Distribution as a default extension does not grant privileged access to Core.
+
+Lua declares keybindings and command associations, which compile into native routing policy.
+Matching a binding and forwarding ordinary terminal input must not wait for Lua or an external
+process. Extension commands execute asynchronously. Keep native recovery sufficient to revoke
+extension input ownership and regain control independently of extension execution.
+
+The split must preserve terminal responsiveness: native code composes retained extension state
+without callbacks or a synchronous dependency on extension progress. Drive user-layer updates
+from bounded observations and changed content rather than terminal-byte or frame callbacks. Idle
+extensions should sleep; terminal screen projections remain opt-in. Validate native and helper
+resource costs with the [performance requirements](performance.md), including the extension-isolation
+gate when changing this seam.
+
+The shipped `lemma-ui` process supplies the statusline and session-manager UI through public
+Events, Procs, and Surfaces. Native command editing, copy/search state, completion, and recovery
+remain authoritative state machines; their prompt representation is observed and rendered by the
+statusline. Managed extension process groups have bounded restart independently of the Lua command
+host. The [extension contract](extensions.md) defines lifecycle, observation, and UI capabilities.
+
 ## Components
 
 [Build targets](../CMakeLists.txt) define the dependency boundaries:
@@ -53,7 +88,9 @@ or semantic Attachment. Stable IDs cross boundaries; borrowed references remain 
 | `lemma_input` | Compiled physical keymaps and per-Attachment routing contexts |
 | `lemma_config` | Configuration values, validation, and native generation compilation |
 | `lemma_extension_contract` | Lua command declarations and language-neutral extension protocol |
-| `lemma_extension` | Isolated command host, Lua callbacks, external children, and configuration admission |
+| `lemma_extension` | Isolated command host, Lua callbacks, managed programs, external children, and configuration admission |
+| `lemma_extension_client` | Public framed client used only by external user programs |
+| `lemma-ui` | Replaceable first-party statusline and session-manager UI |
 | `lemma_runtime` | Extension generations/Surfaces, processes, PTYs, scheduling, input, resize, and frame progress |
 | `lemma_terminal` | The only boundary allowed to include or link against libghostty-vt |
 | `lemma_render` | Non-authoritative pane and frame presentation |
@@ -100,8 +137,9 @@ Events observe committed state and never provide a second mutation path.
 
 The interactive command line is another typed frontend using the same executor. One native catalog
 owns command paths and completion metadata. A Session switch transfers a drained connection decoder
-and sequence, then forces a full redraw; it does not create a nested client. The status renderer owns
-interaction chrome; pane composition does not overlay command or copy-search prompts.
+and sequence, then forces a full redraw; it does not create a nested client. The external statusline
+observes editor state and supplies a retained Grid. Production frame composition receives that Grid,
+without calling a status renderer or invoking extension code.
 
 The daemon borrows one immutable compiled configuration generation. Shipped and user-declared input
 policies compile through the same path: Core owns semantic commands; configuration chooses their keys

@@ -228,6 +228,7 @@ struct Command final {
   PaneSelector other;
   SurfaceSelector surface;
   SurfacePlacement surface_placement;
+  std::optional<bool> configured_focusable;
   std::string name;
   std::string working_directory;
   std::string title;
@@ -282,6 +283,7 @@ struct EventSubscription final {
   std::optional<SessionSelector> session;
   std::vector<PaneSelector> panes;
   bool screen{false};
+  bool presentation{false};
 };
 
 struct EventSubscriptionDecodeResult final {

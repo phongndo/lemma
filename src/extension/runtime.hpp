@@ -139,8 +139,8 @@ public:
                                     bool focusable, bool opaque, render::Viewport viewport) noexcept
       -> SurfaceOperationResult;
   [[nodiscard]] auto configure_surface(ExtensionGenerationId owner, SurfaceId id,
-                                       api::SurfacePlacement placement,
-                                       render::Viewport viewport) noexcept
+                                       api::SurfacePlacement placement, render::Viewport viewport,
+                                       std::optional<bool> focusable = std::nullopt) noexcept
       -> SurfaceOperationResult;
   [[nodiscard]] auto close_surface(ExtensionGenerationId owner, SurfaceId id,
                                    render::Viewport viewport) noexcept -> SurfaceOperationResult;

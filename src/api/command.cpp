@@ -975,6 +975,10 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
         output += R"(,"opaque":false)";
       }
     }
+    if (command.kind == CommandKind::surface_configure &&
+        command.configured_focusable.has_value()) {
+      output += *command.configured_focusable ? R"(,"focusable":true)" : R"(,"focusable":false)";
+    }
     output += "}";
     return output;
   } catch (...) {
@@ -1475,7 +1479,8 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
       command.opaque = *value;
     }
   } else if (*name == "surface.configure") {
-    if (auto rejected = reject_unknown({"command", "surface", "placement"}); rejected.has_value()) {
+    if (auto rejected = reject_unknown({"command", "surface", "placement", "focusable"});
+        rejected.has_value()) {
       return *rejected;
     }
     command.kind = CommandKind::surface_configure;
@@ -1489,6 +1494,12 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
     }
     command.surface = *surface;
     command.surface_placement = *placement;
+    if (json_member(document, "focusable") != nullptr) {
+      command.configured_focusable = json_boolean(document, "focusable");
+      if (!command.configured_focusable.has_value()) {
+        return failure("invalid_field", "focusable");
+      }
+    }
   } else if (*name == "surface.focus" || *name == "surface.close") {
     if (auto rejected = reject_unknown({"command", "surface"}); rejected.has_value()) {
       return *rejected;
@@ -1515,7 +1526,8 @@ auto decode_event_subscription(const JsonValue& document) -> EventSubscriptionDe
   if (json_string(document, "schema") != std::optional<std::string_view>{events_schema}) {
     return {.subscription = std::nullopt, .error = {.reason = "invalid_schema", .field = "schema"}};
   }
-  if (const auto field = unknown_field(document, {"schema", "session", "pane", "panes", "screen"});
+  if (const auto field =
+          unknown_field(document, {"schema", "session", "pane", "panes", "screen", "presentation"});
       field.has_value()) {
     return {.subscription = std::nullopt, .error = {.reason = "unknown_field", .field = *field}};
   }
@@ -1573,6 +1585,14 @@ auto decode_event_subscription(const JsonValue& document) -> EventSubscriptionDe
   }
   if (result.screen && result.panes.empty()) {
     return {.subscription = std::nullopt, .error = {.reason = "invalid_selector", .field = "pane"}};
+  }
+  if (const auto* const presentation = json_member(document, "presentation");
+      presentation != nullptr) {
+    if (presentation->kind != JsonKind::boolean || !result.session.has_value()) {
+      return {.subscription = std::nullopt,
+              .error = {.reason = "invalid_field", .field = "presentation"}};
+    }
+    result.presentation = presentation->boolean;
   }
   return {.subscription = std::move(result), .error = {}};
 }

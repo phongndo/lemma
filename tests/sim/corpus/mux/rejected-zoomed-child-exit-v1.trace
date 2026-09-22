@@ -4,10 +4,10 @@ lemma-mux-trace-v1
 # source-trace: GitHub artifact 10297419178:sanitizers/mux-sim-artifacts/mux-16274383668880884721.trace
 # fixed-at: 55d47f86838e255c23809ed365652b96079ec59c
 op split 0:1 - 0:1 - 0 0 applied applied
-check applied 1 ea5103d516702a0c
+check applied 1 fc5f28b39c733603
 op zoom 0:1 - 1:1 - 0 0 applied applied
-check applied 1 ddc9967fd9ca8353
+check applied 1 e28434a2f5616ee8
 op attachment-resize - - - - 3 1 applied applied
-check applied 1 004c7aae37e4118d
+check applied 1 edfe50db27498b8b
 op child-exit 0:1 - 1:1 - 0 0 applied rejected
-check applied 1 b9012c3f5becbff4
+check applied 1 f4ef33a0b7b1fb98

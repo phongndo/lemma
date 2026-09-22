@@ -163,7 +163,10 @@ resize split dividers, select terminal text, and scroll canonical history. Mouse
 the child when its active terminal modes request them. Visible pane and built-in editor cursors use
 a block shape; pane-requested blinking is preserved.
 
-The status row is the only interaction chrome. An active resize, copy, search, log, or command mode
+The replaceable statusline extension supplies the normal top row. `C-b s` opens the shipped
+[session manager](extensions.md#shipped-user-layer).
+
+The status row is the only persistent interaction chrome. An active resize, copy, search, log, or command mode
 replaces normal Session and Tab status with one flat, left-aligned mode row; mode labels and prompts
 never cover pane content. Normal status returns immediately when the interaction ends.
 
@@ -204,7 +207,7 @@ commands run asynchronously in the isolated host and submit ordinary Procs. See
 [Custom commands](configuration.md#custom-commands) for registration, invocation, bounds, and failure
 behavior.
 
-Command and copy-search prompts are hosted by the native status row. With
+Command and copy-search editors are native; the shipped statusline extension presents their prompts. With
 `ui.status_line = false`, their bindings are intentionally inert rather than capturing invisible
 input.
 

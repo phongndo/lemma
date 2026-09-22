@@ -106,51 +106,6 @@ struct MessageViewStorage final {
   return {.lines = std::span(storage.lines).first(storage.size), .active = true};
 }
 
-[[nodiscard]] auto copy_feedback_text(const CopyModeFeedback feedback) noexcept
-    -> std::string_view {
-  switch (feedback) {
-  case CopyModeFeedback::no_match:
-    return "no match";
-  case CopyModeFeedback::empty_selection:
-    return "empty";
-  case CopyModeFeedback::clipboard_busy:
-    return "clipboard busy";
-  case CopyModeFeedback::too_large:
-    return "selection too large";
-  case CopyModeFeedback::failed:
-    return "copy failed";
-  case CopyModeFeedback::none:
-    return {};
-  }
-  return {};
-}
-
-[[nodiscard]] auto format_copy_position(const PaneRuntime& runtime,
-                                        const std::span<char> output) noexcept -> std::size_t {
-  const auto viewport = runtime.terminal.viewport_state();
-  if (!viewport.has_value() || output.size() < 5U) {
-    return 0;
-  }
-  const auto covered = viewport->offset + viewport->visible_rows;
-  const auto below = viewport->total_rows > covered ? viewport->total_rows - covered : 0U;
-  const auto history = viewport->total_rows > viewport->visible_rows
-                           ? viewport->total_rows - viewport->visible_rows
-                           : 0U;
-  output.front() = '[';
-  auto* const end = std::to_address(output.end());
-  auto position = std::to_chars(output.subspan(1U).data(), end, below);
-  if (position.ec != std::errc{} || position.ptr == end) {
-    return 0;
-  }
-  *position.ptr = '/';
-  const auto total = std::to_chars(std::next(position.ptr), end, history);
-  if (total.ec != std::errc{} || total.ptr == end) {
-    return 0;
-  }
-  *total.ptr = ']';
-  return static_cast<std::size_t>(std::distance(output.data(), std::next(total.ptr)));
-}
-
 // Surface projection combines bounded semantic and runtime state without retaining either.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -219,20 +174,6 @@ collect_surfaces(SessionRecord& session, PaneRuntimeStore& runtimes,
   return title.has_value() && !title->empty() ? *title : std::string_view{"shell"};
 }
 
-[[nodiscard]] auto status_tab_drag_signature(const SessionRecord& session) noexcept
-    -> std::uint64_t {
-  if (!session.attachment.mouse_capture.has_value() ||
-      session.attachment.mouse_capture->owner != MouseCaptureOwner::status_tab) {
-    return 0;
-  }
-  const auto& capture = *session.attachment.mouse_capture;
-  const auto source = (static_cast<std::uint64_t>(capture.target.tab.slot()) << 32U) |
-                      capture.target.tab.generation();
-  const auto anchor = (static_cast<std::uint64_t>(capture.status_tab_before.slot()) << 32U) |
-                      capture.status_tab_before.generation();
-  return (source * 1'099'511'628'211ULL) ^ anchor;
-}
-
 template <typename Mixer>
 void mix_command_line_status(const CommandLineState& command_line, Mixer& mix) noexcept {
   mix(command_line.active ? 1U : 0U);
@@ -265,92 +206,10 @@ void mix_command_line_status(const CommandLineState& command_line, Mixer& mix) n
   return session.input_router.active_label();
 }
 
-struct StatusContextStorage final {
-  std::array<char, render::status_context_bytes_max> text{};
-  std::array<char, limits::search_query_bytes_max> prompt{};
-  std::size_t size{0};
-  std::size_t prompt_size{0};
-
-  [[nodiscard]] auto view() const noexcept -> std::string_view { return {text.data(), size}; }
-  [[nodiscard]] auto prompt_view() const noexcept -> std::string_view {
-    return {prompt.data(), prompt_size};
-  }
-};
-
-void append_status_context(StatusContextStorage& storage, const std::string_view text) noexcept {
-  const auto available = storage.text.size() - storage.size;
-  const auto retained = std::span(text).first(std::min(text.size(), available));
-  std::ranges::copy(retained, std::span(storage.text).subspan(storage.size).begin());
-  storage.size += retained.size();
-}
-
-void append_status_separator(StatusContextStorage& storage) noexcept {
-  if (storage.size > 0 && std::span(storage.text).subspan(storage.size - 1U, 1U).front() != ' ') {
-    append_status_context(storage, " ");
-  }
-}
-
-void append_sanitized_status_text(StatusContextStorage& storage,
-                                  const std::string_view text) noexcept {
-  for (const char character : text) {
-    const auto value = static_cast<unsigned char>(character);
-    const char sanitized = value >= 0x20U && value < 0x7FU ? character : '?';
-    append_status_context(storage, std::string_view(&sanitized, 1U));
-  }
-}
-
-void collect_copy_search_prompt(const CopyModeState& state,
-                                StatusContextStorage& storage) noexcept {
-  for (const char character : state.draft_query_view()) {
-    const auto value = static_cast<unsigned char>(character);
-    std::span(storage.prompt).subspan(storage.prompt_size, 1U).front() =
-        value >= 0x20U && value < 0x7FU ? character : '?';
-    ++storage.prompt_size;
-  }
-}
-
-[[nodiscard]] auto collect_status_input_context(const SessionRecord& session,
-                                                const PaneRuntimeStore& runtimes,
-                                                StatusContextStorage& storage) noexcept
-    -> std::string_view {
-  const auto& copy_mode = session.attachment.copy_mode;
-  if (copy_mode.phase == CopyModePhase::search_prompt) {
-    collect_copy_search_prompt(copy_mode, storage);
-    return storage.view();
-  }
-  append_status_context(storage, status_input_context(session));
-  if (!copy_mode.active()) {
-    return storage.view();
-  }
-  if (copy_mode.phase == CopyModePhase::searching) {
-    append_status_separator(storage);
-    append_status_context(storage,
-                          copy_mode.search_direction == CopySearchDirection::forward ? "/" : "?");
-    append_sanitized_status_text(storage, copy_mode.query_view());
-    return storage.view();
-  }
-  if (const auto* const runtime = copy_mode_runtime(session, runtimes); runtime != nullptr) {
-    std::array<char, 64> position{};
-    const auto position_size = format_copy_position(*runtime, position);
-    if (position_size > 0) {
-      append_status_separator(storage);
-      append_status_context(storage, std::string_view(position.data(), position_size));
-    }
-  }
-  const auto feedback = copy_feedback_text(copy_mode.feedback);
-  if (!feedback.empty()) {
-    append_status_separator(storage);
-    append_status_context(storage, feedback);
-  }
-  return storage.view();
-}
-
 // The branches hash each bounded status projection into one invalidation signature.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto current_status_signature(const SessionRecord& session,
-                                            const PaneRuntimeStore& runtimes,
-                                            const std::string_view input_context,
-                                            const std::string_view copy_search_prompt) noexcept
+                                            const PaneRuntimeStore& runtimes) noexcept
     -> std::uint64_t {
   constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
   constexpr std::uint64_t prime = 1'099'511'628'211ULL;
@@ -384,7 +243,7 @@ void collect_copy_search_prompt(const CopyModeState& state,
   mix(static_cast<std::uint8_t>(copy_mode.phase));
   mix(static_cast<std::uint8_t>(copy_mode.feedback));
   mix(static_cast<std::uint8_t>(copy_mode.prompt_search_direction));
-  for (const char character : copy_search_prompt) {
+  for (const char character : copy_mode.draft_query_view()) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
   mix(session.attachment.status_message_visible ? 1U : 0U);
@@ -393,147 +252,53 @@ void collect_copy_search_prompt(const CopyModeState& state,
   }
   mix(session.attachment.message_view.active ? 1U : 0U);
   mix(session.attachment.message_view.offset);
-  for (const char character : input_context) {
+  for (const char character : status_input_context(session)) {
     mix(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
   }
-  const auto drag = status_tab_drag_signature(session);
-  mix(static_cast<std::uint8_t>(drag));
-  mix(static_cast<std::uint8_t>(drag >> 8U));
-  mix(static_cast<std::uint8_t>(drag >> 16U));
-  mix(static_cast<std::uint8_t>(drag >> 24U));
-  mix(static_cast<std::uint8_t>(drag >> 32U));
-  mix(static_cast<std::uint8_t>(drag >> 40U));
-  mix(static_cast<std::uint8_t>(drag >> 48U));
-  mix(static_cast<std::uint8_t>(drag >> 56U));
+  mix(static_cast<std::uint8_t>(copy_mode.search_direction));
+  for (const char character : copy_mode.query_view()) {
+    mix(static_cast<std::uint8_t>(character));
+  }
+  if (const auto* runtime = copy_mode_runtime(session, runtimes); runtime != nullptr) {
+    if (const auto viewport = runtime->terminal.viewport_state(); viewport.has_value()) {
+      for (const auto value : {viewport->offset, viewport->total_rows, viewport->visible_rows}) {
+        signature = (signature ^ value) * prime;
+      }
+    }
+  }
   return signature;
 }
 
-[[nodiscard]] auto current_status_signature(const SessionRecord& session,
-                                            const PaneRuntimeStore& runtimes) noexcept
-    -> std::uint64_t {
-  StatusContextStorage storage;
-  const auto input_context = collect_status_input_context(session, runtimes, storage);
-  return current_status_signature(session, runtimes, input_context, storage.prompt_view());
-}
-
 [[nodiscard]] constexpr auto status_prompt_target(const RenamePromptKind kind) noexcept
-    -> render::StatusPromptTarget {
+    -> std::string_view {
   switch (kind) {
   case RenamePromptKind::inactive:
-    return render::StatusPromptTarget::none;
+    return "none";
   case RenamePromptKind::session:
-    return render::StatusPromptTarget::session;
+    return "session";
   case RenamePromptKind::tab:
-    return render::StatusPromptTarget::active_tab;
+    return "tab";
   }
-  return render::StatusPromptTarget::none;
+  return "none";
 }
 
 [[nodiscard]] constexpr auto status_prompt_feedback(const RenamePromptFeedback feedback) noexcept
-    -> render::StatusPromptFeedback {
+    -> std::string_view {
   switch (feedback) {
   case RenamePromptFeedback::none:
-    return render::StatusPromptFeedback::none;
+    return "none";
   case RenamePromptFeedback::invalid:
-    return render::StatusPromptFeedback::invalid;
+    return "invalid";
   case RenamePromptFeedback::conflict:
-    return render::StatusPromptFeedback::conflict;
+    return "conflict";
   }
-  return render::StatusPromptFeedback::none;
-}
-
-void refresh_status_process_names(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
-  for (std::size_t position = 0; position < session.tab_order.size(); ++position) {
-    const auto id = session.tab_order.at(position);
-    LEMMA_ASSERT(id.has_value());
-    auto* const tab = find_tab(session, *id);
-    LEMMA_ASSERT(tab != nullptr);
-    auto* const focused = find_pane(session, *tab, tab->focused_pane);
-    LEMMA_ASSERT(focused != nullptr);
-    auto* const runtime = find_pane_runtime(runtimes, session, *tab, *focused);
-    LEMMA_ASSERT(runtime != nullptr);
-    static_cast<void>(refresh_process_name(*runtime));
-  }
-}
-
-[[nodiscard]] auto
-collect_status_tab_order(const SessionRecord& session,
-                         std::array<TabId, render::status_tabs_max>& storage) noexcept
-    -> std::span<const TabId> {
-  std::array<TabId, render::status_tabs_max> semantic{};
-  const auto count = session.tab_order.size();
-  for (std::size_t position = 0; position < count; ++position) {
-    const auto id = session.tab_order.at(position);
-    LEMMA_ASSERT(id.has_value());
-    std::span(semantic).subspan(position, 1).front() = *id;
-  }
-  const auto copy_semantic = [&] {
-    std::ranges::copy(std::span(semantic).first(count), storage.begin());
-    return std::span<const TabId>(storage).first(count);
-  };
-  if (!session.attachment.mouse_capture.has_value() ||
-      session.attachment.mouse_capture->owner != MouseCaptureOwner::status_tab) {
-    return copy_semantic();
-  }
-
-  const auto& capture = *session.attachment.mouse_capture;
-  const bool source_present =
-      std::ranges::find(std::span(semantic).first(count), capture.target.tab) !=
-      std::span(semantic).first(count).end();
-  const bool anchor_present =
-      !capture.status_tab_before.is_valid() ||
-      std::ranges::find(std::span(semantic).first(count), capture.status_tab_before) !=
-          std::span(semantic).first(count).end();
-  if (!source_present || !anchor_present || capture.status_tab_before == capture.target.tab) {
-    return copy_semantic();
-  }
-
-  std::size_t projected = 0;
-  for (const auto id : std::span(semantic).first(count)) {
-    if (id == capture.target.tab) {
-      continue;
-    }
-    if (id == capture.status_tab_before) {
-      std::span(storage).subspan(projected, 1).front() = capture.target.tab;
-      ++projected;
-    }
-    std::span(storage).subspan(projected, 1).front() = id;
-    ++projected;
-  }
-  if (!capture.status_tab_before.is_valid()) {
-    std::span(storage).subspan(projected, 1).front() = capture.target.tab;
-    ++projected;
-  }
-  LEMMA_ASSERT(projected == count);
-  return std::span<const TabId>(storage).first(count);
-}
-
-[[nodiscard]] auto
-collect_status_tabs(const SessionRecord& session, const PaneRuntimeStore& runtimes,
-                    const std::span<const TabId> order,
-                    std::array<render::StatusTab, render::status_tabs_max>& storage) noexcept
-    -> std::span<const render::StatusTab> {
-  for (std::size_t position = 0; position < order.size(); ++position) {
-    const auto* const tab = find_tab(session, order.subspan(position, 1).front());
-    LEMMA_ASSERT(tab != nullptr);
-    const auto semantic_position = session.tab_order.position_of(tab->id);
-    LEMMA_ASSERT(semantic_position.has_value());
-    std::span(storage).subspan(position, 1).front() = {
-        // A drag moves complete labels while previewing. Position prefixes change only when the
-        // release commits TabOrder, so identical titles remain distinguishable throughout.
-        .number = static_cast<std::uint16_t>(*semantic_position + 1U),
-        .title = tab_title(session, *tab, runtimes),
-        .active = tab->id == session.active_tab,
-    };
-  }
-  return std::span(storage).first(order.size());
+  return "none";
 }
 
 struct StatusPromptProjection final {
-  render::StatusPromptTarget target{render::StatusPromptTarget::none};
-  render::StatusPromptFeedback feedback{render::StatusPromptFeedback::none};
+  std::string_view target{"none"};
+  std::string_view feedback{"none"};
   std::string_view value;
-  std::string_view context_override;
   std::size_t cursor{0};
 };
 
@@ -542,126 +307,30 @@ struct StatusPromptProjection final {
     -> StatusPromptProjection {
   const auto& command_line = session.attachment.command_line;
   if (command_line.active) {
-    return {.target = render::StatusPromptTarget::command_line,
-            .feedback = render::StatusPromptFeedback::none,
+    return {.target = "command",
+            .feedback = "none",
             .value = command_line.view(),
-            .context_override = {},
             .cursor = command_line.cursor};
   }
   const auto message = visible_status_message(session);
   if (!message.empty()) {
-    return {.target = render::StatusPromptTarget::message,
-            .feedback = render::StatusPromptFeedback::none,
-            .value = {},
-            .context_override = message,
-            .cursor = 0};
+    return {.target = "message", .feedback = "none", .value = {}, .cursor = 0};
   }
   const auto& copy_mode = session.attachment.copy_mode;
   if (copy_mode.phase == CopyModePhase::search_prompt) {
-    const auto target = copy_mode.prompt_search_direction == CopySearchDirection::forward
-                            ? render::StatusPromptTarget::copy_search_forward
-                            : render::StatusPromptTarget::copy_search_backward;
+    const auto* const target = copy_mode.prompt_search_direction == CopySearchDirection::forward
+                                   ? "search.forward"
+                                   : "search.backward";
     return {.target = target,
-            .feedback = render::StatusPromptFeedback::none,
+            .feedback = "none",
             .value = copy_search_prompt,
-            .context_override = {},
             .cursor = copy_search_prompt.size()};
   }
   const auto& rename = session.attachment.rename_prompt;
   return {.target = status_prompt_target(rename.kind),
           .feedback = status_prompt_feedback(rename.feedback),
           .value = rename.view(),
-          .context_override = {},
           .cursor = rename.cursor};
-}
-
-[[nodiscard]] auto status_line_value(const SessionRecord& session,
-                                     const std::span<const render::StatusTab> tabs,
-                                     const std::string_view input_context,
-                                     const std::string_view copy_search_prompt,
-                                     const bool dirty) noexcept -> render::StatusLine {
-  const auto prompt = collect_status_prompt(session, copy_search_prompt);
-  const auto context = prompt.context_override.empty() ? input_context : prompt.context_override;
-  return {
-      .session_name = session.session_name(),
-      .tabs = tabs,
-      .prompt_target = prompt.target,
-      .prompt_feedback = prompt.feedback,
-      .prompt_value = prompt.value,
-      .input_context = context,
-      .prompt_cursor = prompt.cursor,
-      .dirty = dirty,
-  };
-}
-
-[[nodiscard]] auto
-collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
-                    std::array<render::StatusTab, render::status_tabs_max>& storage,
-                    StatusContextStorage& context_storage) noexcept -> render::StatusLine {
-  if (!reactor_status_line()) {
-    return {};
-  }
-  if (!session.attachment_runtime.status_valid) {
-    refresh_status_process_names(session, runtimes);
-  }
-  std::array<TabId, render::status_tabs_max> order_storage{};
-  const auto order = collect_status_tab_order(session, order_storage);
-  const auto tabs = collect_status_tabs(session, runtimes, order, storage);
-  const auto input_context = collect_status_input_context(session, runtimes, context_storage);
-  const auto signature =
-      current_status_signature(session, runtimes, input_context, context_storage.prompt_view());
-  const bool dirty = !session.attachment_runtime.status_valid ||
-                     signature != session.attachment_runtime.status_signature;
-  session.attachment_runtime.status_signature = signature;
-  session.attachment_runtime.status_valid = true;
-  return status_line_value(session, tabs, input_context, context_storage.prompt_view(), dirty);
-}
-
-[[nodiscard]] auto status_target_at_column(const SessionRecord& session,
-                                           const PaneRuntimeStore& runtimes,
-                                           const std::uint16_t column) noexcept
-    -> std::optional<StatusHit> {
-  if (session.attachment.message_view.active) {
-    return std::nullopt;
-  }
-  std::array<TabId, render::status_tabs_max> order_storage{};
-  std::array<render::StatusTab, render::status_tabs_max> status_storage{};
-  const auto order = collect_status_tab_order(session, order_storage);
-  const auto tabs = collect_status_tabs(session, runtimes, order, status_storage);
-  StatusContextStorage context_storage;
-  const auto input_context = collect_status_input_context(session, runtimes, context_storage);
-  const auto target = render::status_target_at_column(
-      status_line_value(session, tabs, input_context, context_storage.prompt_view(), false),
-      {.columns = session.attachment.columns, .rows = session.attachment.rows}, column);
-  if (!target.has_value()) {
-    return std::nullopt;
-  }
-  if (target->kind == render::StatusTargetKind::create_tab) {
-    return StatusHit{.tab = {},
-                     .next = {},
-                     .position = 0,
-                     .moving_position = 0,
-                     .kind = StatusHitKind::create_tab};
-  }
-  LEMMA_ASSERT(target->tab_position < order.size());
-  auto moving_position = target->tab_position;
-  if (session.attachment.mouse_capture.has_value() &&
-      session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
-    const auto moving = std::ranges::find(order, session.attachment.mouse_capture->target.tab);
-    if (moving == order.end()) {
-      return std::nullopt;
-    }
-    moving_position = static_cast<std::size_t>(std::distance(order.begin(), moving));
-  }
-  return StatusHit{
-      .tab = order.subspan(target->tab_position, 1).front(),
-      .next = target->tab_position + 1U < order.size()
-                  ? order.subspan(target->tab_position + 1U, 1).front()
-                  : TabId{},
-      .position = static_cast<std::uint16_t>(target->tab_position),
-      .moving_position = static_cast<std::uint16_t>(moving_position),
-      .kind = StatusHitKind::tab,
-  };
 }
 
 [[nodiscard]] auto encode_pending_clipboard_write(SessionRecord& session) noexcept
@@ -744,21 +413,20 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
     return queue_pending_clipboard_write(session, now);
   }
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
-  std::array<render::StatusTab, render::status_tabs_max> status_storage{};
   std::array<render::GridSurface, limits::extension_surfaces_hard_max> grid_storage{};
   MessageViewStorage message_storage;
-  StatusContextStorage status_context_storage;
+  session.attachment_runtime.status_signature = current_status_signature(session, runtimes);
+  session.attachment_runtime.status_valid = true;
   const auto surfaces = collect_surfaces(session, runtimes, surface_storage);
   const auto message_view = collect_message_view(session, message_storage);
-  const auto status =
-      collect_status_line(session, runtimes, status_storage, status_context_storage);
   const auto grids = extensions.collect_surfaces(
       session.attachment.id,
       {.columns = session.attachment.columns, .rows = pane_rows(session.attachment.rows)},
       grid_storage);
-  if (extensions.focused_surface(session.attachment.id).is_valid()) {
+  if (std::ranges::any_of(grids, &render::GridSurface::focused)) {
     for (auto& pane : std::span(surface_storage).first(surfaces.size())) {
       pane.focused = false;
+      pane.cursor_override = false;
     }
   }
   std::uint64_t trace_correlation = 0;
@@ -772,7 +440,7 @@ collect_status_line(SessionRecord& session, PaneRuntimeStore& runtimes,
   const auto rendered = render::compose_retained_scene(
       {.panes = surfaces, .grids = grids},
       {.columns = session.attachment.columns, .rows = session.attachment.rows},
-      session.attachment_runtime.frame, force_full, status, session.attachment_runtime.outer_modes,
+      session.attachment_runtime.frame, force_full, {}, session.attachment_runtime.outer_modes,
       message_view);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
@@ -1824,6 +1492,108 @@ next_changed_pane(const api::EventSubscription& subscription,
          append_public(output, "}");
 }
 
+// Presentation observation contains bounded semantic/editor state, never cells or terminal bytes.
+// Consumers choose labels, layout and interaction policy in their own process.
+[[nodiscard]] auto presentation_signature(const SessionRecord& session,
+                                          const PaneRuntimeStore& runtimes) noexcept
+    -> std::uint64_t {
+  auto signature = current_status_signature(session, runtimes);
+  const auto mix = [&](const std::uint64_t value) {
+    signature = (signature ^ value) * 1'099'511'628'211ULL;
+  };
+  mix(session.mutation_generation);
+  mix(session.attachment.columns);
+  mix(session.attachment.rows);
+  mix(session.attachment_runtime.connection_id.generation());
+  mix(session.attachment_runtime.client >= 0 ? 1U : 0U);
+  for (const char byte : session.session_name()) {
+    mix(static_cast<unsigned char>(byte));
+  }
+  for (std::size_t position = 0; position < session.tab_order.size(); ++position) {
+    const auto id = session.tab_order.at(position);
+    const auto* const tab = id.has_value() ? find_tab(session, *id) : nullptr;
+    if (tab != nullptr) {
+      for (const char byte : tab_title(session, *tab, runtimes)) {
+        mix(static_cast<unsigned char>(byte));
+      }
+    }
+  }
+  return signature;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto append_presentation(std::string& output, const SessionRecord& session,
+                                       const PaneRuntimeStore& runtimes) -> bool {
+  const auto& attachment = session.attachment;
+  if (!append_public(output, R"(,"presentation":{"session":)") ||
+      !append_public_id(output, session.id) || !append_public(output, R"(,"name":)") ||
+      !api::append_json_string(output, session.session_name()) ||
+      !append_public(output, R"(,"connection":)") ||
+      !(session.attachment_runtime.client >= 0
+            ? append_public_id(output, session.attachment_runtime.connection_id)
+            : append_public(output, "null")) ||
+      !append_public(output, R"(,"columns":)") ||
+      !append_public_number(output, attachment.columns) || !append_public(output, R"(,"rows":)") ||
+      !append_public_number(output, attachment.rows) || !append_public(output, R"(,"tabs":[)")) {
+    return false;
+  }
+  for (std::size_t position = 0; position < session.tab_order.size(); ++position) {
+    const auto id = session.tab_order.at(position);
+    const auto* const tab = id.has_value() ? find_tab(session, *id) : nullptr;
+    if (tab == nullptr || (position > 0 && !append_public(output, ",")) ||
+        !append_public(output, R"({"id":)") || !append_public_id(output, tab->id) ||
+        !append_public(output, R"(,"position":)") || !append_public_number(output, position + 1U) ||
+        !append_public(output, R"(,"title":)") ||
+        !api::append_json_string(output, tab_title(session, *tab, runtimes)) ||
+        !append_public(output, R"(,"focused_pane":)") ||
+        !append_public_id(output, tab->focused_pane) || !append_public(output, R"(,"active":)") ||
+        !append_public(output, tab->id == session.active_tab ? "true}" : "false}")) {
+      return false;
+    }
+  }
+  constexpr std::array copy_feedback_names{"none",           "no_match",  "empty_selection",
+                                           "clipboard_busy", "too_large", "failed"};
+  const auto& copy = attachment.copy_mode;
+  const auto label = copy.active() || attachment.rename_prompt.active() ||
+                             attachment.command_line.active || attachment.message_view.active
+                         ? session.interaction_router.active_label()
+                         : session.input_router.active_label();
+  const auto prompt = collect_status_prompt(session, copy.draft_query_view());
+  const auto* const copy_runtime = copy_mode_runtime(session, runtimes);
+  const auto viewport =
+      copy_runtime != nullptr
+          ? copy_runtime->terminal.viewport_state()
+          : std::expected<vt::ViewportState, vt::Error>{std::unexpected(vt::Error::invalid_state)};
+  const auto total = viewport.has_value() ? viewport->total_rows : 0U;
+  const auto visible = viewport.has_value() ? viewport->visible_rows : 0U;
+  const auto covered = viewport.has_value() ? viewport->offset + visible : 0U;
+  return append_public(output, R"(],"mode":)") && api::append_json_string(output, label) &&
+         append_public(output, R"(,"prompt":{"kind":)") &&
+         api::append_json_string(output, prompt.target) && append_public(output, R"(,"value":)") &&
+         api::append_json_string(output, prompt.value) && append_public(output, R"(,"cursor":)") &&
+         append_public_number(output, prompt.cursor) && append_public(output, R"(,"feedback":)") &&
+         api::append_json_string(output, prompt.feedback) &&
+         append_public(output, R"(},"message":)") &&
+         api::append_json_string(output, visible_status_message(session)) &&
+         append_public(output, R"(,"copy":{"active":)") &&
+         append_public(output, copy.active() ? "true" : "false") &&
+         append_public(output, R"(,"searching":)") &&
+         append_public(output, copy.phase == CopyModePhase::searching ? "true" : "false") &&
+         append_public(output, R"(,"query":)") &&
+         api::append_json_string(output, copy.query_view()) &&
+         append_public(output, R"(,"backward":)") &&
+         append_public(output,
+                       copy.search_direction == CopySearchDirection::backward ? "true" : "false") &&
+         append_public(output, R"(,"below":)") &&
+         append_public_number(output, total > covered ? total - covered : 0U) &&
+         append_public(output, R"(,"history":)") &&
+         append_public_number(output, total > visible ? total - visible : 0U) &&
+         append_public(output, R"(,"feedback":)") &&
+         api::append_json_string(output,
+                                 copy_feedback_names.at(static_cast<std::size_t>(copy.feedback))) &&
+         append_public(output, "}}");
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto encode_initial_snapshot(PendingConnection& pending, Sessions& sessions,
                                            PaneRuntimeStore& runtimes,
@@ -1837,6 +1607,13 @@ next_changed_pane(const api::EventSubscription& subscription,
         !append_public(output, R"(,"sessions":)") ||
         !append_sessions_snapshot(output, sessions, pending.subscription.session)) {
       return {};
+    }
+    if (pending.subscription.presentation && pending.subscription.session.has_value()) {
+      const auto* const target = public_session(sessions, *pending.subscription.session);
+      if (target == nullptr || !append_presentation(output, *target, runtimes)) {
+        return {};
+      }
+      pending.observed_presentation_hash = presentation_signature(*target, runtimes);
     }
     if (pending.subscription.panes.size() == 1U) {
       const auto target = observed_pane(pending.subscription, sessions, runtimes, 0);
@@ -2012,6 +1789,22 @@ next_changed_pane(const api::EventSubscription& subscription,
         }
         pending.observed_semantic_hash = hash;
       }
+      if (pending.subscription.presentation && pending.subscription.session.has_value()) {
+        const auto* const target = public_session(sessions, *pending.subscription.session);
+        if (target == nullptr) {
+          pending.state = PendingState::unused;
+          continue;
+        }
+        const auto presentation_hash = presentation_signature(*target, runtimes);
+        if (presentation_hash != pending.observed_presentation_hash) {
+          if (!append_event_header(output, pending, "attachment.changed") ||
+              !append_presentation(output, *target, runtimes) || !append_public(output, "}\n")) {
+            pending.state = PendingState::unused;
+            continue;
+          }
+          pending.observed_presentation_hash = presentation_hash;
+        }
+      }
       if (const auto changed = next_changed_pane(pending.subscription, pending.observed_panes,
                                                  sessions, runtimes, pending.observed_pane_cursor);
           changed.has_value()) {
@@ -2118,7 +1911,7 @@ void service_extension_observers(extension::Runtime& extensions, Sessions& sessi
     if (subscription == nullptr) {
       continue;
     }
-    if (session == nullptr || !session->active) {
+    if (session_id.is_valid() && (session == nullptr || !session->active)) {
       static_cast<void>(extensions.disconnect(peer.owner));
       return;
     }
@@ -2127,18 +1920,23 @@ void service_extension_observers(extension::Runtime& extensions, Sessions& sessi
     if (extensions.output_bytes(peer.owner) != 0) {
       continue;
     }
-    if (hash != observed.semantic_hash) {
+    const auto presentation_hash = subscription->presentation && session != nullptr
+                                       ? presentation_signature(*session, runtimes)
+                                       : std::uint64_t{0};
+    if (hash != observed.semantic_hash || presentation_hash != observed.presentation_hash) {
       try {
         std::string event = R"({"schema":"lemma.event/v1","sequence":)" +
                             std::to_string(extensions.event_sequence(peer.owner)) +
                             R"(,"event":"state.changed","sessions":)";
         if (!append_sessions_snapshot(event, sessions, subscription->session) ||
+            (subscription->presentation && !append_presentation(event, *session, runtimes)) ||
             !append_public(event, "}")) {
           static_cast<void>(extensions.disconnect(peer.owner));
           return;
         }
         if (extensions.send_event(peer.owner, event)) {
           observed.semantic_hash = hash;
+          observed.presentation_hash = presentation_hash;
         }
         cursor = (cursor + visited + 1U) % active.size();
         return;

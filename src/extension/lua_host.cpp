@@ -1,6 +1,8 @@
 #include "extension/lua_host.hpp"
 
+#include "extension/defaults.hpp"
 #include "extension/lua_commands.hpp"
+#include "extension/services.hpp"
 
 #include "api/json.hpp"
 #include "config/config.hpp"
@@ -65,6 +67,7 @@ struct LuaAllocator final {
 struct LuaConfiguration final {
   config::Configuration configuration;
   LuaCommands commands;
+  config::LaunchConfiguration extension_program;
 };
 
 [[nodiscard]] auto host_configuration(lua_State* const state) noexcept -> LuaConfiguration& {
@@ -636,10 +639,45 @@ void set_host_function(lua_State* const state, LuaConfiguration& configuration, 
   lua_setfield(state, -2, name);
 }
 
+[[nodiscard]] auto extension_set(lua_State* const state) -> int {
+  std::size_t size = 0;
+  const auto* name = luaL_checklstring(state, 1, &size);
+  const std::string_view key(name, size);
+  if (key.empty() || key.size() > 64 || key.contains('\0')) {
+    return raise_lua_error(state, "extension name must be 1..64 bytes");
+  }
+  auto& extensions = host_configuration(state).configuration.extensions;
+  if (lua_type(state, 2) == LUA_TBOOLEAN && lua_toboolean(state, 2) == 0) {
+    std::erase_if(extensions, [&](const auto& entry) { return entry.name == key; });
+    return 0;
+  }
+  luaL_checktype(state, 2, LUA_TTABLE);
+  auto& program = host_configuration(state).extension_program;
+  static_cast<void>(read_default_program(state, 2, program));
+  if (program.default_program.empty()) {
+    return raise_lua_error(state, "extension argv must not be empty");
+  }
+  const auto found = std::ranges::find(extensions, key, &config::ExtensionConfiguration::name);
+  if (found != extensions.end()) {
+    found->argv = std::move(program.default_program);
+  } else if (extensions.size() < config::extensions_max) {
+    extensions.push_back({.name = std::string(key), .argv = std::move(program.default_program)});
+  } else {
+    return raise_lua_error(state, "extension capacity reached");
+  }
+  return 0;
+}
+
 void install_lemma_module(lua_State* const state, LuaConfiguration& configuration) {
   lua_createtable(state, 0, 3);
   set_host_function(state, configuration, "setup", &config_setup);
   install_commands(state, configuration.commands);
+  const auto ui_path = bundled_ui_path();
+  lua_pushlstring(state, ui_path.data(), ui_path.size());
+  lua_setfield(state, -2, "bundled_ui");
+  lua_createtable(state, 0, 1);
+  set_host_function(state, configuration, "set", &extension_set);
+  lua_setfield(state, -2, "extension");
   lua_createtable(state, 0, 4);
   set_host_function(state, configuration, "set", &keymap_set);
   set_host_function(state, configuration, "del", &keymap_del);
@@ -741,7 +779,16 @@ void install_lemma_module(lua_State* const state, LuaConfiguration& configuratio
     lua_close(state);
     return 1;
   }
-  int status = luaL_loadfilex(state, path.c_str(), "t");
+  int status = luaL_loadbufferx(state, bundled_defaults.data(), bundled_defaults.size(),
+                                "@lemma/defaults.lua", "t");
+  if (status == LUA_OK) {
+    status = lua_pcall(state, 0, 0, 0);
+  }
+  if (status == LUA_OK && !path.empty()) {
+    status = luaL_loadfilex(state, path.c_str(), "t");
+  } else if (status == LUA_OK) {
+    lua_pushcfunction(state, [](lua_State*) -> int { return 0; });
+  }
   if (status == LUA_OK) {
     status = lua_pcall(state, 0, 0, 0);
   }
@@ -752,6 +799,10 @@ void install_lemma_module(lua_State* const state, LuaConfiguration& configuratio
     static_cast<void>(send_host_message(descriptor, HostMessageStatus::failed, diagnostic));
     lua_close(state);
     return 1;
+  }
+  if (!configuration.configuration.ui.status_line) {
+    std::erase_if(configuration.configuration.extensions,
+                  [](const auto& entry) { return entry.name == "statusline"; });
   }
   const auto compiled = config::compile(configuration.configuration);
   if (!compiled.has_value()) {
@@ -1024,31 +1075,38 @@ void HostProcess::reset() noexcept {
   process_ = -1;
 }
 
+namespace {
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
-auto load_configuration(const std::optional<std::string_view> requested_path) noexcept
-    -> ConfigurationLoad {
+auto load_configuration_impl(const std::optional<std::string_view> requested_path,
+                             const bool builtins_only) noexcept -> ConfigurationLoad {
   ConfigurationLoad result;
   const char* const configured_environment = std::getenv("LEMMA_CONFIG");
-  const bool path_required = requested_path.has_value() ||
-                             (configured_environment != nullptr && *configured_environment != '\0');
+  const bool path_required =
+      !builtins_only && (requested_path.has_value() ||
+                         (configured_environment != nullptr && *configured_environment != '\0'));
   try {
-    result.path =
-        requested_path.has_value() ? std::string(*requested_path) : candidate_configuration_path();
+    if (!builtins_only) {
+      result.path = requested_path.has_value() ? std::string(*requested_path)
+                                               : candidate_configuration_path();
+    }
   } catch (...) {
     result.status = ConfigurationStatus::invalid;
     result.diagnostic = "configuration path allocation failed";
     return result;
   }
-  if (result.path.empty() || result.path.size() > config::configuration_path_bytes_max ||
-      result.path.contains('\0')) {
+  if ((path_required && result.path.empty()) ||
+      result.path.size() > config::configuration_path_bytes_max || result.path.contains('\0')) {
     result.status = path_required ? ConfigurationStatus::invalid : ConfigurationStatus::absent;
     result.diagnostic = path_required ? "invalid configuration path" : std::string{};
     return result;
   }
   if (!regular_readable_file(result.path)) {
-    result.status = path_required ? ConfigurationStatus::invalid : ConfigurationStatus::absent;
-    result.diagnostic = path_required ? "configuration file is not readable" : std::string{};
-    return result;
+    if (path_required) {
+      result.status = ConfigurationStatus::invalid;
+      result.diagnostic = "configuration file is not readable";
+      return result;
+    }
+    result.path.clear();
   }
 
   auto [host, frame] = spawn_host(result.path);
@@ -1109,8 +1167,19 @@ auto load_configuration(const std::optional<std::string_view> requested_path) no
     return result;
   }
   result.host = std::move(host);
-  result.status = ConfigurationStatus::loaded;
+  result.status = result.path.empty() ? ConfigurationStatus::absent : ConfigurationStatus::loaded;
   return result;
+}
+
+} // namespace
+
+auto load_configuration(const std::optional<std::string_view> requested_path) noexcept
+    -> ConfigurationLoad {
+  return load_configuration_impl(requested_path, false);
+}
+
+auto load_builtin_configuration() noexcept -> ConfigurationLoad {
+  return load_configuration_impl(std::nullopt, true);
 }
 
 } // namespace lemma::extension

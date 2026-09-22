@@ -31,10 +31,6 @@ namespace lemma::core {
 #endif
 namespace {
 
-[[nodiscard]] constexpr auto content_rows(const std::uint16_t rows) noexcept -> std::uint16_t {
-  return rows >= 2 ? static_cast<std::uint16_t>(rows - 1U) : rows;
-}
-
 [[nodiscard]] constexpr auto tab_viewport(const Tab& tab) noexcept -> PaneRectangle {
   return {.column = tab.layout_column,
           .row = tab.layout_row,
@@ -250,7 +246,7 @@ void commit_projection(Session& session, const LayoutProjection& projection,
 [[nodiscard]] auto fit_tab(Session& session, const SessionRuntimeEffects& runtime, Tab& tab,
                            const bool suspend_on_rejection) noexcept -> RuntimeEffectStatus {
   const PaneRectangle viewport{.columns = session.attachment.columns,
-                               .rows = content_rows(session.attachment.rows)};
+                               .rows = session.attachment.rows};
   const auto projection = tab.layout.project(viewport);
   if (!projection.has_value()) {
     tab.layout_suspended = true;
@@ -654,8 +650,7 @@ auto SessionMachine::create_tab(const CreateTabOptions options) noexcept -> Sess
     pane = std::make_unique<Pane>(Pane{
         .id = pane_id,
         .tab = tab_id,
-        .rectangle = {.columns = session_.attachment.columns,
-                      .rows = content_rows(session_.attachment.rows)},
+        .rectangle = {.columns = session_.attachment.columns, .rows = session_.attachment.rows},
         .launch_intent = std::move(launch),
         .process_exit = std::nullopt,
         .exit_policy = options.exit_policy,
@@ -803,8 +798,7 @@ auto SessionMachine::resize_attachment(const std::uint16_t columns,
             .change = {.frame_requested = true, .force_full_frame = true},
             .handled = true};
   }
-  return resize_attachment(columns, rows,
-                           PaneRectangle{.columns = columns, .rows = content_rows(rows)});
+  return resize_attachment(columns, rows, PaneRectangle{.columns = columns, .rows = rows});
 }
 
 auto SessionMachine::resize_attachment(const std::uint16_t columns, const std::uint16_t rows,

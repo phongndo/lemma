@@ -1508,7 +1508,7 @@ struct CompositionPolicy final {
                                       const std::optional<OuterModeProjection> previous_outer_modes,
                                       CompositionResult composition) noexcept
     -> std::expected<CompositionResult, CompositionError> {
-  if (!render_status_prompt_cursor(status, viewport, output, used)) {
+  if (status.prompting() && !render_status_prompt_cursor(status, viewport, output, used)) {
     invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
@@ -1536,6 +1536,22 @@ struct CompositionPolicy final {
 }
 
 } // namespace
+
+auto project_status_cells(const StatusLine status, const Viewport viewport,
+                          const std::span<ui::Cell> cells, std::uint16_t& cursor) noexcept -> bool {
+  if (!valid_viewport(viewport) || !valid_status(status) || cells.size() != viewport.columns) {
+    return false;
+  }
+  std::ranges::fill(cells, ui::Cell{});
+  cursor = status.prompting()
+               ? static_cast<std::uint16_t>(
+                     (is_modal_prompt(status.prompt_target)
+                          ? modal_prompt_projection(status, viewport).cursor_column
+                          : inline_status_prompt_projection(status, viewport).cursor_column) -
+                     1U)
+               : std::uint16_t{0};
+  return build_status_cells(status, viewport, cells);
+}
 
 [[nodiscard]] auto status_target_at_column(const StatusLine status, const Viewport viewport,
                                            const std::uint16_t column) noexcept
@@ -1609,7 +1625,8 @@ struct CompositionPolicy final {
     invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
-  if ((force_full || status.dirty) && !render_status_line(status, viewport, output, used)) {
+  if (has_visible_status(viewport, status) && (force_full || status.dirty) &&
+      !render_status_line(status, viewport, output, used)) {
     invalidate_scene(scene);
     return std::unexpected(CompositionError::output_exhausted);
   }
@@ -1618,6 +1635,13 @@ struct CompositionPolicy final {
     if (!render_message_view(message_view, content, output, used)) {
       invalidate_scene(scene);
       return std::unexpected(CompositionError::output_exhausted);
+    }
+    // Native message recovery replaces Pane contents; retained extension Surfaces keep their
+    // normal z-order and must be restored over the newly painted message background.
+    const auto grids = render_grids(scene, output, used, true, content.column, content.row,
+                                    content.rows, composition);
+    if (!grids.has_value()) {
+      return std::unexpected(grids.error());
     }
   } else {
     std::optional<vt::AnsiCursorPosition> pane_cursor;

@@ -3938,17 +3938,17 @@ void complete_rename_prompt(SessionRecord& session, PaneRuntimeStore& runtimes,
   return prompt.active();
 }
 
-void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
+auto process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                  const std::span<const std::byte> input,
                                  const SessionNameConflict name_conflict,
-                                 void* const name_conflict_context) noexcept {
+                                 void* const name_conflict_context) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::rename);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.rename_prompt.active()) {
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0U || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -3972,6 +3972,7 @@ void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runti
       invalidate_rename_prompt(session);
     }
   }
+  return offset;
 }
 
 // Key policy has already run through the compiled rename context; only forwarded text is edited.
@@ -4027,15 +4028,15 @@ void apply_message_view_input_command(SessionRecord& session,
   }
 }
 
-void process_message_view_input(SessionRecord& session,
-                                const std::span<const std::byte> input) noexcept {
+auto process_message_view_input(SessionRecord& session,
+                                const std::span<const std::byte> input) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::messages);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.message_view.active) {
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0 || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -4045,6 +4046,7 @@ void process_message_view_input(SessionRecord& session,
       static_cast<void>(queue_hosted_command(session, routed.effect));
     }
   }
+  return offset;
 }
 
 // NOLINTBEGIN(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,cppcoreguidelines-pro-bounds-constant-array-index)
@@ -4210,8 +4212,8 @@ void remember_attachment_command_line(Attachment& attachment) noexcept {
 }
 // NOLINTEND(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,cppcoreguidelines-pro-bounds-constant-array-index)
 
-void process_command_line_input(SessionRecord& session,
-                                const std::span<const std::byte> input) noexcept {
+auto process_command_line_input(SessionRecord& session,
+                                const std::span<const std::byte> input) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::command_line);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.command_line.active &&
@@ -4219,7 +4221,7 @@ void process_command_line_input(SessionRecord& session,
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0 || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -4242,6 +4244,7 @@ void process_command_line_input(SessionRecord& session,
       invalidate_command_line(session);
     }
   }
+  return offset;
 }
 
 void process_typed_command_line_input(SessionRecord& session, const std::span<const std::byte> text,
@@ -4252,7 +4255,8 @@ void process_typed_command_line_input(SessionRecord& session, const std::span<co
 }
 
 [[nodiscard]] auto resize_session(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                  const protocol::Dimensions dimensions) noexcept -> bool {
+                                  const protocol::Dimensions dimensions,
+                                  extension::Runtime* const extensions = nullptr) noexcept -> bool {
   finish_live_divider_resize(session, true);
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
@@ -4267,10 +4271,14 @@ void process_typed_command_line_input(SessionRecord& session, const std::span<co
   }
   ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
   SessionMachine machine(session, production_session_options(runtime_context));
-  const auto transition =
-      reactor_status_line()
-          ? machine.resize_attachment(columns, rows)
-          : machine.resize_attachment(columns, rows, {.columns = columns, .rows = rows});
+  const auto content =
+      extensions != nullptr
+          ? extensions->pane_viewport(session.attachment.id, {.columns = columns, .rows = rows})
+          : std::optional{PaneRectangle{.columns = columns, .rows = rows}};
+  if (!content.has_value()) {
+    return false;
+  }
+  const auto transition = machine.resize_attachment(columns, rows, *content);
   apply_session_change(session, runtimes, transition.change);
   return transition.result.status == CommandStatus::applied ||
          transition.result.status == CommandStatus::no_effect;
@@ -4798,19 +4806,32 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     --input_budget;
     if (session.attachment.message_view.active) {
-      process_message_view_input(session, message.subspan(offset));
-      offset = message.size();
+      const auto consumed = process_message_view_input(session, message.subspan(offset));
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.command_line.active) {
-      process_command_line_input(session, message.subspan(offset));
-      offset = message.size();
+      if (session.attachment.command_line.submit_requested) {
+        session.attachment_runtime.retained_input_offset = offset;
+        return ParseResult::yield;
+      }
+      const auto consumed = process_command_line_input(session, message.subspan(offset));
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.rename_prompt.active()) {
-      process_rename_prompt_input(session, runtimes, message.subspan(offset), name_conflict,
-                                  name_conflict_context);
-      offset = message.size();
+      const auto consumed = process_rename_prompt_input(session, runtimes, message.subspan(offset),
+                                                        name_conflict, name_conflict_context);
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.copy_mode.active()) {
@@ -5314,7 +5335,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                                               : ParseResult::error;
     }
     case protocol::ClientMessageKind::resize:
-      if (!resize_session(session, runtimes, message.dimensions)) {
+      if (!resize_session(session, runtimes, message.dimensions, &extensions)) {
         return ParseResult::error;
       }
       break;
@@ -5438,118 +5459,16 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       if (tab == nullptr) {
         return ParseResult::error;
       }
-      const auto status_rows = reactor_status_line() && session.attachment.rows >= 2
-                                   ? std::uint16_t{1}
-                                   : std::uint16_t{0};
       if (message.mouse.action == protocol::MouseInputAction::press &&
-          session.attachment.mouse_capture.has_value()) {
-        if (session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
-          // A fresh press supersedes the completed divider gesture.
-          finish_live_divider_resize(session);
-        } else if (session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
-          session.attachment.mouse_capture.reset();
-          schedule_frame(session, FrameUrgency::state_change, false);
-        }
+          session.attachment.mouse_capture.has_value() &&
+          session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
+        finish_live_divider_resize(session);
       }
       const bool captured_continuation = session.attachment.mouse_capture.has_value() &&
                                          message.mouse.action != protocol::MouseInputAction::press;
-      if (message.mouse.row < status_rows && !captured_continuation) {
-        if (message.mouse.action != protocol::MouseInputAction::press ||
-            message.mouse.button != protocol::MouseInputButton::left) {
-          break;
-        }
-        const auto target = status_target_at_column(session, runtimes, message.mouse.column);
-        session.attachment.mouse_capture = MouseCapture{
-            .target = {.tab = tab->id, .pane = tab->focused_pane},
-            .peer_pane = {},
-            .status_tab_before = {},
-            .owner = MouseCaptureOwner::discard_until_release,
-            .divider_axis = SplitAxis::left_right,
-        };
-        if (!target.has_value()) {
-          break;
-        }
-        if (target->kind == StatusHitKind::create_tab) {
-          const Command create{
-              .kind = CommandKind::create_tab,
-              .origin = CommandOrigin::client,
-              .target = {.session = session.id,
-                         .tab = {},
-                         .pane = {},
-                         .peer_pane = {},
-                         .attachment = session.attachment.id},
-          };
-          const auto created = dispatch_session_command(session, runtimes, create);
-          if (created.status == CommandStatus::failed) {
-            return ParseResult::error;
-          }
-          break;
-        }
-        session.attachment.mouse_capture = MouseCapture{
-            .target = {.tab = target->tab, .pane = {}},
-            .peer_pane = {},
-            .status_tab_before = target->next,
-            .owner = MouseCaptureOwner::status_tab,
-            .divider_axis = SplitAxis::left_right,
-        };
-        const Command select{
-            .kind = CommandKind::select_tab,
-            .origin = CommandOrigin::client,
-            .target = {.session = session.id,
-                       .tab = target->tab,
-                       .pane = {},
-                       .peer_pane = {},
-                       .attachment = session.attachment.id},
-            .payload = CommandCoordinate{.value = target->position},
-        };
-        if (!dispatch_session_command(session, runtimes, select).succeeded()) {
-          session.attachment.mouse_capture.reset();
-          return ParseResult::error;
-        }
-        break;
-      }
-      const auto content_row = message.mouse.row < status_rows
-                                   ? std::uint16_t{0}
-                                   : static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      const auto content_row = message.mouse.row;
       if (!captured_continuation &&
           route_surface_mouse(extensions, session, message.mouse, content_row)) {
-        break;
-      }
-      if (captured_continuation &&
-          session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
-        if (message.mouse.action == protocol::MouseInputAction::motion) {
-          const auto target = status_target_at_column(session, runtimes, message.mouse.column);
-          if (target.has_value()) {
-            auto before = session.attachment.mouse_capture->status_tab_before;
-            if (target->kind == StatusHitKind::create_tab) {
-              before = {};
-            } else if (target->tab != session.attachment.mouse_capture->target.tab) {
-              before = target->position < target->moving_position ? target->tab : target->next;
-            }
-            if (before != session.attachment.mouse_capture->status_tab_before) {
-              session.attachment.mouse_capture->status_tab_before = before;
-              schedule_frame(session, FrameUrgency::state_change, false);
-            }
-          }
-        } else if (message.mouse.action == protocol::MouseInputAction::release) {
-          const auto capture = *session.attachment.mouse_capture;
-          session.attachment.mouse_capture.reset();
-          schedule_frame(session, FrameUrgency::state_change, false);
-          const Command place{
-              .kind = CommandKind::place_tab,
-              .origin = CommandOrigin::client,
-              .target = {.session = session.id,
-                         .tab = capture.target.tab,
-                         .pane = {},
-                         .peer_pane = {},
-                         .attachment = session.attachment.id},
-              .payload = TabPlacementCommand{.before = capture.status_tab_before},
-          };
-          const auto placed = dispatch_session_command(session, runtimes, place);
-          if (placed.status == CommandStatus::failed) {
-            return ParseResult::error;
-          }
-        }
         break;
       }
       if (tab->layout_suspended) {
@@ -7301,7 +7220,8 @@ encode_proc_result(const ProcExecutionState& state,
                                           request.focusable, request.opaque, viewport);
   } else if (request.kind == api::CommandKind::surface_configure) {
     operation = extensions.configure_surface(owner.generation, request.surface.id,
-                                             request.surface_placement, viewport);
+                                             request.surface_placement, viewport,
+                                             request.configured_focusable);
   } else if (request.kind == api::CommandKind::surface_focus) {
     operation = extensions.focus_surface(owner.generation, request.surface.id, viewport);
   } else {
@@ -9030,7 +8950,9 @@ void process_extension_read(PendingConnections& connections, Sessions& sessions,
     if (admitted.has_value()) {
       observations.at(admitted->slot()) = {.owner = *admitted,
                                            .panes = pending->observed_panes,
-                                           .semantic_hash = pending->observed_semantic_hash};
+                                           .semantic_hash = pending->observed_semantic_hash,
+                                           .presentation_hash =
+                                               pending->observed_presentation_hash};
     }
     close_pending(connections, slot, sessions);
   } catch (...) {

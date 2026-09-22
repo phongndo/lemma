@@ -926,7 +926,8 @@
           "properties": {
             "command": { "const": "surface.configure" },
             "surface": { "$ref": "#/$defs/surfaceSelector" },
-            "placement": { "$ref": "#/$defs/surfacePlacement" }
+            "placement": { "$ref": "#/$defs/surfacePlacement" },
+            "focusable": { "type": "boolean" }
           },
           "additionalProperties": false
         },
@@ -1009,9 +1010,10 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/paneSelector" }
         },
-        "screen": { "type": "boolean", "default": false }
+        "screen": { "type": "boolean", "default": false },
+        "presentation": { "type": "boolean", "default": false }
       },
-      "dependentRequired": { "pane": ["session"], "panes": ["session"] },
+      "dependentRequired": { "pane": ["session"], "panes": ["session"], "presentation": ["session"] },
       "allOf": [
         {
           "not": { "required": ["pane", "panes"] }
@@ -1021,6 +1023,54 @@
           "then": { "anyOf": [{ "required": ["pane"] }, { "required": ["panes"] }] }
         }
       ],
+      "additionalProperties": false
+    },
+    "presentation": {
+      "type": "object",
+      "required": ["session", "name", "connection", "columns", "rows", "tabs", "mode", "prompt", "message", "copy"],
+      "properties": {
+        "session": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "maxLength": 32 },
+        "connection": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "columns": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "tabs": {
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object", "required": ["id", "position", "title", "focused_pane", "active"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "position": { "type": "integer", "minimum": 1, "maximum": 16 },
+              "title": { "type": "string" },
+              "focused_pane": { "$ref": "#/$defs/id" },
+              "active": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "mode": { "type": "string" },
+        "prompt": {
+          "type": "object", "required": ["kind", "value", "cursor", "feedback"],
+          "properties": {
+            "kind": { "enum": ["none", "session", "tab", "command", "search.forward", "search.backward", "message"] },
+            "value": { "type": "string" },
+            "cursor": { "type": "integer", "minimum": 0 },
+            "feedback": { "enum": ["none", "invalid", "conflict"] }
+          },
+          "additionalProperties": false
+        },
+        "message": { "type": "string" },
+        "copy": {
+          "type": "object", "required": ["active", "searching", "query", "backward", "below", "history", "feedback"],
+          "properties": {
+            "active": { "type": "boolean" }, "searching": { "type": "boolean" },
+            "query": { "type": "string" }, "backward": { "type": "boolean" },
+            "below": { "type": "integer", "minimum": 0 }, "history": { "type": "integer", "minimum": 0 },
+            "feedback": { "enum": ["none", "no_match", "empty_selection", "clipboard_busy", "too_large", "failed"] }
+          },
+          "additionalProperties": false
+        }
+      },
       "additionalProperties": false
     },
     "observedPane": {
@@ -1042,8 +1092,9 @@
       "properties": {
         "schema": { "const": "lemma.event/v1" },
         "sequence": { "type": "integer", "minimum": 0 },
-        "event": { "enum": ["snapshot", "state.changed", "pane.terminal", "pane.screen", "pane.process", "pane.closed", "surface.key", "surface.mouse", "surface.paste", "surface.resized", "surface.focused", "surface.blurred", "surface.closed"] },
+        "event": { "enum": ["snapshot", "state.changed", "attachment.changed", "pane.terminal", "pane.screen", "pane.process", "pane.closed", "surface.key", "surface.mouse", "surface.paste", "surface.resized", "surface.focused", "surface.blurred", "surface.closed"] },
         "sessions": { "type": "array" },
+        "presentation": { "$ref": "#/$defs/presentation" },
         "session": { "$ref": "#/$defs/id" },
         "pane": { "$ref": "#/$defs/id" },
         "surface": { "$ref": "#/$defs/id" },
@@ -1103,12 +1154,16 @@
           "uniqueItems": true,
           "items": { "enum": ["observe", "proc", "surface"] }
         },
-        "events": { "$ref": "#/$defs/subscription", "required": ["session"] }
+        "events": { "$ref": "#/$defs/subscription" }
       },
       "allOf": [
         {
           "if": { "properties": { "capabilities": { "contains": { "enum": ["observe", "surface"] } } } },
           "then": { "required": ["events"] }
+        },
+        {
+          "if": { "properties": { "capabilities": { "contains": { "const": "surface" } } } },
+          "then": { "properties": { "events": { "required": ["session"] } } }
         }
       ],
       "additionalProperties": false
@@ -1119,7 +1174,7 @@
       "required": ["schema", "owner", "capabilities", "limits"],
       "allOf": [
         {
-          "if": { "properties": { "capabilities": { "contains": { "enum": ["observe", "surface"] } } } },
+          "if": { "properties": { "capabilities": { "contains": { "const": "surface" } } } },
           "then": { "required": ["attachment"] }
         }
       ],
@@ -1138,6 +1193,14 @@
           "type": "object",
           "required": ["surfaces", "procs", "record_bytes", "output_bytes", "surface_bytes", "surface_bytes_aggregate", "styles", "runs_per_row", "text_bytes_per_row", "input_bytes", "columns", "rows"],
           "properties": {
+            "peers": { "type": "integer", "minimum": 1 },
+            "surfaces_aggregate": { "type": "integer", "minimum": 1 },
+            "input_bytes_aggregate": { "type": "integer", "minimum": 1 },
+            "output_bytes_aggregate": { "type": "integer", "minimum": 1 },
+            "read_bytes_per_turn": { "type": "integer", "minimum": 1 },
+            "record_work_bytes_per_turn": { "type": "integer", "minimum": 1 },
+            "records_per_turn": { "type": "integer", "minimum": 1 },
+            "write_bytes_per_turn": { "type": "integer", "minimum": 1 },
             "surfaces": { "type": "integer", "minimum": 1 },
             "procs": { "type": "integer", "minimum": 1 },
             "record_bytes": { "type": "integer", "minimum": 1 },

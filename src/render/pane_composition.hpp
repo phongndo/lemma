@@ -3,6 +3,7 @@
 
 #include "lemma/limits.hpp"
 #include "render/scene.hpp"
+#include "render/ui.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -108,6 +109,12 @@ struct StatusTarget final {
 [[nodiscard]] auto status_target_at_column(StatusLine status, Viewport viewport,
                                            std::uint16_t column) noexcept
     -> std::optional<StatusTarget>;
+
+// Pure first-party UI projection, also used by the external user-UI program. The retained Scene
+// renderer itself does not need to call this projection for extension-owned status Surfaces.
+[[nodiscard]] auto project_status_cells(StatusLine status, Viewport viewport,
+                                        std::span<ui::Cell> cells, std::uint16_t& cursor) noexcept
+    -> bool;
 
 // Composes one already-resolved Scene into a synchronized outer-terminal update. A visible native
 // status line occupies the top row, and Scene coordinates are relative to the remaining content

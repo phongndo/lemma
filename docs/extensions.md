@@ -18,14 +18,75 @@ Lemma state -> Event -> extension state -> Surface update -> native Scene -> use
 V1 supports full-duplex framed connections, capability negotiation, Procs, Attachment-scoped Grids,
 dock/float/overlay placement, and owner-directed input. A Surface is not a Pane, PTY, or terminal
 emulator. A terminal remains a real Pane using the ordinary process, Ghostty, and lifecycle machinery.
-Floating terminal creation, shared/Session-scoped Surfaces, and wholesale native-UI replacement are
-not supported.
+Floating terminal creation and shared/Session-scoped Surfaces are not supported.
 
 Runtime extensions can use any language that speaks the protocol. The separate
 [configuration and command host](configuration.md#external-command-programs) can declare and launch
 invocation-scoped programs through `argv` commands, discovered by command-line completion and
-invoked by name or keybinding. Persistent runtime services still manage their own launch/lifetime;
-there is no persistent-service registry or automatic restart policy.
+invoked by name or keybinding. Daemon-lifetime programs use the managed extension declarations
+below. Both paths use the same public protocol, capabilities, ownership, and resource limits.
+
+## Shipped user layer
+
+Lemma installs `lemma-ui` beside the main executable. Its statusline and session manager speak the
+public framed protocol; they have no private access to Core. The statusline owns a nonfocusable
+one-row top dock, renders tab labels and native editor state, and implements tab click/drag behavior.
+The session manager opens with `C-b s` or `session.manager` in the command line: `j`/`k` or arrow keys
+select, Enter switches, `n` creates a named Session, and `q`/Escape closes. Busy and stale targets
+cannot take another client's connection. The manager has a ten-minute invocation deadline.
+
+The status helper uses one global discovery connection and one scoped connection for each attached
+Session. It observes presentation state without subscribing to terminal screens and sleeps when
+nothing changes. These connections and Surfaces count against the advertised public limits;
+exhaustion can leave a Session without status UI while native terminal input continues. Detaching
+releases that Session's status connection and dock. The session manager runs only while open.
+
+## Managed programs
+
+Declare a program in `init.lua` using an exact argv array:
+
+```lua
+local lemma = require("lemma")
+lemma.extension.set("sidebar", { "/absolute/path/to/my-sidebar", "--compact" })
+lemma.extension.set("statusline", false) -- remove the shipped statusline
+-- Replace it using the same declaration, or restore the shipped implementation:
+lemma.extension.set("statusline", { lemma.bundled_ui, "status" })
+```
+
+Names are unique, at most 64 bytes; setting an existing name replaces its program. `false` removes
+it. Up to eight programs are admitted, with at most 64 arguments and 4 KiB per argv including
+terminators. `lemma.bundled_ui` is the installed helper's absolute path. Programs receive
+`LEMMA_EXTENSION_ENDPOINT`, inherit the daemon environment, and run in their own process groups.
+Standard input/output use `/dev/null`; diagnostics use the daemon's stderr. Configuration is
+published atomically; changes take effect at the next daemon startup.
+
+The daemon revokes an exited program's descendants before reaping and restarting it. At most three
+restarts follow consecutive failures; a minute of successful operation replenishes the budget.
+There is no idle polling timer. Daemon shutdown terminates the groups. The supervisor is independent
+of the timed Lua command host: a callback failure cannot revoke a managed statusline or sidebar.
+A stopped or slow helper cannot block native input or rendering; its retained UI can remain stale
+until it updates or disconnects. Native recovery remains available.
+
+`ui.status_line = false` also removes the named `statusline` program and disables the native editor
+bindings that require a visible prompt. To supply a replacement status UI, keep that setting enabled
+and replace the program with `lemma.extension.set`. The prompt state remains native and observable;
+the extension chooses its representation.
+
+## Presentation observation
+
+A scoped subscription can set `presentation = true`. Its initial snapshot and framed `state.changed`
+Events include `presentation`: Session identity/name, current connection (null while detached),
+physical dimensions, ordered tab titles and stable IDs, input mode, native prompt kind/value/cursor/
+feedback, current message, and copy-search/history state. It never includes terminal cells. The
+[embedded schema](../schema/lemma-api-v1.schema.json) defines the fields. The NDJSON observer emits
+`attachment.changed` for presentation changes. Neither form schedules periodic refreshes.
+
+Prompts expose state, not a rendered row; cursor offsets are byte offsets into the native editor
+buffer. `surface.configure` can change `focusable` along with placement. Making a focused Surface
+nonfocusable immediately returns keyboard input to the Pane. A nonfocusable Surface may display a
+visible cursor without taking keyboard ownership: the highest such Surface wins when no Surface
+has input focus. A focused Surface always takes cursor precedence. This lets a statusline show the
+native editor's cursor without routing ordinary typing through the extension process.
 
 ## Navigation picker
 
@@ -127,9 +188,10 @@ Session named `example`; send it as a framed Hello, not as a CONTROL JSON line:
 }
 ```
 
-`observe` and `surface` require `events.session`, selecting that Session's Attachment. A proc-only
-connection may omit `events` and have no Session/UI scope; its Commands use ordinary explicit
-selectors. Supplying `events`, even without `observe`, requires a live Session and binds connection
+`surface` requires `events.session`, selecting that Session's Attachment. `observe` requires
+`events`, but may omit its Session selector for a global Session feed. A proc-only connection may
+omit `events`; its Commands use ordinary explicit selectors. Supplying `events.session`, even
+without `observe`, requires a live Session and binds connection
 lifetime to it. This alone does not grant observation.
 
 Lemma replies with one `lemma.extension-welcome/v1` record containing the generation, granted

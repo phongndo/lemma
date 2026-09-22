@@ -3,8 +3,10 @@
 #include "api/command.hpp"
 #include "api/json.hpp"
 #include "api/proc.hpp"
+#include "config/config.hpp"
 #include "core/engine.hpp"
 #include "extension/lua_host.hpp"
+#include "extension/services.hpp"
 #include "lemma/id.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
@@ -103,26 +105,35 @@ public:
   [[nodiscard]] auto read_descriptor() const noexcept -> int { return read_descriptor_; }
   [[nodiscard]] auto write_descriptor() const noexcept -> int { return write_descriptor_; }
 
+  void services(extension::Services& services) noexcept { services_ = &services; }
+
   [[nodiscard]] auto reap_process(int& status) const noexcept -> pid_t {
-    if (host_ == nullptr || !host_->active()) {
+    if (services_ == nullptr && (host_ == nullptr || !host_->active())) {
       return ::waitpid(-1, &status, WNOHANG);
     }
     // Select without consuming an exit. A generic waitpid(-1) after checking a live host would
     // race its exit and could release its process-group identity before revocation.
-    siginfo_t information{};
-    if (::waitid(P_ALL, 0, &information, WEXITED | WNOHANG | WNOWAIT) != 0) {
-      return -1;
+    while (true) {
+      siginfo_t information{};
+      if (::waitid(P_ALL, 0, &information, WEXITED | WNOHANG | WNOWAIT) != 0) {
+        return -1;
+      }
+      if (information.si_pid == 0) {
+        return 0;
+      }
+      if (host_ != nullptr) {
+        host_->reap_exited();
+      }
+      if (services_ != nullptr) {
+        services_->reap_exited();
+      }
+      const auto process = ::waitpid(information.si_pid, &status, WNOHANG);
+      if (process < 0 && errno == ECHILD) {
+        // The selected child was the host, consumed by its owner after revoking the group.
+        continue;
+      }
+      return process;
     }
-    if (information.si_pid == 0) {
-      return 0;
-    }
-    host_->reap_exited();
-    const auto process = ::waitpid(information.si_pid, &status, WNOHANG);
-    if (process < 0 && errno == ECHILD && !host_->active()) {
-      // The selected child was the host, consumed by its owner after revoking the group.
-      return ::waitpid(-1, &status, WNOHANG);
-    }
-    return process;
   }
 
   void drain_wakeup() const noexcept {
@@ -141,6 +152,7 @@ public:
 
 private:
   extension::HostProcess* host_;
+  extension::Services* services_{nullptr};
   int read_descriptor_{-1};
   int write_descriptor_{-1};
 };
@@ -455,6 +467,7 @@ void release_owned_endpoint(void* const context) noexcept {
       static_cast<void>(write_text(STDERR_FILENO, configured_runtime.diagnostic));
     }
     static_cast<void>(write_text(STDERR_FILENO, "\n"));
+    configured_runtime = extension::load_builtin_configuration();
   }
   ChildExitReaper child_reaper(configured_runtime.host.active() ? &configured_runtime.host
                                                                 : nullptr);
@@ -480,6 +493,11 @@ void release_owned_endpoint(void* const context) noexcept {
       .server_lock = server_lock,
       .development_build_id_path = development_marker,
   };
+  extension::Services services(configured_runtime.generation != nullptr
+                                   ? configured_runtime.generation->extensions()
+                                   : std::span<const config::ExtensionConfiguration>{},
+                               path);
+  child_reaper.services(services);
   child_exit_wakeup_descriptor = child_reaper.write_descriptor();
   auto reactor_environment = core::production_reactor_environment();
   if (configured_runtime.generation != nullptr) {

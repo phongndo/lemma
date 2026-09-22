@@ -188,10 +188,10 @@ lemma.command.register("project.open", {
   ASSERT_TRUE(file.valid());
   auto loaded = extension::load_configuration(file.path());
   ASSERT_EQ(loaded.status, extension::ConfigurationStatus::loaded) << loaded.diagnostic;
-  ASSERT_EQ(loaded.commands.size(), 1);
-  EXPECT_EQ(loaded.commands.front().name, "project.open");
-  EXPECT_EQ(loaded.commands.front().description, "Open a project");
-  EXPECT_EQ(loaded.commands.front().timeout_ms, 1234);
+  ASSERT_EQ(loaded.commands.size(), 2);
+  EXPECT_EQ(loaded.commands.at(1).name, "project.open");
+  EXPECT_EQ(loaded.commands.at(1).description, "Open a project");
+  EXPECT_EQ(loaded.commands.at(1).timeout_ms, 1234);
 }
 
 TEST(ConfigurationHostTest, BindsBothCommandKindsToLegacyAndStructuredInput) {
@@ -204,12 +204,12 @@ lemma.keymap.set('normal', 'M-Left', 'test.external')
 )");
   auto loaded = extension::load_configuration(file.path());
   ASSERT_EQ(loaded.status, extension::ConfigurationStatus::loaded) << loaded.diagnostic;
-  ASSERT_EQ(loaded.commands.size(), 2U);
+  ASSERT_EQ(loaded.commands.size(), 3U);
   input::InputRouter router(loaded.generation->input_map());
   constexpr std::array bytes{std::byte{'l'}};
   const auto legacy = router.route_legacy(bytes, bytes.size());
   ASSERT_TRUE(std::holds_alternative<input::RoutedHostedCommand>(legacy.effect));
-  EXPECT_EQ(std::get<input::RoutedHostedCommand>(legacy.effect).index, 0U);
+  EXPECT_EQ(std::get<input::RoutedHostedCommand>(legacy.effect).index, 1U);
   input::KeyEvent key{.action = input::KeyAction::press,
                       .key = input::PhysicalKey::arrow_left,
                       .modifiers = input::key_modifier_alt,
@@ -217,7 +217,7 @@ lemma.keymap.set('normal', 'M-Left', 'test.external')
                       .text = {}};
   const auto structured = router.route_key(key);
   ASSERT_TRUE(std::holds_alternative<input::RoutedHostedCommand>(structured.effect));
-  EXPECT_EQ(std::get<input::RoutedHostedCommand>(structured.effect).index, 1U);
+  EXPECT_EQ(std::get<input::RoutedHostedCommand>(structured.effect).index, 2U);
   key.action = input::KeyAction::release;
   EXPECT_TRUE(std::holds_alternative<input::ConsumedInput>(router.route_key(key).effect));
 }

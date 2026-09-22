@@ -259,7 +259,8 @@ template <typename Id> [[nodiscard]] auto id_text(const Id id) -> std::string {
   if (attachment.is_valid() && attachment.slot() >= limits::sessions_hard_max) {
     return false;
   }
-  return (hello.capabilities & (capability_observe | capability_surface)) == 0 ||
+  return ((hello.capabilities & capability_surface) == 0 &&
+          !hello.subscription.session.has_value()) ||
          (session.is_valid() && attachment.is_valid());
 }
 
@@ -302,7 +303,7 @@ auto decode_hello(const api::JsonValue& document) -> std::optional<Hello> {
   const auto* const events = api::json_member(document, "events");
   if (events != nullptr) {
     const auto decoded = api::decode_event_subscription(*events);
-    if (!decoded.subscription.has_value() || !decoded.subscription->session.has_value()) {
+    if (!decoded.subscription.has_value()) {
       return std::nullopt;
     }
     result.subscription = *decoded.subscription;
@@ -1013,7 +1014,8 @@ auto Runtime::create_surface(const ExtensionGenerationId owner,
 
 auto Runtime::configure_surface(const ExtensionGenerationId owner, const SurfaceId id,
                                 const api::SurfacePlacement placement,
-                                const render::Viewport viewport) noexcept
+                                const render::Viewport viewport,
+                                const std::optional<bool> configured_focusable) noexcept
     -> SurfaceOperationResult {
   auto* const found = surface(id);
   if (found == nullptr) {
@@ -1027,7 +1029,8 @@ auto Runtime::configure_surface(const ExtensionGenerationId owner, const Surface
   }
   if (found->placement.kind == placement.kind && found->placement.column == placement.column &&
       found->placement.row == placement.row && found->placement.columns == placement.columns &&
-      found->placement.rows == placement.rows) {
+      found->placement.rows == placement.rows &&
+      configured_focusable.value_or(found->focusable) == found->focusable) {
     return {.status = SurfaceOperationStatus::no_effect,
             .surface = id,
             .pane_viewport = pane_viewport(found->attachment, viewport).value_or(PaneRectangle{})};
@@ -1047,7 +1050,7 @@ auto Runtime::configure_surface(const ExtensionGenerationId owner, const Surface
     return surface_operation(SurfaceOperationStatus::capacity);
   }
   const auto attachment_id = found->attachment;
-  const auto focusable = found->focusable;
+  const auto focusable = configured_focusable.value_or(found->focusable);
   const auto opaque = found->opaque;
   const auto previous_bytes = found->grid.retained_bytes();
   found->placement = previous;
@@ -1060,6 +1063,9 @@ auto Runtime::configure_surface(const ExtensionGenerationId owner, const Surface
                                      .opaque = opaque});
   retained_surface_bytes_ = retained_surface_bytes_ - previous_bytes +
                             surfaces_.at(id.slot()).surface->grid.retained_bytes();
+  if (!focusable && focused_surface(attachment_id) == id) {
+    static_cast<void>(focus_pane(attachment_id));
+  }
   auto& geometry = geometry_generations_.at(attachment_id.slot());
   geometry = geometry == std::numeric_limits<std::uint64_t>::max() ? 1U : geometry + 1U;
   enqueue_surface_event(owner, id, PendingSurfaceEventKind::resized, rectangle->columns,
@@ -1259,6 +1265,8 @@ auto Runtime::collect_surfaces(
   }
   const auto layout = resolve_layout(attachment_id, viewport);
   std::size_t count = 0;
+  std::optional<std::size_t> passive_cursor;
+  const auto focused = focused_surface(attachment_id);
   for (auto& slot : surfaces_) {
     if (!slot.surface.has_value() || slot.surface->attachment != attachment_id) {
       continue;
@@ -1268,10 +1276,18 @@ auto Runtime::collect_surfaces(
         slot.surface->grid.rows() != rectangle->rows) {
       continue;
     }
+    if (!slot.surface->focusable && slot.surface->grid.cursor().visible) {
+      passive_cursor = count;
+    }
     storage.at(count++) = {.grid = &slot.surface->grid,
                            .rectangle = *rectangle,
-                           .focused = focused_surface(attachment_id) == slot.surface->id,
+                           .focused = focused == slot.surface->id,
                            .opaque = slot.surface->opaque};
+  }
+  // Cursor display is independent of keyboard ownership for nonfocusable Surfaces. A focused
+  // extension always wins; otherwise the highest passive cursor is projected over the Pane.
+  if (!focused.is_valid() && passive_cursor.has_value()) {
+    storage.at(*passive_cursor).focused = true;
   }
   return std::span(storage).first(count);
 }

@@ -39,71 +39,6 @@ using input::PhysicalKey;
   });
 }
 
-// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
-[[nodiscard]] constexpr auto physical_key(const std::string_view name) noexcept
-    -> std::optional<PhysicalKey> {
-  if (name == "Enter") {
-    return PhysicalKey::enter;
-  }
-  if (name == "Tab") {
-    return PhysicalKey::tab;
-  }
-  if (name == "Backspace") {
-    return PhysicalKey::backspace;
-  }
-  if (name == "Escape" || name == "Esc") {
-    return PhysicalKey::escape;
-  }
-  if (name == "Up") {
-    return PhysicalKey::arrow_up;
-  }
-  if (name == "Down") {
-    return PhysicalKey::arrow_down;
-  }
-  if (name == "Left") {
-    return PhysicalKey::arrow_left;
-  }
-  if (name == "Right") {
-    return PhysicalKey::arrow_right;
-  }
-  if (name == "Home") {
-    return PhysicalKey::home;
-  }
-  if (name == "End") {
-    return PhysicalKey::end;
-  }
-  if (name == "Insert") {
-    return PhysicalKey::insert;
-  }
-  if (name == "Delete") {
-    return PhysicalKey::delete_key;
-  }
-  if (name == "PageUp") {
-    return PhysicalKey::page_up;
-  }
-  if (name == "PageDown") {
-    return PhysicalKey::page_down;
-  }
-  constexpr std::array functions{
-      PhysicalKey::f1, PhysicalKey::f2,  PhysicalKey::f3,  PhysicalKey::f4,
-      PhysicalKey::f5, PhysicalKey::f6,  PhysicalKey::f7,  PhysicalKey::f8,
-      PhysicalKey::f9, PhysicalKey::f10, PhysicalKey::f11, PhysicalKey::f12,
-  };
-  if (name.size() >= 2U && name.front() == 'F') {
-    unsigned number = 0;
-    for (const char character : name.substr(1)) {
-      if (character < '0' || character > '9') {
-        return std::nullopt;
-      }
-      number = (number * 10U) + static_cast<unsigned>(character - '0');
-    }
-    if (number > 0U && number <= functions.size()) {
-      return functions.at(number - 1U);
-    }
-  }
-  return std::nullopt;
-}
-
 [[nodiscard]] auto append_chord(std::string& output, const InputChord chord) -> bool {
   try {
     output += R"({"kind":)";
@@ -176,7 +111,7 @@ using input::PhysicalKey;
 }
 
 // Fixed-capacity configuration indexes are validated before access.
-// NOLINTNEXTLINE(bugprone-exception-escape)
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 [[nodiscard]] auto runtime_options_valid(const Configuration& configuration) noexcept -> bool {
   if (configuration.terminal.scrollback_lines.has_value() &&
       *configuration.terminal.scrollback_lines > limits::terminal_scrollback_lines_hard_max) {
@@ -192,6 +127,29 @@ using input::PhysicalKey;
       configuration.history.file.contains('\0')) {
     return false;
   }
+  if (configuration.extensions.size() > extensions_max) {
+    return false;
+  }
+  for (std::size_t index = 0; index < configuration.extensions.size(); ++index) {
+    const auto& extension = configuration.extensions.at(index);
+    if (extension.name.empty() || extension.name.size() > 64 || extension.name.contains('\0') ||
+        extension.argv.empty() || extension.argv.size() > default_program_arguments_max ||
+        extension.argv.front().empty()) {
+      return false;
+    }
+    for (std::size_t previous = 0; previous < index; ++previous) {
+      if (configuration.extensions.at(previous).name == extension.name) {
+        return false;
+      }
+    }
+    std::size_t bytes = 0;
+    for (const auto& argument : extension.argv) {
+      if (argument.contains('\0') || argument.size() + 1 > default_program_bytes_max - bytes) {
+        return false;
+      }
+      bytes += argument.size() + 1;
+    }
+  }
   std::size_t program_bytes = 0;
   for (std::size_t index = 0; index < configuration.launch.default_program.size(); ++index) {
     const auto& argument = configuration.launch.default_program.at(index);
@@ -205,63 +163,6 @@ using input::PhysicalKey;
 }
 
 } // namespace
-
-// Key names intentionally describe physical command chords rather than terminal escape strings.
-// Printable ASCII remains a byte chord so structured and legacy clients share the fast lookup.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto parse_key(std::string_view value) noexcept -> std::optional<InputChord> {
-  if (value.empty() || value.contains('\0')) {
-    return std::nullopt;
-  }
-  std::uint16_t modifiers = 0;
-  const auto take = [&value, &modifiers](const std::string_view prefix,
-                                         const std::uint16_t modifier) {
-    if (!value.starts_with(prefix) || (modifiers & modifier) != 0U) {
-      return false;
-    }
-    modifiers = static_cast<std::uint16_t>(modifiers | modifier);
-    value.remove_prefix(prefix.size());
-    return true;
-  };
-  bool consumed = true;
-  while (consumed) {
-    consumed = take("C-", input::key_modifier_control) || take("S-", input::key_modifier_shift) ||
-               take("M-", input::key_modifier_alt) || take("A-", input::key_modifier_alt) ||
-               take("Super-", input::key_modifier_super) ||
-               take("Cmd-", input::key_modifier_super) ||
-               take("Command-", input::key_modifier_super) ||
-               take("Win-", input::key_modifier_super) || take("D-", input::key_modifier_super);
-  }
-  if (value == "Space") {
-    return InputChord::byte(' ', modifiers);
-  }
-  if (value == "Enter") {
-    return InputChord::byte(0x0DU, modifiers);
-  }
-  if (value == "Tab") {
-    return InputChord::byte(0x09U, modifiers);
-  }
-  if (value == "Backspace") {
-    return InputChord::byte(0x7FU, modifiers);
-  }
-  if (value == "Escape" || value == "Esc") {
-    return InputChord::byte(0x1BU, modifiers);
-  }
-  if (value.size() == 1U) {
-    auto byte = static_cast<std::uint8_t>(value.front());
-    if (byte < 0x20U || byte > 0x7EU) {
-      return std::nullopt;
-    }
-    if (modifiers == input::key_modifier_shift && byte >= 'a' && byte <= 'z') {
-      byte = static_cast<std::uint8_t>(byte - static_cast<std::uint8_t>('a') +
-                                       static_cast<std::uint8_t>('A'));
-      modifiers = 0;
-    }
-    return InputChord::byte(byte, modifiers);
-  }
-  const auto key = physical_key(value);
-  return key.has_value() ? std::optional{InputChord::key(*key, modifiers)} : std::nullopt;
-}
 
 namespace {
 
@@ -751,6 +652,29 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
         return std::nullopt;
       }
     }
+    output += R"(],"extensions":[)";
+    bool separator = false;
+    for (const auto& extension : configuration.extensions) {
+      if (separator) {
+        output += ',';
+      }
+      separator = true;
+      output += R"({"name":)";
+      if (!api::append_json_string(output, extension.name, configuration_document_bytes_max)) {
+        return std::nullopt;
+      }
+      output += R"(,"argv":[)";
+      for (std::size_t index = 0; index < extension.argv.size(); ++index) {
+        if (index != 0) {
+          output += ',';
+        }
+        if (!api::append_json_string(output, extension.argv.at(index),
+                                     configuration_document_bytes_max)) {
+          return std::nullopt;
+        }
+      }
+      output += "]}";
+    }
     output += "]}";
     return output.size() <= configuration_document_bytes_max ? std::optional{std::move(output)}
                                                              : std::nullopt;
@@ -761,10 +685,10 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
 
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
-  if (!known_members(document,
-                     {"schema", "preset", "prefix", "contexts", "bindings", "scrollback_lines",
-                      "status_line", "default_cwd", "history_file", "default_program"}) ||
-      document.object.size() != 10U) {
+  if (!known_members(document, {"schema", "preset", "prefix", "contexts", "bindings",
+                                "scrollback_lines", "status_line", "default_cwd", "history_file",
+                                "default_program", "extensions"}) ||
+      (document.object.size() != 10U && document.object.size() != 11U)) {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::invalid_document, .field = {}}};
   }
@@ -902,6 +826,35 @@ auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::capacity, .field = "runtime"}};
   }
+  if (const auto* extensions = api::json_member(document, "extensions"); extensions != nullptr) {
+    if (extensions->kind != api::JsonKind::array || extensions->array.size() > extensions_max) {
+      return {.configuration = std::nullopt,
+              .failure = {.error = Error::invalid_field, .field = "extensions"}};
+    }
+    try {
+      for (const auto& value : extensions->array) {
+        const auto name = api::json_string(value, "name");
+        const auto* argv = api::json_member(value, "argv");
+        if (!known_members(value, {"name", "argv"}) || !name.has_value() || argv == nullptr ||
+            argv->kind != api::JsonKind::array) {
+          return {.configuration = std::nullopt,
+                  .failure = {.error = Error::invalid_field, .field = "extensions"}};
+        }
+        ExtensionConfiguration extension{.name = std::string(*name), .argv = {}};
+        for (const auto& argument : argv->array) {
+          if (argument.kind != api::JsonKind::string) {
+            return {.configuration = std::nullopt,
+                    .failure = {.error = Error::invalid_field, .field = "extensions"}};
+          }
+          extension.argv.push_back(argument.string);
+        }
+        result.extensions.push_back(std::move(extension));
+      }
+    } catch (...) {
+      return {.configuration = std::nullopt,
+              .failure = {.error = Error::capacity, .field = "extensions"}};
+    }
+  }
   if (!runtime_options_valid(result)) {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::invalid_field, .field = "runtime"}};
@@ -944,7 +897,8 @@ auto compile(const Configuration& configuration) noexcept -> std::expected<Gener
     auto history_file = configuration.history.file;
     return Generation(std::move(*compiled), configuration.terminal.scrollback_lines,
                       configuration.ui.status_line, std::move(default_cwd),
-                      std::move(default_program), std::move(history_file));
+                      std::move(default_program), std::move(history_file),
+                      configuration.extensions);
   } catch (...) {
     return std::unexpected(Error::capacity);
   }
