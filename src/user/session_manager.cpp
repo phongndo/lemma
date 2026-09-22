@@ -855,13 +855,8 @@ void SessionManager::paint() {
       grid.put(pane.x + 2, pane.y + row + 1, content.at(row), pane.width - 4);
     }
   }
-  if (layout_.surface.height > 1) {
-    const std::string_view hint =
-        layout_.surface.width >= 65
-            ? "up/down select  Tab browse  S-Tab back  Enter switch  Esc close"
-            : "Tab in  S-Tab back  Enter go  Esc close";
-    grid.put(0, layout_.surface.height - 1, message_.empty() ? hint : std::string_view(message_),
-             layout_.surface.width, 1);
+  if (layout_.surface.height > 1 && !message_.empty()) {
+    grid.put(0, layout_.surface.height - 1, message_, layout_.surface.width, 1);
   }
   const std::string header =
       R"({"schema":"lemma.surface-update/v1","surface":)" + ext::json_quote(surface_) +
