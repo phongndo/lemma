@@ -85,6 +85,7 @@ struct ScriptedReactor final {
   std::size_t stage{0};
   std::size_t polls{0};
   int initial_poll_timeout{-2};
+  int retry_poll_timeout{-2};
   std::size_t clock_reads{0};
   std::size_t releases{0};
   std::size_t sends{0};
@@ -268,6 +269,8 @@ thread_local ScriptedReactor* active_script = nullptr;
   auto& script = *static_cast<ScriptedReactor*>(context);
   if (script.polls == 0) {
     script.initial_poll_timeout = timeout_milliseconds;
+  } else if (script.polls == 1) {
+    script.retry_poll_timeout = timeout_milliseconds;
   }
   ++script.polls;
   script.positive_timeout_seen = script.positive_timeout_seen || timeout_milliseconds > 0;
@@ -539,6 +542,7 @@ TEST(ReactorEnvironmentTest, ChildReapedBeforePollCannotSleepBeforePublishingIts
   EXPECT_TRUE(script.early_wake_delivered);
   EXPECT_EQ(script.reaped_exits, 2U);
   EXPECT_EQ(script.initial_poll_timeout, 0);
+  EXPECT_EQ(script.retry_poll_timeout, 0);
   EXPECT_EQ(script.blocked_sends, 1U);
   EXPECT_EQ(script.partial_sends, 1U);
   EXPECT_EQ(script.releases, 1U);

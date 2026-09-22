@@ -10424,6 +10424,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t extension_io_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
+  bool reaped_work_pending = false;
 
   while (true) {
     if (stop_requested != nullptr && stop_requested()) {
@@ -10431,7 +10432,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     // Reaping may consume the only wakeup after PTY EOF. Run retirement and waiting Procs
     // before sleeping again so the recorded exit becomes a published Core outcome.
-    const bool reaped_before_poll = reap_exited_children(sessions, runtimes, child_reaper);
+    reaped_work_pending =
+        reap_exited_children(sessions, runtimes, child_reaper) || reaped_work_pending;
     expire_status_messages(sessions, reactor_now());
     const bool public_screen_work_pending = service_public_observers(
         pending_connections, sessions, runtimes, public_scratch, observer_cursor);
@@ -10589,7 +10591,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     const auto timeout =
         poll_timeout(sessions, runtimes, pending_connections, public_procs, capacity_rejections,
-                     public_screen_work_pending || reaped_before_poll);
+                     public_screen_work_pending || reaped_work_pending);
     const auto hosted_timeout =
         service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
     const auto poll_result = reactor_poll(std::span(descriptors).first(descriptor_count),
@@ -10644,6 +10646,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         service_copy_input_timeout(*session, runtimes, reactor_now());
       }
     }
+    // Clear only after retirement; an interrupted poll must retain the pending native turn.
+    reaped_work_pending = false;
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
         client_message_budgets{};
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
