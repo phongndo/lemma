@@ -664,8 +664,10 @@ class SessionPickerMuxTest(unittest.TestCase):
             "tab.new", session=scope, title="temporary", focus="preserve", argv=["cat"]
         )
         self.open()
-        self.client.send("temporary\t")
         self.expect_screen("source / 2:temporary")
+        self.client.send("temporary\t")
+        # The root row contains the same path; wait for the browsing title before deletion.
+        self.expect_screen("Session / source / 2:temporary")
         self.proc("tab.kill", session=scope, tab={"id": tab["tab"]})
         self.expect_screen("Tab closed")
         self.expect_screen("source / 1:shell")

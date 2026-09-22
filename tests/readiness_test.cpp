@@ -41,6 +41,15 @@ struct ReadinessTest : ::testing::Test {
     EXPECT_EQ(value, 'x');
   }
   [[nodiscard]] auto wait() -> int { return readiness.wait(descriptors, identities, 0); }
+  void expect_matches_poll() {
+    auto expected = descriptors;
+    const auto count = ::poll(expected.data(), static_cast<nfds_t>(expected.size()), 0);
+    ASSERT_GE(count, 0);
+    EXPECT_EQ(wait(), count);
+    for (std::size_t index = 0; index < descriptors.size(); ++index) {
+      EXPECT_EQ(descriptors.at(index).revents, expected.at(index).revents);
+    }
+  }
 
   Readiness readiness{8};
   std::array<int, 2> first{-1, -1};
@@ -102,12 +111,12 @@ TEST_F(ReadinessTest, ReusedNumberDoesNotInheritAnOldOpenFileWatch) {
   EXPECT_EQ(wait(), 0);
 }
 
-TEST_F(ReadinessTest, HangupReportedWithoutReadInterest) {
+TEST_F(ReadinessTest, HangupWithoutReadInterestMatchesPoll) {
   descriptors.front().events = 0;
   EXPECT_EQ(wait(), 0);
   close_descriptor(first.back());
-  EXPECT_EQ(wait(), 1);
-  EXPECT_NE(descriptors.front().revents & POLLHUP, 0);
+  // Native poll differs across platforms when no read interest is registered.
+  expect_matches_poll();
 }
 
 TEST_F(ReadinessTest, InvalidDescriptorFallsBackToPoll) {
@@ -123,12 +132,10 @@ TEST_F(ReadinessTest, DuplicateTransitionPreservesPollCountAndInterests) {
   descriptors.back().fd = first.front();
   identities.back() = identities.front();
   signal(first.back());
-  EXPECT_EQ(wait(), 2);
-  EXPECT_EQ(descriptors.front().revents, POLLIN);
-  EXPECT_EQ(descriptors.back().revents, POLLIN);
+  // Darwin reports only one ready entry for a duplicate fd; Linux reports both.
+  expect_matches_poll();
   descriptors.back().events = 0;
-  EXPECT_EQ(wait(), 1);
-  EXPECT_EQ(descriptors.back().revents, 0);
+  expect_matches_poll();
 }
 
 TEST_F(ReadinessTest, UncachedLifetimeAndUnsupportedInterestPreservePollBehavior) {
