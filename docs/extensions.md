@@ -37,8 +37,7 @@ at the root, a process name can find a Pane in any Session. Space-separated term
 the Session/Tab path, observed process name, or directory. Matching is case-insensitive ASCII
 subsequence scoring with word-boundary and consecutive-match bonuses, not fzf's extended query
 grammar. Labels currently use ASCII display fallbacks for non-ASCII text. Pane labels use their
-ordinal and observed process name (falling back to the launch
-executable), not a separate title.
+ordinal and observed process name (falling back to the launch executable), not a separate title.
 
 | Key | Action |
 | --- | --- |
@@ -48,24 +47,25 @@ executable), not a separate title.
 | Enter | Activate the Session, Tab, or exact Pane |
 | Escape or Ctrl-C | Close; in the creation prompt, return to search |
 | Ctrl-O | Open the named Session creation prompt |
-| Ctrl-R | Refresh metadata and the selected preview |
+| Ctrl-R | Refresh metadata |
 
-Printable keys, including `j`, `k`, `n`, and `q`, belong to the query. Arrow keys, Home/End,
+Printable keys, including `j`, `k`, `n`, and `q`, belong to the query. Left/Right, Home/End,
 Backspace/Delete, Ctrl-U, and Ctrl-W edit it. Pasted text cannot activate a result. Removed
 selections require a fresh choice; busy destinations cannot take another client's connection.
 Selecting a Session preserves its active Tab and focused Pane. The manager has a ten-minute
 invocation deadline.
 
-The centered float uses 80% of terminal columns and 85% of rows, with terminal-default backgrounds
-on the fill and border labels. Following fzf-lua's flex layout, the preview sits on the right above
-100 picker columns and below otherwise; small terminals show only the list. Resizing preserves
-the query, browsing location, and selected identity. Session/Tab previews show their hierarchy;
-Pane previews show a bounded plain-text snapshot, refreshed on selection or Ctrl-R. A directory
-marked `(launch)` is the launch directory, used when no current OSC 7 directory is available.
+The centered float uses 80% of terminal columns and 85% of rows for a single result list, with
+terminal-default backgrounds on the fill and border label. Its title is centered above an empty
+search prompt; the prompt row shows matching/total candidate counts. A highlighted row indicates
+selection. There is no preview or keyboard-hint footer. Resizing preserves the query, browsing
+location, and selected identity. A directory marked `(launch)` is the launch directory, used when
+no current OSC 7 directory is available.
 
-Catalogue and preview reads run asynchronously on a separate connection from input. Search uses
-cached metadata, Surface updates retain unchanged rows, and idle helpers wait for Events without
-polling terminal screens. These behaviors live in the replaceable external helper, not Core.
+Catalogue reads run asynchronously on a separate connection from input. Search uses cached
+metadata, Surface updates retain unchanged rows, and idle helpers wait for Events. The picker
+neither captures terminal screens nor subscribes to screen contents. These behaviors live in the
+replaceable external helper, not Core.
 
 The status helper uses one global discovery connection and one scoped connection for each attached
 Session. It observes presentation state without subscribing to terminal screens and sleeps when

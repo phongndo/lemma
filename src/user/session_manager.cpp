@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -98,15 +99,12 @@ struct Pane final {
 struct Tab final {
   std::string id;
   std::string title;
-  std::string focused;
   std::size_t position{0};
   std::vector<Pane> panes;
 };
 struct Session final {
   std::string id;
   std::string name;
-  std::string active_tab;
-  std::string focused;
   std::uint64_t revision{0};
   std::size_t tab_count{0};
   bool attached{false};
@@ -135,32 +133,17 @@ struct Rectangle final {
 struct Layout final {
   Rectangle surface;
   Rectangle list;
-  Rectangle preview;
 };
 
-// fzf-lua's flex split: right:60% above 100 picker columns, down:45% otherwise.
-// Very small terminals retain the prompt/list rather than unusable preview fragments.
+// One centered list at every terminal size; no preview geometry or terminal-screen reads.
 [[nodiscard]] auto layout(std::size_t columns, std::size_t rows) -> Layout {
   const auto width = std::max<std::size_t>(1, columns * 80 / 100);
   const auto height = std::max<std::size_t>(1, rows * 85 / 100);
-  Layout result{
-      .surface = {.x = (columns - width) / 2,
-                  .y = (rows - height) / 2,
-                  .width = width,
-                  .height = height},
-      .list = {.x = 0, .y = 0, .width = width, .height = height > 1 ? height - 1 : height},
-      .preview = {}};
-  if (width > 100 && height >= 9) {
-    const auto left = (width - 1) * 40 / 100;
-    result.list.width = left;
-    result.preview = {
-        .x = left + 1, .y = 0, .width = width - left - 1, .height = result.list.height};
-  } else if (width >= 35 && height >= 16) {
-    const auto bottom = (result.list.height - 1) * 45 / 100;
-    result.list.height -= bottom + 1;
-    result.preview = {.x = 0, .y = result.list.height + 1, .width = width, .height = bottom};
-  }
-  return result;
+  return {.surface = {.x = (columns - width) / 2,
+                      .y = (rows - height) / 2,
+                      .width = width,
+                      .height = height},
+          .list = {.x = 0, .y = 0, .width = width, .height = height > 1 ? height - 1 : height}};
 }
 
 struct Cell final {
@@ -182,13 +165,17 @@ public:
   void put(std::size_t x, std::size_t y, std::string_view value, std::size_t width,
            unsigned style = 0, const std::vector<std::size_t>& highlights = {}) {
     const auto safe = plain(value);
+    // Leave room for borders and detail runs when long queries alternate highlighted cells.
+    const auto marked =
+        std::span(highlights)
+            .first(std::min(highlights.size(), (limits::surface_runs_per_row_max - 16) / 2));
     for (std::size_t i = 0; i < std::min(width, safe.size()); ++i) {
-      const auto highlighted = std::ranges::binary_search(highlights, i);
+      const auto highlighted = std::ranges::binary_search(marked, i);
       const auto match_style = style == 3 ? 5U : 4U;
       glyph(x + i, y, safe.substr(i, 1), highlighted ? match_style : style);
     }
   }
-  void box(const Rectangle& rect, std::string_view title, std::string_view count = {}) {
+  void box(const Rectangle& rect, std::string_view title) {
     if (rect.width < 2 || rect.height < 2) {
       return;
     }
@@ -207,12 +194,8 @@ public:
     glyph(rect.x, bottom, "╰", 1);
     glyph(right, bottom, "╯", 1);
     if (rect.width > 6) {
-      const auto count_width = rect.width >= 18 ? count.size() : 0;
-      const auto title_width = rect.width - 5 - (count_width == 0 ? 0 : count_width + 3);
-      put(rect.x + 2, rect.y, ' ' + std::string(title) + ' ', title_width, 2);
-      if (count_width != 0) {
-        put(right - count_width - 3, rect.y, ' ' + std::string(count) + ' ', count_width + 2, 1);
-      }
+      const auto label = ' ' + plain(title).substr(0, rect.width - 6) + ' ';
+      put(rect.x + ((rect.width - label.size()) / 2), rect.y, label, label.size(), 2);
     }
   }
   [[nodiscard]] auto row(std::size_t y) const -> EncodedRow {
@@ -289,15 +272,12 @@ struct FuzzyMatch final {
   return result;
 }
 
-enum class JobKind : std::uint8_t { outline, metadata, preview };
+enum class JobKind : std::uint8_t { outline, metadata };
 struct Job final {
   JobKind kind{JobKind::outline};
   std::uint32_t sequence{0};
   std::string session;
   std::uint64_t revision{0};
-  std::vector<std::string> panes;
-  Target target;
-  std::size_t lines{0};
   Clock::time_point deadline;
 };
 
@@ -331,14 +311,12 @@ private:
   Location location_;
   std::vector<Location> history_;
   std::vector<Match> matches_;
+  std::size_t candidate_count_{0};
   std::optional<Job> job_;
   Layout layout_;
   std::size_t columns_{0};
   std::size_t rows_{0};
   std::vector<std::string> painted_;
-  std::optional<Target> captured_;
-  std::size_t captured_lines_{0};
-  std::string capture_;
   std::string message_;
   std::string pending_;
   bool dirty_{true};
@@ -384,7 +362,6 @@ private:
   void reply(const ext::ClientRecord& record);
   static void outline(Session& target, const JsonValue& result);
   static void metadata(Session& target, const JsonValue& result);
-  [[nodiscard]] auto preview() -> std::vector<std::string>;
   void paint();
   [[nodiscard]] auto activate() -> bool;
   [[nodiscard]] auto switch_session(std::string_view id) -> bool;
@@ -436,8 +413,6 @@ void SessionManager::reconcile(const JsonValue& list) {
     item.name = text(value, "name");
     item.revision = revision;
     item.tab_count = number(value, "tabs");
-    item.active_tab = text(value, "active_tab");
-    item.focused = text(value, "focused_pane");
     item.attached = enabled(value, "attached");
     updated.push_back(std::move(item));
   }
@@ -452,6 +427,7 @@ void SessionManager::reconcile(const JsonValue& list) {
 
 void SessionManager::add_match(Target target, std::string label, std::string detail,
                                const std::string& search) {
+  ++candidate_count_;
   auto matched = fuzzy(search, location_.query);
   if (!matched.has_value()) {
     return;
@@ -490,6 +466,7 @@ void SessionManager::rebuild(bool choose_first) {
   const auto previous = location_.selected;
   const auto searching = location_.query.find_first_not_of(' ') != std::string::npos;
   matches_.clear();
+  candidate_count_ = 0;
   for (const auto& item : sessions_) {
     if (!location_.scope.session.empty() && item.id != location_.scope.session) {
       continue;
@@ -583,36 +560,18 @@ void SessionManager::refresh() {
   for (auto& item : sessions_) {
     item.loaded = false;
   }
-  captured_.reset();
   message_.clear();
   dirty_ = true;
 }
 
-// One outstanding data Proc; it never waits on the focused input connection. Selection previews
-// take priority over background discovery and replies are checked against stable IDs/revisions.
+// One outstanding data Proc; it never waits on the focused input connection. The selected
+// Session takes priority for discovery and replies are checked against stable IDs/revisions.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void SessionManager::fetch() {
   if (job_.has_value()) {
     return;
   }
   const auto* choice = selected();
-  if (choice != nullptr && !choice->target.pane.empty() && layout_.preview.height > 2 &&
-      (captured_ != choice->target || captured_lines_ != layout_.preview.height - 2)) {
-    Job job{.kind = JobKind::preview,
-            .sequence = 0,
-            .session = choice->target.session,
-            .revision = 0,
-            .panes = {},
-            .target = choice->target,
-            .lines = layout_.preview.height - 2,
-            .deadline = Clock::now() + std::chrono::seconds(3)};
-    job.sequence =
-        observer_.submit_proc(R"([{"command":"pane.capture","session":)" + selector(job.session) +
-                              R"(,"pane":)" + selector(job.target.pane) +
-                              R"(,"source":"visible","lines":)" + std::to_string(job.lines) + "}]");
-    job_ = std::move(job);
-    return;
-  }
   std::vector<Session*> order;
   if (choice != nullptr) {
     if (auto* item = session(choice->target.session); item != nullptr) {
@@ -629,9 +588,6 @@ void SessionManager::fetch() {
             .sequence = 0,
             .session = item->id,
             .revision = item->revision,
-            .panes = {},
-            .target = {},
-            .lines = 0,
             .deadline = Clock::now() + std::chrono::seconds(3)};
     const auto suffix = R"(,"session":)" + selector(item->id) + R"(,"if_session_revision":)" +
                         std::to_string(item->revision) + '}';
@@ -641,12 +597,13 @@ void SessionManager::fetch() {
       commands += R"(,{"command":"pane.list")" + suffix + ']';
     } else {
       job.kind = JobKind::metadata;
+      std::size_t pane_count = 0;
       for (const auto& tab : item->tabs) {
         for (const auto& pane : tab.panes) {
-          if (pane.inspected || job.panes.size() == 16) {
+          if (pane.inspected || pane_count == 16) {
             continue;
           }
-          job.panes.push_back(pane.id);
+          ++pane_count;
           commands += commands.empty() ? "[" : ",";
           commands += R"({"command":"pane.inspect","pane":)";
           commands += selector(pane.id) + suffix;
@@ -670,7 +627,6 @@ void SessionManager::outline(Session& target, const JsonValue& result) {
   for (const auto& value : member(member(values.at(0), "result"), "tabs").array) {
     tabs.push_back({.id = text(value, "id"),
                     .title = plain(text(value, "title")),
-                    .focused = text(value, "focused_pane"),
                     .position = number(value, "position"),
                     .panes = {}});
   }
@@ -714,17 +670,6 @@ void SessionManager::reply(const ext::ClientRecord& record) {
   }
   const auto job = std::move(*job_);
   job_.reset();
-  if (job.kind == JobKind::preview) {
-    captured_ = job.target;
-    captured_lines_ = job.lines;
-    capture_ = enabled(record.document, "ok")
-                   ? text(member(member(member(record.document, "results").array.front(), "result"),
-                                 "capture"),
-                          "text")
-                   : "Preview unavailable";
-    dirty_ = true;
-    return;
-  }
   auto* item = session(job.session);
   if (item == nullptr || item->revision != job.revision) {
     return;
@@ -747,57 +692,12 @@ void SessionManager::reply(const ext::ClientRecord& record) {
   rebuild();
 }
 
-[[nodiscard]] auto lines(std::string_view value) -> std::vector<std::string> {
-  std::vector<std::string> result;
-  while (!value.empty()) {
-    const auto end = value.find('\n');
-    result.push_back(plain(value.substr(0, end)));
-    if (end == std::string_view::npos) {
-      break;
-    }
-    value.remove_prefix(end + 1);
-  }
-  return result;
-}
-
-// Traverse only the selected hierarchy, bounded by the catalogue.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto SessionManager::preview() -> std::vector<std::string> {
-  const auto* choice = selected();
-  if (choice == nullptr) {
-    return {"No destination selected"};
-  }
-  if (!choice->target.pane.empty()) {
-    return captured_ == choice->target ? lines(capture_)
-                                       : std::vector<std::string>{"Loading preview..."};
-  }
-  const auto* item = session(choice->target.session);
-  if (item == nullptr || !item->loaded) {
-    return {"Loading..."};
-  }
-  std::vector<std::string> output;
-  for (const auto& tab : item->tabs) {
-    if (!choice->target.tab.empty() && choice->target.tab != tab.id) {
-      continue;
-    }
-    output.push_back(std::to_string(tab.position) + ' ' + (tab.title.empty() ? "tab" : tab.title));
-    for (std::size_t index = 0; index < tab.panes.size(); ++index) {
-      const auto& pane = tab.panes.at(index);
-      output.push_back("  " + std::to_string(index + 1) + ' ' + pane.command + "  " + pane.cwd +
-                       (pane.launch_cwd ? " (launch)" : ""));
-    }
-    output.emplace_back();
-  }
-  return output;
-}
-
 // Native composition retains these bounded row patches. Default backgrounds on the fill and
 // border labels inherit the terminal theme; only selection supplies a contrasting background.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void SessionManager::paint() {
   Grid grid(layout_.surface.width, layout_.surface.height);
   const auto& list = layout_.list;
-  const auto& pane = layout_.preview;
   std::string title = "Sessions";
   if (const auto* item = session(location_.scope.session); item != nullptr) {
     title = item->name;
@@ -807,21 +707,25 @@ void SessionManager::paint() {
       }
     }
   }
-  grid.box(list, title, std::to_string(matches_.size()));
+  grid.box(list, title);
+  std::size_t cursor_column = 0;
   if (list.width >= 7 && list.height >= 5) {
     for (std::size_t x = 1; x + 1 < list.width; ++x) {
       grid.glyph(x, 2, "─", 1);
     }
-    grid.glyph(0, 2, "├", 1);
-    grid.glyph(list.width - 1, 2, "┤", 1);
     grid.put(2, 1, creating_ ? "+" : ">", 1, 2);
     const auto& query = creating_ ? new_name_ : location_.query;
     const auto cursor = creating_ ? new_cursor_ : location_.cursor;
-    const auto capacity = list.width - 5;
+    const auto count =
+        list.width >= 18 ? std::to_string(matches_.size()) + '/' + std::to_string(candidate_count_)
+                         : std::string{};
+    const auto capacity = list.width - 5 - (count.empty() ? 0 : count.size() + 1);
     const auto offset = cursor >= capacity ? cursor - capacity + 1 : 0;
-    const std::string placeholder = creating_ ? "New session" : "Search...";
+    const std::string placeholder = creating_ ? "New session" : "";
     grid.put(4, 1, query.empty() ? placeholder : query.substr(offset), capacity,
              query.empty() ? 1U : 0U);
+    cursor_column = 4 + cursor - offset;
+    grid.put(list.width - count.size() - 2, 1, count, count.size(), 1);
     const auto visible = list.height - 4;
     const auto selected_row = selected_index();
     const auto start = selected_row >= visible ? selected_row - visible + 1 : 0;
@@ -830,11 +734,10 @@ void SessionManager::paint() {
       const bool active = location_.selected == match.target;
       const auto style = active ? 3U : 0U;
       grid.put(1, row + 3, std::string(list.width - 2, ' '), list.width - 2, style);
-      grid.put(2, row + 3, active ? ">" : " ", 1, style);
-      const auto available = list.width - 6;
+      const auto available = list.width - 4;
       const auto detail_width =
           match.detail.empty() ? 0 : std::min(available / 3, match.detail.size());
-      grid.put(4, row + 3, match.label, available - (detail_width == 0 ? 0 : detail_width + 1),
+      grid.put(2, row + 3, match.label, available - (detail_width == 0 ? 0 : detail_width + 1),
                style, match.highlights);
       if (detail_width != 0) {
         grid.put(list.width - detail_width - 2, row + 3, match.detail, detail_width,
@@ -847,20 +750,12 @@ void SessionManager::paint() {
   } else {
     grid.put(0, 0, "Esc close", list.width, 1);
   }
-  if (pane.width != 0) {
-    const auto* choice = selected();
-    grid.box(pane, choice == nullptr ? "Preview" : choice->label);
-    const auto content = preview();
-    for (std::size_t row = 0; row < content.size() && row + 2 < pane.height; ++row) {
-      grid.put(pane.x + 2, pane.y + row + 1, content.at(row), pane.width - 4);
-    }
-  }
   if (layout_.surface.height > 1 && !message_.empty()) {
     grid.put(0, layout_.surface.height - 1, message_, layout_.surface.width, 1);
   }
   const std::string header =
       R"({"schema":"lemma.surface-update/v1","surface":)" + ext::json_quote(surface_) +
-      R"(,"styles":[{},{"faint":true},{"foreground":"#a7bbdf"},{"background":"#303847","foreground":"#e1e6ef"},{"bold":true,"underline":true},{"background":"#303847","foreground":"#a7bbdf","bold":true,"underline":true}],"rows":[)";
+      R"(,"styles":[{},{"faint":true},{"foreground":"#a7bbdf","bold":true},{"background":"#303847","foreground":"#e1e6ef","bold":true},{"bold":true,"underline":true},{"background":"#303847","foreground":"#a7bbdf","bold":true,"underline":true}],"rows":[)";
   std::string update = header;
   std::size_t nodes = 0;
   for (std::size_t row = 0; row < layout_.surface.height; ++row) {
@@ -885,8 +780,6 @@ void SessionManager::paint() {
       painted_.at(row) = std::move(encoded.text);
     }
   }
-  const auto cursor = creating_ ? new_cursor_ : location_.cursor;
-  const auto cursor_column = list.width >= 7 ? std::min(list.width - 2, 4 + cursor) : 0;
   update += R"(],"cursor":{"row":)" + std::to_string(list.height >= 5 ? 1 : 0) + R"(,"column":)" +
             std::to_string(cursor_column) + R"(,"visible":)" +
             (list.width >= 7 && list.height >= 5 ? "true}}" : "false}}");

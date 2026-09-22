@@ -358,9 +358,9 @@ class SessionPickerMuxTest(unittest.TestCase):
 
     def open(self) -> None:
         self.client.prefix("s")
-        self.expect_screen("Search...")
+        self.expect_screen("Sessions")
 
-    def test_browse_back_and_preview_preserve_focus_until_enter(self) -> None:
+    def test_browse_back_preserves_focus_until_enter(self) -> None:
         initial = self.source.state()
         scope = {"id": initial.id}
         tab = self.proc(
@@ -380,7 +380,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.client.send(b"\x0e\t")
         self.expect_screen("source / editor")
         self.client.send(b"\x0e")
-        self.expect_screen("> 2 cat")
+        self.expect_screen("2 cat")
         self.assertEqual(self.source.state().active_tab, initial.active_tab)
         self.assertEqual(self.source.state().focused_pane, initial.focused_pane)
         self.client.send(b"\x1b[Z\x1b[Z")
@@ -435,7 +435,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.client.send("__DIRECT_PANE__\r")
         self.client.expect_output("__DIRECT_PANE__")
 
-    def test_resize_moves_preview_and_preserves_query_selection_and_input(self) -> None:
+    def test_resize_preserves_single_list_query_selection_and_input(self) -> None:
         target = self.server.create_session("remote", attach=False, command=("cat",))
         self.client.resize(180, 40)
         self.server.wait_for_state(
@@ -444,23 +444,15 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.open()
         self.client.send("remote")
         self.expect_screen("> remote")
-        wide = self.expect_screen("1 shell")
-        # In a wide terminal the preview begins in the right half.
-        self.assertTrue(
-            any(line.find("1 shell") > 70 for line in wide.splitlines()), wide
-        )
+        wide = self.expect_screen("3/6")
+        self.assertNotIn("1 shell", wide)
+        self.assertNotIn("Search...", wide)
         self.client.resize(80, 24)
         self.server.wait_for_state(
             "source", lambda state: state.columns == 80, "narrow terminal"
         )
-        narrow = self.expect_screen("1 shell")
-        self.assertTrue(
-            any(
-                i > 10 and 0 <= line.find("1 shell") < 25
-                for i, line in enumerate(narrow.splitlines())
-            ),
-            narrow,
-        )
+        narrow = self.expect_screen("3/6")
+        self.assertNotIn("1 shell", narrow)
         self.expect_screen("> remote")
         self.client.resize(30, 10)
         self.server.wait_for_state(
@@ -477,7 +469,7 @@ class SessionPickerMuxTest(unittest.TestCase):
             "source", lambda state: state.rows == 40, "restored terminal"
         )
         self.expect_screen("> remote")
-        self.expect_screen("1 shell")
+        self.expect_screen("3/6")
         self.client.send(b"\r")
         self.server.wait_for_state(
             target.name, lambda state: state.attached, "resized selection activation"
@@ -514,15 +506,13 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.server.wait_for_state(
             "source", lambda state: state.rows == 40, "grown terminal"
         )
-        self.expect_screen("Search...")
+        self.expect_screen("Sessions")
         self.proc("tab.select", session=scope, tab={"id": tab["tab"]})
         self.expect_screen("Sessions", absent=True)
         self.client.send("__NATIVE_RECOVERY__\r")
         self.client.expect_output("__NATIVE_RECOVERY__")
 
-    def test_preview_capture_and_maximum_terminal_fit_protocol_limits(self) -> None:
-        self.client.send("__CAPTURE_CONTENT__\r")
-        self.client.expect_output("__CAPTURE_CONTENT__")
+    def test_maximum_terminal_keeps_search_and_escape_working(self) -> None:
         self.client.resize(500, 200)
         self.server.wait_for_state(
             "source", lambda state: state.rows == 200, "maximum terminal"
@@ -530,18 +520,7 @@ class SessionPickerMuxTest(unittest.TestCase):
         self.open()
         self.client.send("source 1 cat")
         self.expect_screen("/ 1 cat")
-        wait_until(
-            "captured pane content inside the preview",
-            lambda: (
-                True
-                if any(
-                    line.find("__CAPTURE_CONTENT__") > 200
-                    for line in self.screen().splitlines()
-                )
-                else None
-            ),
-            diagnostics=self.client.diagnostics,
-        )
+        self.expect_screen("1/3")
         self.client.send(b"\x1b")
         self.expect_screen("Sessions", absent=True)
         self.client.send("__CLOSED_PICKER__\r")
