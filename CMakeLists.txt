@@ -92,6 +92,20 @@ function(lemma_internal_target target)
       "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
   )
   target_link_libraries(${target} PRIVATE lemma_warnings)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Independent helpers should map only the C++ runtime they use. Per-function sections let
+    # the linker discard unused runtime and application code from Release executables.
+    target_compile_options(${target} PRIVATE
+      "$<$<CONFIG:Release>:-ffunction-sections>"
+      "$<$<CONFIG:Release>:-fdata-sections>")
+    get_target_property(target_type ${target} TYPE)
+    if(target_type STREQUAL "EXECUTABLE")
+      target_link_options(${target} PRIVATE
+        "$<$<CONFIG:Release>:-static-libstdc++>"
+        "$<$<CONFIG:Release>:-static-libgcc>"
+        "$<$<CONFIG:Release>:LINKER:--gc-sections,--as-needed>")
+    endif()
+  endif()
 endfunction()
 
 add_library(lemma_base STATIC src/core/assert.cpp)
@@ -298,7 +312,8 @@ target_include_directories(
 )
 
 add_executable(lemma apps/lemma/main.cpp)
-target_link_libraries(lemma PRIVATE lemma_app lemma_warnings)
+lemma_internal_target(lemma)
+target_link_libraries(lemma PRIVATE lemma_app)
 install(TARGETS lemma RUNTIME DESTINATION bin)
 add_dependencies(lemma lemma-ui)
 

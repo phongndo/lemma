@@ -13,6 +13,10 @@ when toolchain/configuration inputs change and incrementally builds the `lemma` 
 profile uses `-O1`, debug symbols, invariants, and frame pointers. Release is explicit for packaging,
 production validation, and performance measurement.
 
+Linux Release executables statically link the C++ and compiler runtimes and discard unused function
+and data sections. This bounds the runtime mappings in the daemon, client, and independent UI helper;
+libc remains dynamic. Development, Debug, sanitizer, and Darwin builds retain their default linkage.
+
 C/C++ outputs are path-normalized into the user's shared ccache, so matching compilations can be
 reused across worktrees and after removing `build/`. `just clean` preserves the cache;
 `just clean-cache` explicitly clears it.

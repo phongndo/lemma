@@ -16,7 +16,6 @@
 #include <exception>
 #include <memory>
 #include <optional>
-#include <print>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -32,6 +31,14 @@ namespace api = lemma::api;
 namespace ext = lemma::extension;
 namespace render = lemma::render;
 using api::JsonValue;
+
+void report_status_error(const std::string_view context, const std::exception& error) {
+  // Bounded diagnostic strings do not need the generic formatter and its runtime mappings.
+  const auto detail = std::string_view(error.what()).substr(0, 180);
+  static_cast<void>(std::fwrite(context.data(), 1, context.size(), stderr));
+  static_cast<void>(std::fwrite(detail.data(), 1, detail.size(), stderr));
+  static_cast<void>(std::fputc('\n', stderr));
+}
 
 [[nodiscard]] auto member(const JsonValue& value, const std::string_view name) -> const JsonValue& {
   const auto* const found = api::json_member(value, name);
@@ -324,7 +331,7 @@ void discover_statuses(const std::string_view endpoint, const JsonValue& documen
         try {
           statuses.push_back(std::make_unique<Status>(endpoint, std::string(id)));
         } catch (const std::exception& error) {
-          std::println(stderr, "status admission: {:.180}", error.what());
+          report_status_error("status admission: ", error);
         }
       }
     }
@@ -368,7 +375,7 @@ auto run_status(const std::string_view endpoint) -> int {
         }
         return false;
       } catch (const std::exception& error) {
-        std::println(stderr, "status: {:.180}", error.what());
+        report_status_error("status: ", error);
         return true;
       }
     });
