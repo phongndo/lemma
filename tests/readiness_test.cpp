@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
+#include <memory>
 #include <span>
 #include <utility>
 
@@ -144,12 +145,11 @@ TEST_F(ReadinessTest, UncachedLifetimeAndUnsupportedInterestPreservePollBehavior
 }
 
 TEST_F(ReadinessTest, RegularFilesFallBackToPoll) {
-  auto* const file = std::tmpfile();
+  const std::unique_ptr<std::FILE, decltype(&std::fclose)> file(std::tmpfile(), &std::fclose);
   ASSERT_NE(file, nullptr);
-  descriptors.front().fd = ::fileno(file);
+  descriptors.front().fd = ::fileno(file.get());
   EXPECT_EQ(wait(), 1);
   EXPECT_EQ(descriptors.front().revents, POLLIN);
-  EXPECT_EQ(std::fclose(file), 0);
 }
 
 // GoogleTest assertion macros inflate the branch count in this linear signal-lifetime test.
