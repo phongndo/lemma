@@ -31,8 +31,10 @@ below. Both paths use the same public protocol, capabilities, ownership, and res
 Lemma installs `lemma-ui` beside the main executable. Its statusline and session manager speak the
 public framed protocol; they have no private access to Core. The statusline owns a nonfocusable
 one-row top dock, renders tab labels and native editor state, and implements tab click/drag behavior.
-The session manager opens with `C-b s` or `session.manager` in the command line. An empty query
-browses Sessions, then Tabs, then Panes. Typing searches descendants of the current location;
+The session manager opens with `C-b s` or `session.manager` in the command line. With an empty query,
+the root lists Sessions with their Tabs indented beneath them, including tab names, positions, and
+pane counts. Both Session and Tab rows can be activated directly. Browsing a Session narrows the
+list to its Tabs; browsing a Tab shows its Panes. Typing searches descendants of the current location;
 at the root, a process name can find a Pane in any Session. Space-separated terms all must match
 the Session/Tab path, observed process name, or directory. Matching is case-insensitive ASCII
 subsequence scoring with word-boundary and consecutive-match bonuses, not fzf's extended query
@@ -55,12 +57,13 @@ selections require a fresh choice; busy destinations cannot take another client'
 Selecting a Session preserves its active Tab and focused Pane. The manager has a ten-minute
 invocation deadline.
 
-The centered float uses 80% of terminal columns and 85% of rows for a single result list, with
-terminal-default backgrounds on the fill and border label. Its title is centered above an empty
-search prompt; the prompt row shows matching/total candidate counts. A highlighted row indicates
-selection. There is no preview or keyboard-hint footer. Resizing preserves the query, browsing
-location, and selected identity. A directory marked `(launch)` is the launch directory, used when
-no current OSC 7 directory is available.
+The centered float is capped at 96 columns and 18 rows, shrinking to 80% of terminal columns and
+85% of rows on smaller terminals. Its size stays fixed while filtering, and longer lists scroll
+with the selection. The fill and border label use terminal-default backgrounds. Its title is
+centered above an empty search prompt; the prompt row shows matching/total candidate counts.
+A highlighted row indicates selection. There is no preview or keyboard-hint footer. Resizing
+preserves the query, browsing location, and selected identity. A directory marked `(launch)` is
+the launch directory, used when no current OSC 7 directory is available.
 
 Catalogue reads run asynchronously on a separate connection from input. Search uses cached
 metadata, Surface updates retain unchanged rows, and idle helpers wait for Events. The picker

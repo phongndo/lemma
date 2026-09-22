@@ -182,7 +182,7 @@ class UserExtensionsMuxTest(unittest.TestCase):
         client = first.require_client()
         client.prefix("s")
         client.expect_output("Sessions")
-        client.send(b"\x0e\r")
+        client.send("second\r")
         server.wait_for_state(
             target.name, lambda state: state.attached, "session manager switch"
         )
@@ -199,8 +199,7 @@ class UserExtensionsMuxTest(unittest.TestCase):
         busy = server.create_session("busy", command=("cat",))
         client.prefix("s")
         client.expect_output("Sessions")
-        # Current session is retained as the selection; the next entry is busy.
-        client.send(b"\x0e\r")
+        client.send("busy\r")
         client.expect_output("Cannot switch:")
         self.assertTrue(busy.state().attached)
         third = server.session_state("third")
@@ -359,6 +358,56 @@ class SessionPickerMuxTest(unittest.TestCase):
     def open(self) -> None:
         self.client.prefix("s")
         self.expect_screen("Sessions")
+
+    def test_root_shows_tabs_and_activates_one_without_search_or_browsing(self) -> None:
+        target = self.server.create_session("project", attach=False, command=("cat",))
+        initial = target.state()
+        tab = self.proc(
+            "tab.new",
+            session={"id": initial.id},
+            title="editor",
+            focus="preserve",
+            argv=["cat"],
+        )
+        self.open()
+        self.expect_screen("2 editor")
+        self.expect_screen("5/5")
+        self.assertEqual(target.state().active_tab, initial.active_tab)
+        # source, its shell Tab, project, its shell Tab, then its editor Tab.
+        self.client.send(b"\x0e\x0e\x0e\x0e\r")
+        self.server.wait_for_state(
+            target.name,
+            lambda state: (
+                state.attached
+                and state.active_tab == tab["tab"]
+                and state.focused_pane == tab["pane"]
+            ),
+            "root Tab selection activates the exact destination",
+        )
+        self.client.send("__ROOT_TAB__\r")
+        self.client.expect_output("__ROOT_TAB__")
+
+    def test_search_disambiguates_identical_tab_names_across_sessions(self) -> None:
+        target = self.server.create_session("project", attach=False, command=("cat",))
+        for session in (self.source, target):
+            self.proc(
+                "tab.rename",
+                session={"id": session.state().id},
+                tab={"id": session.state().active_tab},
+                title="editor",
+            )
+        self.open()
+        self.expect_screen("4/4")
+        self.client.send("prj edtr")
+        self.expect_screen("project / editor")
+        self.expect_screen("2/6")
+        self.client.send(b"\r")
+        self.server.wait_for_state(
+            target.name,
+            lambda state: state.attached,
+            "Session and Tab query selects the matching Session",
+        )
+        self.assertFalse(self.source.state().attached)
 
     def test_browse_back_preserves_focus_until_enter(self) -> None:
         initial = self.source.state()

@@ -135,10 +135,10 @@ struct Layout final {
   Rectangle list;
 };
 
-// One centered list at every terminal size; no preview geometry or terminal-screen reads.
+// Keep a compact list on large terminals and shrink it with the available space.
 [[nodiscard]] auto layout(std::size_t columns, std::size_t rows) -> Layout {
-  const auto width = std::max<std::size_t>(1, columns * 80 / 100);
-  const auto height = std::max<std::size_t>(1, rows * 85 / 100);
+  const auto width = std::clamp<std::size_t>(columns * 80 / 100, 1, 96);
+  const auto height = std::clamp<std::size_t>(rows * 85 / 100, 1, 18);
   return {.surface = {.x = (columns - width) / 2,
                       .y = (rows - height) / 2,
                       .width = width,
@@ -484,9 +484,10 @@ void SessionManager::rebuild(bool choose_first) {
       }
       const auto name = tab.title.empty() ? "tab " + std::to_string(tab.position) : tab.title;
       const auto path = item.name + " / " + name;
-      if ((searching || !location_.scope.session.empty()) && location_.scope.tab.empty()) {
-        add_match({.session = item.id, .tab = tab.id, .pane = {}},
-                  searching ? path : std::to_string(tab.position) + " " + name,
+      if (location_.scope.tab.empty()) {
+        const auto label = (location_.scope.session.empty() ? "  " : "") +
+                           std::to_string(tab.position) + " " + name;
+        add_match({.session = item.id, .tab = tab.id, .pane = {}}, searching ? path : label,
                   std::to_string(tab.panes.size()) + (tab.panes.size() == 1 ? " pane" : " panes"),
                   path);
       }
