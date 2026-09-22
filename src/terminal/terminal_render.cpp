@@ -579,6 +579,9 @@ private:
   if (!selection.has_value()) {
     return std::unexpected(selection.error());
   }
+  // The API writes the returned length; bytes beyond it are never read. Reuse row-local
+  // scratch instead of clearing the maximum-size grapheme buffer for every cell.
+  std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
@@ -604,7 +607,6 @@ private:
     }
     apply_selection_highlight(*style, selection->contains(cell_count), session_theme);
 
-    std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
         .ptr = grapheme.data(),
         .cap = grapheme.size(),
@@ -701,6 +703,7 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
   if (!selection.has_value()) {
     return std::unexpected(selection.error());
   }
+  std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
@@ -727,7 +730,6 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     const bool selected = selection->contains(cell_count);
     apply_selection_highlight(*style, selected, session_theme);
 
-    std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
         .ptr = grapheme.data(),
         .cap = grapheme.size(),

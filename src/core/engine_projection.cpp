@@ -1309,22 +1309,32 @@ template <typename Id>
     value ^= part;
     value *= 1099511628211ULL;
   };
+  const auto mix_session = [&](const SessionRecord& session) {
+    mix(session.id.slot());
+    mix(session.id.generation());
+    for (const char character : session.session_name()) {
+      mix(static_cast<unsigned char>(character));
+    }
+    mix(session.mutation_generation);
+    mix(session.attachment_runtime.client >= 0 ? 1U : 0U);
+  };
+  // Stable-ID subscriptions already identify one slot. Avoid scanning all Sessions on every
+  // reactor turn; get() also validates the generation before exposing a replacement Session.
+  if (filter.has_value() && filter->id.is_valid()) {
+    const auto* const session = sessions.get(filter->id);
+    if (session != nullptr && session->active) {
+      mix_session(*session);
+    }
+    return value;
+  }
   for (const auto& session : sessions) {
     if (session == nullptr || !session->active) {
       continue;
     }
-    if (filter.has_value() &&
-        ((filter->id.is_valid() && filter->id != session->id) ||
-         (!filter->id.is_valid() && filter->name != session->session_name()))) {
+    if (filter.has_value() && filter->name != session->session_name()) {
       continue;
     }
-    mix(session->id.slot());
-    mix(session->id.generation());
-    for (const char character : session->session_name()) {
-      mix(static_cast<unsigned char>(character));
-    }
-    mix(session->mutation_generation);
-    mix(session->attachment_runtime.client >= 0 ? 1U : 0U);
+    mix_session(*session);
   }
   return value;
 }
