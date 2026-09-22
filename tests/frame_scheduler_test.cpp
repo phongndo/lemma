@@ -140,7 +140,7 @@ void prepare_sustained_burst(FrameScheduler& scheduler) {
 }
 
 // The real call sequence can spend the input latch on unrelated PTY output before its response.
-TEST(FrameSchedulerTest, BackgroundDamageCannotDelayFollowingInputResponseToDisplayCadence) {
+TEST(FrameSchedulerTest, BackgroundDamageCannotDelayFollowingInputResponse) {
   const auto source = PaneId::from_parts(0, 1);
   FrameScheduler scheduler;
   prepare_sustained_burst(scheduler);
@@ -155,13 +155,13 @@ TEST(FrameSchedulerTest, BackgroundDamageCannotDelayFollowingInputResponseToDisp
 
   ASSERT_FALSE(latch.consume());
   scheduler.request(FrameUrgency::burst, false, first_damage + 40us, FrameSinkState::ready, source);
-  const auto followup = first_damage + 1ms;
+  const auto followup = first_damage + 40us;
   EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), followup);
-  EXPECT_FALSE(scheduler.due(followup - 1us, FrameSinkState::ready));
   EXPECT_TRUE(scheduler.due(followup, FrameSinkState::ready));
   scheduler.complete();
 
-  // The short follow-up does not restart the sustained stream's history or create an idle timer.
+  // The single immediate follow-up does not restart the sustained stream's history or create an
+  // idle timer.
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::ready).has_value());
   scheduler.request(FrameUrgency::burst, false, followup, FrameSinkState::ready, source);
   EXPECT_EQ(scheduler.deadline(FrameSinkState::ready),
@@ -178,7 +178,7 @@ TEST(FrameSchedulerTest, InteractiveFollowupCoalescesDamageWithoutWakingBlockedO
   scheduler.request(FrameUrgency::burst, false, origin + 56ms, FrameSinkState::blocked, source);
   EXPECT_FALSE(scheduler.deadline(FrameSinkState::blocked).has_value());
   EXPECT_TRUE(scheduler.force_full());
-  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 56ms);
+  EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 55040us);
   EXPECT_TRUE(scheduler.due(origin + 58ms, FrameSinkState::ready));
 }
 
@@ -224,7 +224,7 @@ TEST(FrameSchedulerTest, InteractiveRecoveryDoesNotAccelerateSiblingOrReplacemen
 
     // Unrelated damage must not spend the source Pane's recovery opportunity either.
     scheduler.request(FrameUrgency::burst, false, origin + 55080us, FrameSinkState::ready, source);
-    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 56ms);
+    EXPECT_EQ(scheduler.deadline(FrameSinkState::ready), origin + 55080us);
   }
 }
 

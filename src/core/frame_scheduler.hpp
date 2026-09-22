@@ -50,11 +50,11 @@ public:
 
   // Preserve short-command completion while presenting long autonomous streams at display cadence.
   // Interactive and state-change requests always bypass both delays. Subsequent burst damage
-  // from the same Pane can share one short follow-up deadline: unrelated PTY output may have
-  // spent its input latch. Unscoped UI interaction does not open a Pane recovery window.
+  // from the same Pane gets one immediate follow-up: unrelated PTY output may have spent
+  // its input latch. Unscoped UI interaction does not open a Pane recovery window.
   // Only closely following damage participates; later stream output keeps display cadence.
   // Burst damage neither extends this recovery window nor creates work without new damage.
-  static constexpr auto interactive_followup_delay = std::chrono::milliseconds(1);
+  static constexpr auto interactive_followup_window = std::chrono::milliseconds(1);
   static constexpr auto burst_delay = std::chrono::milliseconds(2);
   static constexpr auto sustained_burst_delay = std::chrono::milliseconds(16);
   static constexpr auto sustained_burst_threshold = std::chrono::milliseconds(50);
