@@ -392,7 +392,7 @@
     },
     {
       "id": "blocked_client",
-      "input": "a 500x200 non-reading attached client runs an unbounded pane-output flood while another session echoes unique tokens",
+      "input": "a 500x200 non-reading attached client runs a dense changing pane-output flood, guarded at ten seconds, while another session echoes unique tokens",
       "completion": "all peer tokens are visible and the non-reading client is disconnected by its no-progress deadline",
       "metrics": [
         "disconnect_latency_ns",

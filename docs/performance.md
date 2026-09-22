@@ -95,6 +95,13 @@ guard measures time without progress, not total transfer time; the harness still
 bounds on sending and completion. Blocking terminal output is a separate workload. Results from
 captures that did not drain output are not comparable to this isolated blocked-input scenario.
 
+The blocked-client fixture continuously fills its 500×200 screen with changing printable rows.
+Repeated short text can settle into an unchanged screen and delay socket saturation, especially
+with blank-tail compression. The native probe still measures from flood launch, allowing 0.5 seconds
+for saturation before the five-second no-progress deadline. The producer has a ten-second safety
+guard; this does not extend the probe deadline. Fixture changes require fresh baseline and candidate
+captures with the same producer.
+
 The merge-blocking [deterministic budgets](../scripts/ci/deterministic-budgets) enforce zero
 steady-state allocations and reviewed work/queue bounds independently of timing: routed bytes,
 frames, wire amplification, flushes, writes, polls, readiness, sends, recovery, and child wakeups.

@@ -2588,7 +2588,9 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         )
         blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
         receive_attach_hello(blocked)
-        flood_command = b"exec yes __LEMMA_BLOCKED_CLIENT_FLOOD__\r"
+        flood_command = (
+            f"exec {shlex.quote(str(runtime.peer_path))} output-flood\r"
+        ).encode()
         flood_frame = attach_frame(ATTACH_KIND_INPUT, flood_command, 2)
         ready_read, ready_write = os.pipe()
         disconnect_probe = subprocess.Popen(
