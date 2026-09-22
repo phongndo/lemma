@@ -33,7 +33,9 @@ class AnsiScreenTrackerTest(unittest.TestCase):
         tracker.feed(b"\x1b[1;12H\x1b[99X")
         self.assertEqual(tracker.text(), "left!   kee")
 
-    def test_text_retains_presented_frame_until_synchronized_update_finishes(self) -> None:
+    def test_text_retains_presented_frame_until_synchronized_update_finishes(
+        self,
+    ) -> None:
         tracker = AnsiScreenTracker(16, 1)
         tracker.feed(b"Session")
         tracker.feed(b"\x1b[?2026h\x1b[2J")
