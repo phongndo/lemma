@@ -697,6 +697,8 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
   bool span_started = false;
   std::size_t changed_end = checkpoint;
   std::size_t trailing_blank_start = std::numeric_limits<std::size_t>::max();
+  std::size_t trailing_blank_content_start = 0;
+  std::size_t trailing_blank_column = 0;
   AnsiStyle trailing_blank_style{};
   bool trailing_blank_changed = false;
   const auto selection = selected_columns(row_iterator);
@@ -779,6 +781,8 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       if (default_blank) {
         if (trailing_blank_start == std::numeric_limits<std::size_t>::max()) {
           trailing_blank_start = cell_checkpoint;
+          trailing_blank_content_start = writer.size();
+          trailing_blank_column = cell_count;
           trailing_blank_changed = false;
         }
         trailing_blank_style = *style;
@@ -829,6 +833,17 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     // EL paints with the active background. Re-emit the pane's semantic default style so the
     // attaching terminal supplies its own default unless the pane has an OSC 10/11 override.
     if (!append_style(writer, trailing_blank_style) || !writer.append("\x1B[K")) {
+      return std::unexpected(Error::out_of_space);
+    }
+  } else if (trailing_blank_start != std::numeric_limits<std::size_t>::max() &&
+             trailing_blank_changed && options.size.columns - trailing_blank_column > 8U) {
+    // A composed pane cannot use EL: it would erase its right-hand neighbor. ECH clears
+    // only this pane's blank tail and retains the already-emitted semantic default style.
+    // Short tails stay literal; the bounded ECH sequence costs at most six bytes.
+    writer.rewind(trailing_blank_content_start);
+    if (!writer.append("\x1B[") ||
+        !writer.append_integer(options.size.columns - trailing_blank_column) ||
+        !writer.append("X")) {
       return std::unexpected(Error::out_of_space);
     }
   } else {

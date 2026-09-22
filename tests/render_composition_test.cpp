@@ -94,6 +94,41 @@ TEST(PaneCompositionTest, PlacesMultipleTerminalSurfacesInOneAtomicFrame) {
   EXPECT_EQ(occurrences(encoded, "\x1B[2J"), 1U);
 }
 
+TEST(PaneCompositionTest, ErasesLongBlankTailsWithoutTouchingNeighboringPanes) {
+  auto left = make_terminal(80, 2);
+  auto right = make_terminal(8, 2);
+  auto outer = make_terminal(88, 2);
+  write_text(left,
+             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopq");
+  write_text(right, "neighbor");
+  const std::array panes{
+      PaneSurface{.terminal = &left, .rectangle = {.columns = 80, .rows = 2}, .focused = true},
+      PaneSurface{.terminal = &right, .rectangle = {.column = 80, .columns = 8, .rows = 2}},
+  };
+  std::array<std::byte, 8192> output{};
+  const auto initial = compose_frame(panes, {.columns = 88, .rows = 2}, output, true);
+  ASSERT_TRUE(initial.has_value());
+  outer.write(std::span(output).first(initial->bytes));
+
+  write_text(left, "\x1B[H__LEMMA_OUTPUT_0000_AAAAAA__\x1B[K");
+  const auto changed =
+      compose_frame(panes, {.columns = 88, .rows = 2}, output, false, {}, initial->outer_modes);
+  ASSERT_TRUE(changed.has_value());
+  EXPECT_LT(changed->bytes, 120U);
+  outer.write(std::span(output).first(changed->bytes));
+
+  auto expected = make_terminal(88, 2);
+  write_text(expected, "__LEMMA_OUTPUT_0000_AAAAAA__\x1B[1;81Hneighbor\x1B[2;1H ");
+  std::array<std::byte, 1024> actual_text{};
+  std::array<std::byte, 1024> expected_text{};
+  const auto actual_size = outer.format_screen(vt::ScreenFormat::plain, actual_text);
+  const auto expected_size = expected.format_screen(vt::ScreenFormat::plain, expected_text);
+  ASSERT_TRUE(actual_size.has_value());
+  ASSERT_TRUE(expected_size.has_value());
+  EXPECT_EQ(as_text(std::span(actual_text).first(*actual_size)),
+            as_text(std::span(expected_text).first(*expected_size)));
+}
+
 TEST(PaneCompositionTest, LeftAlignsMinimalTabStatusAbovePaneContent) {
   auto terminal = make_terminal(40, 2);
   write_text(terminal, "content");
