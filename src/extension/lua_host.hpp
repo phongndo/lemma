@@ -28,7 +28,7 @@ public:
   auto operator=(HostProcess&& other) noexcept -> HostProcess&;
   ~HostProcess();
 
-  [[nodiscard]] auto active() const noexcept -> bool { return descriptor_ >= 0 && process_ > 0; }
+  [[nodiscard]] auto active() const noexcept -> bool { return process_ > 0; }
   [[nodiscard]] auto descriptor() const noexcept -> int { return descriptor_; }
   // Nonblocking reactor failure path. Reaping remains with the daemon or destructor.
   void terminate() noexcept;
@@ -60,6 +60,8 @@ struct ConfigurationLoad final {
 // A discovered missing file is not an error; an explicit missing path is.
 [[nodiscard]] auto load_configuration(std::optional<std::string_view> path = std::nullopt) noexcept
     -> ConfigurationLoad;
+
+[[nodiscard]] auto load_builtin_configuration() noexcept -> ConfigurationLoad;
 
 } // namespace lemma::extension
 

@@ -84,6 +84,8 @@ struct ScriptedReactor final {
   std::size_t fragment_count{0};
   std::size_t stage{0};
   std::size_t polls{0};
+  int initial_poll_timeout{-2};
+  int retry_poll_timeout{-2};
   std::size_t clock_reads{0};
   std::size_t releases{0};
   std::size_t sends{0};
@@ -265,6 +267,11 @@ thread_local ScriptedReactor* active_script = nullptr;
 [[nodiscard]] auto scripted_poll(void* const context, const std::span<pollfd> descriptors,
                                  const int timeout_milliseconds) noexcept -> int {
   auto& script = *static_cast<ScriptedReactor*>(context);
+  if (script.polls == 0) {
+    script.initial_poll_timeout = timeout_milliseconds;
+  } else if (script.polls == 1) {
+    script.retry_poll_timeout = timeout_milliseconds;
+  }
   ++script.polls;
   script.positive_timeout_seen = script.positive_timeout_seen || timeout_milliseconds > 0;
   if (descriptors.size() < 2U || descriptors.front().fd != script.listener ||
@@ -496,6 +503,46 @@ TEST(ReactorEnvironmentTest, ChildWakeCanPrecedeAcceptAndFragmentedRequest) {
   EXPECT_TRUE(script.stop);
   EXPECT_TRUE(script.early_wake_delivered);
   EXPECT_EQ(script.reaped_exits, 1U);
+  EXPECT_EQ(script.blocked_sends, 1U);
+  EXPECT_EQ(script.partial_sends, 1U);
+  EXPECT_EQ(script.releases, 1U);
+}
+
+// GoogleTest assertions inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ReactorEnvironmentTest, ChildReapedBeforePollCannotSleepBeforePublishingItsOutcome) {
+  const auto connection = connected_listener();
+  ASSERT_TRUE(connection.has_value());
+  if (!connection.has_value()) {
+    return;
+  }
+  const auto connected = connection.value();
+  std::array<int, 2> wake{-1, -1};
+  ASSERT_EQ(::pipe(wake.data()), 0);
+  ScriptedReactor script{
+      .now = {},
+      .listener = connected.listener,
+      .client = connected.client,
+      .wake_read = wake.front(),
+      .fragments = {"{", R"("schema":"lemma.proc/v1",)",
+                    R"("commands":[{"command":"daemon.inspect"})", "]}\n"},
+      .fragment_count = 4,
+      .child_exit_pending = true,
+      .wake_before_accept = true,
+  };
+
+  const auto result = run_script(script);
+
+  static_cast<void>(::close(connected.client));
+  static_cast<void>(::close(wake.front()));
+  static_cast<void>(::close(wake.back()));
+  EXPECT_EQ(result, 0);
+  EXPECT_FALSE(script.failed);
+  EXPECT_TRUE(script.stop);
+  EXPECT_TRUE(script.early_wake_delivered);
+  EXPECT_EQ(script.reaped_exits, 2U);
+  EXPECT_EQ(script.initial_poll_timeout, 0);
+  EXPECT_EQ(script.retry_poll_timeout, 0);
   EXPECT_EQ(script.blocked_sends, 1U);
   EXPECT_EQ(script.partial_sends, 1U);
   EXPECT_EQ(script.releases, 1U);

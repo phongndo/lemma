@@ -260,6 +260,53 @@ void apply_selection_highlight(AnsiStyle& style, const bool selected,
   };
 }
 
+// Style IDs are page-local. Reuse a projection only within this row traversal, never across
+// rows or render updates (which may change the page, palette, theme or style-ID allocation).
+// Background-only cells carry their color in the cell itself; selection is applied by the caller
+// to a copy, so neither can contaminate the retained text style.
+class RowStyleProjection final {
+public:
+  [[nodiscard]] auto resolve(const GhosttyCell raw_cell, const GhosttyCellContentTag content_tag,
+                             const GhosttyRenderStateRowCells cells,
+                             const GhosttyRenderStateColors& colors,
+                             const TerminalTheme& theme) noexcept
+      -> std::expected<AnsiStyle, Error> {
+    GhosttyStyleId id = 0;
+    auto result = ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_STYLE_ID, &id);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    const bool text_style = content_tag == GHOSTTY_CELL_CONTENT_CODEPOINT ||
+                            content_tag == GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME;
+    if (text_style && valid_ && id == id_) {
+      return style_;
+    }
+    GhosttyStyle native{};
+    native.size = sizeof(native);
+    result = ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
+                                                &native);
+    if (result != GHOSTTY_SUCCESS) {
+      return std::unexpected(detail::map_error(result));
+    }
+    auto projected = ansi_style(raw_cell, content_tag, native, colors, theme);
+    default_ = ghostty_style_is_default(&native);
+    valid_ = text_style && projected.has_value();
+    if (valid_) {
+      id_ = id;
+      style_ = *projected;
+    }
+    return projected;
+  }
+
+  [[nodiscard]] auto native_default() const noexcept -> bool { return default_; }
+
+private:
+  AnsiStyle style_{};
+  GhosttyStyleId id_{0};
+  bool valid_{false};
+  bool default_{false};
+};
+
 struct SelectedColumns final {
   std::size_t begin{0};
   std::size_t end{0};
@@ -527,21 +574,19 @@ private:
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   std::uint64_t row_hash = hash_initial;
   RenderedCellHasher cell_hasher;
+  RowStyleProjection styles;
   const auto selection = selected_columns(row_iterator);
   if (!selection.has_value()) {
     return std::unexpected(selection.error());
   }
+  // The API writes the returned length; bytes beyond it are never read. Reuse row-local
+  // scratch instead of clearing the maximum-size grapheme buffer for every cell.
+  std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
-    GhosttyStyle ghostty_style{};
-    ghostty_style.size = sizeof(ghostty_style);
     result = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
                                                 &raw_cell);
-    if (result == GHOSTTY_SUCCESS) {
-      result = ghostty_render_state_row_cells_get(
-          row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &ghostty_style);
-    }
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
@@ -556,13 +601,12 @@ private:
     if (result != GHOSTTY_SUCCESS || values_written != cell_keys.size()) {
       return std::unexpected(detail::map_error(result));
     }
-    auto style = ansi_style(raw_cell, content_tag, ghostty_style, render_colors, session_theme);
+    auto style = styles.resolve(raw_cell, content_tag, row_cells, render_colors, session_theme);
     if (!style.has_value()) {
       return std::unexpected(style.error());
     }
     apply_selection_highlight(*style, selection->contains(cell_count), session_theme);
 
-    std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
         .ptr = grapheme.data(),
         .cap = grapheme.size(),
@@ -647,29 +691,26 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
   constexpr std::uint64_t hash_initial = 14'695'981'039'346'656'037ULL;
   std::uint64_t row_hash = hash_initial;
   RenderedCellHasher cell_hasher;
+  RowStyleProjection styles;
   AnsiStyle active_style{};
   bool active_style_valid = false;
   bool span_started = false;
   std::size_t changed_end = checkpoint;
   std::size_t trailing_blank_start = std::numeric_limits<std::size_t>::max();
+  std::size_t trailing_blank_content_start = 0;
+  std::size_t trailing_blank_column = 0;
   AnsiStyle trailing_blank_style{};
   bool trailing_blank_changed = false;
   const auto selection = selected_columns(row_iterator);
   if (!selection.has_value()) {
     return std::unexpected(selection.error());
   }
+  std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
   std::size_t cell_count = 0;
   while (ghostty_render_state_row_cells_next(row_cells)) {
     GhosttyCell raw_cell = 0;
-    GhosttyStyle ghostty_style{};
-    ghostty_style.size = sizeof(ghostty_style);
     result = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
                                                 &raw_cell);
-    if (result != GHOSTTY_SUCCESS) {
-      return std::unexpected(detail::map_error(result));
-    }
-    result = ghostty_render_state_row_cells_get(
-        row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &ghostty_style);
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
@@ -684,14 +725,13 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     if (result != GHOSTTY_SUCCESS) {
       return std::unexpected(detail::map_error(result));
     }
-    auto style = ansi_style(raw_cell, content_tag, ghostty_style, render_colors, session_theme);
+    auto style = styles.resolve(raw_cell, content_tag, row_cells, render_colors, session_theme);
     if (!style.has_value()) {
       return std::unexpected(style.error());
     }
     const bool selected = selection->contains(cell_count);
     apply_selection_highlight(*style, selected, session_theme);
 
-    std::array<std::uint8_t, pane_ansi_grapheme_bytes_max> grapheme{};
     GhosttyBuffer grapheme_buffer{
         .ptr = grapheme.data(),
         .cap = grapheme.size(),
@@ -735,13 +775,14 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
       active_style_valid = true;
 
       const bool default_blank = !selected && grapheme_buffer.len == 0 &&
-                                 wide != GHOSTTY_CELL_WIDE_SPACER_TAIL &&
-                                 ghostty_style_is_default(&ghostty_style) &&
+                                 wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && styles.native_default() &&
                                  content_tag != GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE &&
                                  content_tag != GHOSTTY_CELL_CONTENT_BG_COLOR_RGB;
       if (default_blank) {
         if (trailing_blank_start == std::numeric_limits<std::size_t>::max()) {
           trailing_blank_start = cell_checkpoint;
+          trailing_blank_content_start = writer.size();
+          trailing_blank_column = cell_count;
           trailing_blank_changed = false;
         }
         trailing_blank_style = *style;
@@ -792,6 +833,17 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
     // EL paints with the active background. Re-emit the pane's semantic default style so the
     // attaching terminal supplies its own default unless the pane has an OSC 10/11 override.
     if (!append_style(writer, trailing_blank_style) || !writer.append("\x1B[K")) {
+      return std::unexpected(Error::out_of_space);
+    }
+  } else if (trailing_blank_start != std::numeric_limits<std::size_t>::max() &&
+             trailing_blank_changed && options.size.columns - trailing_blank_column > 8U) {
+    // A composed pane cannot use EL: it would erase its right-hand neighbor. ECH clears
+    // only this pane's blank tail and retains the already-emitted semantic default style.
+    // Short tails stay literal; the bounded ECH sequence costs at most six bytes.
+    writer.rewind(trailing_blank_content_start);
+    if (!writer.append("\x1B[") ||
+        !writer.append_integer(options.size.columns - trailing_blank_column) ||
+        !writer.append("X")) {
       return std::unexpected(Error::out_of_space);
     }
   } else {

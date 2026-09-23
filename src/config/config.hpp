@@ -41,12 +41,19 @@ struct HistoryConfiguration final {
   std::string file;
 };
 
+inline constexpr std::size_t extensions_max = 8;
+struct ExtensionConfiguration final {
+  std::string name;
+  std::vector<std::string> argv;
+};
+
 struct Configuration final {
   input::InputMapConfiguration input;
   TerminalConfiguration terminal;
   UiConfiguration ui;
   LaunchConfiguration launch;
   HistoryConfiguration history;
+  std::vector<ExtensionConfiguration> extensions;
 };
 
 enum class Error : std::uint8_t {
@@ -74,10 +81,12 @@ class Generation final {
 public:
   Generation(input::CompiledInputMap&& input_map, std::optional<std::size_t> scrollback_lines,
              bool status_line, std::string&& default_cwd, std::vector<std::byte>&& default_program,
-             std::string&& history_file) noexcept
+             std::string&& history_file,
+             std::vector<ExtensionConfiguration> extensions = {}) noexcept
       : input_map_(std::move(input_map)), scrollback_lines_(scrollback_lines),
         default_cwd_(std::move(default_cwd)), default_program_(std::move(default_program)),
-        history_file_(std::move(history_file)), status_line_(status_line) {}
+        history_file_(std::move(history_file)), extensions_(std::move(extensions)),
+        status_line_(status_line) {}
   Generation(const Generation&) = delete;
   auto operator=(const Generation&) -> Generation& = delete;
   Generation(Generation&&) noexcept = default;
@@ -97,12 +106,17 @@ public:
   [[nodiscard]] auto status_line() const noexcept -> bool { return status_line_; }
   [[nodiscard]] auto history_file() const noexcept -> std::string_view { return history_file_; }
 
+  [[nodiscard]] auto extensions() const noexcept -> std::span<const ExtensionConfiguration> {
+    return extensions_;
+  }
+
 private:
   input::CompiledInputMap input_map_;
   std::optional<std::size_t> scrollback_lines_;
   std::string default_cwd_;
   std::vector<std::byte> default_program_;
   std::string history_file_;
+  std::vector<ExtensionConfiguration> extensions_;
   bool status_line_{true};
 };
 

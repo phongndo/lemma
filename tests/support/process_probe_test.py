@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -20,6 +21,36 @@ from tests.support.pty_process import PtyOutputMonitor, PtyProcess  # noqa: E402
 class CommandProbeTest(unittest.TestCase):
     probe: Path
     peer: Path
+
+    def test_output_flood_keeps_a_dense_screen_changing(self) -> None:
+        with subprocess.Popen(
+            [str(self.peer), "output-flood"], stdout=subprocess.PIPE
+        ) as process:
+            try:
+                assert process.stdout is not None
+                output = bytearray()
+                deadline = time.monotonic() + 2.0
+                while len(output) < 400 * 501:
+                    remaining = deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, "output flood stalled")
+                    readable, _, _ = select.select([process.stdout], [], [], remaining)
+                    self.assertTrue(readable, "output flood stalled")
+                    chunk = os.read(process.stdout.fileno(), 400 * 501 - len(output))
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                rows = output.splitlines(keepends=True)
+                self.assertEqual(len(rows), 400)
+                self.assertTrue(all(len(row) == 501 for row in rows))
+                self.assertTrue(all(row.endswith(b"\r\n") for row in rows))
+                self.assertTrue(
+                    all(all(33 <= byte <= 126 for byte in row[:-2]) for row in rows)
+                )
+                # Scrolling by a whole screen must not restore identical content.
+                self.assertTrue(all(rows[i] != rows[i + 200] for i in range(200)))
+            finally:
+                process.kill()
+                process.wait(timeout=2)
 
     def run_probe(self, last_reply: bytes) -> subprocess.CompletedProcess[str]:
         outer, fixture = socket.socketpair()

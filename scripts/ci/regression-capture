@@ -41,7 +41,12 @@ trap cleanup_ghostty_output EXIT
 
 python3 "${harness_root}/benchmarks/check_regression.py" \
   --manifest "${manifest}" --validate-manifest
-python3 "${harness_root}/benchmarks/benchmark_tools_test.py" >/dev/null
+# Harness tests include relative fixtures and entry points. They must use the
+# candidate checkout even when the measured subject is an older worktree.
+(
+  cd "${harness_root}"
+  python3 benchmarks/benchmark_tools_test.py >/dev/null
+)
 rm -rf third_party/ghostty/zig-out
 "${harness_root}/scripts/ci/configure" release \
   -DLEMMA_BUILD_TESTS=OFF \

@@ -2,6 +2,7 @@
 
 #include "render/pane_composition.hpp"
 #include "render/scene.hpp"
+#include "render/status_line.hpp"
 
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"

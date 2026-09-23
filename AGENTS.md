@@ -19,7 +19,8 @@ Use:
 - [Configuration](docs/configuration.md) for Lua settings, keymaps, and custom commands;
 - [Automation API](docs/api.md) for Proc and Event contracts;
 - [Runtime extensions](docs/extensions.md) for external processes and Surfaces;
-- [Architecture](docs/architecture.md) for ownership and data flow;
+- [Architecture](docs/architecture.md#core-and-user-layers) for core/user layer separation, UI ownership,
+  and data flow;
 - [Performance](docs/performance.md) for hot-path changes and measurement requirements;
 - [Development](docs/development.md) for verification and dependency upgrades; and
 - [Documentation](docs/development.md#documentation) when changing docs or examples.

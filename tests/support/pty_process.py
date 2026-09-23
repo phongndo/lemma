@@ -32,6 +32,7 @@ class AnsiScreenTracker:
         self.observed_fixture_rows: deque[bytes] = deque(maxlen=64)
         self.state = "ground"
         self.csi = bytearray()
+        self.synchronized_text: str | None = None
 
     def resize(self, columns: int, rows: int) -> None:
         resized = [bytearray(b" " * columns) for _ in range(rows)]
@@ -107,6 +108,15 @@ class AnsiScreenTracker:
             self._erase_display(parameters[0])
         elif final == ord("K"):
             self._erase_line(parameters[0])
+        elif final == ord("X"):
+            end = min(self.columns, self.column + first)
+            self.cells[self.row][self.column : end] = b" " * (end - self.column)
+        elif final in (ord("h"), ord("l")) and self.csi.startswith(b"?"):
+            if 2026 in parameters:
+                if final == ord("h") and self.synchronized_text is None:
+                    self.synchronized_text = self.text()
+                elif final == ord("l"):
+                    self.synchronized_text = None
         elif final == ord("s"):
             self.saved = (self.row, self.column)
         elif final == ord("u"):
@@ -188,6 +198,10 @@ class AnsiScreenTracker:
         return self._feed(data, marker if marker else None)
 
     def text(self) -> str:
+        # UI assertions observe presented frames, never a partial clear/redraw. Marker
+        # observation stays separate so fixture completion can retain transient output.
+        if self.synchronized_text is not None:
+            return self.synchronized_text
         return "\n".join(
             bytes(row).decode("ascii", errors="replace").rstrip() for row in self.cells
         )
@@ -321,13 +335,24 @@ class PtyProcess:
     ) -> None:
         release_read, release_write = os.pipe()
         try:
-            pid, descriptor = pty.fork()
+            ready_read, ready_write = os.pipe()
         except BaseException:
             os.close(release_read)
             os.close(release_write)
             raise
+        try:
+            pid, descriptor = pty.fork()
+        except BaseException:
+            os.close(release_read)
+            os.close(release_write)
+            os.close(ready_read)
+            os.close(ready_write)
+            raise
         if pid == 0:
             os.close(release_write)
+            os.close(ready_read)
+            os.write(ready_write, b"\0")
+            os.close(ready_write)
             try:
                 released = os.read(release_read, 1)
             finally:
@@ -337,6 +362,7 @@ class PtyProcess:
             os.execve(arguments[0], arguments, environment)
 
         os.close(release_read)
+        os.close(ready_write)
         self.pid = pid
         self.descriptor = descriptor
         self.pending_read = b""
@@ -357,12 +383,21 @@ class PtyProcess:
             self.initial_terminal_attributes = termios.tcgetattr(descriptor)
             flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
             fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            # The parent can return from forkpty before the child creates its
+            # process group. Wait for it before callers can send group signals.
+            readable, _, _ = select.select([ready_read], [], [], 5.0)
+            if not readable:
+                raise TimeoutError("PTY child did not initialize its process group")
+            if os.read(ready_read, 1) != b"\0":
+                raise RuntimeError("PTY child exited before initialization")
             os.write(release_write, b"\0")
         except BaseException:
             os.close(release_write)
+            os.close(ready_read)
             self.close()
             raise
         os.close(release_write)
+        os.close(ready_read)
 
     @property
     def running(self) -> bool:

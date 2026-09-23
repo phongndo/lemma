@@ -1,7 +1,6 @@
 #include "core/frame_scheduler.hpp"
 #include "lemma/id.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <optional>
 
@@ -48,16 +47,17 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
   }
   auto candidate = urgency == FrameUrgency::burst ? burst_deadline(now) : now;
   if (urgency == FrameUrgency::interactive && source.is_valid()) {
-    // The input latch can be consumed by unrelated output already in this PTY. Coalesce its
-    // following response at one fixed short deadline without accelerating sibling Panes.
+    // The input latch can be consumed by unrelated output already in this PTY. Allow one
+    // immediate following response without accelerating sibling Panes or the ongoing stream.
     // Keep burst history, and do not arm a timer unless more damage actually arrives.
     interactive_followup_ =
-        InteractiveFollowup{.source = source, .deadline = now + interactive_followup_delay};
+        InteractiveFollowup{.source = source, .deadline = now + interactive_followup_window};
   } else if (urgency == FrameUrgency::burst && interactive_followup_.has_value()) {
     if (now > interactive_followup_->deadline) {
       interactive_followup_.reset();
     } else if (source == interactive_followup_->source) {
-      candidate = std::min(candidate, interactive_followup_->deadline);
+      candidate = now;
+      interactive_followup_.reset();
     }
   }
   if (!pending_ || candidate < deadline_) {
@@ -92,12 +92,7 @@ void FrameScheduler::request(const FrameUrgency urgency, const bool force_full, 
 
 [[nodiscard]] auto FrameScheduler::urgency() const noexcept -> FrameUrgency { return urgency_; }
 
-void FrameScheduler::complete() noexcept {
-  if (interactive_followup_.has_value() && deadline_ == interactive_followup_->deadline) {
-    interactive_followup_.reset();
-  }
-  clear_pending();
-}
+void FrameScheduler::complete() noexcept { clear_pending(); }
 
 void FrameScheduler::cancel() noexcept { reset(); }
 

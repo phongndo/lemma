@@ -50,7 +50,7 @@ using ReactorNow = ReactorClock::time_point (*)(void* context) noexcept;
 using ReactorSend = ReactorIoResult (*)(void* context, int descriptor,
                                         std::span<const std::byte> bytes, int flags) noexcept;
 
-// The production environment delegates directly to poll(2), send(2), and steady_clock.
+// Production uses native level-triggered readiness (poll fallback), send(2), and steady_clock.
 // Deterministic tests may instead provide one scripted readiness/I/O/clock authority. The
 // callbacks are turn-local and must not retain borrowed spans.
 struct ReactorEnvironment final {

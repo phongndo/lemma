@@ -9,7 +9,6 @@
 #include "core/session.hpp"
 #include "extension/runtime.hpp"
 #include "lemma/command.hpp"
-#include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
 
 #include <cstddef>
@@ -22,19 +21,6 @@
 #include <vector>
 
 namespace lemma::core::engine_detail {
-
-enum class StatusHitKind : std::uint8_t {
-  tab,
-  create_tab,
-};
-
-struct StatusHit final {
-  TabId tab;
-  TabId next;
-  std::uint16_t position{0};
-  std::uint16_t moving_position{0};
-  StatusHitKind kind{StatusHitKind::tab};
-};
 
 [[nodiscard]] constexpr auto clipboard_base64_bytes(const std::size_t bytes) noexcept
     -> std::size_t {
@@ -52,10 +38,6 @@ struct PublicCaptureFormatting final {
     -> std::uint64_t;
 [[nodiscard]] auto tab_title(const SessionRecord& session, const Tab& tab,
                              const PaneRuntimeStore& runtimes) noexcept -> std::string_view;
-[[nodiscard]] auto status_target_at_column(const SessionRecord& session,
-                                           const PaneRuntimeStore& runtimes,
-                                           std::uint16_t column) noexcept
-    -> std::optional<StatusHit>;
 [[nodiscard]] auto compose_session_frame(SessionRecord& session, PaneRuntimeStore& runtimes,
                                          extension::Runtime& extensions, bool force_full,
                                          ClientFrameOutput::TimePoint now) noexcept -> bool;

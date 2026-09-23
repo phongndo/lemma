@@ -18,14 +18,117 @@ Lemma state -> Event -> extension state -> Surface update -> native Scene -> use
 V1 supports full-duplex framed connections, capability negotiation, Procs, Attachment-scoped Grids,
 dock/float/overlay placement, and owner-directed input. A Surface is not a Pane, PTY, or terminal
 emulator. A terminal remains a real Pane using the ordinary process, Ghostty, and lifecycle machinery.
-Floating terminal creation, shared/Session-scoped Surfaces, and wholesale native-UI replacement are
-not supported.
+Floating terminal creation and shared/Session-scoped Surfaces are not supported.
 
 Runtime extensions can use any language that speaks the protocol. The separate
 [configuration and command host](configuration.md#external-command-programs) can declare and launch
 invocation-scoped programs through `argv` commands, discovered by command-line completion and
-invoked by name or keybinding. Persistent runtime services still manage their own launch/lifetime;
-there is no persistent-service registry or automatic restart policy.
+invoked by name or keybinding. Daemon-lifetime programs use the managed extension declarations
+below. Both paths use the same public protocol, capabilities, ownership, and resource limits.
+
+## Shipped user layer
+
+Lemma installs `lemma-ui` beside the main executable. Its statusline and session manager speak the
+public framed protocol; they have no private access to Core. The statusline owns a nonfocusable
+one-row top dock, renders tab labels and native editor state, and implements tab click/drag behavior.
+The session manager opens with `C-b s` or `session.manager` in the command line. The **Session**
+picker lists one row per Tab: `session / position:title`, followed by the focused Pane's directory.
+There are no separate Session header rows. Pane counts appear only for Tabs with multiple Panes;
+`*` marks the current Tab and `[attached]` marks another client's Session.
+
+Typing filters Tabs by Session name, Tab position/title, or any contained Pane's process name or
+directory. A process or directory match selects its containing Tab. Tab opens that Tab's Pane
+list, where search matches Pane ordinals, process names, and directories. Shift-Tab returns to
+the Tab list with its query and selection restored. Space-separated terms all must match.
+Matching is case-insensitive ASCII subsequence scoring with word-boundary and consecutive-match
+bonuses, not fzf's extended query grammar. Labels currently use ASCII display fallbacks for
+non-ASCII text. Pane labels use their ordinal and observed process name (falling back to the
+launch executable), not a separate title.
+
+| Key | Action |
+| --- | --- |
+| Up/Down or Ctrl-P/Ctrl-N | Select a result without changing terminal focus |
+| Tab | Show the selected Tab's Panes |
+| Shift-Tab | Return, restoring the previous query, selection, and popup size |
+| Enter | Activate the Tab or exact Pane, switching Sessions when needed |
+| Escape or Ctrl-C | Close; in the creation prompt, return to search |
+| Ctrl-O | Open the named Session creation prompt |
+| Ctrl-R | Refresh metadata |
+
+Printable keys, including `j`, `k`, `n`, and `q`, belong to the query. Left/Right, Home/End,
+Backspace/Delete, Ctrl-U, and Ctrl-W edit it. Pasted text cannot activate a result. Removed
+selections require a fresh choice; busy destinations cannot take another client's connection.
+Opening a Tab preserves its focused Pane. The manager has a ten-minute invocation deadline.
+
+The centered float fits the initial unfiltered list, capped at 96 columns and 18 rows and at
+80% of terminal columns and 85% of rows. It retains its size while filtering; longer lists scroll
+with the selection. Initial metadata arrives asynchronously. If typing begins before discovery
+finishes, the popup keeps its initial footprint. Browsing Panes fits that list separately.
+Terminal resizing preserves the query, browsing location, and selected identity.
+
+The fill and border label use terminal-default backgrounds. The centered title sits above an
+empty search prompt with matching/total candidate counts. Rows align directories beside the
+labels instead of pushing details to the right border. Directories use OSC 7 when available,
+otherwise the launch directory; the user's home is abbreviated to `~`, and clipped paths retain
+their ending. A highlighted row indicates selection. There is no preview or keyboard-hint footer.
+
+Catalogue reads run asynchronously on a separate connection from input. Search uses cached
+metadata, Surface updates retain unchanged rows, and idle helpers wait for Events. The picker
+neither captures terminal screens nor subscribes to screen contents. These behaviors live in the
+replaceable external helper, not Core.
+
+The status helper uses one global discovery connection and one scoped connection for each attached
+Session. It observes presentation state without subscribing to terminal screens and sleeps when
+nothing changes. These connections and Surfaces count against the advertised public limits;
+exhaustion can leave a Session without status UI while native terminal input continues. Detaching
+releases that Session's status connection and dock. The session manager runs only while open.
+
+## Managed programs
+
+Declare a program in `init.lua` using an exact argv array:
+
+```lua
+local lemma = require("lemma")
+lemma.extension.set("sidebar", { "/absolute/path/to/my-sidebar", "--compact" })
+lemma.extension.set("statusline", false) -- remove the shipped statusline
+-- Replace it using the same declaration, or restore the shipped implementation:
+lemma.extension.set("statusline", { lemma.bundled_ui, "status" })
+```
+
+Names are unique, at most 64 bytes; setting an existing name replaces its program. `false` removes
+it. Up to eight programs are admitted, with at most 64 arguments and 4 KiB per argv including
+terminators. `lemma.bundled_ui` is the installed helper's absolute path. Programs receive
+`LEMMA_EXTENSION_ENDPOINT`, inherit the daemon environment, and run in their own process groups.
+Standard input/output use `/dev/null`; diagnostics use the daemon's stderr. Configuration is
+published atomically; changes take effect at the next daemon startup.
+
+The daemon revokes an exited program's descendants before reaping and restarting it. At most three
+restarts follow consecutive failures; a minute of successful operation replenishes the budget.
+There is no idle polling timer. Daemon shutdown terminates the groups. The supervisor is independent
+of the timed Lua command host: a callback failure cannot revoke a managed statusline or sidebar.
+A stopped or slow helper cannot block native input or rendering; its retained UI can remain stale
+until it updates or disconnects. Native recovery remains available.
+
+`ui.status_line = false` also removes the named `statusline` program and disables the native editor
+bindings that require a visible prompt. To supply a replacement status UI, keep that setting enabled
+and replace the program with `lemma.extension.set`. The prompt state remains native and observable;
+the extension chooses its representation.
+
+## Presentation observation
+
+A scoped subscription can set `presentation = true`. Its initial snapshot and framed `state.changed`
+Events include `presentation`: Session identity/name, current connection (null while detached),
+physical dimensions, ordered tab titles and stable IDs, input mode, native prompt kind/value/cursor/
+feedback, current message, and copy-search/history state. It never includes terminal cells. The
+[embedded schema](../schema/lemma-api-v1.schema.json) defines the fields. The NDJSON observer emits
+`attachment.changed` for presentation changes. Neither form schedules periodic refreshes.
+
+Prompts expose state, not a rendered row; cursor offsets are byte offsets into the native editor
+buffer. `surface.configure` can change `focusable` along with placement. Making a focused Surface
+nonfocusable immediately returns keyboard input to the Pane. A nonfocusable Surface may display a
+visible cursor without taking keyboard ownership: the highest such Surface wins when no Surface
+has input focus. A focused Surface always takes cursor precedence. This lets a statusline show the
+native editor's cursor without routing ordinary typing through the extension process.
 
 ## Navigation picker
 
@@ -127,9 +230,10 @@ Session named `example`; send it as a framed Hello, not as a CONTROL JSON line:
 }
 ```
 
-`observe` and `surface` require `events.session`, selecting that Session's Attachment. A proc-only
-connection may omit `events` and have no Session/UI scope; its Commands use ordinary explicit
-selectors. Supplying `events`, even without `observe`, requires a live Session and binds connection
+`surface` requires `events.session`, selecting that Session's Attachment. `observe` requires
+`events`, but may omit its Session selector for a global Session feed. A proc-only connection may
+omit `events`; its Commands use ordinary explicit selectors. Supplying `events.session`, even
+without `observe`, requires a live Session and binds connection
 lifetime to it. This alone does not grant observation.
 
 Lemma replies with one `lemma.extension-welcome/v1` record containing the generation, granted

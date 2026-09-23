@@ -5,6 +5,7 @@
 #include "input/input_router.hpp"
 #include "lemma/id.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "platform/readiness.hpp"
 #include "render/frame_buffer.hpp"
 
 #include <algorithm>
@@ -206,6 +207,14 @@ int main() {
     }
   }
 
+  lemma::platform::Readiness readiness{1};
+  std::array<pollfd, 1> readiness_descriptors{
+      {{.fd = extension_sockets.back(), .events = POLLOUT, .revents = 0}}};
+  constexpr std::array<lemma::platform::ReadinessIdentity, 1> readiness_identities{
+      {{.domain = 1, .owner = 0, .generation = 1}}};
+  if (readiness.wait(readiness_descriptors, readiness_identities, 0) != 1) {
+    return 2;
+  }
   const auto terminal_before = terminal.allocation_stats();
   const auto resize_terminal_before = resize_terminal.allocation_stats();
   audited_allocations.store(0, std::memory_order_relaxed);
@@ -234,11 +243,15 @@ int main() {
     const auto extension_viewport =
         extension_runtime->pane_viewport(extension_attachment, {.columns = 80, .rows = 24});
     const auto extension_accounting = extension_runtime->accounting();
+    // Interest changes must retain registration without allocating, even when nothing is ready.
+    readiness_descriptors.front().events = iteration % 2U == 0 ? POLLIN : POLLOUT;
+    const auto ready = readiness.wait(readiness_descriptors, readiness_identities, 0);
     if (routed.consumed != routed_input.size() || frame_bytes == 0 ||
         !resize_terminal.resize(resize).has_value() || extension_peer_view.size() != 1U ||
         extension_surface_view.size() != 1U || !extension_viewport.has_value() ||
         extension_accounting.peers != 1U || extension_accounting.surfaces != 1U ||
-        extension_accounting.input_bytes != 0 || extension_accounting.output_bytes != 0) {
+        extension_accounting.input_bytes != 0 || extension_accounting.output_bytes != 0 ||
+        ready != (iteration % 2U == 0 ? 0 : 1)) {
       audit_enabled.store(false, std::memory_order_release);
       return 2;
     }

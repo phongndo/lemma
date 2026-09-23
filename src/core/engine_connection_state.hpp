@@ -91,6 +91,7 @@ struct ExtensionObservation final {
   ExtensionGenerationId owner;
   std::array<PublicObservedPaneState, api::event_panes_max> panes{};
   std::uint64_t semantic_hash{0};
+  std::uint64_t presentation_hash{0};
   std::size_t pane_cursor{0};
 };
 using ExtensionObservations = std::array<ExtensionObservation, limits::extension_sessions_hard_max>;
@@ -130,6 +131,7 @@ struct PendingConnection final {
   api::EventSubscription subscription;
   std::uint64_t event_sequence{0};
   std::uint64_t observed_semantic_hash{0};
+  std::uint64_t observed_presentation_hash{0};
   std::array<PublicObservedPaneState, api::event_panes_max> observed_panes{};
   std::size_t observed_pane_cursor{0};
   bool public_connection{false};

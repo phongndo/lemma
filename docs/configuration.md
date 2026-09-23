@@ -5,7 +5,7 @@ executes Lua while routing input, processing PTY bytes, or composing frames. A s
 validated and compiled into one immutable native configuration generation before any Session can
 use it.
 
-The host covers compiled input policy, terminal history, native status UI, launch defaults, and
+The host covers compiled input policy, terminal history, shipped status UI, launch defaults, and
 asynchronous Lua commands in the interactive command line. It does not expose Event subscriptions,
 custom UI Surfaces, dynamic routing contexts, or live reload. Language-neutral runtime extensions
 use a separate [framed protocol](extensions.md).
@@ -24,7 +24,8 @@ If `XDG_CONFIG_HOME` is unset or not absolute, Lemma uses:
 $HOME/.config/lemma/init.lua
 ```
 
-`LEMMA_CONFIG` selects another file. Lemma does not start the host when the default file is absent.
+`LEMMA_CONFIG` selects another file. The host loads the shipped declarations even when the user file
+is absent.
 Validate a file without starting or changing the daemon:
 
 ```sh
@@ -80,8 +81,9 @@ All `lemma.setup()` groups and fields are optional:
   one-shot `prefix` context. Direct bindings in `normal` do not require a prefix.
 - `terminal.scrollback_lines` is a nonnegative integer up to 10,000,000, or `false` for the native
   memory-bounded default.
-- `ui.status_line` enables or disables the native one-row status line. Disabling it gives the full
-  viewport to panes and makes status-hosted command-line and copy-search bindings inert.
+- `ui.status_line` enables or disables the shipped statusline extension. Disabling it releases its
+  docked row and makes command-line and copy-search bindings inert. Replace the statusline through
+  [managed extensions](extensions.md#managed-programs) to retain those native editors with custom UI.
 - `launch.default_cwd` is empty or an absolute path. It applies when creation does not specify
   `--cwd`.
 - `launch.default_program` is an exact argv array, not a shell command. It is bounded to 64
@@ -92,6 +94,11 @@ All `lemma.setup()` groups and fields are optional:
   directory must already exist; malformed, oversized, missing, or inaccessible files load as empty.
   Missing files may be created, but failed reads and malformed existing files are not replaced on
   shutdown. Loaded history seeds new Attachments; live Attachment histories diverge independently.
+
+The shipped bindings live in [Lua policy](../src/user/keymap.lua), compiled at build time into
+native lookup tables. [Default extension declarations](../src/user/defaults.lua) run before your
+`init.lua`; `C-b s` invokes `session.manager`. Your keymap overrides and `input.preset = "none"`
+apply afterward. Ordinary input never evaluates Lua.
 
 `lemma.keymap.set(CONTEXT, KEY, ACTION[, DISPOSITION])` replaces or adds one binding. `ACTION`
 may be a command string or one of these native-policy descriptors:

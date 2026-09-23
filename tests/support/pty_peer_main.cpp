@@ -1074,6 +1074,30 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
   return write_all(marker) && write_all("\r\n") ? 0 : 1;
 }
 
+[[nodiscard]] auto run_output_flood() noexcept -> int {
+  // Fill the 500-column blocked-client screen without wrapping. Unlike a
+  // repeated short line, dense changing rows cannot settle into an unchanged
+  // screen or collapse into blank-tail erases before the socket saturates.
+  if (!make_output_nonblocking()) {
+    return 1;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  std::array<char, 501> line{};
+  std::span(line).subspan(499, 1).front() = '\r';
+  std::span(line).subspan(500, 1).front() = '\n';
+  std::uint32_t state = 1;
+  while (std::chrono::steady_clock::now() < deadline) {
+    for (auto& cell : std::span(line).first(499)) {
+      state = (state * 1'664'525U) + 1'013'904'223U;
+      cell = static_cast<char>(33U + ((state >> 16U) % 94U));
+    }
+    if (!write_all_until({line.data(), line.size()}, deadline)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 // NOLINTBEGIN(readability-function-cognitive-complexity)
 [[nodiscard]] auto run_warm_scroll_loop() noexcept -> int {
   if (!write_all("__LEMMA_WARM_SCROLL_READY__\r\n")) {
@@ -1116,6 +1140,10 @@ run_warm_scroll(const std::string_view marker = "__LEMMA_WARM_SCROLL_DONE__") no
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main(const int argc, char** const argv) {
   const auto arguments = std::span(argv, static_cast<std::size_t>(argc));
+  if (arguments.size() == 2 &&
+      std::string_view(arguments.subspan(1, 1).front()) == "output-flood") {
+    return run_output_flood();
+  }
   if (arguments.size() == 2 &&
       std::string_view(arguments.subspan(1, 1).front()) == "attach-visible") {
     return run_attach_visible();

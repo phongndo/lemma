@@ -212,6 +212,20 @@ TEST(TerminalRenderRegressionTest, RepaintsRepeatedGlyphRunsWhenOnlyTheirStylesC
   EXPECT_EQ(unchanged->rows, 0U);
 }
 
+TEST(TerminalRenderRegressionTest, KeepsErasedBackgroundsDistinctFromAdjacentTextRuns) {
+  vt::TerminalOptions options;
+  options.size = {.columns = 12, .rows = 2};
+  auto terminal = make_terminal(options);
+  write_terminal(terminal, "\x1B[0mAB\x1B[41m\x1B[2X\x1B[2C\x1B[0mCD"
+                           "\x1B[44m\x1B[2X\x1B[2C\x1B[0mEF");
+  std::array<std::byte, 8192> output{};
+  const auto rendered = terminal.render_ansi(output, true);
+  ASSERT_TRUE(rendered.has_value());
+  EXPECT_THAT(output_text(std::span(output).first(rendered->bytes)),
+              testing::HasSubstr("\x1B[0mAB\x1B[0;48;5;1m  \x1B[0mCD"
+                                 "\x1B[0;48;5;4m  \x1B[0mEF"));
+}
+
 TEST(TerminalRenderRegressionTest, ProjectsUnqueriedExtendedPaletteEntriesAsRgb) {
   auto theme = vt::default_theme();
   theme.palette.at(200) = {.red = 10, .green = 20, .blue = 30};

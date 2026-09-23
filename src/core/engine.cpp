@@ -34,10 +34,11 @@
 #include "lemma/terminal/terminal.hpp"
 #include "platform/io.hpp"
 #include "platform/pty.hpp"
+#include "platform/readiness.hpp"
 #include "protocol/attachment.hpp"
 #include "render/frame_buffer.hpp"
-#include "render/pane_composition.hpp"
 #include "render/scene.hpp"
+#include "render/status_line.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3938,17 +3939,17 @@ void complete_rename_prompt(SessionRecord& session, PaneRuntimeStore& runtimes,
   return prompt.active();
 }
 
-void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
+auto process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                  const std::span<const std::byte> input,
                                  const SessionNameConflict name_conflict,
-                                 void* const name_conflict_context) noexcept {
+                                 void* const name_conflict_context) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::rename);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.rename_prompt.active()) {
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0U || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* const command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -3972,6 +3973,7 @@ void process_rename_prompt_input(SessionRecord& session, PaneRuntimeStore& runti
       invalidate_rename_prompt(session);
     }
   }
+  return offset;
 }
 
 // Key policy has already run through the compiled rename context; only forwarded text is edited.
@@ -4027,15 +4029,15 @@ void apply_message_view_input_command(SessionRecord& session,
   }
 }
 
-void process_message_view_input(SessionRecord& session,
-                                const std::span<const std::byte> input) noexcept {
+auto process_message_view_input(SessionRecord& session,
+                                const std::span<const std::byte> input) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::messages);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.message_view.active) {
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0 || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -4045,6 +4047,7 @@ void process_message_view_input(SessionRecord& session,
       static_cast<void>(queue_hosted_command(session, routed.effect));
     }
   }
+  return offset;
 }
 
 // NOLINTBEGIN(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,cppcoreguidelines-pro-bounds-constant-array-index)
@@ -4210,8 +4213,8 @@ void remember_attachment_command_line(Attachment& attachment) noexcept {
 }
 // NOLINTEND(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,cppcoreguidelines-pro-bounds-constant-array-index)
 
-void process_command_line_input(SessionRecord& session,
-                                const std::span<const std::byte> input) noexcept {
+auto process_command_line_input(SessionRecord& session,
+                                const std::span<const std::byte> input) noexcept -> std::size_t {
   session.interaction_router.select_base(input::ConfiguredInputContext::command_line);
   std::size_t offset = 0;
   while (offset < input.size() && session.attachment.command_line.active &&
@@ -4219,7 +4222,7 @@ void process_command_line_input(SessionRecord& session,
     const auto routed =
         session.interaction_router.route_legacy(input.subspan(offset), input.size() - offset);
     if (routed.consumed == 0 || routed.consumed > input.size() - offset) {
-      return;
+      return offset;
     }
     offset += routed.consumed;
     if (const auto* command = std::get_if<input::RoutedCommand>(&routed.effect);
@@ -4242,6 +4245,7 @@ void process_command_line_input(SessionRecord& session,
       invalidate_command_line(session);
     }
   }
+  return offset;
 }
 
 void process_typed_command_line_input(SessionRecord& session, const std::span<const std::byte> text,
@@ -4252,7 +4256,8 @@ void process_typed_command_line_input(SessionRecord& session, const std::span<co
 }
 
 [[nodiscard]] auto resize_session(SessionRecord& session, PaneRuntimeStore& runtimes,
-                                  const protocol::Dimensions dimensions) noexcept -> bool {
+                                  const protocol::Dimensions dimensions,
+                                  extension::Runtime* const extensions = nullptr) noexcept -> bool {
   finish_live_divider_resize(session, true);
   const auto columns = std::clamp(dimensions.columns, std::uint16_t{1}, protocol::columns_max);
   const auto rows = std::clamp(dimensions.rows, std::uint16_t{1}, protocol::rows_max);
@@ -4267,10 +4272,14 @@ void process_typed_command_line_input(SessionRecord& session, const std::span<co
   }
   ProductionSessionRuntimeContext runtime_context{.session = &session, .runtimes = &runtimes};
   SessionMachine machine(session, production_session_options(runtime_context));
-  const auto transition =
-      reactor_status_line()
-          ? machine.resize_attachment(columns, rows)
-          : machine.resize_attachment(columns, rows, {.columns = columns, .rows = rows});
+  const auto content =
+      extensions != nullptr
+          ? extensions->pane_viewport(session.attachment.id, {.columns = columns, .rows = rows})
+          : std::optional{PaneRectangle{.columns = columns, .rows = rows}};
+  if (!content.has_value()) {
+    return false;
+  }
+  const auto transition = machine.resize_attachment(columns, rows, *content);
   apply_session_change(session, runtimes, transition.change);
   return transition.result.status == CommandStatus::applied ||
          transition.result.status == CommandStatus::no_effect;
@@ -4798,19 +4807,32 @@ void accept_input_route(SessionRecord& session, PaneRuntimeStore& runtimes,
     }
     --input_budget;
     if (session.attachment.message_view.active) {
-      process_message_view_input(session, message.subspan(offset));
-      offset = message.size();
+      const auto consumed = process_message_view_input(session, message.subspan(offset));
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.command_line.active) {
-      process_command_line_input(session, message.subspan(offset));
-      offset = message.size();
+      if (session.attachment.command_line.submit_requested) {
+        session.attachment_runtime.retained_input_offset = offset;
+        return ParseResult::yield;
+      }
+      const auto consumed = process_command_line_input(session, message.subspan(offset));
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.rename_prompt.active()) {
-      process_rename_prompt_input(session, runtimes, message.subspan(offset), name_conflict,
-                                  name_conflict_context);
-      offset = message.size();
+      const auto consumed = process_rename_prompt_input(session, runtimes, message.subspan(offset),
+                                                        name_conflict, name_conflict_context);
+      if (consumed == 0) {
+        return ParseResult::error;
+      }
+      offset += consumed;
       continue;
     }
     if (session.attachment.copy_mode.active()) {
@@ -5314,7 +5336,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                                               : ParseResult::error;
     }
     case protocol::ClientMessageKind::resize:
-      if (!resize_session(session, runtimes, message.dimensions)) {
+      if (!resize_session(session, runtimes, message.dimensions, &extensions)) {
         return ParseResult::error;
       }
       break;
@@ -5438,118 +5460,16 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       if (tab == nullptr) {
         return ParseResult::error;
       }
-      const auto status_rows = reactor_status_line() && session.attachment.rows >= 2
-                                   ? std::uint16_t{1}
-                                   : std::uint16_t{0};
       if (message.mouse.action == protocol::MouseInputAction::press &&
-          session.attachment.mouse_capture.has_value()) {
-        if (session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
-          // A fresh press supersedes the completed divider gesture.
-          finish_live_divider_resize(session);
-        } else if (session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
-          session.attachment.mouse_capture.reset();
-          schedule_frame(session, FrameUrgency::state_change, false);
-        }
+          session.attachment.mouse_capture.has_value() &&
+          session.attachment.mouse_capture->owner == MouseCaptureOwner::divider) {
+        finish_live_divider_resize(session);
       }
       const bool captured_continuation = session.attachment.mouse_capture.has_value() &&
                                          message.mouse.action != protocol::MouseInputAction::press;
-      if (message.mouse.row < status_rows && !captured_continuation) {
-        if (message.mouse.action != protocol::MouseInputAction::press ||
-            message.mouse.button != protocol::MouseInputButton::left) {
-          break;
-        }
-        const auto target = status_target_at_column(session, runtimes, message.mouse.column);
-        session.attachment.mouse_capture = MouseCapture{
-            .target = {.tab = tab->id, .pane = tab->focused_pane},
-            .peer_pane = {},
-            .status_tab_before = {},
-            .owner = MouseCaptureOwner::discard_until_release,
-            .divider_axis = SplitAxis::left_right,
-        };
-        if (!target.has_value()) {
-          break;
-        }
-        if (target->kind == StatusHitKind::create_tab) {
-          const Command create{
-              .kind = CommandKind::create_tab,
-              .origin = CommandOrigin::client,
-              .target = {.session = session.id,
-                         .tab = {},
-                         .pane = {},
-                         .peer_pane = {},
-                         .attachment = session.attachment.id},
-          };
-          const auto created = dispatch_session_command(session, runtimes, create);
-          if (created.status == CommandStatus::failed) {
-            return ParseResult::error;
-          }
-          break;
-        }
-        session.attachment.mouse_capture = MouseCapture{
-            .target = {.tab = target->tab, .pane = {}},
-            .peer_pane = {},
-            .status_tab_before = target->next,
-            .owner = MouseCaptureOwner::status_tab,
-            .divider_axis = SplitAxis::left_right,
-        };
-        const Command select{
-            .kind = CommandKind::select_tab,
-            .origin = CommandOrigin::client,
-            .target = {.session = session.id,
-                       .tab = target->tab,
-                       .pane = {},
-                       .peer_pane = {},
-                       .attachment = session.attachment.id},
-            .payload = CommandCoordinate{.value = target->position},
-        };
-        if (!dispatch_session_command(session, runtimes, select).succeeded()) {
-          session.attachment.mouse_capture.reset();
-          return ParseResult::error;
-        }
-        break;
-      }
-      const auto content_row = message.mouse.row < status_rows
-                                   ? std::uint16_t{0}
-                                   : static_cast<std::uint16_t>(message.mouse.row - status_rows);
+      const auto content_row = message.mouse.row;
       if (!captured_continuation &&
           route_surface_mouse(extensions, session, message.mouse, content_row)) {
-        break;
-      }
-      if (captured_continuation &&
-          session.attachment.mouse_capture->owner == MouseCaptureOwner::status_tab) {
-        if (message.mouse.action == protocol::MouseInputAction::motion) {
-          const auto target = status_target_at_column(session, runtimes, message.mouse.column);
-          if (target.has_value()) {
-            auto before = session.attachment.mouse_capture->status_tab_before;
-            if (target->kind == StatusHitKind::create_tab) {
-              before = {};
-            } else if (target->tab != session.attachment.mouse_capture->target.tab) {
-              before = target->position < target->moving_position ? target->tab : target->next;
-            }
-            if (before != session.attachment.mouse_capture->status_tab_before) {
-              session.attachment.mouse_capture->status_tab_before = before;
-              schedule_frame(session, FrameUrgency::state_change, false);
-            }
-          }
-        } else if (message.mouse.action == protocol::MouseInputAction::release) {
-          const auto capture = *session.attachment.mouse_capture;
-          session.attachment.mouse_capture.reset();
-          schedule_frame(session, FrameUrgency::state_change, false);
-          const Command place{
-              .kind = CommandKind::place_tab,
-              .origin = CommandOrigin::client,
-              .target = {.session = session.id,
-                         .tab = capture.target.tab,
-                         .pane = {},
-                         .peer_pane = {},
-                         .attachment = session.attachment.id},
-              .payload = TabPlacementCommand{.before = capture.status_tab_before},
-          };
-          const auto placed = dispatch_session_command(session, runtimes, place);
-          if (placed.status == CommandStatus::failed) {
-            return ParseResult::error;
-          }
-        }
         break;
       }
       if (tab->layout_suspended) {
@@ -6137,12 +6057,15 @@ void record_reaped_child(Sessions& sessions, PaneRuntimeStore& runtimes,
   // Already-closed panes are also daemon children and require no Core transition.
 }
 
-void reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
-                          const ChildReaper child_reaper) noexcept {
+[[nodiscard]] auto reap_exited_children(Sessions& sessions, PaneRuntimeStore& runtimes,
+                                        const ChildReaper child_reaper) noexcept -> bool {
   LEMMA_ASSERT(child_reaper.valid());
+  bool reaped = false;
   while (const auto exited = child_reaper.reap(child_reaper.context)) {
     record_reaped_child(sessions, runtimes, *exited);
+    reaped = true;
   }
+  return reaped;
 }
 
 void reclaim_inactive_sessions(Sessions& sessions, PaneRuntimeStore& runtimes,
@@ -7301,7 +7224,8 @@ encode_proc_result(const ProcExecutionState& state,
                                           request.focusable, request.opaque, viewport);
   } else if (request.kind == api::CommandKind::surface_configure) {
     operation = extensions.configure_surface(owner.generation, request.surface.id,
-                                             request.surface_placement, viewport);
+                                             request.surface_placement, viewport,
+                                             request.configured_focusable);
   } else if (request.kind == api::CommandKind::surface_focus) {
     operation = extensions.focus_surface(owner.generation, request.surface.id, viewport);
   } else {
@@ -9030,7 +8954,9 @@ void process_extension_read(PendingConnections& connections, Sessions& sessions,
     if (admitted.has_value()) {
       observations.at(admitted->slot()) = {.owner = *admitted,
                                            .panes = pending->observed_panes,
-                                           .semantic_hash = pending->observed_semantic_hash};
+                                           .semantic_hash = pending->observed_semantic_hash,
+                                           .presentation_hash =
+                                               pending->observed_presentation_hash};
     }
     close_pending(connections, slot, sessions);
   } catch (...) {
@@ -10442,6 +10368,59 @@ struct DescriptorOwner final {
   ExtensionGenerationId extension_owner;
 };
 
+template <typename Tag>
+[[nodiscard]] auto readiness_id(const GenerationalId<Tag> id) noexcept -> std::uint64_t {
+  return (static_cast<std::uint64_t>(id.generation()) << 32U) | id.slot();
+}
+
+[[nodiscard]] auto readiness_identity(const DescriptorOwner& owner,
+                                      const PendingConnectionGenerations& pending) noexcept
+    -> platform::ReadinessIdentity {
+  const auto domain = static_cast<std::uint64_t>(owner.kind) + 2U;
+  switch (owner.kind) {
+  case DescriptorKind::pane:
+    return {.domain = domain,
+            .owner = readiness_id(owner.session),
+            .generation = readiness_id(owner.pane)};
+  case DescriptorKind::client:
+    return {.domain = domain,
+            .owner = readiness_id(owner.session),
+            .generation = readiness_id(owner.connection)};
+  case DescriptorKind::pending:
+    return {.domain = domain,
+            .owner = owner.auxiliary_slot,
+            .generation = std::span(pending).subspan(owner.auxiliary_slot, 1).front()};
+  case DescriptorKind::extension_peer:
+    return {.domain = domain, .owner = readiness_id(owner.extension_owner), .generation = 0};
+  case DescriptorKind::capacity_rejection:
+    // Rare rejection slots have no lifetime generation. Use ordinary poll for these turns.
+    return {};
+  case DescriptorKind::child_reaper:
+  case DescriptorKind::extension_host:
+    return {.domain = domain, .owner = 0, .generation = 0};
+  }
+  return {};
+}
+
+[[nodiscard]] auto
+collect_readiness_identities(const std::span<const DescriptorOwner> owners,
+                             const PendingConnectionGenerations& pending,
+                             std::vector<platform::ReadinessIdentity>& storage) noexcept
+    -> std::span<const platform::ReadinessIdentity> {
+  try {
+    storage.resize(owners.size());
+  } catch (...) {
+    return {}; // Allocation failure selects poll for this turn.
+  }
+  storage.front() = {
+      .domain = 1, .owner = 0, .generation = 0}; // Listener lifetime is the entire reactor run.
+  for (std::size_t index = 1; index < owners.size(); ++index) {
+    std::span(storage).subspan(index, 1).front() =
+        readiness_identity(owners.subspan(index, 1).front(), pending);
+  }
+  return storage;
+}
+
 // The branches are the explicit bounded stages of the current single-owner reactor.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
@@ -10483,6 +10462,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       capacity_rejection_connections_max + limits::extension_sessions_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
   std::array<DescriptorOwner, descriptor_count_max> owners{};
+  platform::Readiness readiness(environment.poll == &production_poll ? descriptor_count_max : 0);
+  std::vector<platform::ReadinessIdentity> readiness_identities;
   std::array<ClientFrameFlushTarget, static_cast<std::size_t>(limits::sessions_hard_max)>
       client_flush_targets{};
   std::array<ExtensionGeometryObservation, limits::sessions_hard_max>
@@ -10499,12 +10480,16 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
   std::size_t extension_io_cursor = 0;
   std::uint64_t activity_order = 0;
   bool owned_a_session = false;
+  bool reaped_work_pending = false;
 
   while (true) {
     if (stop_requested != nullptr && stop_requested()) {
       return 0;
     }
-    reap_exited_children(sessions, runtimes, child_reaper);
+    // Reaping may consume the only wakeup after PTY EOF. Run retirement and waiting Procs
+    // before sleeping again so the recorded exit becomes a published Core outcome.
+    reaped_work_pending =
+        reap_exited_children(sessions, runtimes, child_reaper) || reaped_work_pending;
     expire_status_messages(sessions, reactor_now());
     const bool public_screen_work_pending = service_public_observers(
         pending_connections, sessions, runtimes, public_scratch, observer_cursor);
@@ -10660,12 +10645,21 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .extension_owner = {}};
       ++descriptor_count;
     }
-    const auto timeout = poll_timeout(sessions, runtimes, pending_connections, public_procs,
-                                      capacity_rejections, public_screen_work_pending);
+    const auto timeout =
+        poll_timeout(sessions, runtimes, pending_connections, public_procs, capacity_rejections,
+                     public_screen_work_pending || reaped_work_pending);
     const auto hosted_timeout =
         service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
-    const auto poll_result = reactor_poll(std::span(descriptors).first(descriptor_count),
-                                          extension_runtime.buffered_work() ? 0 : hosted_timeout);
+    const auto ready_descriptors = std::span(descriptors).first(descriptor_count);
+    const auto ready_timeout = extension_runtime.buffered_work() ? 0 : hosted_timeout;
+    int poll_result = 0;
+    if (readiness.uses_native_wait()) {
+      const auto identities = collect_readiness_identities(
+          std::span(owners).first(descriptor_count), pending_generations, readiness_identities);
+      poll_result = readiness.wait(ready_descriptors, identities, ready_timeout);
+    } else {
+      poll_result = reactor_poll(ready_descriptors, ready_timeout);
+    }
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -10674,7 +10668,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     const auto child_reaper_events = std::span(descriptors).subspan(1, 1).front().revents;
     if ((child_reaper_events & (POLLIN | POLLHUP | POLLERR)) != 0) {
-      reap_exited_children(sessions, runtimes, child_reaper);
+      static_cast<void>(reap_exited_children(sessions, runtimes, child_reaper));
     }
     expire_attached_client_frames(sessions, runtimes, reactor_now());
     expire_status_messages(sessions, reactor_now());
@@ -10716,6 +10710,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
         service_copy_input_timeout(*session, runtimes, reactor_now());
       }
     }
+    // Clear only after retirement; an interrupted poll must retain the pending native turn.
+    reaped_work_pending = false;
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
         client_message_budgets{};
     std::array<std::size_t, static_cast<std::size_t>(limits::sessions_hard_max)>
@@ -10793,11 +10789,17 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                public_scratch, owner.auxiliary_slot);
         }
       } else if (owner.kind == DescriptorKind::extension_peer) {
+        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
+        // Sleeping extensions have no reactor work. Retained complete records still run when
+        // a previous turn exhausted its byte/record budget, even without fresh socket readiness.
+        if (events == 0 &&
+            !extension_runtime.buffered_record_bytes(owner.auxiliary_slot).has_value()) {
+          continue;
+        }
         if (extension_runtime.owner_at(owner.auxiliary_slot) != owner.extension_owner ||
             !extension_runtime.connected(owner.extension_owner)) {
           continue;
         }
-        const auto events = std::span(descriptors).subspan(index, 1).front().revents;
         if ((events & POLLIN) != 0 && extension_read_budget > 0) {
           const auto received = extension_runtime.read_ready(
               owner.auxiliary_slot,

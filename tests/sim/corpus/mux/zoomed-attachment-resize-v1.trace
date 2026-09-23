@@ -4,54 +4,54 @@ lemma-mux-trace-v1
 # source-trace: build/mux-sim-failures/mux-0x0.min.trace
 # fixed-at: 6c453d642f76ecae7bf901623591260356deed92
 op create-tab - - - - 0 0 applied applied
-check applied 1 9fde5dbbfabc38b7
+check applied 1 add04c4b8f42d717
 op create-tab - - - - 0 0 applied applied
-check applied 1 bb881e1dcd94cd8d
+check applied 1 c8afc03d7509e3ba
 op create-tab - - - - 0 0 applied applied
-check applied 1 56c28c41de9aafd9
+check applied 1 10e1a14f0ca32e91
 op create-tab - - - - 0 0 applied applied
-check applied 1 cbee8c0dcc926ef9
+check applied 1 2f93c76e3c83dc0a
 op create-tab - - - - 0 0 applied applied
-check applied 1 24dca7c087290d87
+check applied 1 5d0996123227b5ff
 op create-tab - - - - 0 0 applied applied
-check applied 1 199fa60f16abe4f1
+check applied 1 ce802c08349e517e
 op create-tab - - - - 0 0 applied applied
-check applied 1 068bbcec3992f431
+check applied 1 963ce8e74375a851
 op create-tab - - - - 0 0 applied applied
-check applied 1 be7fa5d58251027d
+check applied 1 1f6bd2653483580e
 op create-tab - - - - 0 0 applied applied
-check applied 1 954f027265e5db7f
+check applied 1 685442e8bcb74cff
 op create-tab - - - - 0 0 applied applied
-check applied 1 29e521e2e1b1197d
+check applied 1 e73f1f89e450b44a
 op create-tab - - - - 0 0 applied applied
-check applied 1 328c6de32bde5b79
+check applied 1 5bea11e9afd463f1
 op create-tab - - - - 0 0 applied applied
-check applied 1 ad693d1119963421
+check applied 1 a058004c733fd602
 op create-tab - - - - 0 0 applied applied
-check applied 1 7dba19f6edb8acdf
+check applied 1 41f5624979d220a7
 op create-tab - - - - 0 0 applied applied
-check applied 1 3dd4a5a1e41b7421
+check applied 1 fb2201a6b1b14afe
 op create-tab - - - - 0 0 applied applied
-check applied 1 802f456f1d8888b1
+check applied 1 2def1fdafe34ccb1
 op split 15:1 - 15:1 - 0 0 applied applied
-check applied 1 50b7e90021f3b3f1
+check applied 1 467990bfee27efe9
 op split 12:1 - 12:1 - 0 0 applied applied
-check applied 1 fb87733e4f7e1589
+check applied 1 71cbf4f86c97b873
 op split 1:1 - 1:1 - 0 0 applied applied
-check applied 1 637dc395e31f7d4f
+check applied 1 3dd584ac76f6fc29
 op split 6:1 - 6:1 - 0 0 applied applied
-check applied 1 500558875e89192d
+check applied 1 8531b4bde875250d
 op split 11:1 - 11:1 - 0 1 applied applied
-check applied 1 fd2f796755ba26fe
+check applied 1 eaeec40889981a9e
 op split 11:1 - 20:1 - 0 0 applied applied
-check applied 1 9c00b0c7c0aa124e
+check applied 1 17b28f46690cd31c
 op split 4:1 - 4:1 - 0 0 applied applied
-check applied 1 988ea8824c0e636a
+check applied 1 43e17cf547c10b9c
 op split 13:1 - 13:1 - 0 0 applied applied
-check applied 1 c26e34391dfdb990
+check applied 1 5ad4aa31ae5af604
 op zoom 13:1 - 23:1 - 0 0 applied applied
-check applied 1 61a466b28a7b35ff
+check applied 1 00b56327b3f143ab
 op select-tab 13:1 - - - 0 0 applied applied
-check applied 1 8b2b825e4532e416
+check applied 1 6389fcd61a8132d2
 op attachment-resize - - - - 20 1000 applied applied
-check applied 1 b741ae30c0a2be30
+check applied 1 d2f67e11f32e9374

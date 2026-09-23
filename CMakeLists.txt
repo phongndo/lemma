@@ -92,6 +92,20 @@ function(lemma_internal_target target)
       "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
   )
   target_link_libraries(${target} PRIVATE lemma_warnings)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Independent helpers should map only the C++ runtime they use. Per-function sections let
+    # the linker discard unused runtime and application code from Release executables.
+    target_compile_options(${target} PRIVATE
+      "$<$<CONFIG:Release>:-ffunction-sections>"
+      "$<$<CONFIG:Release>:-fdata-sections>")
+    get_target_property(target_type ${target} TYPE)
+    if(target_type STREQUAL "EXECUTABLE")
+      target_link_options(${target} PRIVATE
+        "$<$<CONFIG:Release>:-static-libstdc++>"
+        "$<$<CONFIG:Release>:-static-libgcc>"
+        "$<$<CONFIG:Release>:LINKER:--gc-sections,--as-needed>")
+    endif()
+  endif()
 endfunction()
 
 add_library(lemma_base STATIC src/core/assert.cpp)
@@ -117,6 +131,7 @@ target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty
 add_library(
   lemma_platform STATIC
   src/platform/io.cpp
+  src/platform/readiness.cpp
   src/platform/pty.cpp
   src/platform/terminal_mode.cpp
 )
@@ -126,16 +141,19 @@ add_library(lemma_protocol STATIC src/protocol/attachment.cpp)
 lemma_internal_target(lemma_protocol)
 target_link_libraries(lemma_protocol PRIVATE lemma_base)
 
+add_library(lemma_status STATIC src/render/status_line.cpp src/render/ui.cpp)
+lemma_internal_target(lemma_status)
+target_link_libraries(lemma_status PRIVATE lemma_base)
+
 add_library(
   lemma_render STATIC
   src/render/grid.cpp
   src/render/pane_composition.cpp
   src/render/frame_buffer.cpp
-  src/render/ui.cpp
 )
 lemma_internal_target(lemma_render)
 target_link_libraries(
-  lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal
+  lemma_render PRIVATE lemma_base lemma_diagnostic lemma_platform lemma_terminal lemma_status
 )
 
 add_library(
@@ -149,7 +167,23 @@ add_library(
 lemma_internal_target(lemma_core)
 target_link_libraries(lemma_core PRIVATE lemma_base)
 
-add_library(lemma_input STATIC src/input/input_router.cpp)
+add_library(lemma_keys STATIC src/config/keys.cpp)
+lemma_internal_target(lemma_keys)
+add_executable(lemma_compile_keymap src/user/compile_keymap.cpp)
+lemma_internal_target(lemma_compile_keymap)
+target_link_libraries(lemma_compile_keymap PRIVATE lemma_keys ${LEMMA_LUA_TARGET})
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/input")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc"
+  COMMAND lemma_compile_keymap "${CMAKE_CURRENT_SOURCE_DIR}/src/user/keymap.lua"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc"
+  DEPENDS lemma_compile_keymap src/user/keymap.lua)
+# Source analysis runs on fresh trees without building the application first.
+add_custom_target(lemma_analysis_inputs
+  DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc")
+add_dependencies(lemma_analysis_inputs zig_build_lib_vt)
+add_library(lemma_input STATIC src/input/input_router.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/input/default_keymap.inc")
+target_include_directories(lemma_input PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 lemma_internal_target(lemma_input)
 target_link_libraries(lemma_input PRIVATE lemma_base)
 
@@ -170,7 +204,7 @@ target_link_libraries(lemma_api PRIVATE lemma_base lemma_core)
 
 add_library(lemma_config STATIC src/config/config.cpp)
 lemma_internal_target(lemma_config)
-target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input)
+target_link_libraries(lemma_config PRIVATE lemma_api lemma_base lemma_input lemma_keys)
 
 add_library(
   lemma_extension_contract STATIC
@@ -180,9 +214,23 @@ add_library(
 lemma_internal_target(lemma_extension_contract)
 target_link_libraries(lemma_extension_contract PRIVATE lemma_api lemma_platform)
 
+add_library(lemma_extension_client STATIC src/extension/client.cpp)
+lemma_internal_target(lemma_extension_client)
+target_link_libraries(lemma_extension_client PRIVATE lemma_api lemma_extension_contract lemma_platform)
+
+add_executable(lemma-ui src/user/main.cpp src/user/session_manager.cpp)
+lemma_internal_target(lemma-ui)
+target_link_libraries(lemma-ui PRIVATE lemma_extension_client lemma_api lemma_status)
+install(TARGETS lemma-ui RUNTIME DESTINATION bin)
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/user/defaults.lua")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/user/defaults.lua" LEMMA_DEFAULTS_LUA)
+configure_file(src/extension/defaults.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/extension/defaults.hpp" @ONLY)
 add_library(lemma_extension STATIC src/extension/lua_host.cpp src/extension/lua_commands.cpp
-  src/extension/external_command.cpp)
+  src/extension/external_command.cpp src/extension/services.cpp)
 lemma_internal_target(lemma_extension)
+target_include_directories(lemma_extension PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(
   lemma_extension PRIVATE lemma_base lemma_config lemma_extension_contract lemma_input lemma_platform ${LEMMA_LUA_TARGET}
 )
@@ -265,17 +313,21 @@ target_include_directories(
 )
 
 add_executable(lemma apps/lemma/main.cpp)
-target_link_libraries(lemma PRIVATE lemma_app lemma_warnings)
+lemma_internal_target(lemma)
+target_link_libraries(lemma PRIVATE lemma_app)
 install(TARGETS lemma RUNTIME DESTINATION bin)
+add_dependencies(lemma lemma-ui)
 
 if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_test_server tests/support/server_main.cpp)
   lemma_internal_target(lemma_test_server)
   target_link_libraries(lemma_test_server PRIVATE lemma_daemon)
+  add_dependencies(lemma_test_server lemma-ui)
 
   add_executable(lemma_test_cli tests/support/cli_main.cpp)
   lemma_internal_target(lemma_test_cli)
   target_link_libraries(lemma_test_cli PRIVATE lemma_app)
+  add_dependencies(lemma_test_cli lemma-ui)
 
   add_executable(lemma_test_pty_peer tests/support/pty_peer_main.cpp)
   target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
@@ -361,7 +413,7 @@ if(LEMMA_BUILD_TESTS)
   gtest_discover_tests(lemma_terminal_boundary_tests PROPERTIES LABELS "terminal-unit")
 
   # Real platform-process contracts remain native but are never presented as pure unit tests.
-  add_executable(lemma_component_integration_tests tests/platform_test.cpp)
+  add_executable(lemma_component_integration_tests tests/platform_test.cpp tests/readiness_test.cpp)
   lemma_internal_target(lemma_component_integration_tests)
   target_link_libraries(
     lemma_component_integration_tests
@@ -461,7 +513,10 @@ if(LEMMA_BUILD_TESTS)
   endfunction()
 
   lemma_add_python_mux_test(configuration tests.mux.test_configuration)
-  lemma_add_python_mux_test(extensions tests.mux.test_extensions)
+  # Keep independent extension suites within the per-entry deadline under sanitizers.
+  lemma_add_python_mux_test(extensions.lua tests.mux.test_extensions.ExtensionMuxTest)
+  lemma_add_python_mux_test(extensions.picker tests.mux.test_extensions.PickerMuxTest)
+  lemma_add_python_mux_test(user_extensions tests.mux.test_user_extensions)
   lemma_add_python_mux_test(command_line tests.mux.test_command_line)
   lemma_add_python_mux_test(pane_lifecycle tests.mux.test_pane_lifecycle)
   lemma_add_python_mux_test(session_lifecycle tests.mux.test_session_lifecycle)
