@@ -427,6 +427,15 @@ void InputRouter::reset() noexcept {
   forwarded_keys_ = 0;
 }
 
+void InputRouter::reconfigure(const CompiledInputMap& map) noexcept {
+  map_ = &map;
+  stack_ = {};
+  stack_.front().context = InputContextId(0);
+  depth_ = 1;
+  // Captured repeats from the old policy cannot invoke new commands before their release.
+  captured_contexts_.fill(0xFFU);
+}
+
 void InputRouter::select_base(const ConfiguredInputContext selected) noexcept {
   const auto slot = static_cast<std::uint8_t>(selected);
   LEMMA_ASSERT(selected < ConfiguredInputContext::count && slot < map_->context_count_);

@@ -124,9 +124,11 @@ auto PanePtyWriteQueue::ensure_capacity(const std::size_t required) noexcept -> 
   }
 
   constexpr std::size_t allocation_granularity = std::size_t{4} * 1'024U;
-  const auto doubled = std::min(capacity(), storage_capacity_ * 2U);
-  const auto preferred =
-      std::min(capacity(), std::max({required, allocation_granularity, doubled}));
+  const auto ceiling = required <= limits::pane_pty_input_backlog_bytes_max
+                           ? limits::pane_pty_input_backlog_bytes_max
+                           : capacity();
+  const auto doubled = std::min(ceiling, storage_capacity_ * 2U);
+  const auto preferred = std::min(ceiling, std::max({required, allocation_granularity, doubled}));
   if (replace_storage(preferred)) {
     return true;
   }
@@ -275,7 +277,7 @@ static_assert(limits::pane_pty_write_queue_bytes_max >=
 [[nodiscard]] auto queue_encoded(PanePtyWriteQueue& queue,
                                  const std::span<const std::byte> encoded) noexcept
     -> InputQueueResult {
-  if (encoded.size() > queue.remaining() || !queue.reserve(encoded.size())) {
+  if (encoded.size() > queue.input_remaining() || !queue.reserve(encoded.size())) {
     return InputQueueResult::full;
   }
   return queue.append(encoded) ? InputQueueResult::queued : InputQueueResult::encoding_failed;
@@ -357,7 +359,7 @@ template <typename Visitor>
   if (!measured) {
     return InputQueueResult::encoding_failed;
   }
-  if (encoded_size > queue.remaining() || !queue.reserve(encoded_size)) {
+  if (encoded_size > queue.input_remaining() || !queue.reserve(encoded_size)) {
     return InputQueueResult::full;
   }
 
@@ -506,8 +508,8 @@ auto queue_prefixed_key_input(PanePtyWriteQueue& queue, vt::Terminal& terminal,
   if (input.empty() || input.size() > protocol::input_message_bytes_max) {
     return InputQueueResult::encoding_failed;
   }
-  if (input.size() > queue.remaining() ||
-      paste_encoding_overhead_max > queue.remaining() - input.size()) {
+  if (input.size() > queue.input_remaining() ||
+      paste_encoding_overhead_max > queue.input_remaining() - input.size()) {
     return InputQueueResult::full;
   }
   const auto reserved = input.size() + paste_encoding_overhead_max;

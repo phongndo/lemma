@@ -85,6 +85,7 @@
               nativeBuildInputs = [
                 pkgs.cmake
                 pkgs.ninja
+                pkgs.ncurses
                 pkgs.pkg-config
                 pkgs.patch
                 zigPackage
@@ -269,6 +270,7 @@
             pkgs.git
             pkgs.just
             pkgs.lua5_4
+            pkgs.ncurses
             pkgs.ninja
             pkgs.nixd
             pkgs.nixpkgs-fmt

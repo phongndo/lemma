@@ -19,6 +19,7 @@ inline constexpr std::string_view event_schema = "lemma.event/v1";
 
 enum class CommandKind : std::uint8_t {
   daemon_inspect,
+  config_reload,
   attachment_switch,
   session_list,
   session_inspect,
@@ -41,6 +42,7 @@ enum class CommandKind : std::uint8_t {
   pane_zoom,
   pane_send,
   pane_input,
+  pane_paste_image,
   pane_capture,
   pane_wait,
   pane_kill,

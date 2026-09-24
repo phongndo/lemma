@@ -13,6 +13,7 @@
 #include <string_view>
 
 namespace lemma::render {
+class GraphicsProjection;
 
 inline constexpr std::size_t message_view_line_bytes_max = limits::status_message_bytes_max + 32U;
 
@@ -55,10 +56,12 @@ struct CompositionResult final {
 // status line occupies the top row, and Scene coordinates are relative to the remaining content
 // viewport. The focused projection owns cursor and outer input modes. Geometry changes require a
 // full frame; retained Grid updates otherwise visit only damaged rows.
-[[nodiscard]] auto compose_scene(
-    Scene scene, Viewport viewport, std::span<std::byte> output, bool force_full,
-    StatusLine status = {}, std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
-    MessageView message_view = {}) noexcept -> std::expected<CompositionResult, CompositionError>;
+[[nodiscard]] auto
+compose_scene(Scene scene, Viewport viewport, std::span<std::byte> output, bool force_full,
+              StatusLine status = {},
+              std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
+              MessageView message_view = {}, GraphicsProjection* graphics = nullptr) noexcept
+    -> std::expected<CompositionResult, CompositionError>;
 
 // Pane-only compatibility interface retained for focused tests and callers while all production
 // composition converges on Scene.

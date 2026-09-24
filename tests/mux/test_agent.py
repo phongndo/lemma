@@ -74,6 +74,7 @@ class AgentInterfaceMuxTest(unittest.TestCase):
                 "ls,",
                 "split",
                 "send",
+                "paste-image",
                 "wait",
                 "capture",
                 "focus",

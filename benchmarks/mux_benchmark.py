@@ -68,7 +68,9 @@ ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 SHELL_READY_MARKER = b"LEMMA-SHELL-READY"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
-ATTACH_PROTOCOL_MINOR = 9
+ATTACH_PROTOCOL_MINOR = 10
+# The paired harness drives both revisions with the same hello/input wire layouts.
+ATTACH_SUPPORTED_MINORS = (9, 10)
 ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
@@ -232,7 +234,14 @@ def local_socket_peer_pid(path: Path) -> int:
     return process
 
 
-def attach_frame(kind: int, payload: bytes, sequence: int, flags: int = 0) -> bytes:
+def attach_frame(
+    kind: int,
+    payload: bytes,
+    sequence: int,
+    flags: int = 0,
+    *,
+    minor: int = ATTACH_PROTOCOL_MINOR,
+) -> bytes:
     if not 0 < sequence <= 0xFFFF_FFFF or len(payload) > 0xFFFF_FFFF:
         raise ValueError("private attach frame exceeds its wire bounds")
     return (
@@ -240,7 +249,7 @@ def attach_frame(kind: int, payload: bytes, sequence: int, flags: int = 0) -> by
             "!4sBBBBII",
             ATTACH_MAGIC,
             ATTACH_PROTOCOL_MAJOR,
-            ATTACH_PROTOCOL_MINOR,
+            minor,
             kind,
             flags,
             len(payload),
@@ -260,14 +269,37 @@ def receive_exact(peer: socket.socket, size: int) -> bytes:
     return bytes(received)
 
 
-def receive_attach_hello(peer: socket.socket) -> None:
+class AttachVersionMismatch(RuntimeError):
+    def __init__(self, minor: int) -> None:
+        super().__init__(f"daemon requires known private attach version 2.{minor}")
+        self.minor = minor
+
+
+def receive_attach_hello(
+    peer: socket.socket, minor: int = ATTACH_PROTOCOL_MINOR
+) -> None:
     header = receive_exact(peer, ATTACH_HEADER_BYTES)
-    magic, major, minor, kind, flags, payload_bytes, sequence = struct.unpack(
+    magic, major, received_minor, kind, flags, payload_bytes, sequence = struct.unpack(
         "!4sBBBBII", header
     )
     if (
+        magic == ATTACH_MAGIC
+        and major == ATTACH_PROTOCOL_MAJOR
+        and received_minor in ATTACH_SUPPORTED_MINORS
+        and received_minor != minor
+        and kind == 7
+        and flags == 0
+        and sequence == 1
+        and 1 <= payload_bytes <= 256
+    ):
+        payload = receive_exact(peer, payload_bytes)
+        if (
+            payload[0] == 3
+        ):  # DisconnectReason::version_mismatch; never classify diagnostic prose.
+            raise AttachVersionMismatch(received_minor)
+    if (
         magic != ATTACH_MAGIC
-        or (major, minor) != (ATTACH_PROTOCOL_MAJOR, ATTACH_PROTOCOL_MINOR)
+        or (major, received_minor) != (ATTACH_PROTOCOL_MAJOR, minor)
         or kind != ATTACH_KIND_HELLO
         or flags != 0
         or payload_bytes != 4
@@ -275,6 +307,30 @@ def receive_attach_hello(peer: socket.socket) -> None:
     ):
         raise RuntimeError("blocked client received an invalid daemon hello")
     receive_exact(peer, payload_bytes)
+
+
+def connect_blocked_client(
+    path: Path, hello_payload: bytes
+) -> tuple[socket.socket, int]:
+    minor = ATTACH_PROTOCOL_MINOR
+    for attempt in range(2):
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            peer.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024)
+            peer.settimeout(5.0)
+            peer.connect(str(path))
+            peer.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1, minor=minor))
+            receive_attach_hello(peer, minor)
+            return peer, minor
+        except AttachVersionMismatch as error:
+            peer.close()
+            if attempt != 0:
+                raise
+            minor = error.minor
+        except BaseException:
+            peer.close()
+            raise
+    raise AssertionError("bounded attach negotiation exhausted")
 
 
 def percentile(samples: list[int], quantile: float) -> int:
@@ -2578,20 +2634,19 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
             runtime=runtime,
         )
 
-        blocked = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        blocked.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1_024)
-        blocked.settimeout(5.0)
-        blocked.connect(str(runtime.socket_path))
         session = b"blocked_client"
         hello_payload = (
             bytes((len(session),)) + struct.pack("!HH", 500, 200) + b"\0" + session
         )
-        blocked.sendall(attach_frame(ATTACH_KIND_HELLO, hello_payload, 1))
-        receive_attach_hello(blocked)
+        blocked, attach_minor = connect_blocked_client(
+            runtime.socket_path, hello_payload
+        )
         flood_command = (
             f"exec {shlex.quote(str(runtime.peer_path))} output-flood\r"
         ).encode()
-        flood_frame = attach_frame(ATTACH_KIND_INPUT, flood_command, 2)
+        flood_frame = attach_frame(
+            ATTACH_KIND_INPUT, flood_command, 2, minor=attach_minor
+        )
         ready_read, ready_write = os.pipe()
         disconnect_probe = subprocess.Popen(
             [
@@ -2653,6 +2708,7 @@ def blocked_client(runtime: MuxRuntime, repetitions: int) -> dict[str, Any]:
         return {
             "status": "completed",
             "receive_buffer_bytes": 4 * 1_024,
+            "private_attach_version": f"{ATTACH_PROTOCOL_MAJOR}.{attach_minor}",
             "disconnect": {
                 "observer": "native_poll",
                 "clock": disconnect_result["clock"],
@@ -3584,7 +3640,10 @@ def main() -> int:
         "latency_trace": latency_trace_metadata(arguments.trace_directory),
         "private_attach_framing": (
             {
-                "version": f"{ATTACH_PROTOCOL_MAJOR}.{ATTACH_PROTOCOL_MINOR}",
+                "supported_versions": [
+                    f"{ATTACH_PROTOCOL_MAJOR}.{minor}"
+                    for minor in ATTACH_SUPPORTED_MINORS
+                ],
                 "envelope_bytes_per_message": ATTACH_HEADER_BYTES,
                 "render_generation_bytes_per_frame": 4,
                 "render_wire_overhead_bytes_per_frame": ATTACH_HEADER_BYTES + 4,

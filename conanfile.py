@@ -11,6 +11,7 @@ class LemmaConan(ConanFile):
         "benchmark/1.9.5",
         "gtest/1.17.0",
         "lua/5.4.8",
+        "libpng/1.6.58",
         "zstd/1.5.7",
     )
 

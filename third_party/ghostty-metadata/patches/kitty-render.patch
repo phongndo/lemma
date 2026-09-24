@@ -1,0 +1,274 @@
+diff --git b/include/ghostty/vt/kitty_render.h b/include/ghostty/vt/kitty_render.h
+new file mode 100644
+index 0000000..e46f667
+--- /dev/null
++++ b/include/ghostty/vt/kitty_render.h
+@@ -0,0 +1,36 @@
++#ifndef GHOSTTY_VT_KITTY_RENDER_H
++#define GHOSTTY_VT_KITTY_RENDER_H
++
++#include <ghostty/vt/terminal.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Viewport projection using native placement/placeholder/parent-chain semantics.
++ * Pixels remain accessible through the existing image API. All views are invalid
++ * after a terminal mutation. No pixels or borrowed pointers are retained here. */
++typedef struct {
++  uint32_t image_id;
++  int32_t column, row;
++  uint32_t offset_x, offset_y;
++  uint32_t pixel_width, pixel_height;
++  uint32_t source_x, source_y, source_width, source_height;
++  int32_t z;
++} GhosttyKittyRenderPlacement;
++
++/* Bounded to 1024 stored placements/images and 16384 projection operations.
++ * On failure the output is not publishable. count is set only on success. */
++GhosttyResult ghostty_terminal_kitty_render(GhosttyTerminal terminal,
++    GhosttyKittyRenderPlacement* output, size_t capacity, size_t* count);
++
++/* Caller-owned monotonic milliseconds. SUCCESS returns the next delay;
++ * NO_VALUE means no animation needs a timer. Tick only while presenting this
++ * terminal. Native image generations change when the displayed pixels change. */
++GhosttyResult ghostty_terminal_kitty_tick(GhosttyTerminal terminal,
++    uint64_t now_ms, uint64_t* delay_ms);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/lib_vt.zig b/src/lib_vt.zig
+index b86a78b..3fa4460 100644
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -403,6 +403,8 @@ comptime {
+             @export(&c.kitty_graphics_placement_viewport_pos, .{ .name = "ghostty_kitty_graphics_placement_viewport_pos" });
+             @export(&c.kitty_graphics_placement_source_rect, .{ .name = "ghostty_kitty_graphics_placement_source_rect" });
+             @export(&c.kitty_graphics_placement_render_info, .{ .name = "ghostty_kitty_graphics_placement_render_info" });
++            @export(&c.kitty_render.render, .{ .name = "ghostty_terminal_kitty_render" });
++            @export(&c.kitty_render.tick, .{ .name = "ghostty_terminal_kitty_tick" });
+         }
+         if (features.grid_introspection) {
+             @export(&c.grid_ref_cell, .{ .name = "ghostty_grid_ref_cell" });
+diff --git a/src/terminal/c/kitty_graphics.zig b/src/terminal/c/kitty_graphics.zig
+index 2bd5e86..460961b 100644
+--- a/src/terminal/c/kitty_graphics.zig
++++ b/src/terminal/c/kitty_graphics.zig
+@@ -597,7 +597,7 @@ pub fn placement_render_info(
+ /// placeholder) placement, its tracked content has been pruned, or it is
+ /// fully off-screen (its bottom edge is above the viewport or its top edge is
+ /// at or below the viewport's last row).
+-fn computeViewportPos(
++pub fn computeViewportPos(
+     p: *const kitty_storage.ImageStorage.Placement,
+     image: *const Image,
+     t: *Terminal,
+diff --git b/src/terminal/c/kitty_render.zig b/src/terminal/c/kitty_render.zig
+new file mode 100644
+index 0000000..04ef5e4
+--- /dev/null
++++ b/src/terminal/c/kitty_render.zig
+@@ -0,0 +1,188 @@
++//! Bounded native graphics projection for non-GPU embedders.
++const std = @import("std");
++const options = @import("terminal_options");
++const lib = @import("../lib.zig");
++const tc = @import("terminal.zig");
++const graphics = @import("kitty_graphics.zig");
++const unicode = @import("../kitty/graphics_unicode.zig");
++const Storage = @import("../kitty/graphics_storage.zig").ImageStorage;
++const Image = @import("../kitty/graphics_image.zig").Image;
++const Terminal = @import("../Terminal.zig");
++const Result = @import("result.zig").Result;
++
++pub const RenderPlacement = extern struct {
++    image_id: u32,
++    column: i32,
++    row: i32,
++    offset_x: u32,
++    offset_y: u32,
++    pixel_width: u32,
++    pixel_height: u32,
++    source_x: u32,
++    source_y: u32,
++    source_width: u32,
++    source_height: u32,
++    z: i32,
++};
++
++const limit = 1024;
++const Origin = struct { key: Storage.PlacementKey, x: u32, y: u32 };
++
++fn regular(t: *Terminal, p: *const Storage.Placement, image: *const Image) RenderPlacement {
++    const ps = p.pixelSize(image.*, t);
++    const source = p.sourceRect(image.*);
++    return .{
++        .image_id = image.id,
++        .column = 0,
++        .row = 0,
++        .offset_x = @min(p.x_offset, t.width_px / t.cols -| 1),
++        .offset_y = @min(p.y_offset, t.height_px / t.rows -| 1),
++        .pixel_width = ps.width,
++        .pixel_height = ps.height,
++        .source_x = source.x,
++        .source_y = source.y,
++        .source_width = source.width,
++        .source_height = source.height,
++        .z = p.z,
++    };
++}
++
++fn visible(t: *Terminal, value: RenderPlacement) bool {
++    const cw = t.width_px / t.cols;
++    const ch = t.height_px / t.rows;
++    const x = @as(i64, value.column) * cw + value.offset_x;
++    const y = @as(i64, value.row) * ch + value.offset_y;
++    return value.pixel_width > 0 and value.pixel_height > 0 and
++        x < t.width_px and y < t.height_px and
++        x + value.pixel_width > 0 and y + value.pixel_height > 0;
++}
++
++pub fn render(terminal_: tc.Terminal, output_: ?[*]RenderPlacement, capacity: usize, count_: ?*usize) callconv(lib.calling_conv) Result {
++    if (comptime !options.kitty_graphics) return .no_value;
++    const wrapper = terminal_ orelse return .invalid_value;
++    const count = count_ orelse return .invalid_value;
++    if (capacity > limit) return .limit_exceeded;
++    const output: []RenderPlacement = if (capacity == 0) &.{} else (output_ orelse return .invalid_value)[0..capacity];
++    const t = wrapper.terminal;
++    if (t.width_px < t.cols or t.height_px < t.rows) return .invalid_value;
++    const storage = &t.screens.active.kitty_images;
++    if (storage.placements.count() > limit or storage.images.count() > limit) return .limit_exceeded;
++    var used: usize = 0;
++    var has_virtual = false;
++    var has_relative = false;
++    var budget: usize = 16384;
++    var iter = storage.placements.iterator();
++    while (iter.next()) |entry| {
++        const p = entry.value_ptr;
++        switch (p.location) {
++            .virtual => {
++                has_virtual = true;
++                continue;
++            },
++            .relative => has_relative = true,
++            .pin => {},
++        }
++        const image = storage.images.getPtr(entry.key_ptr.image_id) orelse continue;
++        if (image.data.isPending()) continue;
++        const pos = graphics.computeViewportPos(p, image, t);
++        if (!pos.visible) continue;
++        var value = regular(t, p, image);
++        value.column = pos.col;
++        value.row = pos.row;
++        if (!visible(t, value)) continue;
++        if (used == output.len) return .out_of_space;
++        output[used] = value;
++        used += 1;
++    }
++    if (!has_virtual) {
++        count.* = used;
++        return .success;
++    }
++    var origins: [limit]Origin = undefined;
++    var origins_len: usize = 0;
++    const pages = &t.screens.active.pages;
++    const top = pages.getTopLeft(.viewport);
++    const bottom = pages.getBottomRight(.viewport) orelse return .invalid_value;
++    var virtuals = unicode.placementIterator(top, bottom);
++    while (virtuals.next()) |p| {
++        if (budget == 0) return .limit_exceeded;
++        budget -= 1;
++        const image = storage.images.getPtr(p.image_id) orelse continue;
++        if (image.data.isPending()) continue;
++        if (has_relative) origin: {
++            const target = storage.placeholderTarget(p.image_id, p.placement_id) orelse break :origin;
++            const vp = pages.pointFromPin(.viewport, p.pin) orelse break :origin;
++            for (origins[0..origins_len]) |*old| {
++                if (budget == 0) return .limit_exceeded;
++                budget -= 1;
++                if (std.meta.eql(old.key, target.key)) {
++                    old.x = @min(old.x, vp.viewport.x);
++                    old.y = @min(old.y, vp.viewport.y);
++                    break :origin;
++                }
++            }
++            if (origins_len == limit) return .limit_exceeded;
++            origins[origins_len] = .{ .key = target.key, .x = vp.viewport.x, .y = vp.viewport.y };
++            origins_len += 1;
++        }
++        const rp = p.renderPlacement(storage, image, t.width_px / t.cols, t.height_px / t.rows) catch continue;
++        const vp = pages.pointFromPin(.viewport, rp.top_left) orelse continue;
++        const value: RenderPlacement = .{
++            .image_id = image.id,
++            .column = @intCast(vp.viewport.x),
++            .row = @intCast(vp.viewport.y),
++            .offset_x = rp.offset_x,
++            .offset_y = rp.offset_y,
++            .pixel_width = rp.dest_width,
++            .pixel_height = rp.dest_height,
++            .source_x = rp.source_x,
++            .source_y = rp.source_y,
++            .source_width = rp.source_width,
++            .source_height = rp.source_height,
++            .z = -1,
++        };
++        if (!visible(t, value)) continue;
++        if (used == output.len) return .out_of_space;
++        output[used] = value;
++        used += 1;
++    }
++    if (has_relative) {
++        iter = storage.placements.iterator();
++        while (iter.next()) |entry| {
++            const p = entry.value_ptr;
++            const rel = switch (p.location) {
++                .relative => |rel| rel,
++                else => continue,
++            };
++            const chain = storage.resolveChain(rel) orelse continue;
++            if (chain.root.location != .virtual) continue;
++            const image = storage.images.getPtr(entry.key_ptr.image_id) orelse continue;
++            if (image.data.isPending()) continue;
++            for (origins[0..origins_len]) |origin| {
++                if (budget == 0) return .limit_exceeded;
++                budget -= 1;
++                if (!std.meta.eql(origin.key, chain.root_key)) continue;
++                var value = regular(t, p, image);
++                value.column = @as(i32, @intCast(origin.x)) +| chain.horizontal_offset;
++                value.row = @as(i32, @intCast(origin.y)) +| chain.vertical_offset;
++                if (!visible(t, value)) break;
++                if (used == output.len) return .out_of_space;
++                output[used] = value;
++                used += 1;
++                break;
++            }
++        }
++    }
++    count.* = used;
++    return .success;
++}
++
++pub fn tick(terminal_: tc.Terminal, now: u64, delay_: ?*u64) callconv(lib.calling_conv) Result {
++    if (comptime !options.kitty_graphics) return .no_value;
++    const wrapper = terminal_ orelse return .invalid_value;
++    const delay = delay_ orelse return .invalid_value;
++    const storage = &wrapper.terminal.screens.active.kitty_images;
++    if (storage.images.count() > limit) return .limit_exceeded;
++    delay.* = storage.animationTick(wrapper.io.io(), now) orelse return .no_value;
++    return .success;
++}
+diff --git a/src/terminal/c/main.zig b/src/terminal/c/main.zig
+index 4129a2d..8e56c59 100644
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -11,6 +11,7 @@ pub const formatter = @import("formatter.zig");
+ pub const grid_ref = @import("grid_ref.zig");
+ pub const grid_ref_tracked = @import("grid_ref_tracked.zig");
+ pub const io = @import("io.zig");
++pub const kitty_render = @import("kitty_render.zig");
+ pub const kitty_graphics = @import("kitty_graphics.zig");
+ pub const kitty_graphics_get = kitty_graphics.get;
+ pub const kitty_graphics_image = kitty_graphics.image_get_handle;

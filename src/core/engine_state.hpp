@@ -1,6 +1,8 @@
 #ifndef LEMMA_CORE_ENGINE_STATE_HPP
 #define LEMMA_CORE_ENGINE_STATE_HPP
 
+#include "clipboard/png_file.hpp"
+#include "clipboard/transaction.hpp"
 #include "core/client_frame_output.hpp"
 #include "core/frame_scheduler.hpp"
 #include "core/input.hpp"
@@ -15,6 +17,7 @@
 #include "lemma/terminal/terminal.hpp"
 #include "protocol/attachment.hpp"
 #include "render/frame_buffer.hpp"
+#include "render/graphics.hpp"
 #include "render/pane_composition.hpp"
 
 #ifdef LEMMA_ENABLE_LATENCY_TRACE
@@ -195,13 +198,27 @@ using ClipboardStorage = std::unique_ptr<std::byte[]>;
 struct PendingClipboardWrite final {
   ClipboardStorage bytes;
   std::size_t size{0};
+  std::size_t offset{0};
+  bool encoded{false};
+  bool interleave_frame{false};
   bool redraw_after_write{false};
 
   void reset() noexcept {
     bytes.reset();
     size = 0;
+    offset = 0;
+    encoded = false;
+    interleave_frame = false;
     redraw_after_write = false;
   }
+};
+
+struct ClipboardPaste final {
+  SessionId session;
+  PaneId pane;
+  ConnectionId connection;
+  std::unique_ptr<clipboard::Transaction> reply;
+  std::unique_ptr<clipboard::PngFile> file;
 };
 
 struct AttachmentRuntime final {
@@ -215,9 +232,15 @@ struct AttachmentRuntime final {
   void reset_connection() noexcept;
 
   render::FrameBuffer frame;
+  render::GraphicsProjection graphics;
+  protocol::CellSize cell_size;
   protocol::ClientDecoder decoder;
   ClientFrameOutput output;
   PendingClipboardWrite clipboard_write;
+  std::unique_ptr<clipboard::Transaction> clipboard;
+  std::optional<PaneId> clipboard_owner;
+  std::weak_ptr<ClipboardPaste> clipboard_paste;
+  std::shared_ptr<ClipboardPaste> interactive_paste;
   CopyModeRuntimeState copy_mode;
   FrameScheduler frame_scheduler;
   ConnectionId connection_id;

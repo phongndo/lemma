@@ -4,11 +4,14 @@
 #include "config/config.hpp"
 #include "extension/commands.hpp"
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lemma::extension {
@@ -62,6 +65,32 @@ struct ConfigurationLoad final {
     -> ConfigurationLoad;
 
 [[nodiscard]] auto load_builtin_configuration() noexcept -> ConfigurationLoad;
+
+// The private executable starts with only its configuration channel at descriptor 3. Lua and
+// filesystem access run outside the reactor; admission reads at most one 16 KiB quantum per turn.
+[[nodiscard]] auto run_configuration_host(std::string_view requested, bool required) noexcept
+    -> int;
+
+class ConfigurationLoader final {
+public:
+  [[nodiscard]] auto start() noexcept -> bool;
+  [[nodiscard]] auto descriptor() const noexcept -> int { return load_.host.descriptor(); }
+  [[nodiscard]] auto deadline() const noexcept -> std::chrono::steady_clock::time_point {
+    return deadline_;
+  }
+  [[nodiscard]] auto advance(std::chrono::steady_clock::time_point now) noexcept -> bool;
+  [[nodiscard]] auto result() const noexcept -> const ConfigurationLoad& { return load_; }
+  [[nodiscard]] auto host() noexcept -> HostProcess& { return load_.host; }
+  [[nodiscard]] auto take() noexcept -> ConfigurationLoad { return std::move(load_); }
+
+private:
+  ConfigurationLoad load_;
+  std::vector<std::byte> input_;
+  std::chrono::steady_clock::time_point deadline_;
+  std::size_t used_{0};
+  std::size_t target_{12};
+  bool finished_{false};
+};
 
 } // namespace lemma::extension
 

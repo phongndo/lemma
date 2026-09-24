@@ -309,7 +309,8 @@ class PickerMuxTest(unittest.TestCase):
     def setUp(self) -> None:
         picker = Path(__file__).resolve().parents[2] / "extensions/picker.py"
         wrapper = (
-            "import json,os,runpy; from pathlib import Path; "
+            "import json,os,runpy,sys; from pathlib import Path; "
+            f"sys.path.insert(0, {str(picker.parent)!r}); "
             "ctx=json.loads(os.environ['LEMMA_COMMAND_CONTEXT']); "
             "ctx['pid']=os.getpid(); "
             "Path(os.environ['HOME'], 'picker-context.json').write_text(json.dumps(ctx)); "

@@ -15,6 +15,10 @@ namespace lemma::platform {
 [[nodiscard]] auto write_text(int descriptor, std::string_view text) noexcept -> bool;
 [[nodiscard]] auto send_text(int socket, std::string_view text) noexcept -> bool;
 
+// Resolve resources relative to this executable, not cwd or PATH. Empty means unavailable.
+[[nodiscard]] auto executable_path(std::span<char> output) noexcept -> std::size_t;
+[[nodiscard]] auto terminfo_directory(std::span<char> output) noexcept -> std::size_t;
+
 void close_descriptor(int& descriptor) noexcept;
 [[nodiscard]] auto set_nonblocking(int descriptor) noexcept -> bool;
 

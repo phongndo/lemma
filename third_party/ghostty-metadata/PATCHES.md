@@ -27,6 +27,43 @@ store source is modified.
   and reflow, and the regression tests pass without the patch and without adapter normalization.
 - Revalidated pin: `b0c421fcd2e290629d4285c181b52fe2f2095f06`.
 
+## Deferred clipboard replies
+
+- Patch: [`patches/async-clipboard.patch`](patches/async-clipboard.patch).
+- Affected/revalidated pin: `b0c421fcd2e290629d4285c181b52fe2f2095f06`.
+- Upstream tracking: pending; the maintainer explicitly approved a local patch without upstream
+  tracking for nonblocking image clipboard support.
+- Reason: synchronous clipboard replies otherwise require blocking PTY parsing while a client
+  reads its system clipboard. Clipboard helpers and consent must not suspend the daemon reactor.
+- Behavior: additive C functions retain a clipboard request and its protocol reply state, suppress
+  the synchronous default denial, and allow one later reply on the terminal-owning thread.
+  Original synchronous callbacks are unchanged. Retention failure leaves the original request
+  available for an immediate failure response. Retained requests must be freed before terminal
+  reset/destruction; freeing without replying cancels them. Kitty write transactions release their
+  payload state when deferred, independently of later writes. MIME data and request IDs are copied.
+- Owner: Lemma terminal maintainers.
+- Removal condition: upstream provides nonblocking, lifetime-safe clipboard completion, and
+  Lemma's clipboard lifetime/protocol regressions pass against that interface without this patch.
+
+## Native graphics projection and animation
+
+- Patch: [`patches/kitty-render.patch`](patches/kitty-render.patch).
+- Affected/revalidated pin: `b0c421fcd2e290629d4285c181b52fe2f2095f06`.
+- Upstream tracking: maintainer explicitly approved extending the local-patch exception to
+  Unicode-placeholder images and animation timing, without an upstream issue/PR.
+- Reason: the C API exposes direct placements but not placeholder projection or native animation
+  scheduling. Reimplementing these semantics in Lemma would create a second VT authority.
+- Behavior: additive C functions project native placements, Unicode placeholder runs, and parent
+  chains into caller-owned bounded storage; another advances native animations on the caller's
+  monotonic clock and reports the next delay. Pixels stay in canonical native storage; no borrowed
+  pointer survives terminal mutation. Projection is capped at 1024 stored images/placements and
+  16384 lookup/run operations. No file/shared-memory capabilities or snapshot formats change.
+- Regression coverage: terminal-boundary graphics tests exercise placeholder geometry, relative
+  placement, deterministic animation ticks, and composition/lifetime behavior.
+- Owner: Lemma terminal maintainers.
+- Removal condition: upstream exposes native placeholder projection and animation deadlines, and
+  Lemma's graphics regressions pass using those interfaces without the patch.
+
 ## Requirements for future patches
 
 Record each patch before applying it, including the affected commit and patch file, upstream issue

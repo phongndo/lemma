@@ -1,0 +1,421 @@
+diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
+index db5420d..4b3c132 100644
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -817,6 +817,26 @@ typedef void (*GhosttyTerminalClipboardReadFn)(
+     void* userdata,
+     const GhosttyClipboardRead* read);
+ 
++/**
++ * Lemma extension: defer a clipboard request without blocking the VT stream.
++ * Call only during its callback, before replying. Success suppresses the default
++ * synchronous denial and returns a separately owned request, including MIME/data
++ * strings and protocol reply state. Call its reply function at most once, from
++ * the same terminal-owning thread, and then free it. Later VT writes are allowed.
++ * Freeing without replying cancels the request without emitting a response.
++ * Every retained request MUST be freed before terminal reset/destruction.
++ * Failure leaves the original request available for an immediate error reply.
++ * Retaining twice, after replying, or retaining an already retained request is
++ * invalid. These functions are additive; existing synchronous callbacks retain
++ * their original behavior. No terminal or clipboard state is shared across threads.
++ */
++GHOSTTY_API GhosttyResult ghostty_clipboard_read_defer(
++    const GhosttyClipboardRead* request, const GhosttyClipboardRead** out);
++GHOSTTY_API void ghostty_clipboard_read_free(const GhosttyClipboardRead* request);
++GHOSTTY_API GhosttyResult ghostty_clipboard_write_defer(
++    const GhosttyClipboardWrite* request, const GhosttyClipboardWrite** out);
++GHOSTTY_API void ghostty_clipboard_write_free(const GhosttyClipboardWrite* request);
++
+ /**
+  * A request to show a desktop notification.
+  *
+diff --git a/src/lib_vt.zig b/src/lib_vt.zig
+index 1627988..b86a78b 100644
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -315,6 +315,10 @@ comptime {
+         }
+         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
++    @export(&c.clipboard_read_defer, .{ .name = "ghostty_clipboard_read_defer" });
++    @export(&c.clipboard_read_free, .{ .name = "ghostty_clipboard_read_free" });
++    @export(&c.clipboard_write_defer, .{ .name = "ghostty_clipboard_write_defer" });
++    @export(&c.clipboard_write_free, .{ .name = "ghostty_clipboard_write_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
+         @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
+         @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
+diff --git a/src/terminal/c/main.zig b/src/terminal/c/main.zig
+index 45b4dc4..4129a2d 100644
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -182,6 +182,10 @@ pub const sys_set = sys.set;
+ 
+ pub const terminal_new = terminal.new;
+ pub const terminal_free = terminal.free;
++pub const clipboard_read_defer = terminal.clipboard_read_defer;
++pub const clipboard_read_free = terminal.clipboard_read_free;
++pub const clipboard_write_defer = terminal.clipboard_write_defer;
++pub const clipboard_write_free = terminal.clipboard_write_free;
+ pub const terminal_reset = terminal.reset;
+ pub const terminal_resize = terminal.resize;
+ pub const terminal_set = terminal.set;
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+index 04c3e24..e4982bf 100644
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -395,6 +395,9 @@ const Effects = struct {
+     /// Opaque context behind ClipboardWrite.ctx for the reply trampoline.
+     const ClipboardWriteCtx = struct {
+         write: clipboard.Write,
++        wrapper: *TerminalWrapper,
++        claimed: bool = false,
++        retained: bool = false,
+     };
+ 
+     fn clipboardWriteTrampoline(handler: *Handler, write: clipboard.Write) void {
+@@ -420,7 +423,7 @@ const Effects = struct {
+             };
+         }
+ 
+-        const ctx: ClipboardWriteCtx = .{ .write = write };
++        var ctx: ClipboardWriteCtx = .{ .write = write, .wrapper = wrapper };
+         const request: ClipboardWrite = .{
+             .size = @sizeOf(ClipboardWrite),
+             .location = write.location,
+@@ -439,7 +442,9 @@ const Effects = struct {
+         request: *const ClipboardWrite,
+         reply: *const ClipboardWriteReply,
+     ) callconv(lib.calling_conv) void {
+-        const ctx: *const ClipboardWriteCtx = @ptrCast(@alignCast(request.ctx));
++        const ctx: *ClipboardWriteCtx = @ptrCast(@alignCast(@constCast(request.ctx)));
++        if (ctx.claimed) return;
++        ctx.claimed = true;
+         const write = ctx.write;
+         switch (reply.result) {
+             .success => write.reply(.{ .success = .{ .remember = reply.remember } }),
+@@ -455,6 +460,8 @@ const Effects = struct {
+     const ClipboardReadCtx = struct {
+         read: clipboard.Read,
+         wrapper: *TerminalWrapper,
++        claimed: bool = false,
++        retained: bool = false,
+     };
+ 
+     fn clipboardReadTrampoline(handler: *Handler, read: clipboard.Read) void {
+@@ -473,7 +480,7 @@ const Effects = struct {
+         defer alloc.free(mimes);
+         for (mimes, read.mimes) |*c_mime, mime| c_mime.* = .init(mime);
+ 
+-        const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
++        var ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
+         const request: ClipboardRead = .{
+             .size = @sizeOf(ClipboardRead),
+             .location = read.location,
+@@ -493,7 +500,9 @@ const Effects = struct {
+         request: *const ClipboardRead,
+         reply: *const ClipboardReadReply,
+     ) callconv(lib.calling_conv) void {
+-        const ctx: *const ClipboardReadCtx = @ptrCast(@alignCast(request.ctx));
++        const ctx: *ClipboardReadCtx = @ptrCast(@alignCast(@constCast(request.ctx)));
++        if (ctx.claimed) return;
++        ctx.claimed = true;
+         const read = ctx.read;
+         switch (reply.result) {
+             .success => {},
+@@ -520,7 +529,7 @@ const Effects = struct {
+         const alloc = sfa.get();
+         const contents = alloc.alloc(clipboard.Content, c_contents.len) catch {
+             log.warn("out of memory converting clipboard read reply", .{});
+-            return;
++            return read.reply(.io_error);
+         };
+         defer alloc.free(contents);
+         for (contents, c_contents) |*content, c_content| {
+@@ -531,7 +540,7 @@ const Effects = struct {
+         }
+         const available = alloc.alloc([]const u8, c_available.len) catch {
+             log.warn("out of memory converting clipboard read reply", .{});
+-            return;
++            return read.reply(.io_error);
+         };
+         defer alloc.free(available);
+         for (available, c_available) |*mime, c_mime| {
+@@ -665,6 +674,105 @@ const Effects = struct {
+     }
+ };
+ 
++const DeferredClipboardRead = struct {
++    arena: std.heap.ArenaAllocator,
++    ctx: Effects.ClipboardReadCtx,
++    request: ClipboardRead,
++};
++
++const DeferredClipboardWrite = struct {
++    arena: std.heap.ArenaAllocator,
++    ctx: Effects.ClipboardWriteCtx,
++    request: ClipboardWrite,
++};
++
++/// Retain only during the callback, before replying. The terminal must outlive the result.
++pub fn clipboard_read_defer(request: ?*const ClipboardRead, out: ?*?*const ClipboardRead) callconv(lib.calling_conv) Result {
++    const source = request orelse return .invalid_value;
++    const destination = out orelse return .invalid_value;
++    destination.* = null;
++    const ctx: *Effects.ClipboardReadCtx = @ptrCast(@alignCast(@constCast(source.ctx)));
++    if (ctx.claimed or ctx.retained) return .invalid_value;
++    const clone = ctx.read.defer_reply orelse return .invalid_value;
++    const gpa = ctx.wrapper.terminal.gpa();
++    const saved = gpa.create(DeferredClipboardRead) catch return .out_of_memory;
++    saved.* = .{ .arena = .init(gpa), .ctx = ctx.*, .request = source.* };
++    const arena = saved.arena.allocator();
++    const result = retain: {
++        saved.request.name = .init(arena.dupe(u8, source.name.ptr[0..source.name.len]) catch break :retain Result.out_of_memory);
++        const mimes = arena.alloc(lib.String, source.mimes_len) catch break :retain Result.out_of_memory;
++        if (source.mimes) |ptr| for (mimes, ptr[0..source.mimes_len]) |*to, from| {
++            to.* = .init(arena.dupe(u8, from.ptr[0..from.len]) catch break :retain Result.out_of_memory);
++        };
++        saved.request.mimes = mimes.ptr;
++        saved.ctx.read.reply_ctx = clone(ctx.read.reply_ctx, arena) catch break :retain Result.out_of_memory;
++        break :retain Result.success;
++    };
++    if (result != .success) {
++        saved.arena.deinit();
++        gpa.destroy(saved);
++        return result;
++    }
++    ctx.claimed = true;
++    saved.ctx.retained = true;
++    saved.request.ctx = &saved.ctx;
++    destination.* = &saved.request;
++    return .success;
++}
++
++/// Free a retained read, without issuing any further response. Call before terminal destruction.
++pub fn clipboard_read_free(request: ?*const ClipboardRead) callconv(lib.calling_conv) void {
++    const value = request orelse return;
++    const saved: *DeferredClipboardRead = @fieldParentPtr("request", @constCast(value));
++    const gpa = saved.ctx.wrapper.terminal.gpa();
++    saved.arena.deinit();
++    gpa.destroy(saved);
++}
++
++pub fn clipboard_write_defer(request: ?*const ClipboardWrite, out: ?*?*const ClipboardWrite) callconv(lib.calling_conv) Result {
++    const source = request orelse return .invalid_value;
++    const destination = out orelse return .invalid_value;
++    destination.* = null;
++    const ctx: *Effects.ClipboardWriteCtx = @ptrCast(@alignCast(@constCast(source.ctx)));
++    if (ctx.claimed or ctx.retained) return .invalid_value;
++    const clone = ctx.write.defer_reply orelse return .invalid_value;
++    const gpa = ctx.wrapper.terminal.gpa();
++    const saved = gpa.create(DeferredClipboardWrite) catch return .out_of_memory;
++    saved.* = .{ .arena = .init(gpa), .ctx = ctx.*, .request = source.* };
++    const arena = saved.arena.allocator();
++    const result = retain: {
++        saved.request.name = .init(arena.dupe(u8, source.name.ptr[0..source.name.len]) catch break :retain Result.out_of_memory);
++        const contents = arena.alloc(ClipboardContent, source.contents_len) catch break :retain Result.out_of_memory;
++        if (source.contents) |ptr| for (contents, ptr[0..source.contents_len]) |*to, from| {
++            to.* = .{
++                .mime = .init(arena.dupe(u8, from.mime.ptr[0..from.mime.len]) catch break :retain Result.out_of_memory),
++                .data = .init(arena.dupe(u8, from.data.ptr[0..from.data.len]) catch break :retain Result.out_of_memory),
++            };
++        };
++        saved.request.contents = contents.ptr;
++        saved.ctx.write.reply_ctx = clone(ctx.write.reply_ctx, arena) catch break :retain Result.out_of_memory;
++        break :retain Result.success;
++    };
++    if (result != .success) {
++        saved.arena.deinit();
++        gpa.destroy(saved);
++        return result;
++    }
++    ctx.claimed = true;
++    saved.ctx.retained = true;
++    saved.request.ctx = &saved.ctx;
++    destination.* = &saved.request;
++    return .success;
++}
++
++pub fn clipboard_write_free(request: ?*const ClipboardWrite) callconv(lib.calling_conv) void {
++    const value = request orelse return;
++    const saved: *DeferredClipboardWrite = @fieldParentPtr("request", @constCast(value));
++    const gpa = saved.ctx.wrapper.terminal.gpa();
++    saved.arena.deinit();
++    gpa.destroy(saved);
++}
++
+ /// C: GhosttyTerminal
+ pub const Terminal = ?*TerminalWrapper;
+ 
+diff --git a/src/terminal/clipboard.zig b/src/terminal/clipboard.zig
+index 0a1c5a7..291d551 100644
+--- a/src/terminal/clipboard.zig
++++ b/src/terminal/clipboard.zig
+@@ -101,6 +101,10 @@ pub const Write = struct {
+     reply_ctx: *anyopaque,
+     reply_fn: *const fn (*anyopaque, Result) void,
+ 
++    /// Clone reply state into an arena and suppress the synchronous default reply.
++    /// The arena and terminal must outlive the deferred reply.
++    defer_reply: ?*const fn (*anyopaque, std.mem.Allocator) std.mem.Allocator.Error!*anyopaque = null,
++
+     /// Answer the write. May be called at most once; later calls are
+     /// ignored.
+     pub fn reply(self: Write, result: Result) void {
+@@ -193,6 +197,10 @@ pub const Read = struct {
+     reply_ctx: *anyopaque,
+     reply_fn: *const fn (*anyopaque, Result) void,
+ 
++    /// Clone reply state into an arena and suppress the synchronous default reply.
++    /// The arena and terminal must outlive the deferred reply.
++    defer_reply: ?*const fn (*anyopaque, std.mem.Allocator) std.mem.Allocator.Error!*anyopaque = null,
++
+     /// Answer the read. May be called at most once; later calls are
+     /// ignored. Result memory is borrowed only for the duration of this
+     /// call.
+diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
+index 6117242..291a46d 100644
+--- a/src/terminal/stream_terminal.zig
++++ b/src/terminal/stream_terminal.zig
+@@ -656,6 +656,7 @@ pub const Handler = struct {
+                 .can_remember = false,
+                 .reply_ctx = self,
+                 .reply_fn = &ignoreWriteReply,
++                .defer_reply = &deferIgnoreWriteReply,
+             });
+             return;
+         }
+@@ -688,6 +689,7 @@ pub const Handler = struct {
+             .can_remember = false,
+             .reply_ctx = self,
+             .reply_fn = &ignoreWriteReply,
++            .defer_reply = &deferIgnoreWriteReply,
+         });
+     }
+ 
+@@ -696,6 +698,10 @@ pub const Handler = struct {
+     /// and discarded.
+     fn ignoreWriteReply(_: *anyopaque, _: clipboard.Write.Result) void {}
+ 
++    fn deferIgnoreWriteReply(ctx: *anyopaque, _: Allocator) Allocator.Error!*anyopaque {
++        return ctx; // Handler-owned context; no protocol acknowledgement to retain.
++    }
++
+     fn clipboardRead(
+         self: *Handler,
+         location: clipboard.Location,
+@@ -717,6 +723,7 @@ pub const Handler = struct {
+             .can_remember = false,
+             .reply_ctx = &state,
+             .reply_fn = &ClipboardReadState.reply,
++            .defer_reply = &ClipboardReadState.deferReply,
+         });
+ 
+         // The program is waiting on us, so a callback that returned
+@@ -735,6 +742,14 @@ pub const Handler = struct {
+         terminator: osc.Terminator,
+         replied: bool = false,
+ 
++        fn deferReply(ctx: *anyopaque, arena: Allocator) Allocator.Error!*anyopaque {
++            const self: *@This() = @ptrCast(@alignCast(ctx));
++            const copy = try arena.create(@This());
++            copy.* = self.*;
++            self.replied = true;
++            return copy;
++        }
++
+         fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
+             const self: *ClipboardReadState = @ptrCast(@alignCast(ctx));
+             if (self.replied) {
+@@ -900,6 +915,7 @@ pub const Handler = struct {
+             .can_remember = pw.len > 0,
+             .reply_ctx = &state,
+             .reply_fn = &KittyClipboardReadState.reply,
++            .defer_reply = &KittyClipboardReadState.deferReply,
+         });
+ 
+         // The program is waiting on us, so a callback that returned
+@@ -924,6 +940,19 @@ pub const Handler = struct {
+         terminator: osc.Terminator,
+         replied: bool = false,
+ 
++        fn deferReply(ctx: *anyopaque, arena: Allocator) Allocator.Error!*anyopaque {
++            const self: *@This() = @ptrCast(@alignCast(ctx));
++            const copy = try arena.create(@This());
++            copy.* = self.*;
++            copy.id = try arena.dupe(u8, self.id);
++            copy.pw = try arena.dupe(u8, self.pw);
++            const mimes = try arena.alloc([]const u8, self.mimes.len);
++            for (mimes, self.mimes) |*to, from| to.* = try arena.dupe(u8, from);
++            copy.mimes = mimes;
++            self.replied = true;
++            return copy;
++        }
++
+         fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
+             const self: *KittyClipboardReadState = @ptrCast(@alignCast(ctx));
+             if (self.replied) {
+@@ -1169,6 +1198,8 @@ pub const Handler = struct {
+         var reply_state: KittyClipboardWriteReplyState = .{
+             .handler = self,
+             .pw = pw,
++            .id = state.id,
++            .terminator = terminator,
+         };
+         func(self, .{
+             .location = committed.loc,
+@@ -1178,8 +1209,14 @@ pub const Handler = struct {
+             .can_remember = pw.len > 0,
+             .reply_ctx = &reply_state,
+             .reply_fn = &KittyClipboardWriteReplyState.reply,
++            .defer_reply = &KittyClipboardWriteReplyState.deferReply,
+         });
+ 
++        if (reply_state.deferred) {
++            self.kittyClipboardAbort();
++            return;
++        }
++
+         // The program is waiting on the commit status, so a callback
+         // that returned without a reply is answered as a denial rather
+         // than silence.
+@@ -1195,6 +1232,9 @@ pub const Handler = struct {
+     /// during the callback.
+     const KittyClipboardWriteReplyState = struct {
+         handler: *Handler,
++        id: []const u8,
++        terminator: osc.Terminator,
++        deferred: bool = false,
+ 
+         /// The effective password, empty when the request had none.
+         pw: []const u8,
+@@ -1203,6 +1243,17 @@ pub const Handler = struct {
+         /// null until the callback replies.
+         status: ?kitty_clipboard.Status = null,
+ 
++        fn deferReply(ctx: *anyopaque, arena: Allocator) Allocator.Error!*anyopaque {
++            const self: *@This() = @ptrCast(@alignCast(ctx));
++            const copy = try arena.create(@This());
++            copy.* = self.*;
++            copy.id = try arena.dupe(u8, self.id);
++            copy.pw = try arena.dupe(u8, self.pw);
++            copy.deferred = true;
++            self.deferred = true;
++            return copy;
++        }
++
+         fn reply(ctx: *anyopaque, result: clipboard.Write.Result) void {
+             const self: *KittyClipboardWriteReplyState = @ptrCast(@alignCast(ctx));
+             if (self.status != null) {
+@@ -1231,6 +1282,12 @@ pub const Handler = struct {
+                     break :status .DONE;
+                 },
+             };
++            if (self.deferred) self.handler.kittyClipboardRespond(&.{
++                .op = .write,
++                .status = self.status.?,
++                .id = self.id,
++                .terminator = self.terminator,
++            });
+         }
+     };
+ 

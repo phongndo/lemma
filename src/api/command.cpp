@@ -463,6 +463,8 @@ auto command_name(const CommandKind kind) noexcept -> std::string_view {
   switch (kind) {
   case CommandKind::daemon_inspect:
     return "daemon.inspect";
+  case CommandKind::config_reload:
+    return "config.reload";
   case CommandKind::attachment_switch:
     return "attachment.switch";
   case CommandKind::session_list:
@@ -507,6 +509,8 @@ auto command_name(const CommandKind kind) noexcept -> std::string_view {
     return "pane.send";
   case CommandKind::pane_input:
     return "pane.input";
+  case CommandKind::pane_paste_image:
+    return "pane.paste-image";
   case CommandKind::pane_capture:
     return "pane.capture";
   case CommandKind::pane_wait:
@@ -817,6 +821,7 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
                                  command.kind == CommandKind::surface_focus ||
                                  command.kind == CommandKind::surface_close;
     const bool has_session = command.kind != CommandKind::daemon_inspect &&
+                             command.kind != CommandKind::config_reload &&
                              command.kind != CommandKind::session_list &&
                              command.kind != CommandKind::session_start && !surface_command;
     if (has_session && !append_selector(output, "session", command.session)) {
@@ -855,6 +860,7 @@ auto encode_command(const Command& command) -> std::optional<std::string> {
         command.kind == CommandKind::pane_focus || command.kind == CommandKind::pane_swap ||
         command.kind == CommandKind::pane_resize || command.kind == CommandKind::pane_zoom ||
         command.kind == CommandKind::pane_send || command.kind == CommandKind::pane_input ||
+        command.kind == CommandKind::pane_paste_image ||
         command.kind == CommandKind::pane_capture || command.kind == CommandKind::pane_wait ||
         command.kind == CommandKind::pane_kill) {
       if (!append_selector(output, "pane", command.pane)) {
@@ -1011,11 +1017,12 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
     return field.has_value() ? std::optional{failure("unknown_field", *field)} : std::nullopt;
   };
 
-  if (*name == "daemon.inspect") {
+  if (*name == "daemon.inspect" || *name == "config.reload") {
     if (auto rejected = reject_unknown({"command"}); rejected.has_value()) {
       return *rejected;
     }
-    command.kind = CommandKind::daemon_inspect;
+    command.kind =
+        *name == "config.reload" ? CommandKind::config_reload : CommandKind::daemon_inspect;
   } else if (*name == "attachment.switch") {
     if (auto rejected = reject_unknown({"command", "connection", "session", "if_session_revision"});
         rejected.has_value()) {
@@ -1211,12 +1218,15 @@ auto decode_command(const JsonValue& document) -> CommandDecodeResult {
     if (!decode_focus_policy(document, command)) {
       return failure("invalid_field", "focus");
     }
-  } else if (*name == "pane.focus" || *name == "pane.kill") {
+  } else if (*name == "pane.focus" || *name == "pane.kill" || *name == "pane.paste-image") {
     if (auto rejected = reject_unknown({"command", "session", "pane", "if_session_revision"});
         rejected.has_value()) {
       return *rejected;
     }
     command.kind = *name == "pane.focus" ? CommandKind::pane_focus : CommandKind::pane_kill;
+    if (*name == "pane.paste-image") {
+      command.kind = CommandKind::pane_paste_image;
+    }
     if (auto invalid = require_session(document, command); invalid.has_value()) {
       return *invalid;
     }

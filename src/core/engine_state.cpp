@@ -142,6 +142,11 @@ AttachmentRuntime::~AttachmentRuntime() { close_descriptor(client); }
 void AttachmentRuntime::reset_connection() noexcept {
   copy_mode = {};
   clipboard_write.reset();
+  graphics.reset();
+  clipboard = nullptr;
+  clipboard_owner.reset();
+  clipboard_paste.reset();
+  interactive_paste.reset();
   close_descriptor(client);
   connection_id = {};
   hosted_command.reset();

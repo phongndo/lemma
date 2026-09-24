@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <vector>
 
 namespace lemma::vt {
 namespace detail {
@@ -57,6 +58,8 @@ private:
 using CellHashStorage = std::unique_ptr<std::uint64_t[]>; // NOLINT
 
 [[nodiscard]] auto map_error(GhosttyResult result) noexcept -> Error;
+[[nodiscard]] auto register_png_decoder() noexcept -> GhosttyResult;
+[[nodiscard]] auto new_graphics_identity() noexcept -> std::uint64_t;
 
 } // namespace detail
 
@@ -84,7 +87,20 @@ struct Terminal::Impl final {
                                const GhosttyTerminalUnknownSequence* sequence) noexcept;
   static auto enquiry(GhosttyTerminal terminal_handle, void* userdata) noexcept -> GhosttyString;
   static void clipboard_write(GhosttyTerminal terminal_handle, void* userdata,
-                              const GhosttyClipboardWrite* write) noexcept;
+                              const GhosttyClipboardWrite* request) noexcept;
+  static void clipboard_read(GhosttyTerminal terminal_handle, void* userdata,
+                             const GhosttyClipboardRead* request) noexcept;
+  struct ClipboardPending final {
+    ClipboardPending() = default;
+    ClipboardPending(const ClipboardPending&) = delete;
+    auto operator=(const ClipboardPending&) -> ClipboardPending& = delete;
+    ClipboardPending(ClipboardPending&&) = delete;
+    auto operator=(ClipboardPending&&) -> ClipboardPending& = delete;
+    const GhosttyClipboardRead* read{nullptr};
+    const GhosttyClipboardWrite* write{nullptr};
+    std::vector<ClipboardContent> contents;
+    ~ClipboardPending();
+  };
   static auto color_scheme(GhosttyTerminal terminal_handle, void* userdata,
                            GhosttyColorScheme* output) noexcept -> bool;
   static auto device_attributes(GhosttyTerminal terminal_handle, void* userdata,
@@ -108,6 +124,7 @@ struct Terminal::Impl final {
   TerminalOptions options;
   TerminalTheme session_theme{};
   detail::QuotaAllocator allocator;
+  const std::uint64_t graphics_identity{detail::new_graphics_identity()};
   GhosttyTerminal terminal{nullptr};
   GhosttyKeyEncoder key_encoder{nullptr};
   GhosttyKeyEvent key_event{nullptr};
@@ -138,6 +155,13 @@ struct Terminal::Impl final {
   bool selection_checkpoint_rectangle{false};
   BoundedByteQueue<limits::terminal_pty_response_bytes_max> pty_responses;
   EffectBatch effects{};
+  std::unique_ptr<ClipboardPending> clipboard;
+  std::vector<std::byte> clipboard_responses;
+  std::size_t clipboard_response_offset{0};
+  std::uint64_t clipboard_id{0};
+  bool clipboard_read_allowed{false};
+  bool clipboard_write_allowed{false};
+  bool capturing_clipboard_reply{false};
   bool pty_response_integrity_failed{false};
 };
 

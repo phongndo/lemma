@@ -48,13 +48,16 @@ from mux_benchmark import (
     LATENCY_VISIBLE_ACK,
     SHELL_READY_MARKER,
     TUI_REDRAW_READY,
+    AttachVersionMismatch,
     LemmaRuntime,
     PtyReceiptChannel,
     TmuxRuntime,
     ZellijRuntime,
+    attach_frame,
     benchmark_environment,
     blocked_pty,
     build_profile,
+    connect_blocked_client,
     git_provenance,
     install_attach_shell_startup,
     interaction_marker,
@@ -65,6 +68,7 @@ from mux_benchmark import (
     open_descriptor_snapshot,
     parse_linux_schedstat,
     percentile,
+    receive_attach_hello,
     resource_snapshot,
     tui_redraw,
     wait_for_profile_shell,
@@ -78,6 +82,47 @@ from performance_host import validate as validate_host
 from terminal_lab import validate_samples
 
 from tests.support.pty_process import PtyProcess
+
+
+class AttachVersionTest(unittest.TestCase):
+    def test_known_subject_versions_have_strict_hello_validation(self) -> None:
+        for minor in (9, 10):
+            parent, child = socket.socketpair()
+            with parent, child:
+                child.sendall(attach_frame(1, b"\0\0\0\0", 1, minor=minor))
+                receive_attach_hello(parent, minor)
+        cases = (
+            (9, 3, AttachVersionMismatch),
+            (9, 2, RuntimeError),
+            (8, 3, RuntimeError),
+        )
+        for minor, reason, failure in cases:
+            with self.subTest(minor=minor, reason=reason):
+                parent, child = socket.socketpair()
+                with parent, child:
+                    child.sendall(attach_frame(7, bytes((reason,)), 1, minor=minor))
+                    with self.assertRaises(failure) as caught:
+                        receive_attach_hello(parent)
+                    if failure is RuntimeError:
+                        self.assertNotIsInstance(
+                            caught.exception, AttachVersionMismatch
+                        )
+
+    def test_retry_uses_advertised_version_and_closes_rejected_connection(self) -> None:
+        first, second = mock.MagicMock(), mock.MagicMock()
+        with (
+            mock.patch("mux_benchmark.socket.socket", side_effect=(first, second)),
+            mock.patch(
+                "mux_benchmark.receive_attach_hello",
+                side_effect=(AttachVersionMismatch(9), None),
+            ),
+        ):
+            peer, minor = connect_blocked_client(Path("/example/socket"), b"hello")
+        self.assertIs(peer, second)
+        self.assertEqual(minor, 9)
+        first.close.assert_called_once()
+        second.sendall.assert_called_once_with(attach_frame(1, b"hello", 1, minor=9))
+        second.close.assert_not_called()
 
 
 class OwnershipCensusTest(unittest.TestCase):

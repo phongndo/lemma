@@ -1,0 +1,66 @@
+#ifndef LEMMA_CLIPBOARD_TRANSACTION_HPP
+#define LEMMA_CLIPBOARD_TRANSACTION_HPP
+
+#include "lemma/terminal/terminal.hpp"
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace lemma::clipboard {
+// One outer-terminal transaction, owned by an attachment. No clipboard cache or background work.
+// The reactor owns pane/request identity and cancels this state when that ownership changes.
+class Transaction final {
+public:
+  using Clock = std::chrono::steady_clock;
+  [[nodiscard]] auto begin(const vt::ClipboardRequest& request, Clock::time_point now) noexcept
+      -> std::expected<std::string, vt::ClipboardStatus>;
+  void consume(std::string_view record) noexcept;
+  // Only complete OSC records may be interleaved with ordinary presentation frames.
+  [[nodiscard]] static auto frame_prefix(std::span<const std::byte> data,
+                                         std::size_t capacity) noexcept -> std::size_t;
+  [[nodiscard]] auto abort_write(std::span<std::byte> output) const noexcept -> std::size_t;
+  void fail(vt::ClipboardStatus status) noexcept {
+    status_ = status;
+    done_ = true;
+  }
+  [[nodiscard]] auto active() const noexcept -> bool { return !id_.empty(); }
+  [[nodiscard]] auto done() const noexcept -> bool { return done_; }
+  [[nodiscard]] auto expired(Clock::time_point now) const noexcept -> bool {
+    return now >= deadline_;
+  }
+  [[nodiscard]] auto deadline() const noexcept -> Clock::time_point { return deadline_; }
+  [[nodiscard]] auto status() const noexcept -> vt::ClipboardStatus { return status_; }
+  [[nodiscard]] auto request_id() const noexcept -> std::uint64_t { return request_id_; }
+  [[nodiscard]] auto contents() noexcept -> std::span<const vt::ClipboardContent>;
+  void reset() noexcept { *this = Transaction{}; }
+
+private:
+  struct Content {
+    std::string mime;
+    std::string data;
+  };
+  void parse(std::string_view record);
+  [[nodiscard]] auto content(std::string_view mime) -> Content*;
+  std::string id_;
+  std::string listing_;
+  std::vector<std::string> requested_;
+  std::vector<Content> contents_;
+  std::array<vt::ClipboardContent, 32> views_{};
+  Clock::time_point deadline_;
+  std::uint64_t request_id_{0};
+  std::size_t decoded_bytes_{0};
+  vt::ClipboardStatus status_{vt::ClipboardStatus::io_error};
+  bool read_{false};
+  bool list_{false};
+  bool started_{false};
+  bool done_{false};
+};
+} // namespace lemma::clipboard
+#endif

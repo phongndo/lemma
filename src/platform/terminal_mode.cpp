@@ -176,6 +176,14 @@ constexpr int terminal_restore_action = TCSANOW;
   return {
       .columns = std::min(native_size.ws_col, columns_max),
       .rows = std::min(native_size.ws_row, rows_max),
+      .cell_width_px = native_size.ws_xpixel >= native_size.ws_col
+                           ? static_cast<std::uint16_t>(std::min<unsigned>(
+                                 500, native_size.ws_xpixel / native_size.ws_col))
+                           : std::uint16_t{8},
+      .cell_height_px = native_size.ws_ypixel >= native_size.ws_row
+                            ? static_cast<std::uint16_t>(std::min<unsigned>(
+                                  200, native_size.ws_ypixel / native_size.ws_row))
+                            : std::uint16_t{16},
   };
 }
 

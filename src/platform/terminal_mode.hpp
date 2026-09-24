@@ -12,6 +12,8 @@ namespace lemma::platform {
 struct WindowSize final {
   std::uint16_t columns{80};
   std::uint16_t rows{24};
+  std::uint16_t cell_width_px{8};
+  std::uint16_t cell_height_px{16};
 };
 
 [[nodiscard]] auto terminal_size(int descriptor, std::uint16_t columns_max,

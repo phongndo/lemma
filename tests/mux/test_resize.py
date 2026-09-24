@@ -37,9 +37,8 @@ class ResizeMuxTest(unittest.TestCase):
 
     def test_split_delivers_in_band_size_without_another_keystroke(self) -> None:
         # After this Ghostty pin, resize itself emits CSI 48. That reply must reach the child PTY
-        # from the split transaction, not from a later keystroke or PTY read. Pixel fields follow
-        # the pane terminal's current cell metrics; the attach protocol does not transport host
-        # cell size, so this test asserts only the cell geometry of an 80x24 client minus status.
+        # from the split transaction, not from a later keystroke or PTY read. This test asserts the
+        # cell geometry of an 80x24 client minus status; terminal-boundary tests cover pixel metrics.
         session = self.server.create_session("in_band_split")
         pane = session.pane()
         pane.send(

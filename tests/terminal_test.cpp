@@ -679,10 +679,15 @@ TEST(TerminalTest, EncodesOpaquePasteThroughGhosttyPolicy) {
             "\x1B[200~a\n b\x1B[201~");
 }
 
-TEST(TerminalTest, DisablesUnsupportedGraphicsUntilBoundedPresentationExists) {
+TEST(TerminalTest, SupportsKittyQueriesWithoutEnablingTheGlyphProtocol) {
   auto terminal = make_terminal();
   const auto allocations = terminal.allocation_stats().bytes_current;
   write_text(terminal, "\x1B_Gi=1,a=q,s=1,v=1,f=24;AAAA\x1B\\");
+  std::array<std::byte, 32> reply{};
+  const auto count = terminal.read_pty_responses(reply);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(reply.data()), count),
+            "\x1B_Gi=1;OK\x1B\\");
   write_text(terminal, "\x1B_25a1;s\x1B\\");
   write_text(terminal, "\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\");
 
@@ -769,7 +774,7 @@ TEST(TerminalTest, ReportsTruthfulChildVisibleIdentityAndGeometry) {
   EXPECT_THAT(encoded, testing::HasSubstr("\x1BP>|lemma\x1B\\"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[8;24;80t"));
   EXPECT_THAT(encoded, testing::HasSubstr("\x1B[?997;1n"));
-  EXPECT_THAT(encoded, testing::HasSubstr("\x1BP1+r544E=787465726D2D323536636F6C6F72\x1B\\"));
+  EXPECT_THAT(encoded, testing::HasSubstr("\x1BP1+r544E=6C656D6D61\x1B\\"));
 }
 
 TEST(TerminalTest, DeniesKittyClipboardWritesWithoutRememberingPermission) {
@@ -791,7 +796,10 @@ TEST(TerminalTest, DeniesKittyClipboardWritesWithoutRememberingPermission) {
 TEST(TerminalTest, DoesNotExposeClipboardContentsToApplications) {
   auto terminal = make_terminal();
   write_text(terminal, "\x1B]52;c;?\x1B\\");
-  EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
+  std::array<std::byte, 32> denied{};
+  const auto denied_size = terminal.read_pty_responses(denied);
+  EXPECT_EQ(std::span(denied).first(denied_size).size(),
+            std::string_view("\x1B]52;c;\x1B\\").size());
 
   write_text(terminal, "\x1B]5522;type=read:id=r1;dGV4dC9wbGFpbg==\x1B\\");
   std::array<std::byte, 256> response{};
@@ -802,6 +810,66 @@ TEST(TerminalTest, DoesNotExposeClipboardContentsToApplications) {
   EXPECT_EQ(terminal.take_effects().clipboard_writes_denied, 0U);
 }
 
+// GoogleTest assertions check these retained optional requests before dereferencing.
+// NOLINTBEGIN(bugprone-unchecked-optional-access)
+TEST(TerminalTest, ClipboardReadsAreRetainedWithoutPausingSubsequentPtyOutput) {
+  auto terminal = make_terminal();
+  terminal.set_clipboard_access(true, true);
+  write_text(terminal, "\x1B]5522;type=read:id=image; aW1hZ2UvcG5n\x1B\\");
+  // A malformed base64 request must not create a pending owner.
+  EXPECT_FALSE(terminal.clipboard_request().has_value());
+  write_text(terminal, "\x1B]5522;type=read:id=image;aW1hZ2UvcG5n\x1B\\");
+  const auto request = terminal.clipboard_request();
+  ASSERT_TRUE(request.has_value());
+  ASSERT_TRUE(request->read);
+  ASSERT_EQ(request->contents.size(), 1U);
+  EXPECT_EQ(request->contents.front().mime, "image/png");
+  EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
+  write_text(terminal, "STILL-RUNNING\x1B[5n");
+  EXPECT_EQ(request->contents.front().mime, "image/png");
+  const std::array data{std::byte{0}, std::byte{0xFF}, std::byte{'x'}};
+  const std::array contents{ClipboardContent{.mime = "image/png", .data = data}};
+  ASSERT_TRUE(terminal.complete_clipboard(request->id, ClipboardStatus::success, contents));
+  EXPECT_FALSE(terminal.complete_clipboard(request->id, ClipboardStatus::success, contents));
+  std::array<std::byte, 1024> response{};
+  const auto count = terminal.read_pty_responses(response);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(response.data()), count);
+  EXPECT_TRUE(text.starts_with("\x1B[0n"));
+  EXPECT_THAT(text, testing::HasSubstr("status=OK"));
+  EXPECT_THAT(text, testing::HasSubstr("status=DATA"));
+  EXPECT_THAT(text, testing::HasSubstr("AP94"));
+  EXPECT_THAT(text, testing::HasSubstr("status=DONE"));
+  EXPECT_FALSE(terminal.clipboard_request().has_value());
+}
+
+TEST(TerminalTest, DeferredClipboardWriteSurvivesLaterTransactionsAndCancellation) {
+  auto terminal = make_terminal();
+  terminal.set_clipboard_access(true, true);
+  write_text(terminal, "\x1B]5522;type=write:id=first\x1B\\"
+                       "\x1B]5522;type=wdata:mime=aW1hZ2UvcG5n;AP94\x1B\\"
+                       "\x1B]5522;type=wdata\x1B\\");
+  const auto request = terminal.clipboard_request();
+  ASSERT_TRUE(request.has_value());
+  ASSERT_FALSE(request->read);
+  ASSERT_EQ(request->contents.size(), 1U);
+  EXPECT_EQ(request->contents.front().data.front(), std::byte{0});
+  write_text(terminal, "\x1B]5522;type=write:id=second\x1B\\\x1B]5522;type=wdata\x1B\\");
+  ASSERT_TRUE(terminal.complete_clipboard(request->id, ClipboardStatus::success));
+  std::array<std::byte, 1024> response{};
+  const auto count = terminal.read_pty_responses(response);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  const std::string_view text(reinterpret_cast<const char*>(response.data()), count);
+  EXPECT_THAT(text, testing::HasSubstr("status=EBUSY:id=second"));
+  EXPECT_THAT(text, testing::HasSubstr("status=DONE:id=first"));
+  write_text(terminal, "\x1B]52;c;?\x1B\\");
+  ASSERT_TRUE(terminal.clipboard_request().has_value());
+  terminal.set_clipboard_access(false, false);
+  EXPECT_FALSE(terminal.clipboard_request().has_value());
+  EXPECT_GT(terminal.pending_pty_response_bytes(), 0U);
+}
+
+// NOLINTEND(bugprone-unchecked-optional-access)
 TEST(TerminalTest, CapturesEffectsWithoutCallingApplicationCode) {
   auto terminal = make_terminal();
   write_text(terminal, "\a\x1B]2;lemma title\x1B\\\x1B]7;file:///tmp\x1B\\"

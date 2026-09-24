@@ -630,6 +630,10 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
     output += configuration.terminal.scrollback_lines.has_value()
                   ? std::to_string(*configuration.terminal.scrollback_lines)
                   : "null";
+    output += R"(,"clipboard_read":)";
+    output += configuration.terminal.clipboard_read ? "true" : "false";
+    output += R"(,"clipboard_write":)";
+    output += configuration.terminal.clipboard_write ? "true" : "false";
     output += R"(,"status_line":)";
     output += configuration.ui.status_line ? "true" : "false";
     output += R"(,"default_cwd":)";
@@ -685,10 +689,11 @@ auto encode(const Configuration& configuration) -> std::optional<std::string> {
 
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
-  if (!known_members(document, {"schema", "preset", "prefix", "contexts", "bindings",
-                                "scrollback_lines", "status_line", "default_cwd", "history_file",
-                                "default_program", "extensions"}) ||
-      (document.object.size() != 10U && document.object.size() != 11U)) {
+  if (!known_members(document,
+                     {"schema", "preset", "prefix", "contexts", "bindings", "scrollback_lines",
+                      "status_line", "default_cwd", "history_file", "default_program", "extensions",
+                      "clipboard_read", "clipboard_write"}) ||
+      (document.object.size() < 10U || document.object.size() > 13U)) {
     return {.configuration = std::nullopt,
             .failure = {.error = Error::invalid_document, .field = {}}};
   }
@@ -800,6 +805,22 @@ auto decode(const api::JsonValue& document) noexcept -> DecodeResult {
     }
     result.terminal.scrollback_lines = static_cast<std::size_t>(*lines);
   }
+  for (const auto name :
+       {std::string_view{"clipboard_read"}, std::string_view{"clipboard_write"}}) {
+    if (api::json_member(document, name) == nullptr) {
+      continue;
+    }
+    const auto allowed = api::json_boolean(document, name);
+    if (!allowed.has_value()) {
+      return {.configuration = std::nullopt,
+              .failure = {.error = Error::invalid_field, .field = name}};
+    }
+    if (name == "clipboard_read") {
+      result.terminal.clipboard_read = *allowed;
+    } else {
+      result.terminal.clipboard_write = *allowed;
+    }
+  }
   const auto status_line = api::json_boolean(document, "status_line");
   const auto default_cwd = api::json_string(document, "default_cwd");
   const auto history_file = api::json_string(document, "history_file");
@@ -897,8 +918,9 @@ auto compile(const Configuration& configuration) noexcept -> std::expected<Gener
     auto history_file = configuration.history.file;
     return Generation(std::move(*compiled), configuration.terminal.scrollback_lines,
                       configuration.ui.status_line, std::move(default_cwd),
-                      std::move(default_program), std::move(history_file),
-                      configuration.extensions);
+                      std::move(default_program), std::move(history_file), configuration.extensions,
+                      configuration.terminal.clipboard_read,
+                      configuration.terminal.clipboard_write);
   } catch (...) {
     return std::unexpected(Error::capacity);
   }

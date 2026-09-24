@@ -130,14 +130,45 @@ visible cursor without taking keyboard ownership: the highest such Surface wins 
 has input focus. A focused Surface always takes cursor precedence. This lets a statusline show the
 native editor's cursor without routing ordinary typing through the extension process.
 
+## Authoring extensions
+
+Start with an [argv command](configuration.md#external-command-programs) for a keybound workflow.
+It can call ordinary `lemma` commands or submit a complete Proc; it does not need a Surface or a
+framed connection. Keep projects, tasks, and durable state in the program, using returned stable IDs.
+
+For custom UI, the dependency-free [Python client](../extensions/lemma_client.py) provides `Client`,
+`command_context()`, ordered `proc()` requests, retained `update()` messages, and blocking `event()`
+observation. The C++ shipped UI uses the separate [native client](../src/extension/client.hpp).
+Neither client executes inside the daemon.
+
+Python's `Client(endpoint, name="example")` defaults to `observe` and `proc`, so it can connect
+without a Session. For custom UI, supply `session="SLOT:GENERATION"` and explicitly include
+`"surface"` in `capabilities`. Requesting Surfaces without a Session fails before connecting.
+
+Python's `Client` negotiates record limits, preserves Events interleaved with results, bounds queued
+Events, and uses one total request deadline. `send(PROC, ...)` plus `receive()` supports an explicit
+outstanding request; another Proc on that connection is rejected locally. Surface updates have no
+success acknowledgement. A `Rejected` exception retains the Error's sequence and document.
+Timeout or disconnect can leave a mutation's outcome unknown: never automatically replay it.
+Reconnection is explicit and creates a new owner; obtain a fresh snapshot and recreate Surfaces.
+For responsive input while fetching metadata, use a separate catalogue connection, as the shipped
+session manager does.
+
+Installations include the Python client and picker under `share/lemma/extensions`. During local
+development, register an absolute path to your working-tree script and keep `lemma_client.py` next
+to it (or on that program's `PYTHONPATH`). Invocation-scoped programs start fresh every time: close,
+edit, and invoke again without changing daemon configuration. Reload changed command declarations
+with [`lemma config reload`](configuration.md#reload). Managed-program declarations currently
+require a daemon restart; changing them rejects reload rather than partially publishing policy.
+
 ## Navigation picker
 
-The [standalone Python picker](../extensions/picker.py) is a complete Session/Tab/Pane workflow,
+The [Python picker](../extensions/picker.py) is a complete Session/Tab/Pane workflow,
 not a terminal emulator. From the checkout, install it at the path used by this configuration:
 
 ```sh
 mkdir -p "$HOME/.config/lemma"
-cp extensions/picker.py "$HOME/.config/lemma/picker.py"
+cp extensions/picker.py extensions/lemma_client.py "$HOME/.config/lemma/"
 ```
 
 Add this [configuration](../examples/picker.lua) to `init.lua` (adjust `argv` to use a different
@@ -160,10 +191,11 @@ row; Right/`l` descends from Sessions to Tabs to Panes; Left/`h` goes back. Ente
 row positions at commit time. A stale or busy target is rejected; it cannot silently choose a
 replacement or steal another client. Titles use ASCII fallbacks in this dependency-free example.
 
-The picker discovers only the current level, subscribes to no terminal screens, and blocks on its
+The picker uses the reusable Python client, discovers only the current level, subscribes to no
+terminal screens, and blocks on its
 owned input while idle. Closing, losing Surface focus, detaching, switching, or crashing releases its
 UI and returns control to native code. Each invocation starts a fresh helper; this is not a
-persistent sidebar or a general extension client library. The two-minute command deadline is also
+persistent sidebar. The two-minute command deadline is also
 the configured host watchdog, so close the picker when finished.
 
 ## Boundary and trust
@@ -306,6 +338,8 @@ Schema validity, negotiated limits, and current-state validity are distinct:
 - Coordinates must fit the current Grid; style indices must exist in its retained or replacement
   table. Row patches cannot repeat a row or overlap runs.
 - `text_bytes_per_row` counts UTF-8 bytes; JSON Schema string lengths count Unicode characters.
+  Text cannot contain terminal controls or Kitty's U+10EEEE image-placeholder character; images
+  are projected only from canonical Pane state, not extension Grid text.
 - Framing bytes and parser value/depth bounds still apply. A schema-valid update may be rejected
   for stale ownership, current geometry, or retained-memory capacity.
 

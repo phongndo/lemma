@@ -72,6 +72,7 @@ include(cmake/GhosttyVt.cmake)
 lemma_add_pinned_ghostty()
 
 find_package(zstd CONFIG REQUIRED)
+find_package(PNG REQUIRED)
 find_package(Lua 5.4 REQUIRED)
 if(TARGET lua::lua)
   set(LEMMA_LUA_TARGET lua::lua)
@@ -108,6 +109,24 @@ function(lemma_internal_target target)
   endif()
 endfunction()
 
+# Build and ship the same virtual-terminal description used by every pane. tic resolves the
+# xterm base at build time; no ncurses library enters the native hot path.
+find_program(LEMMA_TIC_EXECUTABLE tic REQUIRED)
+set(LEMMA_TERMINFO_DIR "${CMAKE_CURRENT_BINARY_DIR}/terminfo")
+add_custom_command(
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/terminfo.stamp"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${LEMMA_TERMINFO_DIR}"
+  COMMAND "${LEMMA_TIC_EXECUTABLE}" -x -o "${LEMMA_TERMINFO_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/terminfo/lemma.terminfo"
+  COMMAND "${CMAKE_COMMAND}" -E touch "${CMAKE_CURRENT_BINARY_DIR}/terminfo.stamp"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/terminfo/lemma.terminfo"
+  VERBATIM
+)
+add_custom_target(lemma_terminfo ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/terminfo.stamp")
+install(DIRECTORY "${LEMMA_TERMINFO_DIR}/" DESTINATION share/terminfo)
+install(FILES terminfo/lemma.terminfo DESTINATION share/lemma)
+install(FILES extensions/lemma_client.py extensions/picker.py DESTINATION share/lemma/extensions)
+
 add_library(lemma_base STATIC src/core/assert.cpp)
 lemma_internal_target(lemma_base)
 
@@ -116,17 +135,23 @@ lemma_internal_target(lemma_diagnostic)
 
 # This is the only target that may include Ghostty headers. The final executable receives the
 # static archive as a link-only implementation requirement; Ghostty is not part of Lemma's API.
+add_library(lemma_image STATIC src/image/png.cpp)
+lemma_internal_target(lemma_image)
+target_link_libraries(lemma_image PRIVATE lemma_base PNG::PNG)
+
 add_library(
   lemma_terminal STATIC
   src/terminal/terminal_core.cpp
   src/terminal/terminal_effects.cpp
+  src/terminal/terminal_clipboard.cpp
+  src/terminal/terminal_graphics.cpp
   src/terminal/terminal_input.cpp
   src/terminal/terminal_render.cpp
   src/terminal/terminal_selection.cpp
   src/terminal/terminal_measure.cpp
 )
 lemma_internal_target(lemma_terminal)
-target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic ghostty-vt-static)
+target_link_libraries(lemma_terminal PRIVATE lemma_base lemma_diagnostic lemma_image ghostty-vt-static)
 
 add_library(
   lemma_platform STATIC
@@ -136,6 +161,7 @@ add_library(
   src/platform/terminal_mode.cpp
 )
 lemma_internal_target(lemma_platform)
+add_dependencies(lemma_platform lemma_terminfo)
 
 add_library(lemma_protocol STATIC src/protocol/attachment.cpp)
 lemma_internal_target(lemma_protocol)
@@ -149,6 +175,7 @@ add_library(
   lemma_render STATIC
   src/render/grid.cpp
   src/render/pane_composition.cpp
+  src/render/graphics.cpp
   src/render/frame_buffer.cpp
 )
 lemma_internal_target(lemma_render)
@@ -235,11 +262,23 @@ target_link_libraries(
   lemma_extension PRIVATE lemma_base lemma_config lemma_extension_contract lemma_input lemma_platform ${LEMMA_LUA_TARGET}
 )
 
+add_executable(lemma-config-host src/extension/config_host_main.cpp)
+lemma_internal_target(lemma-config-host)
+target_link_libraries(lemma-config-host PRIVATE lemma_extension)
+install(TARGETS lemma-config-host RUNTIME DESTINATION bin)
+
+add_executable(lemma-clipboard-host src/clipboard/host_main.cpp)
+lemma_internal_target(lemma-clipboard-host)
+target_link_libraries(lemma-clipboard-host PRIVATE lemma_image lemma_platform)
+install(TARGETS lemma-clipboard-host RUNTIME DESTINATION bin)
+
 add_library(
   lemma_runtime STATIC
   src/core/client_frame_output.cpp
   src/core/command_history.cpp
   src/core/command_line.cpp
+  src/clipboard/transaction.cpp
+  src/clipboard/png_file.cpp
   src/core/engine.cpp
   src/core/engine_projection.cpp
   src/core/engine_state.cpp
@@ -257,6 +296,7 @@ target_link_libraries(
     lemma_api
     lemma_base
     lemma_core
+    lemma_config
     lemma_diagnostic
     lemma_extension_contract
     lemma_input
@@ -313,6 +353,7 @@ target_include_directories(
 )
 
 add_executable(lemma apps/lemma/main.cpp)
+add_dependencies(lemma lemma-config-host lemma-clipboard-host)
 lemma_internal_target(lemma)
 target_link_libraries(lemma PRIVATE lemma_app)
 install(TARGETS lemma RUNTIME DESTINATION bin)
@@ -322,12 +363,12 @@ if(LEMMA_BUILD_TESTS OR LEMMA_BUILD_BENCHMARKS)
   add_executable(lemma_test_server tests/support/server_main.cpp)
   lemma_internal_target(lemma_test_server)
   target_link_libraries(lemma_test_server PRIVATE lemma_daemon)
-  add_dependencies(lemma_test_server lemma-ui)
+  add_dependencies(lemma_test_server lemma-ui lemma-config-host lemma-clipboard-host)
 
   add_executable(lemma_test_cli tests/support/cli_main.cpp)
   lemma_internal_target(lemma_test_cli)
   target_link_libraries(lemma_test_cli PRIVATE lemma_app)
-  add_dependencies(lemma_test_cli lemma-ui)
+  add_dependencies(lemma_test_cli lemma-ui lemma-config-host lemma-clipboard-host)
 
   add_executable(lemma_test_pty_peer tests/support/pty_peer_main.cpp)
   target_link_libraries(lemma_test_pty_peer PRIVATE lemma_warnings)
@@ -391,6 +432,8 @@ if(LEMMA_BUILD_TESTS)
   add_executable(
     lemma_terminal_boundary_tests
     tests/client_frame_output_test.cpp
+    tests/clipboard_test.cpp
+    tests/graphics_test.cpp
     tests/core_input_test.cpp
     tests/pty_writer_test.cpp
     tests/render_composition_test.cpp

@@ -73,6 +73,20 @@ class ProductionCliTest(unittest.TestCase):
             "session", "start", name, "--hold", "--", "/bin/sh", "-c", script
         )
 
+    def test_panes_can_resolve_their_shipped_terminal_description(self) -> None:
+        started = self.start(
+            "terminfo",
+            'printf "TERM=%s\\n" "$TERM"; '
+            'test -r "$TERMINFO/l/lemma" || test -r "$TERMINFO/6c/lemma"; '
+            'infocmp -x "$TERM"; printf "COLORS="; tput colors',
+        )
+        target = ("--session", "terminfo", "--pane", started["pane"])
+        self.ok("wait", *target, "--exit-code", "0", "--timeout", "2s")
+        captured = self.ok("capture", *target, "--source", "recent", "--lines", "250")
+        self.assertIn("TERM=lemma", captured)
+        self.assertIn("Lemma terminal multiplexer", captured)
+        self.assertIn("COLORS=256", captured)
+
     def test_capture_and_split_fail_when_stdout_is_not_writable(self) -> None:
         started = self.start("output-failure", "printf 'small-output\\n'")
         target = ("--session", "output-failure", "--pane", started["pane"])

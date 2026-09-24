@@ -275,6 +275,8 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   case MessageKind::key:
   case MessageKind::focus:
   case MessageKind::mouse:
+  case MessageKind::terminal_reply:
+  case MessageKind::cell_size:
     return kind;
   }
   return std::nullopt;
@@ -432,6 +434,25 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   LEMMA_ASSERT(bytes > 0);
   LEMMA_ASSERT(bytes <= legacy_input_message_bytes_max);
   return encode_header(MessageKind::input, 0, static_cast<std::uint32_t>(bytes), sequence);
+}
+
+[[nodiscard]] auto encode_cell_size(const CellSize size, const std::uint32_t sequence) noexcept
+    -> SmallMessage {
+  LEMMA_ASSERT(size.width > 0 && size.width <= 500 && size.height > 0 && size.height <= 200);
+  SmallMessage message;
+  copy_header(encode_header(MessageKind::cell_size, 0, 4, sequence), message.storage_,
+              message.size_);
+  const auto encoded = encode_dimensions({.columns = size.width, .rows = size.height});
+  std::ranges::copy(encoded, std::span(message.storage_).subspan(message.size_).begin());
+  message.size_ += encoded.size();
+  return message;
+}
+
+[[nodiscard]] auto encode_terminal_reply_header(const std::size_t bytes,
+                                                const std::uint32_t sequence) noexcept
+    -> std::array<std::byte, attach_header_bytes> {
+  LEMMA_ASSERT(bytes > 0 && bytes <= terminal_reply_bytes_max);
+  return encode_header(MessageKind::terminal_reply, 0, static_cast<std::uint32_t>(bytes), sequence);
 }
 
 [[nodiscard]] auto encode_paste_header(const std::size_t bytes,
@@ -677,6 +698,11 @@ void ClientDecoder::release() noexcept {
         return std::unexpected(DecodeError::oversized);
       }
       break;
+    case MessageKind::terminal_reply:
+      if (envelope.payload_bytes == 0 || envelope.payload_bytes > terminal_reply_bytes_max) {
+        return std::unexpected(DecodeError::invalid_length);
+      }
+      break;
     case MessageKind::paste:
       if (envelope.payload_bytes == 0) {
         return std::unexpected(DecodeError::invalid_length);
@@ -705,6 +731,7 @@ void ClientDecoder::release() noexcept {
       }
       break;
     case MessageKind::resize:
+    case MessageKind::cell_size:
       if (envelope.payload_bytes != 4) {
         return std::unexpected(DecodeError::invalid_length);
       }
@@ -812,10 +839,15 @@ void ClientDecoder::release() noexcept {
         .sequence = envelope.sequence,
     };
   }
-  if (envelope.kind == MessageKind::input || envelope.kind == MessageKind::paste) {
+  if (envelope.kind == MessageKind::input || envelope.kind == MessageKind::paste ||
+      envelope.kind == MessageKind::terminal_reply) {
+    auto kind =
+        envelope.kind == MessageKind::input ? ClientMessageKind::input : ClientMessageKind::paste;
+    if (envelope.kind == MessageKind::terminal_reply) {
+      kind = ClientMessageKind::terminal_reply;
+    }
     return ClientMessage{
-        .kind = envelope.kind == MessageKind::input ? ClientMessageKind::input
-                                                    : ClientMessageKind::paste,
+        .kind = kind,
         .dimensions = {},
         .pane_command = PaneCommand::none,
         .host_theme = nullptr,
@@ -893,6 +925,17 @@ void ClientDecoder::release() noexcept {
         .input = {},
         .sequence = envelope.sequence,
     };
+  }
+  if (envelope.kind == MessageKind::cell_size) {
+    const auto dimensions = decode_dimensions(std::span(payload).first<4>());
+    if (!valid_dimensions(dimensions)) {
+      return std::unexpected(DecodeError::invalid_dimensions);
+    }
+    return ClientMessage{.kind = ClientMessageKind::cell_size,
+                         .cell_size = {.width = dimensions.columns, .height = dimensions.rows},
+                         .session = {},
+                         .input = {},
+                         .sequence = envelope.sequence};
   }
   if (envelope.kind == MessageKind::resize) {
     const auto dimensions = decode_dimensions(std::span(payload).first<4>());

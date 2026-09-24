@@ -100,7 +100,8 @@ static_assert(sizeof(FrameBuffer) <= 5U * sizeof(void*));
 [[nodiscard]] auto compose_retained_scene(
     Scene scene, Viewport viewport, FrameBuffer& frame, bool force_full, StatusLine status = {},
     std::optional<OuterModeProjection> previous_outer_modes = std::nullopt,
-    MessageView message_view = {}) noexcept -> std::expected<CompositionResult, CompositionError>;
+    MessageView message_view = {}, GraphicsProjection* graphics = nullptr) noexcept
+    -> std::expected<CompositionResult, CompositionError>;
 
 [[nodiscard]] auto compose_retained_frame(
     std::span<const PaneSurface> panes, Viewport viewport, FrameBuffer& frame, bool force_full,

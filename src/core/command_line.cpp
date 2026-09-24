@@ -39,6 +39,8 @@ constexpr std::array command_catalog{
     CommandDescriptor{.path = "switch"},
     CommandDescriptor{.path = "attach"},
     CommandDescriptor{.path = "detach"},
+    CommandDescriptor{.path = "reload"},
+    CommandDescriptor{.path = "paste-image"},
     CommandDescriptor{.path = "session"},
     CommandDescriptor{.path = "session switch"},
     CommandDescriptor{.path = "session attach"},
@@ -635,6 +637,24 @@ launch_completion_kind(const std::span<const std::string_view> words,
     CommandLineAction action;
     action.kind = CommandLineActionKind::switch_session;
     action.switch_session = *target;
+    return action;
+  }
+  if (words[0] == "paste-image") {
+    if (words.size() != 1U) {
+      return invalid();
+    }
+    CommandLineAction action;
+    action.command.kind = api::CommandKind::pane_paste_image;
+    action.command.session = current_session(context);
+    action.command.pane = current_pane(context);
+    return action;
+  }
+  if (words[0] == "reload") {
+    if (words.size() != 1U) {
+      return invalid();
+    }
+    CommandLineAction action;
+    action.command.kind = api::CommandKind::config_reload;
     return action;
   }
   if (words[0] == "detach") {

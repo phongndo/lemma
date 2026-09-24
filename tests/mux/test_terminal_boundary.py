@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import base64
+import fcntl
+import json
+import os
+import re
+import select
 import shlex
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
 import unittest
+import zlib
+from pathlib import Path
 
-from tests.support.mux_harness import LemmaServer, wait_until
+from tests.support.mux_harness import Client, LemmaServer, Session, wait_until
 
 
 class TerminalBoundaryMuxTest(unittest.TestCase):
@@ -168,6 +184,559 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
         session.require_client().expect_output("__RELEASE_A__")
         left.expect_alive()
         right.expect_alive()
+
+
+class GraphicsMuxTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.server = LemmaServer.from_environment()
+        self.addCleanup(self.server.close)
+
+    def test_png_is_reprojected_after_resize_and_reattach(self) -> None:
+        png = b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        packet = b"\x1b_Ga=T,q=2,C=1,f=100,i=1,c=4,r=2;" + png + b"\x1b\\"
+        script = f"import os,time; os.write(1, {packet!r}); os.write(1,b'IMAGE_READY'); time.sleep(60)"
+        session = self.server.create_session(
+            "native_png", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=1,v=1,i=")
+        client.expect_raw(b"\x1b_Ga=p,q=2,C=1,i=")
+        client.expect_output("IMAGE_READY")
+        old = client.process.output_tail.count(b"\x1b_Ga=p,q=2,C=1,i=")
+        client.resize(100, 30)
+
+        def redrawn() -> bool | None:
+            client.drain()
+            return (
+                True
+                if client.process.output_tail.count(b"\x1b_Ga=p,q=2,C=1,i=") > old
+                else None
+            )
+
+        wait_until("resized image placement", redrawn)
+        session.detach()
+        fresh = session.attach(columns=100, rows=30)
+        fresh.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=1,v=1,i=")
+        fresh.expect_raw(b"\x1b_Ga=p,q=2,C=1,i=")
+        fresh.expect_output("IMAGE_READY")
+        session.pane().expect_alive()
+
+    def test_cell_pixel_resize_updates_pty_and_graphics_without_grid_resize(
+        self,
+    ) -> None:
+        report = self.server.root / "pixel-size.json"
+        script = f"""
+import fcntl, json, os, signal, struct, termios, time
+from pathlib import Path
+path = Path({str(report)!r})
+def resized(*_):
+    size = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(size))
+    temporary.replace(path)
+signal.signal(signal.SIGWINCH, resized)
+resized()
+os.write(1, b'\\x1b_Ga=T,q=2,C=1,i=1,s=1,v=1,f=32,c=3;/wAA/w==\\x1b\\\\PIXEL_READY')
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "pixel_resize", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("PIXEL_READY")
+        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=24,v=24,")
+        self.assertEqual(json.loads(report.read_text()), [23, 80, 640, 368])
+        fcntl.ioctl(
+            client.process.descriptor,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", 24, 80, 960, 576),
+        )
+        os.killpg(client.pid, signal.SIGWINCH)
+        wait_until(
+            "cell-only resize reaches Pane PTY",
+            lambda: (
+                True if json.loads(report.read_text()) == [23, 80, 960, 552] else None
+            ),
+            diagnostics=lambda: report.read_text() + "\n" + client.diagnostics(),
+        )
+        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=36,v=36,")
+        state = session.state()
+        self.assertEqual((state.columns, state.rows), (80, 24))
+        session.pane().expect_alive()
+
+    def test_animation_advances_without_more_pty_output(self) -> None:
+        packets = (
+            b"\x1b_Ga=T,q=2,C=1,i=1,s=1,v=1,f=32;/wAA/w==\x1b\\"
+            b"\x1b_Ga=f,q=2,i=1,s=1,v=1,f=32,z=100;AAD//w==\x1b\\"
+            b"\x1b_Ga=a,q=2,i=1,r=1,z=100,s=3\x1b\\"
+        )
+        script = f"import os,time; os.write(1, {packets!r}); os.write(1,b'ANIMATION_READY'); time.sleep(60)"
+        session = self.server.create_session(
+            "native_animation", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_raw(b";/wAA/w==\x1b\\")
+        client.expect_raw(b";AAD//w==\x1b\\")
+        client.expect_output("ANIMATION_READY")
+        session.pane().expect_alive()
+
+
+class ClipboardMuxTest(unittest.TestCase):
+    def setUp(self) -> None:
+        cache = tempfile.TemporaryDirectory(prefix="lemma clipboard's-")
+        self.addCleanup(cache.cleanup)
+        self.server = LemmaServer.from_environment(
+            config_text='require("lemma").setup({terminal={clipboard_read=true,clipboard_write=true}})',
+            environment={"XDG_CACHE_HOME": cache.name},
+        )
+        self.addCleanup(self.server.close)
+
+    def run_worker(self, image: bytes, mode: str) -> tuple[bytes, int]:
+        script = """
+import os, resource, sys
+fd = int(sys.argv[1])
+os.dup2(fd, 3, inheritable=True)
+if fd != 3: os.close(fd)
+if sys.argv[3] == 'limited': resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+os.execve(sys.argv[2], [sys.argv[2]], os.environ)
+"""
+        helper = self.server.server_path.with_name("lemma-clipboard-host")
+        parent, child = socket.socketpair()
+        with parent, child:
+            parent.settimeout(15)
+            process = subprocess.Popen(
+                (sys.executable, "-c", script, str(child.fileno()), str(helper), mode),
+                pass_fds=(child.fileno(),),
+                env=self.server.environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                child.close()
+                try:
+                    parent.sendall(image)
+                    if mode != "deadline":
+                        parent.shutdown(socket.SHUT_WR)
+                except BrokenPipeError:
+                    pass  # An over-limit worker may reject input before the final chunk.
+                output = bytearray()
+                if mode == "disconnected":
+                    parent.close()
+                else:
+                    while data := parent.recv(4096):
+                        output.extend(data)
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(stdout, b"")
+                self.assertEqual(stderr, b"")
+                assert process.returncode is not None
+                return bytes(output), process.returncode
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+
+    def test_clipboard_worker_rejects_bad_input_and_cleans_failed_saves(self) -> None:
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        )
+        cases = (
+            (b"not a PNG", "invalid"),
+            (b"x" * (1024 * 1024 + 1), "oversized"),
+            (png, "limited"),
+            (png, "disconnected"),
+        )
+        for image, mode in cases:
+            with self.subTest(mode=mode):
+                output, status = self.run_worker(image, mode)
+                self.assertEqual(status, 1)
+                self.assertEqual(output, b"")
+                self.assertEqual(
+                    list(
+                        Path(self.server.environment["XDG_CACHE_HOME"]).rglob("image-*")
+                    ),
+                    [],
+                )
+
+    def test_clipboard_worker_deadline_does_not_publish_a_partial_result(self) -> None:
+        output, status = self.run_worker(b"", "deadline")
+        self.assertEqual(status, 1)
+        self.assertEqual(output, b"")
+
+    def start_read(self) -> tuple[Session, Client, Path, bytes]:
+        gate = self.server.root / "clipboard.gate"
+        result = self.server.root / "clipboard.reply"
+        script = f"""
+import os, select, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'CLIPBOARD_READY')
+while not Path({str(gate)!r}).exists(): time.sleep(0.005)
+os.write(1, b'\\x1b]5522;type=read:id=child;aW1hZ2UvcG5n\\x1b\\\\CLIPBOARD_PROGRESS')
+reply = bytearray()
+while True:
+    if not select.select([0], [], [], 10)[0]: raise RuntimeError('clipboard reply timeout')
+    reply.extend(os.read(0, 8192))
+    if b':status=DONE' in reply or b':status=EPERM' in reply: break
+Path({str(result)!r}).write_bytes(reply)
+os.write(1, b'CLIPBOARD_FINISHED')
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "clipboard", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("CLIPBOARD_READY")
+        gate.touch()
+        client.expect_raw(b"\x1b]5522;type=read:id=")
+        client.expect_output("CLIPBOARD_PROGRESS")
+        match = re.search(
+            rb"\x1b]5522;type=read:id=([0-9]+):", client.process.output_tail
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        return session, client, result, match.group(1)
+
+    def test_image_read_progress_and_reply_use_separate_input_channels(self) -> None:
+        session, client, result, correlation = self.start_read()
+        image = b"\x89PNG\r\n\x1a\n\x00\xff\x80"
+        client.send(
+            b"\x1b]5522;type=read:status=OK:id="
+            + correlation
+            + b"\x1b\\"
+            + b"\x1b]5522;type=read:status=DATA:id="
+            + correlation
+            + b":mime=aW1hZ2UvcG5n;"
+            + base64.b64encode(image)
+            + b"\x1b\\"
+            + b"\x1b]5522;type=read:status=DONE:id="
+            + correlation
+            + b"\x1b\\"
+        )
+        wait_until(
+            "clipboard completion",
+            lambda: result.read_bytes() if result.exists() else None,
+        )
+        reply = result.read_bytes()
+        self.assertIn(b"status=DONE:id=child", reply)
+        self.assertIn(base64.b64encode(image), reply)
+        self.assertNotIn(b":name=", reply)
+        session.pane().expect_alive()
+
+    def test_clipboard_reply_fragments_can_exceed_the_escape_key_timeout(self) -> None:
+        session, client, result, correlation = self.start_read()
+        prefix = b"\x1b]5522;type=read:id=" + correlation + b":status="
+        client.send(prefix + b"OK\x1b\\" + prefix + b"DATA:mime=aW1hZ2UvcG5n;")
+        client.drain(0.15)
+        self.assertTrue(
+            session.state().attached, "fragment header disconnected the client"
+        )
+        client.send(b"AP94\x1b")
+        client.drain(0.15)
+        self.assertTrue(
+            session.state().attached, "fragmented ST disconnected the client"
+        )
+        client.send(b"\\" + prefix + b"DONE\x1b\\")
+        client.expect_output("CLIPBOARD_FINISHED")
+        self.assertIn(b"AP94", result.read_bytes())
+        self.assertIn(b"status=DONE:id=child", result.read_bytes())
+        self.assertTrue(session.state().attached)
+
+    def test_incomplete_clipboard_record_has_a_nonrenewable_transport_deadline(
+        self,
+    ) -> None:
+        session = self.server.create_session(
+            "reply_deadline",
+            command=(
+                sys.executable,
+                "-c",
+                "import os,time,tty; tty.setraw(0); os.write(1,b'REPLY_READY'); time.sleep(60)",
+            ),
+        )
+        client = session.require_client()
+        client.expect_output("REPLY_READY")
+        client.send(b"\x1b]5522;type=read:status=DATA:id=1;")
+        client.drain(4)
+        self.assertTrue(
+            session.state().attached, "clipboard record used a keyboard deadline"
+        )
+        client.send(b"A")  # Progress must not renew the original 30-second deadline.
+        wait_until(
+            "incomplete clipboard record expires",
+            lambda: True if not session.state().attached else None,
+            timeout=28,
+            diagnostics=client.diagnostics,
+        )
+        session.pane().expect_alive()
+
+    def test_explicit_image_paste_creates_private_png_and_pastes_only_its_path(
+        self,
+    ) -> None:
+        # Explicit user actions do not require granting applications clipboard access.
+        (self.server.root / "config" / "lemma" / "init.lua").write_text(
+            'require("lemma").setup({})'
+        )
+        reloaded = self.server.command("config", "reload")
+        self.assertEqual(reloaded.status, 0, reloaded.output)
+        result = self.server.root / "pasted-path"
+        script = f"""
+import os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'\\x1b[?2004hPASTE_READY')
+data = bytearray()
+while not data.endswith(b'\\x1b[201~'): data.extend(os.read(0, 8192))
+Path({str(result)!r}).write_bytes(data)
+os.write(1, b'PASTE_FINISHED')
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "clipboard_file", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("PASTE_READY")
+        process = subprocess.Popen(
+            [
+                str(self.server.cli_path),
+                str(self.server.socket_path),
+                "paste-image",
+                "--session",
+                session.name,
+                "--pane",
+                session.pane().id,
+                "--json",
+            ],
+            env=self.server.environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.terminate)
+        client.expect_raw(b"\x1b]5522;type=read:id=")
+        match = re.search(
+            rb"\x1b]5522;type=read:id=([0-9]+):", client.process.output_tail
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        correlation = match.group(1)
+
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + kind
+                + data
+                + struct.pack(">I", zlib.crc32(kind + data))
+            )
+
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\0\xff\0\0\xff"))
+            + chunk(b"IEND", b"")
+        )
+        client.send(
+            b"\x1b]5522;type=read:status=OK:id="
+            + correlation
+            + b"\x1b\\"
+            + b"\x1b]5522;type=read:status=DATA:id="
+            + correlation
+            + b":mime=aW1hZ2UvcG5n;"
+            + base64.b64encode(png)
+            + b"\x1b\\"
+            + b"\x1b]5522;type=read:status=DONE:id="
+            + correlation
+            + b"\x1b\\"
+        )
+        wait_until(
+            "pasted PNG path", lambda: result.read_bytes() if result.exists() else None
+        )
+        output, error = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, (output, error))
+        received = result.read_bytes()
+        self.assertTrue(received.startswith(b"\x1b[200~"), received)
+        self.assertTrue(received.endswith(b"\x1b[201~"), received)
+        paths = shlex.split(received[6:-6].decode())
+        self.assertEqual(len(paths), 1)
+        path = Path(paths[0])
+        self.assertTrue(
+            path.is_relative_to(
+                Path(self.server.environment["XDG_CACHE_HOME"]) / "lemma" / "clipboard"
+            )
+        )
+        self.assertEqual(path.read_bytes(), png)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertIn(str(path).encode(), output)
+
+    def test_image_paste_keeps_session_identity_after_rename_and_name_reuse(
+        self,
+    ) -> None:
+        def reader(path: Path) -> tuple[str, ...]:
+            return (
+                sys.executable,
+                "-c",
+                f"""
+import os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'PASTE_READY')
+data = bytearray()
+while not data.endswith(b'\\0'): data.extend(os.read(0, 8192))
+Path({str(path)!r}).write_bytes(data[:-1])
+os.write(1, b'PASTE_CAPTURED')
+while True: time.sleep(1)
+""",
+            )
+
+        original_path = self.server.root / "original-paste"
+        replacement_path = self.server.root / "replacement-paste"
+        original = self.server.create_session(
+            "paste_owner", command=reader(original_path)
+        )
+        client = original.require_client()
+        client.expect_output("PASTE_READY")
+        session_id = original.state().id
+        pane_id = original.pane().id
+        request = {
+            "schema": "lemma.proc/v1",
+            "commands": [
+                {
+                    "command": "pane.paste-image",
+                    "session": {"name": original.name},
+                    "pane": {"id": pane_id},
+                }
+            ],
+        }
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+            peer.settimeout(5)
+            peer.connect(str(self.server.socket_path))
+            peer.sendall(json.dumps(request).encode() + b"\n")
+            client.expect_raw(b"\x1b]5522;type=read:id=")
+            match = re.search(
+                rb"\x1b]5522;type=read:id=([0-9]+):", client.process.output_tail
+            )
+            assert match is not None
+            self.server.require_command(
+                "proc", "session", "rename", "--session", session_id, "renamed_owner"
+            )
+            replacement = self.server.create_session(
+                "paste_owner", command=reader(replacement_path)
+            )
+            replacement_client = replacement.require_client()
+            replacement_client.expect_output("PASTE_READY")
+            self.assertNotEqual(replacement.state().id, session_id)
+            self.assertEqual(replacement.pane().id, pane_id)
+            prefix = b"\x1b]5522;type=read:id=" + match.group(1) + b":status="
+            png = b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+            client.send(
+                prefix
+                + b"OK\x1b\\"
+                + prefix
+                + b"DATA:mime=aW1hZ2UvcG5n;"
+                + png
+                + b"\x1b\\"
+                + prefix
+                + b"DONE\x1b\\"
+            )
+            with peer.makefile("rb") as response:
+                completed = json.loads(response.readline())
+            self.assertTrue(completed["ok"], completed)
+        client.send(b"\0")
+        replacement_client.send(b"\0")
+        client.expect_output("PASTE_CAPTURED")
+        replacement_client.expect_output("PASTE_CAPTURED")
+        self.assertEqual(replacement_path.read_bytes(), b"")
+        pasted = shlex.split(original_path.read_text())
+        self.assertEqual(len(pasted), 1)
+        self.assertEqual(Path(pasted[0]).read_bytes(), base64.b64decode(png))
+
+    def test_large_image_write_interleaves_frames_and_orders_reply_before_input(
+        self,
+    ) -> None:
+        gate = self.server.root / "write.gate"
+        result = self.server.root / "write.reply"
+        script = f"""
+import base64, os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'WRITE_READY')
+while not Path({str(gate)!r}).exists(): time.sleep(0.005)
+image = b'\\xa7' * 200003
+os.write(1, b'\\x1b]5522;type=write:id=child-write\\x1b\\\\')
+for offset in range(0, len(image), 3072):
+    os.write(1, b'\\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;' + base64.b64encode(image[offset:offset+3072]) + b'\\x1b\\\\')
+os.write(1, b'\\x1b]5522;type=wdata\\x1b\\\\WRITE_STAGED')
+reply = bytearray()
+while not reply.endswith(b'Z'): reply.extend(os.read(0, 8192))
+Path({str(result)!r}).write_bytes(reply)
+os.write(1, b'WRITE_FINISHED')
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "clipboard_write", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("WRITE_READY")
+        gate.touch()
+        wire = bytearray()
+        commit = b"\x1b]5522;type=wdata\x1b\\"
+        deadline = time.monotonic() + 10
+        while commit not in wire:
+            self.assertLess(time.monotonic(), deadline, "clipboard write stalled")
+            if not select.select([client.process.descriptor], [], [], 0.05)[0]:
+                continue
+            data = os.read(client.process.descriptor, 65536)
+            self.assertTrue(data)
+            wire.extend(data)
+            client.process.screen.feed(data)
+        packets = re.findall(
+            rb"\x1b\]5522;type=wdata:mime=aW1hZ2UvcG5n;([A-Za-z0-9+/=]*)\x1b\\", wire
+        )
+        self.assertEqual(
+            b"".join(base64.b64decode(packet, validate=True) for packet in packets),
+            b"\xa7" * 200003,
+        )
+        self.assertIn(b"WRITE_STAGED", wire)
+        self.assertLess(wire.index(b"WRITE_STAGED"), wire.index(commit))
+        correlation = re.search(rb"\x1b\]5522;type=write:id=([0-9]+):", wire)
+        self.assertIsNotNone(correlation)
+        assert correlation is not None
+        client.send(
+            b"\x1b]5522;type=write:status=DONE:id=" + correlation.group(1) + b"\x1b\\Z"
+        )
+        client.expect_output("WRITE_FINISHED")
+        self.assertEqual(
+            result.read_bytes(),
+            b"\x1b]5522;type=write:status=DONE:id=child-write\x1b\\Z",
+        )
+
+    def test_policy_reload_revokes_a_pending_application_read(self) -> None:
+        session, client, result, _correlation = self.start_read()
+        (self.server.root / "config" / "lemma" / "init.lua").write_text(
+            'require("lemma").setup({})'
+        )
+        reloaded = self.server.command("config", "reload")
+        self.assertEqual(reloaded.status, 0, reloaded.output)
+        client.expect_output("CLIPBOARD_FINISHED")
+        self.assertIn(b"status=EPERM:id=child", result.read_bytes())
+        session.pane().expect_alive()
+
+    def test_focus_change_revokes_a_pending_application_read(self) -> None:
+        session, _client, result, _correlation = self.start_read()
+        session.split()
+        wait_until(
+            "focus revocation", lambda: result.read_bytes() if result.exists() else None
+        )
+        self.assertIn(b"status=EPERM:id=child", result.read_bytes())
+
+    def test_detach_revokes_the_request_without_stranding_the_application(self) -> None:
+        _session, client, result, _correlation = self.start_read()
+        client.prefix("d")
+        client.wait_for_exit()
+        wait_until(
+            "clipboard cancellation",
+            lambda: result.read_bytes() if result.exists() else None,
+        )
+        self.assertIn(b"status=EPERM:id=child", result.read_bytes())
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 #include "core/engine_projection.hpp"
+#include "clipboard/transaction.hpp"
 #include "core/engine_connection_state.hpp"
 #include "core/engine_state.hpp"
 
@@ -333,11 +334,26 @@ struct StatusPromptProjection final {
           .cursor = rename.cursor};
 }
 
+// OSC 52 and pre-encoded OSC 5522 share one bounded publication buffer.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto encode_pending_clipboard_write(SessionRecord& session) noexcept
     -> std::optional<std::size_t> {
   if (session.attachment_runtime.clipboard_write.bytes == nullptr ||
       session.attachment_runtime.clipboard_write.size == 0) {
     return std::nullopt;
+  }
+  auto& pending = session.attachment_runtime.clipboard_write;
+  if (pending.encoded) {
+    const auto count = clipboard::Transaction::frame_prefix(
+        std::span(pending.bytes.get(), pending.size).subspan(pending.offset),
+        session.attachment_runtime.frame.capacity());
+    if (count == 0) {
+      return std::nullopt;
+    }
+    std::memcpy(session.attachment_runtime.frame.writable().data(),
+                std::span(pending.bytes.get(), pending.size).subspan(pending.offset, count).data(),
+                count);
+    return count;
   }
   constexpr std::string_view prefix = "\x1B]52;c;";
   constexpr std::string_view suffix = "\x1B\\";
@@ -399,9 +415,15 @@ struct StatusPromptProjection final {
     return false;
   }
   session.attachment_runtime.server_sequence += static_cast<std::uint32_t>(messages);
-  session.attachment_runtime.clipboard_write.bytes.reset();
-  session.attachment_runtime.clipboard_write.size = 0;
-  session.attachment_runtime.clipboard_write.redraw_after_write = true;
+  auto& pending = session.attachment_runtime.clipboard_write;
+  if (pending.encoded) {
+    pending.offset += *encoded;
+    pending.interleave_frame = true;
+  }
+  if (!pending.encoded || pending.offset == pending.size) {
+    pending.reset();
+  }
+  pending.redraw_after_write = true;
   return true;
 }
 
@@ -409,9 +431,11 @@ struct StatusPromptProjection final {
 [[nodiscard]] auto compose_session_frame(SessionRecord& session, PaneRuntimeStore& runtimes,
                                          extension::Runtime& extensions, const bool force_full,
                                          const ClientFrameOutput::TimePoint now) noexcept -> bool {
-  if (session.attachment_runtime.clipboard_write.bytes != nullptr) {
+  auto& clipboard_write = session.attachment_runtime.clipboard_write;
+  if (clipboard_write.bytes != nullptr && !clipboard_write.interleave_frame) {
     return queue_pending_clipboard_write(session, now);
   }
+  clipboard_write.interleave_frame = false;
   std::array<render::PaneSurface, panes_per_tab_max> surface_storage{};
   std::array<render::GridSurface, limits::extension_surfaces_hard_max> grid_storage{};
   MessageViewStorage message_storage;
@@ -441,7 +465,7 @@ struct StatusPromptProjection final {
       {.panes = surfaces, .grids = grids},
       {.columns = session.attachment.columns, .rows = session.attachment.rows},
       session.attachment_runtime.frame, force_full, {}, session.attachment_runtime.outer_modes,
-      message_view);
+      message_view, &session.attachment_runtime.graphics);
   diagnostic::record_latency_trace(diagnostic::LatencyTraceStage::frame_composition_finished,
                                    static_cast<std::uint32_t>(session.attachment_runtime.client),
                                    rendered.has_value() ? rendered->bytes : 0);

@@ -19,6 +19,7 @@ enum class HostInputKind : std::uint8_t {
   key,
   focus,
   mouse,
+  terminal_reply,
 };
 
 struct HostInputEvent final {
@@ -47,13 +48,15 @@ enum class HostInputError : std::uint8_t {
   event_limit,
   allocation_failed,
   not_prepared,
+  incomplete_terminal_reply,
 };
 
 inline constexpr std::size_t host_input_output_bytes_max =
     limits::structured_input_payload_bytes_max + (protocol::input_bytes_max * 2U);
 
 // Preserves bracketed paste, focus, and SGR mouse boundaries across arbitrary read fragmentation.
-// Unknown or malformed sequences remain ordinary bytes and retain their original ordering.
+// Unknown or malformed input remains ordinary bytes. Recognized clipboard replies instead use a
+// separate bounded channel; truncation fails closed rather than leaking clipboard bytes as keys.
 class HostInputParser final {
 public:
   [[nodiscard]] auto prepare() noexcept -> std::expected<void, HostInputError>;
@@ -64,10 +67,13 @@ public:
       -> std::expected<HostInputBatch, HostInputError>;
   [[nodiscard]] auto has_pending_sequence() const noexcept -> bool { return pending_size_ > 0; }
   [[nodiscard]] auto paste_active() const noexcept -> bool { return paste_active_; }
+  [[nodiscard]] auto terminal_reply_active() const noexcept -> bool {
+    return terminal_reply_active_;
+  }
 
 private:
   // Decimal Kitty associated-text codepoints can be much larger than their decoded UTF-8.
-  static constexpr std::size_t sequence_bytes_max = (protocol::key_input_text_bytes_max * 8U) + 64U;
+  static constexpr std::size_t sequence_bytes_max = protocol::terminal_reply_bytes_max;
 
   std::array<std::byte, sequence_bytes_max> pending_{};
   // One bounded opaque paste is retained until its end marker arrives, independent of reads.
@@ -76,6 +82,7 @@ private:
   std::size_t pending_size_{0};
   std::size_t paste_size_{0};
   bool paste_active_{false};
+  bool terminal_reply_active_{false};
   bool any_button_pressed_{false};
 };
 

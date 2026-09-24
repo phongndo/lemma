@@ -219,8 +219,31 @@ movement update the copy cursor. `v`, `V`, and `C-v` start character, line, and 
 or Enter copies the selection and leaves copy mode. Search replaces that row with the editable
 `/query` or `?query` prompt; progress and feedback return to the same row without covering the pane.
 
-`Super-c` and `Ctrl-Shift-c` copy the current copy-mode or mouse selection. Lemma currently uses
-bounded OSC 52 output for user-authorized clipboard writes; it has no native clipboard provider.
+`Super-c` and `Ctrl-Shift-c` copy the current copy-mode or mouse selection using bounded OSC 52
+output. Application clipboard access is separate and denied by default; see the
+[clipboard settings](configuration.md#api).
+
+### Clipboard images
+
+With an outer terminal supporting Kitty's OSC 5522 clipboard protocol:
+
+```sh
+lemma paste-image --session work --pane 0:1
+```
+
+The native command prompt also accepts `paste-image`. This explicit user action reads `image/png`,
+validates it in a separate helper, saves a private PNG on the **daemon host**, and pastes only its
+shell-quoted path plus a space. It neither sends image bytes as keyboard input nor presses Enter.
+The target must remain the attached Session's focused Pane. Clipboard refusal, invalid PNG data,
+ownership changes, or file errors fail the operation rather than falling back to text paste.
+
+Files are saved under `$XDG_CACHE_HOME/lemma/clipboard`, or `$HOME/.cache/lemma/clipboard` when
+`XDG_CACHE_HOME` is unset. The directory is owner-only and files have mode `0600`. Saved files
+persist until you remove them; they are not extension resources or automatically deleted on detach.
+The adjacent `lemma-clipboard-host` executable must accompany the installation. This is a terminal
+protocol bridge, not an OS clipboard utility or an OSC 52 image-read fallback. The outer terminal's
+own consent policy still applies. Transfers are limited to 1 MiB and time out after 30 seconds;
+PNG validation/file creation has a separate 10-second deadline.
 
 ## Automation
 
@@ -246,9 +269,48 @@ lemma skill > ~/.agents/skills/lemma/SKILL.md
 
 Repeat the export after updating Lemma so the installed guide stays matched to the binary.
 
+## Terminal compatibility
+
+Panes use `TERM=lemma` and `COLORTERM=truecolor`. Lemma builds a dedicated
+[terminfo entry](../terminfo/lemma.terminfo) with `tic -x` and installs it under `share/terminfo`.
+It describes the virtual terminal inside a Pane, not the outer terminal. `TERMINFO` in each child
+points to that entry, including when running directly from a build tree. Keep the resources with
+the executable when relocating an installation; copying only the binary is insufficient.
+
+The entry uses the xterm-256color base, adds direct-color and styled-underline declarations, and
+omits clipboard and cursor-shape capabilities not provided by the current policy. Ghostty's
+terminal-name query reports the same identity as `TERM`.
+
+An SSH destination also needs the entry to run terminfo-based applications under `TERM=lemma`.
+Install it on that destination rather than setting `TERM` to the outer terminal's name. For example,
+from a Lemma pane, `infocmp -x lemma | ssh HOST 'tic -x -'` installs it in the remote user's database.
+This does not install a remote Lemma daemon.
+
+### Kitty graphics
+
+Lemma retains Kitty images and placements in the daemon's native terminal state; it does not pass
+application graphics escape sequences through to the outer terminal. PNG, RGB/RGBA, multipart
+uploads, Unicode placeholders, relative placements, and animation are projected into Pane geometry.
+The outer terminal must support Kitty graphics. Pixel cell dimensions come from its window-size
+report, with an 8×16 fallback when unavailable.
+
+Images are clipped to Pane bounds and extension UI coverage, reconstructed on reattach, and
+repositioned on resize. Placeholder characters are not replayed to the outer terminal. Animation
+uses native frame state and bounded presentation deadlines, not PTY-output polling. Slow uploads
+pause animation advancement rather than repeatedly abandoning incomplete frames. Synchronized
+Pane presentation retains finished images; a covering Surface suppresses those frozen images until
+the Pane can be presented again.
+
+Per-Pane image storage is bounded to 8 MiB. PNGs must be at most 4096×4096 and decode within that
+bound. A composed Attachment supports at most 256 visible image fragments and 32 MiB of projected
+image data. Native projection also bounds stored image/placement counts and lookup work. Exceeding
+presentation capacity fails the attachment rather than drawing outside its bounds. Graphics output
+is limited to 64 KiB per frame. Pixel-exact non-cell-aligned scaling uses incremental nearest-neighbor
+sampling; ordinary cell-aligned images retain their original pixel transfer.
+
 ## Current limits
 
 - A Session accepts one attached controller at a time.
 - Session, process, terminal, and history state survive detach, not daemon death or reboot.
-- Kitty graphics and the Glyph Protocol are disabled.
-- Lemma uses `xterm-256color` and does not yet ship a dedicated terminfo entry.
+- Kitty file, temporary-file, and shared-memory image transports remain disabled; use direct uploads.
+- The Glyph Protocol is disabled.

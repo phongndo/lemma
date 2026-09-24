@@ -1,15 +1,73 @@
 #include "platform/io.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstddef>
+#include <cstring>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <cstdint>
+#include <mach-o/dyld.h>
+#endif
 
 namespace lemma::platform {
+
+[[nodiscard]] auto executable_path(const std::span<char> output) noexcept -> std::size_t {
+  if (output.empty()) {
+    return 0;
+  }
+#ifdef __APPLE__
+  auto size = static_cast<std::uint32_t>(output.size());
+  if (_NSGetExecutablePath(output.data(), &size) != 0) {
+    return 0;
+  }
+  return std::char_traits<char>::length(output.data());
+#else
+  const auto size = ::readlink("/proc/self/exe", output.data(), output.size() - 1U);
+  if (size <= 0 || static_cast<std::size_t>(size) >= output.size() - 1U) {
+    return 0;
+  }
+  output.subspan(static_cast<std::size_t>(size), 1).front() = '\0';
+  return static_cast<std::size_t>(size);
+#endif
+}
+
+[[nodiscard]] auto terminfo_directory(const std::span<char> output) noexcept -> std::size_t {
+  std::array<char, 4096> executable{};
+  const auto size = executable_path(executable);
+  if (size == 0) {
+    return 0;
+  }
+  const std::string_view path(executable.data(), size);
+  const auto separator = path.find_last_of('/');
+  if (separator == std::string_view::npos) {
+    return 0;
+  }
+  try {
+    // Build trees and relocatable installations both carry their compiled entry. Do not advertise
+    // TERM=lemma when a bare copied executable cannot make its terminfo available to children.
+    for (const auto* const suffix : {"/terminfo", "/../share/terminfo"}) {
+      const auto directory = std::string(path.substr(0, separator)) + suffix;
+      if (directory.size() < output.size() &&
+          (::access((directory + "/l/lemma").c_str(), R_OK) == 0 ||
+           ::access((directory + "/6c/lemma").c_str(), R_OK) == 0)) {
+        std::ranges::copy(directory, output.begin());
+        output.subspan(directory.size(), 1).front() = '\0';
+        return directory.size();
+      }
+    }
+  } catch (...) {
+    return 0; // Resource lookup failure is returned to process creation, never hidden.
+  }
+  return 0;
+}
 
 [[nodiscard]] auto write_all(const int descriptor, const std::span<const std::byte> bytes) noexcept
     -> bool {

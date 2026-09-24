@@ -31,11 +31,15 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <crt_externs.h>
+#endif
 
 extern "C" {
 #include <lauxlib.h>
@@ -166,12 +170,27 @@ struct LuaConfiguration final {
   return 0;
 }
 
+// Validate the complete terminal policy before publishing any field.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto read_terminal_options(lua_State* const state, const int table,
                                          config::TerminalConfiguration& target) -> int {
   const auto absolute = lua_absindex(state, table);
   lua_pushnil(state);
   while (lua_next(state, absolute) != 0) {
     const auto key = lua_table_key(state);
+    if (key == std::optional<std::string_view>{"clipboard_read"} ||
+        key == std::optional<std::string_view>{"clipboard_write"}) {
+      if (lua_type(state, -1) != LUA_TBOOLEAN) {
+        return raise_lua_error(state, "terminal clipboard policy must be boolean");
+      }
+      if (*key == "clipboard_read") {
+        target.clipboard_read = lua_toboolean(state, -1) != 0;
+      } else {
+        target.clipboard_write = lua_toboolean(state, -1) != 0;
+      }
+      lua_pop(state, 1);
+      continue;
+    }
     if (key != std::optional<std::string_view>{"scrollback_lines"}) {
       return raise_lua_error(state, "unknown lemma.setup.terminal option");
     }
@@ -923,10 +942,22 @@ struct HostFrame final {
                                          : std::string{};
 }
 
-[[nodiscard]] auto regular_readable_file(const std::string& path) noexcept -> bool {
+enum class ConfigurationFile : std::uint8_t { absent, readable, invalid };
+
+[[nodiscard]] auto configuration_file(const std::string& path) noexcept -> ConfigurationFile {
+  if (path.empty()) {
+    return ConfigurationFile::absent;
+  }
   struct stat status{};
-  return !path.empty() && ::stat(path.c_str(), &status) == 0 && S_ISREG(status.st_mode) &&
-         ::access(path.c_str(), R_OK) == 0;
+  if (::lstat(path.c_str(), &status) != 0) {
+    return errno == ENOENT ? ConfigurationFile::absent : ConfigurationFile::invalid;
+  }
+  // A dangling symlink is an existing invalid configuration, not an absent optional file.
+  if (S_ISLNK(status.st_mode) && ::stat(path.c_str(), &status) != 0) {
+    return ConfigurationFile::invalid;
+  }
+  return S_ISREG(status.st_mode) && ::access(path.c_str(), R_OK) == 0 ? ConfigurationFile::readable
+                                                                      : ConfigurationFile::invalid;
 }
 
 [[nodiscard]] auto spawn_host(const std::string& path) noexcept
@@ -1076,6 +1107,40 @@ void HostProcess::reset() noexcept {
 }
 
 namespace {
+[[nodiscard]] auto decode_configuration(const std::string_view payload, ConfigurationLoad& result)
+    -> bool {
+  const auto registration = api::parse_json(payload);
+  if (!registration.value.has_value() || registration.value->object.size() != 2U) {
+    result.diagnostic = "configuration runtime returned an invalid document";
+    return false;
+  }
+  const auto* const configuration = api::json_member(*registration.value, "configuration");
+  const auto* const commands = api::json_member(*registration.value, "commands");
+  auto declarations = commands == nullptr ? std::nullopt : decode_commands(*commands);
+  auto decoded = configuration == nullptr ? config::DecodeResult{} : config::decode(*configuration);
+  if (!decoded.configuration.has_value() || !declarations.has_value()) {
+    result.diagnostic = "configuration runtime returned an invalid document";
+    return false;
+  }
+  const auto& input = decoded.configuration->input;
+  for (const auto& binding : std::span(input.bindings).first(input.binding_count)) {
+    if (binding.action.kind == input::ConfiguredBindingKind::hosted_command &&
+        binding.action.hosted_command >= declarations->size()) {
+      result.diagnostic = "input binding references an undeclared command";
+      return false;
+    }
+  }
+  auto compiled = config::compile(*decoded.configuration);
+  if (!compiled.has_value()) {
+    result.diagnostic = "configuration input map failed validation";
+    return false;
+  }
+  result.generation = std::make_unique<config::Generation>(std::move(*compiled));
+  result.commands = std::move(*declarations);
+  result.status = result.path.empty() ? ConfigurationStatus::absent : ConfigurationStatus::loaded;
+  return true;
+}
+
 // NOLINTNEXTLINE(bugprone-exception-escape,readability-function-cognitive-complexity)
 auto load_configuration_impl(const std::optional<std::string_view> requested_path,
                              const bool builtins_only) noexcept -> ConfigurationLoad {
@@ -1100,12 +1165,13 @@ auto load_configuration_impl(const std::optional<std::string_view> requested_pat
     result.diagnostic = path_required ? "invalid configuration path" : std::string{};
     return result;
   }
-  if (!regular_readable_file(result.path)) {
-    if (path_required) {
-      result.status = ConfigurationStatus::invalid;
-      result.diagnostic = "configuration file is not readable";
-      return result;
-    }
+  const auto file = configuration_file(result.path);
+  if (file == ConfigurationFile::invalid || (file == ConfigurationFile::absent && path_required)) {
+    result.status = ConfigurationStatus::invalid;
+    result.diagnostic = "configuration file is not a readable regular file";
+    return result;
+  }
+  if (file == ConfigurationFile::absent) {
     result.path.clear();
   }
 
@@ -1120,54 +1186,15 @@ auto load_configuration_impl(const std::optional<std::string_view> requested_pat
     result.diagnostic = std::move(frame->payload);
     return result;
   }
-  config::DecodeResult decoded;
   try {
-    const auto registration = api::parse_json(frame->payload);
-    const auto* const configuration = registration.value.has_value()
-                                          ? api::json_member(*registration.value, "configuration")
-                                          : nullptr;
-    const auto* const commands = registration.value.has_value()
-                                     ? api::json_member(*registration.value, "commands")
-                                     : nullptr;
-    auto declarations = commands == nullptr ? std::nullopt : decode_commands(*commands);
-    if (registration.value.has_value() && configuration != nullptr && declarations.has_value() &&
-        registration.value->object.size() == 2U) {
-      decoded = config::decode(*configuration);
-      result.commands = std::move(*declarations);
-    }
-  } catch (...) {
-    decoded = {};
-    result.commands.clear();
-  }
-  if (!decoded.configuration.has_value()) {
-    result.status = ConfigurationStatus::invalid;
-    result.diagnostic = "configuration runtime returned an invalid document";
-    return result;
-  }
-  const auto& input = decoded.configuration->input;
-  for (const auto& binding : std::span(input.bindings).first(input.binding_count)) {
-    if (binding.action.kind == input::ConfiguredBindingKind::hosted_command &&
-        binding.action.hosted_command >= result.commands.size()) {
-      result.status = ConfigurationStatus::invalid;
-      result.diagnostic = "input binding references an undeclared command";
+    if (decode_configuration(frame->payload, result)) {
+      result.host = std::move(host);
       return result;
     }
-  }
-  auto compiled = config::compile(*decoded.configuration);
-  if (!compiled.has_value()) {
-    result.status = ConfigurationStatus::invalid;
-    result.diagnostic = "configuration input map failed validation";
-    return result;
-  }
-  try {
-    result.generation = std::make_unique<config::Generation>(std::move(*compiled));
   } catch (...) {
-    result.status = ConfigurationStatus::invalid;
     result.diagnostic = "configuration publication allocation failed";
-    return result;
   }
-  result.host = std::move(host);
-  result.status = result.path.empty() ? ConfigurationStatus::absent : ConfigurationStatus::loaded;
+  result.status = ConfigurationStatus::invalid;
   return result;
 }
 
@@ -1180,6 +1207,187 @@ auto load_configuration(const std::optional<std::string_view> requested_path) no
 
 auto load_builtin_configuration() noexcept -> ConfigurationLoad {
   return load_configuration_impl(std::nullopt, true);
+}
+
+auto run_configuration_host(const std::string_view requested, const bool required) noexcept -> int {
+  constexpr int channel = 3;
+  if (!set_close_on_exec(channel)) {
+    return 1;
+  }
+  try {
+    std::string path(requested);
+    const auto file = configuration_file(path);
+    if (file == ConfigurationFile::invalid || (file == ConfigurationFile::absent && required)) {
+      static_cast<void>(send_host_message(channel, HostMessageStatus::failed,
+                                          "configuration file is not a readable regular file"));
+      return 1;
+    }
+    if (file == ConfigurationFile::absent) {
+      path.clear();
+    }
+    return run_host(channel, path);
+  } catch (...) {
+    // Process boundary: allocation/encoding failure must reject the candidate, never publish
+    // defaults. If even the bounded error frame cannot be sent, EOF is a failed load.
+    static_cast<void>(send_host_message(channel, HostMessageStatus::failed,
+                                        "configuration host resource failure"));
+    return 1;
+  }
+}
+
+// POSIX spawn setup keeps descriptor/process cleanup explicit on each fallible operation.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto ConfigurationLoader::start() noexcept -> bool {
+  if (load_.host.active()) {
+    return false;
+  }
+  std::array<int, 2> sockets{-1, -1};
+  posix_spawn_file_actions_t actions{};
+  posix_spawnattr_t attributes{};
+  bool actions_ready = false;
+  bool attributes_ready = false;
+  bool started = false;
+  try {
+    load_.path = candidate_configuration_path();
+    std::array<char, 4096> executable{};
+    const auto size = platform::executable_path(executable);
+    const std::string_view executable_name(executable.data(), size);
+    std::string helper(executable_name.substr(0, executable_name.find_last_of('/') + 1U));
+    helper += "lemma-config-host";
+    const char* const configured = std::getenv("LEMMA_CONFIG");
+    std::string required = configured != nullptr && *configured != '\0' ? "required" : "optional";
+    input_.resize(host_header_bytes + config::configuration_document_bytes_max);
+    used_ = 0;
+    target_ = host_header_bytes;
+    finished_ = false;
+    if (size != 0 && ::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) == 0 &&
+        set_close_on_exec(sockets.front()) && set_close_on_exec(sockets.back()) &&
+        platform::set_nonblocking(sockets.front()) &&
+        ::posix_spawn_file_actions_init(&actions) == 0) {
+      actions_ready = true;
+      if (::posix_spawnattr_init(&attributes) == 0) {
+        attributes_ready = true;
+        sigset_t defaults{};
+        sigset_t mask{};
+        static_cast<void>(sigemptyset(&defaults));
+        static_cast<void>(sigemptyset(&mask));
+        for (const auto signal : {SIGCHLD, SIGPIPE, SIGINT, SIGTERM, SIGHUP}) {
+          static_cast<void>(sigaddset(&defaults, signal));
+        }
+        std::array arguments{helper.data(), load_.path.data(), required.data(),
+                             static_cast<char*>(nullptr)};
+        pid_t process = -1;
+        constexpr short spawn_flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF |
+                                      POSIX_SPAWN_SETSIGMASK
+#ifdef __APPLE__
+                                      | POSIX_SPAWN_CLOEXEC_DEFAULT
+#endif
+            ;
+#ifdef __APPLE__
+        auto** environment = *_NSGetEnviron();
+#else
+        auto** environment = ::environ;
+#endif
+        if (::posix_spawn_file_actions_adddup2(&actions, sockets.back(), 3) == 0 &&
+            (sockets.front() == 3 ||
+             ::posix_spawn_file_actions_addclose(&actions, sockets.front()) == 0) &&
+            (sockets.back() == 3 ||
+             ::posix_spawn_file_actions_addclose(&actions, sockets.back()) == 0) &&
+#ifndef __APPLE__
+            ::posix_spawn_file_actions_addclosefrom_np(&actions, 4) == 0 &&
+#endif
+            ::posix_spawnattr_setpgroup(&attributes, 0) == 0 &&
+            ::posix_spawnattr_setsigdefault(&attributes, &defaults) == 0 &&
+            ::posix_spawnattr_setsigmask(&attributes, &mask) == 0 &&
+            ::posix_spawnattr_setflags(&attributes, spawn_flags) == 0 &&
+            ::posix_spawn(&process, helper.c_str(), &actions, &attributes, arguments.data(),
+                          environment) == 0) {
+          load_.host = HostProcess(std::exchange(sockets.front(), -1), static_cast<int>(process));
+          deadline_ = std::chrono::steady_clock::now() + startup_timeout;
+          started = true;
+        }
+      }
+    }
+  } catch (...) {
+    started = false;
+  }
+  if (actions_ready) {
+    static_cast<void>(::posix_spawn_file_actions_destroy(&actions));
+  }
+  if (attributes_ready) {
+    static_cast<void>(::posix_spawnattr_destroy(&attributes));
+  }
+  close_descriptor(sockets.front());
+  close_descriptor(sockets.back());
+  return started;
+}
+
+// One bounded read advances header/payload admission; no waiting or partial publication.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto ConfigurationLoader::advance(const std::chrono::steady_clock::time_point now) noexcept
+    -> bool {
+  if (finished_) {
+    return true;
+  }
+  try {
+    bool failed = now >= deadline_;
+    if (!failed) {
+      const auto count = ::read(descriptor(), std::span(input_).subspan(used_).data(),
+                                std::min(target_ - used_, std::size_t{16} * 1024U));
+      if (count > 0) {
+        used_ += static_cast<std::size_t>(count);
+      } else if (count == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+        failed = true;
+      }
+    }
+    if (!failed && used_ >= host_header_bytes) {
+      const auto header = std::span(input_).first(host_header_bytes);
+      const auto status = static_cast<HostMessageStatus>(
+          std::to_integer<std::uint8_t>(header.subspan(6, 1).front()));
+      const auto size = (std::to_integer<std::uint32_t>(header.subspan(8, 1).front()) << 24U) |
+                        (std::to_integer<std::uint32_t>(header.subspan(9, 1).front()) << 16U) |
+                        (std::to_integer<std::uint32_t>(header.subspan(10, 1).front()) << 8U) |
+                        std::to_integer<std::uint32_t>(header.subspan(11, 1).front());
+      const auto maximum = status == HostMessageStatus::configured
+                               ? config::configuration_document_bytes_max
+                               : diagnostic_bytes_max;
+      failed = !std::ranges::equal(header.first(host_magic.size()), host_magic) ||
+               header.subspan(4, 1).front() != std::byte{1} ||
+               header.subspan(5, 1).front() != std::byte{0} ||
+               header.subspan(7, 1).front() != std::byte{0} || size > maximum ||
+               (status != HostMessageStatus::configured && status != HostMessageStatus::failed);
+      if (!failed) {
+        target_ = host_header_bytes + size;
+        if (used_ == target_) {
+          // Header validation bounds this borrowed UTF-8 document.
+          const auto bytes = std::span(input_).subspan(host_header_bytes, size);
+          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+          const auto* const text = reinterpret_cast<const char*>(bytes.data());
+          const std::string_view payload(text, size);
+          if (status == HostMessageStatus::configured && decode_configuration(payload, load_)) {
+            finished_ = true;
+            return true;
+          }
+          if (status == HostMessageStatus::failed) {
+            load_.diagnostic = payload;
+          }
+          failed = true;
+        }
+      }
+    }
+    if (!failed) {
+      return false;
+    }
+    if (load_.diagnostic.empty()) {
+      load_.diagnostic = "configuration runtime timed out or exited without a valid result";
+    }
+  } catch (...) {
+    load_.diagnostic.clear();
+  }
+  load_.status = ConfigurationStatus::invalid;
+  load_.host.terminate();
+  finished_ = true;
+  return true;
 }
 
 } // namespace lemma::extension

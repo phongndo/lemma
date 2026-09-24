@@ -6,6 +6,14 @@
     {
       "file": "patches/resize-viewport.patch",
       "sha256": "756618188f3933a3ceb1e2881bc2829e49dcee1b40676243fbc10bf3772641ab"
+    },
+    {
+      "file": "patches/async-clipboard.patch",
+      "sha256": "33362be9152c7ec176201d8ed1273aaa9a2a8bdbb8f72bb68d34506ce0071099"
+    },
+    {
+      "file": "patches/kitty-render.patch",
+      "sha256": "23d862ca0039ba21007cd47714a9f61e15bb3edd87d7737f9819494344cb9dc8"
     }
   ],
   "zig_version": "0.16.0",

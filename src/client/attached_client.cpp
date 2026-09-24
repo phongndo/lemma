@@ -34,6 +34,9 @@ namespace lemma::client {
 namespace {
 
 constexpr auto host_input_flush_delay = std::chrono::milliseconds(50);
+// Recognized OSC records are transport, not ambiguous Escape keys. Partial progress cannot renew
+// this deadline; exhaustion still fails closed instead of reinterpreting clipboard bytes as input.
+constexpr auto host_terminal_reply_timeout = std::chrono::seconds(30);
 // Window managers emit SIGWINCH repeatedly during one physical resize gesture. A trailing-edge
 // commit prevents those samples from becoming a stream of child PTY resizes and shell redraws.
 constexpr auto outer_resize_quiet_delay = std::chrono::milliseconds(50);
@@ -44,6 +47,7 @@ constexpr auto outer_resize_quiet_delay = std::chrono::milliseconds(50);
 constexpr std::string_view outer_terminal_enter =
     "\x1B[?1049h\x1B[2J\x1B[H\x1B[?2004h\x1B[?1004h\x1B[?1002h\x1B[?1006h\x1B[>23u";
 constexpr std::string_view outer_terminal_restore =
+    "\x18\x1B_Gq=2,m=0;\x1B\\\x1B_Ga=d,d=A,q=2\x1B\\"
     "\x1B[0m\x1B[?2026l\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l"
     "\x1B[?1004l\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l"
     "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[<u\x1B[?1049l";
@@ -555,8 +559,14 @@ private:
 [[nodiscard]] auto send_resize(const int connection, const platform::WindowSize size,
                                std::uint32_t& sequence) noexcept -> bool {
   return send_small_message(
-      connection, protocol::encode_resize({.columns = size.columns, .rows = size.rows}, sequence),
-      sequence);
+             connection,
+             protocol::encode_cell_size(
+                 {.width = size.cell_width_px, .height = size.cell_height_px}, sequence),
+             sequence) &&
+         send_small_message(
+             connection,
+             protocol::encode_resize({.columns = size.columns, .rows = size.rows}, sequence),
+             sequence);
 }
 
 template <typename Header>
@@ -889,7 +899,13 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     const bool handshake_accepted =
         raw_terminal_entered && send_interruptibly(connection, hello.bytes()) &&
         receive_handshake(connection, decoder, dimensions) == HandshakeResult::accepted;
-    terminal_setup_succeeded = handshake_accepted && outer_terminal.enter();
+    terminal_setup_succeeded =
+        handshake_accepted && outer_terminal.enter() &&
+        send_small_message(
+            connection,
+            protocol::encode_cell_size({.width = size.cell_width_px, .height = size.cell_height_px},
+                                       client_sequence),
+            client_sequence);
     if (terminal_setup_succeeded) {
       termination_render_descriptor = outer_terminal.render_descriptor();
       // A rejected handshake has not acquired an AttachmentRuntime and must not leave terminal
@@ -918,6 +934,13 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         switch (event.kind) {
         case HostInputKind::ordinary:
           if (!send_input(connection, bytes, client_sequence)) {
+            return false;
+          }
+          break;
+        case HostInputKind::terminal_reply:
+          if (!send_payload(connection,
+                            protocol::encode_terminal_reply_header(bytes.size(), client_sequence),
+                            bytes, client_sequence)) {
             return false;
           }
           break;
@@ -951,12 +974,21 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     };
     const auto forward_physical_input = [&](const std::span<const std::byte> bytes) noexcept {
       const auto current_size = terminal_size();
+      const bool reply_was_active = host_input_parser.terminal_reply_active();
       const auto parsed = host_input_parser.parse(
           bytes, classified_input, {.columns = current_size.columns, .rows = current_size.rows});
       if (!parsed.has_value() || !forward_host_batch(*parsed)) {
         return false;
       }
-      if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
+      if (host_input_parser.terminal_reply_active()) {
+        const bool completed_reply = std::ranges::any_of(
+            std::span(parsed->events).first(parsed->event_count), [](const HostInputEvent& event) {
+              return event.kind == HostInputKind::terminal_reply;
+            });
+        if (!reply_was_active || completed_reply) {
+          host_input_deadline = std::chrono::steady_clock::now() + host_terminal_reply_timeout;
+        }
+      } else if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
         host_input_deadline = std::chrono::steady_clock::now() + host_input_flush_delay;
       }
       return true;
@@ -987,7 +1019,9 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
         return true;
       }
       const auto settled_size = terminal_size();
-      if ((settled_size.columns != sent_size.columns || settled_size.rows != sent_size.rows) &&
+      if ((settled_size.columns != sent_size.columns || settled_size.rows != sent_size.rows ||
+           settled_size.cell_width_px != sent_size.cell_width_px ||
+           settled_size.cell_height_px != sent_size.cell_height_px) &&
           !send_resize(connection, settled_size, client_sequence)) {
         return false;
       }

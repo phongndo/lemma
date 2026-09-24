@@ -150,6 +150,11 @@ without calling a status renderer or invoking extension code.
 The daemon borrows one immutable compiled configuration generation. Shipped and user-declared input
 policies compile through the same path: Core owns semantic commands; configuration chooses their keys
 and routing transitions. Ordinary input, PTY processing, and composition never call into Lua.
+Explicit reload stages a separate host, consumes its bounded registration asynchronously, and
+replaces the generation between reactor stages after cancelling old invocation ownership. All input
+routers switch before the old generation is released; child reaping retains revoked process-group
+identity until cleanup. [Configuration](configuration.md#reload) owns reloadable settings and
+interaction/failure semantics.
 
 Keybindings compile hosted names to bounded command indices. Routing captures invocation context and
 queues at most one invocation per Attachment; host service, not the input stack, launches it. The
@@ -190,4 +195,25 @@ Attachment geometry -> Surface placement -> Core layout -> Pane geometry -> PTY 
 
 Docks change the effective pane viewport; floats and overlays do not. The child PTY receives target
 dimensions before Ghostty parses output at those dimensions. Multi-pane resize publishes semantic
-geometry only after dependent runtime work succeeds.
+geometry only after dependent runtime work succeeds. Attached clients also report cell pixel size;
+that geometry follows the connection during Session transfer and participates in native resize.
+
+Kitty image pixels, placements, placeholders, and animation frames stay in Ghostty-owned canonical
+state. The terminal adapter exposes bounded borrowed projections using the
+[local native hooks](../third_party/ghostty-metadata/PATCHES.md). An Attachment-owned graphics cache
+retains only upload progress, image generations, and presentation geometry; all pixel views end with
+the composition call. Native code clips images against Panes and Surface coverage, namespaces outer
+image IDs, and schedules bounded continuation frames and animation deadlines. No extension executes
+in this path. File/shared-memory graphics transports remain disabled.
+
+Application clipboard callbacks retain an owned native request rather than waiting for the client.
+One correlated, deadline-bound transaction belongs to the Attachment. Recognized outer replies have
+a dedicated input/protocol record and enter the originating Pane's ordered response queue, never
+keymaps, Surface input, or paste. Once recognized, an incomplete OSC reply has a fixed 30-second
+transport deadline, independent of the Escape-key disambiguation timer; timeout fails the attachment
+closed rather than leaking partial clipboard data as input. Bracketed paste remains opaque.
+Complete OSC records allow rendering
+between clipboard chunks; cancellation aborts an unfinished write rather than committing partial
+contents. Permission and focus are rechecked on service. Image-to-path paste retains Proc/connection
+ownership while `lemma-clipboard-host` performs PNG validation and filesystem work outside the
+reactor. [Usage](usage.md#clipboard-images) defines its user-visible file and permission semantics.

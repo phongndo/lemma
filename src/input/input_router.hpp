@@ -456,6 +456,8 @@ public:
   explicit InputRouter(const CompiledInputMap& map) noexcept;
 
   void reset() noexcept;
+  // Drop transient contexts/deferred triggers, but preserve press-time release ownership.
+  void reconfigure(const CompiledInputMap& map) noexcept;
   void select_base(ConfiguredInputContext selected) noexcept;
   [[nodiscard]] auto active_label() const noexcept -> std::string_view;
   [[nodiscard]] auto unbound() const noexcept -> UnboundBehavior {

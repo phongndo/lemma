@@ -792,7 +792,13 @@ void Terminal::Impl::apply_physical_scroll(const std::int32_t scroll) noexcept {
         trailing_blank_changed = false;
       }
 
-      if (grapheme_buffer.len == 0) {
+      // Project placeholders natively; outer image IDs belong to the attachment,
+      // not this Pane. Never let the outer terminal interpret these cells again.
+      constexpr std::array<std::uint8_t, 4> placeholder{0xF4, 0x8E, 0xBB, 0xAE};
+      const bool graphics_placeholder =
+          grapheme_bytes.size() >= placeholder.size() &&
+          std::ranges::equal(grapheme_bytes.first(placeholder.size()), placeholder);
+      if (grapheme_buffer.len == 0 || graphics_placeholder) {
         if (wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && !writer.append(" ")) {
           return std::unexpected(Error::out_of_space);
         }

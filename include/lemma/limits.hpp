@@ -89,6 +89,8 @@ inline constexpr std::size_t pixel_mouse_report_bytes_max = 128;
 inline constexpr std::size_t paste_payload_bytes_max = std::size_t{1} * 1'024U * 1'024U;
 inline constexpr std::size_t terminal_effect_text_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t clipboard_decoded_bytes_max = std::size_t{1} * 1'024U * 1'024U;
+inline constexpr std::size_t clipboard_response_bytes_max =
+    (std::size_t{2} * 1'024U * 1'024U) + 8192U;
 inline constexpr std::size_t hyperlink_uri_bytes_max = std::size_t{8} * 1'024U;
 inline constexpr std::size_t unknown_sequence_bytes_max = std::size_t{4} * 1'024U;
 inline constexpr std::size_t snapshot_bytes_max = std::size_t{64} * 1'024U * 1'024U;
@@ -104,8 +106,11 @@ inline constexpr std::size_t terminal_pty_response_bytes_max = std::size_t{64} *
 // maximally expanded 8 KiB legacy packet or one bounded typed paste. Queue storage is allocated
 // lazily under this daemon-wide budget, while accepted-input delivery remains all-or-nothing.
 inline constexpr std::size_t normalized_client_input_bytes_max = std::size_t{8} * 1'024U * 128U;
-inline constexpr std::size_t pane_pty_write_queue_bytes_max =
+inline constexpr std::size_t pane_pty_input_backlog_bytes_max =
     terminal_pty_response_bytes_max + normalized_client_input_bytes_max;
+// Clipboard reply headroom must not increase ordinary input admission or its allocation ceiling.
+inline constexpr std::size_t pane_pty_write_queue_bytes_max =
+    pane_pty_input_backlog_bytes_max + clipboard_response_bytes_max;
 inline constexpr std::size_t pane_pty_write_queue_bytes_aggregate_max =
     std::size_t{128} * 1'024U * 1'024U;
 static_assert(pane_pty_write_queue_bytes_aggregate_max >= pane_pty_write_queue_bytes_max);

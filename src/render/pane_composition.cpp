@@ -1,4 +1,5 @@
 #include "render/pane_composition.hpp"
+#include "render/graphics.hpp"
 #include "render/status_line.hpp"
 
 #include "lemma/limits.hpp"
@@ -747,12 +748,12 @@ struct CompositionPolicy final {
 
 // Validation is a separate pass so malformed composition input cannot partially consume terminal
 // damage or alter retained pane state. The bounded branches preserve all-or-nothing composition.
+[[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-[[nodiscard]] auto compose_scene(const Scene scene, const Viewport viewport,
-                                 const std::span<std::byte> output, const bool force_full,
-                                 const StatusLine status,
-                                 const std::optional<OuterModeProjection> previous_outer_modes,
-                                 const MessageView message_view) noexcept
+compose_scene(const Scene scene, const Viewport viewport, const std::span<std::byte> output,
+              const bool force_full, const StatusLine status,
+              const std::optional<OuterModeProjection> previous_outer_modes,
+              const MessageView message_view, GraphicsProjection* const graphics) noexcept
     -> std::expected<CompositionResult, CompositionError> {
   const auto status_rows =
       has_visible_status(viewport, status) ? std::uint16_t{1} : std::uint16_t{0};
@@ -824,6 +825,19 @@ struct CompositionPolicy final {
     if (!cursor.has_value()) {
       return std::unexpected(cursor.error());
     }
+  }
+  if (graphics != nullptr) {
+    constexpr std::size_t finish_reserve = 512;
+    const auto available = output.size() - used;
+    const auto encoded = graphics->append(
+        message_view.active ? Scene{} : scene, status_rows,
+        output.subspan(used, available > finish_reserve ? available - finish_reserve : 0),
+        complete_full, composition.rows > 0);
+    if (!encoded) {
+      invalidate_scene(scene);
+      return std::unexpected(CompositionError::terminal_error);
+    }
+    used += *encoded;
   }
   return finish_composition(scene, status, viewport, output, used, force_full, complete_frame,
                             previous_outer_modes, composition);

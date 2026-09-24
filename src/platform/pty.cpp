@@ -1,7 +1,9 @@
 #include "platform/pty.hpp"
 
 #include "lemma/limits.hpp"
+#include "lemma/terminal_identity.hpp"
 #include "lemma/version.hpp"
+#include "platform/io.hpp"
 
 #include <algorithm>
 #include <array>
@@ -206,6 +208,10 @@ auto capture_process_environment(const std::span<std::byte> output) noexcept
     }
   }
 
+  std::array<char, 4096> terminfo{};
+  if (terminfo_directory(terminfo) == 0) {
+    return -1;
+  }
   winsize initial_size{.ws_row = 24, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0};
   const auto child = ::forkpty(&pty_descriptor, nullptr, nullptr, &initial_size);
   if (child != 0) {
@@ -222,8 +228,12 @@ auto capture_process_environment(const std::span<std::byte> output) noexcept
       !install_environment(std::span(environment_copy).first(environment.size()),
                            environment_mode) ||
       (!working_directory.empty() && ::setenv("PWD", directory.data(), 1) != 0) ||
-      !install_overlay(overlay) || ::setenv("TERM", "xterm-256color", 1) != 0 ||
-      ::setenv("COLORTERM", "truecolor", 1) != 0 || ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
+      !install_overlay(overlay) ||
+      // terminal_name is backed by a null-terminated string literal.
+      // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
+      ::setenv("TERM", terminal_name.data(), 1) != 0 ||
+      ::setenv("TERMINFO", terminfo.data(), 1) != 0 || ::setenv("COLORTERM", "truecolor", 1) != 0 ||
+      ::setenv("TERM_PROGRAM", "lemma", 1) != 0 ||
       // version is backed by a null-terminated string literal.
       // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
       ::setenv("TERM_PROGRAM_VERSION", lemma::version.data(), 1) != 0) {

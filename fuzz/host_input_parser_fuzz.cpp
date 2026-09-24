@@ -44,6 +44,7 @@ struct Transcript final {
     switch (value.kind) {
     case HostInputKind::ordinary:
     case HostInputKind::paste:
+    case HostInputKind::terminal_reply:
       break;
     case HostInputKind::key:
       mix(static_cast<std::uint8_t>(value.key.action));

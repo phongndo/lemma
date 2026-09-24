@@ -1,8 +1,10 @@
+#include "lemma/limits.hpp"
 #include "terminal/terminal_impl.hpp"
 
 #include "lemma/assert.hpp"
 #include "lemma/terminal/terminal.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,10 +19,21 @@ void Terminal::Impl::write_pty([[maybe_unused]] GhosttyTerminal terminal_handle,
                                const std::uint8_t* data, const std::size_t length) noexcept {
   auto& impl = *static_cast<Impl*>(userdata);
   const auto bytes = std::as_bytes(std::span(data, length));
-  if (!impl.pty_responses.append(bytes)) {
-    impl.effects.pty_response_overflowed = true;
-    impl.pty_response_integrity_failed = true;
+  if (impl.capturing_clipboard_reply || !impl.clipboard_responses.empty()) {
+    try {
+      if (bytes.size() <= limits::clipboard_response_bytes_max - impl.clipboard_responses.size()) {
+        impl.clipboard_responses.insert(impl.clipboard_responses.end(), bytes.begin(), bytes.end());
+        return;
+      }
+    } catch (...) {
+      // Callback boundary: allocation failure means reply integrity is lost, never success.
+      impl.pty_response_integrity_failed = true;
+    }
+  } else if (impl.pty_responses.append(bytes)) {
+    return;
   }
+  impl.effects.pty_response_overflowed = true;
+  impl.pty_response_integrity_failed = true;
 }
 
 void Terminal::Impl::bell([[maybe_unused]] GhosttyTerminal terminal_handle,
@@ -82,22 +95,6 @@ auto Terminal::Impl::enquiry([[maybe_unused]] GhosttyTerminal terminal_handle,
                              [[maybe_unused]] void* userdata) noexcept -> GhosttyString {
   static constexpr std::array<std::uint8_t, 5> identity{'l', 'e', 'm', 'm', 'a'};
   return {.ptr = identity.data(), .len = identity.size()};
-}
-
-void Terminal::Impl::clipboard_write([[maybe_unused]] GhosttyTerminal terminal_handle,
-                                     void* userdata, const GhosttyClipboardWrite* write) noexcept {
-  // Application-originated clipboard access is a separate permission from user copy. Until a
-  // session policy explicitly grants it, deny the request at the terminal effect boundary.
-  auto& impl = *static_cast<Impl*>(userdata);
-  if (impl.effects.clipboard_writes_denied < std::numeric_limits<std::uint64_t>::max()) {
-    ++impl.effects.clipboard_writes_denied;
-  }
-  const GhosttyClipboardWriteReply reply{
-      .size = sizeof(GhosttyClipboardWriteReply),
-      .result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED,
-      .remember = false,
-  };
-  write->reply(write, &reply);
 }
 
 auto Terminal::Impl::color_scheme([[maybe_unused]] GhosttyTerminal terminal_handle, void* userdata,
@@ -187,7 +184,8 @@ auto Terminal::take_effects() noexcept -> EffectBatch {
 auto Terminal::pending_pty_response_bytes() const noexcept -> std::size_t {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
-  return impl_->pty_responses.size();
+  return impl_->pty_responses.size() + impl_->clipboard_responses.size() -
+         impl_->clipboard_response_offset;
 }
 
 auto Terminal::pty_response_overflowed() const noexcept -> bool {
@@ -199,7 +197,18 @@ auto Terminal::pty_response_overflowed() const noexcept -> bool {
 auto Terminal::read_pty_responses(const std::span<std::byte> output) noexcept -> std::size_t {
   LEMMA_ASSERT(impl_ != nullptr);
   LEMMA_ASSERT(impl_->terminal != nullptr);
-  return impl_->pty_responses.read(output);
+  auto used = impl_->pty_responses.read(output);
+  const auto available =
+      std::span(impl_->clipboard_responses).subspan(impl_->clipboard_response_offset);
+  const auto count = std::min(output.size() - used, available.size());
+  std::ranges::copy(available.first(count), output.subspan(used).begin());
+  used += count;
+  impl_->clipboard_response_offset += count;
+  if (impl_->clipboard_response_offset == impl_->clipboard_responses.size()) {
+    impl_->clipboard_responses.clear();
+    impl_->clipboard_response_offset = 0;
+  }
+  return used;
 }
 
 } // namespace lemma::vt

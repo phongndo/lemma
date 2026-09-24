@@ -547,7 +547,8 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
     batch.bytes += bytes.size();
     if (batch.event_count > 0) {
       auto& previous = std::span(batch.events).subspan(batch.event_count - 1U, 1).front();
-      if (previous.kind == kind && previous.offset + previous.size == offset) {
+      if (kind != HostInputKind::terminal_reply && previous.kind == kind &&
+          previous.offset + previous.size == offset) {
         previous.size += bytes.size();
         return {};
       }
@@ -658,6 +659,9 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
       continue;
     }
     if (pending_size_ >= pending_.size()) {
+      if (terminal_reply_active_) {
+        return std::unexpected(HostInputError::output_exhausted);
+      }
       const auto emitted = emit_pending(HostInputKind::ordinary, pending_size_);
       if (!emitted.has_value()) {
         return std::unexpected(emitted.error());
@@ -667,6 +671,24 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
     ++pending_size_;
     const auto pending = std::span(pending_).first(pending_size_);
 
+    constexpr std::array clipboard_prefix{std::byte{0x1B}, std::byte{']'}, std::byte{'5'},
+                                          std::byte{'5'},  std::byte{'2'}, std::byte{'2'},
+                                          std::byte{';'}};
+    if (pending.size() >= clipboard_prefix.size() &&
+        std::ranges::equal(pending.first(clipboard_prefix.size()), clipboard_prefix)) {
+      terminal_reply_active_ = true;
+      if (pending.back() == std::byte{7} ||
+          (pending.size() >= 2 &&
+           pending.subspan(pending.size() - 2U, 1).front() == std::byte{0x1B} &&
+           pending.back() == std::byte{'\\'})) {
+        const auto emitted = emit_pending(HostInputKind::terminal_reply, pending_size_);
+        if (!emitted) {
+          return std::unexpected(emitted.error());
+        }
+        terminal_reply_active_ = false;
+      }
+      continue;
+    }
     if (std::ranges::equal(pending, paste_begin)) {
       pending_size_ = 0;
       paste_active_ = true;
@@ -716,9 +738,9 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
     }
 
     const bool known_prefix =
-        prefix_of(pending, paste_begin) || prefix_of(pending, focus_gained) ||
-        prefix_of(pending, focus_lost) || prefix_of(pending, mouse_prefix) ||
-        (kitty_candidate && pending.back() != std::byte{'u'}) ||
+        prefix_of(pending, clipboard_prefix) || prefix_of(pending, paste_begin) ||
+        prefix_of(pending, focus_gained) || prefix_of(pending, focus_lost) ||
+        prefix_of(pending, mouse_prefix) || (kitty_candidate && pending.back() != std::byte{'u'}) ||
         (mouse_candidate && pending.back() != std::byte{'M'} && pending.back() != std::byte{'m'});
     if (known_prefix) {
       continue;
@@ -737,6 +759,9 @@ auto HostInputParser::flush_pending(const std::span<std::byte> output) noexcept
   HostInputBatch batch;
   if (pending_size_ == 0 || paste_active_) {
     return batch;
+  }
+  if (terminal_reply_active_) {
+    return std::unexpected(HostInputError::incomplete_terminal_reply);
   }
   if (pending_size_ > output.size()) {
     return std::unexpected(HostInputError::output_exhausted);

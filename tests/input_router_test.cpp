@@ -431,6 +431,32 @@ TEST(InputRouterTest, DefaultMapEncodesSuperArrowsAsHomeAndEnd) {
   EXPECT_EQ(std::get<EncodeAsKey>(right_routed.effect).modifiers, key_modifier_shift);
 }
 
+TEST(InputRouterTest, ReloadPreservesPressTimeReleaseAndCancelsTransientInput) {
+  InputRouter router(default_input_map());
+  KeyEvent arrow{.key = PhysicalKey::arrow_left, .modifiers = key_modifier_super, .text = {}};
+  ASSERT_TRUE(std::holds_alternative<EncodeAsKey>(router.route_key(arrow).effect));
+  KeyEvent captured{.key = PhysicalKey::c,
+                    .modifiers = key_modifier_super,
+                    .unshifted_codepoint = 'c',
+                    .text = {}};
+  ASSERT_TRUE(std::holds_alternative<RoutedCommand>(router.route_key(captured).effect));
+  const std::array prefix{std::byte{0x02}};
+  static_cast<void>(router.route_legacy(prefix, prefix.size()));
+  router.reconfigure(default_input_map());
+  captured.action = KeyAction::repeat;
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(captured).effect));
+  captured.action = KeyAction::release;
+  EXPECT_TRUE(std::holds_alternative<ConsumedInput>(router.route_key(captured).effect));
+  arrow.action = KeyAction::release;
+  arrow.modifiers = 0;
+  const auto released = router.route_key(arrow);
+  ASSERT_TRUE(std::holds_alternative<EncodeAsKey>(released.effect));
+  EXPECT_EQ(std::get<EncodeAsKey>(released.effect).key, PhysicalKey::home);
+  const std::array ordinary{std::byte{'%'}};
+  EXPECT_TRUE(std::holds_alternative<ForwardLegacyInput>(
+      router.route_legacy(ordinary, ordinary.size()).effect));
+}
+
 TEST(InputRouterTest, RemembersEncodeAsThroughAModifierlessRelease) {
   InputRouter router(default_input_map());
   const KeyEvent press{.action = KeyAction::press,

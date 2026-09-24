@@ -131,6 +131,7 @@ template <typename Integer>
       "  ls, list      Show sessions and their status\n"
       "  split         Split a pane to open another terminal\n"
       "  send          Send text or key presses to a pane's running program\n"
+      "  paste-image   Save a clipboard PNG and paste its quoted file path\n"
       "  wait          Wait for process exit, matching output, or a shell prompt\n"
       "  capture       Print text from a pane's screen or scrollback\n"
       "  focus         Move keyboard focus to a pane\n"
@@ -148,7 +149,7 @@ template <typename Integer>
       "  events        Stream observations\n"
       "  api           Inspect the automation contract\n\n"
       "Other:\n"
-      "  config        Validate configuration\n"
+      "  config        Validate or reload configuration\n"
       "  skill         Print the coding-agent guide\n"
       "  version       Show version information\n"
       "  help          Show help\n\n"
@@ -351,7 +352,7 @@ struct SurfaceArguments final {
     return "input";
   }
   return name == "split" || name == "wait" || name == "capture" || name == "focus" ||
-                 name == "zoom" || name == "swap" || name == "resize"
+                 name == "zoom" || name == "swap" || name == "resize" || name == "paste-image"
              ? name
              : std::string_view{};
 }
@@ -565,6 +566,12 @@ struct SurfaceArguments final {
            "Examples (inside Lemma):\n"
            "  lemma proc pane zoom --on\n"
            "  lemma proc pane zoom --off\n";
+  }
+  if (operation == "paste-image") {
+    return "Usage:\n  lemma proc pane paste-image [--session NAME|ID] [PANE | --pane ID]\n\n"
+           "Read image/png from the attached terminal, validate and save it in the daemon host's\n"
+           "private clipboard cache, and paste its shell-quoted file path into the focused Pane.\n"
+           "Requires Kitty clipboard protocol support. Files persist until explicitly removed.\n";
   }
   if (operation == "input") {
     return "Usage:\n"
@@ -786,10 +793,14 @@ struct SurfaceArguments final {
 [[nodiscard]] auto print_config_check_help() noexcept -> int {
   constexpr std::string_view help =
       "Usage:\n"
-      "  lemma config check [FILE]\n\n"
+      "  lemma config check [FILE]\n"
+      "  lemma config reload\n\n"
       "Load Lua configuration in an isolated bounded host, validate the complete native input "
       "map, and publish nothing. FILE defaults to $XDG_CONFIG_HOME/lemma/init.lua or "
-      "~/.config/lemma/init.lua.\n";
+      "~/.config/lemma/init.lua.\n\n"
+      "reload stages the daemon's configuration without restarting panes and prints a Proc result. "
+      "Failure keeps the current generation. Changes to history.file, ui.status_line, or managed "
+      "extension declarations currently require a restart and reject the entire reload.\n";
   return write_fragment(stdout, help) ? 0 : 1;
 }
 
@@ -830,8 +841,10 @@ struct SurfaceArguments final {
 [[nodiscard]] auto print_other_help(const std::span<char*> arguments) noexcept -> int {
   const std::string_view command(arguments.front());
   if (command == "config") {
-    return help_subcommand_matches(arguments, "check") ? print_config_check_help()
-                                                       : invalid_arguments("config help");
+    return (help_subcommand_matches(arguments, "check") ||
+            help_subcommand_matches(arguments, "reload"))
+               ? print_config_check_help()
+               : invalid_arguments("config help");
   }
   if (command == "api") {
     return help_subcommand_matches(arguments, "schema") ? print_api_schema_summary()
@@ -887,7 +900,14 @@ struct SurfaceArguments final {
   return print_other_help(arguments);
 }
 
-[[nodiscard]] auto run_configuration(const std::span<char*> arguments) noexcept -> int {
+// Validation diagnostics and the explicit reload spelling share the config frontend.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+[[nodiscard]] auto run_configuration(const daemon::RuntimeEndpoint& endpoint,
+                                     const std::span<char*> arguments) noexcept -> int {
+  if (arguments.size() == 1U && std::string_view(arguments.front()) == "reload") {
+    return daemon::run_proc(
+        endpoint, R"({"schema":"lemma.proc/v1","commands":[{"command":"config.reload"}]})");
+  }
   if (arguments.empty() || std::string_view(arguments.front()) != "check" ||
       arguments.size() > 2U) {
     return invalid_arguments("config");
@@ -1546,6 +1566,13 @@ void print_proc_failure(const api::JsonValue& failure) noexcept {
     command.enabled = std::string_view(values.front()) == "--on";
     return execute(command);
   }
+  if (operation == "paste-image") {
+    if (!values.empty()) {
+      return invalid_arguments("proc pane paste-image");
+    }
+    command.kind = api::CommandKind::pane_paste_image;
+    return execute(command);
+  }
   if (operation == "send") {
     if (values.size() != 2U || std::string_view(values.front()) != "--text") {
       return invalid_arguments("proc pane send");
@@ -2192,7 +2219,7 @@ command_target(const TabId tab = {}, const PaneId pane = {}, const PaneId peer =
     return run_events(endpoint, command_arguments.subspan(1));
   }
   if (command == "config") {
-    return run_configuration(command_arguments.subspan(1));
+    return run_configuration(endpoint, command_arguments.subspan(1));
   }
   if (command == "api" && command_arguments.size() >= 2 &&
       std::string_view(command_arguments.subspan(1, 1).front()) == "schema") {

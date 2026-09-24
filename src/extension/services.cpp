@@ -2,11 +2,11 @@
 
 #include "config/config.hpp"
 #include "extension/lua_host.hpp"
+#include "platform/io.hpp"
 
 #include <array>
 #include <chrono>
 #include <csignal>
-#include <cstdlib>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,27 +15,15 @@
 
 #include <fcntl.h>
 #include <unistd.h>
-#ifdef __APPLE__
-#include <cstdint>
-#include <mach-o/dyld.h>
-#endif
 
 namespace lemma::extension {
 auto bundled_ui_path() -> std::string {
   std::array<char, 4096> path{};
-#ifdef __APPLE__
-  auto size = static_cast<std::uint32_t>(path.size());
-  if (_NSGetExecutablePath(path.data(), &size) != 0) {
-    throw std::runtime_error("executable path is too long");
+  const auto size = platform::executable_path(path);
+  if (size == 0) {
+    throw std::runtime_error("cannot resolve executable path for bundled UI");
   }
-  const std::string executable(path.data());
-#else
-  const auto size = ::readlink("/proc/self/exe", path.data(), path.size());
-  if (size <= 0 || static_cast<std::size_t>(size) == path.size()) {
-    throw std::runtime_error("cannot resolve executable path");
-  }
-  const std::string executable(path.data(), static_cast<std::size_t>(size));
-#endif
+  const std::string executable(path.data(), size);
   return executable.substr(0, executable.find_last_of('/') + 1U) + "lemma-ui";
 }
 

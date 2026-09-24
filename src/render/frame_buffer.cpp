@@ -140,12 +140,14 @@ void FrameBuffer::release() noexcept {
   return std::span<const std::byte>(storage_.get(), capacity_).first(bytes);
 }
 
-[[nodiscard]] auto compose_retained_scene(
-    const Scene scene, const Viewport viewport, FrameBuffer& frame, const bool force_full,
-    const StatusLine status, const std::optional<OuterModeProjection> previous_outer_modes,
-    const MessageView message_view) noexcept -> std::expected<CompositionResult, CompositionError> {
+[[nodiscard]] auto
+compose_retained_scene(const Scene scene, const Viewport viewport, FrameBuffer& frame,
+                       const bool force_full, const StatusLine status,
+                       const std::optional<OuterModeProjection> previous_outer_modes,
+                       const MessageView message_view, GraphicsProjection* const graphics) noexcept
+    -> std::expected<CompositionResult, CompositionError> {
   return compose_scene(scene, viewport, frame.writable(), force_full, status, previous_outer_modes,
-                       message_view);
+                       message_view, graphics);
 }
 
 [[nodiscard]] auto

@@ -19,6 +19,7 @@ from tests.support.pty_process import PtyProcess
 
 ALT_SCREEN = b"\x1b[?1049h"
 LEMMA_OUTER_TERMINAL_RESTORE = (
+    b"\x18\x1b_Gq=2,m=0;\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\"
     b"\x1b[0m\x1b[?2026l\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l"
     b"\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l\x1b[?1016l"
     b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
@@ -220,6 +221,7 @@ class LemmaServer:
         peer: str | Path,
         *,
         config_text: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
         self.server_path = Path(server).resolve()
         self.cli_path = Path(cli).resolve()
@@ -253,6 +255,7 @@ class LemmaServer:
         for variable in ("ASAN_OPTIONS", "UBSAN_OPTIONS"):
             if variable in os.environ:
                 self.environment[variable] = os.environ[variable]
+        self.environment.update(environment or {})
         self.clients: list[Client] = []
         self._log = self.log_path.open("wb")
         self.process = subprocess.Popen(
@@ -269,14 +272,23 @@ class LemmaServer:
             raise
 
     @classmethod
-    def from_environment(cls, *, config_text: str | None = None) -> LemmaServer:
+    def from_environment(
+        cls,
+        *,
+        config_text: str | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> LemmaServer:
         required = ("LEMMA_TEST_SERVER", "LEMMA_TEST_CLI", "LEMMA_TEST_PTY_PEER")
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             raise RuntimeError(
                 f"missing mux test binary environment: {', '.join(missing)}"
             )
-        return cls(*(os.environ[name] for name in required), config_text=config_text)
+        return cls(
+            *(os.environ[name] for name in required),
+            config_text=config_text,
+            environment=environment,
+        )
 
     def __enter__(self) -> LemmaServer:
         return self

@@ -7,7 +7,7 @@ use it.
 
 The host covers compiled input policy, terminal history, shipped status UI, launch defaults, and
 asynchronous Lua commands in the interactive command line. It does not expose Event subscriptions,
-custom UI Surfaces, dynamic routing contexts, or live reload. Language-neutral runtime extensions
+custom UI Surfaces, or dynamic routing contexts. Language-neutral runtime extensions
 use a separate [framed protocol](extensions.md).
 
 ## Location and validation
@@ -41,6 +41,36 @@ configuration.
 
 Configuration and modules execute with the user's operating-system permissions. Only load code you
 trust. `require()` searches beside `init.lua` before the ordinary Lua module path.
+
+## Reload
+
+Run `lemma config reload` or `reload` in the native `:` prompt. There is no configuration-file
+watcher. The command uses `config.reload`, an ordinary Proc Command, and waits for publication or
+rejection. An independent `lemma-config-host` evaluates Lua while panes continue processing input
+and output. The native loader admits one bounded read quantum per reactor turn and validates the
+complete bounded registration before replacing the generation.
+
+Reload replaces keybindings, context policy, custom command declarations and their host, and
+launch/scrollback defaults for future panes. It does not restart pane processes, change existing
+scrollback limits, or alter stable IDs. Active native editors, copy/search, resize/prefix contexts,
+and deferred prefix triggers are cancelled on publication; press-time key-release ownership is
+preserved. Old hosted invocations and their remaining Procs are cancelled, and their process group
+is revoked. Already completed effects are not rolled back. Managed status UI and independently
+connected extensions are not restarted.
+
+Changes to `history.file`, `ui.status_line`, or managed extension declarations currently require a
+daemon restart. Such a change rejects the **entire** reload with `restart_required`; it never applies
+only part of the new configuration. Lua errors, malformed output, and the two-second startup deadline
+also retain the old generation. Unlike invalid startup configuration, a failed reload never falls
+back to defaults. Unreadable files, existing non-regular paths, dangling symlinks, and other
+filesystem errors reject reload. Removing the optional discovered file intentionally loads built-ins;
+a missing explicitly selected `LEMMA_CONFIG` file is an error. Use `lemma config check` first to
+validate syntax and declarations; it does not check whether a running daemon can apply a setting live.
+
+Only one candidate loads at a time. Another request reports a conflict while loading or retiring
+its previous host. A CONTROL/extension owner disconnected before publication cancels its candidate.
+The native prompt requests daemon-wide reload and can finish even if its originating client detaches.
+Explicit reload also recovers a failed command host; a bad candidate cannot remove working commands.
 
 ## API
 
@@ -81,6 +111,12 @@ All `lemma.setup()` groups and fields are optional:
   one-shot `prefix` context. Direct bindings in `normal` do not require a prefix.
 - `terminal.scrollback_lines` is a nonnegative integer up to 10,000,000, or `false` for the native
   memory-bounded default.
+- `terminal.clipboard_read` and `terminal.clipboard_write` are Boolean and default to `false`.
+  They allow applications in the attached Session's active, focused Pane to request text or image
+  clipboard access through the outer terminal's OSC 5522 protocol. They do not bypass its consent
+  policy. A live reload revokes incompatible pending requests; detach or focus loss also cancels
+  them. Lemma stores no clipboard cache or remembered grants. Explicit selection copy and
+  [`paste-image`](usage.md#clipboard-images) are separate user-authorized operations.
 - `ui.status_line` enables or disables the shipped statusline extension. Disabling it releases its
   docked row and makes command-line and copy-search bindings inert. Replace the statusline through
   [managed extensions](extensions.md#managed-programs) to retain those native editors with custom UI.
@@ -302,6 +338,7 @@ a blocked callback cannot evade the watchdog by detaching.
 A callback error, instruction-budget failure, or external child exit ends that invocation without
 disabling other commands. Host crash, protocol failure, or deadline expiration removes custom command discovery and
 cancels outstanding invocations. Native bindings, compiled settings, Sessions, and ordinary pane
-processes remain usable. Host recovery requires a daemon restart; live reload is not implemented.
+processes remain usable. [Explicit reload](#reload) can replace the failed command host without
+restarting pane processes.
 Closing the daemon's private lease closes the host. Invalid startup configuration never partially
 changes the native map.

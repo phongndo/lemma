@@ -34,6 +34,11 @@ public:
   }
   [[nodiscard]] static auto allocated_bytes_current() noexcept -> std::size_t;
   [[nodiscard]] auto remaining() const noexcept -> std::size_t { return capacity() - size_; }
+  [[nodiscard]] auto input_remaining() const noexcept -> std::size_t {
+    return size_ < limits::pane_pty_input_backlog_bytes_max
+               ? limits::pane_pty_input_backlog_bytes_max - size_
+               : 0U;
+  }
   [[nodiscard]] auto empty() const noexcept -> bool { return size_ == 0; }
   [[nodiscard]] auto readable_span() const noexcept -> std::span<const std::byte>;
   [[nodiscard]] auto consume(std::size_t bytes) noexcept -> bool;

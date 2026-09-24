@@ -353,6 +353,9 @@ def prepare_subject(output: Path) -> Subject:
     source_binary = ROOT / "build" / "dev" / "lemma"
     binary = binary_directory / ".lemma-real"
     shutil.copy2(source_binary, binary)
+    for helper in ("lemma-ui", "lemma-config-host", "lemma-clipboard-host"):
+        shutil.copy2(source_binary.parent / helper, binary_directory / helper)
+    shutil.copytree(source_binary.parent / "terminfo", subject / "share" / "terminfo")
     skill = skill_directory / "SKILL.md"
     skill.write_text(build.stdout, encoding="utf-8")
     command = binary_directory / "lemma"

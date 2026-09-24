@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from extensions.lemma_client import Client
 from tests.support.mux_harness import LemmaServer, wait_until
 
 MAGIC = b"\x8aLME"
@@ -107,6 +108,34 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
     def setUp(self) -> None:
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
+
+    def test_python_client_defaults_negotiate_without_a_session(self) -> None:
+        with Client(str(self.server.socket_path), name="unscoped-python") as client:
+            self.assertEqual(set(client.welcome["capabilities"]), {"observe", "proc"})
+            self.assertTrue(client.proc({"command": "session.list"})["ok"])
+            self.assertEqual(client.event()["event"], "snapshot")
+
+    def test_python_client_negotiates_explicit_session_scoped_surfaces(self) -> None:
+        session = self.server.create_session("python-surface", command=("cat",))
+        with Client(
+            str(self.server.socket_path),
+            name="scoped-python",
+            session=session.state().id,
+            capabilities=("observe", "proc", "surface"),
+        ) as client:
+            self.assertIn("surface", client.welcome["capabilities"])
+            result = client.command(
+                "surface.create",
+                placement={
+                    "kind": "overlay",
+                    "column": 0,
+                    "row": 0,
+                    "columns": 10,
+                    "rows": 2,
+                },
+            )
+            self.assertEqual(result["status"], "applied")
+            self.assertIn("surface", result)
 
     def test_documented_hello_negotiates_and_observes_its_session(self) -> None:
         self.server.create_session("example", attach=False, command=("cat",))

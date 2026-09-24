@@ -1,5 +1,6 @@
 #include "core/input.hpp"
 
+#include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
 #include "protocol/attachment.hpp"
 
@@ -17,6 +18,37 @@ namespace {
 
 void write_terminal(vt::Terminal& terminal, const std::string_view bytes) noexcept {
   terminal.write(std::as_bytes(std::span(bytes.data(), bytes.size())));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(CoreInputTest, ClipboardReplyHeadroomDoesNotIncreaseInputAdmission) {
+  auto terminal = vt::Terminal::create({}).value();
+  terminal.set_clipboard_access(true, false);
+  PanePtyWriteQueue queue;
+  const std::vector<std::byte> prior(limits::terminal_pty_response_bytes_max +
+                                         limits::normalized_client_input_bytes_max,
+                                     std::byte{'x'});
+  ASSERT_TRUE(queue.append(prior));
+  std::array key{std::byte{'Y'}};
+  EXPECT_EQ(queue_normalized_input(queue, terminal, key), InputQueueResult::full);
+  EXPECT_EQ(queue_paste_input(queue, terminal, key), InputQueueResult::full);
+
+  write_terminal(terminal, "\x1b]5522;type=read:id=headroom;aW1hZ2UvcG5n\x1b\\");
+  const auto request = terminal.clipboard_request().value_or(vt::ClipboardRequest{});
+  ASSERT_NE(request.id, 0U);
+  const std::vector<std::byte> image(std::size_t{64} * 1024U, std::byte{'p'});
+  const std::array content{vt::ClipboardContent{.mime = "image/png", .data = image}};
+  ASSERT_TRUE(terminal.complete_clipboard(request.id, vt::ClipboardStatus::success, content));
+  const auto reply_size = terminal.pending_pty_response_bytes();
+  ASSERT_GT(reply_size, 0U);
+  ASSERT_TRUE(queue_terminal_responses(queue, terminal));
+  EXPECT_EQ(queue.size(), prior.size() + reply_size);
+  EXPECT_EQ(queue_normalized_input(queue, terminal, key), InputQueueResult::full);
+  ASSERT_TRUE(queue.consume(prior.size()));
+  EXPECT_EQ(queue.readable_span().front(), std::byte{0x1b});
+  ASSERT_TRUE(queue.consume(reply_size));
+  EXPECT_EQ(queue_normalized_input(queue, terminal, key), InputQueueResult::queued);
+  EXPECT_EQ(queue.readable_span().front(), std::byte{'Y'});
 }
 
 TEST(CoreInputTest, EncodesEnterSemanticallyWhenKittyKeyboardModeIsActive) {

@@ -42,6 +42,12 @@ struct Dimensions final {
   [[nodiscard]] constexpr auto operator==(const Dimensions&) const noexcept -> bool = default;
 };
 
+struct CellSize final {
+  std::uint16_t width{8};
+  std::uint16_t height{16};
+  constexpr auto operator==(const CellSize&) const noexcept -> bool = default;
+};
+
 struct RgbColor final {
   std::uint8_t red{0};
   std::uint8_t green{0};
@@ -219,11 +225,11 @@ enum class PaneCommand : std::uint8_t {
   select_tab_9 = '9',
 };
 
-// Private attach protocol v2.9. Every envelope is exactly 16 bytes:
+// Private attach protocol v2.10. Every envelope is exactly 16 bytes:
 // magic[4], major, minor, kind, flags, payload_length:u32be, sequence:u32be.
 struct ProtocolVersion final {
   std::uint8_t major{2};
-  std::uint8_t minor{9};
+  std::uint8_t minor{10};
 
   [[nodiscard]] constexpr auto operator==(const ProtocolVersion&) const noexcept -> bool = default;
 };
@@ -271,6 +277,8 @@ enum class MessageKind : std::uint8_t {
   focus = 10,
   mouse = 11,
   key = 12,
+  terminal_reply = 13,
+  cell_size = 14,
 };
 
 enum class DisconnectReason : std::uint8_t {
@@ -297,6 +305,8 @@ enum class ClientMessageKind : std::uint8_t {
   detach,
   pane_command,
   host_theme,
+  terminal_reply,
+  cell_size,
 };
 
 enum class KeyInputAction : std::uint8_t {
@@ -373,6 +383,7 @@ struct KeyInput final {
   [[nodiscard]] constexpr auto operator==(const KeyInput&) const noexcept -> bool = default;
 };
 
+inline constexpr std::size_t terminal_reply_bytes_max = 8192;
 inline constexpr std::size_t key_input_wire_fixed_bytes = 11;
 inline constexpr std::size_t key_input_text_bytes_max = 256;
 
@@ -448,6 +459,7 @@ enum class DecodeError : std::uint8_t {
 struct ClientMessage final {
   ClientMessageKind kind{ClientMessageKind::detach};
   Dimensions dimensions{};
+  CellSize cell_size{};
   PaneCommand pane_command{PaneCommand::none};
   KeyInput key{};
   FocusInput focus{FocusInput::lost};
@@ -498,6 +510,7 @@ private:
   friend auto encode_focus(FocusInput focus, std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_mouse(const MouseInput& mouse, std::uint32_t sequence) noexcept
       -> SmallMessage;
+  friend auto encode_cell_size(CellSize size, std::uint32_t sequence) noexcept -> SmallMessage;
   friend auto encode_disconnect(DisconnectReason reason, std::string_view diagnostic,
                                 std::uint32_t sequence) noexcept -> SmallMessage;
 
@@ -538,6 +551,9 @@ encode_client_hello(std::string_view session, Dimensions dimensions, std::uint32
 [[nodiscard]] auto encode_input_header(std::size_t bytes, std::uint32_t sequence) noexcept
     -> std::array<std::byte, attach_header_bytes>;
 [[nodiscard]] auto encode_paste_header(std::size_t bytes, std::uint32_t sequence) noexcept
+    -> std::array<std::byte, attach_header_bytes>;
+[[nodiscard]] auto encode_cell_size(CellSize size, std::uint32_t sequence) noexcept -> SmallMessage;
+[[nodiscard]] auto encode_terminal_reply_header(std::size_t bytes, std::uint32_t sequence) noexcept
     -> std::array<std::byte, attach_header_bytes>;
 [[nodiscard]] auto encode_key(const KeyInput& key, std::span<const std::byte> text,
                               std::uint32_t sequence) noexcept -> SmallMessage;

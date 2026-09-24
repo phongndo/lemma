@@ -71,6 +71,34 @@ an optional `phase` of `press`, `repeat`, or `release`; it defaults to `press`. 
 bounded visible, recent, or last-command projection. `pane.wait` is a finite Command;
 without a condition it waits for child-process completion.
 
+## Reloading configuration
+
+`config.reload` stages a new daemon configuration and completes only after publication or rejection.
+It accepts no fields beyond `command`. `lemma config reload` submits the same Command; the native
+prompt spells it `reload`. See [Configuration](configuration.md#reload) for live settings, cancellation,
+host replacement, and startup-only changes. Reload is daemon-scoped, not Session-scoped.
+
+## Pasting a clipboard image
+
+`pane.paste-image` accepts `session`, `pane`, and optional `if_session_revision`, like `pane.focus`:
+
+```json
+{"command":"pane.paste-image","session":{"name":"work"},"pane":{"id":"0:1"}}
+```
+
+CLI spellings are `lemma paste-image` and `lemma proc pane paste-image`. The Command asynchronously
+reads a PNG through the attached client's outer terminal, validates/saves it on the daemon host,
+and submits a structured paste containing its quoted path. Success returns `path`. The target must
+remain focused on the same connection, and the requesting Proc must remain owned. This is an
+explicit user action, independent of application clipboard grants. There is no automatic replay.
+See [clipboard images](usage.md#clipboard-images) for file lifetime, limits, and terminal requirements.
+
+Stable rejection reasons include `focused_attachment_required`, `revision_mismatch`, `clipboard_busy`,
+`clipboard_owner_changed`, `clipboard_denied`, `clipboard_unavailable`, `clipboard_image_unavailable`,
+`invalid_png_or_file_error`, and `invalid_file_path`. As with other Procs, already completed effects
+are not rolled back; cancellation cannot undo clipboard operations already accepted by the outer
+terminal or a file already saved.
+
 ## Switching an Attachment
 
 `attachment.switch` transfers the one connected controller identified by `connection` to the selected

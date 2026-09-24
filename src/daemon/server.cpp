@@ -73,6 +73,90 @@ volatile sig_atomic_t child_exit_wakeup_descriptor = -1;
   return ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
+class ConfigurationReloader final : public core::ConfigurationReloader {
+public:
+  explicit ConfigurationReloader(extension::ConfigurationLoad& active) noexcept
+      : active_(&active) {}
+
+  auto start() noexcept -> bool override {
+    reap();
+    if (loader_.has_value() || retired_.active()) {
+      return false;
+    }
+    loader_.emplace();
+    if (!loader_->start()) {
+      loader_.reset();
+      return false;
+    }
+    return true;
+  }
+  [[nodiscard]] auto descriptor() const noexcept -> int override {
+    return loader_.has_value() ? loader_->descriptor() : -1;
+  }
+  [[nodiscard]] auto deadline() const noexcept -> core::ReactorClock::time_point override {
+    return loader_.has_value() ? loader_->deadline() : core::ReactorClock::time_point::max();
+  }
+  auto advance(const core::ReactorClock::time_point now) noexcept
+      -> std::optional<core::ConfigurationCandidate> override {
+    if (!loader_.has_value() || !loader_->advance(now)) {
+      return std::nullopt;
+    }
+    const auto& candidate = loader_->result();
+    if (candidate.status == extension::ConfigurationStatus::invalid ||
+        candidate.generation == nullptr || active_->generation == nullptr) {
+      return core::ConfigurationCandidate{.commands = {}, .diagnostic = candidate.diagnostic};
+    }
+    const auto& next = *candidate.generation;
+    const auto& old = *active_->generation;
+    if (next.history_file() != old.history_file() || next.status_line() != old.status_line() ||
+        !std::ranges::equal(next.extensions(), old.extensions(), [](const auto& a, const auto& b) {
+          return a.name == b.name && a.argv == b.argv;
+        })) {
+      return core::ConfigurationCandidate{
+          .commands = {},
+          .error = core::ConfigurationReloadError::restart_required,
+          .diagnostic =
+              "Changes to history.file, ui.status_line, or managed extensions require a restart"};
+    }
+    return core::ConfigurationCandidate{
+        .generation = candidate.generation.get(),
+        .commands = candidate.commands,
+        .descriptor = candidate.host.descriptor(),
+        .stop =
+            [](void* context) noexcept {
+              static_cast<extension::HostProcess*>(context)->terminate();
+            },
+        .context = &active_->host,
+        .diagnostic = {}};
+  }
+  void commit() noexcept override {
+    if (loader_.has_value()) {
+      retired_ = std::move(active_->host);
+      retired_.terminate();
+      *active_ = loader_->take();
+      loader_.reset();
+    }
+  }
+  void discard() noexcept override {
+    if (loader_.has_value()) {
+      retired_ = std::move(loader_->host());
+      retired_.terminate();
+      loader_.reset();
+    }
+  }
+  void reap() noexcept {
+    retired_.reap_exited();
+    if (loader_.has_value()) {
+      loader_->host().reap_exited();
+    }
+  }
+
+private:
+  extension::ConfigurationLoad* active_;
+  extension::HostProcess retired_;
+  std::optional<extension::ConfigurationLoader> loader_;
+};
+
 class ChildExitReaper final {
 public:
   explicit ChildExitReaper(extension::HostProcess* const host) noexcept : host_(host) {
@@ -106,9 +190,12 @@ public:
   [[nodiscard]] auto write_descriptor() const noexcept -> int { return write_descriptor_; }
 
   void services(extension::Services& services) noexcept { services_ = &services; }
+  void reloader(ConfigurationReloader& reloader) noexcept { reloader_ = &reloader; }
 
+  // Preserve every helper's process-group identity before the general PTY-child reap.
+  // NOLINTNEXTLINE(readability-function-cognitive-complexity)
   [[nodiscard]] auto reap_process(int& status) const noexcept -> pid_t {
-    if (services_ == nullptr && (host_ == nullptr || !host_->active())) {
+    if (reloader_ == nullptr && services_ == nullptr && (host_ == nullptr || !host_->active())) {
       return ::waitpid(-1, &status, WNOHANG);
     }
     // Select without consuming an exit. A generic waitpid(-1) after checking a live host would
@@ -123,6 +210,9 @@ public:
       }
       if (host_ != nullptr) {
         host_->reap_exited();
+      }
+      if (reloader_ != nullptr) {
+        reloader_->reap();
       }
       if (services_ != nullptr) {
         services_->reap_exited();
@@ -153,6 +243,7 @@ public:
 private:
   extension::HostProcess* host_;
   extension::Services* services_{nullptr};
+  ConfigurationReloader* reloader_{nullptr};
   int read_descriptor_{-1};
   int write_descriptor_{-1};
 };
@@ -469,8 +560,9 @@ void release_owned_endpoint(void* const context) noexcept {
     static_cast<void>(write_text(STDERR_FILENO, "\n"));
     configured_runtime = extension::load_builtin_configuration();
   }
-  ChildExitReaper child_reaper(configured_runtime.host.active() ? &configured_runtime.host
-                                                                : nullptr);
+  ConfigurationReloader reloader(configured_runtime);
+  ChildExitReaper child_reaper(&configured_runtime.host);
+  child_reaper.reloader(reloader);
   struct sigaction child_action{};
   child_action.sa_handler = &record_child_exit;
   if (!child_reaper.valid() || sigemptyset(&child_action.sa_mask) != 0 ||
@@ -506,6 +598,7 @@ void release_owned_endpoint(void* const context) noexcept {
   child_reaper.services(*services);
   child_exit_wakeup_descriptor = child_reaper.write_descriptor();
   auto reactor_environment = core::production_reactor_environment();
+  reactor_environment.configuration_reloader = &reloader;
   if (configured_runtime.generation != nullptr) {
     reactor_environment.input_map = &configured_runtime.generation->input_map();
     reactor_environment.scrollback_lines = configured_runtime.generation->scrollback_lines();
@@ -513,6 +606,8 @@ void release_owned_endpoint(void* const context) noexcept {
     reactor_environment.default_cwd = configured_runtime.generation->default_cwd();
     reactor_environment.command_history_file = configured_runtime.generation->history_file();
     reactor_environment.status_line = configured_runtime.generation->status_line();
+    reactor_environment.clipboard_read = configured_runtime.generation->clipboard_read();
+    reactor_environment.clipboard_write = configured_runtime.generation->clipboard_write();
     if (!configured_runtime.commands.empty()) {
       reactor_environment.extension_descriptor = configured_runtime.host.descriptor();
       reactor_environment.extension_commands = configured_runtime.commands;

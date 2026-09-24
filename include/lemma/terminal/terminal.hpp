@@ -59,8 +59,8 @@ enum class ScreenFormat : std::uint8_t {
 struct TerminalSize final {
   std::uint16_t columns{80};
   std::uint16_t rows{24};
-  std::uint32_t cell_width_px{0};
-  std::uint32_t cell_height_px{0};
+  std::uint32_t cell_width_px{8};
+  std::uint32_t cell_height_px{16};
 
   friend constexpr auto operator==(const TerminalSize&, const TerminalSize&) noexcept
       -> bool = default;
@@ -119,6 +119,44 @@ struct AllocationStats final {
   std::size_t allocations_current{0};
   std::size_t allocations_total{0};
   std::size_t failures_total{0};
+};
+
+struct GraphicPlacement final {
+  std::uint64_t image_generation{0};
+  std::uint32_t image_id{0};
+  std::span<const std::byte> pixels{}; // NOLINT(readability-redundant-member-init)
+  std::uint32_t image_width{0}, image_height{0};
+  std::uint32_t source_x{0}, source_y{0}, source_width{0}, source_height{0};
+  std::uint32_t pixel_width{0}, pixel_height{0};
+  std::uint32_t columns{0}, rows{0}, offset_x{0}, offset_y{0};
+  std::int32_t column{0}, row{0}, z{0};
+  std::uint8_t channels{4};
+};
+
+enum class ClipboardStatus : std::uint8_t {
+  success,
+  denied,
+  unsupported,
+  busy,
+  invalid_data,
+  io_error
+};
+
+struct ClipboardContent final {
+  std::string_view mime;
+  std::span<const std::byte> data;
+};
+
+// One retained, bounded request. Views remain valid until completion/cancellation or terminal
+// destruction, including across subsequent PTY writes. Empty data on a read names a requested MIME.
+struct ClipboardRequest final {
+  std::uint64_t id{0};
+  bool read{false};
+  bool primary{false};
+  bool list{false};
+  // Explicit defaults support partial aggregate initialization under Clang's field checks.
+  std::string_view name{};                      // NOLINT(readability-redundant-member-init)
+  std::span<const ClipboardContent> contents{}; // NOLINT(readability-redundant-member-init)
 };
 
 struct EffectBatch final {
@@ -636,6 +674,23 @@ public:
   [[nodiscard]] auto pwd() const noexcept -> std::expected<std::string_view, Error>;
   [[nodiscard]] auto scrollback_rows() const noexcept -> std::expected<std::size_t, Error>;
   [[nodiscard]] auto take_effects() noexcept -> EffectBatch;
+
+  // Image views are borrowed only until the next terminal mutation. Instance identity never aliases
+  // another terminal, including across Pane slot reuse; projection caches must not retain pixels.
+  [[nodiscard]] auto graphics_identity() const noexcept -> std::uint64_t;
+  [[nodiscard]] auto graphics_generation() const noexcept -> std::expected<std::uint64_t, Error>;
+  [[nodiscard]] auto tick_graphics(std::uint64_t now_ms) noexcept
+      -> std::expected<std::optional<std::uint64_t>, Error>;
+  [[nodiscard]] auto graphics(std::span<GraphicPlacement> placements) noexcept
+      -> std::expected<std::size_t, Error>;
+  void set_clipboard_access(bool read, bool write) noexcept;
+  [[nodiscard]] auto clipboard_request() const noexcept -> std::optional<ClipboardRequest>;
+  // Completes only the matching request. No borrowed reply data survives this call. Replies use
+  // the ordered PTY response queue; an unavailable clipboard is an error, never a stale cache.
+  [[nodiscard]] auto complete_clipboard(std::uint64_t id, ClipboardStatus status,
+                                        std::span<const ClipboardContent> contents = {}) noexcept
+      -> bool;
+  void cancel_clipboard() noexcept;
 
   [[nodiscard]] auto pending_pty_response_bytes() const noexcept -> std::size_t;
   [[nodiscard]] auto pty_response_overflowed() const noexcept -> bool;

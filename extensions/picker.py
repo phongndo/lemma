@@ -7,109 +7,12 @@ has no screen subscription, timer while idle, terminal emulator, or daemon-side 
 
 from __future__ import annotations
 
-import json
-import os
-import socket
-import struct
 import sys
 import time
 from collections import deque
 from typing import Any
 
-HEADER = struct.Struct(">4sBBBBII")
-MAGIC = b"\x8aLME"
-HELLO, WELCOME, PROC, RESULT, UPDATE, EVENT, ERROR = range(1, 8)
-MAX_RECORD = 1024 * 1024
-
-
-class Peer:
-    def __init__(self, context: dict[str, Any]) -> None:
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.socket.settimeout(3)
-        self.socket.connect(context["endpoint"])
-        self.input = bytearray()
-        self.sequence = 0
-        self.events: deque[dict[str, Any]] = deque()
-        self.request(
-            HELLO,
-            WELCOME,
-            {
-                "schema": "lemma.extension/v1",
-                "name": "navigation-picker",
-                "capabilities": ["proc", "surface"],
-                "events": {
-                    "schema": "lemma.events/v1",
-                    "session": {"id": context["session"]},
-                },
-            },
-        )
-
-    def close(self) -> None:
-        self.socket.close()
-
-    def send(self, kind: int, document: dict[str, Any]) -> int:
-        self.sequence += 1
-        payload = json.dumps(document, separators=(",", ":")).encode()
-        if len(payload) > MAX_RECORD or self.sequence > 0xFFFFFFFF:
-            raise RuntimeError("picker record limit exceeded")
-        self.socket.sendall(
-            HEADER.pack(MAGIC, 1, 0, kind, 0, len(payload), self.sequence) + payload
-        )
-        return self.sequence
-
-    def receive(self) -> tuple[int, int, dict[str, Any]]:
-        def fill(size: int) -> None:
-            while len(self.input) < size:
-                data = self.socket.recv(size - len(self.input))
-                if not data:
-                    raise EOFError("picker connection closed")
-                self.input.extend(data)
-
-        fill(HEADER.size)
-        magic, major, minor, kind, flags, size, sequence = HEADER.unpack(
-            self.input[: HEADER.size]
-        )
-        if (magic, major, minor, flags) != (MAGIC, 1, 0, 0) or size > MAX_RECORD:
-            raise RuntimeError("invalid picker response")
-        fill(HEADER.size + size)
-        document = json.loads(self.input[HEADER.size : HEADER.size + size])
-        del self.input[: HEADER.size + size]
-        if kind == ERROR:
-            raise RuntimeError(f"picker protocol error: {document}")
-        return kind, sequence, document
-
-    def request(
-        self, kind: int, expected: int, document: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.socket.settimeout(3)
-        sequence = self.send(kind, document)
-        while True:
-            received, correlation, result = self.receive()
-            if received == expected and correlation == sequence:
-                return result
-            if received != EVENT or len(self.events) == 32:
-                raise RuntimeError("unexpected or excessive picker events")
-            self.events.append(result)
-
-    def proc(self, *commands: dict[str, Any]) -> dict[str, Any]:
-        return self.request(
-            PROC, RESULT, {"schema": "lemma.proc/v1", "commands": commands}
-        )
-
-    def command(self, command: str, **fields: Any) -> dict[str, Any]:
-        result = self.proc({"command": command, **fields})
-        if not result["ok"]:
-            raise RuntimeError(f"{command} failed: {result}")
-        return result["results"][0]["result"]
-
-    def event(self, timeout: float | None = None) -> dict[str, Any]:
-        if self.events:
-            return self.events.popleft()
-        self.socket.settimeout(timeout)
-        kind, _, document = self.receive()
-        if kind != EVENT:
-            raise RuntimeError("unexpected picker response")
-        return document
+from lemma_client import UPDATE, Client, command_context
 
 
 def row_text(text: str, columns: int) -> str:
@@ -119,7 +22,7 @@ def row_text(text: str, columns: int) -> str:
 
 
 class Picker:
-    def __init__(self, peer: Peer, context: dict[str, Any]) -> None:
+    def __init__(self, peer: Client, context: dict[str, Any]) -> None:
         self.peer = peer
         self.context = context
         self.session = context["session"]
@@ -302,7 +205,7 @@ class Picker:
             try:
                 event = self.peer.event(0.05 if pending else None)
             except TimeoutError:
-                return  # A lone legacy Escape; partial records remain bounded in Peer.input.
+                return  # A lone legacy Escape; partial records remain bounded in Client.input.
             if event.get("surface") != self.surface:
                 continue
             if event["event"] in ("surface.closed", "surface.blurred"):
@@ -340,10 +243,15 @@ class Picker:
 
 
 def main() -> int:
-    peer: Peer | None = None
+    peer: Client | None = None
     try:
-        context = json.loads(os.environ["LEMMA_COMMAND_CONTEXT"])
-        peer = Peer(context)
+        context = command_context()
+        peer = Client(
+            context["endpoint"],
+            name="navigation-picker",
+            session=context["session"],
+            capabilities=("proc", "surface"),
+        )
         Picker(peer, context).run()
         return 0
     except (EOFError, BrokenPipeError):

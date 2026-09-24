@@ -124,6 +124,8 @@ public:
       -> std::expected<GridRenderResult, GridError>;
   [[nodiscard]] auto cursor() const noexcept -> GridCursor { return cursor_; }
   [[nodiscard]] auto paints_cell(std::uint16_t column, std::uint16_t row) const noexcept -> bool;
+  // Borrowed row coverage for composition; invalidated by any Grid update.
+  [[nodiscard]] auto row_runs(std::uint16_t row) const noexcept -> std::span<const GridRun>;
 
   void invalidate_render_state() noexcept;
 

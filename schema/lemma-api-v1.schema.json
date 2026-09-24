@@ -577,7 +577,7 @@
         {
           "type": "object",
           "required": ["command"],
-          "properties": { "command": { "enum": ["daemon.inspect", "session.list"] } },
+          "properties": { "command": { "enum": ["daemon.inspect", "config.reload", "session.list"] } },
           "additionalProperties": false
         },
         {
@@ -752,7 +752,7 @@
             { "properties": { "pane": { "$ref": "#/$defs/resultReference" } } }
           ],
           "properties": {
-            "command": { "enum": ["pane.focus", "pane.kill"] },
+            "command": { "enum": ["pane.focus", "pane.kill", "pane.paste-image"] },
             "session": { "$ref": "#/$defs/procSessionSelector" },
             "if_session_revision": { "type": "integer", "minimum": 1 },
             "pane": { "$ref": "#/$defs/procPaneSelector" }

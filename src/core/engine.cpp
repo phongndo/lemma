@@ -1,4 +1,7 @@
 #include "core/engine.hpp"
+#include "clipboard/png_file.hpp"
+#include "clipboard/transaction.hpp"
+#include "config/config.hpp"
 
 #include "core/engine_connection_state.hpp"
 #include "core/engine_projection.hpp"
@@ -127,13 +130,42 @@ using platform::close_descriptor;
 using platform::set_nonblocking;
 using render::FrameBuffer;
 
+struct ReloadResult final {
+  std::string diagnostic;
+  ConfigurationReloadError error{ConfigurationReloadError::invalid_configuration};
+  bool complete{false};
+  bool success{false};
+};
+
+struct ReloadState final {
+  std::weak_ptr<ReloadResult> current;
+  std::shared_ptr<ReloadResult> interactive;
+  ConnectionId connection;
+};
+
 thread_local const ReactorEnvironment* active_reactor_environment = nullptr;
+thread_local ReloadState* active_reload = nullptr;
 thread_local CommandLineHistory* active_command_history = nullptr;
+
+[[nodiscard]] auto start_reload() -> std::shared_ptr<ReloadResult> {
+  auto* const owner = active_reactor_environment->configuration_reloader;
+  if (owner == nullptr || owner->descriptor() >= 0) {
+    return {};
+  }
+  auto result = std::make_shared<ReloadResult>();
+  if (!owner->start()) {
+    return {};
+  }
+  active_reload->current = result;
+  return result;
+}
 
 class ReactorEnvironmentGuard final {
 public:
-  explicit ReactorEnvironmentGuard(const ReactorEnvironment& environment) noexcept
-      : previous_(active_reactor_environment) {
+  explicit ReactorEnvironmentGuard(const ReactorEnvironment& environment,
+                                   ReloadState& reload) noexcept
+      : previous_(active_reactor_environment), previous_reload_(active_reload) {
+    active_reload = &reload;
     LEMMA_ASSERT(environment.valid());
     active_reactor_environment = &environment;
   }
@@ -143,16 +175,22 @@ public:
   auto operator=(const ReactorEnvironmentGuard&) -> ReactorEnvironmentGuard& = delete;
   auto operator=(ReactorEnvironmentGuard&&) -> ReactorEnvironmentGuard& = delete;
 
-  ~ReactorEnvironmentGuard() { active_reactor_environment = previous_; }
+  ~ReactorEnvironmentGuard() {
+    active_reactor_environment = previous_;
+    active_reload = previous_reload_;
+  }
 
 private:
   const ReactorEnvironment* previous_;
+  ReloadState* previous_reload_;
 };
 
 class CommandHistoryGuard final {
 public:
   explicit CommandHistoryGuard(const std::string_view path) noexcept
-      : previous_(active_command_history), path_(path) {
+      : previous_(active_command_history), path_size_(path.size()) {
+    LEMMA_ASSERT(path.size() <= path_.size());
+    std::ranges::copy(path, path_.begin());
     const auto loaded = load_command_line_history(path);
     history_ = loaded.history;
     replace_on_shutdown_ = loaded.replace_on_shutdown;
@@ -166,14 +204,16 @@ public:
 
   ~CommandHistoryGuard() {
     if (replace_on_shutdown_) {
-      static_cast<void>(save_command_line_history(path_, history_));
+      static_cast<void>(
+          save_command_line_history(std::string_view(path_.data(), path_size_), history_));
     }
     active_command_history = previous_;
   }
 
 private:
   CommandLineHistory* previous_{nullptr};
-  std::string_view path_;
+  std::array<char, config::configuration_path_bytes_max> path_{};
+  std::size_t path_size_{0};
   CommandLineHistory history_;
   bool replace_on_shutdown_{false};
 };
@@ -269,8 +309,8 @@ private:
 [[nodiscard]] auto resize_pty_for_transaction(void* const context,
                                               const vt::TerminalSize& size) noexcept -> bool {
   const auto pty = *static_cast<const int*>(context);
-  return platform::resize_pty(pty, size.columns, size.rows, size.cell_width_px,
-                              size.cell_height_px);
+  return pty < 0 || platform::resize_pty(pty, size.columns, size.rows, size.cell_width_px,
+                                         size.cell_height_px);
 }
 
 [[nodiscard]] auto resize_pane_terminal(const int pty, vt::Terminal& terminal,
@@ -525,6 +565,152 @@ void record_session_mutation(SessionRecord& session) noexcept {
 
 void finish_live_divider_resize(SessionRecord& session, bool discard_release = false) noexcept;
 
+void schedule_frame(SessionRecord& session, FrameUrgency urgency, bool force_full,
+                    PaneId source) noexcept;
+
+auto apply_cell_size(SessionRecord& session, PaneRuntimeStore& runtimes,
+                     const protocol::CellSize size) noexcept -> bool {
+  session.attachment_runtime.cell_size = size;
+  bool changed = false;
+  for (const auto& slot : session.panes) {
+    if (slot.pane == nullptr) {
+      continue;
+    }
+    auto* runtime = find_pane_runtime(runtimes, session, *slot.pane);
+    LEMMA_ASSERT(runtime != nullptr);
+    auto requested = runtime->terminal.size();
+    if (requested.cell_width_px == size.width && requested.cell_height_px == size.height) {
+      continue;
+    }
+    requested.cell_width_px = size.width;
+    requested.cell_height_px = size.height;
+    auto descriptor = runtime->pty;
+    const auto result = resize_terminal_transaction(runtime->terminal, requested,
+                                                    resize_pty_for_transaction, &descriptor);
+    if (result != TerminalResizeStatus::applied && result != TerminalResizeStatus::unchanged) {
+      return false;
+    }
+    record_terminal_mutation(*runtime);
+    changed = true;
+  }
+  if (changed) {
+    schedule_frame(session, FrameUrgency::state_change, true, {});
+  }
+  return true;
+}
+
+auto begin_clipboard_transaction(SessionRecord& session, const PaneId pane,
+                                 const vt::ClipboardRequest& request) noexcept
+    -> std::expected<void, vt::ClipboardStatus> {
+  auto& attachment = session.attachment_runtime;
+  if (attachment.clipboard != nullptr || attachment.clipboard_write.bytes != nullptr ||
+      !attachment.clipboard_paste.expired()) {
+    return std::unexpected(vt::ClipboardStatus::busy);
+  }
+  try {
+    auto transaction = std::make_unique<clipboard::Transaction>();
+    auto encoded = transaction->begin(request, reactor_now());
+    if (!encoded) {
+      return std::unexpected(encoded.error());
+    }
+    auto storage = allocate_clipboard_storage(encoded->size());
+    if (storage == nullptr) {
+      return std::unexpected(vt::ClipboardStatus::io_error);
+    }
+    std::memcpy(storage.get(), encoded->data(), encoded->size());
+    attachment.clipboard_write.bytes = std::move(storage);
+    attachment.clipboard_write.size = encoded->size();
+    attachment.clipboard_write.offset = 0;
+    attachment.clipboard_write.encoded = true;
+    attachment.clipboard = std::move(transaction);
+    attachment.clipboard_owner = pane;
+    schedule_frame(session, FrameUrgency::state_change, false, {});
+    return {};
+  } catch (const std::bad_alloc&) {
+    // Reject a clipboard job before publication; the active terminal remains usable.
+    return std::unexpected(vt::ClipboardStatus::io_error);
+  }
+}
+
+void start_clipboard_request(SessionRecord& session, const Pane& pane,
+                             PaneRuntime& runtime) noexcept {
+  const auto request = runtime.terminal.clipboard_request();
+  if (!request) {
+    return;
+  }
+  const auto& attachment = session.attachment_runtime;
+  if (attachment.clipboard != nullptr && attachment.clipboard_owner == pane.id &&
+      attachment.clipboard->request_id() == request->id) {
+    return;
+  }
+  const auto result = begin_clipboard_transaction(session, pane.id, *request);
+  if (result) {
+    return;
+  }
+  if (!runtime.terminal.complete_clipboard(request->id, result.error(), {}) ||
+      !queue_terminal_responses(runtime.pending_writes, runtime.terminal)) {
+    runtime.fail(PaneRuntimeFailure::terminal_integrity_error);
+  }
+}
+
+// Completion is one owner/policy-checked publication boundary.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void service_clipboard(SessionRecord& session, PaneRuntimeStore& runtimes) noexcept {
+  auto& attachment = session.attachment_runtime;
+  if (attachment.clipboard == nullptr) {
+    return;
+  }
+  auto& transaction = *attachment.clipboard;
+  auto* runtime = attachment.clipboard_owner
+                      ? runtimes.get({.session = session.id, .pane = *attachment.clipboard_owner})
+                      : nullptr;
+  const auto* tab = find_tab(session, session.active_tab);
+  const bool eligible = runtime != nullptr && runtime->live() && attachment.client >= 0 &&
+                        tab != nullptr && attachment.clipboard_owner == tab->focused_pane;
+  auto request = runtime != nullptr ? runtime->terminal.clipboard_request() : std::nullopt;
+  const auto paste = attachment.clipboard_paste.lock();
+  const bool explicit_paste = transaction.request_id() == 0;
+  const bool allowed =
+      eligible &&
+      (explicit_paste ? paste != nullptr && paste->connection == attachment.connection_id
+                      : request && request->id == transaction.request_id() &&
+                            (request->read ? active_reactor_environment->clipboard_read
+                                           : active_reactor_environment->clipboard_write));
+  if (!allowed) {
+    transaction.fail(vt::ClipboardStatus::denied);
+  } else if (transaction.expired(reactor_now())) {
+    transaction.fail(vt::ClipboardStatus::io_error);
+  }
+  if (!transaction.done()) {
+    return;
+  }
+  auto& staged = attachment.clipboard_write;
+  if (transaction.status() != vt::ClipboardStatus::success && staged.encoded) {
+    const auto abort_size =
+        staged.offset > 0 ? transaction.abort_write(std::span(staged.bytes.get(), staged.size)) : 0;
+    if (abort_size == 0) {
+      staged.reset();
+    } else {
+      staged.size = abort_size;
+      staged.offset = 0;
+      staged.interleave_frame = false;
+      schedule_frame(session, FrameUrgency::state_change, false, {});
+    }
+  }
+  if (explicit_paste && paste != nullptr) {
+    paste->reply = std::move(attachment.clipboard);
+  } else if (!explicit_paste && runtime != nullptr && request &&
+             request->id == transaction.request_id()) {
+    if (!runtime->terminal.complete_clipboard(request->id, transaction.status(),
+                                              transaction.contents()) ||
+        !queue_terminal_responses(runtime->pending_writes, runtime->terminal)) {
+      runtime->fail(PaneRuntimeFailure::terminal_integrity_error);
+    }
+  }
+  attachment.clipboard = nullptr;
+  attachment.clipboard_owner.reset();
+}
+
 // Connection teardown resets only Attachment and AttachmentRuntime state. Session and PaneRuntime
 // lifetimes remain independent, while the direct aggregate layout avoids a connection hot-path
 // allocation or lookup.
@@ -537,6 +723,10 @@ void detach_attachment(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
     }
     auto* const runtime = runtimes.get({.session = session.id, .pane = pane_slot.pane->id});
     LEMMA_ASSERT(runtime != nullptr);
+    runtime->terminal.set_clipboard_access(false, false);
+    if (!queue_terminal_responses(runtime->pending_writes, runtime->terminal)) {
+      runtime->fail(PaneRuntimeFailure::terminal_integrity_error);
+    }
     runtime->terminal.reset_selection_gesture();
     runtime->terminal.clear_selection_checkpoint();
     runtime->terminal.clear_selection();
@@ -688,10 +878,11 @@ struct EncodedContextId final {
     const std::uint16_t columns, const std::uint16_t rows, const std::string_view working_directory,
     const std::span<const std::byte> environment, const LaunchEnvironmentMode environment_mode,
     const vt::TerminalTheme& theme, const SessionId session_id, const std::string_view session_name,
-    const TabId tab_id, const PaneId pane_id,
-    const std::span<const std::byte> launch_command = {}) noexcept -> std::unique_ptr<PaneRuntime> {
+    const TabId tab_id, const PaneId pane_id, const std::span<const std::byte> launch_command = {},
+    const protocol::CellSize cell = {}) noexcept -> std::unique_ptr<PaneRuntime> {
   vt::TerminalOptions options;
-  options.size = {.columns = columns, .rows = rows};
+  options.size = {
+      .columns = columns, .rows = rows, .cell_width_px = cell.width, .cell_height_px = cell.height};
   options.theme = theme;
   options.scrollback_lines_max = reactor_scrollback_lines();
   auto terminal_result = vt::Terminal::create(options);
@@ -1048,10 +1239,11 @@ struct ProductionSessionRuntimeContext final {
       !owner.runtimes->can_reserve_scrollback(limits::terminal_scrollback_bytes_default)) {
     return RuntimeEffectStatus::rejected;
   }
-  auto runtime = create_pane_runtime(
-      effect.rectangle.columns, effect.rectangle.rows, effect.working_directory,
-      session.launch_environment(), session.environment_mode, session.theme, session.id,
-      session.session_name(), effect.tab, effect.pane, effect.command);
+  auto runtime =
+      create_pane_runtime(effect.rectangle.columns, effect.rectangle.rows, effect.working_directory,
+                          session.launch_environment(), session.environment_mode, session.theme,
+                          session.id, session.session_name(), effect.tab, effect.pane,
+                          effect.command, session.attachment_runtime.cell_size);
   if (runtime == nullptr) {
     return RuntimeEffectStatus::rejected;
   }
@@ -4634,7 +4826,7 @@ static_assert(input::key_modifier_num_lock == protocol::key_input_modifier_num_l
   if (staged.empty()) {
     return InputQueueResult::queued;
   }
-  if (staged.size() > runtime.pending_writes.remaining()) {
+  if (staged.size() > runtime.pending_writes.input_remaining()) {
     return InputQueueResult::full;
   }
   if (!scroll_viewport_for_application_input(session, runtime)) {
@@ -5144,6 +5336,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
                                             const protocol::ClientMessage& message) noexcept
     -> bool {
   if (message.kind == protocol::ClientMessageKind::resize ||
+      message.kind == protocol::ClientMessageKind::cell_size ||
       message.kind == protocol::ClientMessageKind::pane_command) {
     return true;
   }
@@ -5335,6 +5528,11 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       return result.status == CommandStatus::detach_requested ? ParseResult::detach
                                                               : ParseResult::error;
     }
+    case protocol::ClientMessageKind::cell_size:
+      if (!apply_cell_size(session, runtimes, message.cell_size)) {
+        return ParseResult::error;
+      }
+      break;
     case protocol::ClientMessageKind::resize:
       if (!resize_session(session, runtimes, message.dimensions, &extensions)) {
         return ParseResult::error;
@@ -5358,6 +5556,16 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       }
       break;
     }
+    case protocol::ClientMessageKind::terminal_reply:
+      if (session.attachment_runtime.clipboard != nullptr) {
+        // Replies never pass through keymaps, Surface input, or paste; completion precedes the next
+        // input record.
+        session.attachment_runtime.clipboard->consume(
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            {reinterpret_cast<const char*>(message.input.data()), message.input.size()});
+        service_clipboard(session, runtimes);
+      }
+      break;
     case protocol::ClientMessageKind::paste: {
       if (const auto routed = route_surface_paste(extensions, session, message.input);
           routed.has_value()) {
@@ -6852,11 +7060,148 @@ struct RuntimeProcOwner final {
   std::uint32_t request_id{0};
 };
 
+[[nodiscard]] auto image_paste_owned(const ClipboardPaste& paste, const Sessions& sessions) noexcept
+    -> bool {
+  const auto* session = sessions.get(paste.session);
+  const auto* tab = session != nullptr ? find_tab(*session, session->active_tab) : nullptr;
+  return session != nullptr && session->active && session->attachment_runtime.client >= 0 &&
+         session->attachment_runtime.connection_id == paste.connection && tab != nullptr &&
+         tab->focused_pane == paste.pane;
+}
+
+auto begin_image_paste(const api::Command& request, Sessions& sessions,
+                       PublicCommandExecution& result) -> std::shared_ptr<ClipboardPaste> {
+  auto* session = public_session(sessions, request.session);
+  auto* tab = session != nullptr ? find_tab(*session, session->active_tab) : nullptr;
+  if (session == nullptr || tab == nullptr || session->attachment_runtime.client < 0 ||
+      tab->focused_pane != request.pane.id) {
+    result.status = CommandStatus::unavailable;
+    result.error_reason = "focused_attachment_required";
+    return {};
+  }
+  if (request.expected_session_revision &&
+      *request.expected_session_revision != session->mutation_generation) {
+    result.status = CommandStatus::conflict;
+    result.error_reason = "revision_mismatch";
+    return {};
+  }
+  auto job = std::make_shared<ClipboardPaste>();
+  job->session = session->id;
+  job->pane = request.pane.id;
+  job->connection = session->attachment_runtime.connection_id;
+  const std::array desired{vt::ClipboardContent{.mime = "image/png", .data = {}}};
+  const auto started = begin_clipboard_transaction(*session, job->pane,
+                                                   {.id = 0, .read = true, .contents = desired});
+  if (!started) {
+    result.status = CommandStatus::unavailable;
+    result.error_reason =
+        started.error() == vt::ClipboardStatus::busy ? "clipboard_busy" : "clipboard_unavailable";
+    return {};
+  }
+  session->attachment_runtime.clipboard_paste = job;
+  return job;
+}
+
+// Revalidate the asynchronous job's owner before saving and before paste publication.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+auto advance_image_paste(ClipboardPaste& job, const api::Command& request, Sessions& sessions,
+                         PaneRuntimeStore& runtimes, std::uint64_t& activity_order)
+    -> std::optional<PublicCommandExecution> {
+  PublicCommandExecution result;
+  result.status = CommandStatus::failed;
+  if (!image_paste_owned(job, sessions)) {
+    result.error_reason = "clipboard_owner_changed";
+    return result;
+  }
+  if (job.file == nullptr) {
+    if (job.reply == nullptr) {
+      return std::nullopt;
+    }
+    if (job.reply->status() != vt::ClipboardStatus::success) {
+      result.error_reason = job.reply->status() == vt::ClipboardStatus::denied
+                                ? "clipboard_denied"
+                                : "clipboard_unavailable";
+      return result;
+    }
+    for (const auto& item : job.reply->contents()) {
+      if (item.mime == "image/png") {
+        job.file = clipboard::PngFile::start(item.data, reactor_now());
+        break;
+      }
+    }
+    job.reply = nullptr;
+    if (job.file == nullptr) {
+      result.error_reason = "clipboard_image_unavailable";
+      return result;
+    }
+  }
+  job.file->advance(reactor_now());
+  if (!job.file->done()) {
+    return std::nullopt;
+  }
+  if (job.file->path().empty()) {
+    result.error_reason = "invalid_png_or_file_error";
+    return result;
+  }
+  std::string encoded_path;
+  if (!api::append_json_string(encoded_path, job.file->path())) {
+    result.error_reason = "invalid_file_path";
+    return result;
+  }
+  std::string quoted = "'";
+  for (const auto character : job.file->path()) {
+    if (character == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += character;
+    }
+  }
+  quoted += "' ";
+  auto paste = request;
+  paste.kind = api::CommandKind::pane_input;
+  paste.session = {.id = job.session, .name = {}};
+  paste.input_events = {{.kind = api::InputEventKind::paste, .text = std::move(quoted)}};
+  // The admitted Proc owner is checked immediately before this step. Native prompts are scoped to
+  // their connection. Never retarget a finished clipboard read to a newly focused Pane.
+  result = PublicCommandExecutor::execute(paste, sessions, runtimes, activity_order, {});
+  result.value_field = "path";
+  result.value_json = std::move(encoded_path);
+  return result;
+}
+
+void service_interactive_paste(SessionRecord& session, Sessions& sessions,
+                               PaneRuntimeStore& runtimes, std::uint64_t& activity_order) noexcept {
+  auto& job = session.attachment_runtime.interactive_paste;
+  if (job == nullptr) {
+    return;
+  }
+  try {
+    api::Command request;
+    request.kind = api::CommandKind::pane_paste_image;
+    request.session = {.id = job->session, .name = {}};
+    request.pane = {.id = job->pane};
+    const auto result = advance_image_paste(*job, request, sessions, runtimes, activity_order);
+    if (!result) {
+      return;
+    }
+    const bool success = result->status == CommandStatus::applied;
+    publish_status_message(session,
+                           success ? StatusMessageKind::information : StatusMessageKind::error,
+                           success ? "Image path pasted" : "Image paste failed");
+  } catch (const std::bad_alloc&) {
+    // Native command boundary: cancel this job, preserving the attachment and running panes.
+    publish_status_message(session, StatusMessageKind::error, "Image paste resource failure");
+  }
+  job.reset();
+}
+
 struct ProcExecutionState final {
   std::vector<CompiledProcStep> steps;
   std::vector<ProcOutputIds> outputs;
   std::vector<std::string> results;
   std::optional<ProcCommandWait> wait;
+  std::shared_ptr<ReloadResult> reload;
+  std::shared_ptr<ClipboardPaste> image_paste;
   PublicProcId id;
   std::variant<ConnectionProcOwner, HostedProcOwner, RuntimeProcOwner> owner;
   std::size_t retained_result_bytes{0};
@@ -7336,7 +7681,34 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
   const auto& step = std::span(state.steps).subspan(index, 1).front();
   std::optional<api::Command> request;
   PublicCommandExecution execution;
-  if (state.wait.has_value()) {
+  if (state.image_paste != nullptr) {
+    request = concrete_proc_command(step, state.outputs);
+    if (!request) {
+      execution.error_reason = "unresolved_reference";
+    } else {
+      auto completed =
+          advance_image_paste(*state.image_paste, *request, sessions, runtimes, activity_order);
+      if (!completed) {
+        return std::nullopt;
+      }
+      execution = std::move(*completed);
+    }
+    state.image_paste.reset();
+  } else if (state.reload != nullptr) {
+    if (!state.reload->complete) {
+      return std::nullopt;
+    }
+    request = concrete_proc_command(step, state.outputs);
+    execution.status = state.reload->success ? CommandStatus::applied : CommandStatus::failed;
+    if (!state.reload->success) {
+      execution.error_reason = state.reload->error == ConfigurationReloadError::restart_required
+                                   ? "restart_required"
+                                   : "invalid_configuration";
+      execution.text = state.reload->diagnostic;
+      execution.has_text = true;
+    }
+    state.reload.reset();
+  } else if (state.wait.has_value()) {
     if (!public_wait_has_work(*state.wait, sessions, runtimes, reactor_now())) {
       return std::nullopt;
     }
@@ -7354,24 +7726,38 @@ execute_public_proc_step(ProcExecutionState& state, Sessions& sessions, PaneRunt
       return std::nullopt;
     }
     if (request.has_value()) {
-      const auto* const runtime_owner = std::get_if<RuntimeProcOwner>(&state.owner);
-      if (surface_command(request->kind)) {
-        if (runtime_owner == nullptr) {
-          execution.status = CommandStatus::unavailable;
-        } else {
-          execution =
-              execute_surface_command(*request, *runtime_owner, sessions, runtimes, extensions);
+      if (request->kind == api::CommandKind::pane_paste_image) {
+        state.image_paste = begin_image_paste(*request, sessions, execution);
+        if (state.image_paste != nullptr) {
+          return std::nullopt;
         }
+      } else if (request->kind == api::CommandKind::config_reload) {
+        state.reload = start_reload();
+        if (state.reload != nullptr) {
+          return std::nullopt;
+        }
+        execution.status = CommandStatus::conflict;
+        execution.error_reason = "reload_busy_or_unavailable";
       } else {
-        auto scratch = std::span<std::byte>{};
-        if (request->kind == api::CommandKind::pane_capture) {
-          scratch = acquire_public_scratch(scratch_owner);
-        }
-        if (scratch.empty() && request->kind == api::CommandKind::pane_capture) {
-          execution.status = CommandStatus::failed;
+        const auto* const runtime_owner = std::get_if<RuntimeProcOwner>(&state.owner);
+        if (surface_command(request->kind)) {
+          if (runtime_owner == nullptr) {
+            execution.status = CommandStatus::unavailable;
+          } else {
+            execution =
+                execute_surface_command(*request, *runtime_owner, sessions, runtimes, extensions);
+          }
         } else {
-          execution =
-              PublicCommandExecutor::execute(*request, sessions, runtimes, activity_order, scratch);
+          auto scratch = std::span<std::byte>{};
+          if (request->kind == api::CommandKind::pane_capture) {
+            scratch = acquire_public_scratch(scratch_owner);
+          }
+          if (scratch.empty() && request->kind == api::CommandKind::pane_capture) {
+            execution.status = CommandStatus::failed;
+          } else {
+            execution = PublicCommandExecutor::execute(*request, sessions, runtimes, activity_order,
+                                                       scratch);
+          }
         }
       }
     } else {
@@ -9307,6 +9693,16 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
          !session->attachment_runtime.output.busy())) {
       return 0;
     }
+    if (session->attachment_runtime.clipboard != nullptr &&
+        tighten(session->attachment_runtime.clipboard->deadline())) {
+      return 0;
+    }
+    if (const auto& paste = session->attachment_runtime.interactive_paste; paste != nullptr) {
+      if (!image_paste_owned(*paste, sessions) || paste->reply != nullptr ||
+          (paste->file != nullptr && tighten(paste->file->deadline()))) {
+        return 0;
+      }
+    }
     if ((session->attachment_runtime.copy_mode.search_task.has_value() &&
          tighten(session->attachment_runtime.copy_mode.search_task->deadline)) ||
         (session->attachment_runtime.copy_mode.pending_escape_size > 0 &&
@@ -9314,7 +9710,9 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
         (session->attachment.status_message_visible &&
          tighten(session->attachment_runtime.status_message_deadline)) ||
         tighten(session->attachment_runtime.frame_scheduler.deadline(frame_sink_state(*session))) ||
-        tighten(session->attachment_runtime.output.deadline())) {
+        tighten(session->attachment_runtime.output.deadline()) ||
+        (session->attachment_runtime.client >= 0 && !session->attachment_runtime.output.busy() &&
+         tighten(session->attachment_runtime.graphics.deadline()))) {
       return 0;
     }
     for (const auto& pane_slot : session->panes) {
@@ -9360,6 +9758,23 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
   };
   for (const auto& slot : executions) {
     if (slot.execution == nullptr) {
+      continue;
+    }
+    if (const auto& paste = slot.execution->image_paste; paste != nullptr) {
+      if (!image_paste_owned(*paste, sessions) || paste->reply != nullptr) {
+        return 0;
+      }
+      if (paste->file != nullptr) {
+        struct FileDeadline {
+          std::chrono::steady_clock::time_point deadline;
+        };
+        if (tighten(FileDeadline{.deadline = paste->file->deadline()})) {
+          return 0;
+        }
+      }
+      continue;
+    }
+    if (slot.execution->reload != nullptr && !slot.execution->reload->complete) {
       continue;
     }
     if (!slot.execution->wait.has_value()) {
@@ -9465,10 +9880,18 @@ void process_pane_events(SessionRecord& session, Tab& tab, Pane& pane, PaneRunti
   if (pane_budget == 0) {
     return;
   }
+  const bool clipboard_eligible = session.attachment_runtime.client >= 0 &&
+                                  tab.id == session.active_tab && pane.id == tab.focused_pane;
+  runtime.terminal.set_clipboard_access(
+      clipboard_eligible && active_reactor_environment->clipboard_read,
+      clipboard_eligible && active_reactor_environment->clipboard_write);
   const auto pane_budget_before = pane_budget;
   const auto drained =
       drain_pty(runtime.pty, runtime.terminal, runtime.presentation_gate, runtime.pending_writes,
                 pane_budget, track_interactive_damage, trace_matcher);
+  if (runtime.terminal.clipboard_request().has_value()) {
+    start_clipboard_request(session, pane, runtime);
+  }
   const auto bytes_drained = pane_budget_before - pane_budget;
   global_budget -= bytes_drained;
   if (blocked_sink) {
@@ -9754,6 +10177,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   publish_status_message(session, StatusMessageKind::error, message);
 }
 
+// Geometry, theme, transport, and graphics ownership transfer as one bounded transition.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto transfer_attachment(SessionRecord& source, SessionRecord& target,
                                        Sessions& sessions, PaneRuntimeStore& runtimes,
                                        std::uint64_t& activity_order) noexcept
@@ -9771,7 +10196,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
       target_runtime.pending_attach_slot != std::numeric_limits<std::uint32_t>::max()) {
     return AttachmentTransferResult::conflict;
   }
-  if (source_runtime.output.busy() || source_runtime.clipboard_write.bytes != nullptr) {
+  if (source_runtime.output.busy() || source_runtime.clipboard_write.bytes != nullptr ||
+      source_runtime.clipboard != nullptr || !source_runtime.clipboard_paste.expired()) {
     return AttachmentTransferResult::deferred;
   }
   if (!sessions.connection_available(target.id)) {
@@ -9782,14 +10208,21 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
                                                  .rows = target.attachment.rows};
   const protocol::Dimensions dimensions{.columns = source.attachment.columns,
                                         .rows = source.attachment.rows};
-  if (!resize_session(target, runtimes, dimensions)) {
+  const auto previous_cells = target_runtime.cell_size;
+  if (!resize_session(target, runtimes, dimensions) ||
+      !apply_cell_size(target, runtimes, source_runtime.cell_size)) {
+    if (!resize_session(target, runtimes, previous_dimensions) ||
+        !apply_cell_size(target, runtimes, previous_cells)) {
+      target.active = false;
+    }
     return AttachmentTransferResult::failed;
   }
   if (!target.theme_bound && source.theme_bound &&
       !apply_session_theme(target, runtimes, source.theme)) {
     // Viewport and theme preparation are one transaction, as on an ordinary attach. If either
     // rollback cannot restore a usable Session, keep it out of subsequent target resolution.
-    if (target.active && !resize_session(target, runtimes, previous_dimensions)) {
+    if (target.active && (!resize_session(target, runtimes, previous_dimensions) ||
+                          !apply_cell_size(target, runtimes, previous_cells))) {
       target.active = false;
     }
     return AttachmentTransferResult::failed;
@@ -9802,6 +10235,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   const auto surface_paste = source_runtime.surface_paste;
   const int client = std::exchange(source_runtime.client, -1);
   auto decoder = std::move(source_runtime.decoder);
+  auto graphics = std::move(source_runtime.graphics);
   source_runtime.decoder = {};
   auto history = source.attachment.command_history;
   auto messages = source.attachment.status_messages;
@@ -9811,6 +10245,7 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
 
   target_runtime.client = client;
   target_runtime.decoder = std::move(decoder);
+  target_runtime.graphics = std::move(graphics);
   target_runtime.server_sequence = server_sequence;
   target_runtime.full_redraw_generation = full_redraw_generation;
   target_runtime.outer_modes = previous_outer_modes;
@@ -9885,6 +10320,32 @@ void service_attachment_command_lines(Sessions& sessions, PaneRuntimeStore& runt
         continue;
       }
       const auto& action = *parsed;
+      if (action.kind == CommandLineActionKind::command &&
+          action.command.kind == api::CommandKind::pane_paste_image) {
+        PublicCommandExecution result;
+        auto job = begin_image_paste(action.command, sessions, result);
+        if (job == nullptr) {
+          finish_command_line_error(session, "Error: Image paste busy or unavailable");
+        } else {
+          session.attachment_runtime.interactive_paste = std::move(job);
+          reset_command_line(session);
+          publish_status_message(session, StatusMessageKind::information,
+                                 "Reading clipboard image");
+        }
+        continue;
+      }
+      if (action.kind == CommandLineActionKind::command &&
+          action.command.kind == api::CommandKind::config_reload) {
+        auto result = start_reload();
+        if (result == nullptr) {
+          finish_command_line_error(session, "Error: Reload busy or unavailable");
+        } else {
+          active_reload->interactive = std::move(result);
+          active_reload->connection = session.attachment_runtime.connection_id;
+          reset_command_line(session);
+        }
+        continue;
+      }
       if (action.kind == CommandLineActionKind::hosted) {
         if (extensions.start(action.hosted_command, action.arguments,
                              {.session = session.id,
@@ -10171,6 +10632,11 @@ void queue_due_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                       extension::Runtime& extensions) noexcept {
   const auto now = reactor_now();
   for (auto& session : sessions) {
+    if (session != nullptr && session->active && session->attachment_runtime.client >= 0 &&
+        !session->attachment_runtime.output.busy() &&
+        session->attachment_runtime.graphics.wake(now)) {
+      schedule_frame(*session, FrameUrgency::burst, false);
+    }
     if (session == nullptr || !session->active ||
         session->attachment_runtime.client_close_state != ConnectionCloseState::none ||
         !session->attachment_runtime.frame_scheduler.due(now, frame_sink_state(*session))) {
@@ -10202,6 +10668,8 @@ void expire_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtime
   }
 }
 
+// Fair bounded drains schedule independently staged clipboard/graphics continuations.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes,
                                   const std::span<ClientFrameFlushTarget> storage,
                                   std::size_t& cursor,
@@ -10239,6 +10707,9 @@ void flush_attached_client_frames(Sessions& sessions, PaneRuntimeStore& runtimes
       if (session.attachment_runtime.clipboard_write.redraw_after_write) {
         session.attachment_runtime.clipboard_write.redraw_after_write = false;
         schedule_frame(session, FrameUrgency::state_change, true);
+      } else if (session.attachment_runtime.graphics.pending() ||
+                 session.attachment_runtime.clipboard_write.bytes != nullptr) {
+        schedule_frame(session, FrameUrgency::burst, false);
       }
       queue_client_disconnect_if_ready(session, runtimes);
     }
@@ -10356,6 +10827,7 @@ enum class DescriptorKind : std::uint8_t {
   capacity_rejection,
   extension_host,
   extension_peer,
+  configuration_loader,
 };
 
 struct DescriptorOwner final {
@@ -10392,8 +10864,9 @@ template <typename Tag>
             .generation = std::span(pending).subspan(owner.auxiliary_slot, 1).front()};
   case DescriptorKind::extension_peer:
     return {.domain = domain, .owner = readiness_id(owner.extension_owner), .generation = 0};
+  case DescriptorKind::configuration_loader:
   case DescriptorKind::capacity_rejection:
-    // Rare rejection slots have no lifetime generation. Use ordinary poll for these turns.
+    // Short-lived cold-path descriptors have no retained identity. Use ordinary poll this turn.
     return {};
   case DescriptorKind::child_reaper:
   case DescriptorKind::extension_host:
@@ -10421,18 +10894,124 @@ collect_readiness_identities(const std::span<const DescriptorOwner> owners,
   return storage;
 }
 
+// Publication keeps old-owner cancellation, borrower transfer, and cleanup ordered in one turn.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void service_configuration_reload(ReactorEnvironment& environment, ReloadState& reload,
+                                  Sessions& sessions, PaneRuntimeStore& runtimes,
+                                  extension::CommandRuntime& commands, PublicProcExecutions& procs,
+                                  PendingConnections& connections, extension::Runtime& extensions,
+                                  const int listener, bool& service_extensions) noexcept {
+  auto* const owner = environment.configuration_reloader;
+  if (owner == nullptr || owner->descriptor() < 0) {
+    return;
+  }
+  auto result = reload.current.lock();
+  if (result == nullptr) {
+    owner->discard(); // Its CONTROL/extension owner disconnected before publication.
+    return;
+  }
+  const auto candidate = owner->advance(reactor_now());
+  if (!candidate.has_value()) {
+    return;
+  }
+  // A Proc can outlive its transport until the round-robin scheduler revisits it. Check its
+  // authoritative completion owner at publication, not just the shared result's lifetime.
+  if (result != reload.interactive && !std::ranges::any_of(procs, [&](const auto& slot) {
+        const auto* const execution = slot.execution.get();
+        if (execution == nullptr || execution->reload != result) {
+          return false;
+        }
+        if (owned_public_proc(connections, *execution) != nullptr) {
+          return true;
+        }
+        if (const auto* hosted = std::get_if<HostedProcOwner>(&execution->owner)) {
+          const auto* const invocation = commands.find(hosted->invocation);
+          return invocation != nullptr && invocation_attachment(sessions, *invocation) != nullptr;
+        }
+        const auto* const runtime = std::get_if<RuntimeProcOwner>(&execution->owner);
+        return runtime != nullptr && extensions.connected(runtime->generation);
+      })) {
+    owner->discard();
+    return;
+  }
+  result->error = candidate->error;
+  try {
+    result->diagnostic = candidate->diagnostic;
+  } catch (...) {
+    // Reactor/result boundary: diagnostic allocation failure rejects the untouched candidate.
+    // The failed result retains its stable reason even when display text cannot be retained.
+    owner->discard();
+    result->complete = true;
+    return;
+  }
+  if (candidate->generation == nullptr) {
+    owner->discard();
+  } else {
+    // The old map and descriptors remain alive until every borrower has moved. Old command
+    // invocations cannot address the new host's reused invocation IDs.
+    fail_hosted_commands(commands, sessions, "Error: Command cancelled by config reload");
+    for (auto& slot : procs) {
+      if (slot.execution != nullptr &&
+          std::holds_alternative<HostedProcOwner>(slot.execution->owner)) {
+        slot.execution.reset();
+      }
+    }
+    const auto& generation = *candidate->generation;
+    for (auto& session : sessions) {
+      if (session == nullptr) {
+        continue;
+      }
+      leave_copy_mode(*session, runtimes);
+      reset_rename_prompt(*session, false);
+      reset_command_line(*session, false);
+      leave_message_view(*session, false);
+      session->input_router.reconfigure(generation.input_map());
+      session->interaction_router.reconfigure(generation.input_map());
+      session->attachment_runtime.hosted_command.reset();
+      schedule_frame(*session, FrameUrgency::state_change, false);
+    }
+    environment.input_map = &generation.input_map();
+    environment.scrollback_lines = generation.scrollback_lines();
+    environment.clipboard_read = generation.clipboard_read();
+    environment.clipboard_write = generation.clipboard_write();
+    environment.default_program = generation.default_program();
+    environment.default_cwd = generation.default_cwd();
+    environment.command_history_file = generation.history_file();
+    environment.extension_descriptor = candidate->descriptor;
+    environment.extension_commands = candidate->commands;
+    environment.stop_extension = candidate->stop;
+    environment.extension_context = candidate->context;
+    commands = extension::CommandRuntime(candidate->descriptor, candidate->commands,
+                                         candidate->stop, candidate->context, listener);
+    service_extensions = commands.channel().descriptor() >= 0;
+    owner->commit();
+    result->success = true;
+  }
+  result->complete = true;
+  if (reload.interactive == result) {
+    for (auto& session : sessions) {
+      if (session != nullptr && session->attachment_runtime.connection_id == reload.connection) {
+        publish_status_message(
+            *session, result->success ? StatusMessageKind::information : StatusMessageKind::error,
+            result->success ? "Configuration reloaded" : result->diagnostic);
+      }
+    }
+    reload.interactive.reset();
+  }
+}
+
 // The branches are the explicit bounded stages of the current single-owner reactor.
 [[nodiscard]] auto
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,bugprone-exception-escape)
 run_server_impl(const int listener, const EndpointRelease release_endpoint,
                 void* const release_context, const StopRequested stop_requested,
-                const ChildReaper child_reaper, const ReactorEnvironment environment) noexcept
-    -> int {
+                const ChildReaper child_reaper, ReactorEnvironment environment) noexcept -> int {
   diagnostic::set_latency_trace_role(diagnostic::LatencyTraceRole::daemon);
   if (!environment.valid()) {
     return 1;
   }
-  const ReactorEnvironmentGuard environment_guard(environment);
+  ReloadState reload;
+  const ReactorEnvironmentGuard environment_guard(environment, reload);
   CommandHistoryGuard command_history_guard(environment.command_history_file);
   EndpointReleaseGuard endpoint_release(release_endpoint, release_context);
   Sessions sessions;
@@ -10457,7 +11036,7 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     return 1;
   }
   constexpr auto descriptor_count_max =
-      std::size_t{3} + limits::panes_hard_max +
+      std::size_t{4} + limits::panes_hard_max +
       static_cast<std::size_t>(limits::sessions_hard_max) + limits::pending_connections_hard_max +
       capacity_rejection_connections_max + limits::extension_sessions_hard_max;
   std::array<pollfd, descriptor_count_max> descriptors{};
@@ -10645,13 +11224,34 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
                                                                 .extension_owner = {}};
       ++descriptor_count;
     }
+    auto* const reloader = environment.configuration_reloader;
+    if (reloader != nullptr && reloader->descriptor() >= 0) {
+      std::span(descriptors).subspan(descriptor_count, 1).front() = {
+          .fd = reloader->descriptor(), .events = POLLIN, .revents = 0};
+      std::span(owners).subspan(descriptor_count, 1).front() = {
+          .session = {},
+          .tab = {},
+          .pane = {},
+          .connection = {},
+          .kind = DescriptorKind::configuration_loader,
+          .extension_owner = {}};
+      ++descriptor_count;
+    }
     const auto timeout =
         poll_timeout(sessions, runtimes, pending_connections, public_procs, capacity_rejections,
                      public_screen_work_pending || reaped_work_pending);
     const auto hosted_timeout =
         service_extensions ? extensions.poll_timeout(timeout, reactor_now()) : timeout;
     const auto ready_descriptors = std::span(descriptors).first(descriptor_count);
-    const auto ready_timeout = extension_runtime.buffered_work() ? 0 : hosted_timeout;
+    auto ready_timeout = extension_runtime.buffered_work() ? 0 : hosted_timeout;
+    if (reloader != nullptr && reloader->descriptor() >= 0) {
+      const auto remaining =
+          std::max<std::int64_t>(0, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        reloader->deadline() - reactor_now())
+                                        .count());
+      ready_timeout = ready_timeout < 0 ? static_cast<int>(remaining)
+                                        : std::min(ready_timeout, static_cast<int>(remaining));
+    }
     int poll_result = 0;
     if (readiness.uses_native_wait()) {
       const auto identities = collect_readiness_identities(
@@ -10854,6 +11454,9 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
     }
     service_public_procs(public_procs, pending_connections, sessions, runtimes, activity_order,
                          public_scratch, proc_cursor, extensions, extension_runtime);
+    service_configuration_reload(environment, reload, sessions, runtimes, extensions, public_procs,
+                                 pending_connections, extension_runtime, listener,
+                                 service_extensions);
     std::array<AttachmentId, limits::extension_sessions_hard_max> affected_attachments{};
     static_cast<void>(extension_runtime.reap_disconnected(affected_attachments));
 
@@ -10868,6 +11471,8 @@ run_server_impl(const int listener, const EndpointRelease release_endpoint,
       if (session == nullptr || !session->active) {
         continue;
       }
+      service_clipboard(*session, runtimes);
+      service_interactive_paste(*session, sessions, runtimes, activity_order);
       for (auto& pane_slot : session->panes) {
         if (pane_slot.pane == nullptr) {
           continue;

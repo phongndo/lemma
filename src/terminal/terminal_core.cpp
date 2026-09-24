@@ -3,6 +3,7 @@
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "lemma/terminal/terminal.hpp"
+#include "lemma/terminal_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -174,13 +175,15 @@ template <typename Function>
   return result;
 }
 
-[[nodiscard]] auto disable_unsupported_graphics(const GhosttyTerminal terminal) noexcept
-    -> GhosttyResult {
-  constexpr std::uint64_t storage_limit = 0;
+[[nodiscard]] auto configure_graphics(const GhosttyTerminal terminal) noexcept -> GhosttyResult {
+  constexpr std::uint64_t storage_limit = std::uint64_t{8} * 1024U * 1024U;
   constexpr bool disabled = false;
-  constexpr std::size_t kitty_apc_limit = 0;
-  auto result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
-                                     &storage_limit);
+  constexpr std::size_t kitty_apc_limit = 8192;
+  auto result = detail::register_png_decoder();
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                                  &storage_limit);
+  }
   if (result == GHOSTTY_SUCCESS) {
     result =
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE, &disabled);
@@ -218,7 +221,7 @@ template <typename Function>
     result = apply_theme(terminal, theme);
   }
   if (result == GHOSTTY_SUCCESS) {
-    result = disable_unsupported_graphics(terminal);
+    result = configure_graphics(terminal);
   }
   if (result == GHOSTTY_SUCCESS) {
     constexpr std::size_t unknown_sequence_bytes_max = limits::unknown_sequence_bytes_max;
@@ -226,9 +229,10 @@ template <typename Function>
                                   &unknown_sequence_bytes_max);
   }
   if (result == GHOSTTY_SUCCESS) {
-    static constexpr std::array<std::uint8_t, 14> terminfo_name{'x', 't', 'e', 'r', 'm', '-', '2',
-                                                                '5', '6', 'c', 'o', 'l', 'o', 'r'};
-    const GhosttyString name{.ptr = terminfo_name.data(), .len = terminfo_name.size()};
+    // Ghostty's borrowed string representation uses unsigned UTF-8 bytes.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const GhosttyString name{.ptr = reinterpret_cast<const std::uint8_t*>(terminal_name.data()),
+                             .len = terminal_name.size()};
     result = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_TERMINFO_NAME, &name);
   }
   return result;
@@ -421,6 +425,7 @@ Terminal::Impl::Impl(const TerminalOptions& terminal_options) noexcept
 }
 
 Terminal::Impl::~Impl() {
+  clipboard.reset(); // Retained requests borrow the terminal's protocol reply owner.
   ghostty_tracked_grid_ref_free(selection_checkpoint_start);
   ghostty_tracked_grid_ref_free(selection_checkpoint_end);
   for (auto* const event : selection_events) {
@@ -469,6 +474,11 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
 
   auto result = ghostty_terminal_new(impl->allocator.native(), &impl->terminal,
                                      options.size.columns, options.size.rows);
+  if (result != GHOSTTY_SUCCESS) {
+    return std::unexpected(detail::map_error(result));
+  }
+  result = ghostty_terminal_resize(impl->terminal, options.size.columns, options.size.rows,
+                                   options.size.cell_width_px, options.size.cell_height_px);
   if (result != GHOSTTY_SUCCESS) {
     return std::unexpected(detail::map_error(result));
   }
@@ -574,6 +584,11 @@ auto Terminal::create(const TerminalOptions& options) noexcept -> std::expected<
     result = ghostty_terminal_set(
         impl->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
         callback_pointer(static_cast<GhosttyTerminalClipboardWriteFn>(&Impl::clipboard_write)));
+  }
+  if (result == GHOSTTY_SUCCESS) {
+    result = ghostty_terminal_set(
+        impl->terminal, GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ,
+        callback_pointer(static_cast<GhosttyTerminalClipboardReadFn>(&Impl::clipboard_read)));
   }
   if (result == GHOSTTY_SUCCESS) {
     result = ghostty_terminal_set(

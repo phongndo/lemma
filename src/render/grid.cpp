@@ -126,6 +126,11 @@ Grid::Grid(const std::uint16_t columns, const std::uint16_t rows, std::vector<Ro
       retained_bytes_((rows_.size() * sizeof(Row)) + (styles_.size() * sizeof(GridStyle))),
       columns_(columns), rows_count_(rows) {}
 
+auto Grid::row_runs(const std::uint16_t row) const noexcept -> std::span<const GridRun> {
+  return row < rows_.size() ? std::span<const GridRun>(rows_.at(row).runs)
+                            : std::span<const GridRun>{};
+}
+
 auto Grid::create(const std::uint16_t columns, const std::uint16_t rows) noexcept
     -> std::expected<Grid, GridError> {
   if (columns == 0 || rows == 0 || columns > limits::terminal_columns_hard_max ||
@@ -188,7 +193,9 @@ auto Grid::apply(GridPatch patch, const std::size_t retained_bytes_max) noexcept
       std::size_t text_bytes = 0;
       std::uint32_t previous_end = 0;
       for (auto& run : row_patch.runs) {
-        if (run.text.empty() || run.style >= style_table.size() || run.column >= columns_ ||
+        // Kitty placeholders are terminal protocol, not ordinary Surface text.
+        if (run.text.empty() || run.text.contains("\xF4\x8E\xBB\xAE") ||
+            run.style >= style_table.size() || run.column >= columns_ ||
             run.text.size() > limits::surface_text_bytes_per_row_max -
                                   std::min(text_bytes, limits::surface_text_bytes_per_row_max)) {
           return std::unexpected(run.style >= style_table.size() ? GridError::invalid_style
