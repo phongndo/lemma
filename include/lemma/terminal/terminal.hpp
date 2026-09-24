@@ -142,6 +142,8 @@ enum class ClipboardStatus : std::uint8_t {
   io_error
 };
 
+enum class ClipboardProtocol : std::uint8_t { osc52, kitty };
+
 struct ClipboardContent final {
   std::string_view mime;
   std::span<const std::byte> data;
@@ -151,6 +153,7 @@ struct ClipboardContent final {
 // destruction, including across subsequent PTY writes. Empty data on a read names a requested MIME.
 struct ClipboardRequest final {
   std::uint64_t id{0};
+  ClipboardProtocol protocol{ClipboardProtocol::kitty};
   bool read{false};
   bool primary{false};
   bool list{false};

@@ -45,12 +45,13 @@ constexpr auto outer_resize_quiet_delay = std::chrono::milliseconds(50);
 // Disambiguation, event types, alternate keys, and associated text preserve metadata where it is
 // available while ordinary layout/IME text remains ordinary bytes.
 constexpr std::string_view outer_terminal_enter =
-    "\x1B[?1049h\x1B[2J\x1B[H\x1B[?2004h\x1B[?1004h\x1B[?1002h\x1B[?1006h\x1B[>23u";
+    "\x1B[?1049h\x1B[2J\x1B[H\x1B[?2004h\x1B[?1004h\x1B[?1002h\x1B[?1006h\x1B[>23u"
+    "\x1B[?2048s\x1B[?2048h\x1B[?5522$p";
 constexpr std::string_view outer_terminal_restore =
     "\x18\x1B_Gq=2,m=0;\x1B\\\x1B_Ga=d,d=A,q=2\x1B\\"
     "\x1B[0m\x1B[?2026l\x1B[?1l\x1B[?9l\x1B[?1000l\x1B[?1002l\x1B[?1003l"
     "\x1B[?1004l\x1B[?1005l\x1B[?1006l\x1B[?1007l\x1B[?1015l\x1B[?1016l"
-    "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[<u\x1B[?1049l";
+    "\x1B[?2004l\x1B]112\x1B\\\x1B[0 q\x1B[?25h\x1B[?7h\x1B[<u\x1B[?2048r\x1B[?1049l";
 constexpr std::string_view interruption_diagnostic = "lemma attach interrupted by signal\n";
 constexpr auto signal_cleanup_storage = [] {
   std::array<char, outer_terminal_restore.size() + interruption_diagnostic.size()> payload{};
@@ -891,6 +892,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
 
     HostTerminalThemeParser host_theme_parser;
     bool host_theme_query_pending = false;
+    bool host_theme_update_pending = false;
     constexpr auto host_theme_query_timeout = std::chrono::milliseconds(100);
     auto host_theme_deadline = std::chrono::steady_clock::time_point{};
     const auto size = terminal_size();
@@ -925,19 +927,68 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
     auto host_input_deadline = std::chrono::steady_clock::time_point{};
     auto outer_resize_deadline = std::chrono::steady_clock::time_point{};
     auto sent_size = size;
+    auto observed_size = size;
+    bool in_band_geometry = false;
     bool outer_resize_deferred = false;
     bool attached = terminal_setup_succeeded;
+    const auto commit_outer_resize = [&]() noexcept {
+      if (!outer_resize_deferred) {
+        return true;
+      }
+      const auto settled_size = in_band_geometry ? observed_size : terminal_size();
+      if ((settled_size.columns != sent_size.columns || settled_size.rows != sent_size.rows ||
+           settled_size.cell_width_px != sent_size.cell_width_px ||
+           settled_size.cell_height_px != sent_size.cell_height_px) &&
+          !send_resize(connection, settled_size, client_sequence)) {
+        return false;
+      }
+      sent_size = settled_size;
+      outer_resize_deferred = false;
+      return true;
+    };
+    const auto defer_outer_resize = [&]() noexcept {
+      resize_pending = 0;
+      outer_resize_deferred = true;
+      outer_resize_deadline = std::chrono::steady_clock::now() + outer_resize_quiet_delay;
+    };
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     const auto forward_host_batch = [&](const HostInputBatch& batch) noexcept {
       for (const auto& event : std::span(batch.events).first(batch.event_count)) {
+        if (event.kind != HostInputKind::window_size && !commit_outer_resize()) {
+          return false;
+        }
         const auto bytes = std::span(classified_input).subspan(event.offset, event.size);
         switch (event.kind) {
+        case HostInputKind::clipboard_supported:
+        case HostInputKind::clipboard_unsupported:
+          if (!send_small_message(
+                  connection,
+                  protocol::encode_clipboard_support(
+                      event.kind == HostInputKind::clipboard_supported, client_sequence),
+                  client_sequence)) {
+            return false;
+          }
+          break;
+        case HostInputKind::theme_reply:
+          // Filtering belongs after paste/key classification, and remains active after startup.
+          host_theme_parser.push(bytes);
+          host_theme_parser.finish();
+          host_theme_parser.consume_pending_input();
+          host_theme_update_pending = true;
+          break;
+        case HostInputKind::window_size:
+          // Once observed, native reports outrank potentially stale or pixel-less proxy ioctls.
+          observed_size = event.window_size;
+          in_band_geometry = true;
+          defer_outer_resize();
+          break;
         case HostInputKind::ordinary:
           if (!send_input(connection, bytes, client_sequence)) {
             return false;
           }
           break;
         case HostInputKind::terminal_reply:
+        case HostInputKind::terminal_reply_stream:
           if (!send_payload(connection,
                             protocol::encode_terminal_reply_header(bytes.size(), client_sequence),
                             bytes, client_sequence)) {
@@ -973,19 +1024,15 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       return true;
     };
     const auto forward_physical_input = [&](const std::span<const std::byte> bytes) noexcept {
-      const auto current_size = terminal_size();
-      const bool reply_was_active = host_input_parser.terminal_reply_active();
+      const auto current_size = in_band_geometry ? observed_size : terminal_size();
+      const auto previous_report = host_input_parser.pending_report();
       const auto parsed = host_input_parser.parse(
           bytes, classified_input, {.columns = current_size.columns, .rows = current_size.rows});
       if (!parsed.has_value() || !forward_host_batch(*parsed)) {
         return false;
       }
-      if (host_input_parser.terminal_reply_active()) {
-        const bool completed_reply = std::ranges::any_of(
-            std::span(parsed->events).first(parsed->event_count), [](const HostInputEvent& event) {
-              return event.kind == HostInputKind::terminal_reply;
-            });
-        if (!reply_was_active || completed_reply) {
+      if (const auto report = host_input_parser.pending_report(); report.has_value()) {
+        if (report != previous_report) {
           host_input_deadline = std::chrono::steady_clock::now() + host_terminal_reply_timeout;
         }
       } else if (host_input_parser.has_pending_sequence() && !host_input_parser.paste_active()) {
@@ -994,8 +1041,8 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
       return true;
     };
     const auto finish_host_theme_query = [&]() noexcept {
-      host_theme_parser.finish();
       host_theme_query_pending = false;
+      host_theme_update_pending = false;
       if (host_theme_parser.overflowed()) {
         static_cast<void>(write_text_interruptibly(
             STDERR_FILENO, "lemma attach host-theme query exceeded retained input capacity\n"));
@@ -1007,37 +1054,11 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                 protocol::encode_host_theme_update(*theme, client_sequence),
                                 client_sequence);
     };
-    const auto forward_retained_host_input = [&]() noexcept {
-      if (!forward_physical_input(host_theme_parser.pending_input())) {
-        return false;
-      }
-      host_theme_parser.consume_pending_input();
-      return true;
-    };
-    const auto commit_outer_resize = [&]() noexcept {
-      if (!outer_resize_deferred) {
-        return true;
-      }
-      const auto settled_size = terminal_size();
-      if ((settled_size.columns != sent_size.columns || settled_size.rows != sent_size.rows ||
-           settled_size.cell_width_px != sent_size.cell_width_px ||
-           settled_size.cell_height_px != sent_size.cell_height_px) &&
-          !send_resize(connection, settled_size, client_sequence)) {
-        return false;
-      }
-      sent_size = settled_size;
-      outer_resize_deferred = false;
-      return true;
-    };
-    const auto defer_outer_resize = [&]() noexcept {
-      resize_pending = 0;
-      outer_resize_deferred = true;
-      outer_resize_deadline = std::chrono::steady_clock::now() + outer_resize_quiet_delay;
-    };
     while (attached && termination_signal == 0) {
-      if (host_theme_query_pending && (host_theme_parser.complete() ||
-                                       std::chrono::steady_clock::now() >= host_theme_deadline)) {
-        if (!finish_host_theme_query() || !forward_retained_host_input()) {
+      if ((host_theme_query_pending && (host_theme_parser.complete() ||
+                                        std::chrono::steady_clock::now() >= host_theme_deadline)) ||
+          (!host_theme_query_pending && host_theme_update_pending)) {
+        if (!finish_host_theme_query()) {
           break;
         }
       }
@@ -1172,16 +1193,7 @@ process_server_messages(protocol::ServerDecoder& decoder, const int terminal_des
                                          static_cast<std::uint32_t>(STDIN_FILENO), input_size,
                                          trace_correlation);
         const auto physical_input = std::span(input).first(input_size);
-        if (host_theme_query_pending) {
-          host_theme_parser.push(physical_input);
-          if ((host_theme_parser.overflowed() || host_theme_parser.complete()) &&
-              !finish_host_theme_query()) {
-            break;
-          }
-          if (!forward_retained_host_input()) {
-            break;
-          }
-        } else if (!forward_physical_input(physical_input)) {
+        if (!forward_physical_input(physical_input)) {
           break;
         }
       }

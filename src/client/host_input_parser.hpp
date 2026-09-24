@@ -2,6 +2,7 @@
 #define LEMMA_CLIENT_HOST_INPUT_PARSER_HPP
 
 #include "lemma/limits.hpp"
+#include "platform/terminal_mode.hpp"
 #include "protocol/attachment.hpp"
 
 #include <array>
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace lemma::client {
@@ -20,15 +22,21 @@ enum class HostInputKind : std::uint8_t {
   focus,
   mouse,
   terminal_reply,
+  terminal_reply_stream,
+  theme_reply,
+  window_size,
+  clipboard_supported,
+  clipboard_unsupported,
 };
 
 struct HostInputEvent final {
   HostInputKind kind{HostInputKind::ordinary};
+  protocol::FocusInput focus{protocol::FocusInput::lost};
+  protocol::MouseInput mouse{};
   std::size_t offset{0};
   std::size_t size{0};
   protocol::KeyInput key{};
-  protocol::FocusInput focus{protocol::FocusInput::lost};
-  protocol::MouseInput mouse{};
+  platform::WindowSize window_size{};
 };
 
 inline constexpr std::size_t host_input_events_max = (protocol::input_bytes_max / 2U) + 1U;
@@ -49,14 +57,17 @@ enum class HostInputError : std::uint8_t {
   allocation_failed,
   not_prepared,
   incomplete_terminal_reply,
+  incomplete_terminal_report,
+  invalid_size_report,
+  invalid_terminal_report,
 };
 
 inline constexpr std::size_t host_input_output_bytes_max =
     limits::structured_input_payload_bytes_max + (protocol::input_bytes_max * 2U);
 
 // Preserves bracketed paste, focus, and SGR mouse boundaries across arbitrary read fragmentation.
-// Unknown or malformed input remains ordinary bytes. Recognized clipboard replies instead use a
-// separate bounded channel; truncation fails closed rather than leaking clipboard bytes as keys.
+// Unknown input remains ordinary bytes. Recognized mouse, size, and clipboard reports never become
+// keys: stale mouse coordinates are discarded; incomplete reports fail closed at their deadline.
 class HostInputParser final {
 public:
   [[nodiscard]] auto prepare() noexcept -> std::expected<void, HostInputError>;
@@ -67,11 +78,20 @@ public:
       -> std::expected<HostInputBatch, HostInputError>;
   [[nodiscard]] auto has_pending_sequence() const noexcept -> bool { return pending_size_ > 0; }
   [[nodiscard]] auto paste_active() const noexcept -> bool { return paste_active_; }
-  [[nodiscard]] auto terminal_reply_active() const noexcept -> bool {
-    return terminal_reply_active_;
-  }
+  // Identity of the current recognized transport report, stable until it completes or fails.
+  [[nodiscard]] auto pending_report() const noexcept -> std::optional<std::uint64_t>;
 
 private:
+  enum class Report : std::uint8_t {
+    none,
+    clipboard,
+    legacy_clipboard,
+    clipboard_support,
+    theme,
+    mouse,
+    size
+  };
+
   // Decimal Kitty associated-text codepoints can be much larger than their decoded UTF-8.
   static constexpr std::size_t sequence_bytes_max = protocol::terminal_reply_bytes_max;
 
@@ -79,10 +99,12 @@ private:
   // One bounded opaque paste is retained until its end marker arrives, independent of reads.
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
   std::unique_ptr<std::byte[]> paste_storage_;
+  std::uint64_t report_generation_{0};
   std::size_t pending_size_{0};
+  std::size_t legacy_report_bytes_{0};
   std::size_t paste_size_{0};
   bool paste_active_{false};
-  bool terminal_reply_active_{false};
+  Report report_{Report::none};
   bool any_button_pressed_{false};
 };
 

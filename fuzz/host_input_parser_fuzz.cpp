@@ -29,8 +29,9 @@ struct Transcript final {
   void event(const lemma::client::HostInputEvent& value,
              const std::span<const std::byte> output) noexcept {
     using lemma::client::HostInputKind;
-    const bool streaming =
-        value.kind == HostInputKind::ordinary || value.kind == HostInputKind::paste;
+    const bool streaming = value.kind == HostInputKind::ordinary ||
+                           value.kind == HostInputKind::paste ||
+                           value.kind == HostInputKind::terminal_reply_stream;
     if (!streaming || streaming_kind != value.kind) {
       mix(0x100U + static_cast<std::uint8_t>(value.kind));
       ++events;
@@ -45,6 +46,16 @@ struct Transcript final {
     case HostInputKind::ordinary:
     case HostInputKind::paste:
     case HostInputKind::terminal_reply:
+    case HostInputKind::terminal_reply_stream:
+    case HostInputKind::theme_reply:
+    case HostInputKind::clipboard_supported:
+    case HostInputKind::clipboard_unsupported:
+      break;
+    case HostInputKind::window_size:
+      mix(value.window_size.columns);
+      mix(value.window_size.rows);
+      mix(value.window_size.cell_width_px);
+      mix(value.window_size.cell_height_px);
       break;
     case HostInputKind::key:
       mix(static_cast<std::uint8_t>(value.key.action));
@@ -74,7 +85,7 @@ struct Transcript final {
 };
 
 [[nodiscard]] auto parse_transcript(const std::span<const std::byte> input,
-                                    const lemma::protocol::Dimensions geometry,
+                                    lemma::protocol::Dimensions geometry,
                                     const std::size_t chunk_max) -> std::optional<Transcript> {
   lemma::client::HostInputParser parser;
   if (!parser.prepare().has_value()) {
@@ -97,6 +108,9 @@ struct Transcript final {
     const auto bytes = output_span.first(parsed->bytes);
     for (const auto& event : std::span(parsed->events).first(parsed->event_count)) {
       transcript.event(event, bytes);
+      if (event.kind == lemma::client::HostInputKind::window_size) {
+        geometry = {.columns = event.window_size.columns, .rows = event.window_size.rows};
+      }
     }
     offset += copied;
   }

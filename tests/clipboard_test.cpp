@@ -21,7 +21,10 @@ void deliver(vt::Terminal& terminal, Transaction& transaction) {
     const auto batch = parser.parse(std::span(input).first(count), output, {});
     ASSERT_TRUE(batch);
     for (const auto& event : std::span(batch->events).first(batch->event_count)) {
-      ASSERT_EQ(event.kind, client::HostInputKind::terminal_reply);
+      ASSERT_EQ(event.kind, transaction.protocol() == vt::ClipboardProtocol::osc52
+                                ? client::HostInputKind::terminal_reply_stream
+                                : client::HostInputKind::terminal_reply);
+      ASSERT_LE(event.size, protocol::terminal_reply_bytes_max);
       const auto record = std::span(output).subspan(event.offset, event.size);
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
       const std::string_view text{reinterpret_cast<const char*>(record.data()), record.size()};
@@ -30,6 +33,90 @@ void deliver(vt::Terminal& terminal, Transaction& transaction) {
   }
   EXPECT_FALSE(parser.has_pending_sequence());
 }
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ClipboardTest, Osc52MaximumReadPreservesProtocolWithBoundedReplyPackets) {
+  auto outer = vt::Terminal::create({}).value();
+  outer.set_clipboard_access(true, true);
+  const std::array desired{vt::ClipboardContent{.mime = "text/plain", .data = {}}};
+  Transaction transaction;
+  const auto request = transaction.begin(
+      {.id = 82, .protocol = vt::ClipboardProtocol::osc52, .read = true, .contents = desired},
+      Transaction::Clock::now());
+  ASSERT_TRUE(request);
+  EXPECT_EQ(*request, "\x1b]52;c;?\x1b\\");
+  transaction.published();
+  EXPECT_TRUE(transaction.uncorrelated_read_outstanding());
+  transaction.consume("\x1b]5522;type=read:id=old:status=DONE\x1b\\");
+  EXPECT_FALSE(transaction.done());
+  write(outer, *request);
+  const auto pending = outer.clipboard_request();
+  ASSERT_TRUE(pending);
+  EXPECT_EQ(pending->protocol, vt::ClipboardProtocol::osc52);
+  const std::vector<std::byte> text(limits::clipboard_decoded_bytes_max, std::byte{'x'});
+  const std::array contents{vt::ClipboardContent{.mime = "text/plain", .data = text}};
+  ASSERT_TRUE(outer.complete_clipboard(pending->id, vt::ClipboardStatus::success, contents));
+  deliver(outer, transaction);
+  ASSERT_TRUE(transaction.done());
+  EXPECT_FALSE(transaction.uncorrelated_read_outstanding());
+  EXPECT_EQ(transaction.status(), vt::ClipboardStatus::success);
+  ASSERT_EQ(transaction.contents().size(), 1U);
+  EXPECT_TRUE(std::ranges::equal(transaction.contents().front().data, text));
+}
+
+TEST(ClipboardTest, Osc52WriteCompletesOnlyWhenPublishedAndCanAbortAnIncompleteRecord) {
+  auto outer = vt::Terminal::create({}).value();
+  outer.set_clipboard_access(true, true);
+  const std::vector<std::byte> text(100'003, std::byte{'x'});
+  const std::array contents{vt::ClipboardContent{.mime = "text/plain", .data = text}};
+  Transaction transaction;
+  const auto request =
+      transaction
+          .begin({.id = 83, .protocol = vt::ClipboardProtocol::osc52, .contents = contents},
+                 Transaction::Clock::now())
+          .value();
+  EXPECT_TRUE(request.starts_with("\x1b]52;c;"));
+  write(outer, std::string_view(request).substr(0, 65'536));
+  EXPECT_FALSE(outer.clipboard_request());
+  std::array<std::byte, 1> abort{};
+  ASSERT_EQ(transaction.abort_write(abort), 1U);
+  outer.write(abort);
+  write(outer, "\x1b[Hrendering continues");
+  EXPECT_FALSE(outer.clipboard_request());
+  EXPECT_FALSE(transaction.done());
+  transaction.fail(vt::ClipboardStatus::denied);
+  transaction.published();
+  EXPECT_EQ(transaction.status(), vt::ClipboardStatus::denied);
+
+  Transaction next;
+  write(outer, next.begin({.protocol = vt::ClipboardProtocol::osc52, .contents = contents},
+                          Transaction::Clock::now())
+                   .value());
+  ASSERT_TRUE(outer.clipboard_request());
+  EXPECT_FALSE(next.done());
+  next.published();
+  EXPECT_TRUE(next.done());
+  EXPECT_EQ(next.status(), vt::ClipboardStatus::success);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ClipboardTest, Osc52RejectsBadPaddingSelectionAndTrailingDataWithoutPublishingPartialText) {
+  const std::array desired{vt::ClipboardContent{.mime = "text/plain", .data = {}}};
+  for (const std::string_view reply :
+       {"\x1b]52;p;YQ==\x1b\\", "\x1b]52;c;YR==\x1b\\", "\x1b]52;c;YQ==Yg==\x1b\\",
+        "\x1b]52;c;YQ=\x1b\\", "\x1b]52;c;YQ==\x1b\\trailing"}) {
+    Transaction transaction;
+    ASSERT_TRUE(transaction.begin(
+        {.protocol = vt::ClipboardProtocol::osc52, .read = true, .contents = desired},
+        Transaction::Clock::now()));
+    transaction.published();
+    transaction.consume(reply);
+    ASSERT_TRUE(transaction.done());
+    EXPECT_EQ(transaction.status(), vt::ClipboardStatus::invalid_data);
+    EXPECT_TRUE(transaction.contents().empty());
+    EXPECT_TRUE(transaction.uncorrelated_read_outstanding());
+  }
+}
+
 TEST(ClipboardTest, ReadImageRoundTripsThroughTheRealOuterTerminalProtocol) {
   auto outer = vt::Terminal::create({});
   ASSERT_TRUE(outer);

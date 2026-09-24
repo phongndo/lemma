@@ -26,6 +26,12 @@ public:
   [[nodiscard]] static auto frame_prefix(std::span<const std::byte> data,
                                          std::size_t capacity) noexcept -> std::size_t;
   [[nodiscard]] auto abort_write(std::span<std::byte> output) const noexcept -> std::size_t;
+  // Publication completes an OSC 52 write: that protocol has no write acknowledgement.
+  void published() noexcept;
+  [[nodiscard]] auto protocol() const noexcept -> vt::ClipboardProtocol { return protocol_; }
+  [[nodiscard]] auto uncorrelated_read_outstanding() const noexcept -> bool {
+    return protocol_ == vt::ClipboardProtocol::osc52 && read_ && published_ && !read_complete_;
+  }
   void fail(vt::ClipboardStatus status) noexcept {
     status_ = status;
     done_ = true;
@@ -47,6 +53,7 @@ private:
     std::string data;
   };
   void parse(std::string_view record);
+  void parse_osc52(std::string_view part);
   [[nodiscard]] auto content(std::string_view mime) -> Content*;
   std::string id_;
   std::string listing_;
@@ -56,8 +63,17 @@ private:
   Clock::time_point deadline_;
   std::uint64_t request_id_{0};
   std::size_t decoded_bytes_{0};
+  std::size_t osc52_prefix_size_{0};
+  std::array<char, 4> osc52_quartet_{};
+  std::size_t osc52_quartet_size_{0};
+  vt::ClipboardProtocol protocol_{vt::ClipboardProtocol::kitty};
   vt::ClipboardStatus status_{vt::ClipboardStatus::io_error};
   bool read_{false};
+  bool primary_{false};
+  bool published_{false};
+  bool read_complete_{false};
+  bool osc52_escape_{false};
+  bool osc52_padded_{false};
   bool list_{false};
   bool started_{false};
   bool done_{false};

@@ -334,7 +334,8 @@ struct StatusPromptProjection final {
           .cursor = rename.cursor};
 }
 
-// OSC 52 and pre-encoded OSC 5522 share one bounded publication buffer.
+// Encoded clipboard traffic shares one bounded publication buffer. OSC 52 parts cannot interleave
+// with presentation; OSC 5522 yields only between complete records.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto encode_pending_clipboard_write(SessionRecord& session) noexcept
     -> std::optional<std::size_t> {
@@ -343,10 +344,12 @@ struct StatusPromptProjection final {
     return std::nullopt;
   }
   auto& pending = session.attachment_runtime.clipboard_write;
-  if (pending.encoded) {
-    const auto count = clipboard::Transaction::frame_prefix(
-        std::span(pending.bytes.get(), pending.size).subspan(pending.offset),
-        session.attachment_runtime.frame.capacity());
+  if (pending.format != PendingClipboardWrite::Format::selection) {
+    const auto remaining = std::span(pending.bytes.get(), pending.size).subspan(pending.offset);
+    const auto capacity = session.attachment_runtime.frame.capacity();
+    const auto count = pending.format == PendingClipboardWrite::Format::kitty
+                           ? clipboard::Transaction::frame_prefix(remaining, capacity)
+                           : std::min({remaining.size(), capacity, std::size_t{64} * 1024U});
     if (count == 0) {
       return std::nullopt;
     }
@@ -416,11 +419,16 @@ struct StatusPromptProjection final {
   }
   session.attachment_runtime.server_sequence += static_cast<std::uint32_t>(messages);
   auto& pending = session.attachment_runtime.clipboard_write;
-  if (pending.encoded) {
+  if (pending.format != PendingClipboardWrite::Format::selection) {
     pending.offset += *encoded;
-    pending.interleave_frame = true;
+    pending.interleave_frame = pending.format == PendingClipboardWrite::Format::kitty;
   }
-  if (!pending.encoded || pending.offset == pending.size) {
+  if (pending.format == PendingClipboardWrite::Format::selection ||
+      pending.offset == pending.size) {
+    if (pending.format != PendingClipboardWrite::Format::selection &&
+        session.attachment_runtime.clipboard != nullptr) {
+      session.attachment_runtime.clipboard->published();
+    }
     pending.reset();
   }
   pending.redraw_after_write = true;

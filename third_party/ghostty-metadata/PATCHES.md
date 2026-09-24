@@ -41,6 +41,8 @@ store source is modified.
   available for an immediate failure response. Retained requests must be freed before terminal
   reset/destruction; freeing without replying cancels them. Kitty write transactions release their
   payload state when deferred, independently of later writes. MIME data and request IDs are copied.
+  Read/write request structs retain an `osc52` flag so the bridge preserves the original wire
+  protocol rather than converting legacy text requests into unsupported MIME requests.
 - Owner: Lemma terminal maintainers.
 - Removal condition: upstream provides nonblocking, lifetime-safe clipboard completion, and
   Lemma's clipboard lifetime/protocol regressions pass against that interface without this patch.

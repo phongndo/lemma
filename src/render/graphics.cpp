@@ -660,13 +660,11 @@ auto GraphicsProjection::append(const Scene scene, const std::uint16_t status_ro
     writer.text("\x1b_Ga=d,d=a,q=2\x1b\\");
     state.clear_cursor = image_limit;
   }
-  bool missing = false;
   for (; state.place_cursor < state.plan_size; ++state.place_cursor) {
     const auto& placed = state.plan.at(state.place_cursor);
     const auto* item = state.resident(placed.key);
     LEMMA_ASSERT(item != nullptr);
     if (!item->complete) {
-      missing = true;
       continue;
     }
     if (!writer.room(256)) {
@@ -674,43 +672,44 @@ auto GraphicsProjection::append(const Scene scene, const std::uint16_t status_ro
     }
     writer.place(placed, item->id, state.place_cursor);
   }
-  if (missing) {
-    state.place_cursor = 0;
-  }
+  const auto upload_and_place = [&](Resident& item) {
+    const auto* image = state.image(item.key);
+    LEMMA_ASSERT(image != nullptr);
+    if (image->pixels.empty()) {
+      state.pending = false;
+      return false;
+    }
+    while (!item.complete) {
+      if (!writer.room(4352)) {
+        return false;
+      }
+      writer.upload(item, *image);
+    }
+    // Publish newly ready placements in this frame, not a later empty transition frame. Already
+    // resident placements were handled above and need not be replayed during upload progress.
+    for (std::size_t index = 0; index < state.plan_size; ++index) {
+      const auto& placed = state.plan.at(index);
+      if (placed.key != item.key) {
+        continue;
+      }
+      if (!writer.room(256)) {
+        state.place_cursor = 0; // The upload is complete; resume ordinary placement publication.
+        return false;
+      }
+      writer.place(placed, item.id, index);
+    }
+    return true;
+  };
   // Finish the current data stream first. Presentation commands above remain responsive while
   // image bytes arrive; only another image's transmission must wait.
   for (auto& item : state.residents) {
-    if (item.sent == 0 || item.complete) {
-      continue;
-    }
-    const auto* image = state.image(item.key);
-    LEMMA_ASSERT(image != nullptr);
-    if (image->pixels.empty()) {
-      state.pending = false;
+    if (item.sent > 0 && !item.complete && !upload_and_place(item)) {
       return finish();
-    }
-    while (!item.complete) {
-      if (!writer.room(4352)) {
-        return finish();
-      }
-      writer.upload(item, *image);
     }
   }
   for (auto& item : state.residents) {
-    if (item.key.generation == 0 || item.complete) {
-      continue;
-    }
-    const auto* image = state.image(item.key);
-    LEMMA_ASSERT(image != nullptr);
-    if (image->pixels.empty()) {
-      state.pending = false;
+    if (item.key.generation != 0 && !item.complete && !upload_and_place(item)) {
       return finish();
-    }
-    while (!item.complete) {
-      if (!writer.room(4352)) {
-        return finish();
-      }
-      writer.upload(item, *image);
     }
   }
   state.pending = state.place_cursor < state.plan_size;

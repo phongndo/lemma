@@ -31,7 +31,7 @@ TEST(ProtocolTest, HasDeterministicGoldenClientHelloEncoding) {
       encode_client_hello("project", {.columns = 132, .rows = 43}, 1, current_version);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x0A}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x0B}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x0D}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x01}, std::byte{0x07}, std::byte{0x00}, std::byte{0x84}, std::byte{0x00},
       std::byte{0x2B}, std::byte{0x00}, std::byte{'p'},  std::byte{'r'},  std::byte{'o'},
@@ -198,6 +198,31 @@ TEST(ProtocolTest, RoundTripsCellPixelsAndRejectsZeroGeometry) {
   EXPECT_FALSE(decoder.next());
 }
 
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(ProtocolTest, RoundTripsClipboardSupportAndRejectsNonBooleanPayload) {
+  for (const bool supported : {false, true}) {
+    const auto encoded = encode_clipboard_support(supported, 2);
+    ClientDecoder decoder;
+    ASSERT_TRUE(decoder.prepare());
+    decoder.reset(2, false);
+    std::ranges::copy(encoded.bytes(), decoder.writable_bytes().begin());
+    ASSERT_TRUE(decoder.commit(encoded.bytes().size()));
+    const auto decoded = decoder.next();
+    ASSERT_TRUE(decoded && *decoded);
+    EXPECT_EQ((**decoded).kind, ClientMessageKind::clipboard_support);
+    EXPECT_EQ((**decoded).clipboard_supported, supported);
+    decoder.reset(2, false);
+    auto target = decoder.writable_bytes();
+    std::ranges::copy(encoded.bytes(), target.begin());
+    target.subspan(attach_header_bytes, 1).front() = std::byte{2};
+    ASSERT_TRUE(decoder.commit(encoded.bytes().size()));
+    const auto invalid = decoder.next();
+    ASSERT_FALSE(invalid);
+    EXPECT_EQ(invalid.error(), DecodeError::invalid_enum);
+  }
+}
+
 TEST(ProtocolTest, RoundTripsLiveHostThemeUpdate) {
   HostTerminalTheme theme;
   theme.foreground = RgbColor{.red = 1, .green = 2, .blue = 3};
@@ -221,7 +246,7 @@ TEST(ProtocolTest, HasDeterministicGoldenRenderEncoding) {
   const auto encoded = encode_render_frame_header(3, 2, 1, true);
   const std::array expected{
       std::byte{0x89}, std::byte{'L'},  std::byte{'M'},  std::byte{'A'},  std::byte{0x02},
-      std::byte{0x0A}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x0B}, std::byte{0x06}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x07}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
       std::byte{0x02}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
   };

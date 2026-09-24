@@ -223,6 +223,21 @@ or Enter copies the selection and leaves copy mode. Search replaces that row wit
 output. Application clipboard access is separate and denied by default; see the
 [clipboard settings](configuration.md#api).
 
+### Application clipboard
+
+When application access is enabled, Lemma preserves the requested terminal protocol: OSC 52 for
+plain text, or Kitty's OSC 5522 for MIME data. It does not translate a text request into a protocol
+the outer terminal may not support or call an OS clipboard utility. In Ghostty 1.3.1, text works
+through OSC 52; PNG clipboard access requires an OSC 5522-capable outer terminal such as Kitty.
+The outer terminal's permissions still apply. OSC 52 writes have no acknowledgement; publication
+does not prove that the outer terminal accepted the write.
+
+Reads are bounded to 1 MiB and 30 seconds. OSC 52 has no request IDs: after an outstanding read is
+cancelled, times out, or fails, further OSC 52 reads are denied on that attachment so a late reply
+cannot reach a different request or Pane. Attach from a fresh outer terminal window to retry reads
+without an old terminal reply still in flight. Writes and Kitty's correlated requests remain
+available, subject to their usual permissions.
+
 ### Clipboard images
 
 With an outer terminal supporting Kitty's OSC 5522 clipboard protocol:
@@ -286,6 +301,17 @@ Install it on that destination rather than setting `TERM` to the outer terminal'
 from a Lemma pane, `infocmp -x lemma | ssh HOST 'tic -x -'` installs it in the remote user's database.
 This does not install a remote Lemma daemon.
 
+### Window geometry and input
+
+Lemma requests in-band size reports (mode 2048) from supporting outer terminals. These carry both
+rows/columns and pixel dimensions, and take precedence over stale or pixel-less PTY proxy reports.
+Other terminals use the PTY window size. Lemma restores the parent's reporting mode on exit.
+Font-size changes update Pane pixel geometry even when the character grid stays unchanged.
+
+Mouse reports outside the current grid are discarded, never typed into the shell. Recognized
+partial mouse, size, and clipboard reports have a fixed 30-second transport deadline, independent
+of Escape-key timing; progress does not renew it. Bracketed paste remains opaque.
+
 ### Kitty graphics
 
 Lemma retains Kitty images and placements in the daemon's native terminal state; it does not pass
@@ -300,6 +326,10 @@ uses native frame state and bounded presentation deadlines, not PTY-output polli
 pause animation advancement rather than repeatedly abandoning incomplete frames. Synchronized
 Pane presentation retains finished images; a covering Surface suppresses those frozen images until
 the Pane can be presented again.
+
+Kitty 0.48.2 on Linux with software rendering can leave a new image invisible under a steady cursor
+until text redraws, including after reattach. This was also reproduced without Lemma. Lemma preserves
+the native cursor mode rather than changing it to hide the outer renderer's behavior.
 
 Per-Pane image storage is bounded to 8 MiB. PNGs must be at most 4096×4096 and decode within that
 bound. A composed Attachment supports at most 256 visible image fragments and 32 MiB of projected

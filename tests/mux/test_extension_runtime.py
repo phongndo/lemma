@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import struct
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
+from benchmarks.mux_benchmark import attach_frame, connect_blocked_client
 from extensions.lemma_client import Client
-from tests.support.mux_harness import LemmaServer, wait_until
+from tests.support.mux_harness import LemmaServer, Session, wait_until
 
 MAGIC = b"\x8aLME"
 HEADER = struct.Struct(">4sBBBBII")
@@ -362,8 +366,7 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
         self.assertEqual(event["event"], "surface.key", event)
         self.assertEqual(event["text"], "rejected")
 
-    def test_surface_paste_preserves_opaque_bytes_with_strict_json(self) -> None:
-        session = self.server.create_session("opaque-paste", command=("cat",))
+    def _focused_overlay_peer(self, session: Session) -> ExtensionPeer:
         peer = ExtensionPeer(str(self.server.socket_path))
         self.addCleanup(peer.close)
         peer.send(
@@ -410,6 +413,11 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
             },
         )
         peer.receive_proc_before_surface_event(3, "surface.focused")
+        return peer
+
+    def test_surface_paste_preserves_opaque_bytes_with_strict_json(self) -> None:
+        session = self.server.create_session("opaque-paste", command=("cat",))
+        peer = self._focused_overlay_peer(session)
         client = session.require_client()
         client.drain(0.2)
         for data in [
@@ -425,6 +433,9 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
                     sent = sender.submit(
                         client.send, b"\x1b[200~" + data + b"\x1b[201~", timeout=5.0
                     )
+                    if len(data) == 1024 * 1024:
+                        # A briefly descheduled consumer must backpressure, not lose its owner.
+                        time.sleep(0.1)
                     received = bytearray()
                     while len(received) < len(data):
                         event = peer.receive_matching(EVENT)
@@ -444,6 +455,121 @@ class ExtensionRuntimeMuxTest(unittest.TestCase):
             {"schema": "lemma.proc/v1", "commands": [{"command": "session.list"}]},
         )
         self.assertTrue(peer.receive_matching(PROC_RESULT, 4)["ok"])
+
+    def test_surface_paste_stall_expires_without_reading_or_closing_the_attachment(
+        self,
+    ) -> None:
+        session = self.server.create_session("stalled-paste", command=("cat",))
+        peer = self._focused_overlay_peer(session)
+        client = session.require_client()
+        client.drain(0.2)
+        poller = select.poll()
+        poller.register(peer.socket, select.POLLHUP | select.POLLERR)
+        with ThreadPoolExecutor(max_workers=1) as sender:
+            started = time.monotonic()
+            sent = sender.submit(
+                client.send,
+                b"\x1b[200~" + b"\0" * (1024 * 1024) + b"\x1b[201~",
+                timeout=10,
+            )
+            # Poll hangup without consuming queued bytes: only the reactor's deadline can wake it.
+            self.assertTrue(
+                poller.poll(8000), "stalled Surface owner was never revoked"
+            )
+            self.assertGreaterEqual(time.monotonic() - started, 4.5)
+            sent.result(timeout=3)
+        self.assertTrue(session.state().attached)
+
+    def test_switch_retries_decoder_held_input_after_surface_backpressure(self) -> None:
+        source = self.server.create_session(
+            "paste-source", attach=False, command=("cat",)
+        )
+        target = self.server.create_session(
+            "paste-target", attach=False, command=("cat",)
+        )
+        name = source.name.encode()
+        raw, minor = connect_blocked_client(
+            self.server.socket_path, struct.pack("!BHHB", len(name), 80, 24, 0) + name
+        )
+        self.addCleanup(raw.close)
+        stopped = Event()
+
+        def drain() -> None:
+            while not stopped.is_set():
+                if select.select([raw], [], [], 0.05)[0]:
+                    self.assertTrue(raw.recv(65536), "attachment closed during handoff")
+
+        with ThreadPoolExecutor(max_workers=1) as reader:
+            draining = reader.submit(drain)
+            try:
+                peer = self._focused_overlay_peer(source)
+                # Both records fit the expanded decoder. No later socket input wakes the marker.
+                raw.sendall(
+                    attach_frame(9, b"\0" * (512 * 1024), 2, minor=minor)
+                    + attach_frame(2, b"HANDOFF_INPUT\n", 3, minor=minor)
+                )
+                first = peer.receive_matching(EVENT)
+                self.assertEqual(first["event"], "surface.paste")
+                time.sleep(0.15)
+                with Client(
+                    str(self.server.socket_path),
+                    name="paste-switch",
+                    capabilities=("proc",),
+                ) as control:
+
+                    def switch(connection: str, session: Session) -> str:
+                        def attempt() -> str | None:
+                            result = control.proc(
+                                {
+                                    "command": "attachment.switch",
+                                    "connection": connection,
+                                    "session": {"id": session.state().id},
+                                }
+                            )["results"][0]["result"]
+                            if (
+                                result["status"] == "conflict"
+                                and result["error"]["reason"] == "output_pending"
+                            ):
+                                return None
+                            self.assertEqual(result["status"], "applied", result)
+                            return result["connection"]
+
+                        return wait_until("paste handoff", attempt, timeout=2)
+
+                    # The first terminal controller in this isolated daemon has generation 1.
+                    switch("0:1", target)
+                    peer.send(
+                        PROC,
+                        4,
+                        {
+                            "schema": "lemma.proc/v1",
+                            "commands": [{"command": "session.list"}],
+                        },
+                    )
+                    received = len(bytes.fromhex(first["bytes_hex"]))
+                    while True:
+                        kind, sequence, document = peer.receive()
+                        if kind == PROC_RESULT and sequence == 4:
+                            break
+                        if kind == EVENT and document["event"] == "surface.paste":
+                            received += len(bytes.fromhex(document["bytes_hex"]))
+                    self.assertLess(
+                        received, 512 * 1024, "fixture did not establish backpressure"
+                    )
+                    state = target.state()
+                    observed = control.proc(
+                        {
+                            "command": "pane.wait",
+                            "session": {"id": state.id},
+                            "pane": {"id": state.focused_pane},
+                            "contains": "HANDOFF_INPUT",
+                            "timeout_ms": 2000,
+                        }
+                    )
+                    self.assertTrue(observed["ok"], observed)
+            finally:
+                stopped.set()
+                draining.result(timeout=2)
 
     def test_global_extension_service_is_fair_across_buffered_structural_work(
         self,

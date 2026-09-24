@@ -1,0 +1,2 @@
+# Unified diffs require space-only context lines and may end with blank context.
+third_party/ghostty-metadata/patches/*.patch whitespace=-blank-at-eol,-blank-at-eof

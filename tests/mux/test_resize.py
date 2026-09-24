@@ -1,14 +1,76 @@
 from __future__ import annotations
 
+import json
+import os
+import signal
+import sys
 import unittest
 
-from tests.support.mux_harness import LemmaServer
+from tests.support.mux_harness import LemmaServer, wait_until
 
 
 class ResizeMuxTest(unittest.TestCase):
     def setUp(self) -> None:
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
+
+    def test_in_band_geometry_overrides_stale_proxy_size_without_typing_reports(
+        self,
+    ) -> None:
+        report = self.server.root / "geometry.json"
+        captured = self.server.root / "input.bin"
+        script = f"""
+import fcntl, json, os, signal, struct, termios, tty
+from pathlib import Path
+report = Path({str(report)!r})
+captured = Path({str(captured)!r})
+def resized(*_):
+    size = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))
+    temporary = report.with_suffix('.tmp')
+    temporary.write_text(json.dumps(size))
+    temporary.replace(report)
+signal.signal(signal.SIGWINCH, resized)
+tty.setraw(0)
+resized()
+os.write(1, b'GEOMETRY_READY')
+data = b''
+while True:
+    data += os.read(0, 4096)
+    captured.write_bytes(data)
+"""
+        session = self.server.create_session(
+            "in_band_geometry", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("GEOMETRY_READY")
+        self.assertEqual(json.loads(report.read_text()), [23, 80, 640, 368])
+        # A PTY proxy still reports 80x24, but Ghostty sends its real grid and pixels in band.
+        # Mouse input shares this read and must be classified against the new geometry.
+        client.send(b"\x1b[48;50;160;1700;2560t\x1b[<0;114;35M\x1b[<0;114;35mZ")
+        self.server.wait_for_state(
+            session.name,
+            lambda state: (state.columns, state.rows) == (160, 50),
+            "in-band size supersedes stale PTY geometry",
+        )
+        wait_until(
+            "only keyboard input reaches Pane",
+            lambda: (
+                True if captured.exists() and captured.read_bytes() == b"Z" else None
+            ),
+            diagnostics=client.diagnostics,
+        )
+        self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
+        # A later SIGWINCH must not replace known native metrics with the stale proxy ioctl.
+        os.killpg(client.pid, signal.SIGWINCH)
+        client.send(b"Q")
+        wait_until(
+            "input after stale SIGWINCH",
+            lambda: True if captured.read_bytes() == b"ZQ" else None,
+            diagnostics=client.diagnostics,
+        )
+        state = session.state()
+        self.assertEqual((state.columns, state.rows), (160, 50))
+        self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
 
     def test_nested_resize_reaches_each_real_child_pty(self) -> None:
         session = self.server.create_session("nested_resize")

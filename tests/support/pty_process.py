@@ -331,7 +331,7 @@ class PtyProcess:
         arguments: list[str],
         environment: dict[str, str],
         *,
-        terminal_restore_sequence: bytes | None = None,
+        terminal_restore_sequence: bytes | tuple[bytes, ...] | None = None,
     ) -> None:
         release_read, release_write = os.pipe()
         try:
@@ -437,8 +437,13 @@ class PtyProcess:
                     self.terminal_modes_restored = None
                     self.terminal_state_restored = attributes_restored
                 else:
-                    self.terminal_modes_restored = (
-                        self.terminal_restore_sequence in self.final_output
+                    sequences = (
+                        (self.terminal_restore_sequence,)
+                        if isinstance(self.terminal_restore_sequence, bytes)
+                        else self.terminal_restore_sequence
+                    )
+                    self.terminal_modes_restored = any(
+                        sequence in self.final_output for sequence in sequences
                     )
                     self.terminal_state_restored = (
                         attributes_restored and self.terminal_modes_restored is True

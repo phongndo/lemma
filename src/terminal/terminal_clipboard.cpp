@@ -139,7 +139,9 @@ auto Terminal::clipboard_request() const noexcept -> std::optional<ClipboardRequ
     return std::nullopt;
   }
   const auto* const read = pending->read;
+  const bool osc52 = read != nullptr ? read->osc52 : pending->write->osc52;
   return ClipboardRequest{.id = impl_->clipboard_id,
+                          .protocol = osc52 ? ClipboardProtocol::osc52 : ClipboardProtocol::kitty,
                           .read = read != nullptr,
                           .primary =
                               (read != nullptr ? read->location : pending->write->location) !=

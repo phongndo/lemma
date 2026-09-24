@@ -9,7 +9,7 @@
     },
     {
       "file": "patches/async-clipboard.patch",
-      "sha256": "33362be9152c7ec176201d8ed1273aaa9a2a8bdbb8f72bb68d34506ce0071099"
+      "sha256": "aa397baa8979b3daf8138e4ee4105bb5bffe86295522be49249e5737bf3017cc"
     },
     {
       "file": "patches/kitty-render.patch",

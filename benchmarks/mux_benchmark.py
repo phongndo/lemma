@@ -38,6 +38,7 @@ from benchmarks.benchmark_manifest import (  # noqa: E402
     suite_workloads,
     workload_for_mode,
 )
+from tests.support.mux_harness import LEMMA_OUTER_TERMINAL_RESTORE  # noqa: E402
 from tests.support.pty_process import PtyOutputMonitor, PtyProcess  # noqa: E402
 
 # Repository scans include the Ghostty submodule and can exceed two seconds on
@@ -45,8 +46,8 @@ from tests.support.pty_process import PtyOutputMonitor, PtyProcess  # noqa: E402
 GIT_METADATA_TIMEOUT_SECONDS = 30.0
 
 ALT_SCREEN = b"\x1b[?1049h"
-# Exact outer-terminal cleanup emitted by src/client/attached_client.cpp.
-LEMMA_OUTER_TERMINAL_RESTORE = (
+# The paired harness also runs pre-2.11 baselines, which never save/enable native geometry reports.
+LEGACY_LEMMA_OUTER_TERMINAL_RESTORE = (
     b"\x1b[0m\x1b[?2026l\x1b[?1l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l"
     b"\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l\x1b[?1016l"
     b"\x1b[?2004l\x1b]112\x1b\\\x1b[0 q\x1b[?25h\x1b[?7h\x1b[<u\x1b[?1049l"
@@ -68,9 +69,9 @@ ATTACH_VISIBLE_MARKER = b"__LEMMA_ATTACH_VISIBLE__"
 SHELL_READY_MARKER = b"LEMMA-SHELL-READY"
 ATTACH_MAGIC = b"\x89LMA"
 ATTACH_PROTOCOL_MAJOR = 2
-ATTACH_PROTOCOL_MINOR = 10
-# The paired harness drives both revisions with the same hello/input wire layouts.
-ATTACH_SUPPORTED_MINORS = (9, 10)
+ATTACH_PROTOCOL_MINOR = 11
+# These known versions share the hello/input wire layouts used by the paired harness.
+ATTACH_SUPPORTED_MINORS = (9, 10, 11)
 ATTACH_HEADER_BYTES = 16
 ATTACH_KIND_HELLO = 1
 ATTACH_KIND_INPUT = 2
@@ -1313,7 +1314,10 @@ class LemmaRuntime:
         client = PtyProcess(
             self.attach_arguments(session),
             self.environment,
-            terminal_restore_sequence=LEMMA_OUTER_TERMINAL_RESTORE,
+            terminal_restore_sequence=(
+                LEMMA_OUTER_TERMINAL_RESTORE,
+                LEGACY_LEMMA_OUTER_TERMINAL_RESTORE,
+            ),
         )
         self.clients.append(client)
         client.read_until(ALT_SCREEN, 5.0, preserve_suffix=True)

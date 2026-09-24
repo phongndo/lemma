@@ -145,6 +145,8 @@ void AttachmentRuntime::reset_connection() noexcept {
   graphics.reset();
   clipboard = nullptr;
   clipboard_owner.reset();
+  kitty_clipboard_supported.reset();
+  osc52_read_retired = false;
   clipboard_paste.reset();
   interactive_paste.reset();
   close_descriptor(client);

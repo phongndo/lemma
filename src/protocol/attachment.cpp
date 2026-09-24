@@ -277,6 +277,7 @@ decode_host_theme(const std::span<const std::byte, host_theme_wire_bytes> input)
   case MessageKind::mouse:
   case MessageKind::terminal_reply:
   case MessageKind::cell_size:
+  case MessageKind::clipboard_support:
     return kind;
   }
   return std::nullopt;
@@ -434,6 +435,15 @@ void copy_header(const std::array<std::byte, attach_header_bytes>& header,
   LEMMA_ASSERT(bytes > 0);
   LEMMA_ASSERT(bytes <= legacy_input_message_bytes_max);
   return encode_header(MessageKind::input, 0, static_cast<std::uint32_t>(bytes), sequence);
+}
+
+[[nodiscard]] auto encode_clipboard_support(const bool supported,
+                                            const std::uint32_t sequence) noexcept -> SmallMessage {
+  SmallMessage message;
+  copy_header(encode_header(MessageKind::clipboard_support, 0, 1, sequence), message.storage_,
+              message.size_);
+  message.storage_.at(message.size_++) = supported ? std::byte{1} : std::byte{0};
+  return message;
 }
 
 [[nodiscard]] auto encode_cell_size(const CellSize size, const std::uint32_t sequence) noexcept
@@ -721,6 +731,7 @@ void ClientDecoder::release() noexcept {
       }
       break;
     case MessageKind::focus:
+    case MessageKind::clipboard_support:
       if (envelope.payload_bytes != 1) {
         return std::unexpected(DecodeError::invalid_length);
       }
@@ -925,6 +936,17 @@ void ClientDecoder::release() noexcept {
         .input = {},
         .sequence = envelope.sequence,
     };
+  }
+  if (envelope.kind == MessageKind::clipboard_support) {
+    const auto value = std::to_integer<unsigned>(payload.front());
+    if (value > 1) {
+      return std::unexpected(DecodeError::invalid_enum);
+    }
+    return ClientMessage{.kind = ClientMessageKind::clipboard_support,
+                         .clipboard_supported = value != 0,
+                         .session = {},
+                         .input = {},
+                         .sequence = envelope.sequence};
   }
   if (envelope.kind == MessageKind::cell_size) {
     const auto dimensions = decode_dimensions(std::span(payload).first<4>());

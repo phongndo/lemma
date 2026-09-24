@@ -812,6 +812,24 @@ TEST(TerminalTest, DoesNotExposeClipboardContentsToApplications) {
 
 // GoogleTest assertions check these retained optional requests before dereferencing.
 // NOLINTBEGIN(bugprone-unchecked-optional-access)
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(TerminalTest, RetainsOriginalOsc52ProtocolForTextClipboardOperations) {
+  for (const std::string_view command :
+       {"\x1b]52;c;?\x1b\\", "\x1b]52;p;?\x1b\\", "\x1b]52;c;YWJj\x1b\\", "\x1b]52;c;\x1b\\"}) {
+    auto terminal = make_terminal();
+    terminal.set_clipboard_access(true, true);
+    write_text(terminal, command);
+    const auto request = terminal.clipboard_request();
+    ASSERT_TRUE(request.has_value());
+    EXPECT_EQ(request->protocol, ClipboardProtocol::osc52);
+    write_text(terminal, "STILL-RUNNING");
+    ASSERT_TRUE(terminal.clipboard_request().has_value());
+    EXPECT_EQ(terminal.clipboard_request()->protocol, ClipboardProtocol::osc52);
+    EXPECT_TRUE(terminal.complete_clipboard(request->id, ClipboardStatus::success));
+  }
+}
+
 TEST(TerminalTest, ClipboardReadsAreRetainedWithoutPausingSubsequentPtyOutput) {
   auto terminal = make_terminal();
   terminal.set_clipboard_access(true, true);
@@ -822,6 +840,7 @@ TEST(TerminalTest, ClipboardReadsAreRetainedWithoutPausingSubsequentPtyOutput) {
   const auto request = terminal.clipboard_request();
   ASSERT_TRUE(request.has_value());
   ASSERT_TRUE(request->read);
+  EXPECT_EQ(request->protocol, ClipboardProtocol::kitty);
   ASSERT_EQ(request->contents.size(), 1U);
   EXPECT_EQ(request->contents.front().mime, "image/png");
   EXPECT_EQ(terminal.pending_pty_response_bytes(), 0U);
@@ -852,6 +871,7 @@ TEST(TerminalTest, DeferredClipboardWriteSurvivesLaterTransactionsAndCancellatio
   const auto request = terminal.clipboard_request();
   ASSERT_TRUE(request.has_value());
   ASSERT_FALSE(request->read);
+  EXPECT_EQ(request->protocol, ClipboardProtocol::kitty);
   ASSERT_EQ(request->contents.size(), 1U);
   EXPECT_EQ(request->contents.front().data.front(), std::byte{0});
   write_text(terminal, "\x1B]5522;type=write:id=second\x1B\\\x1B]5522;type=wdata\x1B\\");

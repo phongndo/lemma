@@ -1,5 +1,7 @@
 #include "client/host_input_parser.hpp"
 
+#include "platform/terminal_mode.hpp"
+
 #include "lemma/assert.hpp"
 #include "lemma/limits.hpp"
 #include "protocol/attachment.hpp"
@@ -15,6 +17,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace lemma::client {
 namespace {
@@ -26,6 +29,18 @@ constexpr std::array paste_end{std::byte{0x1B}, std::byte{'['}, std::byte{'2'},
 constexpr std::array focus_gained{std::byte{0x1B}, std::byte{'['}, std::byte{'I'}};
 constexpr std::array focus_lost{std::byte{0x1B}, std::byte{'['}, std::byte{'O'}};
 constexpr std::array mouse_prefix{std::byte{0x1B}, std::byte{'['}, std::byte{'<'}};
+constexpr std::array size_prefix{std::byte{0x1B}, std::byte{'['}, std::byte{'4'}, std::byte{'8'},
+                                 std::byte{';'}};
+
+constexpr std::array legacy_clipboard_prefix{std::byte{0x1b}, std::byte{']'}, std::byte{'5'},
+                                             std::byte{'2'}, std::byte{';'}};
+constexpr std::array clipboard_support_prefix{std::byte{0x1b}, std::byte{'['}, std::byte{'?'},
+                                              std::byte{'5'},  std::byte{'5'}, std::byte{'2'},
+                                              std::byte{'2'},  std::byte{';'}};
+constexpr std::size_t legacy_report_bytes_max =
+    (((limits::clipboard_decoded_bytes_max + 2U) / 3U) * 4U) + 16U;
+constexpr std::array<std::string_view, 5> theme_prefixes{"\x1b]4;", "\x1b]10;", "\x1b]11;",
+                                                         "\x1b]17;", "\x1b]19;"};
 
 [[nodiscard]] auto prefix_of(const std::span<const std::byte> value,
                              const std::span<const std::byte> complete) noexcept -> bool {
@@ -50,6 +65,43 @@ constexpr std::array mouse_prefix{std::byte{0x1B}, std::byte{'['}, std::byte{'<'
     result = (result * 10U) + digit;
   }
   return result;
+}
+
+[[nodiscard]] auto decode_size_report(const std::span<const std::byte> sequence) noexcept
+    -> std::optional<platform::WindowSize> {
+  const auto body = sequence.subspan(size_prefix.size(), sequence.size() - size_prefix.size() - 1);
+  std::array<std::uint32_t, 4> fields{};
+  std::size_t field = 0;
+  std::size_t start = 0;
+  for (std::size_t index = 0; index <= body.size(); ++index) {
+    if (index != body.size() && body.subspan(index, 1).front() != std::byte{';'}) {
+      continue;
+    }
+    if (field == fields.size()) {
+      return std::nullopt;
+    }
+    const auto value = parse_decimal(body.subspan(start, index - start));
+    if (!value.has_value()) {
+      return std::nullopt;
+    }
+    fields.at(field++) = *value;
+    start = index + 1;
+  }
+  const auto [rows, columns, height, width] = fields;
+  if (field != fields.size() || rows == 0 || columns == 0) {
+    return std::nullopt;
+  }
+  return platform::WindowSize{
+      .columns =
+          static_cast<std::uint16_t>(std::min<std::uint32_t>(columns, protocol::columns_max)),
+      .rows = static_cast<std::uint16_t>(std::min<std::uint32_t>(rows, protocol::rows_max)),
+      .cell_width_px = width >= columns ? static_cast<std::uint16_t>(
+                                              std::min<std::uint32_t>(500, width / columns))
+                                        : std::uint16_t{8},
+      .cell_height_px =
+          height >= rows ? static_cast<std::uint16_t>(std::min<std::uint32_t>(200, height / rows))
+                         : std::uint16_t{16},
+  };
 }
 
 [[nodiscard]] auto byte_at(const std::span<const std::byte> input, const std::size_t index) noexcept
@@ -518,7 +570,7 @@ auto HostInputParser::prepare() noexcept -> std::expected<void, HostInputError> 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto HostInputParser::parse(const std::span<const std::byte> input,
                             const std::span<std::byte> output,
-                            const protocol::Dimensions geometry) noexcept
+                            protocol::Dimensions geometry) noexcept
     -> std::expected<HostInputBatch, HostInputError> {
   if (paste_storage_ == nullptr) {
     return std::unexpected(HostInputError::not_prepared);
@@ -547,7 +599,8 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
     batch.bytes += bytes.size();
     if (batch.event_count > 0) {
       auto& previous = std::span(batch.events).subspan(batch.event_count - 1U, 1).front();
-      if (kind != HostInputKind::terminal_reply && previous.kind == kind &&
+      if (kind != HostInputKind::terminal_reply && kind != HostInputKind::terminal_reply_stream &&
+          kind != HostInputKind::theme_reply && previous.kind == kind &&
           previous.offset + previous.size == offset) {
         previous.size += bytes.size();
         return {};
@@ -659,12 +712,20 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
       continue;
     }
     if (pending_size_ >= pending_.size()) {
-      if (terminal_reply_active_) {
-        return std::unexpected(HostInputError::output_exhausted);
-      }
-      const auto emitted = emit_pending(HostInputKind::ordinary, pending_size_);
-      if (!emitted.has_value()) {
-        return std::unexpected(emitted.error());
+      if (report_ == Report::legacy_clipboard) {
+        // Retain one byte so a split ST remains recognizable, without buffering a large OSC 52.
+        const auto emitted = emit_pending(HostInputKind::terminal_reply_stream, pending_size_ - 1);
+        if (!emitted) {
+          return std::unexpected(emitted.error());
+        }
+      } else {
+        if (pending_report().has_value()) {
+          return std::unexpected(HostInputError::output_exhausted);
+        }
+        const auto emitted = emit_pending(HostInputKind::ordinary, pending_size_);
+        if (!emitted) {
+          return std::unexpected(emitted.error());
+        }
       }
     }
     std::span(pending_).subspan(pending_size_, 1).front() = byte;
@@ -674,19 +735,108 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
     constexpr std::array clipboard_prefix{std::byte{0x1B}, std::byte{']'}, std::byte{'5'},
                                           std::byte{'5'},  std::byte{'2'}, std::byte{'2'},
                                           std::byte{';'}};
-    if (pending.size() >= clipboard_prefix.size() &&
-        std::ranges::equal(pending.first(clipboard_prefix.size()), clipboard_prefix)) {
-      terminal_reply_active_ = true;
+    if (report_ == Report::none) {
+      if (std::ranges::equal(pending, clipboard_prefix)) {
+        report_ = Report::clipboard;
+      } else if (std::ranges::equal(pending, legacy_clipboard_prefix)) {
+        report_ = Report::legacy_clipboard;
+        legacy_report_bytes_ = pending.size() - 1;
+      } else if (std::ranges::equal(pending, clipboard_support_prefix)) {
+        report_ = Report::clipboard_support;
+      } else if (std::ranges::equal(pending, mouse_prefix)) {
+        report_ = Report::mouse;
+      } else if (std::ranges::equal(pending, size_prefix)) {
+        report_ = Report::size;
+      } else if (std::ranges::any_of(theme_prefixes, [&](const std::string_view prefix) {
+                   return std::ranges::equal(pending, std::as_bytes(std::span(prefix)));
+                 })) {
+        report_ = Report::theme;
+      }
+      if (report_ != Report::none) {
+        ++report_generation_;
+      }
+    }
+    if (report_ == Report::legacy_clipboard && ++legacy_report_bytes_ > legacy_report_bytes_max) {
+      return std::unexpected(HostInputError::output_exhausted);
+    }
+    if (report_ == Report::clipboard || report_ == Report::legacy_clipboard ||
+        report_ == Report::theme) {
       if (pending.back() == std::byte{7} ||
           (pending.size() >= 2 &&
            pending.subspan(pending.size() - 2U, 1).front() == std::byte{0x1B} &&
            pending.back() == std::byte{'\\'})) {
-        const auto emitted = emit_pending(HostInputKind::terminal_reply, pending_size_);
+        auto kind = HostInputKind::theme_reply;
+        if (report_ == Report::clipboard) {
+          kind = HostInputKind::terminal_reply;
+        } else if (report_ == Report::legacy_clipboard) {
+          kind = HostInputKind::terminal_reply_stream;
+        }
+        const auto emitted = emit_pending(kind, pending_size_);
         if (!emitted) {
           return std::unexpected(emitted.error());
         }
-        terminal_reply_active_ = false;
+        report_ = Report::none;
       }
+      continue;
+    }
+    if (report_ == Report::clipboard_support) {
+      if (pending.back() != std::byte{'y'}) {
+        continue;
+      }
+      if (pending.size() < clipboard_support_prefix.size() + 3U ||
+          pending.subspan(pending.size() - 2U, 1).front() != std::byte{'$'}) {
+        return std::unexpected(HostInputError::invalid_terminal_report);
+      }
+      const auto value = parse_decimal(pending.subspan(
+          clipboard_support_prefix.size(), pending.size() - clipboard_support_prefix.size() - 2U));
+      if (!value || *value > 4) {
+        return std::unexpected(HostInputError::invalid_terminal_report);
+      }
+      if (!append_event({.kind = *value == 0 ? HostInputKind::clipboard_unsupported
+                                             : HostInputKind::clipboard_supported})) {
+        return std::unexpected(HostInputError::event_limit);
+      }
+      pending_size_ = 0;
+      report_ = Report::none;
+      continue;
+    }
+    // CSI 48; also begins Kitty keyboard events for '0'. Their final byte selects the key
+    // parser below; retaining the shared prefix must not swallow subsequent keyboard input.
+    if (report_ == Report::size && pending.back() == std::byte{'u'}) {
+      report_ = Report::none;
+    }
+    if (report_ == Report::size) {
+      if (pending.back() != std::byte{'t'}) {
+        continue;
+      }
+      const auto size = decode_size_report(pending);
+      if (!size.has_value()) {
+        return std::unexpected(HostInputError::invalid_size_report);
+      }
+      if (!append_event({.kind = HostInputKind::window_size, .window_size = *size})) {
+        return std::unexpected(HostInputError::event_limit);
+      }
+      geometry = {.columns = size->columns, .rows = size->rows};
+      pending_size_ = 0;
+      report_ = Report::none;
+      continue;
+    }
+    if (report_ == Report::mouse) {
+      if (pending.back() != std::byte{'M'} && pending.back() != std::byte{'m'}) {
+        continue;
+      }
+      const auto mouse = decode_sgr_mouse(pending, geometry, any_button_pressed_);
+      if (mouse.has_value()) {
+        if (!append_event({.kind = HostInputKind::mouse, .mouse = *mouse})) {
+          return std::unexpected(HostInputError::event_limit);
+        }
+      } else if (pending.back() == std::byte{'m'}) {
+        any_button_pressed_ = false;
+      }
+      // A complete SGR mouse record is never text, including stale coordinates across resize.
+      // Drop invalid/out-of-bounds reports instead of typing their escape bytes into the Pane.
+      pending_size_ = 0;
+      report_ = Report::none;
       continue;
     }
     if (std::ranges::equal(pending, paste_begin)) {
@@ -723,25 +873,16 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
       pending_size_ = 0;
       continue;
     }
-    const bool mouse_candidate =
-        pending.size() >= mouse_prefix.size() &&
-        std::ranges::equal(pending.first(mouse_prefix.size()), mouse_prefix);
-    if (mouse_candidate && (pending.back() == std::byte{'M'} || pending.back() == std::byte{'m'})) {
-      const auto mouse = decode_sgr_mouse(pending, geometry, any_button_pressed_);
-      if (mouse.has_value()) {
-        if (!append_event({.kind = HostInputKind::mouse, .mouse = *mouse})) {
-          return std::unexpected(HostInputError::event_limit);
-        }
-        pending_size_ = 0;
-        continue;
-      }
-    }
-
     const bool known_prefix =
-        prefix_of(pending, clipboard_prefix) || prefix_of(pending, paste_begin) ||
+        prefix_of(pending, clipboard_prefix) || prefix_of(pending, legacy_clipboard_prefix) ||
+        prefix_of(pending, clipboard_support_prefix) || prefix_of(pending, paste_begin) ||
         prefix_of(pending, focus_gained) || prefix_of(pending, focus_lost) ||
-        prefix_of(pending, mouse_prefix) || (kitty_candidate && pending.back() != std::byte{'u'}) ||
-        (mouse_candidate && pending.back() != std::byte{'M'} && pending.back() != std::byte{'m'});
+        prefix_of(pending, mouse_prefix) || prefix_of(pending, size_prefix) ||
+        std::ranges::any_of(theme_prefixes,
+                            [&](const std::string_view prefix) {
+                              return prefix_of(pending, std::as_bytes(std::span(prefix)));
+                            }) ||
+        (kitty_candidate && pending.back() != std::byte{'u'});
     if (known_prefix) {
       continue;
     }
@@ -754,14 +895,24 @@ auto HostInputParser::parse(const std::span<const std::byte> input,
   return batch;
 }
 
+auto HostInputParser::pending_report() const noexcept -> std::optional<std::uint64_t> {
+  if (report_ != Report::none) {
+    return report_generation_;
+  }
+  return std::nullopt;
+}
+
 auto HostInputParser::flush_pending(const std::span<std::byte> output) noexcept
     -> std::expected<HostInputBatch, HostInputError> {
   HostInputBatch batch;
   if (pending_size_ == 0 || paste_active_) {
     return batch;
   }
-  if (terminal_reply_active_) {
+  if (report_ == Report::clipboard || report_ == Report::legacy_clipboard) {
     return std::unexpected(HostInputError::incomplete_terminal_reply);
+  }
+  if (pending_report().has_value()) {
+    return std::unexpected(HostInputError::incomplete_terminal_report);
   }
   if (pending_size_ > output.size()) {
     return std::unexpected(HostInputError::output_exhausted);

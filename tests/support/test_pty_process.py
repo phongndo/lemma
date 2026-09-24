@@ -230,6 +230,25 @@ class PtyProcessBufferingTest(unittest.TestCase):
         finally:
             process.close()
 
+    def test_cross_version_cleanup_requires_one_complete_known_sequence(self) -> None:
+        alternatives = (b"\x1b[?2048r\x1b[?1049l", b"\x1b[?1049l\x1b[0m")
+        for output, restored in (
+            (alternatives[0], True),
+            (alternatives[1], True),
+            (b"\x1b[?1049l", False),
+        ):
+            with self.subTest(output=output):
+                process = PtyProcess(
+                    [sys.executable, "-c", f"import os; os.write(1, {output!r})"],
+                    dict(os.environ),
+                    terminal_restore_sequence=alternatives,
+                )
+                try:
+                    process.wait_for_exit(5.0)
+                    self.assertEqual(process.terminal_state_restored, restored)
+                finally:
+                    process.close()
+
     def test_handshake_preserves_bytes_from_the_same_read(self) -> None:
         read_descriptor, write_descriptor = os.pipe()
         process = object.__new__(PtyProcess)

@@ -398,6 +398,11 @@ limits. Accounting derives from peer-owned input, records, queues, Events, and P
 Event bytes include framing and decrement as written; a record occupies its Event slot until its
 last byte drains, even while unrelated output keeps the queue nonempty.
 
+Surface paste waits for queued Events to drain before producing another chunk. This backpressures
+that attachment's input without spinning or blocking other attachments. If the Event backlog
+prevents paste progress for five seconds, Lemma disconnects its owner and releases the retained
+input record; a brief reader pause does not exhaust the Event queue.
+
 Global turn budgets charge socket reads/writes, record count, and complete framed bytes before
 parsing or structural application. Rotating peer order prevents a low slot from owning successive
 budgets. Slow peers cannot grow memory without bound or block unrelated Procs, PTYs, or Attachments.

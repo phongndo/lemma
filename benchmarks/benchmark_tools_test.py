@@ -86,13 +86,14 @@ from tests.support.pty_process import PtyProcess
 
 class AttachVersionTest(unittest.TestCase):
     def test_known_subject_versions_have_strict_hello_validation(self) -> None:
-        for minor in (9, 10):
+        for minor in (9, 10, 11):
             parent, child = socket.socketpair()
             with parent, child:
                 child.sendall(attach_frame(1, b"\0\0\0\0", 1, minor=minor))
                 receive_attach_hello(parent, minor)
         cases = (
             (9, 3, AttachVersionMismatch),
+            (10, 3, AttachVersionMismatch),
             (9, 2, RuntimeError),
             (8, 3, RuntimeError),
         )

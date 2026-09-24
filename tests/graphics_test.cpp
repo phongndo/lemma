@@ -54,6 +54,53 @@ void settle(GraphicsProjection& graphics, vt::Terminal& outer, const Scene scene
   }
   ASSERT_FALSE(graphics.pending());
 }
+// GoogleTest assertion macros inflate the measured branch count.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(GraphicsTest, ReadyUploadsArePlacedInTheSameFrameWithoutBlankReplacement) {
+  auto source = terminal();
+  auto outer = terminal();
+  GraphicsProjection graphics;
+  const std::array panes{
+      PaneSurface{.terminal = &source, .rectangle = {.columns = 20, .rows = 10}, .focused = true}};
+  const Scene scene{.panes = panes, .grids = {}};
+  for (const std::string_view pixels : {"/wAA/w==", "AAD//w=="}) {
+    write(source,
+          "\x1b_Ga=T,q=2,C=1,f=32,i=1,p=1,s=1,v=1,c=4,r=2;" + std::string(pixels) + "\x1b\\");
+    project(graphics, outer, scene);
+    EXPECT_FALSE(graphics.pending());
+    std::array<vt::GraphicPlacement, 8> placements{};
+    ASSERT_EQ(outer.graphics(placements).value(), 1U);
+    const auto expected = base64::decode(pixels, 4);
+    if (!expected) {
+      ADD_FAILURE() << "invalid pixel fixture";
+      return;
+    }
+    EXPECT_TRUE(std::ranges::equal(placements.front().pixels, std::as_bytes(std::span(*expected))));
+  }
+}
+
+TEST(GraphicsTest, CompletedUploadResumesPlacementWhenTheFrameHasNoRoomLeft) {
+  auto source = terminal();
+  auto outer = terminal();
+  transmit(source, 32, 24);
+  GraphicsProjection graphics;
+  const std::array panes{
+      PaneSurface{.terminal = &source, .rectangle = {.columns = 20, .rows = 10}, .focused = true}};
+  const Scene scene{.panes = panes, .grids = {}};
+  std::array<std::byte, 4400> output{};
+  const auto first = graphics.append(scene, 0, output).value();
+  ASSERT_GT(first, 0U);
+  outer.write(std::span(output).first(first));
+  ASSERT_TRUE(graphics.pending());
+  const auto second = graphics.append(scene, 0, output).value();
+  ASSERT_GT(second, 0U);
+  outer.write(std::span(output).first(second));
+  EXPECT_FALSE(graphics.pending());
+  std::array<vt::GraphicPlacement, 8> placements{};
+  ASSERT_EQ(outer.graphics(placements).value(), 1U);
+  EXPECT_EQ(placements.front().pixels.size(), 3072U);
+}
+
 TEST(GraphicsTest, RetainedImagesAreNamespacedPositionedAndRecreatedAfterFullRedraw) {
   auto source = terminal();
   auto outer = terminal(80, 24);

@@ -27,7 +27,29 @@ auto bytes(const std::span<const std::byte> data) noexcept -> std::string_view {
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   return {reinterpret_cast<const char*>(data.data()), data.size()};
 }
+auto osc52_command(const vt::ClipboardRequest& request, std::string& output) -> bool {
+  if (request.list || request.contents.size() > 1 || (request.read && request.contents.empty()) ||
+      (!request.contents.empty() && request.contents.front().mime != "text/plain")) {
+    return false;
+  }
+  output = request.primary ? "\x1b]52;p;" : "\x1b]52;c;";
+  if (request.read) {
+    output += '?';
+  } else if (!request.contents.empty()) {
+    output += base64::encode(bytes(request.contents.front().data));
+  }
+  output += "\x1b\\";
+  return true;
+}
 } // namespace
+
+void Transaction::published() noexcept {
+  published_ = true;
+  if (!done_ && protocol_ == vt::ClipboardProtocol::osc52 && !read_) {
+    status_ = vt::ClipboardStatus::success;
+    done_ = true;
+  }
+}
 
 auto Transaction::frame_prefix(const std::span<const std::byte> data,
                                const std::size_t capacity) noexcept -> std::size_t {
@@ -43,6 +65,13 @@ auto Transaction::frame_prefix(const std::span<const std::byte> data,
 auto Transaction::abort_write(const std::span<std::byte> output) const noexcept -> std::size_t {
   if (read_ || !active()) {
     return 0;
+  }
+  if (protocol_ == vt::ClipboardProtocol::osc52) {
+    if (output.empty()) {
+      return 0;
+    }
+    output.front() = std::byte{0x18}; // CAN cancels the unterminated OSC; never commit its prefix.
+    return 1;
   }
   // Invalid MIME metadata aborts an unfinished write with EINVAL under OSC 5522.
   // Unlike a no-MIME commit it cannot publish a truncated clipboard representation.
@@ -80,41 +109,53 @@ auto Transaction::begin(const vt::ClipboardRequest& request, const Clock::time_p
       size += item.data.size();
     }
     const auto correlation = std::to_string(id);
-    std::string output = "\x1b]5522;type=";
-    output += request.read ? "read" : "write";
-    output += ":id=" + correlation + ":name=TGVtbWE=";
-    if (request.primary) {
-      output += ":loc=primary";
-    }
-    if (request.read) {
-      output += ';';
-      if (request.list) {
-        output += base64::encode(".");
+    std::string output;
+    if (request.protocol == vt::ClipboardProtocol::osc52) {
+      if (!osc52_command(request, output)) {
+        return std::unexpected(vt::ClipboardStatus::invalid_data);
       }
-      for (const auto& item : request.contents) {
-        if (output.back() != ';') {
-          output += ' ';
+      if (request.read) {
+        contents_.push_back({.mime = "text/plain", .data = {}});
+      }
+    } else {
+      output = "\x1b]5522;type=";
+      output += request.read ? "read" : "write";
+      output += ":id=" + correlation + ":name=TGVtbWE=";
+      if (request.primary) {
+        output += ":loc=primary";
+      }
+      if (request.read) {
+        output += ';';
+        if (request.list) {
+          output += base64::encode(".");
         }
-        output += base64::encode(item.mime);
-        requested_.emplace_back(item.mime);
-      }
-    }
-    output += "\x1b\\";
-    if (!request.read) {
-      for (const auto& item : request.contents) {
-        const auto mime = base64::encode(item.mime);
-        // wdata's base64 payload is at most 4096 bytes; each packet is independently bounded.
-        for (std::size_t offset = 0; offset < item.data.size() || offset == 0; offset += 3072U) {
-          output += "\x1b]5522;type=wdata:mime=" + mime + ';';
-          output += base64::encode(bytes(
-              item.data.subspan(offset, std::min(std::size_t{3072}, item.data.size() - offset))));
-          output += "\x1b\\";
+        for (const auto& item : request.contents) {
+          if (output.back() != ';') {
+            output += ' ';
+          }
+          output += base64::encode(item.mime);
+          requested_.emplace_back(item.mime);
         }
       }
-      output += "\x1b]5522;type=wdata\x1b\\";
+      output += "\x1b\\";
+      if (!request.read) {
+        for (const auto& item : request.contents) {
+          const auto mime = base64::encode(item.mime);
+          // wdata's base64 payload is at most 4096 bytes; each packet is independently bounded.
+          for (std::size_t offset = 0; offset < item.data.size() || offset == 0; offset += 3072U) {
+            output += "\x1b]5522;type=wdata:mime=" + mime + ';';
+            output += base64::encode(bytes(
+                item.data.subspan(offset, std::min(std::size_t{3072}, item.data.size() - offset))));
+            output += "\x1b\\";
+          }
+        }
+        output += "\x1b]5522;type=wdata\x1b\\";
+      }
     }
     id_ = correlation;
     request_id_ = request.id;
+    protocol_ = request.protocol;
+    primary_ = request.primary;
     read_ = request.read;
     list_ = request.list;
     deadline_ = now + std::chrono::seconds(30);
@@ -135,7 +176,8 @@ auto Transaction::content(const std::string_view mime) -> Content* {
   if (!valid_mime(mime) || contents_.size() == views_.size()) {
     return nullptr;
   }
-  return &contents_.emplace_back(std::string(mime), std::string{});
+  contents_.push_back({.mime = std::string(mime), .data = {}});
+  return &contents_.back();
 }
 
 void Transaction::consume(const std::string_view record) noexcept {
@@ -150,9 +192,78 @@ void Transaction::consume(const std::string_view record) noexcept {
   }
 }
 
+// OSC 52 has one uncorrelated, potentially large record. Decode bounded quartets as parts arrive.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void Transaction::parse_osc52(const std::string_view part) {
+  if (!read_ || part.starts_with("\x1b]5522;")) {
+    return;
+  }
+  const std::string_view prefix = primary_ ? "\x1b]52;p;" : "\x1b]52;c;";
+  const auto complete = [&](const std::size_t index) {
+    if (osc52_quartet_size_ != 0 || index + 1 != part.size()) {
+      fail(vt::ClipboardStatus::invalid_data);
+      return;
+    }
+    read_complete_ = true;
+    status_ = vt::ClipboardStatus::success;
+    done_ = true;
+  };
+  for (std::size_t index = 0; index < part.size(); ++index) {
+    const auto character = part.at(index);
+    if (osc52_prefix_size_ < prefix.size()) {
+      if (character != prefix.at(osc52_prefix_size_++)) {
+        fail(vt::ClipboardStatus::invalid_data);
+        return;
+      }
+      continue;
+    }
+    if (osc52_escape_) {
+      if (character != '\\') {
+        fail(vt::ClipboardStatus::invalid_data);
+        return;
+      }
+      complete(index);
+      return;
+    }
+    if (character == '\x1b') {
+      osc52_escape_ = true;
+      continue;
+    }
+    if (character == '\a') {
+      complete(index);
+      return;
+    }
+    if (osc52_padded_) {
+      fail(vt::ClipboardStatus::invalid_data);
+      return;
+    }
+    osc52_quartet_.at(osc52_quartet_size_++) = character;
+    if (osc52_quartet_size_ != osc52_quartet_.size()) {
+      continue;
+    }
+    const auto decoded = base64::decode({osc52_quartet_.data(), osc52_quartet_.size()},
+                                        limits::clipboard_decoded_bytes_max - decoded_bytes_);
+    if (!decoded) {
+      fail(vt::ClipboardStatus::invalid_data);
+      return;
+    }
+    contents_.front().data.append(*decoded);
+    decoded_bytes_ += decoded->size();
+    osc52_padded_ = osc52_quartet_.back() == '=';
+    osc52_quartet_size_ = 0;
+  }
+}
+
 // Correlation, phase, and size validation share one rejection boundary.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void Transaction::parse(std::string_view record) {
+  if (protocol_ == vt::ClipboardProtocol::osc52) {
+    if (osc52_prefix_size_ == 0 && record.starts_with("\x1b]5522;")) {
+      return;
+    }
+    parse_osc52(record);
+    return;
+  }
   if (!record.starts_with("\x1b]5522;")) {
     return;
   }
@@ -286,6 +397,9 @@ void Transaction::parse(std::string_view record) {
 }
 
 auto Transaction::contents() noexcept -> std::span<const vt::ClipboardContent> {
+  if (!done_ || status_ != vt::ClipboardStatus::success) {
+    return {};
+  }
   for (std::size_t i = 0; i < contents_.size(); ++i) {
     const auto& item = std::span(contents_).subspan(i, 1).front();
     std::span(views_).subspan(i, 1).front() = {.mime = item.mime,

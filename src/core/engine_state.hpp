@@ -196,10 +196,11 @@ struct CopyModeRuntimeState final {
 using ClipboardStorage = std::unique_ptr<std::byte[]>;
 
 struct PendingClipboardWrite final {
+  enum class Format : std::uint8_t { selection, osc52, kitty };
   ClipboardStorage bytes;
   std::size_t size{0};
   std::size_t offset{0};
-  bool encoded{false};
+  Format format{Format::selection};
   bool interleave_frame{false};
   bool redraw_after_write{false};
 
@@ -207,7 +208,7 @@ struct PendingClipboardWrite final {
     bytes.reset();
     size = 0;
     offset = 0;
-    encoded = false;
+    format = Format::selection;
     interleave_frame = false;
     redraw_after_write = false;
   }
@@ -239,6 +240,9 @@ struct AttachmentRuntime final {
   PendingClipboardWrite clipboard_write;
   std::unique_ptr<clipboard::Transaction> clipboard;
   std::optional<PaneId> clipboard_owner;
+  std::optional<bool> kitty_clipboard_supported;
+  // OSC 52 has no reply IDs. An abandoned read retires this channel for the connection.
+  bool osc52_read_retired{false};
   std::weak_ptr<ClipboardPaste> clipboard_paste;
   std::shared_ptr<ClipboardPaste> interactive_paste;
   CopyModeRuntimeState copy_mode;
@@ -266,6 +270,7 @@ struct AttachmentRuntime final {
   struct SurfacePasteProgress final {
     SurfaceId surface;
     std::size_t offset{0};
+    std::optional<std::chrono::steady_clock::time_point> deadline;
   };
   std::optional<SurfacePasteProgress> surface_paste;
   std::optional<std::chrono::steady_clock::time_point> status_message_deadline;

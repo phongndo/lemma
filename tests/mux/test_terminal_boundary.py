@@ -27,6 +27,44 @@ class TerminalBoundaryMuxTest(unittest.TestCase):
         self.server = LemmaServer.from_environment()
         self.addCleanup(self.server.close)
 
+    def test_late_fragmented_host_theme_replies_never_become_keys_or_modify_paste(
+        self,
+    ) -> None:
+        captured = self.server.root / "host-reply-input.bin"
+        script = f"""
+import os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'\\x1b[?2004hHOST_REPLY_READY')
+data = b''
+while not data.endswith(b'Z'):
+    data += os.read(0, 4096)
+Path({str(captured)!r}).write_bytes(data)
+time.sleep(60)
+"""
+        session = self.server.create_session(
+            "host_replies", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("HOST_REPLY_READY")
+        time.sleep(0.25)  # The initial 100 ms host-theme query window has expired.
+        client.send(b"\x1b]10;rgb:ffff/")
+        time.sleep(
+            0.15
+        )  # A recognized report is not subject to Escape-key disambiguation.
+        client.send(b"ffff/ffff\x1b\\\x1b]11;rgb:0000/0000/0000\x1b\\")
+        paste = b"\x1b[200~\x1b]4;1;rgb:ffff/0000/0000\x1b\\\x1b[201~"
+        client.send(paste + b"Z")
+        wait_until(
+            "late host-reply input recorded",
+            lambda: True if captured.exists() else None,
+            diagnostics=client.diagnostics,
+        )
+        # Ghostty's native paste encoder replaces embedded ESC with spaces. The host-reply
+        # filter must preserve the pasted content for that encoder, not consume it as metadata.
+        expected = b"\x1b[200~ ]4;1;rgb:ffff/0000/0000 \\\x1b[201~Z"
+        self.assertEqual(captured.read_bytes(), expected)
+
     def test_short_pty_read_does_not_replay_the_previous_read_tail(self) -> None:
         release = self.server.root / "short-read.gate"
         finish = self.server.root / "short-read-finish.gate"
@@ -290,6 +328,126 @@ class ClipboardMuxTest(unittest.TestCase):
             environment={"XDG_CACHE_HOME": cache.name},
         )
         self.addCleanup(self.server.close)
+
+    def test_osc52_large_text_preserves_native_protocol_and_reply_order(self) -> None:
+        write_gate = self.server.root / "osc52-write.gate"
+        read_gate = self.server.root / "osc52-read.gate"
+        captured = self.server.root / "osc52-input"
+        script = f"""
+import base64, os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'OSC52_READY')
+while not Path({str(write_gate)!r}).exists(): time.sleep(0.005)
+os.write(1, b'\\x1b]52;c;' + base64.b64encode(b'x' * 200003) + b'\\x1b\\\\OSC52_WRITTEN')
+while not Path({str(read_gate)!r}).exists(): time.sleep(0.005)
+os.write(1, b'\\x1b]52;c;?\\x1b\\\\')
+data = bytearray()
+while not data.endswith(b'Z'): data.extend(os.read(0, 8192))
+Path({str(captured)!r}).write_bytes(data)
+os.write(1, b'OSC52_CAPTURED')
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "osc52", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("OSC52_READY")
+        client.send(
+            b"\x1b[?5522;0$y"
+        )  # Like stable Ghostty: MIME protocol is unsupported.
+        write_gate.touch()
+        # An OSC 52 body must not contain interleaved frames, even across publication chunks.
+        client.expect_raw(b"\x1b]52;c;" + base64.b64encode(b"x" * 200003) + b"\x1b\\")
+        client.expect_output("OSC52_WRITTEN")
+        read_gate.touch()
+        client.expect_raw(b"\x1b]52;c;?\x1b\\")
+        encoded = base64.b64encode(b"y" * (1024 * 1024))
+        client.send(b"\x1b]52;c;" + encoded[:12000])
+        client.drain(0.15)
+        client.send(encoded[12000:] + b"\x1b")
+        client.drain(0.15)
+        client.send(b"\\Z")
+        client.expect_output("OSC52_CAPTURED")
+        self.assertEqual(captured.read_bytes(), b"\x1b]52;c;" + encoded + b"\x1b\\Z")
+        self.assertTrue(session.state().attached)
+
+    def test_abandoned_osc52_read_cannot_deliver_late_data_to_a_new_owner(self) -> None:
+        old_reply = self.server.root / "osc52-old"
+        old_gate = self.server.root / "osc52-old.gate"
+        new_reply = self.server.root / "osc52-new"
+        old_script = f"""
+import os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'OLD_READ_READY')
+while not Path({str(old_gate)!r}).exists(): time.sleep(0.005)
+os.write(1, b'\\x1b]52;c;?\\x1b\\\\')
+data = b''
+while not data.endswith(b'\\x1b\\\\'): data += os.read(0, 8192)
+Path({str(old_reply)!r}).write_bytes(data)
+while True: time.sleep(1)
+"""
+        session = self.server.create_session(
+            "osc52_owner", command=(sys.executable, "-c", old_script)
+        )
+        client = session.require_client()
+        client.expect_output("OLD_READ_READY")
+        old_gate.touch()
+        client.expect_raw(b"\x1b]52;c;?\x1b\\")
+        right = session.pane().split_right()
+        wait_until(
+            "cancelled read",
+            lambda: old_reply.read_bytes() if old_reply.exists() else None,
+        )
+        self.assertEqual(old_reply.read_bytes(), b"\x1b]52;c;\x1b\\")
+        new_script = f"""
+import os, time, tty
+from pathlib import Path
+tty.setraw(0)
+os.write(1, b'RETIRED_READ_READY\\x1b]52;c;?\\x1b\\\\')
+data = b''
+while not data.endswith(b'Z'): data += os.read(0, 8192)
+Path({str(new_reply)!r}).write_bytes(data)
+os.write(1, b'RETIRED_READ_CAPTURED')
+while True: time.sleep(1)
+"""
+        script_path = self.server.root / "osc52-new-owner.py"
+        script_path.write_text(new_script)
+        right.send("exec " + shlex.join((sys.executable, str(script_path))) + "\r")
+        client.expect_output("RETIRED_READ_READY")
+        client.send(
+            b"\x1b]52;c;" + base64.b64encode(b"old owner's secret") + b"\x1b\\Z"
+        )
+        client.expect_output("RETIRED_READ_CAPTURED")
+        self.assertEqual(new_reply.read_bytes(), b"\x1b]52;c;\x1b\\Z")
+        self.assertEqual(client.process.output_tail.count(b"\x1b]52;c;?\x1b\\"), 1)
+
+    def test_image_paste_rejects_an_outer_terminal_without_mime_clipboard_support(
+        self,
+    ) -> None:
+        script = (
+            "import os,time,tty; tty.setraw(0); os.write(1,b'CAP_READY'); "
+            "os.read(0,1); os.write(1,b'CAP_OBSERVED'); time.sleep(60)"
+        )
+        session = self.server.create_session(
+            "no_mime_clipboard", command=(sys.executable, "-c", script)
+        )
+        client = session.require_client()
+        client.expect_output("CAP_READY")
+        client.send(b"\x1b[?5522;0$yZ")
+        client.expect_output("CAP_OBSERVED")
+        result = self.server.command(
+            "paste-image",
+            "--session",
+            session.name,
+            "--pane",
+            session.pane().id,
+            "--json",
+        )
+        self.assertNotEqual(result.status, 0, result.output)
+        self.assertIn("clipboard_unavailable", result.output)
+        self.assertNotIn(b"\x1b]5522;type=read", client.process.output_tail)
 
     def run_worker(self, image: bytes, mode: str) -> tuple[bytes, int]:
         script = """

@@ -603,6 +603,12 @@ auto begin_clipboard_transaction(SessionRecord& session, const PaneId pane,
                                  const vt::ClipboardRequest& request) noexcept
     -> std::expected<void, vt::ClipboardStatus> {
   auto& attachment = session.attachment_runtime;
+  if ((request.protocol == vt::ClipboardProtocol::kitty &&
+       attachment.kitty_clipboard_supported == false) ||
+      (request.protocol == vt::ClipboardProtocol::osc52 && request.read &&
+       attachment.osc52_read_retired)) {
+    return std::unexpected(vt::ClipboardStatus::unsupported);
+  }
   if (attachment.clipboard != nullptr || attachment.clipboard_write.bytes != nullptr ||
       !attachment.clipboard_paste.expired()) {
     return std::unexpected(vt::ClipboardStatus::busy);
@@ -621,7 +627,9 @@ auto begin_clipboard_transaction(SessionRecord& session, const PaneId pane,
     attachment.clipboard_write.bytes = std::move(storage);
     attachment.clipboard_write.size = encoded->size();
     attachment.clipboard_write.offset = 0;
-    attachment.clipboard_write.encoded = true;
+    attachment.clipboard_write.format = request.protocol == vt::ClipboardProtocol::osc52
+                                            ? PendingClipboardWrite::Format::osc52
+                                            : PendingClipboardWrite::Format::kitty;
     attachment.clipboard = std::move(transaction);
     attachment.clipboard_owner = pane;
     schedule_frame(session, FrameUrgency::state_change, false, {});
@@ -684,8 +692,12 @@ void service_clipboard(SessionRecord& session, PaneRuntimeStore& runtimes) noexc
   if (!transaction.done()) {
     return;
   }
+  if (transaction.uncorrelated_read_outstanding()) {
+    attachment.osc52_read_retired = true;
+  }
   auto& staged = attachment.clipboard_write;
-  if (transaction.status() != vt::ClipboardStatus::success && staged.encoded) {
+  if (transaction.status() != vt::ClipboardStatus::success &&
+      staged.format != PendingClipboardWrite::Format::selection) {
     const auto abort_size =
         staged.offset > 0 ? transaction.abort_write(std::span(staged.bytes.get(), staged.size)) : 0;
     if (abort_size == 0) {
@@ -5383,6 +5395,8 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
   return true;
 }
 
+// Keep captured ownership, bounded backpressure, and chunk publication in one rejection boundary.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto route_surface_paste(extension::Runtime& extensions, SessionRecord& session,
                                        const std::span<const std::byte> text) noexcept
     -> std::optional<ParseResult> {
@@ -5396,7 +5410,7 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     if (!surface.is_valid()) {
       return std::nullopt;
     }
-    progress = {.surface = surface};
+    progress = {.surface = surface, .deadline = {}};
   }
   const auto surface = progress->surface;
   const auto owner = extensions.surface_owner(surface);
@@ -5405,6 +5419,21 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
     progress.reset();
     return ParseResult::keep;
   }
+  if (extensions.output_accounting(owner).event_records != 0) {
+    // Wait for the previous Event to drain instead of overflowing a healthy, briefly descheduled
+    // consumer. Reuse input backpressure so the reactor sleeps on peer write readiness.
+    const auto now = reactor_now();
+    if (!progress->deadline) {
+      progress->deadline = now + std::chrono::seconds(5);
+    }
+    if (now < *progress->deadline) {
+      return ParseResult::backpressure;
+    }
+    static_cast<void>(extensions.disconnect(owner));
+    progress.reset();
+    return ParseResult::keep;
+  }
+  progress->deadline.reset();
   // The accepted key-record bound is not a paste production quantum. Hex encoding doubles the
   // bytes; reserve half the write quantum for framing and other output instead of outrunning it.
   constexpr auto chunk_bytes_max = limits::extension_io_bytes_per_turn_max / 4U;
@@ -5527,6 +5556,16 @@ process_routed_key_input(SessionRecord& session, PaneRuntimeStore& runtimes,
       session.attachment_runtime.decoder.consume();
       return result.status == CommandStatus::detach_requested ? ParseResult::detach
                                                               : ParseResult::error;
+    }
+    case protocol::ClientMessageKind::clipboard_support: {
+      auto& attachment = session.attachment_runtime;
+      attachment.kitty_clipboard_supported = message.clipboard_supported;
+      if (!message.clipboard_supported && attachment.clipboard != nullptr &&
+          attachment.clipboard->protocol() == vt::ClipboardProtocol::kitty) {
+        attachment.clipboard->fail(vt::ClipboardStatus::unsupported);
+        service_clipboard(session, runtimes);
+      }
+      break;
     }
     case protocol::ClientMessageKind::cell_size:
       if (!apply_cell_size(session, runtimes, message.cell_size)) {
@@ -9693,8 +9732,13 @@ void flush_capacity_rejection_output(CapacityRejectionConnections& connections,
          !session->attachment_runtime.output.busy())) {
       return 0;
     }
+    if (const auto& paste = session->attachment_runtime.surface_paste;
+        paste && tighten(paste->deadline)) {
+      return 0;
+    }
     if (session->attachment_runtime.clipboard != nullptr &&
-        tighten(session->attachment_runtime.clipboard->deadline())) {
+        (session->attachment_runtime.clipboard->done() ||
+         tighten(session->attachment_runtime.clipboard->deadline()))) {
       return 0;
     }
     if (const auto& paste = session->attachment_runtime.interactive_paste; paste != nullptr) {
@@ -9985,7 +10029,8 @@ void process_client_events(SessionRecord& session, PaneRuntimeStore& runtimes,
                            void* const name_conflict_context) noexcept {
   // Consume resizes before flushing queued output so resize_session can discard bytes composed
   // for the previous physical viewport. Decoder-held work is retried without socket readiness on a
-  // later bounded turn or after PTY capacity becomes available. A closed peer cannot retain it.
+  // later bounded turn or after destination capacity becomes available. A closed peer cannot
+  // retain it.
   if (session.attachment_runtime.client >= 0 &&
       (session.attachment_runtime.input_backpressured ||
        session.attachment_runtime.client_work_pending) &&
@@ -10231,8 +10276,12 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   const auto server_sequence = source_runtime.server_sequence;
   const auto full_redraw_generation = source_runtime.full_redraw_generation;
   const auto previous_outer_modes = source_runtime.outer_modes;
-  const bool client_work_pending = source_runtime.client_work_pending;
+  // A retained Surface record must revalidate its old owner after the connection moves.
+  const bool client_work_pending =
+      source_runtime.client_work_pending || source_runtime.surface_paste.has_value();
   const auto surface_paste = source_runtime.surface_paste;
+  const auto kitty_clipboard_supported = source_runtime.kitty_clipboard_supported;
+  const bool osc52_read_retired = source_runtime.osc52_read_retired;
   const int client = std::exchange(source_runtime.client, -1);
   auto decoder = std::move(source_runtime.decoder);
   auto graphics = std::move(source_runtime.graphics);
@@ -10251,6 +10300,8 @@ void finish_command_line_error(SessionRecord& session, const std::string_view me
   target_runtime.outer_modes = previous_outer_modes;
   target_runtime.client_work_pending = client_work_pending;
   target_runtime.surface_paste = surface_paste;
+  target_runtime.kitty_clipboard_supported = kitty_clipboard_supported;
+  target_runtime.osc52_read_retired = osc52_read_retired;
   target_runtime.connection_id = sessions.allocate_connection(target.id);
   target_runtime.status_valid = false;
   target_runtime.client_close_state = ConnectionCloseState::none;

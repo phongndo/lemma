@@ -113,8 +113,9 @@ All `lemma.setup()` groups and fields are optional:
   memory-bounded default.
 - `terminal.clipboard_read` and `terminal.clipboard_write` are Boolean and default to `false`.
   They allow applications in the attached Session's active, focused Pane to request text or image
-  clipboard access through the outer terminal's OSC 5522 protocol. They do not bypass its consent
-  policy. A live reload revokes incompatible pending requests; detach or focus loss also cancels
+  clipboard access through the outer terminal's [native protocol](usage.md#application-clipboard).
+  They do not bypass its consent policy. A live reload revokes incompatible pending requests;
+  detach or focus loss also cancels
   them. Lemma stores no clipboard cache or remembered grants. Explicit selection copy and
   [`paste-image`](usage.md#clipboard-images) are separate user-authorized operations.
 - `ui.status_line` enables or disables the shipped statusline extension. Disabling it releases its
