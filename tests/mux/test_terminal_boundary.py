@@ -274,7 +274,7 @@ def resized(*_):
     temporary.replace(path)
 signal.signal(signal.SIGWINCH, resized)
 resized()
-os.write(1, b'\\x1b_Ga=T,q=2,C=1,i=1,s=1,v=1,f=32,c=3;/wAA/w==\\x1b\\\\PIXEL_READY')
+os.write(1, b'\\x1b_Ga=T,q=2,C=1,i=1,s=1,v=1,f=32,c=15;/wAA/w==\\x1b\\\\PIXEL_READY')
 while True: time.sleep(1)
 """
         session = self.server.create_session(
@@ -282,7 +282,7 @@ while True: time.sleep(1)
         )
         client = session.require_client()
         client.expect_output("PIXEL_READY")
-        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=24,v=24,")
+        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=120,v=120,")
         self.assertEqual(json.loads(report.read_text()), [23, 80, 640, 368])
         fcntl.ioctl(
             client.process.descriptor,
@@ -290,6 +290,9 @@ while True: time.sleep(1)
             struct.pack("HHHH", 24, 80, 960, 576),
         )
         os.killpg(client.pid, signal.SIGWINCH)
+        # Drain image output while waiting for resize so the client can handle SIGWINCH even
+        # when the outer PTY fills. Observe the new upload before its header leaves the raw tail.
+        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=180,v=180,")
         wait_until(
             "cell-only resize reaches Pane PTY",
             lambda: (
@@ -297,7 +300,6 @@ while True: time.sleep(1)
             ),
             diagnostics=lambda: report.read_text() + "\n" + client.diagnostics(),
         )
-        client.expect_raw(b"\x1b_Ga=t,q=2,f=32,s=36,v=36,")
         state = session.state()
         self.assertEqual((state.columns, state.rows), (80, 24))
         session.pane().expect_alive()
