@@ -6,7 +6,7 @@ import signal
 import sys
 import unittest
 
-from tests.support.mux_harness import LemmaServer, wait_until
+from tests.support.mux_harness import LemmaServer
 
 
 class ResizeMuxTest(unittest.TestCase):
@@ -32,11 +32,15 @@ def resized(*_):
 signal.signal(signal.SIGWINCH, resized)
 tty.setraw(0)
 resized()
+# Make the resize redraw exceed the PTY output buffer on Linux as well as macOS.
+row = b'\\x1b[38;2;123;45;67mA\\x1b[38;2;89;123;45mB' * 39
+os.write(1, (row + b'\\r\\n') * 22)
 os.write(1, b'GEOMETRY_READY')
 data = b''
 while True:
     data += os.read(0, 4096)
     captured.write_bytes(data)
+    os.write(1, b'INPUT_' + data)
 """
         session = self.server.create_session(
             "in_band_geometry", command=(sys.executable, "-c", script)
@@ -52,22 +56,16 @@ while True:
             lambda state: (state.columns, state.rows) == (160, 50),
             "in-band size supersedes stale PTY geometry",
         )
-        wait_until(
-            "only keyboard input reaches Pane",
-            lambda: (
-                True if captured.exists() and captured.read_bytes() == b"Z" else None
-            ),
-            diagnostics=client.diagnostics,
-        )
+        # Observing the acknowledgement drains the redraw so output backpressure cannot
+        # block the client's next input read while the test waits on the capture file.
+        client.expect_output("INPUT_Z")
+        self.assertEqual(captured.read_bytes(), b"Z")
         self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
         # A later SIGWINCH must not replace known native metrics with the stale proxy ioctl.
         os.killpg(client.pid, signal.SIGWINCH)
         client.send(b"Q")
-        wait_until(
-            "input after stale SIGWINCH",
-            lambda: True if captured.read_bytes() == b"ZQ" else None,
-            diagnostics=client.diagnostics,
-        )
+        client.expect_output("INPUT_ZQ")
+        self.assertEqual(captured.read_bytes(), b"ZQ")
         state = session.state()
         self.assertEqual((state.columns, state.rows), (160, 50))
         self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
