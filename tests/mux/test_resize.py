@@ -20,25 +20,26 @@ class ResizeMuxTest(unittest.TestCase):
         report = self.server.root / "geometry.json"
         captured = self.server.root / "input.bin"
         script = f"""
-import fcntl, json, os, signal, struct, termios, tty
+import fcntl, json, os, struct, termios, tty
 from pathlib import Path
 report = Path({str(report)!r})
 captured = Path({str(captured)!r})
-def resized(*_):
+def record_size():
     size = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))
     temporary = report.with_suffix('.tmp')
     temporary.write_text(json.dumps(size))
     temporary.replace(report)
-signal.signal(signal.SIGWINCH, resized)
 tty.setraw(0)
-resized()
 # Make the resize redraw exceed the PTY output buffer on Linux as well as macOS.
 row = b'\\x1b[38;2;123;45;67mA\\x1b[38;2;89;123;45mB' * 39
-os.write(1, (row + b'\\r\\n') * 22)
+output = (row + b'\\r\\n') * 22
+while output:
+    output = output[os.write(1, output):]
 os.write(1, b'GEOMETRY_READY')
 data = b''
 while True:
     data += os.read(0, 4096)
+    record_size()
     captured.write_bytes(data)
     os.write(1, b'INPUT_' + data)
 """
@@ -47,6 +48,10 @@ while True:
         )
         client = session.require_client()
         client.expect_output("GEOMETRY_READY")
+        # Sample geometry at input delivery, after attachment setup and each ordered resize.
+        # A signal handler can reenter and overwrite a newer sample with intermediate geometry.
+        client.send(b"I")
+        client.expect_output("INPUT_I")
         self.assertEqual(json.loads(report.read_text()), [23, 80, 640, 368])
         # A PTY proxy still reports 80x24, but Ghostty sends its real grid and pixels in band.
         # Mouse input shares this read and must be classified against the new geometry.
@@ -58,14 +63,14 @@ while True:
         )
         # Observing the acknowledgement drains the redraw so output backpressure cannot
         # block the client's next input read while the test waits on the capture file.
-        client.expect_output("INPUT_Z")
-        self.assertEqual(captured.read_bytes(), b"Z")
+        client.expect_output("INPUT_IZ")
+        self.assertEqual(captured.read_bytes(), b"IZ")
         self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
         # A later SIGWINCH must not replace known native metrics with the stale proxy ioctl.
         os.killpg(client.pid, signal.SIGWINCH)
         client.send(b"Q")
-        client.expect_output("INPUT_ZQ")
-        self.assertEqual(captured.read_bytes(), b"ZQ")
+        client.expect_output("INPUT_IZQ")
+        self.assertEqual(captured.read_bytes(), b"IZQ")
         state = session.state()
         self.assertEqual((state.columns, state.rows), (160, 50))
         self.assertEqual(json.loads(report.read_text()), [49, 160, 2560, 1666])
