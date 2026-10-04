@@ -247,6 +247,11 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
       case "message": {
         const message = data.message;
         if (message.role === "user") {
+          // A steer: a prompt placed in the running turn between its steps, shown where it joined.
+          if (current !== undefined && current.hasUser && data.turnId !== undefined && current.turnId === data.turnId) {
+            current.items.push(cache.get(event.id, "", (): UserItem => ({ kind: "user", id: event.id, at: event.at, content: message.content })));
+            break;
+          }
           const turn =
             current !== undefined &&
             !current.hasUser &&

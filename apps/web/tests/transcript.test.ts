@@ -52,6 +52,21 @@ describe("projectTranscript", () => {
     expect(t.turns[1]!.end).toBeUndefined();
   });
 
+  it("shows a steer in the turn it joined, between its steps", () => {
+    const t = projectTranscript(
+      branch(
+        { type: "turn-start", turnId: "t1" },
+        user("a", "t1"),
+        { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "text", text: "working" }]) },
+        user("also b", "t1"),
+        { type: "message", turnId: "t1", stepId: "s2", message: assistant([{ type: "text", text: "both done" }]) },
+        { type: "turn-end", turnId: "t1", reason: "done" },
+      ),
+    );
+    expect(t.turns).toHaveLength(1);
+    expect(t.turns[0]!.items.map((item) => item.kind)).toEqual(["user", "assistant", "user", "assistant"]);
+  });
+
   it("shows attempts distinctly and counts their usage but not as steps", () => {
     const t = projectTranscript(
       branch(

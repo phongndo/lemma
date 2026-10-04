@@ -68,6 +68,11 @@ export function ledger(turns: readonly TrajectoryTurn[]): LedgerRecord[] {
     if (turn.prompt !== undefined) {
       push({ kind: "user", id: `${turn.turnId}:prompt`, message: turn.prompt, at: turn.startedAt });
     }
+    // Prompts the turn placed later, each after the step it followed.
+    const steersAfter = (index: number) => {
+      for (const steer of turn.steers) if (steer.after === index) push({ kind: "user", id: steer.eventId, message: steer.message, at: steer.at });
+    };
+    steersAfter(0);
     for (const step of turn.steps) {
       const request = step.request;
       if (request !== undefined) {
@@ -98,6 +103,7 @@ export function ledger(turns: readonly TrajectoryTurn[]): LedgerRecord[] {
         const spec = specs.get(run.call.name);
         push({ kind: "tool", id: run.eventId ?? run.call.id, step, run, ...(spec === undefined ? {} : { spec }) });
       }
+      steersAfter(step.index);
     }
   }
   return records;

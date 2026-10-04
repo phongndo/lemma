@@ -81,6 +81,11 @@ export interface TrajectoryTurn {
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly prompt?: UserMessage;
+  /**
+   * Prompts placed in the turn after `prompt`: queued ones it started with
+   * (`after` 0), and steers that joined it after the step numbered `after`.
+   */
+  readonly steers: readonly { readonly eventId: string; readonly message: UserMessage; readonly at: number; readonly after: number }[];
   readonly end?: { readonly reason: "done" | "cancelled" | "error" | "max-steps"; readonly error?: string };
   readonly steps: readonly TrajectoryStep[];
   /** Summed over the turn's responses and failed attempts. */
@@ -130,6 +135,7 @@ interface MutableTurn {
   startedAt: number;
   endedAt?: number;
   prompt?: UserMessage;
+  steers: { readonly eventId: string; readonly message: UserMessage; readonly at: number; readonly after: number }[];
   end?: NonNullable<TrajectoryTurn["end"]>;
   steps: MutableStep[];
   usage: Usage;
@@ -161,7 +167,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     const data = event.data;
     switch (data.type) {
       case "turn-start": {
-        const turn: MutableTurn = { turnId: data.turnId, index: turns.length + 1, startedAt: event.at, steps: [], usage: emptyUsage };
+        const turn: MutableTurn = { turnId: data.turnId, index: turns.length + 1, startedAt: event.at, steps: [], steers: [], usage: emptyUsage };
         turns.push(turn);
         turnById.set(data.turnId, turn);
         return;
@@ -252,7 +258,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         const turn = data.turnId === undefined ? undefined : turnById.get(data.turnId);
         if (turn === undefined) return;
         if (message.role === "user") {
-          turn.prompt ??= message;
+          if (turn.prompt === undefined) turn.prompt = message;
+          else turn.steers.push({ eventId: event.id, message, at: event.at, after: turn.steps.length });
           return;
         }
         if (message.role === "assistant") {

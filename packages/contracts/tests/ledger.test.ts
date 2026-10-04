@@ -183,3 +183,37 @@ describe("promptDiff", () => {
     expect(promptDiff(first, without).map((section) => [section.id, section.status])).toEqual([["environment", "removed"]]);
   });
 });
+
+describe("steers", () => {
+  it("lists a prompt placed in a running turn after the step it followed", () => {
+    const user = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }], timestamp: 0 });
+    const steered = trajectory(
+      log(
+        { type: "turn-start", turnId: "t1" },
+        { type: "message", turnId: "t1", message: user("first") },
+        { type: "step-start", turnId: "t1", stepId: "s1" },
+        request("t1", "s1", "env", true),
+        { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "text", text: "working" }], "stop") },
+        { type: "step-end", turnId: "t1", stepId: "s1" },
+        { type: "message", turnId: "t1", requestId: "r2", message: user("also this") },
+        { type: "step-start", turnId: "t1", stepId: "s2" },
+        request("t1", "s2", "env", false),
+        { type: "message", turnId: "t1", stepId: "s2", message: assistant([{ type: "text", text: "both" }], "stop") },
+        { type: "step-end", turnId: "t1", stepId: "s2" },
+        { type: "turn-end", turnId: "t1", reason: "done" },
+      ),
+    );
+    expect(steered[0]!.steers).toEqual([{ eventId: "e7", message: user("also this"), at: 7000, after: 1 }]);
+    const text = (record: ReturnType<typeof ledger>[number]) => {
+      const summary = recordSummary(record);
+      return "text" in summary ? summary.text : record.id;
+    };
+    expect(ledger(steered).map((record) => [record.kind, record.kind === "user" ? text(record) : record.id])).toEqual([
+      ["user", "first"],
+      ["system", "e4:system"],
+      ["assistant", "e5"],
+      ["user", "also this"],
+      ["assistant", "e10"],
+    ]);
+  });
+});
