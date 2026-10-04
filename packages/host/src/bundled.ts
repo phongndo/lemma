@@ -10,7 +10,7 @@ import llm from "@lemma/plugin-llm-pi-ai";
 import projectContext from "@lemma/plugin-project-context";
 import sessions from "@lemma/plugin-sessions";
 import tools from "@lemma/plugin-tools";
-import { bash, edit, read, write } from "@lemma/plugin-tools-builtin";
+import { bash, codemode, edit, read, write } from "@lemma/plugin-tools-builtin";
 import transport from "@lemma/plugin-transport";
 import workspace from "@lemma/plugin-workspace";
 
@@ -35,6 +35,7 @@ export function bundled(host: Plugin): readonly Plugin[] {
     write,
     edit,
     bash,
+    codemode,
     sessions,
     agent,
     compaction,

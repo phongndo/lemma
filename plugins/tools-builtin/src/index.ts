@@ -1,14 +1,18 @@
 import { Effect, Layer } from "effect";
+import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Tools } from "@lemma/contracts";
 import type { Tool } from "@lemma/contracts";
 import { bashTool } from "./bash.ts";
+import { codemodeTool } from "./codemode.ts";
 import { editTool } from "./edit.ts";
 import { readTool } from "./read.ts";
 import { writeTool } from "./write.ts";
 
 export { bashTool, BashInput } from "./bash.ts";
 export type { BashDetails } from "./bash.ts";
+export { codemodeTool, CodemodeInput } from "./codemode.ts";
+export type { CodemodeDetails } from "./codemode.ts";
 export { applyEdits, editTool, EditInput } from "./edit.ts";
 export type { EditDetails } from "./edit.ts";
 export { readTool, ReadInput, MAX_IMAGE_BYTES } from "./read.ts";
@@ -22,20 +26,22 @@ export { resolveToCwd } from "./files.ts";
  * One plugin per tool, with the tool's name as its id, so a composition can
  * disable or replace one (`bash`, say) without touching the others. A reload
  * swaps in the new tool without a gap: the registry lets a plugin's
- * replacement take over its names.
+ * replacement take over its names. A tool that runs others is built from the
+ * registry it registers with.
  */
-const toolPlugin = (tool: Tool<any>) =>
+const toolPlugin = (id: string, tool: Tool<any> | ((registry: Context.Tag.Service<typeof Tools>) => Tool<any>)) =>
   definePlugin({
-    id: tool.name,
+    id,
     version: "0.1.0",
     requires: [Tools],
-    layer: Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(tool))),
+    layer: Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(typeof tool === "function" ? tool(registry) : tool))),
   });
 
-export const read = toolPlugin(readTool);
-export const write = toolPlugin(writeTool);
-export const edit = toolPlugin(editTool);
-export const bash = toolPlugin(bashTool);
+export const read = toolPlugin(readTool.name, readTool);
+export const write = toolPlugin(writeTool.name, writeTool);
+export const edit = toolPlugin(editTool.name, editTool);
+export const bash = toolPlugin(bashTool.name, bashTool);
+export const codemode = toolPlugin("codemode", codemodeTool);
 
-/** All four plugins, for compositions that want the standard set. */
-export default [read, write, edit, bash] as const;
+/** All five plugins, for compositions that want the standard set. */
+export default [read, write, edit, bash, codemode] as const;

@@ -691,6 +691,9 @@ importers:
 
   plugins/tools-builtin:
     dependencies:
+      '@earendil-works/pi-codemode':
+        specifier: 1.0.2
+        version: 1.0.2
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -968,6 +971,10 @@ packages:
     resolution: {integrity: sha512-JP59xGlSAQ/HhQ6EHN5qmneBlWfDyu6FPPryAvAaSo8A38ubAsEpS9YisCM5Jbbns0srrDffLZonE0OXorHI5A==}
     engines: {node: '>=22.19.0'}
     hasBin: true
+
+  '@earendil-works/pi-codemode@1.0.2':
+    resolution: {integrity: sha512-tvfDSVz984ra/4y/hIFmYGpP5ojC+C6/ey+DNbjTzfJvbXviW4JYTXwVcm33KAceI0xcOuE+P1yRGLtQgis0/w==}
+    engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-telemetry@1.0.2':
     resolution: {integrity: sha512-Ev5h9TE8nEXHCfRKhWj0qpUFhQgVqNteS95vsM2KNGRGm533vOO2ruDPaEwImBKPMBKXy4omz3D6V2cm41gLOQ==}
@@ -2835,6 +2842,9 @@ packages:
   pure-rand@6.1.0:
     resolution: {integrity: sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==}
 
+  quickjs-wasi@3.6.2:
+    resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
+
   regex-recursion@6.0.2:
     resolution: {integrity: sha512-0YCaSCq2VRIebiaUviZNs0cBz1kg5kVS2UKUfNIx8YVs1cN3AV7NTctO5FOKBA+UT2BPJIWZauYHPqJODG50cg==}
 
@@ -3476,6 +3486,10 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
+
+  '@earendil-works/pi-codemode@1.0.2':
+    dependencies:
+      quickjs-wasi: 3.6.2
 
   '@earendil-works/pi-telemetry@1.0.2': {}
 
@@ -5071,6 +5085,8 @@ snapshots:
   proxy-agent-negotiate@1.1.0: {}
 
   pure-rand@6.1.0: {}
+
+  quickjs-wasi@3.6.2: {}
 
   regex-recursion@6.0.2:
     dependencies:

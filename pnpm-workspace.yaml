@@ -14,3 +14,4 @@ minimumReleaseAgeExclude:
   - electron@44.5.1
   - "@earendil-works/pi-ai@1.0.2"
   - "@earendil-works/pi-telemetry@1.0.2"
+  - "@earendil-works/pi-codemode@1.0.2"

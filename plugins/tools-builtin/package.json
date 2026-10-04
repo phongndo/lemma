@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@earendil-works/pi-codemode": "1.0.2",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "effect": "3.22.2"

@@ -37,7 +37,7 @@ const MOCK_INSPECTORS = [
     description: "Every tool the model can call, the plugin that registered it, and the guards that check calls",
     source: "tools",
     snapshot: () => ({
-      tools: ["read", "write", "edit", "bash"].map((name) => ({ name, plugin: name, description: `The ${name} tool` })),
+      tools: ["read", "write", "edit", "bash", "codemode"].map((name) => ({ name, plugin: name, description: `The ${name} tool` })),
       guards: [],
     }),
   },
@@ -305,6 +305,7 @@ export const createMockHost = (): Host => {
     bundled("write", { requires: ["lemma/Tools"] }),
     bundled("edit", { requires: ["lemma/Tools"] }),
     bundled("bash", { requires: ["lemma/Tools"] }),
+    bundled("codemode", { requires: ["lemma/Tools"] }),
     bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"], locked: needed }),
     bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"], locked: needed }),
     bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),

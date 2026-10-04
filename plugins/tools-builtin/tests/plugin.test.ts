@@ -10,7 +10,7 @@ import { tempDir, textOf } from "./support.ts";
 
 describe("plugins", () => {
   it("registers one tool per plugin under the tool's name, with clean schemas", async () => {
-    expect(builtin.map((plugin) => plugin.id)).toEqual(["read", "write", "edit", "bash"]);
+    expect(builtin.map((plugin) => plugin.id)).toEqual(["read", "write", "edit", "bash", "codemode"]);
     const listed = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -21,6 +21,7 @@ describe("plugins", () => {
     );
     expect(listed.map((tool) => [tool.spec.name, tool.source])).toEqual([
       ["bash", "bash"],
+      ["codemode", "codemode"],
       ["edit", "edit"],
       ["read", "read"],
       ["write", "write"],
