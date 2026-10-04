@@ -6,6 +6,7 @@ import {
   ChatToolPart,
   ChatTurnFooterPart,
   ChatUserPart,
+  ComposerQueuedPart,
   ChatWorkingPart,
   ChatWorkPart,
   ConfigFormPart,
@@ -63,6 +64,7 @@ export const ProviderLogo = partView(ProviderLogoPart);
 export const Icon = partView(IconPart);
 
 export const ChatUser = partView(ChatUserPart);
+export const ComposerQueued = partView(ComposerQueuedPart);
 export const ChatThinking = partView(ChatThinkingPart);
 export const ChatTool = partView(ChatToolPart);
 export const ChatWork = partView(ChatWorkPart);

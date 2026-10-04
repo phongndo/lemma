@@ -120,6 +120,48 @@
   stroke-width: 1.9;
 }
 
+/* Prompts sent while a turn runs, waiting to steer it or to follow it. */
+.composer-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 10px 12px 0;
+  list-style: none;
+}
+
+.queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 2px 2px 8px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  font-size: 13px;
+}
+
+.queued-mode {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.queued-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-remove {
+  flex: none;
+}
+
 .attachments {
   display: flex;
   flex-wrap: wrap;

@@ -1,5 +1,5 @@
 import { branchOf } from "@lemma/contracts";
-import type { SessionEvent, SessionInfo } from "@lemma/contracts";
+import type { QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
 
 export interface SessionGroup {
   readonly cwd: string;
@@ -84,3 +84,17 @@ export const trackTurn = (
   if (ended[event.sessionId] === event.turnId || running.includes(event.sessionId)) return tracking;
   return { running: [...running, event.sessionId], ended };
 };
+
+/** A session's queue as last reported, with its revision. */
+export interface KnownQueue {
+  readonly queue: readonly QueuedPrompt[];
+  readonly revision: number;
+}
+
+/**
+ * Whichever report of a queue is newer: a `queue-changed` event and a view
+ * fetched alongside it can arrive in either order, and the older must not
+ * bring back prompts since placed or withdrawn, or hide ones since queued.
+ */
+export const newerQueue = (known: KnownQueue | undefined, report: KnownQueue): KnownQueue =>
+  known === undefined || report.revision >= known.revision ? report : known;

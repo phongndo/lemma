@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
-import { fileSessions, groupSessions, resolveLeaf, trackTurn, upsertSession } from "../src/model/threads.ts";
+import { fileSessions, groupSessions, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/model/threads.ts";
 
 const info = (id: string, cwd: string, updatedAt: number, lastSeq = 0): SessionInfo => ({ id, cwd, createdAt: 0, updatedAt, lastSeq });
 const ev = (id: string, parent: string | null, seq: number): SessionEvent => ({ seq, id, parent, at: seq, data: { type: "title", title: id } });
@@ -75,5 +75,16 @@ describe("trackTurn", () => {
     expect(trackTurn(ended, start("s", "t1")).running).toEqual([]);
     // The next turn still counts.
     expect(trackTurn(trackTurn(ended, start("s", "t1")), start("s", "t2")).running).toEqual(["s"]);
+  });
+});
+
+describe("newerQueue", () => {
+  it("keeps the newer of a view's queue and an event's, whichever arrives last", () => {
+    const prompt = { requestId: "r1", content: [], mode: "follow-up" as const, at: 1 };
+    const view = { queue: [prompt], revision: 5 };
+    // The prompt was placed after the view was taken: the event says so, and the view arriving after it does not undo it.
+    const event = { queue: [], revision: 6 };
+    expect(newerQueue(newerQueue(undefined, event), view)).toBe(event);
+    expect(newerQueue(newerQueue(undefined, view), event)).toBe(event);
   });
 });

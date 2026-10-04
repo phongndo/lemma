@@ -1,4 +1,4 @@
-import type { SessionEvent, StreamEvent, ToolCall } from "@lemma/contracts";
+import type { AgentView, AssistantMessage, SessionEvent, StreamEvent, ToolCall } from "@lemma/contracts";
 
 /**
  * Streaming state for one session: what the model is producing right now,
@@ -19,6 +19,8 @@ export interface StepDraft {
   /** The stream finished (done or error); waiting for the durable event. */
   readonly finished: boolean;
   readonly error?: string;
+  /** The last stream event applied, by its number in the step (0: none numbered yet). */
+  readonly seq: number;
 }
 
 export interface LiveState {
@@ -27,27 +29,50 @@ export interface LiveState {
   readonly settled: ReadonlySet<string>;
   /** Output of tools still running, by tool call id: the tail, until the result is logged. */
   readonly output: ReadonlyMap<string, string>;
+  /** How much each running tool has printed in all, so a chunk the output already holds is not added twice. */
+  readonly printed: ReadonlyMap<string, number>;
+  /**
+   * While a view of the running turn is on its way (`beginJoin`): the deltas
+   * and output that arrived meanwhile, held to be replayed over the view.
+   */
+  readonly joining?: readonly Held[];
 }
 
-export const emptyLive: LiveState = { drafts: [], settled: new Set(), output: new Map() };
+/** An update held while joining. */
+type Held =
+  | { readonly kind: "delta"; readonly turnId: string; readonly stepId: string; readonly event: StreamEvent; readonly seq?: number }
+  | { readonly kind: "output"; readonly toolCallId: string; readonly chunk: string; readonly offset?: number };
+
+export const emptyLive: LiveState = { drafts: [], settled: new Set(), output: new Map(), printed: new Map() };
 
 /** Live output kept per running tool: more than a view shows, bounded however long the tool runs. */
 export const OUTPUT_TAIL_CHARS = 16 * 1024;
 
-/** A running tool printed `chunk`. */
-export const appendOutput = (state: LiveState, toolCallId: string, chunk: string): LiveState => {
-  const text = (state.output.get(toolCallId) ?? "") + chunk;
+/** A running tool printed `chunk`, after `offset` characters in all when known; the part the output already holds is skipped. */
+export const appendOutput = (state: LiveState, toolCallId: string, chunk: string, offset?: number): LiveState => {
+  if (state.joining !== undefined)
+    return { ...state, joining: [...state.joining, { kind: "output", toolCallId, chunk, ...(offset === undefined ? {} : { offset }) }] };
+  const seen = state.printed.get(toolCallId) ?? 0;
+  const start = offset ?? seen;
+  const end = start + chunk.length;
+  if (end <= seen) return state;
+  const fresh = start >= seen ? chunk : chunk.slice(seen - start);
+  const text = (state.output.get(toolCallId) ?? "") + fresh;
   const output = new Map(state.output);
   output.set(toolCallId, text.length > OUTPUT_TAIL_CHARS ? text.slice(-OUTPUT_TAIL_CHARS) : text);
-  return { ...state, output };
+  const printed = new Map(state.printed);
+  printed.set(toolCallId, end);
+  return { ...state, output, printed };
 };
 
 /** The tool's result is logged: its live output is no longer shown. */
 export const dropOutput = (state: LiveState, toolCallId: string): LiveState => {
-  if (!state.output.has(toolCallId)) return state;
+  if (!state.output.has(toolCallId) && !state.printed.has(toolCallId)) return state;
   const output = new Map(state.output);
   output.delete(toolCallId);
-  return { ...state, output };
+  const printed = new Map(state.printed);
+  printed.delete(toolCallId);
+  return { ...state, output, printed };
 };
 
 const setBlock = (blocks: readonly (DraftBlock | undefined)[], index: number, block: DraftBlock) => {
@@ -93,11 +118,16 @@ const applyToDraft = (draft: StepDraft, event: StreamEvent): StepDraft => {
   }
 };
 
-export const applyDelta = (state: LiveState, turnId: string, stepId: string, event: StreamEvent): LiveState => {
+/** Applies a stream event; one numbered at or below what the draft holds (it was seeded from a view) is skipped. */
+export const applyDelta = (state: LiveState, turnId: string, stepId: string, event: StreamEvent, seq?: number): LiveState => {
   if (state.settled.has(stepId)) return state;
+  if (state.joining !== undefined)
+    return { ...state, joining: [...state.joining, { kind: "delta", turnId, stepId, event, ...(seq === undefined ? {} : { seq }) }] };
   const index = state.drafts.findIndex((draft) => draft.stepId === stepId);
-  const draft = index === -1 ? { turnId, stepId, blocks: [], finished: false } : state.drafts[index]!;
-  const next = applyToDraft(draft, event);
+  const draft: StepDraft = index === -1 ? { turnId, stepId, blocks: [], finished: false, seq: 0 } : state.drafts[index]!;
+  if (seq !== undefined && seq <= draft.seq) return state;
+  const applied = applyToDraft(draft, event);
+  const next = seq === undefined || applied === draft ? applied : { ...applied, seq };
   if (next === draft && index !== -1) return state;
   const drafts = state.drafts.slice();
   if (index === -1) drafts.push(next);
@@ -124,7 +154,47 @@ const settleTurn = (state: LiveState, turnId: string): LiveState => {
 /** The session's running turn ended: nothing more streams for it, and, as a session runs one turn at a time, no tool of it is running. */
 export const endTurn = (state: LiveState, turnId: string): LiveState => {
   const next = settleTurn(state, turnId);
-  return next.output.size === 0 ? next : { ...next, output: new Map() };
+  return next.output.size === 0 && next.printed.size === 0 ? next : { ...next, output: new Map(), printed: new Map() };
+};
+
+const blockOf = (part: AssistantMessage["content"][number]): DraftBlock => {
+  if (part.type === "text") return { kind: "text", text: part.text };
+  if (part.type === "thinking") return { kind: "thinking", text: part.thinking };
+  // Held from its start, a call's arguments may still be streaming: it is whole once it has some.
+  const whole = Object.keys(part.arguments).length > 0;
+  return { kind: "tool", id: part.id, name: part.name, args: whole ? JSON.stringify(part.arguments) : "", ...(whole ? { call: part } : {}) };
+};
+
+/**
+ * What the agent says the running turn has produced so far (`Agent.View`),
+ * for a session opened or reconnected mid-turn: it replaces the draft of
+ * that step and the running tools' output. Updates that arrived while it was
+ * on its way are held (`beginJoin`) and replayed over it (`joinLive`), their
+ * numbers and offsets skipping what it covers: a newer update alone says
+ * nothing of what came before it, so it never stands in for the view.
+ */
+export const seedLive = (state: LiveState, view: AgentView): LiveState => {
+  const turnId = view.turnId;
+  if (turnId === undefined) return state;
+  let next = state;
+  const draft = view.draft;
+  if (draft !== undefined && !next.settled.has(draft.stepId)) {
+    // Each block at its index in the stream, which the deltas that follow name.
+    const blocks: (DraftBlock | undefined)[] = [];
+    for (const { index, block } of draft.blocks) blocks[index] = blockOf(block);
+    const seeded: StepDraft = { turnId, stepId: draft.stepId, blocks, finished: false, seq: draft.seq };
+    next = { ...next, drafts: [...next.drafts.filter((existing) => existing.stepId !== draft.stepId), seeded] };
+  }
+  if (view.output.length > 0) {
+    const output = new Map(next.output);
+    const printed = new Map(next.printed);
+    for (const entry of view.output) {
+      output.set(entry.toolCallId, entry.output);
+      printed.set(entry.toolCallId, entry.length);
+    }
+    next = { ...next, output, printed };
+  }
+  return next;
 };
 
 /**
@@ -134,7 +204,7 @@ export const endTurn = (state: LiveState, turnId: string): LiveState => {
  * log holds every earlier turn's end too.
  */
 export const reconcileLive = (state: LiveState, events: readonly SessionEvent[]): LiveState => {
-  if (state.drafts.length === 0 && state.output.size === 0) return state;
+  if (state.drafts.length === 0 && state.output.size === 0 && state.printed.size === 0) return state;
   let next = state;
   const calls = new Map<string, string[]>();
   for (const { data } of events) {
@@ -153,6 +223,26 @@ export const reconcileLive = (state: LiveState, events: readonly SessionEvent[])
     }
   }
   return next;
+};
+
+/** A view of the running turn has been asked for: deltas and output from now on are held until it arrives (`joinLive`). */
+export const beginJoin = (state: LiveState): LiveState => (state.joining !== undefined ? state : { ...state, joining: [] });
+
+/**
+ * The view arrived (or, `undefined`, could not be had): it is applied
+ * (`seedLive`), the updates held meanwhile replayed over it, and the result
+ * checked against the session's log as it stands now, since the view and the
+ * log are fetched side by side and a view older than the log must not bring
+ * back drafts or output the log already settled.
+ */
+export const joinLive = (state: LiveState, view: AgentView | undefined, log: readonly SessionEvent[]): LiveState => {
+  const { joining = [], ...rest } = state;
+  let next: LiveState = view === undefined ? rest : seedLive(rest, view);
+  for (const held of joining) {
+    next =
+      held.kind === "delta" ? applyDelta(next, held.turnId, held.stepId, held.event, held.seq) : appendOutput(next, held.toolCallId, held.chunk, held.offset);
+  }
+  return reconcileLive(next, log);
 };
 
 /** Best-effort parse of streamed tool arguments (partial JSON while streaming). */

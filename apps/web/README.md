@@ -57,7 +57,11 @@ plugin's `bindings`, one line per action, which a file edit changes as well:
 ```
 
 Nothing after `=` unbinds an action; the composer's send key is the
-`composer` plugin's `send` (`enter` or `mod+enter`).
+`composer` plugin's `send` (`enter` or `mod+enter`). While a turn runs, the send
+key steers it (the prompt joins after its current step) and Alt with it queues
+the prompt for after the turn; queued prompts show above the composer, where
+each can be withdrawn. A thread opened or reconnected midway shows what the
+running turn has produced so far (`Agent.View`).
 
 Open the app with `?safe` to ignore rows and files: the way back from a
 customization that broke the page, including one that turned the settings off.
@@ -166,7 +170,7 @@ plugins use nothing else.
   `segmented`, `config-form`, `provider-logo`, `search-field` (a page's search), and `icon` for every icon, all
   from the `kit` plugin) and a view's own (`chat.user`, `chat.thinking`,
   `chat.tool`, `chat.work`, `chat.working`, `chat.turn-footer`,
-  `sidebar.row`, `providers.row`). Replace one
+  `composer.queued`, `sidebar.row`, `providers.row`). Replace one
   everywhere by adding an item with an `order` below `DEFAULT_PART_ORDER`;
   `api.defaults` holds the bundled implementations to wrap or fall back to.
 

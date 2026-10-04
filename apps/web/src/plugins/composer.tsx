@@ -1,8 +1,9 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { Schema } from "effect";
-import type { ImageContent, PromptContent } from "@lemma/contracts";
-import { modKey } from "../lib/keys.ts";
+import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
+import { randomId } from "../lib/id.ts";
+import { formatKeys, modKey } from "../lib/keys.ts";
 import {
   ActionIds,
   Actions,
@@ -11,6 +12,7 @@ import {
   ComposerControls,
   ComposerFooter,
   ComposerNotices,
+  ComposerQueuedPart,
   ComposerRegion,
   Models,
   Notify,
@@ -19,10 +21,19 @@ import {
   Slots,
   Workspace,
 } from "../ui/contracts.ts";
-import type { ClientService, ComposerActionProps, ModelsService, NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
+import type {
+  ClientService,
+  ComposerActionProps,
+  ComposerQueuedProps,
+  ModelsService,
+  NotifyService,
+  ThreadsService,
+  WorkspaceService,
+} from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
+import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ChatIcon, ImageIcon, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
+import { ChatIcon, ComposerQueued, ImageIcon, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
 
 /** The formats every provider accepts; others (SVG, HEIC, TIFF…) would fail every later request in the session. */
@@ -52,7 +63,20 @@ export const ComposerConfig = Schema.Struct({
 interface Draft {
   readonly text: string;
   readonly images: readonly ImageContent[];
+  /** Kept from a send that did not get through, so sending it again unchanged cannot place it twice; an edit drops it. */
+  readonly requestId?: string;
 }
+
+/** A queued prompt in a line: its text, whitespace collapsed, or what it attaches. */
+const preview = (content: QueuedPrompt["content"]): string => {
+  const text = content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const images = content.filter((part) => part.type === "image").length;
+  return text || (images === 1 ? "An image" : `${images} images`);
+};
 const unsent = (draft: Draft) => draft.text.trim() !== "" || draft.images.length > 0;
 
 interface Deps {
@@ -96,8 +120,22 @@ function Composer(props: { deps: Deps }) {
       { defer: true },
     ),
   );
-  // Every edit is kept with its thread, for when the composer shows it again.
-  createEffect(on([text, images], ([text, images]) => drafts.set(draftKey(), { text, images }), { defer: true }));
+  // Every change is kept with its thread, for when the composer shows it again; a retry id stays until the person edits.
+  createEffect(
+    on(
+      [text, images],
+      ([text, images]) => {
+        const requestId = drafts.get(draftKey())?.requestId;
+        drafts.set(draftKey(), { text, images, ...(requestId === undefined ? {} : { requestId }) });
+      },
+      { defer: true },
+    ),
+  );
+  /** The person changed the prompt: sending it is a new submission, not a retry of the last one. */
+  const edited = () => {
+    const draft = drafts.get(draftKey());
+    if (draft?.requestId !== undefined) drafts.set(draftKey(), { text: draft.text, images: draft.images });
+  };
 
   const resize = () => {
     input.style.height = "auto";
@@ -111,21 +149,22 @@ function Composer(props: { deps: Deps }) {
   });
   onCleanup(() => props.deps.setFocus(undefined));
 
-  const canSend = () => client.connected() && !threads.busy() && !sending() && (text().trim() !== "" || images().length > 0);
+  // While a turn runs, sending steers it (or, with Alt, queues the prompt for after it).
+  const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
 
-  const submit = async () => {
+  const submit = async (whenBusy: "steer" | "follow-up" = "steer") => {
     if (!canSend()) return;
     const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
     const key = draftKey();
-    const sent = { text: text(), images: images() };
+    const sent: Draft = { text: text(), images: images(), requestId: drafts.get(key)?.requestId ?? randomId() };
     setSending(true);
     let ok = false;
     try {
       // A new chat may start in its own worktree, named from the prompt.
       const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
-      ok = await threads.send(content, { turn: models.turnOptions(), cwd });
+      ok = await threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
     } catch (error) {
       notify.report(error, "Could not create a session");
     }
@@ -147,6 +186,7 @@ function Composer(props: { deps: Deps }) {
     const start = input.selectionStart ?? text().length;
     const end = input.selectionEnd ?? start;
     const next = text().slice(0, start) + value + text().slice(end);
+    edited();
     setText(next);
     queueMicrotask(() => {
       input.focus();
@@ -172,14 +212,17 @@ function Composer(props: { deps: Deps }) {
       });
     if (accepted.length === 0) return;
     const read = await Promise.all(accepted.map(readImage));
+    edited();
     setImages((current) => [...current, ...read]);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
     const sends = props.deps.config.send === "mod+enter" ? modKey(event) : !modKey(event) && !event.ctrlKey && !event.metaKey;
-    if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing && !event.altKey) {
+    if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
+      // Alt queues it for after the running turn; with none running, Alt+Enter is left to the field.
+      if (event.altKey && !threads.busy()) return;
       event.preventDefault();
-      void submit();
+      void submit(event.altKey ? "follow-up" : "steer");
     } else if (event.key === "Escape" && threads.busy()) {
       event.preventDefault();
       threads.cancel();
@@ -201,7 +244,7 @@ function Composer(props: { deps: Deps }) {
 
   const placeholder = () => {
     if (!client.connected()) return "Waiting for the host…";
-    if (threads.busy()) return "Working…";
+    if (threads.busy()) return `Steer it, or ${formatKeys(props.deps.config.send === "mod+enter" ? "alt+mod+enter" : "alt+enter")} to send after it`;
     return threads.activeId() === undefined ? "Ask anything, or describe a task" : "Reply…";
   };
 
@@ -226,6 +269,11 @@ function Composer(props: { deps: Deps }) {
         }}
         onDrop={onDrop}
       >
+        <Show when={threads.queue().length > 0}>
+          <ul class="composer-queue" aria-label="Queued prompts">
+            <For each={threads.queue()}>{(queued) => <ComposerQueued prompt={queued} withdraw={() => void threads.withdraw(queued.requestId)} />}</For>
+          </ul>
+        </Show>
         <Show when={images().length > 0}>
           <div class="attachments">
             <For each={images()}>
@@ -236,7 +284,10 @@ function Composer(props: { deps: Deps }) {
                     type="button"
                     class="attachment-remove"
                     aria-label="Remove image"
-                    onClick={() => setImages((all) => all.filter((_, i) => i !== index()))}
+                    onClick={() => {
+                      edited();
+                      setImages((all) => all.filter((_, i) => i !== index()));
+                    }}
                   >
                     <XIcon />
                   </button>
@@ -256,6 +307,7 @@ function Composer(props: { deps: Deps }) {
           aria-label="Message"
           spellcheck={true}
           onInput={(event) => {
+            edited();
             setText(event.currentTarget.value);
             resize();
           }}
@@ -276,6 +328,11 @@ function Composer(props: { deps: Deps }) {
                 </button>
               }
             >
+              <Show when={canSend()}>
+                <button type="submit" class="send" aria-label="Steer" data-tip="Steer: joins the running turn after its current step">
+                  <SendIcon />
+                </button>
+              </Show>
               <button type="button" class="send stop" aria-label="Stop" data-tip="Stop" onClick={() => threads.cancel()}>
                 <StopIcon />
               </button>
@@ -289,6 +346,19 @@ function Composer(props: { deps: Deps }) {
 }
 
 /** Where prompts are written: text, pasted or dropped images, send and stop. Its notices, controls, and footer are slots. */
+/** The default `composer.queued` part: the prompt's mode and text on one line, and a button to withdraw it. */
+function QueuedRow(props: ComposerQueuedProps) {
+  return (
+    <li class="queued">
+      <span class="queued-mode">{props.prompt.mode === "steer" ? "Steer" : "Next"}</span>
+      <span class="queued-text">{preview(props.prompt.content)}</span>
+      <button type="button" class="icon-button queued-remove" aria-label="Withdraw" data-tip="Withdraw" onClick={() => props.withdraw()}>
+        <XIcon />
+      </button>
+    </li>
+  );
+}
+
 /** The default composer action: pick images to attach. */
 function AttachImages(props: ComposerActionProps) {
   let picker!: HTMLInputElement;
@@ -328,8 +398,9 @@ export default defineUiPlugin({
       }),
     );
     plugin.onCleanup(use.slots.add(ComposerRegion, { id: "composer", component: () => <Composer deps={deps} /> }));
-    // Its own button goes through the slot other plugins add theirs to.
+    // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     plugin.onCleanup(use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages }));
+    plugin.onCleanup(use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow }));
     plugin.onCleanup(
       use.slots.add(Actions, {
         id: ActionIds.focusComposer,

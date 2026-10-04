@@ -1,11 +1,12 @@
 import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { SessionLog, startPrompt } from "@lemma/client";
-import { branchOf } from "@lemma/contracts";
+import { branchOf, HostError } from "@lemma/contracts";
 import { isRoute } from "@lemma/router";
-import type { HostEvent, PromptContent, SessionEvent, SessionInfo, SessionMarks, TurnOptions } from "@lemma/contracts";
-import { appendOutput, applyDelta, dropOutput, emptyLive, endTurn, reconcileLive, settleStep } from "../model/live.ts";
+import type { AgentView, HostEvent, PromptContent, QueuedPrompt, SessionEvent, SessionInfo, SessionMarks, TurnOptions } from "@lemma/contracts";
+import { appendOutput, applyDelta, beginJoin, dropOutput, emptyLive, endTurn, joinLive, reconcileLive, settleStep } from "../model/live.ts";
 import type { LiveState } from "../model/live.ts";
-import { resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";
+import { newerQueue, resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";
+import type { KnownQueue } from "../model/threads.ts";
 import { Client, NewThreadRoute, Notify, Router, ThreadRoute, Threads } from "../ui/contracts.ts";
 import type { LogState } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -43,6 +44,13 @@ export default defineUiPlugin({
     const [events, setEvents] = createSignal<readonly SessionEvent[]>([], { equals: false });
     const [log, setLog] = createSignal<LogState>({ loaded: true, syncing: false });
     const [live, setLive] = createSignal<Readonly<Record<string, LiveState>>>({});
+    /** Each session's queue as the agent last reported it, with its revision: an older report never replaces a newer. */
+    const [queues, setQueues] = createSignal<Readonly<Record<string, KnownQueue>>>({});
+    const setQueue = (sessionId: string, queue: readonly QueuedPrompt[], revision: number) => {
+      const known = queues()[sessionId];
+      const next = newerQueue(known, { queue, revision });
+      if (next !== known) setQueues({ ...queues(), [sessionId]: next });
+    };
 
     let sessionLog: SessionLog | undefined;
     let stopLog: (() => void) | undefined;
@@ -70,6 +78,10 @@ export default defineUiPlugin({
     const busy = createMemo(() => {
       const id = activeId();
       return id !== undefined && running().includes(id);
+    });
+    const activeQueue = createMemo(() => {
+      const id = activeId();
+      return (id === undefined ? undefined : queues()[id]?.queue) ?? [];
     });
 
     const updateLive = (sessionId: string, update: (state: LiveState) => LiveState): void => {
@@ -111,6 +123,33 @@ export default defineUiPlugin({
       preloaded.set(sessionId, { at: Date.now(), events });
     };
 
+    /**
+     * What the agent has of the thread beyond its log (a turn running since
+     * before this page saw it: its output so far; and the queue), so a thread
+     * opened or reconnected midway shows it all. The numbered deltas that
+     * follow continue from it: they are held while it is on its way and
+     * replayed over it. Fetched beside the log, it may be older than the log
+     * that arrived first, so it is checked against the log as it stands. Only
+     * the latest view asked for is applied.
+     */
+    const joins = new Map<string, number>();
+    const joinTurn = (sessionId: string) => {
+      const join = (joins.get(sessionId) ?? 0) + 1;
+      joins.set(sessionId, join);
+      // What arrived before asking is older than the view: it applies as usual. What arrives from now is held.
+      flushDeltas();
+      updateLive(sessionId, beginJoin);
+      const done = (view: AgentView | undefined) =>
+        batch(() => {
+          if (joins.get(sessionId) !== join) return;
+          flushDeltas();
+          const log = sessionLog?.sessionId === sessionId ? untrack(events) : [];
+          updateLive(sessionId, (state) => joinLive(state, view, log));
+          if (view !== undefined) setQueue(sessionId, view.queue, view.queueRevision);
+        });
+      return host.agent.view(sessionId).then(done, () => done(undefined));
+    };
+
     /** Settles once the active thread's log has first synced. */
     let opened: Promise<void> = Promise.resolve();
     /** Loads the log of the thread the address names, replacing the last one's. */
@@ -148,6 +187,7 @@ export default defineUiPlugin({
         // A preloaded log may predate the thread's latest events; the list knows its last, and the log catches up to it.
         .then(() => next.noteLastSeq(untrack(list).find((session) => session.id === sessionId)?.lastSeq ?? 0))
         .catch((error) => notify.report(error, "Could not load the session"));
+      void joinTurn(sessionId);
     };
     createEffect(on(activeId, open));
 
@@ -168,7 +208,7 @@ export default defineUiPlugin({
         const tasks = [
           host.session.list().then((threads) => batch(() => (setList(threads), setLoaded(true)))),
           host.agent.running().then(setRunning),
-          ...(sessionLog === undefined ? [] : [sessionLog.sync()]),
+          ...(sessionLog === undefined ? [] : [sessionLog.sync(), joinTurn(sessionLog.sessionId)]),
         ];
         void Promise.allSettled(tasks).then((results) => {
           const failed = results.find((result) => result.status === "rejected");
@@ -183,7 +223,7 @@ export default defineUiPlugin({
     type Streamed = Extract<HostEvent, { type: "delta" | "tool-output" }>;
     let deltas: Streamed[] = [];
     let frame: number | undefined;
-    const flushDeltas = () => {
+    function flushDeltas() {
       if (frame !== undefined) cancelAnimationFrame(frame);
       frame = undefined;
       if (deltas.length === 0) return;
@@ -200,12 +240,14 @@ export default defineUiPlugin({
           updateLive(sessionId, (state) =>
             events.reduce(
               (next, event) =>
-                event.type === "delta" ? applyDelta(next, event.turnId, event.stepId, event.event) : appendOutput(next, event.toolCallId, event.chunk),
+                event.type === "delta"
+                  ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
+                  : appendOutput(next, event.toolCallId, event.chunk, event.offset),
               state,
             ),
           );
       });
-    };
+    }
     plugin.onCleanup(() => {
       if (frame !== undefined) cancelAnimationFrame(frame);
     });
@@ -244,6 +286,9 @@ export default defineUiPlugin({
           case "turn-started":
             setRunning(trackTurn({ running: running(), ended: endedTurns }, event).running);
             return;
+          case "queue-changed":
+            setQueue(event.sessionId, event.queue, event.revision);
+            return;
           case "turn-ended": {
             const next = trackTurn({ running: running(), ended: endedTurns }, event);
             endedTurns = next.ended;
@@ -257,7 +302,12 @@ export default defineUiPlugin({
 
     const send = async (
       content: PromptContent,
-      options: { readonly turn?: TurnOptions | undefined; readonly cwd?: string | undefined } = {},
+      options: {
+        readonly turn?: TurnOptions | undefined;
+        readonly cwd?: string | undefined;
+        readonly requestId?: string | undefined;
+        readonly whenBusy?: "steer" | "follow-up" | undefined;
+      } = {},
     ): Promise<boolean> => {
       let sessionId = activeId();
       if (sessionId === undefined) {
@@ -274,12 +324,19 @@ export default defineUiPlugin({
       }
       const id = sessionId;
       if (!running().includes(id)) setRunning((current) => [...current, id]);
-      const prompt = startPrompt(host, id, content, options.turn);
+      const prompt = startPrompt(host, id, content, options.turn, {
+        whenBusy: options.whenBusy ?? "steer",
+        ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
+      });
       void prompt.done
         .catch(() => {})
         .finally(() => {
-          // turn-ended normally clears this; the prompt settling is the fallback when the event was lost.
-          setRunning((current) => current.filter((candidate) => candidate !== id));
+          // turn-ended and turn-started normally keep this; the prompt settling is the fallback when they were lost. A
+          // queued prompt may already have started the next turn, so ask rather than assume.
+          void host.agent
+            .running()
+            .then(setRunning)
+            .catch(() => {});
           void sessionLog?.sync().catch(() => {});
         });
       // A refused prompt returns false so the composer keeps the text; failures after that are only reported.
@@ -290,7 +347,9 @@ export default defineUiPlugin({
           return false;
         },
       );
-      if (accepted) void prompt.done.catch((error) => notify.report(error));
+      // Accepted, the turn is the host's: a dropped connection only ends this wait (the page reconnects and catches up),
+      // and a withdrawn prompt fails it on purpose. What the host reports otherwise is shown.
+      if (accepted) void prompt.done.catch((error) => (error instanceof HostError && error.code !== "Withdrawn" ? notify.report(error) : undefined));
       return accepted;
     };
 
@@ -339,6 +398,16 @@ export default defineUiPlugin({
           }
         },
         send,
+        queue: activeQueue,
+        withdraw: async (requestId: string) => {
+          const sessionId = activeId();
+          if (sessionId === undefined) return;
+          try {
+            await host.agent.withdraw(sessionId, requestId);
+          } catch (error) {
+            notify.report(error, "Could not withdraw the prompt");
+          }
+        },
         cancel: () => {
           const sessionId = activeId();
           if (sessionId !== undefined) host.agent.cancel(sessionId).catch((error) => notify.report(error, "Cancel failed"));

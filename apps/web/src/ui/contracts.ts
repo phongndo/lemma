@@ -18,6 +18,7 @@ import type {
   PluginChange,
   PluginStatus,
   PromptContent,
+  QueuedPrompt,
   ProviderInfo,
   ReloadResult,
   SessionEvent,
@@ -158,8 +159,24 @@ export interface ThreadsService {
   readonly mark: (sessionId: string, marks: SessionMarks) => Promise<void>;
   /** Deletes it for good, leaving it first if it is open; failures (a running turn) are reported. */
   readonly remove: (sessionId: string) => Promise<void>;
-  /** Sends a prompt, creating the session first for a new chat (in `cwd`, else the pending directory). Resolves false when it was refused. */
-  readonly send: (content: PromptContent, options?: { readonly turn?: TurnOptions | undefined; readonly cwd?: string | undefined }) => Promise<boolean>;
+  /**
+   * Sends a prompt, creating the session first for a new chat (in `cwd`, else the pending directory). Resolves false when
+   * it was refused. While a turn runs it steers that turn or follows it (`whenBusy`, default steer). `requestId` makes it
+   * exactly-once: sending again with the same id (after a lost connection) cannot place it twice.
+   */
+  readonly send: (
+    content: PromptContent,
+    options?: {
+      readonly turn?: TurnOptions | undefined;
+      readonly cwd?: string | undefined;
+      readonly requestId?: string | undefined;
+      readonly whenBusy?: "steer" | "follow-up" | undefined;
+    },
+  ) => Promise<boolean>;
+  /** The active thread's queue: prompts sent while a turn ran, waiting to steer it or to follow it. */
+  readonly queue: Accessor<readonly QueuedPrompt[]>;
+  /** Takes a prompt out of the active thread's queue. */
+  readonly withdraw: (requestId: string) => Promise<void>;
   readonly cancel: () => void;
   /** Moves the active session's leaf: the next prompt branches from `eventId`. */
   readonly checkout: (eventId: string) => Promise<void>;
@@ -860,6 +877,17 @@ export interface IconProps {
 }
 /** Every icon, by name: one part, so a set replaces them all and can fall back to the defaults (`api.defaults.Icon`). */
 export const IconPart = definePart<IconProps>("icon");
+
+// ------------------------------------------------------------------ composer parts
+
+export interface ComposerQueuedProps {
+  /** A prompt sent while a turn ran: it steers that turn, or (`follow-up`) waits for it to end. */
+  readonly prompt: QueuedPrompt;
+  /** Takes it out of the queue. */
+  readonly withdraw: () => void;
+}
+/** A queued prompt above the composer: its default shows the prompt's mode and text, and a button to withdraw it. */
+export const ComposerQueuedPart = definePart<ComposerQueuedProps>("composer.queued");
 
 // ------------------------------------------------------------------ chat parts
 

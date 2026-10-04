@@ -27,6 +27,10 @@ import { createServer } from "vite";
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
  * 8. The devtools dock under the app, and each panel shows it as it runs.
+ * 9. While a turn runs, the composer steers it or queues a prompt for after
+ *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
+ *    a steer shows in its turn. A send that fails is retried with its request
+ *    id, until the prompt is edited.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
@@ -607,8 +611,108 @@ try {
   assert.equal(await appHeight(), 900, "the app did not take its room back when the devtools closed");
   expectNoErrors("using the devtools");
 
+  // 9. While a turn runs: Enter steers it, Alt+Enter queues a prompt for after it, and a queued one can be withdrawn.
+  await page.goto(`${url}/?mock`);
+  await settled(page);
+  await page.evaluate(async () => {
+    const { Settings } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Settings)).open(undefined);
+  });
+  await page.fill("textarea", "start a turn");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".send.stop");
+  await page.fill("textarea", "steer it");
+  await page.keyboard.press("Enter");
+  await page
+    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer", { timeout: 5_000 })
+    .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));
+  assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
+  await page.fill("textarea", "for later");
+  await page.keyboard.press("Alt+Enter");
+  await page.waitForSelector(".queued:has-text('for later') .queued-mode >> text=Next");
+  // The row is a part: a plugin's own replaces it, and the default returns when that goes.
+  await page.evaluate(async () => {
+    const { ComposerQueuedPart } = await import("/src/ui/contracts.ts" as string);
+    (window as any).removeRow = (window as any).lemma.slots().add(ComposerQueuedPart, {
+      id: "check.queued",
+      order: 0,
+      component: (props: { prompt: { requestId: string } }) => {
+        const element = document.createElement("li");
+        element.className = "check-queued";
+        element.textContent = props.prompt.requestId;
+        return element;
+      },
+    });
+  });
+  await page
+    .waitForSelector(".composer-queue .check-queued", { timeout: 5_000 })
+    .catch(() => assert.fail("a plugin's composer.queued part does not render the queue"));
+  await page.evaluate(() => (window as any).removeRow());
+  await page.click(".queued:has-text('for later') .queued-remove");
+  await page.waitForSelector(".queued:has-text('for later')", { state: "detached" });
+  await page.waitForSelector(".turn-footer", { timeout: 20_000 });
+  await page.waitForSelector(".queued", { state: "detached" });
+  // One turn, holding both prompts: the steer where it joined.
+  assert.deepEqual(
+    await page.locator(".turn").evaluateAll((turns) => turns.map((turn) => [...turn.querySelectorAll(".user-text")].map((user) => user.textContent))),
+    [["start a turn", "steer it"]],
+    "the steer is not shown in the turn it joined",
+  );
+  expectNoErrors("steering and queueing");
+
+  // A send that fails (the connection dropped, say) keeps its request id: sending the same prompt again, even after
+  // moving to another thread and back, is a retry the host can recognise. An edit makes it a new prompt.
+  await page.evaluate(async () => {
+    const { Client } = await import("/src/ui/contracts.ts" as string);
+    const agent = (await (window as any).lemma.service(Client)).host.agent;
+    const prompt = agent.prompt.bind(agent);
+    const sent: (string | undefined)[] = ((window as any).sentIds = []);
+    agent.prompt = (sessionId: string, content: unknown, options: unknown, submit?: { requestId?: string }) => {
+      sent.push(submit?.requestId);
+      return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : prompt(sessionId, content, options, submit);
+    };
+  });
+  const sentIds = () => page.evaluate(() => (window as any).sentIds as (string | undefined)[]);
+  await page.evaluate(async () => {
+    const { Threads } = await import("/src/ui/contracts.ts" as string);
+    void (await (window as any).lemma.service(Threads)).select(undefined);
+  });
+  await page.waitForFunction(() => location.pathname === "/");
+  await page.fill("textarea", "retry me");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => (window as any).sentIds.length === 1);
+  // The send created its thread and moved there; the refused prompt is back in the composer.
+  await page.waitForFunction(
+    () => location.pathname.startsWith("/threads/") && (document.querySelector("textarea") as HTMLTextAreaElement).value === "retry me",
+  );
+  const retrying = new URL(page.url()).pathname;
+  await page.goBack();
+  await page.waitForFunction((path) => location.pathname !== path, retrying);
+  await page.goForward();
+  await page.waitForFunction(
+    (path) => location.pathname === path && (document.querySelector("textarea") as HTMLTextAreaElement).value === "retry me",
+    retrying,
+  );
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => (window as any).sentIds.length === 2);
+  const [first, retried] = await sentIds();
+  assert(first !== undefined && first === retried, `a retried send had another request id: ${first} then ${retried}`);
+  await page.waitForSelector(".turn-footer", { timeout: 20_000 });
+  // Fails again, and the person changes the prompt before sending it: a new prompt, with a new id.
+  await page.fill("textarea", "edit me");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => (window as any).sentIds.length === 3);
+  await page.waitForFunction(() => (document.querySelector("textarea") as HTMLTextAreaElement).value === "edit me");
+  await page.fill("textarea", "edit me, edited");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => (window as any).sentIds.length === 4);
+  const [, , refused, edited] = await sentIds();
+  assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
+  // The failed sends were reported; nothing else went wrong.
+  errors.splice(0);
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id.`,
   );
 } finally {
   await browser.close();
