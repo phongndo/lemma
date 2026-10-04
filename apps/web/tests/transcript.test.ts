@@ -136,21 +136,30 @@ describe("createProjector", () => {
 });
 
 describe("promptMarks", () => {
-  it("marks each turn that starts with a prompt, with the start of its reply", () => {
+  it("marks each turn that starts with a prompt, with its answer", () => {
+    const answer = "## Fixed\n\nThe **cause** was `retry_count`.";
     const t = projectTranscript(
       branch(
         { type: "turn-start", turnId: "t1" },
         user("fix   the\nbuild", "t1"),
-        { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "thinking", thinking: "hmm" }, { type: "text", text: " " }, call("c1")]) },
+        {
+          type: "message",
+          turnId: "t1",
+          stepId: "s1",
+          message: assistant([{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Reading the log." }, call("c1")]),
+        },
         toolResult("c1", "ok"),
-        { type: "message", turnId: "t1", stepId: "s2", message: assistant([{ type: "text", text: "Fixed it.\n\nThe cause was…" }]) },
+        { type: "message", turnId: "t1", stepId: "s2", message: assistant([{ type: "text", text: answer }]) },
         { type: "turn-end", turnId: "t1", reason: "done" },
         { type: "turn-start", turnId: "t2" },
         { type: "message", turnId: "t2", message: { role: "user", content: [{ type: "image", data: "", mimeType: "image/png" }], timestamp: 0 } },
+        // Cut off after a note and a tool call: the note is not its answer.
+        { type: "message", turnId: "t2", stepId: "s3", message: assistant([{ type: "text", text: "Let me look." }, call("c2")]) },
+        { type: "turn-end", turnId: "t2", reason: "cancelled" },
       ),
     );
     expect(promptMarks(t.turns)).toEqual([
-      { key: "t1", prompt: "fix the build", reply: "Fixed it. The cause was…" },
+      { key: "t1", prompt: "fix the build", reply: answer },
       { key: "t2", prompt: "Image", reply: "" },
     ]);
   });

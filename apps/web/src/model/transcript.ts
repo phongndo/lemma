@@ -1,5 +1,6 @@
 import { addUsage, emptyUsage } from "@lemma/contracts";
 import type { AssistantMessage, ImageContent, SessionEvent, TextContent, Timing, ToolCall, ToolResultMessage, Usage } from "@lemma/contracts";
+import { answerText } from "./fold.ts";
 
 /**
  * Projection of a session branch into what the chat transcript renders.
@@ -374,7 +375,7 @@ export interface PromptMark {
   readonly key: string;
   /** The prompt's text, whitespace collapsed; a stand-in when it is only images. */
   readonly prompt: string;
-  /** The start of the reply's first text, whitespace collapsed; empty until there is one. */
+  /** The turn's answer (`answerText`), markdown as written; empty until there is one. */
   readonly reply: string;
 }
 
@@ -394,14 +395,5 @@ export const promptMarks = (turns: readonly TurnView[]): PromptMark[] =>
       .join(" ");
     const images = user.content.filter((part) => part.type === "image").length;
     const prompt = flatten(text, 200) || (images === 1 ? "Image" : `${images} images`);
-    let reply = "";
-    for (const item of turn.items) {
-      if (item.kind !== "assistant") continue;
-      const block = item.blocks.find((candidate) => candidate.kind === "text" && candidate.text.trim() !== "");
-      if (block?.kind === "text") {
-        reply = flatten(block.text, 300);
-        break;
-      }
-    }
-    return [{ key: turn.key, prompt, reply }];
+    return [{ key: turn.key, prompt, reply: answerText(turn) }];
   });

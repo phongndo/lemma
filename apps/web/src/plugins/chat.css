@@ -110,64 +110,169 @@
   position: relative;
 }
 
+/* The prompt rail (`PromptRail`), over the chat view, for a pointer that can aim. */
 .prompt-rail {
   position: absolute;
-  left: 8px;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Too little space beside the text to keep it out: it shows while pointed at or focused. */
+.prompt-rail.tucked {
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+}
+
+.prompt-rail.tucked:hover,
+.prompt-rail.tucked:focus-within {
+  opacity: 1;
+}
+
+@media not (any-pointer: fine) {
+  .prompt-rail {
+    display: none;
+  }
+}
+
+/*
+ * 12px from the edge (nearer when the space is tight), at most 40px wide, and
+ * 8px short of the transcript's text (`--room`), so it never takes the pointer
+ * from the text. Its ticks are 8px apart until that would leave the steps no
+ * room in the view; then they move closer.
+ */
+.prompt-strip {
+  --strip-left: clamp(4px, var(--room) - 36px, 12px);
+  position: absolute;
   top: 50%;
+  left: var(--strip-left);
+  width: clamp(0px, var(--room) - 8px - var(--strip-left), 40px);
+  height: min(calc((var(--count) - 1) * 8px), max(0px, 100% - 96px));
   transform: translateY(-50%);
-  max-height: calc(100% - 48px);
-  overflow-y: auto;
-  scrollbar-width: none;
-  display: flex;
-  flex-direction: column;
-  padding: 4px 0;
 }
 
+/* The pointer's target: the strip and a little past its end ticks. The pointer's height on it picks the tick. */
+.prompt-hit {
+  position: absolute;
+  inset: -6px 0;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.prompt-ticks {
+  position: absolute;
+  inset: 0;
+}
+
+/* A button for the keys; the strip's target takes the pointer. Only transform and opacity change, so neither restyles any layout. */
 .prompt-tick {
-  flex: none;
-  display: flex;
-  align-items: center;
-  width: 34px;
-  height: 12px;
-  padding: 0 4px;
-  border: 0;
-  background: none;
-}
-
-.prompt-tick span {
-  width: calc(12px + var(--near, 0) * 8px);
-  height: 2px;
-  border-radius: 1px;
-  background: var(--text-3);
-  opacity: calc(0.6 + var(--near, 0) * 0.4);
-  transition:
-    width 0.12s ease-out,
-    opacity 0.12s ease-out;
-}
-
-.prompt-tick.current span {
-  width: max(20px, calc(12px + var(--near, 0) * 8px));
-  opacity: 1;
-  background: var(--text);
-}
-
-.prompt-tick.hovered span,
-.prompt-tick:focus-visible span {
+  position: absolute;
+  left: 0;
   width: 24px;
-  opacity: 1;
+  height: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--text-3) 55%, transparent);
+  transform: translateY(-50%) scaleX(var(--scale));
+  transform-origin: left;
+  transition: transform 0.15s ease-out;
+  pointer-events: none;
+}
+
+.prompt-tick:focus-visible {
+  outline-offset: 3px;
+}
+
+.prompt-tick.pointed {
   background: var(--text);
 }
 
+.prompt-tick::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--text);
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+}
+
+.prompt-tick.seen::after {
+  opacity: 0.9;
+}
+
+/* Previous and next: shown while the rail is pointed at, and reached from its target (they start where it ends), so they never cover the text unasked. */
+.prompt-step {
+  position: absolute;
+  left: -6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-out;
+}
+
+.prompt-step.previous {
+  bottom: calc(100% + 6px);
+}
+
+.prompt-step.next {
+  top: calc(100% + 6px);
+}
+
+.prompt-step .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.prompt-step.previous .icon {
+  transform: rotate(-90deg);
+}
+
+.prompt-step.next .icon {
+  transform: rotate(90deg);
+}
+
+.prompt-rail:hover .prompt-step {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.prompt-step:focus-visible {
+  opacity: 1;
+}
+
+.prompt-rail:hover .prompt-step:disabled {
+  opacity: 0.35;
+}
+
+.prompt-step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Beside the strip; `PromptRail` sets its top (its middle level with the tick, inside the view) and the width the view leaves it. */
 .prompt-card {
   position: absolute;
-  left: 44px;
-  z-index: 5;
-  width: min(340px, calc(100% - 56px));
-  padding: 10px 14px;
+  top: 0;
+  left: 32px;
+  width: 320px;
+  padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   background: var(--bg-raised);
   box-shadow: var(--shadow);
+  font-size: 14px;
+  line-height: 20px;
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -181,7 +286,6 @@
 .prompt-card-reply {
   margin-top: 4px;
   color: var(--text-2);
-  font-size: 13px;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -660,11 +764,5 @@
 @media (max-width: 820px) {
   .content {
     padding: 16px 14px 24px;
-  }
-  .prompt-rail {
-    left: 0;
-  }
-  .prompt-tick {
-    width: 20px;
   }
 }

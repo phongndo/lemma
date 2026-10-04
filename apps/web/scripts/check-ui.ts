@@ -31,6 +31,9 @@ import { createServer } from "vite";
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
  *    a steer shows in its turn. A send that fails is retried with its request
  *    id, until the prompt is edited.
+ * 10. The prompt rail has a tick per prompt; the one pointed at, or chosen with
+ *    the keys, shows its prompt in a card level with it, and a click or Enter
+ *    goes there, lighting it; the previous and next buttons move a turn each.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
@@ -711,8 +714,128 @@ try {
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
 
+  // 10. The prompt rail: a tick per prompt; the card for the one pointed at is level with it, and a click goes there.
+  await page.goto(`${url}/?mock`);
+  await settled(page);
+  await page.evaluate(async () => {
+    const { Settings } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Settings)).open(undefined);
+  });
+  for (const [index, prompt] of ["first prompt", "second prompt", "third prompt"].entries()) {
+    await page.fill("textarea", prompt);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((count) => document.querySelectorAll(".turn-footer").length === count, index + 1, { timeout: 20_000 });
+  }
+  const ticks = page.locator("nav[aria-label='Prompts'] button.prompt-tick");
+  assert.equal(await ticks.count(), 3, "the prompts landmark does not have a tick button per prompt");
+  assert.deepEqual(
+    await ticks.evaluateAll((all) => all.map((tick) => [tick.tabIndex, tick.getAttribute("aria-current")])),
+    [
+      [-1, null],
+      [-1, null],
+      [0, "location"],
+    ],
+    "the current prompt's tick is not the rail's one tab stop",
+  );
+  const point = async (index: number) => {
+    const box = (await ticks.nth(index).boundingBox())!;
+    await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  };
+  const cardShows = (text: string, failure: string) =>
+    page.waitForSelector(`.prompt-card:has-text('${text}')`, { timeout: 5_000 }).catch(() => assert.fail(failure));
+  /** The scroller's position once a smooth scroll stops. */
+  const scrolled = () =>
+    page.evaluate(
+      () =>
+        new Promise<number>((resolve) => {
+          const scroller = document.querySelector(".chat-view .scroller")!;
+          let last = -1;
+          let still = 0;
+          const frame = () => {
+            still = scroller.scrollTop === last ? still + 1 : 0;
+            last = scroller.scrollTop;
+            if (still >= 10) resolve(last);
+            else requestAnimationFrame(frame);
+          };
+          frame();
+        }),
+    );
+  await point(1);
+  await cardShows("second prompt", "pointing at a tick does not show its prompt");
+  const [tick, card] = await page.evaluate(() =>
+    [".prompt-tick.pointed", ".prompt-card"].map((selector) => {
+      const box = document.querySelector(selector)!.getBoundingClientRect();
+      return (box.top + box.bottom) / 2;
+    }),
+  );
+  assert(Math.abs(tick! - card!) < 1, `the prompt card's middle is at ${card}, not level with its tick at ${tick}`);
+  // From the bottom, the previous and next buttons (reached from the strip) move the view a turn each time.
+  const step = async (which: "previous" | "next") => {
+    const strip = (await page.locator(".prompt-hit").boundingBox())!;
+    await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2);
+    const button = (await page.locator(`.prompt-step.${which}`).boundingBox())!;
+    await page.mouse.click(button.x + button.width / 2, button.y + button.height / 2);
+    return scrolled();
+  };
+  const bottom = await scrolled();
+  const up = await step("previous");
+  const further = await step("previous");
+  const down = await step("next");
+  assert(up < bottom - 10 && further < up - 10 && down > further + 10, `stepping through prompts went ${bottom} → ${up} → ${further} → ${down}`);
+  await point(0);
+  await page.mouse.down();
+  await page.mouse.up();
+  const atFirst = await scrolled();
+  const [turnTop, ...lit] = await page.evaluate(() => [
+    document.querySelector<HTMLElement>(".turn")!.offsetTop,
+    ...[...document.querySelectorAll(".prompt-tick")].map((element) => element.classList.contains("seen")),
+  ]);
+  assert(
+    Math.abs(atFirst - (Number(turnTop) - 8)) < 2 && lit[0] === true && lit[2] === false,
+    `clicking the first prompt's tick went to ${atFirst} (its turn is at ${turnTop}), lighting ${lit}`,
+  );
+  // The keys move along the ticks; pointing elsewhere and away gives the card back to the focused one, and Enter goes there.
+  await page.mouse.move(900, 450);
+  await page.focus(".prompt-tick[tabindex='0']");
+  await page.keyboard.press("End");
+  await cardShows("third prompt", "the keys do not choose a prompt on the rail");
+  // A key with a modifier is left to the app's shortcuts.
+  await page.keyboard.press("Alt+ArrowUp");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Prompt 3 of 3: third prompt", "the rail took a modified key");
+  await point(0);
+  await cardShows("first prompt", "pointing at a tick while another is focused does not show it");
+  await page.mouse.move(900, 450);
+  await cardShows("third prompt", "the focused tick's card did not return when the pointer left");
+  await page.keyboard.press("Enter");
+  assert((await scrolled()) > atFirst + 10, "Enter on a focused tick does not go to its prompt");
+  // With short last turns (their replies hidden), the view cannot reach their starts: Previous still goes up from the bottom.
+  await page.addStyleTag({ content: ".turn:nth-of-type(n + 2) > :not(:first-child) { display: none }" });
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".chat-view .scroller")!;
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+  const end = await scrolled();
+  const back = await step("previous");
+  const forth = await step("next");
+  assert(back < end - 10 && forth > back + 10, `stepping past short turns went ${end} → ${back} → ${forth}`);
+  // The width setting moves the text without resizing the window: the strip moves aside and stays clear of it.
+  await page.evaluate(() => document.documentElement.style.setProperty("--content", "none"));
+  await page
+    .waitForFunction(
+      () => {
+        const content = document.querySelector(".chat-view .content")!;
+        const text = content.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft);
+        return document.querySelector(".prompt-hit")!.getBoundingClientRect().right <= text - 8 && document.querySelector(".prompt-rail.tucked") !== null;
+      },
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => assert.fail("the prompt rail's strip covers the text once the content is wider"));
+  await page.evaluate(() => document.documentElement.style.removeProperty("--content"));
+  expectNoErrors("using the prompt rail");
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it.`,
   );
 } finally {
   await browser.close();

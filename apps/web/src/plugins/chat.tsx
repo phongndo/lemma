@@ -57,6 +57,7 @@ import {
   XIcon,
 } from "../ui/parts.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { markdownText } from "../lib/markdown.ts";
 import styles from "./chat.css?inline";
 
 export const ChatConfig = Schema.Struct({
@@ -70,7 +71,8 @@ export const ChatConfig = Schema.Struct({
   }),
   promptRail: Schema.optionalWith(Schema.Boolean, { default: () => true }).annotations({
     title: "Prompt rail",
-    description: "Mark each of your prompts along the chat's edge: hover one to preview it, click to go to it.",
+    description:
+      "Mark each of your prompts beside the chat, when there is room for them and a mouse or trackpad: point at one to preview it, click to go to it.",
   }),
 });
 
@@ -705,67 +707,151 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   );
 }
 
-/** A tick per prompt along the chat's left edge; hovering one previews it and its reply, clicking goes to it. */
-function PromptRail(props: { marks: readonly PromptMark[]; current: string | undefined; onJump: (key: string) => void }) {
+/** With less space than this beside the transcript's text, the prompt rail shows only while pointed at or focused. */
+const RAIL_ROOM = 48;
+/** A tick's length by how far it is from the one pointed at, then the length of the rest. */
+const TICK_SCALES = [1, 0.667, 0.417];
+const TICK_SCALE_REST = 0.333;
+/** How much of an answer the card reads: more than its three lines hold. */
+const PREVIEW_SOURCE = 2000;
+/** The card keeps this far inside the chat view. */
+const CARD_INSET = 8;
+/** A jump to a turn stops this far above its start. */
+const JUMP_MARGIN = 8;
+
+/**
+ * A tick per prompt along the chat's left edge, evenly spaced and squeezed
+ * together when there are too many to fit. Pointing anywhere on the strip
+ * picks the nearest tick and previews its prompt and answer in a card level
+ * with it; clicking goes there. Each tick is also a button: one tab stop, the
+ * arrow keys, Home, and End move between them. The ticks of the turns in view
+ * are lit. The strip keeps to the space beside the transcript's text
+ * (`--room`), so it never covers what the reader is selecting.
+ */
+function PromptRail(props: {
+  marks: readonly PromptMark[];
+  /** The index of the prompt being read. */
+  current: number;
+  /** Where the previous and next buttons go. */
+  previous: number | undefined;
+  next: number | undefined;
+  /** The indices of the first and last prompts whose turns are in view. */
+  seen: { readonly first: number; readonly last: number } | undefined;
+  /** The space between the chat's left edge and the transcript's text, in pixels. */
+  room: number;
+  onJump: (key: string) => void;
+}) {
   let rail!: HTMLElement;
-  const [hovered, setHovered] = createSignal<{ index: number; top: number }>();
-  const mark = () => {
-    const h = hovered();
-    return h === undefined ? undefined : props.marks[h.index];
+  let strip!: HTMLDivElement;
+  let card: HTMLDivElement | undefined;
+  const ticks: HTMLButtonElement[] = [];
+  const count = () => props.marks.length;
+  const [hovered, setHovered] = createSignal<number>();
+  const [focused, setFocused] = createSignal<number>();
+  /** The prompt the card shows: the one pointed at, else the one focused. */
+  const active = () => {
+    const index = hovered() ?? focused();
+    return index !== undefined && index < count() ? index : undefined;
   };
-  /** How close a tick is to the hovered one, 0–1: neighbours grow a little, like a magnifier. */
-  const near = (index: number) => {
-    const h = hovered();
-    return h === undefined ? 0 : Math.max(0, 1 - Math.abs(h.index - index) / 4);
+  const shown = createMemo(() => {
+    const index = active();
+    if (index === undefined) return undefined;
+    const mark = props.marks[index]!;
+    return { index, prompt: mark.prompt, reply: markdownText(mark.reply.slice(0, PREVIEW_SOURCE)) };
+  });
+  const at = (index: number) => (count() < 2 ? 0 : (index / (count() - 1)) * 100);
+  const scale = (index: number) => {
+    const pointer = active();
+    return pointer === undefined ? TICK_SCALE_REST : (TICK_SCALES[Math.abs(index - pointer)] ?? TICK_SCALE_REST);
   };
-  const show = (index: number, tick: HTMLElement) => {
-    const frame = rail.parentElement!.getBoundingClientRect();
-    const box = tick.getBoundingClientRect();
-    // The card starts level with the tick, kept inside the view.
-    setHovered({ index, top: Math.max(8, Math.min(box.top - frame.top - 14, frame.height - 150)) });
+  /** The tick nearest the pointer's height on the strip. */
+  const fromPointer = (event: MouseEvent) => {
+    const box = strip.getBoundingClientRect();
+    const progress = box.height <= 0 ? 0 : Math.max(0, Math.min(1, (event.clientY - box.top) / box.height));
+    return Math.round(progress * (count() - 1));
   };
-  // Keep the current prompt's tick in sight when the ticks outgrow the rail.
-  createEffect(
-    on(
-      () => props.current,
-      (key) => {
-        const index = props.marks.findIndex((candidate) => candidate.key === key);
-        (rail.children[index] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
-      },
-    ),
-  );
+  const jump = (index: number | undefined) => {
+    const mark = index === undefined ? undefined : props.marks[index];
+    if (mark !== undefined) props.onJump(mark.key);
+  };
+  /** The tick the tab key reaches: the focused one, else the current prompt's. */
+  const stop = () => focused() ?? Math.min(props.current, count() - 1);
+  const onKeyDown = (event: KeyboardEvent, index: number) => {
+    // With a modifier it is an app shortcut, not a move along the rail.
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const keys: Record<string, number> = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: count() - 1 };
+    const to = keys[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    ticks[Math.max(0, Math.min(count() - 1, to))]?.focus();
+  };
+  // The card's middle is level with its tick unless that takes it out of the chat view, and it is no larger than the view leaves.
+  createEffect(() => {
+    const index = shown()?.index;
+    if (index === undefined || card === undefined) return;
+    const view = rail.getBoundingClientRect();
+    const box = strip.getBoundingClientRect();
+    card.style.maxWidth = `${Math.max(0, view.right - card.getBoundingClientRect().left - CARD_INSET)}px`;
+    card.style.maxHeight = `${Math.max(0, view.height - 2 * CARD_INSET)}px`;
+    const tick = box.top + (at(index) / 100) * box.height;
+    const top = Math.max(view.top + CARD_INSET, Math.min(tick - card.offsetHeight / 2, view.bottom - card.offsetHeight - CARD_INSET));
+    card.style.top = `${top - box.top}px`;
+  });
   return (
-    <>
-      <nav class="prompt-rail" aria-label="Prompts" ref={rail} onMouseLeave={() => setHovered(undefined)} onScroll={() => setHovered(undefined)}>
-        <Index each={props.marks}>
-          {(item, index) => (
-            <button
-              class="prompt-tick"
-              classList={{ current: item().key === props.current, hovered: hovered()?.index === index }}
-              style={{ "--near": near(index) }}
-              aria-label={`Prompt ${index + 1}: ${item().prompt}`}
-              aria-current={item().key === props.current ? "location" : undefined}
-              onMouseEnter={(event) => show(index, event.currentTarget)}
-              onFocus={(event) => show(index, event.currentTarget)}
-              onBlur={() => setHovered(undefined)}
-              onClick={() => props.onJump(item().key)}
-            >
-              <span />
-            </button>
+    <nav
+      class="prompt-rail"
+      classList={{ tucked: props.room < RAIL_ROOM }}
+      aria-label="Prompts"
+      ref={rail}
+      style={{ "--room": `${props.room}px`, "--count": count() }}
+    >
+      <div class="prompt-strip" ref={strip}>
+        <button class="prompt-step previous" aria-label="Previous prompt" disabled={props.previous === undefined} onClick={() => jump(props.previous)}>
+          <ChevronIcon />
+        </button>
+        <div
+          class="prompt-hit"
+          aria-hidden="true"
+          onMouseMove={(event) => setHovered(fromPointer(event))}
+          onMouseLeave={() => setHovered(undefined)}
+          // Going to a prompt leaves focus where the reader was typing.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => jump(fromPointer(event))}
+        />
+        <div class="prompt-ticks">
+          <Index each={props.marks}>
+            {(mark, index) => (
+              <button
+                class="prompt-tick"
+                classList={{ pointed: active() === index, seen: props.seen !== undefined && index >= props.seen.first && index <= props.seen.last }}
+                style={{ top: `${at(index)}%`, "--scale": scale(index) }}
+                ref={(element) => (ticks[index] = element)}
+                tabIndex={stop() === index ? 0 : -1}
+                aria-label={`Prompt ${index + 1} of ${count()}: ${mark().prompt}`}
+                aria-current={index === props.current ? "location" : undefined}
+                onFocus={() => setFocused(index)}
+                onBlur={() => setFocused(undefined)}
+                onKeyDown={(event) => onKeyDown(event, index)}
+                onClick={() => jump(index)}
+              />
+            )}
+          </Index>
+        </div>
+        <button class="prompt-step next" aria-label="Next prompt" disabled={props.next === undefined} onClick={() => jump(props.next)}>
+          <ChevronIcon />
+        </button>
+        <Show when={shown()}>
+          {(preview) => (
+            <div class="prompt-card" ref={card} aria-hidden="true">
+              <div class="prompt-card-prompt">{preview().prompt}</div>
+              <Show when={preview().reply}>
+                <div class="prompt-card-reply">{preview().reply}</div>
+              </Show>
+            </div>
           )}
-        </Index>
-      </nav>
-      <Show when={mark()}>
-        {(m) => (
-          <div class="prompt-card" style={{ top: `${hovered()!.top}px` }} aria-hidden="true">
-            <div class="prompt-card-prompt">{m().prompt}</div>
-            <Show when={m().reply}>
-              <div class="prompt-card-reply">{m().reply}</div>
-            </Show>
-          </div>
-        )}
-      </Show>
-    </>
+        </Show>
+      </div>
+    </nav>
   );
 }
 
@@ -775,20 +861,57 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   let content!: HTMLDivElement;
   const [stuck, setStuck] = createSignal(true);
   const marks = createMemo(() => promptMarks(props.turns()));
-  const [current, setCurrent] = createSignal<string>();
+  const [current, setCurrent] = createSignal(0);
+  const [steps, setSteps] = createSignal<{ previous: number | undefined; next: number | undefined }>(
+    { previous: undefined, next: undefined },
+    { equals: (a, b) => a.previous === b.previous && a.next === b.next },
+  );
+  const [seen, setSeen] = createSignal<{ first: number; last: number } | undefined>(undefined, {
+    equals: (a, b) => a?.first === b?.first && a?.last === b?.last,
+  });
+  /** The space beside the transcript's text, where the prompt rail goes. */
+  const [room, setRoom] = createSignal(0);
   const turnElement = (key: string) => content.querySelector<HTMLElement>(`[data-turn="${CSS.escape(key)}"]`);
-  /** The prompt being read: the last whose turn starts above the top third of the view, or the last one at the bottom. */
+  /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
+  let heading: number | undefined;
+  /**
+   * Which prompts' turns are in view (a turn runs to the next prompt, the last
+   * to the end); the one being read: the last whose turn starts above the top
+   * third of the view, or the last one at the bottom; and the nearest turns
+   * starting above and below where the view is (or is going), for stepping.
+   */
   const locate = () => {
-    // At the bottom the last prompt is the one being read, however short its turn.
-    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 2) return setCurrent(marks().at(-1)?.key);
-    const line = scroller.scrollTop + scroller.clientHeight / 3;
-    let found = marks()[0]?.key;
-    for (const mark of marks()) {
-      const element = turnElement(mark.key);
-      if (element === null || element.offsetTop > line) break;
-      found = mark.key;
+    const turns = new Map<string | undefined, number>();
+    for (const element of content.querySelectorAll<HTMLElement>("[data-turn]")) turns.set(element.dataset.turn, element.offsetTop);
+    const tops = marks().map((mark) => turns.get(mark.key));
+    const top = scroller.scrollTop;
+    const bottom = top + scroller.clientHeight;
+    const line = top + scroller.clientHeight / 3;
+    const from = heading ?? top;
+    const atEnd = from >= scroller.scrollHeight - scroller.clientHeight - 1;
+    let found: number | undefined;
+    let first: number | undefined;
+    let last: number | undefined;
+    let previous: number | undefined;
+    let next: number | undefined;
+    let end = scroller.scrollHeight;
+    for (let index = tops.length - 1; index >= 0; index--) {
+      const start = tops[index];
+      if (start === undefined) continue;
+      if (start < bottom && end > top) {
+        first = index;
+        last ??= index;
+      }
+      if (found === undefined && start <= line) found = index;
+      const target = Math.max(0, start - JUMP_MARGIN);
+      if (previous === undefined && target < from - 1) previous = index;
+      if (!atEnd && target > from + 1) next = index;
+      end = start;
     }
-    setCurrent(found);
+    // At the bottom the last prompt is the one being read, however short its turn.
+    setCurrent(scroller.scrollHeight - bottom < 2 ? Math.max(0, tops.length - 1) : (found ?? 0));
+    setSeen(first === undefined || last === undefined ? undefined : { first, last });
+    setSteps({ previous, next });
   };
   let locating = 0;
   const locateSoon = () => {
@@ -797,7 +920,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   };
   const jump = (key: string) => {
     const element = turnElement(key);
-    if (element !== null) scroller.scrollTo({ top: element.offsetTop - 8, behavior: "smooth" });
+    if (element === null) return;
+    const target = Math.min(Math.max(0, element.offsetTop - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
+    heading = Math.abs(target - scroller.scrollTop) < 2 ? undefined : target;
+    scroller.scrollTo({ top: target, behavior: "smooth" });
+    locate();
   };
   const toBottom = (smooth = false) => scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" });
   let lastTop = 0;
@@ -819,6 +946,12 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     if (nearBottom) setStuck(true);
     else if (scroller.scrollTop < lastTop) setStuck(false);
+    if (heading !== undefined) {
+      // The jump is over once the view gets there, passes it, or turns away from it.
+      const left = heading - scroller.scrollTop;
+      const before = heading - lastTop;
+      if (Math.abs(left) < 2 || Math.sign(left) !== Math.sign(before) || Math.abs(left) > Math.abs(before)) heading = undefined;
+    }
     lastTop = scroller.scrollTop;
     locateSoon();
     if (restoring !== undefined) return;
@@ -837,6 +970,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   };
 
   onMount(() => {
+    // The text moves with the view's width and with the content's (the width setting, the narrow layout's padding).
+    const measure = new ResizeObserver(() => setRoom(content.offsetLeft + parseFloat(getComputedStyle(content).paddingLeft)));
+    measure.observe(scroller);
+    measure.observe(content);
+    onCleanup(() => measure.disconnect());
     // Follow new output while the reader is at the bottom; leave them alone once they scroll up.
     const observer = new ResizeObserver(() => {
       const held = anchor;
@@ -861,6 +999,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   });
   createEffect(
     on(threads.activeId, () => {
+      heading = undefined;
       restoring = untrack(() => remembered().get());
       setStuck(restoring === undefined);
       queueMicrotask(() => (restoring === undefined ? toBottom() : restore()));
@@ -912,7 +1051,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
         </Show>
       </div>
       <Show when={props.chat.config.promptRail && marks().length > 1}>
-        <PromptRail marks={marks()} current={current()} onJump={jump} />
+        <PromptRail marks={marks()} current={current()} previous={steps().previous} next={steps().next} seen={seen()} room={room()} onJump={jump} />
       </Show>
     </div>
   );
