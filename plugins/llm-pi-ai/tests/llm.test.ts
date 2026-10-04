@@ -253,7 +253,9 @@ describe("catalog", () => {
     const anthropic = providers.find((p) => p.id === "anthropic")!;
     expect(anthropic.auth.map((a) => a.type)).toEqual(["api_key"]);
     expect(anthropic).toMatchObject({ configured: true, source: "ANTHROPIC_API_KEY" });
-    expect(providers.find((p) => p.id === "openai-codex")?.auth.map((a) => a.type)).toContain("oauth");
+    // OpenAI signs in with ChatGPT itself; the legacy Codex provider is left out unless `exclude` says otherwise.
+    expect(providers.find((p) => p.id === "openai")?.auth.map((a) => a.type)).toEqual(["api_key", "oauth"]);
+    expect(providers.some((p) => p.id === "openai-codex")).toBe(false);
     expect(providers.find((p) => p.id === "github-copilot")?.auth.map((a) => a.type)).toContain("oauth");
   });
 

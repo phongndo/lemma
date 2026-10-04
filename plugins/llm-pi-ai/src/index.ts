@@ -12,7 +12,9 @@ import { CustomProvider, customEntry, customProvider, selectProviders, withoutAn
 
 export const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to register; default all." }),
-  exclude: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to leave out." }),
+  exclude: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["openai-codex"] }).annotations({
+    description: "Built-in provider ids to leave out. Default: the legacy openai-codex, whose ChatGPT sign-in openai now offers.",
+  }),
   providers: Schema.optional(Schema.Array(CustomProvider)).annotations({
     description: "Providers on a known wire API (OpenAI-compatible servers, proxies). Replace a built-in with the same id.",
   }),

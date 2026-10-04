@@ -2,7 +2,7 @@
 
 Provides `Llm` (plugin id `llm`) by wrapping [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi). Requires `Credentials` and `Interaction`.
 
-Every pi-ai built-in provider is registered, with the logins pi-ai offers: OpenAI (API key), OpenAI Codex (signing in with a ChatGPT plan), Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI, OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the way pi does: a credential stored by `/login` wins, then the provider's environment variables or ambient config (AWS profiles, gcloud ADC).
+Every pi-ai built-in provider but the legacy OpenAI Codex is registered, with the logins pi-ai offers: OpenAI (API key, or signing in with a ChatGPT plan), Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI, OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the way pi does: a credential stored by `/login` wins, then the provider's environment variables or ambient config (AWS profiles, gcloud ADC).
 
 ## Config
 
@@ -14,7 +14,7 @@ All fields are optional.
     "llm": {
       "config": {
         "include": ["anthropic", "openai", "openrouter"], // built-ins to register; default all
-        "exclude": ["amazon-bedrock"],
+        "exclude": ["amazon-bedrock"], // default ["openai-codex"]; [] registers it too
         "liveCatalogs": true, // list the models providers serve now (see Behavior); false keeps pi-ai's lists
         "providers": [
           // Keyless local server: no apiKey.
@@ -52,6 +52,7 @@ Without an `apiKey`, a custom provider counts as configured and sends a placehol
 - `stream` runs `LlmRequestHook` around pi-ai's `streamSimple`. Interrupting the stream aborts the provider request. The plugin enforces the `StreamEvent` protocol even where pi-ai does not: it adds a `start` event when setup fails before one, emits exactly one `done`/`error`, and rebuilds the final message without pi-only fields such as diagnostics. pi's `pending` and `deferred` stop reasons become `error`. When auth is missing, the plugin returns an `error` event telling the user to run `/login <provider>`. It does not throw.
 - `login(provider, type)` runs the provider's pi-ai flow. Text, secret, and paste-the-code prompts become `Interaction.ask` (secret prompts are masked), and choices become `Interaction.select`. A prompt the flow abandons, such as a paste prompt that loses the race to the local callback server, is withdrawn by interrupting the question. Auth URLs, device codes, and progress are published as `Notice` events. A dismissed prompt fails with `Cancelled`, and other failures with `LoginFailed` and the provider's message.
 - Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy, so Anthropic accepts API keys only. The other OAuth providers stay.
+- pi-ai's `openai-codex` (ChatGPT sign-in through the Codex backend) is left out by default: pi-ai calls it legacy now that `openai` signs in with ChatGPT itself, and two OpenAI sign-ins would only ask which. Its login is not `openai`'s (another OAuth client, a token for `api.openai.com`), so moving over means signing in again.
 - Built-in providers' model lists are live (`liveCatalogs`, default on). On refresh, at startup and after a login (which waits for it before announcing itself, so clients listing models then see all of them), [models.dev](https://models.dev) decides which models are current: pi-ai's lists are generated from it, so a model it no longer lists has been retired and is hidden, even where the provider's own `/models` still names it. Current models pi-ai does not know are added: the ones the provider's OpenAI-style `/models` lists (asked with its key, then without, as OpenCode's refuses keys), or all of models.dev's when it has no such list. An added model is served like a known model on the same wire API; its request settings come from the same model at another built-in provider, else the known model with the nearest id, and its limits, prices, and inputs from models.dev. Without models.dev a provider keeps pi-ai's list. Radius keeps its own dynamic catalog. models.dev is read at most once an hour; catalogs are in memory only.
 - On disposal the plugin calls pi-ai's `cleanupSessionResources()`, releasing pooled Codex websockets so the process can exit. This cleanup is process-global in pi-ai.
 

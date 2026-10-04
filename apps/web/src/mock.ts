@@ -241,8 +241,8 @@ export const createMockHost = (): Host => {
     ["mistral", "Mistral", [key]],
     ["moonshotai", "Moonshot AI", [key]],
     ["nvidia", "NVIDIA", [key]],
-    ["openai", "OpenAI", [key]],
-    ["openai-codex", "OpenAI Codex", [oauth("OpenAI (ChatGPT Plus/Pro)")]],
+    // As in the real llm plugin: OpenAI signs in with ChatGPT itself, and the legacy OpenAI Codex is left out.
+    ["openai", "OpenAI", [key, oauth("Sign in with ChatGPT")]],
     ["opencode", "OpenCode Zen", [key]],
     ["opencode-go", "OpenCode Go", [key]],
     ["openrouter", "OpenRouter", [oauth("OpenRouter OAuth"), key]],
