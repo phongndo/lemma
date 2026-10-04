@@ -7,7 +7,7 @@ import { AlertIcon, CheckIcon, CopyIcon } from "../ui/parts.tsx";
 import { copyText } from "../lib/clipboard.ts";
 import styles from "./connection.css?inline";
 
-function ConnectionBadge(props: { status: ConnectionStatus; now: Accessor<number> }) {
+function ConnectionBadge(props: { status: ConnectionStatus; now: Accessor<number>; compact?: boolean }) {
   const now = props.now;
   const label = () => {
     const status = props.status;
@@ -25,9 +25,14 @@ function ConnectionBadge(props: { status: ConnectionStatus; now: Accessor<number
     }
   };
   return (
-    <span class={`connection connection-${props.status.state}`} role="status" data-tip={props.status.error}>
+    <span
+      class={`connection connection-${props.status.state}${props.compact ? " connection-compact" : ""}`}
+      role="status"
+      data-tip={props.compact ? (props.status.error === undefined ? label() : `${label()}: ${props.status.error}`) : props.status.error}
+    >
       <span class="connection-dot" aria-hidden="true" />
-      {label()}
+      {/* Compact, the label is hidden rather than left out: a live region announces its text, not an aria-label. */}
+      <span classList={{ "connection-hidden": props.compact }}>{label()}</span>
     </span>
   );
 }
@@ -68,7 +73,7 @@ function ConnectionNotice(props: { status: Accessor<ConnectionStatus>; now: Acce
   );
 }
 
-/** How the connection to the host is doing: a badge in the sidebar, a notice above the composer while it is down. */
+/** How the connection to the host is doing: a dot in the sidebar (its label is the tooltip), a notice above the composer while it is down. */
 export default defineUiPlugin({
   id: "connection",
   styles,
@@ -84,7 +89,7 @@ export default defineUiPlugin({
         component: () => (
           <>
             <span class="spacer" />
-            <ConnectionBadge status={client.status()} now={now} />
+            <ConnectionBadge status={client.status()} now={now} compact />
           </>
         ),
       }),

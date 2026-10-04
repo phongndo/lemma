@@ -27,6 +27,7 @@ import palette from "./palette.tsx";
 import pluginsPage from "./plugins-page.tsx";
 import projectsPage from "./projects-page.tsx";
 import providers from "./providers.tsx";
+import reload from "./reload.tsx";
 import router from "./router.ts";
 import threadView from "./thread-view.tsx";
 import threads from "./threads.ts";
@@ -73,6 +74,7 @@ export const bundled: readonly Plugin[] = [
   modelPicker,
   workspaceBar,
   connection,
+  reload,
   palette,
   settings,
   providers,

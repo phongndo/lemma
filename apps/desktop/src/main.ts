@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
@@ -24,6 +24,7 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 const REMOTE_TIMEOUT_MS = 10_000;
 
 let host: UtilityProcess | undefined;
+let ownsHost = false;
 /** The host serving the page, once known. */
 let served: { readonly url: string; readonly token: string } | undefined;
 /** A deep link that arrived before there was a window to show it in. */
@@ -78,6 +79,7 @@ const untilReached = async (problem: () => Promise<string | undefined>, message:
 };
 
 const startHost = async (): Promise<Discovery> => {
+  ownsHost = true;
   const child = utilityProcess.fork(hostMain, ["--no-open"], {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },
@@ -103,21 +105,71 @@ const startHost = async (): Promise<Discovery> => {
   throw new Error(`The host did not start listening within ${STARTUP_TIMEOUT_MS / 1000}s.`);
 };
 
-const stopHost = () =>
-  new Promise<void>((resolve) => {
-    const child = host;
-    if (child === undefined) return resolve();
-    const timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
+/** Each host's stop, once begun: a second SIGTERM would end its graceful shutdown partway. */
+const exits = new WeakMap<UtilityProcess, Promise<void>>();
+
+/** Resolves once the host exits, or after `SHUTDOWN_TIMEOUT_MS`; a call while it stops waits again without signalling again. */
+const stopHost = () => {
+  const child = host;
+  if (child === undefined) return Promise.resolve();
+  let exited = exits.get(child);
+  if (exited === undefined) {
+    exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    exits.set(child, exited);
     // SIGTERM: the host shuts down its plugins and removes transport.json.
     child.kill();
-  });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([exited, new Promise<void>((resolve) => (timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)))]).finally(() => clearTimeout(timer));
+};
+
+/** Set once the app starts quitting: nothing starts a host after that. */
+let quitting = false;
+
+/** Each window again at its address, from the host now serving; one that fails does not keep the rest from it. */
+const reloadWindows = async () => {
+  const failed: string[] = [];
+  await Promise.all(
+    BrowserWindow.getAllWindows().map(async (page) => {
+      if (page.isDestroyed()) return;
+      let path = "/";
+      try {
+        const current = new URL(page.webContents.getURL());
+        path = `${current.pathname}${current.search}${current.hash}`;
+      } catch {
+        // Nothing loaded yet: the app's start.
+      }
+      await page.loadURL(pageAt(path)!).catch((error: unknown) => {
+        // Closed meanwhile, or the page's own navigation took over.
+        if (page.isDestroyed() || (error as { code?: string }).code === "ERR_ABORTED") return;
+        failed.push(failure(error));
+      });
+    }),
+  );
+  if (failed.length > 0) throw new Error(`Could not reload ${failed.length === 1 ? "a window" : `${failed.length} windows`}: ${failed.join("; ")}`);
+};
+
+// The `reload` web plugin's restart of a host this app started (README.md).
+let reloading = false;
+ipcMain.handle("lemma:reload", async (event) => {
+  const expected = pageAt();
+  if (!ownsHost || event.senderFrame !== event.sender.mainFrame || expected === undefined || new URL(event.sender.getURL()).origin !== new URL(expected).origin)
+    throw new Error("Only the window of a host this app started can restart it.");
+  if (reloading || quitting) return;
+  reloading = true;
+  try {
+    await stopHost();
+    if (quitting) return;
+    // Never start a second writer if the old host has not actually exited.
+    if (host !== undefined) throw new Error("The host has not stopped yet. Try reloading again once it exits.");
+    served = await startHost();
+    await reloadWindows();
+  } finally {
+    reloading = false;
+  }
+});
 
 const openWindow = (url: string) => {
-  const origin = new URL(url).origin;
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -130,7 +182,13 @@ const openWindow = (url: string) => {
     titleBarStyle: "hidden",
     titleBarOverlay: true,
     trafficLightPosition: { x: 17, y: 17 },
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      preload: fileURLToPath(new URL("preload.cjs", import.meta.url)),
+      additionalArguments: ownsHost ? ["--lemma-owns-host"] : [],
+    },
   });
   window.once("ready-to-show", () => window.show());
   // Links leave for the system browser, as they would leave the app's tab.
@@ -142,7 +200,8 @@ const openWindow = (url: string) => {
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event, target) => {
-    if (new URL(target).origin === origin) return;
+    // The current page's origin: a restarted host may listen on another port.
+    if (new URL(target).origin === new URL(pageAt() ?? url).origin) return;
     event.preventDefault();
     external(target);
   });
@@ -245,10 +304,10 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
 
-  let stopping = false;
   app.on("before-quit", (event) => {
-    if (host === undefined || stopping) return;
-    stopping = true;
+    const first = !quitting;
+    quitting = true;
+    if (!first || host === undefined) return;
     event.preventDefault();
     void stopHost().then(() => app.quit());
   });

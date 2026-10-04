@@ -12,6 +12,22 @@
   overflow-wrap: anywhere;
 }
 
+/* Only the dot shows; its label is the tooltip, so the padding gives the pointer something to rest on. */
+.connection-compact {
+  padding: 8px;
+  cursor: default;
+}
+
+/* Read by screen readers, not shown. */
+.connection-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .connection {
   display: inline-flex;
   align-items: center;

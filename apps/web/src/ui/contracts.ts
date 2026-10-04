@@ -75,6 +75,10 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
  *   the column under the controls (the sidebar, or the main column when the
  *   sidebar is hidden or a drawer), the room its bar leaves at the left; a
  *   full-screen layer leaves a 48px strip over its own left column.
+ * - `window.lemmaDesktop`, in a desktop window, is its app's bridge
+ *   (`apps/desktop/src/preload.cjs`): `ownsHost` when the app started the
+ *   host, and `reload()` for that case, which restarts it (see the desktop
+ *   README). The `reload` plugin uses it; a replacement can too.
  */
 
 // ------------------------------------------------------------------ slots

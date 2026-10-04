@@ -1,0 +1,4 @@
+/* At the footer's right end on its own; beside the connection's dot, that dot's spacer has already taken the room. */
+.reload-button {
+  margin-left: auto;
+}

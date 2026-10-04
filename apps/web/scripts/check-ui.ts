@@ -843,8 +843,28 @@ try {
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
   await fresh.waitForSelector("textarea");
   assert.equal(await fresh.locator(".composer-callout").count(), 0, "the no-provider notice stayed after connecting one");
+  const connection = fresh.locator(".sidebar-foot .connection");
+  assert.ok((await connection.boundingBox())!.width < 30, "the footer connection should be a dot, not text");
+  assert.equal((await connection.textContent())?.trim(), "Connected", "the dot's live region must carry its status as text, which is announced");
+  // Reload is its own plugin: an action (listed in the palette, keys bindable) that its footer button, right of the dot, runs.
+  assert.ok(
+    await fresh.evaluate(async () => {
+      const { Actions } = await import("/src/ui/contracts.ts" as string);
+      return (window as any).lemma.slots().get(Actions, "reload.app") !== undefined;
+    }),
+    "reload is not an action",
+  );
+  const [dot, reloadButton] = await Promise.all([connection.boundingBox(), fresh.getByRole("button", { name: "Reload Lemma", exact: true }).boundingBox()]);
+  assert.ok(dot!.x < reloadButton!.x, "the connection's dot should sit left of the reload button");
+  await Promise.all([fresh.waitForEvent("load"), fresh.getByRole("button", { name: "Reload Lemma", exact: true }).click()]);
+  await fresh.waitForSelector(".sidebar-foot .connection-connected");
+  // What the host's reload changed is reported on the page it reloads to.
+  await fresh
+    .getByText(/^Reloaded: /)
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("a reload did not report what it changed"));
   await fresh.close();
-  expectNoErrors("connecting a first provider");
+  expectNoErrors("connecting a first provider and reloading the UI");
 
   console.log(
     `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
