@@ -1,12 +1,13 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import type { PluginStatus, ReloadResult } from "@lemma/contracts";
+import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "../model/format.ts";
 import {
   PLUGIN_FILTERS,
   capabilityName,
   dependentsOf,
+  describeReload,
   describeState,
   matchPlugins,
   pluginText,
@@ -54,17 +55,6 @@ const describeSource = (plugin: PluginStatus, kind: PluginKind, home: string | u
     case "project":
       return `.lemma/${dir} in this project${plugin.shadows ? ", in place of the bundled plugin with this id" : ""}`;
   }
-};
-
-/** `started x; restarted y; stopped z`, leaving out `except` (a plugin the message already names). */
-const describeReload = (result: ReloadResult, except?: string): string => {
-  const list = (ids: readonly string[]) => ids.filter((id) => id !== except);
-  const parts = [
-    list(result.started).length > 0 ? `started ${list(result.started).join(", ")}` : "",
-    list(result.restarted).length > 0 ? `restarted ${list(result.restarted).join(", ")}` : "",
-    list(result.stopped).length > 0 ? `stopped ${list(result.stopped).join(", ")}` : "",
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join("; ") : "nothing changed";
 };
 
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });

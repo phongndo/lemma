@@ -1,4 +1,4 @@
-import type { PluginStatus } from "@lemma/contracts";
+import type { PluginStatus, ReloadResult } from "@lemma/contracts";
 
 type Source = PluginStatus["source"];
 
@@ -166,3 +166,19 @@ export const usersOf = (plugins: readonly PluginStatus[], key: string): string[]
 /** The plugin providing `key`: the enabled one when several do. */
 export const providerOf = (plugins: readonly PluginStatus[], key: string): PluginStatus | undefined =>
   plugins.find((plugin) => plugin.enabled && plugin.provides.includes(key)) ?? plugins.find((plugin) => plugin.provides.includes(key));
+
+/** `started x; restarted y; stopped z; failed w`, leaving out `except` (a plugin the message already names). */
+export const describeReload = (result: ReloadResult, except?: string): string => {
+  const list = (ids: readonly string[] | undefined) => (ids ?? []).filter((id) => id !== except);
+  const parts = (
+    [
+      ["started", result.started],
+      ["restarted", result.restarted],
+      ["stopped", result.stopped],
+      ["failed", result.failed],
+    ] as const
+  )
+    .map(([verb, ids]) => (list(ids).length > 0 ? `${verb} ${list(ids).join(", ")}` : ""))
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "nothing changed";
+};

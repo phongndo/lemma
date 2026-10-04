@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginStatus } from "@lemma/contracts";
 import {
   dependentsOf,
+  describeReload,
   describeState,
   matchPlugins,
   pluginGroups,
@@ -129,5 +130,12 @@ describe("providerOf and usersOf", () => {
   it("find who provides a capability and who needs it", () => {
     expect(providerOf(plugins, "lemma/Tools")?.id).toBe("tools");
     expect(usersOf(plugins, "lemma/Tools")).toEqual(["bash", "edit", "agent", "notes"]);
+  });
+});
+
+describe("describeReload", () => {
+  it("names what changed, failures included, leaving out the plugin the message already names", () => {
+    expect(describeReload({ started: ["a"], restarted: ["b", "c"], stopped: [], failed: ["d"] }, "c")).toBe("started a; restarted b; failed d");
+    expect(describeReload({ started: [], restarted: [], stopped: [] })).toBe("nothing changed");
   });
 });

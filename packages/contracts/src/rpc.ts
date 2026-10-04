@@ -52,6 +52,8 @@ export const ReloadResult = Schema.Struct({
   started: Schema.Array(Schema.String),
   restarted: Schema.Array(Schema.String),
   stopped: Schema.Array(Schema.String),
+  /** Plugins the change left failed or halted (`ReloadReport.failed`). */
+  failed: Schema.optional(Schema.Array(Schema.String)),
   /** Applied after the reply, because it restarts the transport; see `ConfigureReport`. */
   deferred: Schema.optional(Schema.Boolean),
 });

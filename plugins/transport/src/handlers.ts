@@ -129,5 +129,6 @@ const toReloadResult = (report: ConfigureReport): ReloadResult => ({
   started: report.started,
   restarted: report.restarted,
   stopped: report.stopped,
+  ...(report.failed.length > 0 ? { failed: report.failed } : {}),
   ...(report.deferred ? { deferred: true } : {}),
 });

@@ -187,6 +187,7 @@ export const formatReload = (report: {
   readonly started: readonly string[];
   readonly restarted: readonly string[];
   readonly stopped: readonly string[];
+  readonly failed?: readonly string[] | undefined;
   readonly deferred?: boolean | undefined;
 }): string => {
   if (report.deferred) return "applying: the host restarts the plugins that use it, the transport among them, so clients reconnect";
@@ -194,6 +195,7 @@ export const formatReload = (report: {
     report.started.length ? `started ${report.started.join(", ")}` : "",
     report.restarted.length ? `restarted ${report.restarted.join(", ")}` : "",
     report.stopped.length ? `stopped ${report.stopped.join(", ")}` : "",
+    report.failed?.length ? `failed ${report.failed.join(", ")}` : "",
   ].filter(Boolean);
   return parts.length ? parts.join("; ") : "nothing changed";
 };
