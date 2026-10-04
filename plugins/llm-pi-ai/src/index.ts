@@ -1,13 +1,25 @@
-import { Effect, Fiber, Layer, Queue, Schema, Stream } from "effect";
+import { Effect, Fiber, Layer, Queue, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, PluginContext, definePlugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, InteractionError, Llm, LlmError, LlmRequestHook, Notice, Paths, parseModelRef } from "@lemma/contracts";
+import {
+  Credentials,
+  HostControl,
+  Interaction,
+  InteractionError,
+  Llm,
+  LlmError,
+  LlmRequestHook,
+  ModelsChanged,
+  Notice,
+  Paths,
+  parseModelRef,
+} from "@lemma/contracts";
 import type { AuthType, LlmRequest, NoticePayload, ProviderInfo, StreamEvent } from "@lemma/contracts";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
-import { networkSources, withLiveCatalog } from "./catalog.ts";
+import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
@@ -91,7 +103,13 @@ export function makeLlmPlugin(options: Options = {}) {
           // A missing model may be described already by another built-in provider's catalog.
           const siblings = () => builtins.flatMap((provider) => provider.getModels());
           const sources = networkSources(options.fetch ?? fetch, siblings);
-          for (const provider of builtins) models.setProvider(config.liveCatalogs ? withLiveCatalog(provider, sources) : provider);
+          const plan = planSource(options.fetch ?? fetch);
+          // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
+          const live = (provider: Provider) => {
+            const caught = withLiveCatalog(provider, sources);
+            return provider.id === "openai" ? withPlanCatalog(caught, plan) : caught;
+          };
+          for (const provider of builtins) models.setProvider(config.liveCatalogs ? live(provider) : provider);
           for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
           const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
           /**
@@ -140,12 +158,25 @@ export function makeLlmPlugin(options: Options = {}) {
             }),
           );
 
-          /** Updates provider catalogs (live catalogs, and Radius's own); failures keep the previous list. */
+          const listed = () =>
+            models
+              .getProviders()
+              .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
+              .join("\n");
+          /**
+           * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
+           * Clients hear when the models changed, and list them again.
+           */
           const refresh = (providers?: readonly string[]) =>
-            Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) })).pipe(
-              Effect.tap(({ errors }) => Effect.forEach(errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`))),
-            );
-          yield* plugin.background("refresh models", refresh());
+            Effect.gen(function* () {
+              const before = listed();
+              const result = yield* Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) }));
+              yield* Effect.forEach(result.errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`));
+              if (listed() !== before) yield* events.publish(ModelsChanged, {});
+              return result;
+            });
+          // Now and every hour, so models a provider adds or retires show without a restart.
+          yield* plugin.background("refresh models", Effect.repeat(refresh().pipe(Effect.ignore), Schedule.spaced("1 hour")));
 
           const unknownModel = (ref: string) => new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}. Model refs are <provider>/<model>.` });
 
@@ -280,7 +311,8 @@ export function makeLlmPlugin(options: Options = {}) {
                     message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
                     cause: error,
                   }),
-              }),
+                // Signed out of a plan, the provider's own list returns.
+              }).pipe(Effect.tap(() => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore))),
 
             addCustom: (spec) =>
               Effect.gen(function* () {

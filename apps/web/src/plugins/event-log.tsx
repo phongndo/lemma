@@ -73,6 +73,8 @@ const describe = (line: Line): string => {
       return event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ");
     case "commands-changed":
       return event.commands.map((command) => command.id).join(" ");
+    case "models-changed":
+      return "list them again";
     case "ui-changed":
       return `${Object.keys(event.ui.plugins).length} rows · files ${event.ui.files.map((file) => file.name).join(" ") || "none"}`;
   }

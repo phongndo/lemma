@@ -2,13 +2,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Chunk, Effect, Layer, Runtime, Schema, Stream } from "effect";
+import { Chunk, Effect, Fiber, Layer, Runtime, Schema, Stream } from "effect";
 import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { PluginContext, definePlugin } from "@lemma/core";
-import { InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, StreamEvent } from "@lemma/contracts";
+import { Events, PluginContext, definePlugin } from "@lemma/core";
+import { InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
@@ -276,6 +276,45 @@ describe("catalog", () => {
       },
     );
     expect(ids).toEqual(["anthropic"]);
+  });
+});
+
+describe("model catalogs", () => {
+  it("tells clients when a refresh changed the models, and not when it did not", async () => {
+    // A provider whose list grows on every refresh after the first (at startup).
+    let refreshes = 0;
+    const models = [{ id: "a" }];
+    const growing = createProvider({
+      id: "grow",
+      name: "Grow",
+      auth: {},
+      models: [],
+      api: openAICompletionsApi(),
+    });
+    const provider: Provider = {
+      ...growing,
+      getModels: () => models.map((entry) => ({ ...fauxProvider({ provider: "grow" }).provider.getModels()[0]!, ...entry, provider: "grow" })),
+      refreshModels: async (context) => {
+        if (refreshes++ === 0) return;
+        await context.publish({ update: () => models.push({ id: `m${refreshes}` }) });
+      },
+    };
+    const { plugins } = setup({ providers: () => [provider] });
+    const changes = await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const events = yield* Events;
+        const llm = yield* Llm;
+        yield* Effect.sleep("50 millis");
+        const heard = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(ModelsChanged), 1)));
+        yield* Effect.yieldNow();
+        // Logging out refreshes the provider's catalog, which grows this time.
+        yield* llm.logout("grow");
+        yield* Fiber.join(heard);
+        return (yield* llm.models()).map((model) => model.ref);
+      }),
+    );
+    expect(changes).toEqual(["grow/a", "grow/m2"]);
   });
 });
 

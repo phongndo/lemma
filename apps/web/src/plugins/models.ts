@@ -48,8 +48,9 @@ export default defineUiPlugin({
     plugin.onCleanup(client.onConnect(() => void refresh().catch((error) => notify.report(error, "Sync failed"))));
     plugin.onCleanup(
       client.onEvent((event) => {
-        // A login may finish after this page reloaded and lost its own call; provider plugins may come or go.
-        if ((event.type === "notice" && event.notice.source === "llm") || event.type === "plugins-changed") quietly();
+        // A login may finish after this page reloaded and lost its own call; provider plugins may come or go; a
+        // provider's catalog refreshes (a ChatGPT plan's list, say).
+        if ((event.type === "notice" && event.notice.source === "llm") || event.type === "plugins-changed" || event.type === "models-changed") quietly();
       }),
     );
 

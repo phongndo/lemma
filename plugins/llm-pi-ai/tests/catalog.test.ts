@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Api, Model, Provider, RefreshModelsContext } from "@earendil-works/pi-ai";
-import { discoveredModels, networkSources, withLiveCatalog } from "../src/catalog.ts";
-import type { CatalogSources, DevProvider } from "../src/catalog.ts";
+import { discoveredModels, networkSources, planModels, planSource, withLiveCatalog, withPlanCatalog } from "../src/catalog.ts";
+import type { CatalogSources, DevProvider, PlanModel } from "../src/catalog.ts";
 
 const model = (id: string, extra: Record<string, unknown> = {}): Model<Api> =>
   ({
@@ -157,5 +157,92 @@ describe("networkSources", () => {
     expect(await sources.dev(signal)).toEqual({ go: { models: {} } });
     await sources.dev(signal);
     expect(reads).toBe(2);
+  });
+});
+
+describe("ChatGPT plans", () => {
+  const api = [
+    model("gpt-6-sol", { provider: "openai", api: "openai-responses", reasoning: true, input: ["text", "image"] }),
+    model("gpt-6-astra", { provider: "openai", api: "openai-responses", reasoning: true }),
+    model("o1", { provider: "openai", api: "openai-responses" }),
+    model("gpt-4o", { provider: "openai", api: "openai-responses" }),
+  ];
+  // As `GET /v1/models?client_version=…` answers a ChatGPT sign-in.
+  const listed: PlanModel[] = [
+    {
+      slug: "gpt-6.1-sol",
+      display_name: "GPT-6.1-Sol",
+      visibility: "list",
+      context_window: 400_000,
+      input_modalities: ["text", "image"],
+      supported_reasoning_levels: [{}],
+    },
+    { slug: "gpt-6-astra", display_name: "GPT-6-Astra", visibility: "list" },
+    { slug: "gpt-reserve", visibility: "hide" },
+    { slug: "gpt-6-sol", visibility: "list" },
+    { slug: "gpt-app-only", visibility: "list", supported_in_api: false },
+  ];
+  const provider = { id: "openai", name: "OpenAI", auth: {}, getModels: () => api } as unknown as Provider;
+  const context = (credential?: RefreshModelsContext["credential"]): RefreshModelsContext => ({
+    ...(credential === undefined ? {} : { credential }),
+    allowNetwork: true,
+    signal: new AbortController().signal,
+    publish: async ({ update }) => {
+      update?.();
+      return true;
+    },
+  });
+  const oauth = { type: "oauth", access: "chatgpt-token", refresh: "r", expires: Date.now() + 60_000 } as RefreshModelsContext["credential"];
+
+  it("offers what the plan lists for its pickers, in its order, pi-ai's entries where it has them", () => {
+    const models = planModels(api, listed);
+    expect(models.map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+    expect(models[1]).toBe(api[1]);
+    // A model pi-ai does not know is served like the nearest known one, described by the list.
+    expect(models[0]).toMatchObject({
+      name: "GPT-6.1-Sol",
+      api: "openai-responses",
+      provider: "openai",
+      contextWindow: 400_000,
+      input: ["text", "image"],
+      reasoning: true,
+    });
+  });
+
+  it("lists the plan's models signed in with ChatGPT, and the API's otherwise", async () => {
+    const asked: string[] = [];
+    const planned = withPlanCatalog(provider, {
+      plan: async (token) => {
+        asked.push(token);
+        return listed;
+      },
+    });
+    await planned.refreshModels!(context(oauth));
+    expect(asked).toEqual(["chatgpt-token"]);
+    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+    // Signed out, or with an API key: the API's list again.
+    await planned.refreshModels!(context({ type: "api_key", key: "sk-x" }));
+    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "o1", "gpt-4o"]);
+  });
+
+  it("keeps the plan's list it had when the plan cannot be read", async () => {
+    let reachable = true;
+    const planned = withPlanCatalog(provider, { plan: async () => (reachable ? listed : undefined) });
+    await planned.refreshModels!(context(oauth));
+    reachable = false;
+    await planned.refreshModels!(context(oauth));
+    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+  });
+
+  it("asks OpenAI as a client newer than any, with the sign-in's token", async () => {
+    const requests: { url: string; authorization: string | null }[] = [];
+    const source = planSource(async (input, init) => {
+      requests.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      return new Response(JSON.stringify({ models: [{ slug: "gpt-6-sol", visibility: "list" }, { visibility: "list" }] }));
+    });
+    expect(await source.plan("token", new AbortController().signal)).toEqual([{ slug: "gpt-6-sol", visibility: "list" }]);
+    expect(requests).toEqual([{ url: "https://api.openai.com/v1/models?client_version=999.0.0", authorization: "Bearer token" }]);
+    const refused = planSource(async () => new Response("no", { status: 401 }));
+    expect(await refused.plan("token", new AbortController().signal)).toBeUndefined();
   });
 });

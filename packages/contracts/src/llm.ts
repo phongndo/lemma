@@ -1,6 +1,6 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect, Stream } from "effect";
-import { Hook } from "@lemma/core";
+import { Event, Hook } from "@lemma/core";
 
 // Message shapes follow pi-ai's provider-neutral format so opaque provider
 // state (reasoning signatures, response ids) survives a round trip through the
@@ -242,6 +242,9 @@ export class LlmError extends Data.TaggedError("LlmError")<{
 
 /** Wraps every model request: logging, retries, routing, and gates can be plugins. The terminal is the provider. */
 export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request");
+
+/** The models `Llm.models` lists changed (a provider's catalog refreshed, a login or logout); clients list them again. */
+export const ModelsChanged = Event.make<Record<string, never>>("lemma/llm.models.changed");
 
 export class Llm extends Context.Tag("lemma/Llm")<
   Llm,

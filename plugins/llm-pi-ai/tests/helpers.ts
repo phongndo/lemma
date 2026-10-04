@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, definePlugin, makeCore } from "@lemma/core";
+import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Credentials, HostControl, Interaction, Notice, Paths } from "@lemma/contracts";
 import type { ConfigScope, Credential, InteractionError, Llm, NoticePayload, PluginChange } from "@lemma/contracts";
@@ -107,7 +108,7 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
 }
 
 /** Runs `body` against `plugins`, adding a `fakeHost` when none of them provides `HostControl`. */
-export const runWith = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A, E, Llm>, configs: Record<string, unknown> = {}): Promise<A> =>
+export const runWith = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A, E, Llm | Events>, configs: Record<string, unknown> = {}): Promise<A> =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

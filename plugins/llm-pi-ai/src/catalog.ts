@@ -195,3 +195,96 @@ export function networkSources(fetchImpl: typeof fetch, siblings: () => readonly
     siblings,
   };
 }
+
+/** The parts of a model this reads from the list `GET /v1/models` answers a ChatGPT sign-in with. */
+export interface PlanModel {
+  readonly slug: string;
+  readonly display_name?: string;
+  /** `list` for the models the Codex CLI and app offer; `hide` for the ones they keep out of their pickers. */
+  readonly visibility?: string;
+  readonly supported_in_api?: boolean;
+  readonly context_window?: number;
+  readonly input_modalities?: readonly string[];
+  readonly supported_reasoning_levels?: readonly unknown[];
+}
+
+/**
+ * A ChatGPT plan's models: the ones its list offers, in its order, as the Codex CLI and app show them. A model pi-ai
+ * knows keeps pi-ai's entry, which carries request settings tuned per model; one it does not is served like the known
+ * model with the nearest id, described by the list.
+ */
+export function planModels(known: readonly Model<Api>[], listed: readonly PlanModel[]): Model<Api>[] {
+  if (known.length === 0) return [];
+  return listed
+    .filter((entry) => entry.visibility === "list" && entry.supported_in_api !== false)
+    .map((entry) => {
+      const own = known.find((model) => model.id === entry.slug);
+      if (own !== undefined) return own;
+      const donor = known.reduce((best, model) => (commonPrefix(model.id, entry.slug) > commonPrefix(best.id, entry.slug) ? model : best), known[0]!);
+      const input = entry.input_modalities;
+      const levels = entry.supported_reasoning_levels;
+      return {
+        ...donor,
+        id: entry.slug,
+        name: entry.display_name ?? entry.slug,
+        input: input === undefined ? donor.input : input.includes("image") ? ["text", "image"] : ["text"],
+        contextWindow: entry.context_window ?? donor.contextWindow,
+        reasoning: levels === undefined ? donor.reasoning : levels.length > 0,
+      } as Model<Api>;
+    });
+}
+
+export interface PlanSource {
+  /** What a ChatGPT sign-in's plan offers, asked with its access token; undefined when it cannot be read. */
+  readonly plan: (accessToken: string, signal: AbortSignal) => Promise<readonly PlanModel[] | undefined>;
+}
+
+/**
+ * OpenAI's provider signed in with ChatGPT lists the plan's models (`planModels`) rather than the API's, most of
+ * which a plan does not serve (o1, gpt-4o). With an API key, or signed out, it is `provider` as it was.
+ */
+export function withPlanCatalog(provider: Provider, source: PlanSource): Provider {
+  let plan: readonly Model<Api>[] | undefined;
+  return {
+    ...provider,
+    getModels: () => (plan === undefined ? provider.getModels() : [...plan]),
+    refreshModels: async (context: RefreshModelsContext) => {
+      const credential = context.credential;
+      if (credential?.type !== "oauth") {
+        if (plan !== undefined) await context.publish({ update: () => (plan = undefined) });
+        return provider.refreshModels?.(context);
+      }
+      if (!context.allowNetwork || context.signal.aborted) return;
+      const listed = await source.plan(credential.access, context.signal);
+      // Out of reach: the list it had stands.
+      if (listed === undefined || context.signal.aborted) return;
+      const next = planModels(provider.getModels(), listed);
+      await context.publish({ update: () => (plan = next) });
+    },
+  };
+}
+
+/**
+ * The list leaves out models newer than the Codex client it is told of (Codex's versions, 0.x). Lemma speaks the
+ * Responses API, which serves them all, so it asks as a client newer than any.
+ */
+const PLAN_CLIENT_VERSION = "999.0.0";
+
+/** The plan's list from OpenAI over the network. */
+export function planSource(fetchImpl: typeof fetch): PlanSource {
+  return {
+    plan: async (accessToken, signal) => {
+      try {
+        const response = await fetchImpl(`https://api.openai.com/v1/models?client_version=${PLAN_CLIENT_VERSION}`, {
+          headers: { authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+        });
+        if (!response.ok) return undefined;
+        const body = (await response.json()) as { models?: readonly PlanModel[] };
+        return Array.isArray(body.models) ? body.models.filter((entry) => typeof entry.slug === "string") : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}

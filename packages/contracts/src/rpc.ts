@@ -93,6 +93,7 @@ export const HostEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("notice"), notice: NoticePayload }),
   Schema.Struct({ type: Schema.Literal("plugins-changed"), plugins: Schema.Array(PluginStatus) }),
   Schema.Struct({ type: Schema.Literal("commands-changed"), commands: Schema.Array(CommandInfo) }),
+  Schema.Struct({ type: Schema.Literal("models-changed") }),
   Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
 );
 export type HostEvent = typeof HostEvent.Type;
