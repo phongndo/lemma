@@ -3,11 +3,12 @@ import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, PluginContext, definePlugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, InteractionError, Llm, LlmError, LlmRequestHook, Notice, parseModelRef } from "@lemma/contracts";
+import { Credentials, HostControl, Interaction, InteractionError, Llm, LlmError, LlmRequestHook, Notice, Paths, parseModelRef } from "@lemma/contracts";
 import type { AuthType, LlmRequest, NoticePayload, ProviderInfo, StreamEvent } from "@lemma/contracts";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, withLiveCatalog } from "./catalog.ts";
+import { deviceId } from "./device.ts";
 import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
 export const Config = Schema.Struct({
@@ -68,7 +69,7 @@ export function makeLlmPlugin(options: Options = {}) {
     id: "llm",
     config: Config,
     provides: [Llm],
-    requires: [Credentials, Interaction, HostControl],
+    requires: [Credentials, Interaction, HostControl, Paths],
     layer: (config: Config) =>
       Layer.scoped(
         Llm,
@@ -79,6 +80,7 @@ export function makeLlmPlugin(options: Options = {}) {
           const credentials = yield* Credentials;
           const interaction = yield* Interaction;
           const host = yield* HostControl;
+          const { home } = yield* Paths;
           const run = runner(yield* Effect.runtime<never>());
 
           const models = createModels({
@@ -259,6 +261,7 @@ export function makeLlmPlugin(options: Options = {}) {
                       authInteraction(interaction, run, signal, (event) => {
                         Queue.unsafeOffer(notices, toNotice(event, provider.name));
                       }),
+                      { getDeviceId: () => deviceId(home) },
                     ),
                   catch: (error) => loginError(error, provider),
                 }).pipe(Effect.ensuring(flush));

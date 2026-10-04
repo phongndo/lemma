@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Chunk, Effect, Layer, Runtime, Schema, Stream } from "effect";
 import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
@@ -7,6 +10,7 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { PluginContext, definePlugin } from "@lemma/core";
 import { InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, StreamEvent } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
+import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
 import { envContext, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";
 
@@ -333,13 +337,16 @@ describe("login", () => {
         : Effect.succeed("unused"),
     );
     const recorder = noticeRecorder();
+    const devices: (string | undefined)[] = [];
+    const host = fakeHost();
     const oauthProvider = createProvider({
       id: "sso",
       name: "SSO",
       auth: {
         oauth: {
           name: "SSO account",
-          login: async (flow) => {
+          login: async (flow, options) => {
+            devices.push(options?.getDeviceId?.(), options?.getDeviceId?.());
             flow.notify({ type: "auth_url", url: "https://sso.test/authorize" });
             flow.notify({ type: "device_code", userCode: "ABCD-1234", verificationUri: "https://sso.test/device" });
             flow.notify({ type: "progress", message: "Waiting for the browser" });
@@ -361,6 +368,7 @@ describe("login", () => {
       credentials.plugin,
       interaction.plugin,
       recorder.plugin,
+      host.plugin,
       makeLlmPlugin({ fetch: offline, providers: () => [oauthProvider], authContext: envContext() }),
     ];
     const info = await runWith(
@@ -374,6 +382,10 @@ describe("login", () => {
     );
 
     expect(withdrawn).toBe(true);
+    // The installation's one device ID (OpenAI's ChatGPT sign-in requires it), kept in the host's home.
+    expect(devices[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(devices[1]).toBe(devices[0]);
+    expect(readFileSync(join(host.home, "device-id"), "utf8").trim()).toBe(devices[0]);
     expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token", accountId: "acct" });
     expect(info[0]).toMatchObject({ auth: [{ type: "oauth", name: "SSO account", interactive: true }], configured: true, source: "OAuth" });
     expect(recorder.notices).toEqual([
@@ -481,5 +493,17 @@ describe("credential store adapter", () => {
       Effect.flatMap(Llm, (llm) => llm.addCustom({ name: "Local", api: "openai-completions", baseUrl: "http://localhost:1", models: ["m"] })),
     );
     expect(host.scopes).toEqual(["project"]);
+  });
+});
+
+describe("deviceId", () => {
+  it("makes the installation's ID once and keeps it, replacing a file that holds no ID", () => {
+    const home = mkdtempSync(join(tmpdir(), "lemma-device-"));
+    const id = deviceId(home);
+    expect(deviceId(home)).toBe(id);
+    writeFileSync(join(home, "device-id"), "not an id\n");
+    const replaced = deviceId(home);
+    expect(replaced).not.toBe(id);
+    expect(deviceId(home)).toBe(replaced);
   });
 });

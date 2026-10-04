@@ -1,8 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, definePlugin, makeCore } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, Notice } from "@lemma/contracts";
+import { Credentials, HostControl, Interaction, Notice, Paths } from "@lemma/contracts";
 import type { ConfigScope, Credential, InteractionError, Llm, NoticePayload, PluginChange } from "@lemma/contracts";
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
@@ -85,8 +88,22 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
     ui: unused(),
     configureUi: unused,
   } as unknown as typeof HostControl.Service;
-  const plugin = definePlugin({ id: "host", provides: [HostControl], layer: Layer.succeed(HostControl, service) });
-  return { saved, scopes, plugin };
+  // A home of its own, as the host's: the llm plugin keeps the installation's device ID there.
+  const home = mkdtempSync(join(tmpdir(), "lemma-llm-home-"));
+  const paths = {
+    home,
+    userConfig: join(home, "config.jsonc"),
+    projectConfig: join(home, "project.jsonc"),
+    auth: join(home, "auth.json"),
+    sessions: join(home, "sessions"),
+    cwd: home,
+  };
+  const plugin = definePlugin({
+    id: "host",
+    provides: [HostControl, Paths],
+    layer: Layer.merge(Layer.succeed(HostControl, service), Layer.succeed(Paths, paths)),
+  });
+  return { saved, scopes, home, plugin };
 }
 
 /** Runs `body` against `plugins`, adding a `fakeHost` when none of them provides `HostControl`. */
