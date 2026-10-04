@@ -11,7 +11,7 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "allowImportingTsExtensions": true,
-    "customConditions": ["source"],
+    "customConditions": ["lemma-source"],
     "skipLibCheck": true,
     "noEmit": true
   }

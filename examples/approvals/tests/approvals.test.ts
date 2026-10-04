@@ -153,7 +153,7 @@ describe("as a plugin file in a real host", () => {
   let host: ChildProcess | undefined;
   let mock: ChildProcess | undefined;
   const lemma = async (...argv: string[]) => {
-    const { stdout } = await execFileAsync(process.execPath, ["--conditions=source", cliMain, ...argv], { env: { ...process.env, LEMMA_HOME: home! } });
+    const { stdout } = await execFileAsync(process.execPath, ["--conditions=lemma-source", cliMain, ...argv], { env: { ...process.env, LEMMA_HOME: home! } });
     return stdout;
   };
 
@@ -174,7 +174,7 @@ describe("as a plugin file in a real host", () => {
         },
       }),
     );
-    const started = spawn(process.execPath, ["--conditions=source", hostMain, "--no-open"], {
+    const started = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
       env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
       stdio: "ignore",
     });

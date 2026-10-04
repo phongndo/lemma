@@ -7,7 +7,7 @@
     ".": "./src/main.ts"
   },
   "scripts": {
-    "start": "node --conditions=source src/main.ts",
+    "start": "node --conditions=lemma-source src/main.ts",
     "check": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },

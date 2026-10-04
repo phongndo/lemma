@@ -138,7 +138,7 @@ describe("credentials", () => {
 
   test("concurrent modifies from several processes do not lose updates", async () => {
     const fixture = fileURLToPath(new URL("./fixtures/increment.ts", import.meta.url));
-    const child = () => promisify(execFile)(process.execPath, ["--conditions=source", fixture, auth, "counter", "10"]);
+    const child = () => promisify(execFile)(process.execPath, ["--conditions=lemma-source", fixture, auth, "counter", "10"]);
     await run(
       Effect.gen(function* () {
         const service = yield* Credentials;

@@ -18,7 +18,7 @@ import workspace from "@lemma/plugin-workspace";
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
 /** How the agent runs this checkout's `lemma` CLI from its shell; `node` is on PATH wherever the host runs. */
-export const cliCommand = `node --conditions=source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
+export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
 
 /**
  * Everything a fresh install runs. The host plugin is built by main.ts with a

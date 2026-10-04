@@ -82,7 +82,9 @@ capability contracts can expose ordinary values, functions, and promises.
 Use the Nix shell on Linux or Apple silicon macOS. Both development shells supply
 Node.js 24 and pnpm from [`flake.nix`](flake.nix), including CI. Node runs TypeScript
 sources directly through type stripping, so source must use erasable syntax only
-(enforced by `erasableSyntaxOnly`).
+(enforced by `erasableSyntaxOnly`). Processes run with `--conditions=lemma-source`,
+which selects `@lemma/core`'s sources over its build; the condition is Lemma's own
+because dependencies publish a `source` condition for files they do not ship.
 
 ```sh
 nix develop -c pnpm install --frozen-lockfile

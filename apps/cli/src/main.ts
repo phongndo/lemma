@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --conditions=source
+#!/usr/bin/env -S node --conditions=lemma-source
 import { createInterface } from "node:readline";
 import { run } from "./cli.ts";
 

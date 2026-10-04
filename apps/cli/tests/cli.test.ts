@@ -160,7 +160,7 @@ describe("against a running host", () => {
         },
       }),
     );
-    host = spawn(process.execPath, ["--conditions=source", hostMain, "--no-open"], {
+    host = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
       env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
       stdio: "ignore",
     });
@@ -840,7 +840,7 @@ describe("a host killed mid-turn", () => {
   const hosts: ChildProcess[] = [];
 
   const startHost = async () => {
-    const host = spawn(process.execPath, ["--conditions=source", hostMain, "--no-open"], {
+    const host = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
       env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
       stdio: "ignore",
     });

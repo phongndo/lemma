@@ -81,7 +81,7 @@ const startHost = async (): Promise<Discovery> => {
   const child = utilityProcess.fork(hostMain, ["--no-open"], {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },
-    execArgv: ["--conditions=source"],
+    execArgv: ["--conditions=lemma-source"],
     stdio: "inherit",
     serviceName: "lemma host",
   });

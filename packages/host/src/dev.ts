@@ -86,10 +86,15 @@ const once = (command: string, args: readonly string[]) =>
   new Promise<boolean>((resolve) => spawn(command, args, { cwd: root, stdio: "inherit" }).once("exit", (code) => resolve(code === 0)));
 
 // The host's own output stays: watch mode would clear the terminal the web server shares.
-run("host", process.execPath, ["--watch", "--watch-preserve-output", "--conditions=source", fileURLToPath(new URL("main.ts", import.meta.url)), "--no-open"], {
-  cwd: project,
-  env: { ...process.env, INIT_CWD: project },
-});
+run(
+  "host",
+  process.execPath,
+  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", fileURLToPath(new URL("main.ts", import.meta.url)), "--no-open"],
+  {
+    cwd: project,
+    env: { ...process.env, INIT_CWD: project },
+  },
+);
 let host = await discover();
 for (const deadline = Date.now() + STARTUP_TIMEOUT_MS; host === undefined && !stopping && Date.now() < deadline; host = await discover()) await sleep(100);
 if (host === undefined) {

@@ -12,7 +12,7 @@ const auth = token === undefined ? {} : { headers: { authorization: `Bearer ${to
 
 export default defineConfig({
   plugins: [solid()],
-  resolve: { conditions: ["source"] },
+  resolve: { conditions: ["lemma-source"] },
   server: {
     host: process.env.LEMMA_DEV_HOST ?? "127.0.0.1",
     proxy: { "/rpc": { target: hostUrl, ws: true, ...auth }, "/api": { target: hostUrl, ...auth } },
