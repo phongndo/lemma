@@ -10,6 +10,7 @@ import type {
   ModelInfo,
   PluginStatus,
   PromptContent,
+  QueuedPrompt,
   ProviderInfo,
   SessionEvent,
   SessionInfo,
@@ -358,6 +359,13 @@ export const createMockHost = (): Host => {
   const openRequests = new Map<string, InteractionRequest>();
   const cancelled = new Set<string>();
   const running = new Set<string>();
+  /** Prompts sent while a turn ran, as the agent queues them: steers join it after its tool step, follow-ups run next. */
+  const queues = new Map<string, { readonly prompt: QueuedPrompt; readonly done: () => void; readonly fail: (error: Error) => void }[]>();
+  const queueOf = (sessionId: string) => queues.get(sessionId) ?? [];
+  /** Each change to a queue moves the mock's one revision on, which keeps each session's growing. */
+  let queueRevision = 0;
+  const queueChanged = (sessionId: string) =>
+    emit({ type: "queue-changed", sessionId, queue: queueOf(sessionId).map((queued) => queued.prompt), revision: ++queueRevision });
 
   const create = (cwd = CWD, at = Date.now()): SessionInfo => {
     const info: SessionInfo = { id: id("s"), cwd, createdAt: at, updatedAt: at, lastSeq: 0 };
@@ -605,22 +613,31 @@ export const createMockHost = (): Host => {
   };
 
   /** Answers as the model the turn names, else the first available one, as the host does. */
-  const runTurn = async (sessionId: string, content: PromptContent, options?: TurnOptions) => {
+  const runTurn = async (sessionId: string, content: PromptContent, options?: TurnOptions, requestId?: string): Promise<void> => {
     const available = MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured);
     const by = available.find((model) => model.ref === options?.model) ?? available[0] ?? MODELS[0]!;
     const turnId = id("t");
     const started = Date.now();
-    append(sessionId, { type: "turn-start", turnId });
-    append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started } });
+    append(sessionId, { type: "turn-start", turnId, model: by.ref });
+    append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     emit({ type: "turn-started", sessionId, turnId });
     running.add(sessionId);
     const text = content.find((part) => part.type === "text")?.text ?? "(image)";
     let total = emptyUsage;
+    /** Steers placed in this turn, answered when it ends. */
+    const steered: (() => void)[] = [];
     const end = (reason: "done" | "cancelled") => {
       append(sessionId, { type: "turn-end", turnId, reason });
       emit({ type: "turn-ended", sessionId, turnId, usage: total, reason });
       running.delete(sessionId);
       cancelled.delete(sessionId);
+      for (const done of steered) done();
+      const [next, ...rest] = queueOf(sessionId);
+      if (reason === "done" && next !== undefined) {
+        queues.set(sessionId, rest);
+        queueChanged(sessionId);
+        void runTurn(sessionId, next.prompt.content, next.prompt.options, next.prompt.requestId).then(next.done, next.fail);
+      }
     };
     const step1 = id("p");
     const startedAt = Date.now();
@@ -660,6 +677,24 @@ export const createMockHost = (): Host => {
         content: [{ type: "text", text: "drwxr-xr-x client\ndrwxr-xr-x contracts\ndrwxr-xr-x core" }],
       },
     });
+    // Steers sent meanwhile join the turn here, between its steps.
+    const steers = queueOf(sessionId).filter((queued) => queued.prompt.mode === "steer");
+    if (steers.length > 0) {
+      queues.set(
+        sessionId,
+        queueOf(sessionId).filter((queued) => queued.prompt.mode !== "steer"),
+      );
+      for (const steer of steers) {
+        append(sessionId, {
+          type: "message",
+          turnId,
+          requestId: steer.prompt.requestId,
+          message: { role: "user", content: steer.prompt.content, timestamp: Date.now() },
+        });
+        steered.push(steer.done);
+      }
+      queueChanged(sessionId);
+    }
     const step2 = id("p");
     const s2 = Date.now();
     const m2 = assistant(
@@ -741,14 +776,39 @@ export const createMockHost = (): Host => {
       },
     },
     agent: {
-      prompt: async (sessionId, content, options) => {
-        if (running.has(sessionId)) throw new Error("A turn is already running");
-        await runTurn(sessionId, content, options);
+      prompt: async (sessionId, content, options, submit) => {
+        if (!running.has(sessionId)) return runTurn(sessionId, content, options, submit?.requestId);
+        const mode = submit?.whenBusy ?? "follow-up";
+        if (mode === "reject") throw new HostError({ code: "Busy", subject: sessionId, message: "A turn is already running" });
+        await new Promise<void>((resolve, reject) => {
+          const prompt: QueuedPrompt = {
+            requestId: submit?.requestId ?? id("r"),
+            content,
+            mode,
+            at: Date.now(),
+            ...(options === undefined ? {} : { options }),
+          };
+          queues.set(sessionId, [...queueOf(sessionId), { prompt, done: resolve, fail: reject }]);
+          queueChanged(sessionId);
+        });
       },
       cancel: async (sessionId) => {
         if (running.has(sessionId)) cancelled.add(sessionId);
       },
       running: async () => [...running],
+      queue: async (sessionId) => queueOf(sessionId).map((queued) => queued.prompt),
+      withdraw: async (sessionId, requestId) => {
+        const found = queueOf(sessionId).find((queued) => queued.prompt.requestId === requestId);
+        if (found === undefined) return false;
+        queues.set(
+          sessionId,
+          queueOf(sessionId).filter((queued) => queued !== found),
+        );
+        found.fail(new HostError({ code: "Withdrawn", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
+        queueChanged(sessionId);
+        return true;
+      },
+      view: async (sessionId) => ({ output: [], queue: queueOf(sessionId).map((queued) => queued.prompt), queueRevision }),
     },
     llm: {
       providers: async () => providers.slice(),

@@ -1,6 +1,7 @@
 import { Cause, Duration, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { HostError } from "@lemma/contracts";
 import type {
+  AgentView,
   AuthType,
   CustomProviderSpec,
   CommandInfo,
@@ -18,12 +19,14 @@ import type {
   PluginStatus,
   PromptContent,
   ProviderInfo,
+  QueuedPrompt,
   ReloadResult,
   SessionEvent,
   SessionInfo,
   SessionMarks,
   TurnOptions,
   UiComposition,
+  WhenBusy,
   WorkspaceStatus,
 } from "@lemma/contracts";
 import { makeHostRpc, rpcUrl } from "./rpc.ts";
@@ -62,10 +65,25 @@ export interface Host {
     readonly remove: (sessionId: string) => Promise<void>;
   };
   readonly agent: {
-    /** Resolves when the turn ends. */
-    readonly prompt: (sessionId: string, content: PromptContent, options?: TurnOptions) => Promise<void>;
+    /**
+     * Resolves when the turn that places the prompt ends. While a turn runs,
+     * `whenBusy` says whether it steers that turn, follows it (the default),
+     * or is refused; `requestId` makes it exactly-once (see `Agent.prompt`).
+     */
+    readonly prompt: (
+      sessionId: string,
+      content: PromptContent,
+      options?: TurnOptions,
+      submit?: { readonly requestId?: string; readonly whenBusy?: WhenBusy },
+    ) => Promise<void>;
     readonly cancel: (sessionId: string) => Promise<void>;
     readonly running: () => Promise<readonly string[]>;
+    /** Prompts waiting for a turn, oldest first. */
+    readonly queue: (sessionId: string) => Promise<readonly QueuedPrompt[]>;
+    /** Takes a queued prompt out; false when a turn had placed it already. */
+    readonly withdraw: (sessionId: string, requestId: string) => Promise<boolean>;
+    /** The session as a client joining now shows it: model and tool output so far, and the queue. */
+    readonly view: (sessionId: string) => Promise<AgentView>;
   };
   readonly llm: {
     readonly providers: () => Promise<readonly ProviderInfo[]>;
@@ -227,9 +245,21 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       remove: (sessionId) => unit(rpc.Session.Delete({ sessionId })),
     },
     agent: {
-      prompt: (sessionId, content, turn) => unit(rpc.Agent.Prompt(turn === undefined ? { sessionId, content } : { sessionId, content, options: turn })),
+      prompt: (sessionId, content, turn, submit) =>
+        unit(
+          rpc.Agent.Prompt({
+            sessionId,
+            content,
+            ...(turn === undefined ? {} : { options: turn }),
+            ...(submit?.requestId === undefined ? {} : { requestId: submit.requestId }),
+            ...(submit?.whenBusy === undefined ? {} : { whenBusy: submit.whenBusy }),
+          }),
+        ),
       cancel: (sessionId) => unit(rpc.Agent.Cancel({ sessionId })),
       running: () => call(rpc.Agent.Running()),
+      queue: (sessionId) => call(rpc.Agent.Queue({ sessionId })),
+      withdraw: (sessionId, requestId) => call(rpc.Agent.Withdraw({ sessionId, requestId })),
+      view: (sessionId) => call(rpc.Agent.View({ sessionId })),
     },
     llm: {
       providers: () => call(rpc.Llm.Providers()),
