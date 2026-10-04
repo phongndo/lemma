@@ -5,7 +5,8 @@
   "description": "Capability contracts shared by the Lemma harness plugins and clients",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fs": "./src/fs.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",

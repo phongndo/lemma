@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, utimes } from "node:fs/promises";
+import { mkdir, open, readFile, rm, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { Duration, Effect, Either, Schedule, Schema } from "effect";
 import { Credential, CredentialError } from "@lemma/contracts";
+import { writeFileAtomic } from "@lemma/contracts/fs";
 
 /** The raw file: provider id → entry. Entries are decoded on use so unknown ones survive a write untouched. */
 export type RawStore = Readonly<Record<string, unknown>>;
@@ -63,25 +64,12 @@ export function decodeEntry(path: string, store: RawStore, provider: string): Ef
       );
 }
 
-/** Temp file plus rename so readers never see a partial file; mode 0600 from creation, directory 0700. */
+/** Written whole and synced, so readers never see a partial file; mode 0600, directory 0700. */
 export function writeStore(path: string, store: RawStore): Effect.Effect<void, CredentialError> {
-  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   return Effect.tryPromise({
-    try: async () => {
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      const handle = await open(temp, "wx", 0o600);
-      try {
-        // The creation mode is subject to umask; make 0600 explicit.
-        await handle.chmod(0o600);
-        await handle.writeFile(`${JSON.stringify(store, null, 2)}\n`);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(temp, path);
-    },
+    try: () => writeFileAtomic(path, `${JSON.stringify(store, null, 2)}\n`, { sync: true }),
     catch: (cause) => io(`Cannot write ${path}`, cause),
-  }).pipe(Effect.onError(() => Effect.promise(() => rm(temp, { force: true }))));
+  }).pipe(Effect.asVoid);
 }
 
 interface LockOwner {

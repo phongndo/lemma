@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Effect, Either, Schema } from "effect";
+import { writeFileAtomic } from "@lemma/contracts/fs";
 
 /** `<home>/transport.json`: how local clients find a running host. */
 export const Discovery = Schema.Struct({
@@ -40,18 +40,7 @@ export const readDiscovery = (home: string): Effect.Effect<Discovery | undefined
 /** Written atomically with mode 0600; removed on scope close unless another host has replaced it since. */
 export const publishDiscovery = (home: string, entry: Discovery) => {
   const path = discoveryPath(home);
-  const write = Effect.promise(async () => {
-    await mkdir(home, { recursive: true, mode: 0o700 });
-    const temp = `${path}.${randomUUID()}.tmp`;
-    const handle = await open(temp, "wx", 0o600);
-    try {
-      await handle.chmod(0o600);
-      await handle.writeFile(`${JSON.stringify(entry, null, 2)}\n`);
-    } finally {
-      await handle.close();
-    }
-    await rename(temp, path);
-  });
+  const write = Effect.promise(() => writeFileAtomic(path, `${JSON.stringify(entry, null, 2)}\n`));
   const removeIfOurs = Effect.promise(async () => {
     const current = Either.getOrUndefined(decode(await readFile(path, "utf8").catch(() => "")));
     if (current?.pid === entry.pid && current.startedAt === entry.startedAt && current.url === entry.url) await rm(path, { force: true });
