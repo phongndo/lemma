@@ -41,6 +41,38 @@ const sanitize = (html: string): string => {
  */
 export const renderMarkdown = (source: string): string => sanitize(marked.parse(source) as string);
 
+/** Tokens that stand apart from what follows them: their text is followed by a space. */
+const SEPARATE = new Set(["paragraph", "heading", "code", "blockquote", "list_item", "table", "hr", "space", "br"]);
+
+/**
+ * Markdown as the text a reader sees, on one line, for a preview: emphasis,
+ * link targets, and HTML are left out; code, link labels, and an ordered
+ * list's numbers are kept.
+ */
+export const markdownText = (source: string): string => {
+  let text = "";
+  const walk = (tokens: readonly Token[]) => {
+    for (const token of tokens) {
+      if (token.type === "list") {
+        const list = token as Tokens.List;
+        list.items.forEach((item, index) => {
+          if (list.ordered) text += `${(Number(list.start) || 1) + index}. `;
+          walk([item]);
+        });
+      } else if (token.type === "table") {
+        const table = token as Tokens.Table;
+        for (const cell of [...table.header, ...table.rows.flat()]) walk([...cell.tokens, { type: "br", raw: "" }]);
+      } else if (token.type === "html") continue;
+      else if ("tokens" in token && token.tokens !== undefined) walk(token.tokens);
+      else if (token.type === "text" || token.type === "codespan" || token.type === "code" || token.type === "escape" || token.type === "image")
+        text += token.text;
+      if (SEPARATE.has(token.type)) text += " ";
+    }
+  };
+  walk(marked.lexer(source));
+  return text.replace(/\s+/g, " ").trim();
+};
+
 /** A code block's source, kept out of the HTML so the view (and code renderers) get it as text. */
 export interface CodeBlock {
   /** The fence's language, lowercased; "" when none. */

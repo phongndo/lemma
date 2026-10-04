@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBlockLexer, markdownBlocks } from "../src/lib/markdown.ts";
+import { createBlockLexer, markdownBlocks, markdownText } from "../src/lib/markdown.ts";
 import type { MarkdownBlock } from "../src/lib/markdown.ts";
 
 const shape = (blocks: readonly MarkdownBlock[]) =>
@@ -62,5 +62,20 @@ describe("markdown blocks", () => {
     const withLink = "see [x][1]\n\n[1]: https://example.com\n";
     lex(withLink.slice(0, 12));
     expect(shape(lex(withLink))).toEqual(shape(markdownBlocks(withLink)));
+  });
+});
+
+describe("markdown text", () => {
+  it("keeps what a reader sees, on one line", () => {
+    expect(markdownText("## Fixed\n\nThe **cause** was _not_ `__init__.py`, see [the log](https://e.org/Foo_(bar)).")).toBe(
+      "Fixed The cause was not __init__.py, see the log.",
+    );
+    expect(markdownText("Globs `src/**/*.ts` and `*args`; my__var__name and snake_case_name stay.")).toBe(
+      "Globs src/**/*.ts and *args; my__var__name and snake_case_name stay.",
+    );
+    expect(markdownText("2024. Was a big year\n\n- one\n- two\n\n```ts\nx * y\n```\n\n<b>bold</b> > quote")).toBe(
+      "2024. Was a big year one two x * y bold > quote",
+    );
+    expect(markdownText("| a | b |\n|---|---|\n| 1 | 2 |")).toBe("a b 1 2");
   });
 });
