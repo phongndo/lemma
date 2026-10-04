@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
+import type { Scope } from "effect";
 import {
   appUrl,
   branchOf,
@@ -24,9 +25,8 @@ import {
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
 import { resolvePaths } from "@lemma/plugin-host";
-import { readDiscovery } from "@lemma/plugin-transport";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Failure, Io, Options, QuestionPolicy } from "./command.ts";
+import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
   formatConfig,
   formatDiff,
@@ -63,6 +63,7 @@ import {
   questionsCommand,
   runCommand,
 } from "./live.ts";
+import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
 import { workspaceCommand } from "./workspace.ts";
 
 export { CliError, ExitCode } from "./command.ts";
@@ -70,11 +71,13 @@ export type { Io } from "./command.ts";
 
 export const USAGE = `Usage: lemma <command> [options] [--json]
 
-Everything the web app can do, from a shell. Every command except serve talks
-to the running host found in $LEMMA_HOME/transport.json (default ~/.lemma).
+Everything the web app can do, from a shell. Every command except serve, remote,
+and token talks to a running host: the one LEMMA_URL (with LEMMA_TOKEN) names,
+else the one in $LEMMA_HOME/remote.json, else the local host found in
+$LEMMA_HOME/transport.json ($LEMMA_HOME defaults to ~/.lemma).
 
 Host
-  serve                          Run the host in this terminal
+  serve                          Run the host in this terminal (always here, never remote)
   status                         Host, composition, plugin states, running turns
   plugins                        Every plugin: id, version, state (or "disabled"), source, and why
   plugins enable <id>            Turn a plugin on: removes its "enabled" row from the user config
@@ -89,6 +92,13 @@ Host
                                  Set one field in the config file that sets its config (user by default)
     --unset                      ...remove the field instead, back to its default
   reload                         Re-read config files and apply them
+
+A host on another machine (docs/remote.md)
+  remote                         Which host commands go to (LEMMA_URL, remote.json, or local) and its URL
+  remote set <url> [--token <t>] Use the host at <url> from now on: checks the token against it, then
+                                 writes $LEMMA_HOME/remote.json (the token: --token, LEMMA_TOKEN, or asked)
+  remote clear                   Remove remote.json: back to the local host
+  token                          The local host's token, to give a client on another machine
 
 Web app (plugins the web app loads: bundled, and files in ~/.lemma/ui)
   ui                             The "ui" rows of the config files and the UI files found
@@ -201,30 +211,34 @@ const openBrowser = (url: string) =>
 /** The web app's address for a session (checked to exist) or a new thread, with the token; opened unless `--json`. */
 const openCommand =
   (sessionId: string | undefined, view: string | undefined, options: Options): Command =>
-  ({ discovery, rpc }) =>
+  ({ target, rpc }) =>
     Effect.gen(function* () {
       if (sessionId !== undefined) yield* rpc.Session.Get({ sessionId });
       const path = sessionId === undefined ? NewThreadRoute.href({}) : ThreadRoute.href({ id: sessionId, ...(view === undefined ? {} : { view }) });
-      const url = appUrl(discovery.url, path, discovery.token);
+      const url = appUrl(target.url, path, target.token);
       if (!options.json) yield* openBrowser(url);
       return { json: { url }, text: url };
     });
 
-const route = (positionals: readonly string[], options: Options, io: Io): Command | CliError => {
+const route = (positionals: readonly string[], options: Options, io: Io): Command | Unattached | CliError => {
   const [command, sub, arg, ...rest] = positionals;
   const extra = (count: number) => (positionals.length > count ? usage(`Unexpected argument "${positionals[count]}"`) : undefined);
   switch (command) {
     case "status":
       return (
         extra(1) ??
-        (({ discovery, rpc }) =>
+        (({ target, rpc }) =>
           Effect.all([rpc.Host.Info(), rpc.Host.Plugins(), rpc.Agent.Running()], { concurrency: "unbounded" }).pipe(
             Effect.map(([info, plugins, running]) => ({
-              json: { url: discovery.url, pid: discovery.pid, startedAt: discovery.startedAt, info, plugins, running },
-              text: formatStatus(discovery, info, plugins, running),
+              json: { url: target.url, source: target.source, pid: target.pid, startedAt: target.startedAt, info, plugins, running },
+              text: formatStatus(target, info, plugins, running),
             })),
           ))
       );
+    case "remote":
+      return remoteCommand(sub, arg, rest, io, options);
+    case "token":
+      return extra(1) ?? tokenCommand(io);
     case "plugins":
       if (sub === undefined || sub === "list") {
         return (
@@ -563,27 +577,21 @@ const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: T
 };
 
 /**
- * The running host for this `LEMMA_HOME`: one-shot HTTP calls for most
+ * The host commands go to (see `findTarget`): one-shot HTTP calls for most
  * commands, and a WebSocket (opened only when a command follows events) for
  * streaming and questions, as the web app uses.
  */
 const connect = (io: Io) =>
   Effect.gen(function* () {
-    const paths = resolvePaths({ env: io.env, cwd: io.cwd });
-    const discovery = yield* readDiscovery(paths.home);
-    if (discovery === undefined) {
-      return yield* new CliError({
-        code: "NoHost",
-        message: `No running Lemma host for ${paths.home}. Start one with \`lemma serve\`.`,
-        exit: ExitCode.unavailable,
-      });
-    }
-    const rpc = yield* makeHostRpcHttp(discovery.url, discovery.token);
-    const live = yield* Effect.cached(makeHostRpc(rpcUrl(discovery.url, discovery.token)));
-    return { discovery, rpc, live };
+    const target = yield* findTarget(io);
+    if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
+    const rpc = yield* makeHostRpcHttp(target.url, target.token);
+    const live = yield* Effect.cached(makeHostRpc(rpcUrl(target.url, target.token)));
+    return { target, rpc, live };
   });
 
-const toCliError = (error: Failure): CliError => {
+/** A remote target that cannot be reached is the remote's "no host"; a local one that was found but did not answer is unreachable. */
+const toCliError = (error: Failure, target?: Target): CliError => {
   if (error instanceof CliError) return error;
   if (error instanceof HostError) {
     return new CliError({
@@ -593,10 +601,21 @@ const toCliError = (error: Failure): CliError => {
       exit: ExitCode.failed,
     });
   }
+  const remote = target !== undefined && target.source !== "local" ? target : undefined;
   // `filterStatusOk` turns a rejected token into a failed send; the response status says which it was.
-  const status = (error.cause as { readonly response?: { readonly status?: unknown } } | undefined)?.response?.status;
-  if (status === 401) {
-    return new CliError({ code: "Unauthorized", message: "The host rejected the token in transport.json", exit: ExitCode.unavailable });
+  if (statusOf(error) === 401) {
+    const message =
+      remote === undefined
+        ? "The host rejected the token in transport.json"
+        : `The host at ${remote.url} rejected the token from ${remote.from}. \`lemma token\` there prints the current one; ${remote.source === "env" ? "set LEMMA_TOKEN to it" : `save it with \`lemma remote set ${remote.url} --token <token>\``}.`;
+    return new CliError({ code: "Unauthorized", message, exit: ExitCode.unavailable });
+  }
+  if (remote !== undefined) {
+    return new CliError({
+      code: "NoHost",
+      message: `No Lemma host answers at ${remote.url} (from ${remote.from}): ${reasonOf(error)}. Check that the host runs on that machine and that this one can reach it, or ${remote.source === "env" ? "unset LEMMA_URL" : "run `lemma remote clear`"} to use the local host.`,
+      exit: ExitCode.unavailable,
+    });
   }
   return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${error.message}`, exit: ExitCode.unavailable });
 };
@@ -649,6 +668,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         force: { type: "boolean", default: false },
         project: { type: "boolean", default: false },
         unset: { type: "boolean", default: false },
+        token: { type: "string" },
         help: { type: "boolean", short: "h", default: false },
       },
     });
@@ -690,11 +710,16 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     force: values.force,
     project: values.project,
     unset: values.unset,
+    token: values.token,
   };
   const command = route(positionals, options, io);
   if (command instanceof CliError) return report(io, options.json, command);
 
-  const result = await Effect.runPromise(Effect.scoped(Effect.flatMap(connect(io), (connection) => command(connection, io, options))).pipe(Effect.either));
+  const program: Effect.Effect<Output | undefined, Failure, Scope.Scope> =
+    typeof command === "function"
+      ? Effect.flatMap(connect(io), (connection) => command(connection, io, options).pipe(Effect.mapError((error) => toCliError(error, connection.target))))
+      : command.unattached;
+  const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.either));
   if (result._tag === "Left") return report(io, options.json, toCliError(result.left));
   const output = result.right;
   if (output === undefined) return ExitCode.ok;

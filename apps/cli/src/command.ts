@@ -3,7 +3,7 @@ import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "@effect/rpc";
 import type { HostError } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
-import type { Discovery } from "@lemma/plugin-transport";
+import type { Target } from "@lemma/plugin-transport";
 
 /** Exit codes a calling script or agent can branch on; `--json` errors also carry a `code`. */
 export const ExitCode = { ok: 0, failed: 1, usage: 2, unavailable: 3 } as const;
@@ -58,10 +58,14 @@ export interface Options {
   readonly force: boolean;
   readonly project: boolean;
   readonly unset: boolean;
+  readonly token?: string | undefined;
 }
 
+/** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */
+export type { Target } from "@lemma/plugin-transport";
+
 export interface Connection {
-  readonly discovery: Discovery;
+  readonly target: Target;
   /** One-shot HTTP calls: never subscribes to events, so never answers questions. */
   readonly rpc: HostRpcClient;
   /** A WebSocket client for `Host.Events`, opened on first use and closed with the command. */
@@ -80,3 +84,8 @@ export interface Output {
 
 export type Failure = HostError | RpcClientError.RpcClientError | CliError;
 export type Command = (connection: Connection, io: Io, options: Options) => Effect.Effect<Output | undefined, Failure, Scope.Scope>;
+
+/** A command about which host the others go to (`remote`, `token`): it runs without connecting to that host. */
+export interface Unattached {
+  readonly unattached: Effect.Effect<Output, Failure, Scope.Scope>;
+}

@@ -6,12 +6,13 @@ import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
 import { resolvePaths } from "@lemma/plugin-host";
-import { readDiscovery } from "@lemma/plugin-transport";
-import type { Discovery } from "@lemma/plugin-transport";
+import { findTarget, readDiscovery } from "@lemma/plugin-transport";
+import type { Discovery, Target } from "@lemma/plugin-transport";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
-// It attaches to a running host like the CLI does and starts one only when none runs, since the sessions store
-// has a single writer. A host it started stops when it quits.
+// It finds its host like the CLI does: one on another machine (`LEMMA_URL`, or `remote.json`), else a running local
+// one, and starts one only when none runs, since the sessions store has a single writer. A host it started stops
+// when it quits.
 const hostMain = fileURLToPath(import.meta.resolve("@lemma/host"));
 // `pnpm start` runs from apps/desktop; INIT_CWD is where the user invoked it, and the host takes it as the project.
 const project = process.env.INIT_CWD ?? homedir();
@@ -20,6 +21,7 @@ const paths = resolvePaths({ env: process.env, cwd: project });
 const webUrl = process.env.LEMMA_WEB_URL;
 const STARTUP_TIMEOUT_MS = 30_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const REMOTE_TIMEOUT_MS = 10_000;
 
 let host: UtilityProcess | undefined;
 /** The host serving the page, once known. */
@@ -27,6 +29,39 @@ let served: { readonly url: string; readonly token: string } | undefined;
 /** A deep link that arrived before there was a window to show it in. */
 let pending: string | undefined;
 const pageAt = (path = "/") => (served === undefined ? undefined : appUrl(webUrl ?? served.url, path, served.token));
+
+/** What keeps the remote host from serving this app, or undefined when it answers to the token. */
+const problemWith = async (remote: Target): Promise<string | undefined> => {
+  try {
+    const response = await fetch(new URL("/api/health", remote.url), {
+      headers: { authorization: `Bearer ${remote.token}` },
+      signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
+    });
+    if (response.status === 401) return `It rejected the token from ${remote.from}; \`lemma token\` on that machine prints the current one.`;
+    return response.ok ? undefined : `It answered ${response.status} ${response.statusText}.`;
+  } catch (error) {
+    // `fetch failed` says nothing; its cause says why (refused, not found, timed out).
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+    return cause instanceof Error ? cause.message : String(cause);
+  }
+};
+
+/** Resolves true once the remote host answers; until then each failure asks whether to retry. False to quit. */
+const reach = async (remote: Target): Promise<boolean> => {
+  for (;;) {
+    const problem = await problemWith(remote);
+    if (problem === undefined) return true;
+    const { response } = await dialog.showMessageBox({
+      type: "error",
+      message: `Cannot reach the Lemma host at ${remote.url}`,
+      detail: `${problem}\n\nThe address is set by ${remote.from}. Check that the host runs on that machine and that this one can reach it, or run \`lemma remote clear\` to use a host on this machine.`,
+      buttons: ["Retry", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 1) return false;
+  }
+};
 
 const startHost = async (): Promise<Discovery> => {
   const child = utilityProcess.fork(hostMain, ["--no-open"], {
@@ -156,8 +191,17 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
-      const entry = (await Effect.runPromise(readDiscovery(paths.home))) ?? (await startHost());
-      served = { url: entry.url, token: entry.token };
+      // Found as the CLI finds it (docs/remote.md). A target that is set but unusable fails rather than falling back to
+      // a local host, which would act on the wrong machine.
+      const target = await Effect.runPromise(findTarget(process.env, paths.home).pipe(Effect.mapError((error) => new Error(error.message))));
+      if (target !== undefined && target.source !== "local") {
+        // Never a local host beside a remote one: the window shows the remote's page, deep links included.
+        if (!(await reach(target))) return app.quit();
+        served = target;
+      } else {
+        const entry = target ?? (await startHost());
+        served = { url: entry.url, token: entry.token };
+      }
       openWindow(pageAt(pending)!);
       pending = undefined;
     })

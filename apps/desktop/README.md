@@ -14,11 +14,15 @@ nix develop -c pnpm --filter @lemma/desktop dev          # another; restart it a
 
 ## Behavior
 
-- **Attach first.** Like the CLI, it finds a running host through
-  `$LEMMA_HOME/transport.json` and opens its page. With none running, it starts
-  one with Electron's Node (`packages/host/src/main.ts --no-open`, the project
-  being the directory `pnpm desktop` ran from, else `~`). Never two: the
-  sessions store has a single writer.
+- **Attach first.** Like the CLI, it opens the page of the host `LEMMA_URL`
+  (with `LEMMA_TOKEN`) or `$LEMMA_HOME/remote.json` names, a host on another
+  machine ([remote access](../../docs/remote.md)), else of a running local host
+  found through `$LEMMA_HOME/transport.json`. With a remote host it never starts
+  a local one; if the remote does not answer at start, a dialog names its URL
+  and offers Retry or Quit. With neither, it starts one with Electron's Node
+  (`packages/host/src/main.ts --no-open`, the project being the directory
+  `pnpm desktop` ran from, else `~`). Never two: the sessions store has a
+  single writer.
 - **A host it started stops when it quits.** One it attached to keeps running.
   On macOS, closing the last window leaves the app (and its host) running until
   you quit it.

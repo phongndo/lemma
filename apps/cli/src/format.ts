@@ -21,8 +21,8 @@ import type {
   Usage,
   WorkspaceStatus,
 } from "@lemma/contracts";
+import type { Target } from "./command.ts";
 import type { TurnResult } from "./live.ts";
-import type { Discovery } from "@lemma/plugin-transport";
 
 /** Human-readable output. `--json` bypasses all of this and prints the contract shapes. */
 
@@ -50,9 +50,9 @@ const countStates = (plugins: readonly PluginStatus[]): string => {
   return [...counts].map(([state, count]) => `${count} ${state}`).join(", ");
 };
 
-export const formatStatus = (discovery: Discovery, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[]): string =>
+export const formatStatus = (target: Target, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[]): string =>
   pad([
-    ["host", `${discovery.url} (pid ${discovery.pid}, transport ${info.version})`],
+    ["host", `${target.url} (${target.pid === undefined ? `from ${target.from}` : `pid ${target.pid}`}, transport ${info.version})`],
     ["home", info.home],
     ["project", info.cwd],
     ["composition", `${info.composition.id.slice(0, 12)} (${info.composition.plugins.length} plugins)`],

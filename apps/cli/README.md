@@ -22,11 +22,15 @@ panels are one view too (`kernelOf`), as are an inspector's tables
 
 ## Behavior
 
-- **Attach only.** The host is found through `$LEMMA_HOME/transport.json`
-  (`readDiscovery` from the transport plugin). With no running host the command
-  fails with exit code 3 and code `NoHost`; it never starts one itself. Running a
-  second host in-process would break the sessions store's single-writer
-  assumption.
+- **Attach only.** Commands go to the host `LEMMA_URL` (with `LEMMA_TOKEN`)
+  names, else the one in `$LEMMA_HOME/remote.json`, else the local host found
+  through `$LEMMA_HOME/transport.json` (`readDiscovery` from the transport
+  plugin). `lemma remote` shows which; `remote set`, `remote clear`, and
+  `token` set up a host on another machine, as [remote access](../../docs/remote.md)
+  describes. With no local host, or a remote one that does not answer, the
+  command fails with exit code 3 and code `NoHost`; it never starts one itself
+  (`lemma serve` always runs locally). Running a second host in-process would
+  break the sessions store's single-writer assumption.
 - **Two connections, as the transport intends.** Calls use one-shot HTTP
   (`POST /rpc/http`, `makeHostRpcHttp`). Commands that watch the host —
   `run` (for its turn's questions; with `--follow`, everything the turn
@@ -43,7 +47,7 @@ panels are one view too (`kernelOf`), as are an inspector's tables
   (`HostInfo`, `PluginStatus`, `SessionInfo`, `SessionEvent`, `ModelInfo`, …) on
   stdout, and failures are `{"error": {"code", "message", "subject"?}}` on
   stderr. `code` is the host's `HostError` code (`NotFound`, `Busy`, ...), or
-  `Usage`, `NoHost`, `Unauthorized`, `Unreachable` from the CLI. Streams
+  `Usage`, `NoHost`, `Unauthorized`, `Unreachable`, `WriteFailed` from the CLI. Streams
   (`run --follow --json`, `events --json`) are NDJSON; `run --follow` ends with a
   `{"type": "result", …}` line. `inspect --records` returns flat record
   summaries (`recordSummary`), not records, which point at their whole turn.
@@ -53,4 +57,6 @@ panels are one view too (`kernelOf`), as are an inspector's tables
 - **Directory scope.** `session list` shows sessions whose recorded cwd is the
   directory the command runs in (or `--cwd`), exactly; `--all` lists every
   session. `session new` and `run new` create the session there too, and
-  `workspace` commands default to it.
+  `workspace` commands default to it. With a remote host that directory is
+  this machine's, not the host's: give the host's path with `--cwd` (`--path`
+  for `workspace`), or use `--all`.

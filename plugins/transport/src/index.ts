@@ -11,6 +11,8 @@ import { startServer } from "./server.ts";
 import { loadToken } from "./token.ts";
 
 export { Discovery, discoveryPath, readDiscovery } from "./discovery.ts";
+export { clearRemote, findTarget, normalizeUrl, readRemote, remotePath, TargetError, writeRemote } from "./target.ts";
+export type { Remote, Target } from "./target.ts";
 export { toHostError, toPluginStatus } from "./errors.ts";
 
 /** Reported by `Host.Info` and as the plugin version. */

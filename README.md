@@ -22,6 +22,8 @@ nix develop -c pnpm desktop        # the same app in a desktop window
 nix develop -c pnpm lemma status   # query the running host; `pnpm lemma --help` lists commands
 ```
 
+To run the host on one machine and use it from another, see [remote access](docs/remote.md).
+
 With no config, every bundled plugin runs. `~/.lemma/config.jsonc` and
 `<project>/.lemma/config.jsonc` patch that by plugin id (`enabled: false`, or a
 replacement `config`). The Plugins settings page and `lemma plugins enable|disable`

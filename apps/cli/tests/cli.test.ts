@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,11 +16,11 @@ import { formatDiff, formatQuestions, formatRecords, formatSession, formatStep, 
 
 const hostMain = fileURLToPath(new URL("../../../packages/host/src/main.ts", import.meta.url));
 
-const invoke = async (argv: readonly string[], home: string, cwd = "/") => {
+const invoke = async (argv: readonly string[], home: string, cwd = "/", env: Readonly<Record<string, string>> = {}) => {
   let out = "";
   const err: string[] = [];
   const code = await run(argv, {
-    env: { LEMMA_HOME: home },
+    env: { LEMMA_HOME: home, ...env },
     cwd,
     out: (text) => {
       out += `${text}\n`;
@@ -107,9 +107,30 @@ describe("without a host", () => {
       ["ui", "enable"],
       ["ui", "config", "theme"],
       ["ui", "config", "theme", "accent"],
+      ["remote", "bogus"],
+      ["remote", "clear", "x"],
+      ["remote", "set"],
+      ["remote", "set", "https://box.example.ts.net/lemma", "--token", "t"],
+      ["remote", "set", "ftp://box.example.ts.net", "--token", "t"],
+      ["remote", "set", "https://box.example.ts.net?token=t", "--token", "t"],
+      ["remote", "set", "https://box.example.ts.net", "x", "--token", "t"],
+      // No token, and no terminal to ask at.
+      ["remote", "set", "https://box.example.ts.net"],
+      ["token", "x"],
     ]) {
       expect((await invoke(argv, home)).code, argv.join(" ")).toBe(ExitCode.usage);
     }
+    // LEMMA_URL names the host only together with its token.
+    expect((await invoke(["status"], home, "/", { LEMMA_URL: "https://box.example.ts.net" })).code).toBe(ExitCode.usage);
+    expect((await invoke(["remote"], home, "/", { LEMMA_URL: "box", LEMMA_TOKEN: "t" })).code).toBe(ExitCode.usage);
+  });
+
+  test("remote and token say there is no host, without one", async () => {
+    expect(JSON.parse((await invoke(["remote", "--json"], home)).out)).toMatchObject({ source: "local", tokenSet: false });
+    expect((await invoke(["remote"], home)).out).toContain("No remote host is set and no local host runs");
+    const token = await invoke(["token", "--json"], home);
+    expect(token.code).toBe(ExitCode.unavailable);
+    expect(JSON.parse(token.err).error.code).toBe("NoHost");
   });
 
   test("prints help", async () => {
@@ -441,6 +462,110 @@ describe("against a running host", () => {
     } finally {
       await rm(other, { recursive: true, force: true });
     }
+  });
+
+  describe("from another machine", () => {
+    // `other` stands for the client machine: a home with no local host, only what `lemma remote` writes.
+    let other: string;
+    let url: string;
+    let token: string;
+    let dead: string;
+    beforeAll(async () => {
+      other = await mkdtemp(join(tmpdir(), "lemma-cli-client-"));
+      ({ url, token } = JSON.parse(await readFile(join(home, "transport.json"), "utf8")));
+      dead = `http://127.0.0.1:${await freePort()}`;
+    });
+    afterAll(() => rm(other, { recursive: true, force: true }));
+    const remoteFile = () => join(other, "remote.json");
+
+    test("token prints the local host's token; remote set checks it against the host before saving it", async () => {
+      expect(await invoke(["token"], home)).toMatchObject({ code: ExitCode.ok, out: token });
+
+      const wrong = await invoke(["remote", "set", url, "--token", "wrong", "--json"], other);
+      expect(wrong.code).toBe(ExitCode.unavailable);
+      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Unauthorized" });
+      const unreachable = await invoke(["remote", "set", dead, "--token", token, "--json"], other);
+      expect(unreachable.code).toBe(ExitCode.unavailable);
+      expect(JSON.parse(unreachable.err).error).toMatchObject({ code: "Unreachable" });
+      expect(existsSync(remoteFile())).toBe(false);
+
+      const set = await invoke(["remote", "set", `${url}/`, "--token", token, "--json"], other);
+      expect(set.code).toBe(ExitCode.ok);
+      expect(JSON.parse(set.out)).toMatchObject({ url, from: remoteFile(), info: { home } });
+      expect(JSON.parse(await readFile(remoteFile(), "utf8"))).toEqual({ url, token });
+      expect((await stat(remoteFile())).mode & 0o777).toBe(0o600);
+
+      // The token can come from LEMMA_TOKEN, or be asked for without echoing it.
+      expect((await invoke(["remote", "set", url], other, "/", { LEMMA_TOKEN: token })).code).toBe(ExitCode.ok);
+      const asked: boolean[] = [];
+      const code = await run(["remote", "set", url], {
+        env: { LEMMA_HOME: other },
+        cwd: "/",
+        out: () => {},
+        err: () => {},
+        ask: async (_question, secret) => {
+          asked.push(secret);
+          return `${token}\n`;
+        },
+      });
+      expect([code, asked]).toEqual([ExitCode.ok, [true]]);
+      expect(JSON.parse(await readFile(remoteFile(), "utf8"))).toEqual({ url, token });
+    });
+
+    test("commands go to the host in remote.json; remote names it without the token", async () => {
+      await writeFile(remoteFile(), JSON.stringify({ url, token }));
+      const shown = await invoke(["remote"], other);
+      expect(shown.out).toBe(`${url} (from ${remoteFile()})`);
+      expect(JSON.parse((await invoke(["remote", "--json"], other)).out)).toEqual({ source: "remote", url, from: remoteFile(), tokenSet: true });
+
+      const status = JSON.parse((await invoke(["status", "--json"], other)).out);
+      expect(status).toMatchObject({ url, source: "remote", info: { home } });
+      expect(status.pid).toBeUndefined();
+      expect((await invoke(["status"], other)).out).toContain(`${url} (from ${remoteFile()}, transport`);
+      const listed = JSON.parse((await invoke(["session", "list", "--all", "--json"], other)).out);
+      expect(listed).toEqual(JSON.parse((await invoke(["session", "list", "--all", "--json"], home)).out));
+      const opened = new URL(JSON.parse((await invoke(["open", "--json"], other)).out).url);
+      expect([opened.origin, opened.searchParams.get("token")]).toEqual([url, token]);
+      // `token` is about this machine's host, and there is none here.
+      expect(JSON.parse((await invoke(["token", "--json"], other)).err).error.code).toBe("NoHost");
+    });
+
+    test("LEMMA_URL and LEMMA_TOKEN override remote.json", async () => {
+      await writeFile(remoteFile(), JSON.stringify({ url: dead, token }));
+      const env = { LEMMA_URL: url, LEMMA_TOKEN: token };
+      expect(JSON.parse((await invoke(["remote", "--json"], other, "/", env)).out)).toMatchObject({ source: "env", url, from: "LEMMA_URL" });
+      expect(JSON.parse((await invoke(["status", "--json"], other, "/", env)).out)).toMatchObject({ url, source: "env", info: { home } });
+      const wrong = await invoke(["status", "--json"], other, "/", { ...env, LEMMA_TOKEN: "wrong" });
+      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Unauthorized" });
+      expect(JSON.parse(wrong.err).error.message).toContain("LEMMA_TOKEN");
+    });
+
+    test("a remote host that does not answer is NoHost, naming its URL and the way back", async () => {
+      await writeFile(remoteFile(), JSON.stringify({ url: dead, token }));
+      const down = await invoke(["status", "--json"], other);
+      expect(down.code).toBe(ExitCode.unavailable);
+      const error = JSON.parse(down.err).error;
+      expect(error.code).toBe("NoHost");
+      expect(error.message).toContain(dead);
+      expect(error.message).toContain("lemma remote clear");
+
+      await writeFile(remoteFile(), JSON.stringify({ url, token: "stale" }));
+      const stale = JSON.parse((await invoke(["status", "--json"], other)).err).error;
+      expect(stale.code).toBe("Unauthorized");
+      expect(stale.message).toContain(remoteFile());
+
+      // An unusable file is an error, never a silent fallback to the local host.
+      await writeFile(remoteFile(), "{");
+      expect(JSON.parse((await invoke(["status", "--json"], other)).err).error.message).toContain(`Cannot use ${remoteFile()}`);
+    });
+
+    test("remote clear removes remote.json: back to the local host", async () => {
+      await writeFile(remoteFile(), JSON.stringify({ url, token }));
+      expect(JSON.parse((await invoke(["remote", "clear", "--json"], other)).out)).toEqual({ removed: true, from: remoteFile() });
+      expect(existsSync(remoteFile())).toBe(false);
+      expect(JSON.parse((await invoke(["remote", "clear", "--json"], other)).out)).toEqual({ removed: false, from: remoteFile() });
+      expect(JSON.parse((await invoke(["status", "--json"], other)).err).error.code).toBe("NoHost");
+    });
   });
 });
 
