@@ -270,8 +270,26 @@ try {
     "an unreachable saved position kept the chat from remembering scrolls",
   );
   // A view is in the address, and back returns to the one before.
+  // The trajectory opens at its newest row, and scrolling up stops following it until Follow; a short window makes it scroll.
+  await page.setViewportSize({ width: 1200, height: 320 });
   await page.click(".view-tab[aria-label=Trajectory]");
   await page.waitForFunction(() => location.pathname.endsWith("/trajectory"));
+  const atNewest = (failure: string) =>
+    page
+      .waitForFunction(
+        () => {
+          const scroller = document.querySelector(".trj-scroll")!;
+          return scroller.scrollHeight > scroller.clientHeight && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 2;
+        },
+        undefined,
+        { timeout: 5_000 },
+      )
+      .catch(() => assert.fail(failure));
+  await atNewest("the trajectory did not open at its newest row");
+  await page.evaluate(() => document.querySelector(".trj-scroll")!.scrollTo({ top: 0 }));
+  await page.click(".dt-chip >> text=Follow");
+  await atNewest("Follow did not bring the trajectory back to its newest row");
+  await page.setViewportSize({ width: 1200, height: 900 });
   await page.goBack();
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread);
   await page.waitForSelector(".turn");

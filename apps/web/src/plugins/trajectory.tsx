@@ -65,7 +65,16 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   /** The visible slice of the time axis, as fractions of its full width. */
   const [zoom, setZoom] = createSignal({ start: 0, end: 1 });
   const [menu, setMenu] = createSignal<{ x: number; y: number; record: LedgerRecord }>();
+  /** Whether the table keeps its newest row in view as rows arrive, as a log does; scrolling up stops it. */
+  const [stuck, setStuck] = createSignal(true);
   let filterInput: HTMLInputElement | undefined;
+  let scroller: HTMLDivElement | undefined;
+
+  /** Brings the newest row into view and keeps it there. */
+  const follow = () => {
+    setStuck(true);
+    queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+  };
 
   const select = (next: Selection | undefined, initialTab?: string) => {
     setSelection(next);
@@ -240,6 +249,12 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
               {formatDuration(r().to - r().from)} range <XIcon />
             </button>
           )}
+        </Show>
+        <Show when={!stuck() && sort().key === "time"}>
+          <span class="dt-sep" />
+          <button class="dt-chip" onClick={follow} data-tip="Show the newest record and keep it in view">
+            ↓ Follow
+          </button>
         </Show>
       </div>
     );
@@ -1434,9 +1449,34 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
           setZoom({ start: 0, end: 1 });
           setCollapsed(new Set<string>());
           setMenu(undefined);
+          if (sort().key === "time") follow();
         },
       ),
     );
+    // In time order the newest row is the one to watch, so the table opens at its end and follows new rows there
+    // (a filter's change too), until the reader scrolls up. Another order has no "newest end" to follow.
+    createEffect(
+      on(visible, () => {
+        if (stuck() && sort().key === "time") follow();
+      }),
+    );
+    createEffect(
+      on(
+        () => sort().key,
+        (key) => {
+          if (key === "time") follow();
+        },
+        { defer: true },
+      ),
+    );
+    let lastTop = 0;
+    const onScroll = () => {
+      const top = scroller!.scrollTop;
+      // Only scrolling up stops following: rows added below move the bottom away too.
+      if (scroller!.scrollHeight - top - scroller!.clientHeight < 24) setStuck(true);
+      else if (top < lastTop) setStuck(false);
+      lastTop = top;
+    };
 
     // DevTools keys: arrows move the selection, Escape closes the panel (or the menu), "/" and Ctrl/Cmd+F focus the filter.
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1472,7 +1512,13 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         <Toolbar />
         <Overview ledgerSpans={allSpans()} scale={scale()} now={now()} matches={matches} />
         <div class="trj-body">
-          <div class="trj-scroll">
+          <div
+            class="trj-scroll"
+            ref={(el) => {
+              scroller = el;
+            }}
+            onScroll={onScroll}
+          >
             <Show
               when={records().length > 0}
               fallback={
