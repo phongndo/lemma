@@ -271,7 +271,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
       if (request === undefined) return yield* Effect.dieMessage(`request ${logged.id} is not on its own branch`);
-      return { request, model };
+      return { request, model, offered: specs.map((spec) => spec.name) };
     });
 
   /** Streams one model call. Returns the settled message, or how the turn ends when the call failed. */
@@ -323,9 +323,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   /**
    * Runs the pending tool calls in order, logging each result as it arrives.
    * A call in `interrupted` (cut off by a restart, and not safe to repeat) is
-   * not run: the model is told so, with the output it had printed.
+   * not run: the model is told so, with the output it had printed. `offered`:
+   * the request's tools, the only ones its calls may run.
    */
-  const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map()) =>
+  const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map(), offered?: readonly string[]) =>
     Effect.gen(function* () {
       const results: ToolResultMessage[] = [];
       while (state.pending.length > 0) {
@@ -333,7 +334,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         if (signal.aborted) return yield* Effect.interrupt;
         const call = state.pending[0]!;
         const startedAt = Date.now();
-        const invocation = new ToolInvocation({ sessionId, toolCallId: call.id, name: call.name, input: call.arguments, cwd });
+        const invocation = new ToolInvocation({
+          sessionId,
+          toolCallId: call.id,
+          name: call.name,
+          input: call.arguments,
+          cwd,
+          ...(offered === undefined ? {} : { offered }),
+        });
         const result = interrupted.has(call.id)
           ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
           : yield* tools.execute(invocation, signal).pipe(
@@ -418,11 +426,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         const stepId = newId();
         yield* append({ type: "step-start", turnId, stepId });
         state.step = { id: stepId, model: input.model };
-        const { request, model } = yield* prepareRequest(stepId);
+        const { request, model, offered } = yield* prepareRequest(stepId);
         state.step = { id: stepId, model };
         const outcome = yield* callModel(stepId, request, model);
         if ("ended" in outcome) return outcome.ended;
-        const results = yield* runTools(stepId);
+        const results = yield* runTools(stepId, new Map(), offered);
         const decision = yield* decide(step, { message: outcome.message, results });
         yield* append({ type: "step-end", turnId, stepId });
         state.step = undefined;

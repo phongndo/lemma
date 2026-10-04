@@ -193,7 +193,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
 
     /** Guards, then the tool. Runs as the hook's terminal so no handler can route around a guard. */
     const terminal =
-      (original: ToolInvocation, decoded: unknown, signal: AbortSignal) =>
+      (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ((chunk: string) => void) | undefined) =>
       (call: ToolInvocation): Effect.Effect<ToolResult, ToolError> =>
         Effect.gen(function* () {
           const found = yield* find(call.name);
@@ -207,28 +207,38 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
           const runtime = yield* Effect.runtime<never>();
-          const output = outputBatcher((chunk, offset) =>
-            Runtime.runFork(runtime)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
-          );
-          return yield* runTool(
-            entry.tool,
-            input,
-            { sessionId: call.sessionId, toolCallId: call.toolCallId, cwd: call.cwd, update: output.update },
-            signal,
-          ).pipe(Effect.ensuring(Effect.sync(output.flush)));
+          const output =
+            update === undefined
+              ? outputBatcher((chunk, offset) =>
+                  Runtime.runFork(runtime)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
+                )
+              : { update, flush: () => {} };
+          const context = {
+            sessionId: call.sessionId,
+            toolCallId: call.toolCallId,
+            cwd: call.cwd,
+            update: output.update,
+            maxResultChars: options.maxResultChars,
+            ...(call.offered === undefined ? {} : { offered: call.offered }),
+          };
+          return yield* runTool(entry.tool, input, context, signal).pipe(Effect.ensuring(Effect.sync(output.flush)));
         });
 
-    const execute: Service["execute"] = (invocation, signal) =>
+    const execute: Service["execute"] = (invocation, signal, executeOptions) =>
       owner.trace(
         `tools.execute ${invocation.name}`,
         Effect.gen(function* () {
           const found = yield* find(invocation.name);
           if (found === undefined) return yield* unknown(invocation.name, yield* names);
+          // A tool the request did not offer is not there for this call, whoever makes it (a model, or a tool running others).
+          if (invocation.offered !== undefined && !invocation.offered.includes(invocation.name)) {
+            return yield* unknown(invocation.name, [...invocation.offered]);
+          }
           const entry = found.item;
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
           const started = Date.now();
           const settled = yield* entry.decode(invocation.input).pipe(
-            Effect.flatMap((decoded) => hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal))),
+            Effect.flatMap((decoded) => hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal, executeOptions?.update))),
             Effect.map((result) => capResult(result, options.maxResultChars)),
             // Handler failures, invalid input, and denials are results the model reads and can act on.
             Effect.catchAll((error) => Effect.succeed(errorResult(error.message))),

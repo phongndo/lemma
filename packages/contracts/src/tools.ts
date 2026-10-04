@@ -22,6 +22,10 @@ export interface ToolContext {
    * while the tool runs. Chunks append; the model reads only the result.
    */
   readonly update?: (chunk: string) => void;
+  /** The call's `ToolInvocation.offered`: a tool that runs others offers only these. */
+  readonly offered?: readonly string[];
+  /** Text characters a result keeps before the registry cuts it; a tool that truncates its own output fits under it. */
+  readonly maxResultChars?: number;
 }
 
 export class ToolError extends Data.TaggedError("ToolError")<{
@@ -55,6 +59,11 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
   name: Schema.String,
   input: Schema.Unknown,
   cwd: Schema.String,
+  /**
+   * The tools, by name, the model request behind this call offered (after `AgentRequestHook`); the registry refuses
+   * any other as `NotFound`. Absent: no request to hold it to, as for a call resumed after a restart.
+   */
+  offered: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
 /**
@@ -97,6 +106,14 @@ export interface ToolContribution {
   readonly replay?: "safe";
 }
 
+export interface ExecuteOptions {
+  /**
+   * Where the call's live output goes instead of its own `ToolOutput`: a tool that runs others passes its
+   * `ToolContext.update`, so their output shows as its own and ends with it.
+   */
+  readonly update?: (chunk: string) => void;
+}
+
 export class Tools extends Context.Tag("lemma/Tools")<
   Tools,
   {
@@ -114,6 +131,6 @@ export class Tools extends Context.Tag("lemma/Tools")<
      * (`NotFound`), an aborted `signal` (`Cancelled`, which interrupts the tool
      * and publishes no `ToolExecuted`), and interruption escape as failures.
      */
-    readonly execute: (invocation: ToolInvocation, signal: AbortSignal) => Effect.Effect<ToolResult, ToolError>;
+    readonly execute: (invocation: ToolInvocation, signal: AbortSignal, options?: ExecuteOptions) => Effect.Effect<ToolResult, ToolError>;
   }
 >() {}

@@ -138,6 +138,27 @@ describe("agent", () => {
     );
   });
 
+  it("refuses a call to a tool the request did not offer", async () => {
+    const readOnly = definePlugin({
+      id: "read-only",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentRequestHook, (draft, next) => next({ ...draft, tools: draft.tools.filter((tool) => tool.spec.name !== "echo") })),
+        ),
+      ),
+    });
+    await withAgent({ plugins: [readOnly], scripts: [useTools(call("c1", "echo", { text: "one" })), reply("ok")] }, ({ requests, executed }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        expect(executed).toEqual([]);
+        const [result] = requests[1]!.messages.filter((message) => message.role === "toolResult");
+        expect(result!.isError).toBe(true);
+        expect(JSON.stringify(result!.content)).toContain('Tool \\"echo\\" not found');
+      }),
+    );
+  });
+
   it("records contributions with plugin ids and omits unchanged system and tools", async () => {
     let calls = 0;
     const context = definePlugin({

@@ -344,6 +344,64 @@ describe("execute", () => {
     );
   });
 
+  it("refuses a tool the request did not offer, and tells the tool what was offered and the result cap", async () => {
+    const context: Tool<unknown> = {
+      name: "context",
+      description: "",
+      input: Schema.Unknown,
+      execute: async (_input, { offered, maxResultChars }) => ok(JSON.stringify({ offered, maxResultChars })),
+    };
+    await run(
+      [contributor("p", [context])],
+      Effect.gen(function* () {
+        const registry = yield* Tools;
+        const invoke = (offered: readonly string[]) =>
+          registry.execute(
+            new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "context", input: {}, cwd: "/tmp", offered }),
+            new AbortController().signal,
+          );
+        const refused = yield* Effect.flip(invoke(["read"]));
+        expect(refused.reason).toBe("NotFound");
+        expect(refused.message).toContain("Available tools: read");
+        expect(JSON.parse(textOf(yield* invoke(["context", "read"])))).toEqual({ offered: ["context", "read"], maxResultChars: 100_000 });
+      }),
+    );
+  });
+
+  it("sends a call's output to the caller's update instead of publishing it", async () => {
+    const chatty: Tool<unknown> = {
+      name: "chatty",
+      description: "",
+      input: Schema.Unknown,
+      execute: async (_input, { update }) => {
+        update?.("one\n");
+        update?.("two\n");
+        return ok("done");
+      },
+    };
+    await run(
+      [contributor("p", [chatty])],
+      Effect.gen(function* () {
+        const events = yield* Events;
+        const published: unknown[] = [];
+        const watching = yield* Effect.fork(Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => published.push(payload))));
+        yield* Effect.yieldNow();
+        const received: string[] = [];
+        const registry = yield* Tools;
+        const result = yield* registry.execute(
+          new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
+          new AbortController().signal,
+          { update: (chunk) => received.push(chunk) },
+        );
+        yield* Effect.sleep("100 millis");
+        yield* Fiber.interrupt(watching);
+        expect(textOf(result)).toBe("done");
+        expect(received).toEqual(["one\n", "two\n"]);
+        expect(published).toEqual([]);
+      }),
+    );
+  });
+
   it("keeps the tail of output that floods between publishes, its offset counting what was dropped", () => {
     const published: { chunk: string; offset: number }[] = [];
     const batcher = outputBatcher((chunk, offset) => published.push({ chunk, offset }), 1_000);
