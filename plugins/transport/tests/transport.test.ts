@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
 import transport, { readDiscovery } from "../src/index.ts";
+import { loadToken } from "../src/token.ts";
 import { fakeAgent, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
 import type { ControlHolder } from "./fakes.ts";
 
@@ -543,20 +544,60 @@ describe("transport", () => {
     30_000,
   );
 
-  test("keeps a generated token across restarts; a configured token wins", async () => {
-    const tokens = await withHost((host) =>
-      Effect.gen(function* () {
-        yield* host.core.restart("transport");
-        const found = yield* readDiscovery(host.home);
-        expect(found?.token).toBe(host.token);
-        expect(yield* Effect.promise(() => fetch(`${found!.url}/api/health?token=${encodeURIComponent(host.token)}`).then((r) => r.status))).toBe(200);
-        return host.token;
-      }),
-    );
-    // A second host start in the same process is the same module instance: still the same generated token.
-    expect(await withHost((host) => Effect.succeed(host.token))).toBe(tokens);
-    expect(await withHost((host) => Effect.succeed(host.token), { token: "configured" })).toBe("configured");
+  test("keeps a generated token in <home>/token across restarts and host starts; a configured token wins", async () => {
+    const home = await mkdtemp(join(tmpdir(), "lemma-transport-"));
+    const file = join(home, "token");
+    try {
+      const token = await withHost(
+        (host) =>
+          Effect.gen(function* () {
+            yield* host.core.restart("transport");
+            const found = yield* readDiscovery(host.home);
+            expect(found?.token).toBe(host.token);
+            expect(yield* Effect.promise(() => fetch(`${found!.url}/api/health?token=${encodeURIComponent(host.token)}`).then((r) => r.status))).toBe(200);
+            return host.token;
+          }),
+        {},
+        home,
+      );
+      expect((await readFile(file, "utf8")).trim()).toBe(token);
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      // A new host with the same home: the clients it served before still hold a valid token.
+      expect(await withHost((host) => Effect.succeed(host.token), {}, home)).toBe(token);
+      expect(await withHost((host) => Effect.succeed(host.token), { token: "configured" }, home)).toBe("configured");
+      expect((await readFile(file, "utf8")).trim()).toBe(token);
+      // Deleting the file rotates the token at the next start.
+      await rm(file);
+      const rotated = await withHost((host) => Effect.succeed(host.token), {}, home);
+      expect(rotated).not.toBe(token);
+      expect((await readFile(file, "utf8")).trim()).toBe(rotated);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   }, 30_000);
+
+  test("hosts creating the token file at once agree on one token; an empty file is an error, not a new token", async () => {
+    const home = join(await mkdtemp(join(tmpdir(), "lemma-transport-")), "home");
+    try {
+      const tokens = await Effect.runPromise(
+        Effect.all(
+          Array.from({ length: 8 }, () => loadToken(home)),
+          { concurrency: "unbounded" },
+        ),
+      );
+      expect(new Set(tokens).size).toBe(1);
+      expect(tokens[0]).toMatch(/^[\w-]{32}$/);
+      expect(await readdir(home)).toEqual(["token"]);
+      expect((await stat(home)).mode & 0o777).toBe(0o700);
+      await writeFile(join(home, "token"), "  \n");
+      const exit = await Effect.runPromiseExit(loadToken(home));
+      expect(Exit.isFailure(exit) && exit.cause._tag === "Fail" && exit.cause.error.message).toBe(
+        `${join(home, "token")} is empty; delete it and restart the host to generate a new token`,
+      );
+    } finally {
+      await rm(join(home, ".."), { recursive: true, force: true });
+    }
+  });
 
   test("without subscribers the question falls through to the terminal", () =>
     withHost((host) =>

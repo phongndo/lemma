@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { Effect, Layer, Schema } from "effect";
 import { Agent, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
 import { definePlugin, Events, PluginContext, Registries } from "@lemma/core";
@@ -9,6 +8,7 @@ import { makeInteractions } from "./interactions.ts";
 import { makeLogins } from "./logins.ts";
 import { publishDiscovery } from "./discovery.ts";
 import { startServer } from "./server.ts";
+import { loadToken } from "./token.ts";
 
 export { Discovery, discoveryPath, readDiscovery } from "./discovery.ts";
 export { toHostError, toPluginStatus } from "./errors.ts";
@@ -25,7 +25,7 @@ export const TransportConfig = Schema.Struct({
   }),
   token: Schema.optional(Schema.NonEmptyString).annotations({
     ...secret,
-    description: "Generated once per host process when absent, so plugin restarts keep it.",
+    description: "When absent, read from <home>/token, which the first start creates with a random token; delete that file to rotate it.",
   }),
   staticDir: Schema.optional(Schema.String).annotations({
     description: "A built web app served at /, with index.html as the fallback for client-side routes.",
@@ -37,13 +37,6 @@ export const TransportConfig = Schema.Struct({
 export type TransportConfig = typeof TransportConfig.Type;
 
 /** A wildcard bind is reachable locally through loopback; that is what the discovery file should say. */
-/**
- * Generated once per host process, not per start: plugin modules are imported
- * once, so a restart (a config change here or in a dependency) keeps the token
- * that connected clients and the web app's tokenized link already hold.
- */
-const generatedToken = randomBytes(24).toString("base64url");
-
 const clientHost = (hostname: string): string => {
   if (hostname === "0.0.0.0") return "127.0.0.1";
   if (hostname === "::") return "[::1]";
@@ -70,7 +63,7 @@ export default definePlugin({
         hub = yield* makeHub(owner, interactions.open);
         yield* owner.on(InteractionHook, interactions.handle);
 
-        const token = config.token ?? generatedToken;
+        const token = config.token ?? (yield* loadToken(paths.home));
         const login = makeLogins(llm, yield* Effect.scope);
         const handlers = HostRpcs.toLayer(
           makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }),

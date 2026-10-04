@@ -8,19 +8,21 @@ Serves `HostRpcs` from `@lemma/contracts` with `@effect/rpc` on Node's HTTP serv
 { "plugins": { "transport": { "config": { "port": 7433, "staticDir": "/path/to/apps/web/dist" } } } }
 ```
 
-| Config               | Default                 | Meaning                                                                                                                              |
-| -------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `host`               | `"127.0.0.1"`           | Bind address. Loopback unless set explicitly.                                                                                        |
-| `port`               | `7433`                  | `0` asks the OS for a free port.                                                                                                     |
-| `token`              | random per host process | Required on `/rpc*` and `/api*`. The generated token survives plugin restarts, so connected clients and the web app link stay valid. |
-| `staticDir`          | none                    | Built web app served at `/`; extensionless paths without a file fall back to `index.html`. No token needed.                          |
-| `interactionGraceMs` | `15000`                 | How long an open question waits for a client to (re)connect before failing `Unavailable`.                                            |
+| Config               | Default              | Meaning                                                                                                     |
+| -------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `host`               | `"127.0.0.1"`        | Bind address. Loopback unless set explicitly.                                                               |
+| `port`               | `7433`               | `0` asks the OS for a free port.                                                                            |
+| `token`              | `<Paths.home>/token` | Required on `/rpc*` and `/api*`. The default is read from that file, created at the first start (below).    |
+| `staticDir`          | none                 | Built web app served at `/`; extensionless paths without a file fall back to `index.html`. No token needed. |
+| `interactionGraceMs` | `15000`              | How long an open question waits for a client to (re)connect before failing `Unavailable`.                   |
 
 Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser WebSockets need; otherwise `401`):
 
 - `GET /rpc` — WebSocket, JSON serialization. One multiplexed connection for UIs.
 - `POST /rpc/http` — streaming HTTP, NDJSON serialization. With `@effect/rpc`'s HTTP client, add `HttpClient.filterStatusOk`: otherwise it parses a `401` body as NDJSON and waits forever.
 - `GET /api/health` — `{ ok: true, version }`.
+
+Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token.
 
 After listening it writes `<Paths.home>/transport.json` as `{ url, token, pid, startedAt }` (mode 0600) and removes it on shutdown unless another host has replaced it. `readDiscovery(home)` returns that entry, or `undefined` when the file is absent, invalid, or its process is gone. It also publishes a `Notice` with the URL (and a tokenized link to the web app when `staticDir` is set).
 

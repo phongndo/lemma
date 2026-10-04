@@ -284,7 +284,7 @@ export const createMockHost = (): Host => {
       port: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 65535)), { default: () => 7433 }).annotations({
         description: "0 asks the OS for a free port.",
       }),
-      token: Schema.optional(Schema.NonEmptyString).annotations({ ...secret, description: "Generated once per host process when absent." }),
+      token: Schema.optional(Schema.NonEmptyString).annotations({ ...secret, description: "When absent, read from <home>/token, created at the first start." }),
     }),
   };
   const configRows: Record<string, Record<string, unknown>> = { transport: { token: "mock-token" } };
