@@ -312,6 +312,8 @@ const eventLine = (event: HostEvent): string => {
       return `${event.sessionId} turn started ${event.turnId}`;
     case "turn-ended":
       return `${event.sessionId} turn ended ${event.turnId} (${event.reason})`;
+    case "queue-changed":
+      return `${event.sessionId} queue ${event.queue.length === 0 ? "empty" : event.queue.map((queued) => `${queued.mode} ${queued.requestId}`).join(", ")}`;
     case "interaction":
       return `question ${event.request.id} (${event.request.type}): ${event.request.title}`;
     case "interaction-closed":

@@ -5,6 +5,7 @@ import {
   CommandsChanged,
   Notice,
   PluginsChanged,
+  QueueChanged,
   SessionAppended,
   SessionChanged,
   SessionRemoved,
@@ -53,9 +54,18 @@ export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => I
     const forward = <P>(event: Event<P>, convert: (payload: P) => HostEvent, buffer = 256) =>
       owner.observe(event, (payload) => feed(convert(payload)), { buffer, overflow: "dropOldest" });
 
-    yield* forward(AssistantDelta, (e) => ({ type: "delta", sessionId: e.sessionId, turnId: e.turnId, stepId: e.stepId, event: e.event }), SUBSCRIBER_BUFFER);
-    yield* forward(ToolOutput, (e) => ({ type: "tool-output", sessionId: e.sessionId, toolCallId: e.toolCallId, chunk: e.chunk }), SUBSCRIBER_BUFFER);
+    yield* forward(
+      AssistantDelta,
+      (e) => ({ type: "delta", sessionId: e.sessionId, turnId: e.turnId, stepId: e.stepId, seq: e.seq, event: e.event }),
+      SUBSCRIBER_BUFFER,
+    );
+    yield* forward(
+      ToolOutput,
+      (e) => ({ type: "tool-output", sessionId: e.sessionId, toolCallId: e.toolCallId, chunk: e.chunk, offset: e.offset }),
+      SUBSCRIBER_BUFFER,
+    );
     yield* forward(TurnStarted, (e) => ({ type: "turn-started", sessionId: e.sessionId, turnId: e.turnId }));
+    yield* forward(QueueChanged, (e) => ({ type: "queue-changed", sessionId: e.sessionId, queue: e.queue, revision: e.revision }));
     yield* forward(TurnEnded, (e) => ({ type: "turn-ended", sessionId: e.sessionId, turnId: e.turnId, usage: e.usage, reason: e.reason }));
     yield* forward(SessionAppended, (e) => ({ type: "session-appended", sessionId: e.sessionId, event: e.event }), SUBSCRIBER_BUFFER);
     yield* forward(SessionChanged, (e) => ({ type: "session-changed", info: e.info }));

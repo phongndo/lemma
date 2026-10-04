@@ -48,8 +48,10 @@ const OUTPUT_INTERVAL_MS = 50;
 const OUTPUT_MAX_CHARS = 64 * 1024;
 
 /** Batches `ToolContext.update` chunks into one `publish` per interval; `flush` sends the rest. */
-export const outputBatcher = (publish: (chunk: string) => void, interval = OUTPUT_INTERVAL_MS) => {
+export const outputBatcher = (publish: (chunk: string, offset: number) => void, interval = OUTPUT_INTERVAL_MS) => {
   let pending = "";
+  /** Everything printed so far, the parts a batch dropped included. */
+  let printed = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = () => {
     if (timer !== undefined) clearTimeout(timer);
@@ -57,9 +59,10 @@ export const outputBatcher = (publish: (chunk: string) => void, interval = OUTPU
     if (pending === "") return;
     const chunk = pending;
     pending = "";
-    publish(chunk);
+    publish(chunk, printed - chunk.length);
   };
   const update = (chunk: string) => {
+    printed += chunk.length;
     pending += chunk;
     if (pending.length > OUTPUT_MAX_CHARS) pending = pending.slice(-OUTPUT_MAX_CHARS);
     timer ??= setTimeout(flush, interval);
@@ -173,7 +176,11 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
 
     const list: Service["list"] = Effect.map(entries, (items) =>
       items
-        .map((contribution) => ({ source: contribution.pluginId, spec: contribution.item.spec }))
+        .map((contribution) => ({
+          source: contribution.pluginId,
+          spec: contribution.item.spec,
+          ...(contribution.item.tool.replay === undefined ? {} : { replay: contribution.item.tool.replay }),
+        }))
         .sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0)),
     );
 
@@ -200,8 +207,8 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
           const runtime = yield* Effect.runtime<never>();
-          const output = outputBatcher((chunk) =>
-            Runtime.runFork(runtime)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk })),
+          const output = outputBatcher((chunk, offset) =>
+            Runtime.runFork(runtime)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
           );
           return yield* runTool(
             entry.tool,

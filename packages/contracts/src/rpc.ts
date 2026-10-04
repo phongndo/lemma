@@ -1,6 +1,6 @@
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
-import { PromptContent, TurnOptions } from "./agent.ts";
+import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from "./agent.ts";
 import { CommandInfo, CommandResult } from "./commands.ts";
 import { ConfigField, ConfigValues } from "./config.ts";
 import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, PluginChange, PluginSource, RegistryUse, UiComposition } from "./host.ts";
@@ -62,9 +62,23 @@ export const HostEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("session-appended"), sessionId: Schema.String, event: SessionEvent }),
   Schema.Struct({ type: Schema.Literal("session-changed"), info: SessionInfo }),
   Schema.Struct({ type: Schema.Literal("session-removed"), sessionId: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("delta"), sessionId: Schema.String, turnId: Schema.String, stepId: Schema.String, event: StreamEvent }),
-  Schema.Struct({ type: Schema.Literal("tool-output"), sessionId: Schema.String, toolCallId: Schema.String, chunk: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("delta"),
+    sessionId: Schema.String,
+    turnId: Schema.String,
+    stepId: Schema.String,
+    seq: Schema.optional(Schema.Number),
+    event: StreamEvent,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("tool-output"),
+    sessionId: Schema.String,
+    toolCallId: Schema.String,
+    chunk: Schema.String,
+    offset: Schema.optional(Schema.Number),
+  }),
   Schema.Struct({ type: Schema.Literal("turn-started"), sessionId: Schema.String, turnId: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("queue-changed"), sessionId: Schema.String, queue: Schema.Array(QueuedPrompt), revision: Schema.Number }),
   Schema.Struct({
     type: Schema.Literal("turn-ended"),
     sessionId: Schema.String,
@@ -108,10 +122,24 @@ export class HostRpcs extends RpcGroup.make(
   /** Fails `Busy` while a turn runs in it. */
   Rpc.make("Session.Delete", { payload: { sessionId: Schema.String }, error: HostError }),
 
-  /** Returns when the turn ends. */
-  Rpc.make("Agent.Prompt", { payload: { sessionId: Schema.String, content: PromptContent, options: Schema.optional(TurnOptions) }, error: HostError }),
+  /** Returns when the turn that places the prompt ends (see `Agent.prompt`): call it again with the same `requestId` to wait again. */
+  Rpc.make("Agent.Prompt", {
+    payload: {
+      sessionId: Schema.String,
+      content: PromptContent,
+      options: Schema.optional(TurnOptions),
+      requestId: Schema.optional(Schema.String),
+      whenBusy: Schema.optional(WhenBusy),
+    },
+    error: HostError,
+  }),
   Rpc.make("Agent.Cancel", { payload: { sessionId: Schema.String } }),
   Rpc.make("Agent.Running", { success: Schema.Array(Schema.String) }),
+  Rpc.make("Agent.Queue", { payload: { sessionId: Schema.String }, success: Schema.Array(QueuedPrompt) }),
+  /** False when the prompt was no longer queued. */
+  Rpc.make("Agent.Withdraw", { payload: { sessionId: Schema.String, requestId: Schema.String }, success: Schema.Boolean }),
+  /** What a client joining now shows of the session beyond its log: model output and tool output so far, and the queue. */
+  Rpc.make("Agent.View", { payload: { sessionId: Schema.String }, success: AgentView }),
 
   Rpc.make("Llm.Providers", { success: Schema.Array(ProviderInfo), error: HostError }),
   Rpc.make("Llm.Models", { payload: { available: Schema.optional(Schema.Boolean) }, success: Schema.Array(ModelInfo), error: HostError }),

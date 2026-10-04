@@ -3,7 +3,10 @@ import { createServer } from "node:http";
 /**
  * A scripted OpenAI Chat Completions server for end-to-end runs without an API
  * key. A user turn gets a `bash` tool call; a tool result gets a streamed text
- * answer that quotes it. Configure it as a keyless custom provider:
+ * answer that quotes it. A prompt saying "slowly" gets a command that prints,
+ * then sleeps for a while; one saying "ramble" gets a long answer streamed
+ * slowly and no tool call: both are for cutting a turn off midway. Configure
+ * it as a keyless custom provider:
  *
  *   { "plugins": { "llm": { "config": { "providers": [{ "id": "mock", "api": "openai-completions",
  *     "baseUrl": "http://127.0.0.1:7499/v1", "models": [{ "id": "scripted" }] }] } } } }
@@ -30,6 +33,7 @@ createServer((request, response) => {
   request.on("end", async () => {
     const messages: ChatMessage[] = JSON.parse(body).messages;
     const last = messages.at(-1);
+    const prompt = JSON.stringify(messages.filter((message) => message.role === "user").at(-1)?.content ?? "");
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const send = (text: string) => response.write(text);
     const pause = () => new Promise((resolve) => setTimeout(resolve, 40));
@@ -41,13 +45,20 @@ createServer((request, response) => {
         await pause();
       }
       send(chunk({}, "stop"));
+    } else if (prompt.includes("ramble")) {
+      for (let word = 1; word <= 60; word++) {
+        send(chunk({ content: `word${word} ` }));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      send(chunk({}, "stop"));
     } else {
+      const command = prompt.includes("slowly") ? "echo started && sleep 8 && echo finished" : "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset} && uname -s";
       send(chunk({ content: "Let me check with bash." }));
       await pause();
       send(chunk({ tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: "" } }] }));
       send(
         chunk({
-          tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset} && uname -s" }) } }],
+          tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command }) } }],
         }),
       );
       send(chunk({}, "tool_calls"));

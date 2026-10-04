@@ -41,3 +41,7 @@ Paths resolve against the session cwd; `~` expands and a leading `@` is dropped.
   kill the whole group. After the shell exits, output is read until the pipes go
   idle for 100ms, so a background child holding them cannot hang the call.
 - Writes and edits to one file are serialized in-process (per real path).
+- **Only `read` repeats.** It is `replay: "safe"`, so a read a host restart cut
+  off runs again; a cut-off `write`, `edit`, or `bash` is reported to the model
+  as interrupted instead, since running it twice could do harm (pi's tools
+  repeat none).

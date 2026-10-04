@@ -8,7 +8,9 @@ stays on loopback and Tailscale carries it across machines over HTTPS.
 ## On the server
 
 Build the web app once (and after updating the checkout), then run the host
-under a supervisor so it comes back after a crash or a reboot:
+under a supervisor so it comes back after a crash or a reboot. Turns a crash or
+a restart cut off resume when it does, and queued prompts run on (see the
+[agent plugin](../plugins/agent/README.md#durability)):
 
 ```sh
 nix develop -c pnpm --filter @lemma/web build

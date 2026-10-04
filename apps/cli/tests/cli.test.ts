@@ -763,3 +763,102 @@ describe("argument parsing", () => {
     expect(formatQuestions([approval])).toBe("q1  select  Run this command?\n    rm -rf build\n    ls\n    1. once (Allow once)\n    2. deny (Deny)");
   });
 });
+
+describe("a host killed mid-turn", () => {
+  let home: string;
+  let mock: ChildProcess;
+  const hosts: ChildProcess[] = [];
+
+  const startHost = async () => {
+    const host = spawn(process.execPath, ["--conditions=source", hostMain, "--no-open"], {
+      env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
+      stdio: "ignore",
+    });
+    hosts.push(host);
+    // A killed host leaves its transport.json behind: wait for this one's.
+    const ready = await settled(
+      async () => JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { pid: number },
+      (entry) => entry.pid === host.pid,
+    );
+    if (ready === undefined) throw new Error("host did not start");
+    return host;
+  };
+  const show = async (session: string) =>
+    JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as { branch: { data: Record<string, any> }[] };
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), "lemma-cli-crash-"));
+    const port = await freePort();
+    mock = spawn(process.execPath, [mockProvider], { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "ignore"] });
+    await new Promise<void>((resolve) => mock.stdout!.once("data", () => resolve()));
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        plugins: {
+          transport: { config: { port: 0 } },
+          llm: { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: "scripted" }] }] } },
+          agent: { config: { defaultModel: "mock/scripted" } },
+        },
+      }),
+    );
+  }, 30_000);
+
+  afterAll(async () => {
+    mock.kill();
+    for (const host of hosts) {
+      if (host.exitCode !== null || host.signalCode !== null) continue;
+      const exited = new Promise((resolve) => host.once("exit", resolve));
+      host.kill("SIGTERM");
+      await exited;
+    }
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("resumes its turns when it starts again: a cut-off command is reported with its output, a cut-off answer is asked again", async () => {
+    const first = await startHost();
+    const slow = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const ramble = (await invoke(["session", "new", "--cwd", home], home)).out;
+    // Both are left waiting when the host dies under them.
+    void invoke(["run", slow, "do it slowly"], home);
+    void invoke(["run", ramble, "ramble on"], home);
+    const live = (session: string) => readFile(join(home, "agent", `${session}.live.json`), "utf8");
+    expect(
+      await settled(
+        () => live(slow),
+        (text) => text.includes("started"),
+      ),
+    ).toBeDefined();
+    expect(
+      await settled(
+        () => live(ramble),
+        (text) => text.includes("word5"),
+      ),
+    ).toBeDefined();
+    const exited = new Promise((resolve) => first.once("exit", resolve));
+    first.kill("SIGKILL");
+    await exited;
+
+    await startHost();
+    const ended = async (session: string) =>
+      settled(
+        () => show(session),
+        ({ branch }) => branch.some((event) => event.data.type === "turn-end"),
+      );
+    const [slowLog, rambleLog] = await Promise.all([ended(slow), ended(ramble)]);
+    for (const log of [slowLog!, rambleLog!]) {
+      expect(log.branch.some((event) => event.data.type === "custom" && event.data.kind === "agent.resumed")).toBe(true);
+      expect(log.branch.find((event) => event.data.type === "turn-end")!.data.reason).toBe("done");
+      expect(log.branch.filter((event) => event.data.type === "turn-start")).toHaveLength(1);
+    }
+    // The command was not run again: the model was told it was cut off, with what it had printed.
+    const result = slowLog!.branch.find((event) => event.data.type === "message" && event.data.message.role === "toolResult")!.data.message;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/interrupted[\s\S]*started/);
+    // The answer cut off midway is kept as an interrupted attempt, and asked again in full.
+    const attempt = rambleLog!.branch.find((event) => event.data.type === "attempt")!.data.message;
+    expect(attempt.errorMessage).toMatch(/^Interrupted/);
+    expect(attempt.content[0].text).toContain("word5");
+    const answer = rambleLog!.branch.filter((event) => event.data.type === "message" && event.data.message.role === "assistant").at(-1)!.data.message;
+    expect(answer.content[0].text).toContain("word60");
+  }, 60_000);
+});

@@ -17,7 +17,7 @@ import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
 import transport, { readDiscovery } from "../src/index.ts";
 import { loadToken } from "../src/token.ts";
-import { fakeAgent, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
+import { fakeAgent, prompted, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
 import type { ControlHolder } from "./fakes.ts";
 
 type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
@@ -233,7 +233,8 @@ describe("transport", () => {
           expect((yield* client.Session.List({})).map((info) => info.id)).toEqual([session.id]);
           expect(yield* client.Session.List({ cwd: "/elsewhere" })).toEqual([]);
 
-          yield* client.Agent.Prompt({ sessionId: session.id, content: text("hi") });
+          yield* client.Agent.Prompt({ sessionId: session.id, content: text("hi"), requestId: "r1", whenBusy: "steer" });
+          expect(prompted.at(-1)).toEqual({ requestId: "r1", whenBusy: "steer" });
           // Kinds are observed independently, so `turn-ended` may overtake the last delta: wait for both.
           let ended = false;
           let streamed = "";
@@ -243,7 +244,12 @@ describe("transport", () => {
             return ended && streamed === "echo: hi";
           });
           expect(turn.some((event) => event.type === "turn-started" && event.sessionId === session.id)).toBe(true);
+          // Deltas carry their number in the step, so a client seeded from `Agent.View` can skip what it already shows.
+          expect(turn.flatMap((event) => (event.type === "delta" ? [event.seq] : []))).toEqual([1, 2]);
           expect(yield* client.Agent.Running()).toEqual([]);
+          expect(yield* client.Agent.View({ sessionId: session.id })).toEqual({ output: [], queue: [], queueRevision: 0 });
+          expect(yield* client.Agent.Queue({ sessionId: session.id })).toEqual([]);
+          expect(yield* client.Agent.Withdraw({ sessionId: session.id, requestId: "r1" })).toBe(false);
 
           const logged = yield* client.Session.Events({ sessionId: session.id });
           expect(logged.map((event) => (event.data.type === "message" ? event.data.message.role : event.data.type))).toEqual(["user", "assistant"]);

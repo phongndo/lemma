@@ -61,6 +61,8 @@ const describe = (line: Line): string => {
       return `lastSeq ${event.info.lastSeq}${event.info.title === undefined ? "" : ` "${event.info.title}"`}`;
     case "turn-started":
       return `turn ${event.turnId}`;
+    case "queue-changed":
+      return event.queue.length === 0 ? "empty" : event.queue.map((queued) => `${queued.mode} ${queued.requestId}`).join(" · ");
     case "turn-ended":
       return `turn ${event.turnId} ${event.reason} · ↑${event.usage.input} ↓${event.usage.output}`;
     case "interaction":

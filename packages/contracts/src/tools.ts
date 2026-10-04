@@ -41,6 +41,11 @@ export interface Tool<Input = any> {
   /** Model-facing description. */
   readonly description: string;
   readonly input: Schema.Schema<Input, any, never>;
+  /**
+   * `safe`: running it again with the same input does no harm (it only reads), so a call cut off by a host restart is
+   * run again. Absent: a cut-off call is not repeated, and the model is told it was interrupted, with its output so far.
+   */
+  readonly replay?: "safe";
   readonly execute: (input: Input, context: ToolContext) => Promise<ToolResult> | Effect.Effect<ToolResult, unknown>;
 }
 
@@ -73,17 +78,23 @@ export const ToolExecuted = Event.make<{
   readonly durationMs: number;
 }>("lemma/tool.executed");
 
-/** Live output of a running tool (see `ToolContext.update`), batched; the durable record is its result. Losable. */
+/**
+ * Live output of a running tool (see `ToolContext.update`), batched; the durable record is its result. Losable.
+ * `offset` is how much the tool had printed before `chunk` (a batch keeps only its tail, so offsets can skip).
+ */
 export const ToolOutput = Event.make<{
   readonly sessionId: string;
   readonly toolCallId: string;
   readonly chunk: string;
+  readonly offset: number;
 }>("lemma/tool.output");
 
 /** A registered tool's model-facing spec and the plugin that registered it. */
 export interface ToolContribution {
   readonly spec: ToolSpec;
   readonly source: string;
+  /** The tool's `replay`. */
+  readonly replay?: "safe";
 }
 
 export class Tools extends Context.Tag("lemma/Tools")<

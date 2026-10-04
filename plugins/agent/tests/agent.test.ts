@@ -325,7 +325,7 @@ describe("agent", () => {
     );
   });
 
-  it("rejects a second prompt with Busy and keeps running when the caller goes away", async () => {
+  it("rejects a second prompt with Busy when asked to, and keeps running when the caller goes away", async () => {
     const gate = Effect.runSync(Deferred.make<void>());
     await withAgent({ scripts: [gated(gate, reply("late"))] }, ({ rec }) =>
       Effect.gen(function* () {
@@ -333,7 +333,7 @@ describe("agent", () => {
         const a = yield* Agent;
         const caller = yield* Effect.fork(a.prompt(id, text("go")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        const busy = yield* Effect.flip(a.prompt(id, text("again")));
+        const busy = yield* Effect.flip(a.prompt(id, text("again"), { whenBusy: "reject" }));
         expect(busy.reason).toBe("Busy");
         yield* Fiber.interrupt(caller);
         expect(yield* a.busy(id)).toBe(true);

@@ -36,7 +36,8 @@ export const Contribution = Schema.Struct({
 export type Contribution = typeof Contribution.Type;
 
 export const EventData = Schema.Union(
-  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String }),
+  /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
+  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,
@@ -72,6 +73,8 @@ export const EventData = Schema.Union(
     stepId: Schema.optional(Schema.String),
     timing: Schema.optional(Timing),
     details: Schema.optional(Schema.Unknown),
+    /** On a user message: the submission's id (see `Agent.prompt`), so a retried submission is not placed twice. */
+    requestId: Schema.optional(Schema.String),
   }),
   /** A failed, cancelled, or retried model call. Kept for inspection; never model-visible. */
   Schema.Struct({

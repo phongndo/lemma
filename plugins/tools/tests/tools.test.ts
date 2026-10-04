@@ -338,19 +338,21 @@ describe("execute", () => {
         expect(textOf(yield* call("chatty", {}))).toBe("done");
         const chunks = Chunk.toArray(yield* Fiber.join(outputs));
         expect(chunks.map((payload) => payload.chunk)).toEqual(["one\ntwo\n", "three\n"]);
+        expect(chunks.map((payload) => payload.offset)).toEqual([0, 8]);
         expect(chunks[0]).toMatchObject({ sessionId: "s", toolCallId: "c1" });
       }),
     );
   });
 
-  it("keeps the tail of output that floods between publishes", () => {
-    const published: string[] = [];
-    const batcher = outputBatcher((chunk) => published.push(chunk), 1_000);
+  it("keeps the tail of output that floods between publishes, its offset counting what was dropped", () => {
+    const published: { chunk: string; offset: number }[] = [];
+    const batcher = outputBatcher((chunk, offset) => published.push({ chunk, offset }), 1_000);
     batcher.update("a".repeat(70_000));
     batcher.update("end");
     batcher.flush();
     expect(published).toHaveLength(1);
-    expect(published[0]!.length).toBe(64 * 1024);
-    expect(published[0]!.endsWith("end")).toBe(true);
+    expect(published[0]!.chunk.length).toBe(64 * 1024);
+    expect(published[0]!.chunk.endsWith("end")).toBe(true);
+    expect(published[0]!.offset).toBe(70_003 - 64 * 1024);
   });
 });

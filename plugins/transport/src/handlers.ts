@@ -50,9 +50,19 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
       }),
 
     // The agent owns the turn's lifetime; this call only waits for it.
-    "Agent.Prompt": ({ sessionId, content, options }) => agent.prompt(sessionId, content, options).pipe(Effect.mapError(toHostError)),
+    "Agent.Prompt": ({ sessionId, content, options, requestId, whenBusy }) =>
+      agent
+        .prompt(sessionId, content, {
+          ...options,
+          ...(requestId === undefined ? {} : { requestId }),
+          ...(whenBusy === undefined ? {} : { whenBusy }),
+        })
+        .pipe(Effect.mapError(toHostError)),
     "Agent.Cancel": ({ sessionId }) => agent.cancel(sessionId),
     "Agent.Running": () => agent.running,
+    "Agent.Queue": ({ sessionId }) => agent.queue(sessionId),
+    "Agent.Withdraw": ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId),
+    "Agent.View": ({ sessionId }) => agent.view(sessionId),
 
     "Llm.Providers": () => llm.providers,
     "Llm.Models": ({ available }) => llm.models(available === undefined ? undefined : { available }),

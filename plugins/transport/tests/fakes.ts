@@ -33,6 +33,7 @@ import type {
   InteractionRequest,
   ModelInfo,
   PluginInfo,
+  PromptOptions,
   SessionEvent,
   SessionInfo,
   UiComposition,
@@ -135,6 +136,9 @@ const reply = (text: string): AssistantMessage => ({
   timestamp: Date.now(),
 });
 
+/** The options of every prompt the fake agent received, for checking what the transport passes on. */
+export const prompted: PromptOptions[] = [];
+
 /** Echoes the prompt in two deltas and records both messages. */
 export const fakeAgent = definePlugin({
   id: "agent",
@@ -149,8 +153,9 @@ export const fakeAgent = definePlugin({
       let turns = 0;
       const session = (sessionId: string) => (error: SessionError) => new AgentError({ sessionId, reason: "Session", message: error.message, cause: error });
       return {
-        prompt: (sessionId, content) =>
+        prompt: (sessionId, content, options) =>
           Effect.gen(function* () {
+            prompted.push(options ?? {});
             if (running.has(sessionId)) return yield* new AgentError({ sessionId, reason: "Busy", message: "A turn is running" });
             running.add(sessionId);
             const turnId = `t${++turns}`;
@@ -160,7 +165,7 @@ export const fakeAgent = definePlugin({
             yield* events.publish(TurnStarted, { sessionId, turnId });
             const text = `echo: ${content.map((part) => (part.type === "text" ? part.text : "")).join("")}`;
             for (const [index, delta] of [text.slice(0, 6), text.slice(6)].entries()) {
-              yield* events.publish(AssistantDelta, { sessionId, turnId, stepId: "p1", event: { type: "text-delta", index, delta } });
+              yield* events.publish(AssistantDelta, { sessionId, turnId, stepId: "p1", seq: index + 1, event: { type: "text-delta", index, delta } });
             }
             yield* sessions.append(sessionId, { type: "message", message: reply(text), turnId }).pipe(Effect.mapError(session(sessionId)));
             yield* events.publish(TurnEnded, { sessionId, turnId, usage: emptyUsage, reason: "done" as const });
@@ -168,6 +173,9 @@ export const fakeAgent = definePlugin({
         cancel: () => Effect.void,
         busy: (sessionId) => Effect.sync(() => running.has(sessionId)),
         running: Effect.sync(() => [...running]),
+        queue: () => Effect.succeed([]),
+        withdraw: () => Effect.succeed(false),
+        view: () => Effect.succeed({ output: [], queue: [], queueRevision: 0 }),
       };
     }),
   ),

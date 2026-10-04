@@ -35,6 +35,10 @@ const greet = definePlugin({
 - `register` records the caller's `PluginContext` id as the tool's `source` and
   unregisters when the caller's scope closes. A duplicate name fails with
   `InvalidInput`, so contributors should be `exclusive` to reload cleanly.
+- A tool that only reads declares `replay: "safe"`: a call a host restart cut
+  off then runs again when the turn resumes, where any other is reported to the
+  model as interrupted (see the [agent](../agent/README.md#durability)). `list`
+  carries it.
 - `list` is sorted by name, so re-registration after a reload does not reorder
   (and re-log) the tool list. Parameters come from `JSONSchema.make(tool.input)`
   with `$schema`, ids, and Effect's generated titles removed and every `$ref`
