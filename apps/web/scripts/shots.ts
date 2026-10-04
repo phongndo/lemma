@@ -35,9 +35,6 @@ try {
   for (const theme of ["light", "dark"] as const) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: theme });
     await page.goto(`http://127.0.0.1:${address.port}/?mock`);
-    // The mock host starts with no provider set up, so the providers' welcome (settings) may show first: leave it.
-    await page.waitForSelector("textarea, .settings");
-    if ((await page.locator(".settings").count()) > 0) await page.keyboard.press("Escape");
     await page.waitForSelector("textarea");
     await shot(page, `${theme}-01-new-chat`);
     await page.fill("textarea", "Show me the packages");

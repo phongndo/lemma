@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import { Schema } from "effect";
 import type { AuthType, InteractionRequest, ProviderInfo } from "@lemma/contracts";
@@ -23,8 +23,6 @@ import {
   Models,
   Notify,
   ProviderRowPart,
-  NewThreadRoute,
-  Router,
   Settings,
   SettingsGroups,
   SettingsSections,
@@ -477,8 +475,8 @@ function CustomProviderRow(props: { add: (draft: CustomProviderDraft, key: strin
 /**
  * Model providers: sign in with a subscription or paste an API key, in the
  * provider's row. A search at the top narrows the list; popular ways to start
- * come first. On a first run with nothing set up, the section opens by itself
- * and closes once a provider is connected.
+ * come first. Opened from the chat's notice (or the palette) with nothing set
+ * up, it says why and closes once a provider is connected.
  */
 export const ProvidersConfig = Schema.Struct({
   logos: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })).annotations({
@@ -498,9 +496,8 @@ export default defineUiPlugin({
     interactions: Interactions,
     notify: Notify,
     uiPlugins: UiPlugins,
-    router: Router,
   },
-  setup: ({ models, settings, slots, interactions, notify, uiPlugins, router }, plugin) => {
+  setup: ({ models, settings, slots, interactions, notify, uiPlugins }, plugin) => {
     const moving = Object.entries(plugin.config.logos ?? {});
     let moved = moving.length === 0;
     createEffect(() => {
@@ -519,15 +516,6 @@ export default defineUiPlugin({
     const [welcome, setWelcome] = createSignal(false);
     const [query, setQuery] = createSignal("");
     const [filter, setFilter] = createSignal<AuthFilter>("all");
-    let greeted = false;
-    createEffect(() => {
-      if (greeted || !models.providersLoaded()) return;
-      greeted = true;
-      // Only over a new thread: an address that names a page (a thread, a settings section) is what the reader asked for.
-      if (models.configured() || untrack(() => router.matchOf(NewThreadRoute)) === undefined) return;
-      setWelcome(true);
-      settings.open(SECTION);
-    });
     createEffect(
       on(
         settings.section,
@@ -545,7 +533,10 @@ export default defineUiPlugin({
       const ok = await models.login(provider, type);
       if (ok && welcome() && models.configured()) settings.open(undefined);
     };
-    const open = () => settings.open(SECTION);
+    const open = () => {
+      setWelcome(!models.configured());
+      settings.open(SECTION);
+    };
 
     /** Keys typed with a new custom provider, answered for it when its login asks. */
     const pendingKeys = new Map<string, string>();

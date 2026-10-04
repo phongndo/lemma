@@ -7,9 +7,8 @@ UI files, and `"ui"` rows.
 ```sh
 nix develop -c pnpm desktop   # build the core and the web app, then open the window
 
-# Developing: the window loads the web app's dev server, so web edits hot-reload
-nix develop -c pnpm dev:web                              # one terminal
-nix develop -c pnpm --filter @lemma/desktop dev          # another; restart it after editing src/main.ts
+# Developing: `pnpm dev` opens the window on the web app's dev server, so web edits hot-reload
+nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as after editing src/main.ts
 ```
 
 ## Behavior

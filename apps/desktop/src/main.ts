@@ -40,21 +40,35 @@ const problemWith = async (remote: Target): Promise<string | undefined> => {
     if (response.status === 401) return `It rejected the token from ${remote.from}; \`lemma token\` on that machine prints the current one.`;
     return response.ok ? undefined : `It answered ${response.status} ${response.statusText}.`;
   } catch (error) {
-    // `fetch failed` says nothing; its cause says why (refused, not found, timed out).
-    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-    return cause instanceof Error ? cause.message : String(cause);
+    return failure(error);
   }
 };
 
-/** Resolves true once the remote host answers; until then each failure asks whether to retry. False to quit. */
-const reach = async (remote: Target): Promise<boolean> => {
+/** What keeps the web app's dev server from serving the page, or undefined when it does. */
+const devServerProblem = async (url: string): Promise<string | undefined> => {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS) });
+    return response.ok ? undefined : `It answered ${response.status} ${response.statusText}.`;
+  } catch (error) {
+    return failure(error);
+  }
+};
+
+/** Why a fetch failed: `fetch failed` says nothing, and its cause says why (refused, not found, timed out). */
+const failure = (error: unknown): string => {
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+  return cause instanceof Error ? cause.message : String(cause);
+};
+
+/** Resolves true once `problem` finds none; until then each one found asks whether to retry. False to quit. */
+const untilReached = async (problem: () => Promise<string | undefined>, message: string, advice: string): Promise<boolean> => {
   for (;;) {
-    const problem = await problemWith(remote);
-    if (problem === undefined) return true;
+    const found = await problem();
+    if (found === undefined) return true;
     const { response } = await dialog.showMessageBox({
       type: "error",
-      message: `Cannot reach the Lemma host at ${remote.url}`,
-      detail: `${problem}\n\nThe address is set by ${remote.from}. Check that the host runs on that machine and that this one can reach it, or run \`lemma remote clear\` to use a host on this machine.`,
+      message,
+      detail: `${found}\n\n${advice}`,
       buttons: ["Retry", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -191,12 +205,27 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
+      // Without the dev server the window would be blank, and a host started for it would serve nothing.
+      if (
+        webUrl !== undefined &&
+        !(await untilReached(
+          () => devServerProblem(webUrl),
+          `Nothing serves the web app at ${webUrl}`,
+          "This window shows the web app's dev server, which `pnpm dev` runs: it starts the host and the dev server, and opens this window on them.",
+        ))
+      )
+        return app.quit();
       // Found as the CLI finds it (docs/remote.md). A target that is set but unusable fails rather than falling back to
       // a local host, which would act on the wrong machine.
       const target = await Effect.runPromise(findTarget(process.env, paths.home).pipe(Effect.mapError((error) => new Error(error.message))));
       if (target !== undefined && target.source !== "local") {
         // Never a local host beside a remote one: the window shows the remote's page, deep links included.
-        if (!(await reach(target))) return app.quit();
+        const reached = await untilReached(
+          () => problemWith(target),
+          `Cannot reach the Lemma host at ${target.url}`,
+          `The address is set by ${target.from}. Check that the host runs on that machine and that this one can reach it, or run \`lemma remote clear\` to use a host on this machine.`,
+        );
+        if (!reached) return app.quit();
         served = target;
       } else {
         const entry = target ?? (await startHost());

@@ -22,6 +22,16 @@ nix develop -c pnpm desktop        # the same app in a desktop window
 nix develop -c pnpm lemma status   # query the running host; `pnpm lemma --help` lists commands
 ```
 
+Working on lemma itself, keep `pnpm dev` running: it starts the host, the web
+app's dev server, and the desktop window on them. The host restarts when its
+code changes and the web app hot-reloads. Quitting the window leaves the rest
+running; Ctrl+C stops everything.
+
+```sh
+nix develop -c pnpm dev            # host (restarting on edits), dev server, and window; prints a browser link too
+nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
+```
+
 To run the host on one machine and use it from another, see [remote access](docs/remote.md).
 
 With no config, every bundled plugin runs. `~/.lemma/config.jsonc` and

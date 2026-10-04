@@ -34,6 +34,8 @@ import { createServer } from "vite";
  * 10. The prompt rail has a tick per prompt; the one pointed at, or chosen with
  *    the keys, shows its prompt in a card level with it, and a click or Enter
  *    goes there, lighting it; the previous and next buttons move a turn each.
+ * 11. With no provider set up, the app opens in the chat; the composer's notice
+ *    opens Providers, which goes back to the chat once one connects.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
@@ -129,11 +131,6 @@ try {
   assert.deepEqual(off, [], "plugins not back on after the round trip");
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
-  // The mock host starts with no provider set up, so settings may be the page (the providers' welcome): leave it.
-  await page.evaluate(async () => {
-    const { Settings } = await import("/src/ui/contracts.ts" as string);
-    (await (window as any).lemma.service(Settings)).open(undefined);
-  });
   await page.fill("textarea", "hello");
   // The new thread's page becomes the thread's mid-send, keeping its composer (a refused prompt's text returns to it).
   await page.evaluate(() => ((document.querySelector("textarea") as any).checkMark = true));
@@ -418,8 +415,6 @@ try {
   await settled(page);
   await page.evaluate(async () => {
     const { api } = await import("/src/ui/api.ts" as string);
-    // A fresh mock host has no provider set up, so the providers' welcome may be the page.
-    (await (window as any).lemma.service(api.contracts.Settings)).open(undefined);
     const { Pages, Router, SidebarFooter } = api.contracts;
     const lemma = (window as any).lemma;
     const router = await lemma.service(Router);
@@ -834,8 +829,25 @@ try {
   await page.evaluate(() => document.documentElement.style.removeProperty("--content"));
   expectNoErrors("using the prompt rail");
 
+  // 11. No provider set up: the chat, not settings, and its notice opens Providers, which returns to the chat once one connects.
+  const fresh = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  fresh.on("pageerror", (error) => errors.push(error.message));
+  await fresh.goto(`${url}/?mock`);
+  await fresh.waitForSelector(".composer-callout, .settings");
+  assert.equal(await fresh.locator(".settings").count(), 0, "with no provider set up, the app opened settings rather than the chat");
+  await fresh.click(".composer-callout >> text=Log in to a provider");
+  await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
+  await fresh.locator(".provider", { hasText: "Mistral" }).locator(".provider-connect").click();
+  await fresh.fill(".provider-key input", "sk-check");
+  await fresh.press(".provider-key input", "Enter");
+  await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
+  await fresh.waitForSelector("textarea");
+  assert.equal(await fresh.locator(".composer-callout").count(), 0, "the no-provider notice stayed after connecting one");
+  await fresh.close();
+  expectNoErrors("connecting a first provider");
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
   );
 } finally {
   await browser.close();
