@@ -4,6 +4,7 @@ import { extname, resolve } from "node:path";
 import { Deferred, Duration, Effect, Fiber, FiberMap, Stream } from "effect";
 import { branchOf, contentText, ThinkingLevel, trajectory } from "@lemma/contracts";
 import type {
+  AssistantMessage,
   HostEvent,
   ImageContent,
   InteractionAnswer,
@@ -17,7 +18,7 @@ import type {
 import type { HostRpcClient } from "@lemma/client";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Connection, Io, Options, Output } from "./command.ts";
-import { formatCommands, formatModels, formatProviders, formatQuestions, formatTurnResult } from "./format.ts";
+import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions, formatTurnResult } from "./format.ts";
 
 /**
  * Commands that act on the host and, with `--follow`, watch it: they
@@ -165,11 +166,20 @@ const turnOptions = (options: Options): TurnOptions | CliError => {
   };
 };
 
-/** How the session's last turn ended, from its log: the reply, the reason, usage, and time. */
-const lastTurn = (rpc: HostRpcClient, sessionId: string) =>
+/**
+ * How a turn ended, from the log: the reply, the reason, usage, and time. The
+ * turn is the one that placed the prompt `requestId` (a queued prompt runs in
+ * a later turn, a steer in the running one), else the session's last.
+ */
+const turnOf = (rpc: HostRpcClient, sessionId: string, requestId?: string) =>
   Effect.gen(function* () {
     const [info, events] = yield* Effect.all([rpc.Session.Get({ sessionId }), rpc.Session.Events({ sessionId })], { concurrency: "unbounded" });
-    const turn = trajectory(branchOf(events, info.leaf)).at(-1);
+    const placed = events.find((event) => event.data.type === "message" && event.data.requestId !== undefined && event.data.requestId === requestId);
+    const turnId = placed?.data.type === "message" ? placed.data.turnId : undefined;
+    // On that turn's own branch, through its last event: a checkout since may have left it off the session's.
+    const last = turnId === undefined ? undefined : events.filter((event) => "turnId" in event.data && event.data.turnId === turnId).at(-1);
+    const turns = trajectory(branchOf(events, last?.id ?? info.leaf));
+    const turn = turnId === undefined ? turns.at(-1) : turns.find((candidate) => candidate.turnId === turnId);
     const response = turn?.steps.filter((step) => step.response !== undefined).at(-1)?.response;
     return {
       session: sessionId,
@@ -183,7 +193,7 @@ const lastTurn = (rpc: HostRpcClient, sessionId: string) =>
       text: response === undefined ? "" : contentText(response.message.content),
     };
   });
-export type TurnResult = Effect.Effect.Success<ReturnType<typeof lastTurn>>;
+export type TurnResult = Effect.Effect.Success<ReturnType<typeof turnOf>>;
 
 /** `lemma run <session|new> <prompt…>`: send a prompt and wait for the turn; `--follow` streams it. */
 export const runCommand =
@@ -199,7 +209,15 @@ export const runCommand =
 
       const sessionId = target === "new" ? (yield* connection.rpc.Session.Create({ cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
       if (target === "new" && !options.json) io.err(`lemma: session ${sessionId}`);
-      const payload = { sessionId, content, ...(Object.keys(turn).length ? { options: turn } : {}) };
+      // Always an id: the result and `--follow` are about the turn that places this prompt, which a queue can delay.
+      const requestId = options.requestId ?? randomUUID();
+      const payload = {
+        sessionId,
+        content,
+        requestId,
+        ...(Object.keys(turn).length ? { options: turn } : {}),
+        ...(options.whenBusy === undefined ? {} : { whenBusy: options.whenBusy }),
+      };
 
       if (!options.follow) {
         // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
@@ -210,7 +228,7 @@ export const runCommand =
           yield* subscribe(rpc, yield* questionHandler(rpc, io, options, `session:${sessionId}`));
         }
         yield* connection.rpc.Agent.Prompt(payload);
-        return result(yield* lastTurn(connection.rpc, sessionId), options, false);
+        return result(yield* turnOf(connection.rpc, sessionId, requestId), options, false);
       }
 
       const ended = yield* Deferred.make<void>();
@@ -224,11 +242,37 @@ export const runCommand =
       };
       const rpc = yield* connection.live;
       const questions = yield* questionHandler(rpc, io, options, `session:${sessionId}`);
-      yield* subscribe(rpc, (event) =>
+      /**
+       * The turn that placed the prompt: only that turn is streamed. It is
+       * known once its message is logged, or, for a retry (the request id was
+       * placed before), from the log. Until then, and while a retry joins the
+       * turn, the session's events are held, since its `turn-started` comes
+       * first.
+       */
+      let ours: string | undefined;
+      let joining = false;
+      let held: HostEvent[] = [];
+      /** Text or tool calls of ours were shown: without any (a turn that had ended), the result prints its answer. */
+      let streamed = false;
+      /**
+       * What a retry joining a running turn showed already, so the events
+       * after it skip it: log events through `logSeq`, the steps it printed
+       * whole, the call in flight through its event `seq`, and how much of
+       * each running tool's output.
+       */
+      let logSeq = 0;
+      const whole = new Set<string>();
+      let joined: { readonly stepId: string; readonly seq: number } | undefined;
+      const printed = new Map<string, number>();
+      const turnOfEvent = (event: HostEvent): string | undefined => {
+        if (event.type === "delta" || event.type === "turn-started" || event.type === "turn-ended") return event.turnId;
+        if (event.type === "session-appended") return "turnId" in event.event.data ? event.event.data.turnId : undefined;
+        // Tool output carries no turn; a session runs one turn at a time, and it is ours once we have one.
+        return ours;
+      };
+      const print = (event: HostEvent) =>
         Effect.gen(function* () {
-          if (event.type === "interaction" || event.type === "interaction-closed") return yield* questions(event);
-          if (event.type === "notice") return options.json ? io.out(JSON.stringify(event)) : line(noticeLine(event));
-          if (!("sessionId" in event) || event.sessionId !== sessionId) return;
+          if (event.type === "delta" && (event.event.type === "text-delta" || event.event.type === "toolcall-end")) streamed = true;
           if (options.json) io.out(JSON.stringify(event));
           else if (event.type === "delta" && event.event.type === "text-delta") {
             io.write?.(event.event.delta);
@@ -253,13 +297,129 @@ export const runCommand =
             );
           }
           if (event.type === "turn-ended") yield* Deferred.succeed(ended, undefined);
-        }),
+        });
+      /** Shows an event of ours, skipping what a retry's join showed already. */
+      const show = (event: HostEvent) => {
+        if (event.type === "session-appended" && event.event.seq <= logSeq) return Effect.void;
+        if (event.type === "delta" && whole.has(event.stepId)) return Effect.void;
+        if (event.type === "delta" && event.stepId === joined?.stepId && event.seq !== undefined && event.seq <= joined.seq) return Effect.void;
+        if (event.type === "tool-output" && event.offset !== undefined) {
+          const seen = printed.get(event.toolCallId) ?? 0;
+          if (event.offset + event.chunk.length <= seen) return Effect.void;
+          printed.set(event.toolCallId, event.offset + event.chunk.length);
+          if (event.offset < seen) return print({ ...event, chunk: event.chunk.slice(seen - event.offset), offset: seen });
+        }
+        return print(event);
+      };
+      /** A model answer's text and tool calls, shown as if streamed. */
+      const answer = (turnId: string, stepId: string, content: AssistantMessage["content"]) =>
+        Effect.forEach(
+          content,
+          (block, index) =>
+            block.type === "text"
+              ? print({ type: "delta", sessionId, turnId, stepId, event: { type: "text-delta", index, delta: block.text } })
+              : block.type === "toolCall" && Object.keys(block.arguments).length > 0
+                ? print({ type: "delta", sessionId, turnId, stepId, event: { type: "toolcall-end", index, toolCall: block } })
+                : Effect.void,
+          { discard: true },
+        );
+      // One event at a time, so a retry's join and the events after it show in order.
+      const lock = yield* Effect.makeSemaphore(1);
+      yield* subscribe(rpc, (event) =>
+        lock.withPermits(1)(
+          Effect.gen(function* () {
+            if (event.type === "interaction" || event.type === "interaction-closed") return yield* questions(event);
+            if (event.type === "notice") return options.json ? io.out(JSON.stringify(event)) : line(noticeLine(event));
+            if (!("sessionId" in event) || event.sessionId !== sessionId) return;
+            if (ours !== undefined && !joining) return turnOfEvent(event) === ours ? yield* show(event) : undefined;
+            if (!joining && event.type === "session-appended" && event.event.data.type === "message" && event.event.data.requestId === requestId) {
+              ours = event.event.data.turnId;
+              // What was held: this turn's own events (its start); tool output from before was another turn's.
+              const replay = held.filter((earlier) => earlier.type !== "tool-output" && turnOfEvent(earlier) === ours);
+              held = [];
+              for (const earlier of replay) yield* show(earlier);
+              return yield* show(event);
+            }
+            held = [...held.slice(-1023), event];
+          }),
+        ),
       );
+
+      // A retry: the request id was placed before, so no message of it is coming. Follow the turn that placed it, from
+      // what it has done so far: subscribed first, every event from here is held until that is shown.
+      joining = true;
+      const log = yield* connection.rpc.Session.Events({ sessionId });
+      const placed = log.find((event) => event.data.type === "message" && event.data.requestId === requestId);
+      const turnId = placed?.data.type === "message" ? placed.data.turnId : undefined;
+      if (turnId === undefined) {
+        joining = false;
+      } else if (log.some((event) => event.data.type === "turn-end" && event.data.turnId === turnId)) {
+        // Over: nothing more comes, and the result prints its answer.
+        ours = turnId;
+        joining = false;
+        held = [];
+        yield* Deferred.succeed(ended, undefined);
+      } else {
+        const view = yield* connection.rpc.Agent.View({ sessionId });
+        yield* lock.withPermits(1)(
+          Effect.gen(function* () {
+            ours = turnId;
+            // What it has logged: its answers' text and tool calls, and the tools' results.
+            for (const event of log) {
+              const data = event.data;
+              if (data.type !== "message" || data.turnId !== turnId || data.message.role === "user") continue;
+              if (data.message.role === "assistant") {
+                if (data.stepId !== undefined) whole.add(data.stepId);
+                yield* answer(turnId, data.stepId ?? "", data.message.content);
+              } else yield* print({ type: "session-appended", sessionId, event });
+            }
+            logSeq = log.at(-1)?.seq ?? 0;
+            // A step that ended while joining, after the log was read, shows whole when its answer comes (below).
+            const endedSince = new Set(
+              held.flatMap((event) =>
+                event.type === "session-appended" &&
+                event.event.seq > logSeq &&
+                event.event.data.type === "message" &&
+                event.event.data.message.role === "assistant"
+                  ? [event.event.data.stepId ?? ""]
+                  : [],
+              ),
+            );
+            // The call in flight and running tools' output, as the agent had them.
+            if (view.turnId === turnId && view.draft !== undefined && !endedSince.has(view.draft.stepId)) {
+              joined = { stepId: view.draft.stepId, seq: view.draft.seq };
+              yield* answer(
+                turnId,
+                view.draft.stepId,
+                view.draft.blocks.map((entry) => entry.block),
+              );
+            }
+            if (view.turnId === turnId) {
+              for (const entry of view.output) {
+                yield* show({ type: "tool-output", sessionId, toolCallId: entry.toolCallId, chunk: entry.output, offset: entry.length - entry.output.length });
+              }
+            }
+            for (const stepId of endedSince) if (stepId !== joined?.stepId) whole.add(stepId);
+            const replay = held;
+            held = [];
+            joining = false;
+            for (const event of replay) {
+              if (turnOfEvent(event) !== turnId) continue;
+              const data = event.type === "session-appended" ? event.event.data : undefined;
+              if (event.type === "session-appended" && data?.type === "message" && data.message.role === "assistant" && endedSince.has(data.stepId ?? "")) {
+                if (data.stepId !== joined?.stepId && event.event.seq > logSeq) yield* answer(turnId, data.stepId ?? "", data.message.content);
+                continue;
+              }
+              yield* show(event);
+            }
+          }),
+        );
+      }
       yield* rpc.Agent.Prompt(payload);
       // `turn-ended` may trail the reply; the log is authoritative either way.
       yield* Deferred.await(ended).pipe(Effect.timeout(Duration.seconds(2)), Effect.ignore);
       if (midLine) io.write?.("\n");
-      return result(yield* lastTurn(connection.rpc, sessionId), options, true);
+      return result(yield* turnOf(connection.rpc, sessionId, requestId), options, options.json || streamed);
     });
 
 const result = (turn: TurnResult, options: Options, streamed: boolean): Output => ({
@@ -273,6 +433,32 @@ export const cancelCommand =
   (sessionId: string): Command =>
   ({ rpc }) =>
     Effect.as(rpc.Agent.Cancel({ sessionId }), { json: { cancelled: sessionId }, text: `cancelled any running turn in ${sessionId}` });
+
+/** `lemma queue <session>`: prompts waiting for a turn. */
+export const queueCommand =
+  (sessionId: string): Command =>
+  ({ rpc }) =>
+    Effect.gen(function* () {
+      yield* rpc.Session.Get({ sessionId });
+      const queue = yield* rpc.Agent.Queue({ sessionId });
+      return { json: queue, text: formatQueue(queue) };
+    });
+
+/** `lemma withdraw <session> <request>`: takes a prompt out of the queue. */
+export const withdrawCommand =
+  (sessionId: string, requestId: string): Command =>
+  ({ rpc }) =>
+    Effect.gen(function* () {
+      if (!(yield* rpc.Agent.Withdraw({ sessionId, requestId }))) {
+        return yield* new CliError({
+          code: "NotFound",
+          message: `No queued prompt ${requestId} in ${sessionId}: a turn may have placed it already`,
+          subject: requestId,
+          exit: ExitCode.failed,
+        });
+      }
+      return { json: { withdrawn: requestId }, text: `withdrew ${requestId}` };
+    });
 
 // ------------------------------------------------------------------ events / questions
 

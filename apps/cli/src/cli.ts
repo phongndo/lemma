@@ -60,8 +60,10 @@ import {
   modelsCommand,
   providersCommand,
   listCommandsCommand,
+  queueCommand,
   questionsCommand,
   runCommand,
+  withdrawCommand,
 } from "./live.ts";
 import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
 import { workspaceCommand } from "./workspace.ts";
@@ -122,7 +124,13 @@ Sessions and turns
     --image <file>               Attach an image (repeatable)
     --follow                     Stream the turn: text, tool calls, results (NDJSON with --json)
     --cwd <dir>                  Directory for a new session
+    --when-busy <mode>           While a turn runs: follow-up (default: the next turn), steer (join it
+                                 after its current step), or reject (fail Busy). --steer: --when-busy steer
+    --request-id <id>            Send it exactly once: the same id again waits for (or reports) the turn
+                                 that placed it rather than placing it twice
   cancel <id>                    Cancel the session's running turn
+  queue <id>                     Prompts waiting for a turn: mode, request id, and text
+  withdraw <id> <request>        Take a prompt out of the queue
   open [<id> [<view>]]           Open the web app at a session (a new thread without one) in the browser,
                                  in a view such as trajectory; prints the address. --json: print it only
 
@@ -338,6 +346,12 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "cancel":
       if (sub === undefined) return usage("cancel needs a session id");
       return extra(2) ?? cancelCommand(sub);
+    case "queue":
+      if (sub === undefined) return usage("queue needs a session id");
+      return extra(2) ?? queueCommand(sub);
+    case "withdraw":
+      if (sub === undefined || arg === undefined) return usage("withdraw needs a session id and a request id (see lemma queue)");
+      return extra(3) ?? withdrawCommand(sub, arg);
     case "do":
       if (sub === undefined) return listCommandsCommand;
       return extra(2) ?? doCommand(sub);
@@ -669,6 +683,9 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         project: { type: "boolean", default: false },
         unset: { type: "boolean", default: false },
         token: { type: "string" },
+        "request-id": { type: "string" },
+        "when-busy": { type: "string" },
+        steer: { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
       },
     });
@@ -685,6 +702,11 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   if (values.request !== undefined && values.step !== undefined) return report(io, values.json, usage("Use either --request or --step"));
   if (values.questions !== undefined && !QUESTION_POLICIES.has(values.questions))
     return report(io, values.json, usage("--questions must be ask, ignore, or dismiss"));
+  const whenBusy = values.steer ? "steer" : values["when-busy"];
+  if (values.steer && values["when-busy"] !== undefined && values["when-busy"] !== "steer")
+    return report(io, values.json, usage("Use either --steer or --when-busy"));
+  if (whenBusy !== undefined && whenBusy !== "steer" && whenBusy !== "follow-up" && whenBusy !== "reject")
+    return report(io, values.json, usage("--when-busy must be steer, follow-up, or reject"));
   const options: Options = {
     json: values.json,
     all: values.all,
@@ -711,6 +733,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     project: values.project,
     unset: values.unset,
     token: values.token,
+    requestId: values["request-id"],
+    whenBusy,
   };
   const command = route(positionals, options, io);
   if (command instanceof CliError) return report(io, options.json, command);

@@ -59,6 +59,10 @@ export interface Options {
   readonly project: boolean;
   readonly unset: boolean;
   readonly token?: string | undefined;
+  /** `run`: the submission's id, for exactly-once delivery. */
+  readonly requestId?: string | undefined;
+  /** `run`: what the prompt does while the session has a turn running. */
+  readonly whenBusy?: "steer" | "follow-up" | "reject" | undefined;
 }
 
 /** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */

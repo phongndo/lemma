@@ -43,6 +43,16 @@ panels are one view too (`kernelOf`), as are an inspector's tables
   and prints how to answer from the CLI (the default otherwise, so an agent never
   answers for the person), and `dismiss` fails them. `questions`, `answer`, and
   `dismiss` work on any open question from a separate process.
+- **A prompt to a busy session** waits for the next turn by default; `--steer`
+  joins the running turn after its current step, and `--when-busy reject` fails
+  `Busy`. `run` reports, and with `--follow` streams, the turn that places its
+  prompt, which a queue can delay. A retry with `--follow` shows what that turn
+  has done so far and streams the rest, or prints its answer when it has
+  ended. Each `run` sends a request id (`--request-id`
+  to choose it): running again with the same id waits for, or reports, the turn
+  that placed it rather than placing the prompt twice, so a script or agent can
+  retry safely. `queue` lists what waits and `withdraw` takes a prompt out (its
+  waiting `run` then fails with code `Withdrawn`).
 - **Machine-readable output.** With `--json`, results are the contract shapes
   (`HostInfo`, `PluginStatus`, `SessionInfo`, `SessionEvent`, `ModelInfo`, …) on
   stdout, and failures are `{"error": {"code", "message", "subject"?}}` on

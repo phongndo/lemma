@@ -226,6 +226,76 @@ describe("against a running host", () => {
     expect((await invoke(["cancel", session], home)).code).toBe(ExitCode.ok);
   }, 30_000);
 
+  test("a prompt sent while a turn runs is queued or steers it; a queued one can be withdrawn; a request id sends it once", async () => {
+    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const first = invoke(["run", session, "ramble on", "--model", "mock/scripted", "--json"], home);
+    await settled(
+      async () => JSON.parse((await invoke(["status", "--json"], home)).out).running as string[],
+      (running) => running.includes(session),
+    );
+    const queued = invoke(["run", session, "afterwards", "--request-id", "q1", "--json"], home);
+    const listed = await settled(
+      async () => JSON.parse((await invoke(["queue", session, "--json"], home)).out) as { requestId: string; mode: string }[],
+      (queue) => queue.some((item) => item.requestId === "q1"),
+    );
+    expect(listed).toEqual([expect.objectContaining({ requestId: "q1", mode: "follow-up" })]);
+    expect((await invoke(["queue", session], home)).out).toMatch(/follow-up\s+q1\s+\S+\s+afterwards/);
+    expect((await invoke(["withdraw", session, "q1"], home)).code).toBe(ExitCode.ok);
+    const withdrawn = await queued;
+    expect(withdrawn.code).toBe(ExitCode.failed);
+    expect(JSON.parse(withdrawn.err).error.code).toBe("Withdrawn");
+    expect((await invoke(["withdraw", session, "q1", "--json"], home)).code).toBe(ExitCode.failed);
+
+    // A steer joins the running turn: both runs report that one turn.
+    const steered = invoke(["run", session, "also check the shell", "--steer", "--request-id", "s1", "--json"], home);
+    const [ramble, steer] = await Promise.all([first, steered]);
+    expect(ramble.code).toBe(ExitCode.ok);
+    expect(steer.code).toBe(ExitCode.ok);
+    const turn = JSON.parse(ramble.out).turn as string;
+    expect(JSON.parse(steer.out)).toMatchObject({ turn, reason: "done", toolCalls: 1 });
+    // The same request id again reports that turn instead of placing the prompt twice.
+    expect(JSON.parse((await invoke(["run", session, "also check the shell", "--request-id", "s1", "--json"], home)).out).turn).toBe(turn);
+    const { branch } = JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as { branch: { data: { type: string } }[] };
+    expect(branch.filter((event) => event.data.type === "turn-start")).toHaveLength(1);
+    expect((await invoke(["run", session, "x", "--steer", "--when-busy", "reject"], home)).code).toBe(ExitCode.usage);
+  }, 30_000);
+
+  test("a retried run reports the turn that placed its prompt, even after a checkout left it off the branch", async () => {
+    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const first = JSON.parse((await invoke(["run", session, "first", "--request-id", "b1", "--json"], home)).out);
+    const second = JSON.parse((await invoke(["run", session, "second", "--request-id", "b2", "--json"], home)).out);
+    expect(second.turn).not.toBe(first.turn);
+    const { branch } = JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as {
+      branch: { id: string; data: Record<string, unknown> }[];
+    };
+    const firstEnd = branch.find((event) => event.data.type === "turn-end" && event.data.turnId === first.turn)!;
+    expect((await invoke(["session", "checkout", session, firstEnd.id], home)).code).toBe(ExitCode.ok);
+    const retried = JSON.parse((await invoke(["run", session, "second", "--request-id", "b2", "--json"], home)).out);
+    expect(retried).toMatchObject({ turn: second.turn, reason: "done", text: second.text });
+  }, 30_000);
+
+  test("a retried run --follow shows the turn that placed its prompt: its answer when done, all of it when running", async () => {
+    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const done = await invoke(["run", session, "check the shell", "--request-id", "d1", "--follow"], home);
+    expect(done.out).toContain("Everything works end to end.");
+    const again = await invoke(["run", session, "check the shell", "--request-id", "d1", "--follow"], home);
+    expect(again.code).toBe(ExitCode.ok);
+    expect(again.out).toContain("Everything works end to end.");
+
+    // Retried while it runs: what it said before the retry, then the rest as it comes, once each, in order.
+    const running = invoke(["run", session, "ramble on", "--request-id", "r1"], home);
+    await settled(
+      async () => JSON.parse((await invoke(["status", "--json"], home)).out).running as string[],
+      (ids) => ids.includes(session),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const joined = await invoke(["run", session, "ramble on", "--request-id", "r1", "--follow"], home);
+    expect(joined.code).toBe(ExitCode.ok);
+    const words = [...joined.out.matchAll(/word(\d+)/g)].map((match) => Number(match[1]));
+    expect(words).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
+    expect((await running).code).toBe(ExitCode.ok);
+  }, 30_000);
+
   test("lists providers, models, and open questions", async () => {
     expect(JSON.parse((await invoke(["models", "--json"], home)).out).map((model: { ref: string }) => model.ref)).toEqual(["mock/scripted"]);
     expect(JSON.parse((await invoke(["providers", "--json"], home)).out).some((provider: { id: string }) => provider.id === "mock")).toBe(true);

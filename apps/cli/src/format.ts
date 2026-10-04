@@ -1,4 +1,4 @@
-import { recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
+import { contentText, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
 import type {
   CommandInfo,
   InspectorInfo,
@@ -11,6 +11,7 @@ import type {
   ModelInfo,
   PluginStatus,
   ProviderInfo,
+  QueuedPrompt,
   SectionDiff,
   SessionEvent,
   SessionInfo,
@@ -494,6 +495,20 @@ export const formatCommands = (commands: readonly CommandInfo[]): string =>
   commands.length === 0
     ? "No commands."
     : pad([["command", "title", "category", "from"], ...commands.map((command) => [command.id, command.title, command.category ?? "", command.source])]);
+
+/** Prompts waiting for a turn: mode, request id, age, and their text on one line. */
+export const formatQueue = (queue: readonly QueuedPrompt[]): string =>
+  queue.length === 0
+    ? "Nothing queued."
+    : pad([
+        ["mode", "request", "queued", "prompt"],
+        ...queue.map((queued) => [
+          queued.mode,
+          queued.requestId,
+          new Date(queued.at).toISOString(),
+          contentText(queued.content).replace(/\s+/g, " ").trim().slice(0, 100),
+        ]),
+      ]);
 
 export const formatQuestions = (questions: readonly InteractionRequest[]): string =>
   questions.length === 0
