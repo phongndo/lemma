@@ -1,4 +1,5 @@
 import type { Api, Model, Provider, RefreshModelsContext } from "@earendil-works/pi-ai";
+import { USER_AGENT } from "./identity.ts";
 
 /**
  * Live catalogs for built-in providers. pi-ai ships each provider's models as
@@ -158,7 +159,10 @@ const DEV_TTL = 60 * 60 * 1000;
 export function networkSources(fetchImpl: typeof fetch, siblings: () => readonly Model<Api>[]): CatalogSources {
   let cached: { at: number; catalog: Promise<DevCatalog | undefined> } | undefined;
   const readJson = async (url: string, headers: Record<string, string>, signal: AbortSignal): Promise<unknown> => {
-    const response = await fetchImpl(url, { headers, signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
+    const response = await fetchImpl(url, {
+      headers: { "user-agent": USER_AGENT, ...headers },
+      signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+    });
     if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
     return response.json();
   };
@@ -276,7 +280,7 @@ export function planSource(fetchImpl: typeof fetch): PlanSource {
     plan: async (accessToken, signal) => {
       try {
         const response = await fetchImpl(`https://api.openai.com/v1/models?client_version=${PLAN_CLIENT_VERSION}`, {
-          headers: { authorization: `Bearer ${accessToken}` },
+          headers: { "user-agent": USER_AGENT, authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
         });
         if (!response.ok) return undefined;

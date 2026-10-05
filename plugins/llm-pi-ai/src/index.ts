@@ -21,6 +21,7 @@ import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
+import { identityHeaders } from "./identity.ts";
 import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
 export const Config = Schema.Struct({
@@ -191,6 +192,7 @@ export function makeLlmPlugin(options: Options = {}) {
               const provider = model === undefined ? undefined : models.getProvider(model.provider);
               if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
               const reasoning = reasoningFor(model, request.thinking);
+              const headers = identityHeaders(model);
               return Stream.asyncPush<StreamEvent>(
                 (emit) =>
                   Effect.acquireRelease(
@@ -198,6 +200,7 @@ export function makeLlmPlugin(options: Options = {}) {
                       const controller = new AbortController();
                       const streamOptions: SimpleStreamOptions = {
                         signal: controller.signal,
+                        ...(headers === undefined ? {} : { headers }),
                         ...(reasoning === undefined ? {} : { reasoning }),
                         ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
                         ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),

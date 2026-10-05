@@ -1,5 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Chunk, Effect, Fiber, Layer, Runtime, Schema, Stream } from "effect";
@@ -544,5 +546,49 @@ describe("deviceId", () => {
     const replaced = deviceId(home);
     expect(replaced).not.toBe(id);
     expect(deviceId(home)).toBe(replaced);
+  });
+});
+
+describe("identity", () => {
+  it("names Lemma, not pi, on every wire API, unless a model sends its own User-Agent", async () => {
+    const agents: Record<string, string | undefined> = {};
+    const server = createServer((request, response) => {
+      agents[new URL(request.url ?? "", "http://x").pathname] = request.headers["user-agent"];
+      response.writeHead(400, { "content-type": "application/json" }).end('{"error":{"message":"recorded"}}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const provider = (id: string, api: string, headers?: Record<string, string>) => ({
+      id,
+      api,
+      baseUrl: `http://127.0.0.1:${port}/${id}`,
+      apiKey: { value: "sk-test" },
+      ...(headers === undefined ? {} : { headers }),
+      models: [{ id: "m" }],
+    });
+    const providers = [
+      provider("completions", "openai-completions"),
+      provider("responses", "openai-responses"),
+      provider("anthropic", "anthropic-messages"),
+      provider("copilot", "openai-completions", { "User-Agent": "GitHubCopilotChat/0.35.0" }),
+    ];
+    const { plugins } = setup({ providers: () => [] });
+    try {
+      await runWith(
+        plugins,
+        Effect.forEach(providers, ({ id }) => collect(new LlmRequest({ model: `${id}/m`, messages: [user("hi")] }))),
+        { llm: { providers } },
+      );
+    } finally {
+      server.close();
+    }
+
+    const lemma = `lemma (${platform()} ${release()}; ${arch()})`;
+    expect(agents).toEqual({
+      "/completions/chat/completions": lemma,
+      "/responses/responses": lemma,
+      "/anthropic/v1/messages": lemma,
+      "/copilot/chat/completions": "GitHubCopilotChat/0.35.0",
+    });
   });
 });
