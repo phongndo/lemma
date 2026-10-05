@@ -1,5 +1,5 @@
 import { Either } from "effect";
-import { split } from "./history.ts";
+import { BASE, split } from "./history.ts";
 import type { HistoryAction, HistoryLocation, RouterHistory } from "./history.ts";
 import { compareScores, matchPattern, splitPath } from "./path.ts";
 import type { AnyRoute, ParamsOf, SearchOf } from "./route.ts";
@@ -60,14 +60,21 @@ export interface RouterOptions {
   readonly known?: readonly AnyRoute[];
   /** Search keys every navigation keeps from the current location unless it sets them (`safe`, a debug flag). */
   readonly retain?: readonly string[];
-  /** A listener or blocker that threw, or a navigation to values that do not encode. Default `console.error`. */
-  readonly onError?: (error: unknown, during: "listener" | "blocker" | "navigate") => void;
+  /**
+   * Something that failed, and where: a listener or blocker that threw; a
+   * navigation to values that do not encode, to a URL rather than a path, or
+   * whose history write threw (`navigate`); a back or forward that did not
+   * land within `settleTimeout` (`history`). Default `console.error`.
+   */
+  readonly onError?: (error: unknown, during: "listener" | "blocker" | "navigate" | "history") => void;
   /** Called with each new conflict between routes (see `RouteIssue`), when entries or known routes change. */
   readonly onIssue?: (issue: RouteIssue) => void;
   /** How an entry is named in `inspect`, `explain`, and the journal. Default: its route's id. */
   readonly label?: (entry: any) => string;
   /** How many events the journal keeps; older ones are dropped. Default 200. */
   readonly journal?: number;
+  /** How long navigations wait for a back or forward to land before going ahead anyway, the move reported (ms). Default 1000. */
+  readonly settleTimeout?: number;
 }
 
 export interface BlockOptions {
@@ -102,9 +109,10 @@ export interface Router<E extends RouteEntry = RouteEntry> {
   /** `route`'s address for these values, keeping the retained search keys. Throws when a value does not encode. */
   readonly href: <R extends AnyRoute>(route: R, params: ParamsOf<R>, search?: Partial<SearchOf<R>>) => string;
   /**
-   * Goes to `route` with these values, or to `href` (any same-origin path).
-   * Returns false when a blocker refused, or the values do not encode (that
-   * is reported to `onError`). Made while a `go` is still landing, it waits for it.
+   * Goes to `route` with these values, or to `href` (a path in the app, not a
+   * URL). Returns false when a blocker refused, or when the values do not
+   * encode, `href` is a URL, or the history refuses the write (each reported
+   * to `onError`). Made while a `go` is still landing, it waits for it, up to `settleTimeout`.
    */
   readonly navigate: Navigate;
   /** The conflicts between the routes now registered or known. */
@@ -279,6 +287,19 @@ export const findIssues = (entries: readonly RouteEntry[], known: readonly AnyRo
   return issues;
 };
 
+/**
+ * Whether `href` is a path in the app (`/x?y#z`, or relative), not a URL
+ * naming an origin (`//host/x`, `https://host/x`): the router does not know
+ * the page's origin, so any URL's is another.
+ */
+const isPath = (href: string) => {
+  try {
+    return new URL(href, BASE).origin === BASE;
+  } catch {
+    return false;
+  }
+};
+
 const same = <E extends RouteEntry>(a: Match<E>, b: Match<E>) =>
   a.status === b.status &&
   a.location.key === b.location.key &&
@@ -290,6 +311,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
   const { history } = options;
   const retain = options.retain ?? [];
   const onError = options.onError ?? ((error: unknown, during: string) => console.error(`router: a ${during} failed`, error));
+  const settleTimeout = options.settleTimeout ?? 1000;
   let entries: readonly E[] = [];
   let known: readonly AnyRoute[] = options.known ?? [];
   let table = compileRoutes(entries, known);
@@ -322,7 +344,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     ...(match.status === "unmatched" ? {} : { route: match.route.id, params: match.params, search: match.search }),
     ...(match.status === "matched" ? { entry: label(match.entry) } : {}),
   });
-  const report = (error: unknown, during: "listener" | "blocker" | "navigate") => {
+  const report = (error: unknown, during: "listener" | "blocker" | "navigate" | "history") => {
     record({ kind: "failed", during, message: error instanceof Error ? error.message : String(error) });
     onError(error, during);
   };
@@ -378,45 +400,65 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
    * A browser's back or forward lands later (on `popstate`), so a navigation
    * made meanwhile (close, then open something) waits for it: written at
    * once, it would be the entry the move then leaves. Only a move the history
-   * says will land is waited for, so the wait always ends.
+   * says will land is waited for, and only for `settleTimeout`, so the wait
+   * always ends: a pop that never comes is reported, and the navigations go ahead.
    */
   let moving = false;
   let waiting: (() => void)[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Where the undo of a refused back or forward lands (the entry it left): the pop landing there is the undo, not a move of its own. */
+  let undoing: number | undefined;
   const settle = () => {
+    clearTimeout(timer);
     moving = false;
     const run = waiting;
     waiting = [];
     for (const write of run) write();
   };
+  const go = (delta: number) => {
+    if (delta === 0) return;
+    moving = true;
+    if (!history.go(delta)) return settle();
+    // Its pop came during `go` (a history that moves at once): nothing to wait for.
+    if (!moving) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      // An undo still expected stays so: if its pop lands late, it is the undo, not a move to refuse again.
+      report(new Error(`A move of ${delta} through the history did not land within ${settleTimeout} ms; the router stopped waiting for it`), "history");
+      settle();
+    }, settleTimeout);
+  };
 
-  let undoing = false;
   const stopUnload = history.onUnload?.(() => allowed({ href: history.location().href, action: "unload" }));
   const stop = history.subscribe(({ action, delta, location }) => {
-    if (undoing) {
-      undoing = false;
-      settle();
-      return;
+    if (action === "pop" && undoing !== undefined) {
+      // The undo lands on an entry the history knows (a new one, from an address edited by hand, has delta 0). Any other
+      // pop is a move of its own: the undo's never came, and the router follows the address again.
+      const undone = location.index === undoing && delta !== 0;
+      undoing = undefined;
+      // Matched again, in case navigations went ahead while it landed late.
+      if (undone) {
+        update(false);
+        return settle();
+      }
     }
-    // A move through the stack has already happened; a blocker that refuses it is answered by moving back.
+    // A move through the stack has already happened; a blocker that refuses it is answered by moving back, waited for like any `go`.
     if (action === "pop" && delta !== 0 && !allowed({ href: location.href, action })) {
-      undoing = true;
-      history.go(-delta);
+      undoing = location.index - delta;
+      go(-delta);
+      // Landed already (memory), or never will: there is no pop to tell apart.
+      if (!moving) undoing = undefined;
       return;
     }
     if (action === "pop") record({ kind: "moved", href: location.href, delta });
     update(true);
     if (action === "pop") settle();
   });
-  const go = (delta: number) => {
-    if (delta === 0) return;
-    moving = true;
-    if (!history.go(delta)) settle();
-  };
 
   /** `href` with the retained search keys the current location has and it does not set. */
   const withRetained = (href: string): string => {
     if (retain.length === 0) return href;
-    const url = new URL(href, "http://router.invalid");
+    const url = new URL(href, BASE);
     const now = new URLSearchParams(history.location().search);
     for (const key of retain) {
       const value = now.get(key);
@@ -429,6 +471,10 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     let href: string;
     let navigateOptions: (NavigateOptions & { readonly search?: unknown }) | undefined;
     if (typeof to === "string") {
+      if (!isPath(to)) {
+        report(new Error(`Cannot navigate to "${to}": navigate takes a path in the app, not a URL`), "navigate");
+        return false;
+      }
       href = to;
       navigateOptions = rest[0] as NavigateOptions | undefined;
     } else {
@@ -446,11 +492,17 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       const target = withRetained(href);
       if (!allowed({ href: target, action })) return false;
       record({ kind: "navigate", href: target, action, held });
-      if (target === history.location().href && action === "push") {
-        // The same address again is a replace, so a repeated click adds no entry.
-        history.replace(target);
-      } else if (action === "replace") history.replace(target);
-      else history.push(target);
+      try {
+        if (target === history.location().href && action === "push") {
+          // The same address again is a replace, so a repeated click adds no entry.
+          history.replace(target);
+        } else if (action === "replace") history.replace(target);
+        else history.push(target);
+      } catch (error) {
+        // The history refused the write (a browser's limit on how often a page writes, an address it will not take): nothing moved.
+        report(error, "navigate");
+        return false;
+      }
       return true;
     };
     if (!moving) return write();
@@ -525,8 +577,10 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       return () => void eventListeners.delete(listener);
     },
     destroy: () => {
+      clearTimeout(timer);
       moving = false;
       waiting = [];
+      undoing = undefined;
       stopUnload?.();
       stop();
       controller.abort();

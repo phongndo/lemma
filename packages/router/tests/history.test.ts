@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createBrowserHistory } from "../src/history.ts";
 import { createRouter } from "../src/router.ts";
 
@@ -9,6 +9,9 @@ const fakeWindow = (initial: string, initialState: unknown = null) => {
   /** With `later`, a `go` lands only on `land()`, as a browser's does on a later task. */
   let later = false;
   let landing: (() => void) | undefined;
+  /** With `refusing`, writes throw, as Safari's do past its limit on how often a page writes. */
+  let refusing = false;
+  const refusal = () => new DOMException("Attempt to use history.pushState() more than 100 times per 30 seconds", "SecurityError");
   const listeners = new Set<() => void>();
   const unloads = new Set<(event: { preventDefault: () => void; returnValue: unknown }) => void>();
   const at = () => new URL(stack[index]!.url, "http://app.test");
@@ -29,10 +32,12 @@ const fakeWindow = (initial: string, initialState: unknown = null) => {
         return stack[index]!.state;
       },
       pushState: (state: unknown, _: string, url?: string) => {
+        if (refusing) throw refusal();
         index++;
         stack.splice(index, stack.length, { url: url ?? stack[index - 1]!.url, state });
       },
       replaceState: (state: unknown, _: string, url?: string) => {
+        if (refusing) throw refusal();
         stack[index] = { url: url ?? stack[index]!.url, state };
       },
       go: (delta: number) => {
@@ -59,6 +64,7 @@ const fakeWindow = (initial: string, initialState: unknown = null) => {
       for (const listener of listeners) listener();
     },
     later: () => void (later = true),
+    refuse: (on = true) => void (refusing = on),
     land: () => {
       const move = landing;
       landing = undefined;
@@ -105,6 +111,32 @@ describe("createBrowserHistory", () => {
     target.edit("/typed");
     expect(actions).toEqual(["pop:0"]);
     expect(history.location()).toMatchObject({ pathname: "/typed", index: 1 });
+  });
+
+  test("a write the browser refuses throws and changes nothing", () => {
+    const target = fakeWindow("/");
+    const history = createBrowserHistory(target as unknown as Window);
+    const heard: string[] = [];
+    history.subscribe(({ location }) => heard.push(location.href));
+    target.refuse();
+    expect(() => history.push("/one")).toThrow(/100 times/);
+    expect(() => history.replace("/two")).toThrow(/100 times/);
+    expect(history.location()).toMatchObject({ href: "/", index: 0 });
+    expect(heard).toEqual([]);
+    target.refuse(false);
+    history.push("/one");
+    expect(history.location()).toMatchObject({ href: "/one", index: 1 });
+  });
+
+  test("an entry reached without state is followed even when the browser refuses to give it some", () => {
+    const target = fakeWindow("/");
+    const history = createBrowserHistory(target as unknown as Window);
+    const heard: string[] = [];
+    history.subscribe(({ action, location }) => heard.push(`${action} ${location.href} ${location.index}`));
+    target.refuse();
+    target.edit("/typed");
+    expect(heard).toEqual(["pop /typed 1"]);
+    expect(history.location()).toMatchObject({ href: "/typed", index: 1 });
   });
 });
 
@@ -161,6 +193,160 @@ describe("a router on the browser history", () => {
     router.back();
     router.navigate("/b");
     expect(router.location().href).toBe("/b");
+  });
+
+  test("a write the browser refuses is reported, and the navigation returns false and goes nowhere", () => {
+    const target = fakeWindow("/a");
+    const errors: string[] = [];
+    const router = createRouter({ history: createBrowserHistory(target as unknown as Window), onError: (_, during) => errors.push(during) });
+    target.refuse();
+    expect(router.navigate("/b")).toBe(false);
+    expect(router.navigate("/c", { replace: true })).toBe(false);
+    expect(errors).toEqual(["navigate", "navigate"]);
+    expect(router.journal().map((event) => event.kind)).toEqual(["navigate", "failed", "navigate", "failed"]);
+    expect(router.location()).toMatchObject({ href: "/a", index: 0 });
+    expect(router.match().location.href).toBe("/a");
+    target.refuse(false);
+    expect(router.navigate("/b")).toBe(true);
+    expect(router.location()).toMatchObject({ href: "/b", index: 1 });
+  });
+});
+
+describe("a back or forward that does not land", () => {
+  beforeEach(() => void vi.useFakeTimers());
+  afterEach(() => void vi.useRealTimers());
+
+  test("is waited for only so long: then it is reported, and the navigations made meanwhile go ahead", () => {
+    const target = fakeWindow("/a");
+    const errors: string[] = [];
+    const router = createRouter({ history: createBrowserHistory(target as unknown as Window), onError: (_, during) => errors.push(during) });
+    router.navigate("/settings");
+    target.later();
+    router.back();
+    expect(router.navigate("/b")).toBe(true);
+    vi.advanceTimersByTime(999);
+    expect(router.location().href).toBe("/settings");
+    vi.advanceTimersByTime(1);
+    expect(errors).toEqual(["history"]);
+    expect(router.location()).toMatchObject({ href: "/b", index: 2 });
+    expect(router.inspect().moving).toBe(false);
+    expect(router.journal().slice(-3)).toMatchObject([
+      { kind: "failed", during: "history", message: expect.stringMatching(/did not land within 1000 ms/) },
+      { kind: "navigate", href: "/b", held: true },
+      { kind: "matched" },
+    ]);
+    // Landing after all, it is a move like any other: the router follows the address.
+    target.land();
+    expect(router.match().location).toMatchObject({ href: "/settings", index: 1 });
+  });
+
+  test("settleTimeout sets how long; a move landing in time, or the router's destroy, stops the clock", () => {
+    const target = fakeWindow("/a");
+    const errors: string[] = [];
+    const router = createRouter({ history: createBrowserHistory(target as unknown as Window), onError: (_, during) => errors.push(during), settleTimeout: 50 });
+    router.navigate("/b");
+    target.later();
+    router.back();
+    vi.advanceTimersByTime(49);
+    target.land();
+    expect(vi.getTimerCount()).toBe(0);
+    router.go(1);
+    vi.advanceTimersByTime(50);
+    expect(errors).toEqual(["history"]);
+    target.land();
+    router.back();
+    router.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(errors).toEqual(["history"]);
+  });
+});
+
+describe("a back or forward a blocker refuses", () => {
+  /** A router at `/c` after `/a` and `/b`, refusing every back and forward while `refusing` says so. */
+  const setup = () => {
+    const target = fakeWindow("/a");
+    const router = createRouter({ history: createBrowserHistory(target as unknown as Window) });
+    router.navigate("/b");
+    router.navigate("/c");
+    const refused: string[] = [];
+    const state = { refusing: true };
+    router.block((transition) => {
+      if (transition.action !== "pop" || !state.refusing) return true;
+      refused.push(transition.href);
+      return false;
+    });
+    target.later();
+    return { target, router, refused, state };
+  };
+
+  test("is undone, navigations wait for the undo, and its pop is not taken for a move", () => {
+    const { target, router, refused } = setup();
+    // The user presses back.
+    target.history.go(-1);
+    target.land();
+    expect(refused).toEqual(["/b"]);
+    expect(router.location().href).toBe("/b");
+    expect(router.match().location.href).toBe("/c");
+    expect(router.navigate("/d")).toBe(true);
+    expect(router.inspect().moving).toBe(true);
+    target.land();
+    expect(refused).toEqual(["/b"]);
+    expect(router.location()).toMatchObject({ href: "/d", index: 3 });
+    expect(target.stack.map((entry) => entry.url)).toEqual(["/a", "/b", "/c", "/d"]);
+    expect(router.journal().some((event) => event.kind === "moved")).toBe(false);
+  });
+
+  test("when the undo never lands, the next move is followed, not taken for it", () => {
+    const { target, router, state } = setup();
+    target.history.go(-1);
+    target.land();
+    state.refusing = false;
+    // The user presses back again before the undo lands; it never does.
+    target.history.go(-1);
+    target.land();
+    expect(router.match().location).toMatchObject({ href: "/a", index: 0 });
+    expect(router.inspect().moving).toBe(false);
+  });
+
+  test("an undo landing after the wait gave up is still the undo, not a move to refuse again", () => {
+    vi.useFakeTimers();
+    try {
+      const target = fakeWindow("/a");
+      const errors: string[] = [];
+      const router = createRouter({
+        history: createBrowserHistory(target as unknown as Window),
+        settleTimeout: 20,
+        onError: (_, during) => errors.push(during),
+      });
+      router.navigate("/b");
+      router.navigate("/c");
+      const refused: string[] = [];
+      router.block((transition) => {
+        if (transition.action !== "pop") return true;
+        refused.push(transition.href);
+        return false;
+      });
+      target.later();
+      // The user presses back; it is refused, and its undo is slow.
+      target.history.go(-1);
+      target.land();
+      vi.advanceTimersByTime(25);
+      expect(errors).toEqual(["history"]);
+      target.land();
+      expect(refused).toEqual(["/b"]);
+      expect(router.location().href).toBe("/c");
+      expect(router.match().location.href).toBe("/c");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("an address edited by hand while the undo is landing is followed, though it takes the undo's index", () => {
+    const { target, router } = setup();
+    target.history.go(-1);
+    target.land();
+    target.edit("/typed");
+    expect(router.match().location).toMatchObject({ href: "/typed", index: 2 });
   });
 });
 

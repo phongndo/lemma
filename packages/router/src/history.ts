@@ -27,7 +27,9 @@ export interface HistoryUpdate {
 
 export interface RouterHistory {
   readonly location: () => HistoryLocation;
+  /** Adds an entry. Throws, changing nothing, when the history refuses the write (a browser's limit on how often a page writes, another origin). */
   readonly push: (href: string) => void;
+  /** Rewrites the current entry, keeping its key. Throws, changing nothing, when the history refuses the write. */
   readonly replace: (href: string) => void;
   /**
    * Moves through the stack. True when the move lands later, with a pop event;
@@ -45,9 +47,12 @@ export interface RouterHistory {
 let counter = 0;
 const newKey = () => `${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
+/** What addresses are resolved against: a placeholder origin, since only their path, search, and hash are kept. */
+export const BASE = "http://router.invalid";
+
 /** `href` as a location (an address relative to the app's origin), with this key and index. */
 export const split = (href: string, key: string, index: number): HistoryLocation => {
-  const url = new URL(href, "http://router.invalid");
+  const url = new URL(href, BASE);
   return { href: `${url.pathname}${url.search}${url.hash}`, pathname: url.pathname, search: url.search, hash: url.hash, key, index };
 };
 
@@ -89,7 +94,11 @@ export const createBrowserHistory = (target: Window = window): RouterHistory => 
   // An entry reached without our state (the first load, an address edited by hand) is given some.
   const adopt = (index: number): EntryState => {
     const next = { key: newKey(), index };
-    write("replaceState", next);
+    try {
+      write("replaceState", next);
+    } catch {
+      // Refused (a browser's limit on how often a page writes): the entry is still followed, its key kept only in memory.
+    }
     return next;
   };
   let current = entryState(history.state) ?? adopt(0);
@@ -113,9 +122,11 @@ export const createBrowserHistory = (target: Window = window): RouterHistory => 
   return {
     location: () => split(href(), current.key, current.index),
     push: (url) => {
-      current = { key: newKey(), index: current.index + 1 };
+      const next = { key: newKey(), index: current.index + 1 };
+      // Kept only once the browser takes it: a write it refuses throws, and the entry stays the current one.
+      write("pushState", next, url);
+      current = next;
       top = current.index;
-      write("pushState", current, url);
       events.emit({ location: split(href(), current.key, current.index), action: "push", delta: 1 });
     },
     replace: (url) => {

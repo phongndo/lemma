@@ -83,6 +83,10 @@ A listener or blocker that throws is reported to `onError` (default
 `console.error`) and does not stop the others; a throwing blocker allows the
 navigation, so a broken one cannot trap the user. `navigate` to values that do
 not encode reports the `RouteError` and returns false; `href` throws it.
+`navigate` also refuses a URL rather than a path in the app (`//host/x`,
+`https://host/x`: the router does not know the page's origin, so any is
+another), and a history write that throws (Safari limits how often a page
+writes) leaves the location as it was; both are reported and return false.
 
 ## Inspection
 
@@ -116,10 +120,14 @@ scroll position) and an `index`, so a back or forward can be measured and
 undone: `block(blocker)` runs before every navigation and stops it, rolling a
 back or forward back. It also runs, with `action: "unload"`, before the page
 itself unloads (closed or reloaded), where refusing has the browser ask the
-user; a blocker guarding only in-app moves returns true for it. A browser's back or forward lands later, so a `navigate`
-made while one is landing waits for it rather than being the entry it leaves.
-`retain` lists search keys every navigation keeps from
-the current location unless it sets them.
+user; a blocker guarding only in-app moves returns true for it. A browser's
+back or forward (a refused one's undo too) lands later, so a `navigate` made
+while one is landing waits for it rather than being the entry it leaves, for
+`settleTimeout` at most (default 1000 ms): a move that has not landed by then
+is reported (during `history`) and the navigations go ahead; a refused
+move's undo that lands later is still taken as the undo. `retain` lists
+search keys every navigation keeps from the current location unless it sets
+them.
 
 ## Not here
 

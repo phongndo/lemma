@@ -232,6 +232,20 @@ describe("errors", () => {
     expect(errors[0]).toBeInstanceOf(RouteError);
     expect(router.location().pathname).toBe("/");
   });
+
+  test("navigating to a URL rather than a path is reported and goes nowhere; paths, relative ones too, go", () => {
+    const errors: [string, unknown][] = [];
+    const router = createRouter<Entry>({ history: createMemoryHistory("/"), retain: ["safe"], onError: (error, during) => errors.push([during, error]) });
+    const urls = ["//evil.example/x", "/\\evil.example/x", "https://other.example/x", "javascript:alert(1)"];
+    for (const href of urls) expect(router.navigate(href), href).toBe(false);
+    expect(errors.map(([during]) => during)).toEqual(urls.map(() => "navigate"));
+    expect(errors.map(([, error]) => (error as Error).message)).toEqual(urls.map((href) => expect.stringContaining(`"${href}"`)));
+    expect(router.location()).toMatchObject({ href: "/", index: 0 });
+    expect(router.navigate("/x?y#z")).toBe(true);
+    expect(router.location().href).toBe("/x?y#z");
+    expect(router.navigate("y")).toBe(true);
+    expect(router.location().href).toBe("/y");
+  });
 });
 
 describe("typed navigation", () => {
