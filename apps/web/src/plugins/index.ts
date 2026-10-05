@@ -12,6 +12,7 @@ import devtools from "./devtools.tsx";
 import devtoolsKernel from "./devtools-kernel.tsx";
 import devtoolsRouter from "./devtools-router.tsx";
 import eventLog from "./event-log.tsx";
+import fileIcons from "./file-icons.tsx";
 import fileMentions from "./file-mentions.tsx";
 import highlight from "./highlight.ts";
 import hostPlugins from "./host-plugins.ts";
@@ -52,6 +53,7 @@ export const bundled: readonly Plugin[] = [
   slots,
   router,
   kit,
+  fileIcons,
   notify,
   toasts,
   threads,

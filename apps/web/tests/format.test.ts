@@ -32,7 +32,12 @@ describe("format", () => {
 
   it("summarizes built-in tool arguments", () => {
     expect(summarizeToolArgs("bash", { command: "ls -la" })).toEqual({ primary: "ls -la", shell: true });
-    expect(summarizeToolArgs("read", { path: "/w/a.ts", offset: 10, limit: 5 }, { cwd: "/w" })).toEqual({ primary: "a.ts", secondary: "lines 10–14" });
+    expect(summarizeToolArgs("read", { path: "/w/a.ts", offset: 10, limit: 5 }, { cwd: "/w" })).toEqual({
+      primary: "a.ts",
+      secondary: "lines 10–14",
+      file: { path: "a.ts", kind: "file" },
+    });
+    expect(summarizeToolArgs("ls", { path: "/w/src" }, { cwd: "/w" })).toEqual({ primary: "src", file: { path: "src", kind: "directory" } });
     expect(summarizeToolArgs("grep", { pattern: "TODO", path: "/w/src" }, { cwd: "/w" })).toEqual({ primary: "TODO", secondary: "in src" });
     expect(summarizeToolArgs("custom", { n: 1, q: "hello" })).toEqual({ primary: "hello" });
     expect(summarizeToolArgs("custom", undefined)).toEqual({});

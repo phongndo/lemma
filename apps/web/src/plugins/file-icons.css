@@ -1,0 +1,128 @@
+/*
+ * Each file type in one of a few hues, per theme: change a hue here (from a UI
+ * stylesheet, `--file-icon-blue: …`), or one type (`.file-type[data-type="rust"]`).
+ * Types without a hue (text, default, font, nextjs, stylelint) are muted.
+ */
+:root {
+  --file-icon-blue: #1a85d4;
+  --file-icon-cyan: #1ca1c7;
+  --file-icon-teal: #17a5af;
+  --file-icon-green: #199f43;
+  --file-icon-yellow: #d5a910;
+  --file-icon-orange: #d47628;
+  --file-icon-coral: #d5512f;
+  --file-icon-red: #d52c36;
+  --file-icon-pink: #d32a61;
+  --file-icon-magenta: #a631be;
+  --file-icon-violet: #693acf;
+  --file-icon-brown: #594c5b;
+  --file-icon-muted: #84848a;
+}
+
+:root[data-theme="dark"] {
+  --file-icon-blue: #69b1ff;
+  --file-icon-cyan: #68cdf2;
+  --file-icon-teal: #64d1db;
+  --file-icon-green: #5ecc71;
+  --file-icon-yellow: #ffd452;
+  --file-icon-orange: #ffa359;
+  --file-icon-coral: #ff8c5b;
+  --file-icon-red: #ff6762;
+  --file-icon-pink: #ff678d;
+  --file-icon-magenta: #d568ea;
+  --file-icon-violet: #9d6afb;
+  --file-icon-brown: #8a7a8c;
+  --file-icon-muted: #adadb1;
+}
+
+.file-type {
+  flex: none;
+  color: var(--file-icon-muted);
+}
+
+.file-type[data-type="biome"],
+.file-type[data-type="c"],
+.file-type[data-type="cpp"],
+.file-type[data-type="docker"],
+.file-type[data-type="nix"],
+.file-type[data-type="python"],
+.file-type[data-type="typescript"],
+.file-type[data-type="vscode"],
+.file-type[data-type="webpack"] {
+  color: var(--file-icon-blue);
+}
+
+.file-type[data-type="go"],
+.file-type[data-type="oxc"],
+.file-type[data-type="react"],
+.file-type[data-type="tailwind"] {
+  color: var(--file-icon-cyan);
+}
+
+.file-type[data-type="mcp"],
+.file-type[data-type="prettier"],
+.file-type[data-type="table"] {
+  color: var(--file-icon-teal);
+}
+
+.file-type[data-type="bash"],
+.file-type[data-type="markdown"],
+.file-type[data-type="svgo"],
+.file-type[data-type="vue"] {
+  color: var(--file-icon-green);
+}
+
+.file-type[data-type="babel"],
+.file-type[data-type="browserslist"],
+.file-type[data-type="javascript"] {
+  color: var(--file-icon-yellow);
+}
+
+.file-type[data-type="claude"],
+.file-type[data-type="html"],
+.file-type[data-type="json"],
+.file-type[data-type="pnpm"],
+.file-type[data-type="rust"],
+.file-type[data-type="svg"],
+.file-type[data-type="swift"],
+.file-type[data-type="toml"],
+.file-type[data-type="zig"],
+.file-type[data-type="zip"] {
+  color: var(--file-icon-orange);
+}
+
+.file-type[data-type="git"] {
+  color: var(--file-icon-coral);
+}
+
+.file-type[data-type="npm"],
+.file-type[data-type="postcss"],
+.file-type[data-type="ruby"],
+.file-type[data-type="svelte"],
+.file-type[data-type="yml"] {
+  color: var(--file-icon-red);
+}
+
+.file-type[data-type="graphql"],
+.file-type[data-type="image"],
+.file-type[data-type="sass"] {
+  color: var(--file-icon-pink);
+}
+
+.file-type[data-type="astro"],
+.file-type[data-type="database"],
+.file-type[data-type="vite"] {
+  color: var(--file-icon-magenta);
+}
+
+.file-type[data-type="bootstrap"],
+.file-type[data-type="css"],
+.file-type[data-type="eslint"],
+.file-type[data-type="terraform"],
+.file-type[data-type="wasm"] {
+  color: var(--file-icon-violet);
+}
+
+.file-type[data-type="bun"] {
+  color: var(--file-icon-brown);
+}

@@ -72,7 +72,12 @@ Picking a folder writes `@src/` and goes on completing inside it, as typing a
 folder that exists before a `/` does. That is the `file-mentions` plugin,
 configured like any other (`trigger`, `limit`, `folders`), on the host's
 `file-search` plugin, which `lemma workspace files <query>` uses too; either
-can be turned off or replaced.
+can be turned off or replaced. Files show their type's icon, here
+and on the chat's read, write, and edit calls: the `file-icons` plugin fills
+the `file-icon` part with Pierre's file icons (as T3 Code shows them) plus Nix,
+TOML, and pnpm, each type in a hue a stylesheet can change
+(`--file-icon-blue`, or `.file-type[data-type="rust"]`). Its `rules` add matches
+(`.mdc = markdown`, `Justfile = bash`); turned off, files show the plain icon.
 Any plugin can add its own trigger, or more suggestions for `@`, with a
 `ComposerCompletions` item:
 

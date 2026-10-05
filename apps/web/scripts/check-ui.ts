@@ -213,6 +213,12 @@ try {
   await page
     .waitForSelector(".completions .completion >> text=Composer.tsx", { timeout: 5_000 })
     .catch(() => assert.fail("typing @ does not offer the project's files"));
+  // Its rows draw the `file-icon` part, which the `file-icons` plugin fills by type.
+  assert.equal(
+    await page.locator('.completion:has-text("Composer.tsx") .file-type[data-type="react"]').count(),
+    1,
+    "a file's row does not show its type's icon",
+  );
   await page.keyboard.press("Enter");
   assert.equal(await page.inputValue("textarea"), "see @src/components/Composer.tsx ", "picking a file does not write its mention");
   await page.waitForSelector(".completions", { state: "detached" });

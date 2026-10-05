@@ -100,6 +100,8 @@ export interface ToolSummary {
   readonly secondary?: string;
   /** Primary is a shell command (render as `$ cmd`). */
   readonly shell?: boolean;
+  /** The file or folder the call acts on, shown with its icon (the `file-icon` part). */
+  readonly file?: { readonly path: string; readonly kind: "file" | "directory" };
 }
 
 /**
@@ -127,13 +129,13 @@ export const summarizeToolArgs = (
       const limit = num(args.limit);
       const range =
         offset !== undefined || limit !== undefined ? `lines ${offset ?? 1}${limit !== undefined ? `–${(offset ?? 1) + limit - 1}` : "+"}` : undefined;
-      return { ...(p === undefined ? {} : { primary: p }), ...(range === undefined ? {} : { secondary: range }) };
+      return { ...(p === undefined ? {} : { primary: p, file: { path: p, kind: "file" } }), ...(range === undefined ? {} : { secondary: range }) };
     }
     case "write":
     case "edit":
     case "ls": {
       const p = path(args.path ?? args.file_path);
-      return p === undefined ? {} : { primary: p };
+      return p === undefined ? {} : { primary: p, file: { path: p, kind: name === "ls" ? "directory" : "file" } };
     }
     case "grep":
     case "find": {

@@ -939,8 +939,9 @@ export interface FileIconProps {
 }
 /**
  * The icon for a file or folder, wherever one is named (the composer's `@`
- * menu). `kit`'s default is the plain `file` and `folder` icons; an item below
- * `DEFAULT_PART_ORDER` replaces it.
+ * menu, a tool call's path). `kit`'s default is the plain `file` and `folder`
+ * icons; the `file-icons` plugin draws each file's type, just below
+ * `DEFAULT_PART_ORDER`, so a replacement below that replaces either.
  */
 export const FileIconPart = definePart<FileIconProps>("file-icon");
 
