@@ -20,7 +20,8 @@ const paths = resolvePaths({ env: process.env, cwd: project });
 /** Development: the page comes from the web app's dev server (`pnpm dev`), which proxies to the host, so edits hot-reload. */
 const webUrl = process.env.LEMMA_WEB_URL;
 const STARTUP_TIMEOUT_MS = 30_000;
-const SHUTDOWN_TIMEOUT_MS = 5_000;
+/** The host's own limit on stopping (40 seconds), and a margin: quitting sooner would cut off what it lets finish. */
+const SHUTDOWN_TIMEOUT_MS = 45_000;
 const REMOTE_TIMEOUT_MS = 10_000;
 
 let host: UtilityProcess | undefined;

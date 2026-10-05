@@ -182,6 +182,12 @@ const readConfigFiles = Effect.forEach([paths.userConfig, paths.projectConfig], 
 
 /** How long a deferred change waits for its reply to leave before the transport that sends it restarts. */
 const DEFER = Duration.millis(250);
+/**
+ * How long stopping may take in all. The core's default (its 10 second dispose deadline) would cut it short of a
+ * plugin that asks for longer to close: the agent takes up to 30 seconds, letting running turns reach a point to
+ * resume from.
+ */
+const SHUTDOWN_TIMEOUT = Duration.seconds(40);
 
 /** Decodes the configs of `ids` as the loader will, so a change that restarts the transport is refused before it is applied. */
 const checkConfigs = (next: Loaded, ids: readonly string[]): Effect.Effect<void, ReloadError> => {
@@ -402,7 +408,7 @@ const program = Effect.gen(function* () {
   });
 
   applied = yield* load(host);
-  const loader = yield* makeLoader({ source, composition: applied.resolved.composition });
+  const loader = yield* makeLoader({ source, composition: applied.resolved.composition, shutdownTimeout: SHUTDOWN_TIMEOUT });
   yield* Deferred.succeed(ready, loader);
   // Captured once: a reload drains in-flight core.run work, so it must not run inside core.run.
   const control = yield* loader.core.run(HostControl);
