@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { discoveredModels, fixedCatalog, networkSources, planModels, planSource, withLiveCatalog, withPlanCatalog } from "../src/catalog.ts";
+import { agentReady, discoveredModels, fixedCatalog, networkSources, planCatalog, planModels, planSource, withLiveCatalog } from "../src/catalog.ts";
 import type { CatalogSources, DevProvider, PlanModel, RefreshContext } from "../src/catalog.ts";
 
 const signal = new AbortController().signal;
@@ -114,6 +114,70 @@ describe("withLiveCatalog", () => {
     await offline.refresh!({ auth: undefined, signal });
     expect(offline.models()).toEqual(known);
   });
+
+  it("lists only models an agent can work with: ones that call tools and answer in text", async () => {
+    const mixed: DevProvider = {
+      npm: "@ai-sdk/openai-compatible",
+      models: {
+        "glm-5.1": { tool_call: true, modalities: { input: ["text"], output: ["text"] } },
+        "kimi-k2.6": { tool_call: true, modalities: { input: ["text", "audio"], output: ["text", "audio"] } },
+        "minimax-m3": {},
+        "embed-3": { tool_call: false, modalities: { input: ["text"], output: ["text"] } },
+        "image-2": { tool_call: false, modalities: { input: ["text"], output: ["image"] } },
+      },
+    };
+    const live = withLiveCatalog("go", fixedCatalog(known), { dev: async () => ({ go: mixed }), list: async () => undefined, siblings: () => [] });
+    await live.refresh!({ auth: undefined, signal });
+    // A realtime model (audio out) is hidden, though pi-ai lists it; models.dev saying nothing counts for a model.
+    expect(live.models().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3"]);
+    expect(agentReady({})).toBe(true);
+  });
+
+  it("keeps pi-ai's request settings for a model it knows, with models.dev's limits and prices", async () => {
+    const limits: DevProvider = {
+      models: {
+        "glm-5.1": { limit: { context: 1_050_000, output: 128_000 }, cost: { input: 3, output: 9 } },
+        "kimi-k2.6": { limit: { context: 0 } },
+        "minimax-m3": {},
+      },
+    };
+    const live = withLiveCatalog("go", fixedCatalog(known), { dev: async () => ({ go: limits }), list: async () => undefined, siblings: () => [] });
+    await live.refresh!({ auth: undefined, signal });
+    const [glm, kimi] = live.models();
+    expect(glm).toEqual({ ...known[0], contextWindow: 1_050_000, maxTokens: 128_000, cost: { input: 3, output: 9, cacheRead: 0, cacheWrite: 0 } });
+    // A limit models.dev leaves at zero is not one.
+    expect(kimi!.contextWindow).toBe(100_000);
+  });
+
+  it("hides a model the key cannot use only when the provider's list is complete", async () => {
+    const sources: CatalogSources = { dev: async () => ({ go: dev }), list: async () => ["glm-5.1"], siblings: () => [] };
+    const partial = withLiveCatalog("go", fixedCatalog(known), sources);
+    await partial.refresh!(withKey("sk-go"));
+    expect(partial.models().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3"]);
+    const complete = withLiveCatalog("go", fixedCatalog(known), sources, { listComplete: true });
+    await complete.refresh!(withKey("sk-go"));
+    expect(complete.models().map((m) => m.id)).toEqual(["glm-5.1"]);
+  });
+
+  it("reads models.dev under the provider's id there, and the list from where the provider says", async () => {
+    const asked: string[] = [];
+    const sources: CatalogSources = {
+      dev: async () => ({ elsewhere: dev }),
+      list: async (baseUrl, key) => {
+        asked.push(`${baseUrl} ${key}`);
+        return ["glm-5"];
+      },
+      siblings: () => [],
+    };
+    const live = withLiveCatalog("go", fixedCatalog(known), sources, { devId: "elsewhere", listUrl: "https://list.test/v1" });
+    await live.refresh!(withKey("sk-go"));
+    expect(asked).toEqual(["https://list.test/v1 sk-go"]);
+    expect(live.models().map((m) => [m.id, m.provider])).toEqual([
+      ["glm-5.1", "go"],
+      ["minimax-m3", "go"],
+      ["glm-5", "go"],
+    ]);
+  });
 });
 
 describe("networkSources", () => {
@@ -174,7 +238,8 @@ describe("ChatGPT plans", () => {
   it("offers what the plan lists for its pickers, in its order, pi-ai's entries where it has them", () => {
     const models = planModels(api, listed);
     expect(models.map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
-    expect(models[1]).toBe(api[1]);
+    // pi-ai's entry, with the plan's context window where it gives one.
+    expect(models[1]).toEqual(api[1]);
     // A model pi-ai does not know is served like the nearest known one, described by the list.
     expect(models[0]).toMatchObject({
       name: "GPT-6.1-Sol",
@@ -186,29 +251,45 @@ describe("ChatGPT plans", () => {
     });
   });
 
-  it("lists the plan's models signed in with ChatGPT, and the API's otherwise", async () => {
+  // What pi-ai knows plans serve.
+  const usual: PlanModel[] = [
+    { slug: "gpt-6-sol", visibility: "list", context_window: 272_000 },
+    { slug: "gpt-6-astra", visibility: "list" },
+  ];
+
+  it("lists the plan's models signed in with ChatGPT, and the models plans serve otherwise, never the API's", async () => {
     const asked: string[] = [];
-    const planned = withPlanCatalog(fixedCatalog(api), {
+    const planned = planCatalog(api, usual, {
       plan: async (token) => {
         asked.push(token);
         return listed;
       },
     });
+    // Before the plan's list is read.
+    expect(planned.models().map((m) => [m.id, m.contextWindow])).toEqual([
+      ["gpt-6-sol", 272_000],
+      ["gpt-6-astra", 100_000],
+    ]);
     await planned.refresh!(signedIn);
     expect(asked).toEqual(["chatgpt-token"]);
     expect(planned.models().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
-    // Signed out, or with an API key: the API's list again.
-    await planned.refresh!(withKey("sk-x"));
-    expect(planned.models().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "o1", "gpt-4o"]);
+    await planned.refresh!({ auth: undefined, signal });
+    expect(planned.models().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra"]);
   });
 
   it("keeps the plan's list it had when the plan cannot be read", async () => {
     let reachable = true;
-    const planned = withPlanCatalog(fixedCatalog(api), { plan: async () => (reachable ? listed : undefined) });
+    const planned = planCatalog(api, usual, { plan: async () => (reachable ? listed : undefined) });
     await planned.refresh!(signedIn);
     reachable = false;
     await planned.refresh!(signedIn);
     expect(planned.models().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+  });
+
+  it("stays on the models plans serve without a source", () => {
+    const fixed = planCatalog(api, usual);
+    expect(fixed.refresh).toBeUndefined();
+    expect(fixed.models().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra"]);
   });
 
   it("asks OpenAI as a client newer than any, with the sign-in's token", async () => {

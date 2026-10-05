@@ -6,11 +6,11 @@ import { Credentials, HostControl, Interaction, Llm, LlmError, LlmRequestHook, M
 import type { AuthType, LlmRequest, ProviderInfo, StreamEvent } from "@lemma/contracts";
 import { makeAuth } from "./auth.ts";
 import type { LoginUi, Token } from "./auth.ts";
-import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
+import { networkSources, planSource, withLiveCatalog } from "./catalog.ts";
 import { chatgptSignIn } from "./chatgpt.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { identityHeaders } from "./identity.ts";
-import { CustomProvider, apis, builtinProviders, customEntry, customProvider, selectProviders } from "./providers.ts";
+import { CustomProvider, apis, builtinProviders, customEntry, customProvider, forPi, selectProviders } from "./providers.ts";
 import type { LlmProvider } from "./providers.ts";
 
 export const Config = Schema.Struct({
@@ -107,16 +107,14 @@ export function makeLlmPlugin(options: Options = {}) {
           };
           const auth = makeAuth({ credentials, env: options.env ?? ((name) => process.env[name]), ui });
 
-          const builtins = selectProviders(options.providers?.() ?? builtinProviders(chatgptSignIn({ home, fetch: fetchImpl })), config);
+          // A ChatGPT sign-in lists its plan's models, read from OpenAI, unless the lists are to stay pi-ai's.
+          const plan = config.liveCatalogs ? planSource(fetchImpl) : undefined;
+          const builtins = selectProviders(options.providers?.() ?? builtinProviders(chatgptSignIn({ home, fetch: fetchImpl }), plan), config);
           // A model a provider adds may be described already by another built-in provider's catalog.
           const siblings = () => builtins.flatMap((provider) => provider.catalog.models());
           const sources = networkSources(fetchImpl, siblings);
-          const plan = planSource(fetchImpl);
-          // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
-          const live = (provider: LlmProvider): LlmProvider => {
-            const caught = withLiveCatalog(provider.id, provider.catalog, sources);
-            return { ...provider, catalog: provider.id === "openai" ? withPlanCatalog(caught, plan) : caught };
-          };
+          const live = (provider: LlmProvider): LlmProvider =>
+            provider.live === undefined ? provider : { ...provider, catalog: withLiveCatalog(provider.id, provider.catalog, sources, provider.live) };
           // The user's providers replace built-ins with the same id.
           const custom = new Map((config.providers ?? []).map((entry) => [entry.id, entry]));
           const providers = [
@@ -262,7 +260,8 @@ export function makeLlmPlugin(options: Options = {}) {
                       const out = (events: StreamEvent[]) => events.length > 0 && emit.array(events);
                       void (async () => {
                         try {
-                          for await (const event of send(model, normalizeContext(toContext(request)), streamOptions)) {
+                          const sent = forPi(provider, model, normalizeContext(toContext(request)));
+                          for await (const event of send(sent.model, sent.context, streamOptions)) {
                             out(mapper.push(event));
                             if (mapper.finished) break;
                           }

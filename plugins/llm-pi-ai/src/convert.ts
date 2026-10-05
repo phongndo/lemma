@@ -150,7 +150,8 @@ export function makeEventMapper(model: Pi.Model<Pi.Api>) {
   };
   const terminal = (message: Pi.AssistantMessage, fallback?: string): StreamEvent[] => {
     finished = true;
-    const mapped = toAssistantMessage(message, message.errorMessage ?? fallback);
+    // The provider that served it, which pi-ai may know by another id (`openai-api` speaks as `openai`).
+    const mapped = { ...toAssistantMessage(message, message.errorMessage ?? fallback), provider: model.provider };
     const type = mapped.stopReason === "error" || mapped.stopReason === "aborted" ? "error" : "done";
     return [...begin(), { type, message: mapped }];
   };

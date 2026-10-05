@@ -4,13 +4,14 @@ Provides `Llm` (plugin id `llm`). Requires `Credentials`, `Interaction`, `HostCo
 
 Lemma owns the providers and their logins; [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) only sends requests (its wire APIs, called with the token Lemma resolves) and supplies the built-in model lists. The built-in providers:
 
-| Provider     | Id            | Logins                                  | Environment        |
-| ------------ | ------------- | --------------------------------------- | ------------------ |
-| OpenAI       | `openai`      | API key, or Sign in with ChatGPT (plan) | `OPENAI_API_KEY`   |
-| OpenCode Zen | `opencode`    | API key                                 | `OPENCODE_API_KEY` |
-| OpenCode Go  | `opencode-go` | API key                                 | `OPENCODE_API_KEY` |
+| Provider     | Id            | Login                | Environment        | Models                   |
+| ------------ | ------------- | -------------------- | ------------------ | ------------------------ |
+| OpenAI       | `openai`      | Sign in with ChatGPT |                    | The ChatGPT plan's       |
+| OpenAI API   | `openai-api`  | API key              | `OPENAI_API_KEY`   | The ones the key can use |
+| OpenCode Zen | `opencode`    | API key              | `OPENCODE_API_KEY` | OpenCode Zen's           |
+| OpenCode Go  | `opencode-go` | API key              | `OPENCODE_API_KEY` | OpenCode Go's            |
 
-A credential stored by `/login` wins, whatever its type; without one, the provider's environment variable. One OpenCode key serves Zen and Go.
+A credential stored by `/login` wins; without one, the provider's environment variable. One OpenCode key serves Zen and Go. OpenAI is two providers because a plan and a key serve different models and bill differently, and both can be set up at once.
 
 ## Config
 
@@ -79,16 +80,25 @@ ignore it. An `apiKey.env` that is unset leaves the provider unconfigured until
   end the session in the account's settings.
 - **Sign in with ChatGPT** follows OpenAI's
   [flow for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-  and uses the plan's models, as the Codex app does. The first sign-in
+  and lists every model the plan's list offers, with the plan's context
+  windows, as the Codex app does. Until the plan's list is read, the
+  list is the models pi-ai knows plans serve, never the API's. The first sign-in
   registers a client named Lemma, kept in `<home>/chatgpt.json` so signing in
   again reuses it; delete that file to register anew. From a host on another
   machine, paste the address the browser ends on. [`src/chatgpt.ts`](src/chatgpt.ts)
   documents the checks.
-- **Live model lists** (`liveCatalogs`, default on). At startup, hourly, and
-  after a login or logout, [models.dev](https://models.dev) decides which
-  built-in models are current, and models the provider serves that pi-ai does
-  not know are added. Without models.dev a provider keeps pi-ai's list. A
-  change publishes `ModelsChanged`.
+- **Live model lists** (`liveCatalogs`, default on; off, every list stays
+  pi-ai's). At startup, hourly, and after a login or logout,
+  [models.dev](https://models.dev) decides which built-in models are current,
+  and models the provider serves that pi-ai does not know are added. A model
+  keeps pi-ai's request settings and takes its limits and prices from
+  models.dev, which follows the provider's docs more closely than a pi-ai
+  release can. Only models an agent can work with are listed: ones that call
+  tools and answer in text, so embedding, image, and realtime models are left
+  out. The OpenAI API lists only what its key can use (`/v1/models`). Without
+  models.dev a provider keeps pi-ai's list. A change publishes `ModelsChanged`.
+- **The OpenAI API speaks to pi-ai as `openai`**, the id pi-ai shapes OpenAI's
+  requests for, while Lemma lists and logs it as `openai-api`.
 
 ## Testing
 

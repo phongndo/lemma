@@ -14,25 +14,26 @@ const all = [
   provider("opencode", "OpenCode Zen"),
   provider("baseten", "Baseten"),
   provider("github-copilot", "GitHub Copilot", false, [oauth, key]),
-  provider("openai", "OpenAI", false, [key, oauth]),
+  provider("openai", "OpenAI", false, [oauth]),
+  provider("openai-api", "OpenAI API"),
 ];
 
 describe("providerGroups", () => {
   it("lists connected, then the popular ways to start in their order, then the rest by name", () => {
     expect(ids(providerGroups(all))).toEqual([
       ["Connected", ["anthropic"]],
-      ["Popular", ["openai", "github-copilot", "opencode", "opencode-go"]],
+      ["Popular", ["openai", "openai-api", "github-copilot", "opencode", "opencode-go"]],
       ["All providers", ["baseten", "groq"]],
     ]);
   });
 
   it("keeps the providers that offer the chosen way in", () => {
     expect(ids(providerGroups(all, "", "oauth"))).toEqual([["Popular", ["openai", "github-copilot"]]]);
-    expect(ids(providerGroups(all, "open", "api_key"))).toEqual([["Results", ["openai", "opencode-go", "opencode"]]]);
+    expect(ids(providerGroups(all, "open", "api_key"))).toEqual([["Results", ["openai-api", "opencode-go", "opencode"]]]);
   });
 
   it("searches every word, connected first, in one list", () => {
-    expect(ids(providerGroups(all, "open"))).toEqual([["Results", ["openai", "opencode-go", "opencode"]]]);
+    expect(ids(providerGroups(all, "open"))).toEqual([["Results", ["openai", "openai-api", "opencode-go", "opencode"]]]);
     expect(ids(providerGroups(all, "chatgpt"))).toEqual([["Results", ["openai"]]]);
     expect(ids(providerGroups(all, "opencode zen"))).toEqual([["Results", ["opencode"]]]);
     expect(ids(providerGroups(all, "claude"))).toEqual([["Results", ["anthropic"]]]);

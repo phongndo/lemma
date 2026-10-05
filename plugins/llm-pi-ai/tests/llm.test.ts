@@ -297,23 +297,36 @@ describe("catalog", () => {
     ]);
   });
 
-  it("offers OpenAI, OpenCode Zen, and OpenCode Go, one OpenCode key serving both", async () => {
+  it("offers OpenAI with ChatGPT, the OpenAI API, OpenCode Zen, and OpenCode Go, one OpenCode key serving both", async () => {
     // Default built-ins: the plugin's real provider list.
-    const llm = makeLlmPlugin({ fetch: offline, env: envOf({ OPENCODE_API_KEY: "sk-oc" }) });
+    const llm = makeLlmPlugin({ fetch: offline, env: envOf({ OPENCODE_API_KEY: "sk-oc", OPENAI_API_KEY: "sk-oa" }) });
     const plugins = [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("")).plugin, llm];
     const providers = await runWith(
       plugins,
       Effect.flatMap(Llm, (l) => l.providers),
     );
     expect(providers.map((p) => [p.id, p.name, p.configured, p.source])).toEqual([
+      // OPENAI_API_KEY is the API's: a ChatGPT plan is only signed in to.
       ["openai", "OpenAI", false, undefined],
+      ["openai-api", "OpenAI API", true, "OPENAI_API_KEY"],
       ["opencode", "OpenCode Zen", true, "OPENCODE_API_KEY"],
       ["opencode-go", "OpenCode Go", true, "OPENCODE_API_KEY"],
     ]);
-    expect(providers[0]!.auth).toEqual([
-      { type: "api_key", name: "OpenAI API key", interactive: true },
-      { type: "oauth", name: "Sign in with ChatGPT", interactive: true },
-    ]);
+    expect(providers[0]!.auth).toEqual([{ type: "oauth", name: "Sign in with ChatGPT", interactive: true }]);
+    expect(providers[1]!.auth).toEqual([{ type: "api_key", name: "OpenAI API key", interactive: true }]);
+  });
+
+  it("lists what ChatGPT plans serve for OpenAI before a sign-in, and the API's models for the OpenAI API", async () => {
+    const llm = makeLlmPlugin({ fetch: offline, env: envOf() });
+    const models = await runWith(
+      [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("")).plugin, llm],
+      Effect.flatMap(Llm, (l) => l.models()),
+    );
+    const of = (provider: string) => models.filter((model) => model.provider === provider).map((model) => model.id);
+    expect(of("openai")).toContain("gpt-6-sol");
+    expect(of("openai")).not.toContain("gpt-4o");
+    expect(of("openai-api")).toContain("gpt-4o");
+    expect(models.find((model) => model.ref === "openai-api/gpt-4o")).toMatchObject({ provider: "openai-api", api: "openai-responses" });
   });
 
   it("filters built-ins with include and exclude, and lets the user's provider replace one", async () => {
@@ -754,5 +767,39 @@ describe("identity", () => {
     });
     expect(Object.entries(agents).find(([path]) => path.startsWith("/messages/"))?.[1]).toBe(lemma);
     expect(gateway).toMatchObject({ messages: "gk", keyed: "gk" });
+  });
+});
+
+describe("a provider pi-ai knows by another id", () => {
+  const reply = (provider: string) => ({
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "earlier" }],
+    api: "faux",
+    provider,
+    model: "plain",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  });
+
+  it("is sent as that id, with its own turns as pi-ai's and another credential's kept apart, and answers under its own", async () => {
+    const faux = fauxProvider({ provider: "api", models: [{ id: "plain" }] });
+    faux.setResponses([fauxAssistantMessage([fauxText("now")])]);
+    let seen: { provider: string; turns: string[] } | undefined;
+    const provider = fauxLlm(faux, undefined, {
+      piProvider: "pi",
+      stream: (model, context, options) => {
+        seen = { provider: model.provider, turns: context.messages.flatMap((message) => (message.role === "assistant" ? [message.provider] : [])) };
+        return faux.provider.streamSimple(model, context, options);
+      },
+    });
+    const { plugins } = setup({ providers: () => [provider] });
+    const events = await runWith(
+      plugins,
+      collect(new LlmRequest({ model: "api/plain", messages: [user("a"), reply("api"), user("b"), reply("pi"), user("c"), reply("other"), user("d")] })),
+    );
+    expect(seen).toEqual({ provider: "pi", turns: ["pi", "lemma:pi", "other"] });
+    const done = events.find((event) => event.type === "done");
+    expect(done?.type === "done" && done.message.provider).toBe("api");
   });
 });

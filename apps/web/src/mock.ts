@@ -90,22 +90,23 @@ const assistant = (
 });
 
 const MODELS: ModelInfo[] = [
+  // A ChatGPT plan's model, and the API's.
   {
-    ref: "openai/gpt-5",
+    ref: "openai/gpt-6-sol",
     provider: "openai",
-    id: "gpt-5",
-    name: "GPT-5",
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
     api: "openai-responses",
     reasoning: true,
-    thinkingLevels: ["minimal", "low", "medium", "high"],
+    thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
     input: ["text", "image"],
-    contextWindow: 400_000,
+    contextWindow: 272_000,
     maxTokens: 128_000,
-    cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
   },
   {
-    ref: "openai/gpt-5-mini",
-    provider: "openai",
+    ref: "openai-api/gpt-5-mini",
+    provider: "openai-api",
     id: "gpt-5-mini",
     name: "GPT-5 mini",
     api: "openai-responses",
@@ -195,7 +196,8 @@ export const createMockHost = (): Host => {
   const oauth = (name: string) => ({ type: "oauth", name, interactive: true }) as const;
   /** The real llm plugin's providers, as `Llm.providers` reports them. */
   const providers: ProviderInfo[] = [
-    ["openai", "OpenAI", [{ ...key, name: "OpenAI API key" }, oauth("Sign in with ChatGPT")]],
+    ["openai", "OpenAI", [oauth("Sign in with ChatGPT")]],
+    ["openai-api", "OpenAI API", [{ ...key, name: "OpenAI API key" }]],
     ["opencode", "OpenCode Zen", [{ ...key, name: "OpenCode API key" }]],
     ["opencode-go", "OpenCode Go", [{ ...key, name: "OpenCode API key" }]],
   ].map(([id, name, auth]) => ({ id: id as string, name: name as string, auth: auth as ProviderInfo["auth"], configured: false }));

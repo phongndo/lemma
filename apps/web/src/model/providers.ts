@@ -63,10 +63,11 @@ const brands: Readonly<Record<string, ProviderBrand>> = {
   opencode: { logo: { mono: opencode }, blurb: "Pay as you go for models picked for coding", keyUrl: "https://opencode.ai/auth" },
   "opencode-go": { logo: { mono: opencode }, blurb: "A subscription to open coding models", keyUrl: "https://opencode.ai/auth" },
   anthropic: { logo: { light: claude }, keywords: "claude", blurb: "Claude models with an API key", keyUrl: "https://console.anthropic.com/settings/keys" },
-  openai: {
+  openai: { logo: { light: openai, dark: openaiDark }, keywords: "chatgpt gpt", blurb: "Sign in with your ChatGPT plan" },
+  "openai-api": {
     logo: { light: openai, dark: openaiDark },
-    keywords: "chatgpt gpt",
-    blurb: "Sign in with your ChatGPT plan, or use an API key",
+    keywords: "gpt",
+    blurb: "GPT models with an API key",
     keyUrl: "https://platform.openai.com/api-keys",
   },
   google: { logo: { light: gemini }, keywords: "gemini", blurb: "Gemini models with an API key", keyUrl: "https://aistudio.google.com/apikey" },
@@ -108,7 +109,7 @@ const brands: Readonly<Record<string, ProviderBrand>> = {
 };
 
 /** Offered first, in this order, until connected: the quickest ways to start. */
-const POPULAR = ["openai", "github-copilot", "opencode", "opencode-go", "anthropic", "google", "openrouter"];
+const POPULAR = ["openai", "openai-api", "github-copilot", "opencode", "opencode-go", "anthropic", "google", "openrouter"];
 
 export const providerBrand = (id: string): ProviderBrand => brands[id] ?? {};
 
