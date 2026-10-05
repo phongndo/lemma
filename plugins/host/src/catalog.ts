@@ -134,6 +134,8 @@ export interface CatalogInput {
   readonly registries?: readonly RegistrySnapshot[];
   /** Recent faults by plugin id, newest first (see `faultHistory`). */
   readonly faults?: ReadonlyMap<string, readonly FaultRecord[]>;
+  /** Enabled plugins the planner left out, with why (`Plan.problems`). */
+  readonly problems?: ReadonlyMap<string, string>;
   readonly enabledIn: Readonly<Record<string, ConfigScope>>;
   /** Per plugin id, the file whose row sets `config`. */
   readonly configIn?: Readonly<Record<string, ConfigScope>>;
@@ -188,6 +190,7 @@ export function catalog({
   events = [],
   registries = [],
   faults,
+  problems,
   enabledIn,
   configIn = {},
   pinned,
@@ -212,6 +215,7 @@ export function catalog({
       return items.length === 0 ? [] : [{ name: registry.name, items: items.length, ...(keys.length === 0 ? {} : { keys }) }];
     });
     const history = faults?.get(plugin.id);
+    const problem = problems?.get(plugin.id);
     return {
       id: plugin.id,
       ...(plugin.version === undefined ? {} : { version: plugin.version }),
@@ -225,6 +229,7 @@ export function catalog({
       ...(snapshot === undefined ? {} : { state: snapshot.state }),
       ...(snapshot?.fault === undefined ? {} : { fault: snapshot.fault }),
       ...(haltedBy === undefined ? {} : { haltedBy }),
+      ...(problem === undefined ? {} : { problem }),
       ...(fields === undefined || fields.length === 0
         ? {}
         : { configFields: fields, config: configValues(plugin.config!, composition.plugins[plugin.id]?.config, fields) }),

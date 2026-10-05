@@ -9,6 +9,8 @@ export type { ConfigSection, ConfigUpdate, LoadedComposition, MergedRows } from 
 export { listUiFiles, projectUiDir, userUiDir } from "./ui.ts";
 export { catalog, faultHistory, faultMessage, resolveComposition, restartedBy, withReplacements } from "./catalog.ts";
 export type { CatalogInput, KnownPlugin, Resolved } from "./catalog.ts";
+export { planComposition } from "./planner.ts";
+export type { LocalPlugin, Plan, PlanInput } from "./planner.ts";
 export { compositionInfo } from "./composition.ts";
 export { watchConfig, watchUi } from "./watch.ts";
 export type { WatchOptions } from "./watch.ts";

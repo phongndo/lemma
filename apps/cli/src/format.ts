@@ -62,7 +62,7 @@ export const formatStatus = (target: Target, info: HostInfo, plugins: readonly P
     ["running", running.length ? running.join(", ") : "none"],
   ]);
 
-/** `needs agent, which needs tools, which is off`: from a halted plugin to the one turned off. */
+/** `needs agent, which needs tools, which is off`: from a halted plugin to the one turned off or left out. */
 const waitingNote = (plugins: readonly PluginStatus[], plugin: PluginStatus): string => {
   const byId = new Map(plugins.map((candidate) => [candidate.id, candidate]));
   const names: string[] = [];
@@ -74,13 +74,15 @@ const waitingNote = (plugins: readonly PluginStatus[], plugin: PluginStatus): st
     current = next;
   }
   const last = byId.get(names.at(-1)!);
-  return `needs ${names.join(", which needs ")}${last !== undefined && !last.enabled ? ", which is off" : ""}`;
+  const why = last === undefined ? "" : !last.enabled ? ", which is off" : last.problem !== undefined ? ", which is left out" : "";
+  return `needs ${names.join(", which needs ")}${why}`;
 };
 
 /** Why a plugin is not simply running, or why it cannot be turned off. */
 const pluginNote = (plugins: readonly PluginStatus[], plugin: PluginStatus): string => {
   if (plugin.fault !== undefined)
     return `${plugin.fault.phase}${plugin.fault.operation === undefined ? "" : ` ${plugin.fault.operation}`}: ${plugin.fault.message}`;
+  if (plugin.problem !== undefined) return `left out: ${plugin.problem}`;
   if (plugin.haltedBy !== undefined) return plugin.state === "disabled" ? waitingNote(plugins, plugin) : `halted by ${plugin.haltedBy}`;
   if (!plugin.enabled) return `off in the ${plugin.scope ?? "user"} config`;
   return plugin.locked ?? "";

@@ -25,10 +25,49 @@ another provides turns that one off. The `host` and `transport` plugins, and
 everything they need, stay on. Each plugin's README lists its settings.
 
 Plugin files in `~/.lemma/plugins/` or `<project>/.lemma/plugins/` load
-automatically, and one with a bundled plugin's id takes its place;
-[approvals](../examples/approvals/README.md) is an example. The web app is
-composed the same way from its own plugins, through `"ui"` rows and files in
-`~/.lemma/ui/`: see [its README](../apps/web/README.md).
+automatically. One with a bundled plugin's id takes its place, and one
+providing what a bundled plugin provides turns that one off unless a row
+decides; [approvals](../examples/approvals/README.md) is an example. A file whose
+default export is a function receives `{ bundled }`, the bundled plugins by
+id, so a replacement can wrap the plugin it replaces and keep its updates
+rather than copy it. The web app is composed the same way from its own
+plugins, through `"ui"` rows and files in `~/.lemma/ui/`: see
+[its README](../apps/web/README.md).
+
+## When something cannot run
+
+The host starts with what can run. A plugin whose `config` no longer decodes
+(a setting changed in an update), that is written for another version of
+Lemma's API, or that fails to start is left out, with the plugins that need
+it, and the host says why; the Plugins page and `lemma plugins` show it as
+left out or failed. A config key a plugin does not read is a warning, which
+catches a setting renamed in an update. A row naming no plugin is ignored,
+unless it says `"required": true`.
+
+What is **required** must start, or the host does not: the `host` and
+`transport` plugins and what they need, every plugin from your own files (a
+file that does not load, which therefore names no plugin, too), and any plugin
+whose row says `"required": true`, with what it needs: a row turning off what
+a required plugin needs stops the start too, and a required plugin is never
+turned off for a file's plugin that provides the same (the host reports the
+two as a conflict). Mark a plugin that
+enforces a policy required, so the host never runs without it; a row saying
+`"required": false` lets the host start without one of your plugins instead.
+A replacement that cannot run is never swapped back for the bundled plugin it
+replaced.
+
+A change made while the host runs (a config edit, the Plugins page) is
+refused, and the running composition kept, when it would leave out a plugin
+that is not left out already; one that is stays so, and blocks no other change. `--safe` (`pnpm start --safe`, or `LEMMA_SAFE=1`) starts the bundled
+plugins as shipped, reading no config file and no plugin file and writing
+neither: the way back when your config keeps the host from starting.
+
+A plugin says which version of the host's contracts it is written for by
+requiring `HostApi(version)` from `@lemma/contracts`, and a web app plugin by
+`defineUiPlugin({ api })`, so after an incompatible change it is left out with
+the version named rather than failing at some later call. A plugin that
+renames a setting reads its users' old rows with `migrateConfig` from
+`@lemma/contracts`.
 
 ## Project trust
 

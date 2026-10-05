@@ -1,6 +1,6 @@
 import { Cause, Effect, Layer, Stream } from "effect";
 import type { Context } from "effect";
-import { HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
+import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
 import { definePlugin, Events, PluginContext } from "@lemma/core";
 import type { Plugin, PluginFault } from "@lemma/core";
 import { HOST_PLUGIN_ID } from "./config.ts";
@@ -15,21 +15,25 @@ export interface HostPluginOptions {
   readonly faults?: Stream.Stream<PluginFault>;
 }
 
+/** The host API version this host provides (see `HostApi`); a plugin written for another is left out. */
+const Api = HostApi(HOST_API);
+
 /**
- * Provides `Paths` from its config and `HostControl` from the app's handle, and
- * publishes `PluginsChanged` after every change it can observe: a reload or
- * restart through the handle, and any fault. Faults also become an error
- * `Notice`; the app's log remains the durable record. The app publishes
- * `UiChanged` itself: it also sees the UI files change.
+ * Provides `Paths` from its config, `HostControl` from the app's handle, and
+ * the host API version, and publishes `PluginsChanged` after every change it
+ * can observe: a reload or restart through the handle, and any fault. Faults
+ * also become an error `Notice`; the app's log remains the durable record. The
+ * app publishes `UiChanged` itself: it also sees the UI files change.
  */
-export function hostPlugin(options: HostPluginOptions): Plugin<readonly [typeof Paths, typeof HostControl]> {
+export function hostPlugin(options: HostPluginOptions): Plugin<readonly [typeof Paths, typeof HostControl, typeof Api]> {
   return definePlugin({
     id: HOST_PLUGIN_ID,
     config: PathsSchema,
-    provides: [Paths, HostControl],
+    provides: [Paths, HostControl, Api],
     layer: (paths) =>
-      Layer.merge(
+      Layer.mergeAll(
         Layer.succeed(Paths, paths),
+        Layer.succeed(Api, HOST_API),
         Layer.effect(
           HostControl,
           Effect.gen(function* () {

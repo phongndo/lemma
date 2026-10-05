@@ -4,18 +4,19 @@ import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Either, Exit, Option, ParseResult, Schema, Stream } from "effect";
 import { HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
-import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport } from "@lemma/core";
+import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import {
   catalog,
   compositionInfo,
   faultHistory,
+  faultMessage,
   HOST_PLUGIN_ID,
   hostPlugin,
   listUiFiles,
   loadComposition,
+  planComposition,
   projectPluginsDir,
   readConfigText,
-  resolveComposition,
   resolvePaths,
   restartedBy,
   updateConfig,
@@ -24,12 +25,18 @@ import {
   withReplacements,
 } from "@lemma/plugin-host";
 import type { ConfigSection, HostControlService, KnownPlugin, Resolved } from "@lemma/plugin-host";
-import type { ConfigScope, ConfigureReport, PluginChange, UiComposition } from "@lemma/contracts";
+import type { ConfigScope, ConfigureReport, PluginChange, PluginRow, UiComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/plugin-transport";
-import { bundled, withDefaults } from "./bundled.ts";
+import { appDefaults, bundled } from "./bundled.ts";
 import { loadLocalPlugins } from "./local.ts";
 
 const args = new Set(process.argv.slice(2));
+/**
+ * `--safe` (or `LEMMA_SAFE=1`): the bundled plugins as shipped, reading no
+ * config file and no plugin file, and writing neither: the way back from a
+ * customization that keeps the host from starting.
+ */
+const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
@@ -59,8 +66,12 @@ interface Loaded {
   readonly known: readonly KnownPlugin[];
   /** Every known plugin with its row, as the files and app defaults describe it. */
   readonly composition: Composition;
-  /** What the loader runs: `composition` minus plugins whose requirements a disabled plugin leaves unmet. */
+  /** What the loader runs: `composition` minus what is off, left out, or needs either. */
   readonly resolved: Resolved;
+  /** What must start (see `Plan.required`). */
+  readonly required: readonly string[];
+  /** Enabled plugins left out because they cannot run, with why. */
+  readonly problems: ReadonlyMap<string, string>;
   readonly enabledIn: Readonly<Record<string, ConfigScope>>;
   readonly configIn: Readonly<Record<string, ConfigScope>>;
   readonly trusted: boolean;
@@ -93,55 +104,64 @@ const source: PluginSource = {
   },
 };
 
-/** The plugin a halted one ultimately waits on: the first in its chain that is turned off. */
-const rootOf = (resolved: Resolved, id: string): string => {
-  let current = id;
-  for (let next = resolved.haltedBy.get(current); next !== undefined; next = resolved.haltedBy.get(current)) current = next;
-  return current;
-};
+const EMPTY_UI: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
 
-/** Read config files and local plugins into the next composition. Warnings print here; errors fail. */
+/**
+ * Read config files and local plugins into the next composition (see
+ * `planComposition`): what cannot run is left out with a warning unless it is
+ * required, or a change brought it in. Warnings print here; errors fail.
+ */
 const load = (host: Plugin): Effect.Effect<Loaded, ReloadError> =>
   Effect.gen(function* () {
+    const fixed = { [HOST_PLUGIN_ID]: { config: paths } };
+    const input = { bundled: bundled(host), pinned: Object.keys(pinned), defaults: appDefaults, fixed, localRequired: true };
+    if (safe) {
+      const planned = planComposition({ ...input, local: [], rows: {} });
+      const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+      if (errors.length) return yield* new ReloadError({ diagnostics: errors });
+      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, ui: EMPTY_UI };
+    }
     const loaded = yield* loadComposition(paths);
     // Project plugins run only in a project the user config trusts; see `loadComposition`.
-    const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir]);
-    const diagnostics = [...local.diagnostics, ...loaded.diagnostics];
-    // A local plugin with a bundled id takes the bundled one's place, in its position; later directories win.
-    const byId = new Map<string, KnownPlugin>();
-    for (const plugin of bundled(host)) byId.set(plugin.id, { plugin, source: "bundled" });
-    for (const { plugin, dir } of local.plugins) {
-      const previous = byId.get(plugin.id);
-      const shadows = previous?.source === "bundled" || previous?.shadows === true;
-      byId.set(plugin.id, { plugin, source: dir === userPluginsDir ? "user" : "project", ...(shadows ? { shadows } : {}) });
-    }
-    const known = [...byId.values()];
-    const composition = withDefaults([...byId.keys()], loaded.composition);
-    const resolved = resolveComposition(known, composition, Object.keys(pinned));
-    for (const [id, by] of resolved.haltedBy) {
-      const root = rootOf(resolved, id);
-      const chain = root === by ? `"${by}"` : `"${by}", which needs "${root}"`;
-      diagnostics.push(
-        new Diagnostic({
-          severity: "warning",
-          pluginId: id,
-          message: `"${id}" is not loaded: it needs ${chain}, and "${root}" is turned off`,
-          suggestion: `Turn "${root}" on to load "${id}"`,
-        }),
-      );
-    }
-    // The host's policy for a row turning off what cannot be turned off: refuse the config rather than ignore the row.
-    for (const id of resolved.overridden) {
-      const root = resolved.locked.get(id)!;
-      const message = id === root ? `"${id}" cannot be turned off: ${pinned[id]}` : `"${id}" cannot be turned off: "${root}" needs it (${pinned[root]})`;
-      diagnostics.push(new Diagnostic({ severity: "error", pluginId: id, message, suggestion: `Remove its "enabled" row` }));
-    }
+    const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
+      bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
+    });
+    const { [HOST_PLUGIN_ID]: _, ...rows } = loaded.composition.plugins as Readonly<Record<string, PluginRow>>;
+    const planned = planComposition({
+      ...input,
+      local: local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) })),
+      rows,
+    });
+    // A change that would leave out a plugin not left out already is refused (the file is put back, the running
+    // composition kept), whichever plugin it touched; one already left out stays so, and blocks nothing.
+    const previous: Loaded | undefined = applied;
+    const refused = previous === undefined ? [] : [...planned.problems].filter(([id]) => !previous.problems.has(id));
+    const diagnostics = [
+      ...local.diagnostics,
+      ...loaded.diagnostics,
+      ...planned.diagnostics.filter(
+        (diagnostic) => !refused.some(([id]) => diagnostic.pluginId === id && diagnostic.message.startsWith(`"${id}" is left out`)),
+      ),
+      ...refused.map(
+        ([id, problem]) => new Diagnostic({ severity: "error", pluginId: id, message: `"${id}" cannot run: ${problem}`, suggestion: "Fix it, or turn it off" }),
+      ),
+    ];
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error");
     if (errors.length) return yield* new ReloadError({ diagnostics: errors });
     // Only for a composition that will run: a rejected one's warnings describe nothing that happens.
     yield* printDiagnostics(diagnostics.filter((diagnostic) => diagnostic.severity === "warning"));
     const files = yield* listUiFiles(paths, loaded.trusted);
-    return { known, composition, resolved, enabledIn: loaded.enabledIn, configIn: loaded.configIn, trusted: loaded.trusted, ui: { ...loaded.ui, files } };
+    return {
+      known: planned.known,
+      composition: planned.composition,
+      resolved: planned.resolved,
+      required: planned.required,
+      problems: planned.problems,
+      enabledIn: loaded.enabledIn,
+      configIn: loaded.configIn,
+      trusted: loaded.trusted,
+      ui: { ...loaded.ui, files },
+    };
   });
 
 const describe = (report: ReloadReport): string => {
@@ -230,6 +250,7 @@ const program = Effect.gen(function* () {
       events: snapshot.events,
       registries: snapshot.registries,
       faults: faults.get(),
+      problems: applied.problems,
       pinned,
     });
   /** Web apps apply `ui` rows and files themselves; tell them when either changed. */
@@ -301,6 +322,14 @@ const program = Effect.gen(function* () {
       const report: ConfigureReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
       return report;
     });
+  const safeMode = () =>
+    rejected(
+      new Diagnostic({
+        severity: "error",
+        message: "The host is running with --safe: it reads and writes no config file",
+        suggestion: `Edit ${paths.userConfig} by hand, or restart the host without --safe`,
+      }),
+    );
   const untrustedProject = () =>
     rejected(
       new Diagnostic({
@@ -319,6 +348,7 @@ const program = Effect.gen(function* () {
       withLoader((loader) =>
         reloading.withPermits(1)(
           Effect.gen(function* () {
+            if (safe) return yield* safeMode();
             const scope = options?.scope ?? "user";
             if (scope === "project" && !applied.trusted) return yield* untrustedProject();
             yield* write(loader, rows, scope, "ui");
@@ -358,6 +388,7 @@ const program = Effect.gen(function* () {
       withLoader((loader) =>
         reloading.withPermits(1)(
           Effect.gen(function* () {
+            if (safe) return yield* safeMode();
             const scope = options?.scope ?? "user";
             if (scope === "project" && !applied.trusted) return yield* untrustedProject();
             // Checked here so the answer is immediate and the file is never touched: the load would refuse these too.
@@ -407,13 +438,66 @@ const program = Effect.gen(function* () {
     faults: Stream.unwrap(withLoader((loader) => Effect.succeed(loader.core.faults))).pipe(Stream.tap((fault) => Effect.sync(() => faults.record(fault)))),
   });
 
+  if (safe) yield* log("safe mode: the bundled plugins as shipped; no config file or plugin file is read or written");
   applied = yield* load(host);
-  const loader = yield* makeLoader({ source, composition: applied.resolved.composition, shutdownTimeout: SHUTDOWN_TIMEOUT });
+  // What cannot start is left failed, restartable, unless it is required: the essential plugins, your own, and rows marked so.
+  const loader = yield* makeLoader({
+    source,
+    composition: applied.resolved.composition,
+    shutdownTimeout: SHUTDOWN_TIMEOUT,
+    partialStart: { required: applied.required },
+  }).pipe(
+    // A plugin of yours that fails to start keeps the host down only because it is required: say how to start without it.
+    Effect.mapError(
+      (error) =>
+        new ReloadError({
+          diagnostics: error.diagnostics.map((diagnostic) =>
+            diagnostic.suggestion === undefined &&
+            diagnostic.pluginId !== undefined &&
+            applied.required.includes(diagnostic.pluginId) &&
+            pinned[diagnostic.pluginId] === undefined
+              ? new Diagnostic({ ...diagnostic, suggestion: `Fix it, or set "required": false in its row to start without it` })
+              : diagnostic,
+          ),
+        }),
+    ),
+  );
   yield* Deferred.succeed(ready, loader);
   // Captured once: a reload drains in-flight core.run work, so it must not run inside core.run.
   const control = yield* loader.core.run(HostControl);
   const { plugins } = yield* loader.core.inspect;
-  yield* log(`running ${plugins.map((plugin) => plugin.id).join(", ")}`);
+  for (const plugin of plugins) {
+    // No fault stream existed yet to hear these: the Plugins page's history gets them here.
+    if (plugin.state === "failed" && plugin.fault !== undefined) faults.record(plugin.fault as ReportedFault);
+  }
+  yield* printDiagnostics(
+    plugins.flatMap((plugin) =>
+      plugin.state === "failed" && plugin.fault !== undefined
+        ? [
+            new Diagnostic({
+              severity: "warning",
+              pluginId: plugin.id,
+              message: `"${plugin.id}" failed to start: ${faultMessage(plugin.fault)}`,
+              suggestion: `Fix it, then restart it from the Plugins page or with \`lemma plugins restart ${plugin.id}\``,
+            }),
+          ]
+        : plugin.haltedBy !== undefined
+          ? [
+              new Diagnostic({
+                severity: "warning",
+                pluginId: plugin.id,
+                message: `"${plugin.id}" is not running: it needs "${plugin.haltedBy}", which failed to start`,
+              }),
+            ]
+          : [],
+    ),
+  );
+  yield* log(
+    `running ${plugins
+      .filter((plugin) => plugin.state === "active")
+      .map((plugin) => plugin.id)
+      .join(", ")}`,
+  );
   yield* log(`home ${paths.home}, project ${paths.cwd}`);
 
   yield* Effect.forkScoped(
@@ -423,9 +507,11 @@ const program = Effect.gen(function* () {
       }),
     ),
   );
-  for (const [path, text] of yield* readConfigFiles) seenConfig.set(path, text);
+  // In safe mode no config file is read, even to remember it.
+  if (!safe) for (const [path, text] of yield* readConfigFiles) seenConfig.set(path, text);
+  // In safe mode the files are not read, so their changes are nothing to apply.
   yield* Effect.forkScoped(
-    Stream.runForEach(watchConfig(paths), () =>
+    Stream.runForEach(safe ? Stream.empty : watchConfig(paths), () =>
       Effect.gen(function* () {
         // Only what differs from the last read or write is new; a change this process wrote (a configure, or its undo) is already applied.
         const current = yield* readConfigFiles;
@@ -445,7 +531,7 @@ const program = Effect.gen(function* () {
 
   // A UI file added, edited, or removed changes only what web apps load.
   yield* Effect.forkScoped(
-    Stream.runForEach(watchUi(paths), () =>
+    Stream.runForEach(safe ? Stream.empty : watchUi(paths), () =>
       reloading.withPermits(1)(
         Effect.gen(function* () {
           const previous = applied;
@@ -474,6 +560,7 @@ if (Exit.isFailure(exit)) {
   if (Option.isSome(failure) && failure.value instanceof ReloadError) {
     await Effect.runPromise(printDiagnostics(failure.value.diagnostics));
     console.error("lemma: cannot start with this composition");
+    if (!safe) console.error("lemma: --safe starts the bundled plugins as shipped, reading no config file or plugin file, while you fix it");
   } else if (!Cause.isInterruptedOnly(exit.cause)) {
     console.error(Cause.pretty(exit.cause));
   }

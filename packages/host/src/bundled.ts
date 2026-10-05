@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import type { Composition, Plugin, PluginEntry } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
 import agent from "@lemma/plugin-agent";
 import commands from "@lemma/plugin-commands";
 import compaction from "@lemma/plugin-compaction";
@@ -51,27 +51,12 @@ export function bundled(host: Plugin): readonly Plugin[] {
   ];
 }
 
-/** Config the app supplies for bundled plugins, beneath whatever a config file sets. */
-const appConfig: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+/**
+ * Config the app supplies for bundled plugins (the planner's `defaults`): it
+ * stays beneath a file's `config` object key by key, so setting the
+ * transport's port does not also unset the web app.
+ */
+export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
   transport: { staticDir: webDist },
   agent: { cli: cliCommand },
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * The default composition is every bundled and local plugin, enabled with its
- * default config. Config files patch it by plugin id: `enabled: false` removes a
- * plugin, and a `config` object replaces the default config. App-supplied
- * config (the web app's `staticDir`, the agent's `cli`) stays underneath a file's
- * `config` object key by key, so setting the transport's port does not also unset the web app.
- */
-export function withDefaults(ids: readonly string[], patch: Composition): Composition {
-  const plugins: Record<string, PluginEntry> = {};
-  for (const id of ids) plugins[id] = appConfig[id] === undefined ? {} : { config: appConfig[id] };
-  for (const [id, row] of Object.entries(patch.plugins)) {
-    const base = appConfig[id];
-    plugins[id] = { ...plugins[id], ...row, ...(base !== undefined && isRecord(row.config) ? { config: { ...base, ...row.config } } : {}) };
-  }
-  return { plugins };
-}

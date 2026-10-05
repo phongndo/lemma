@@ -12,7 +12,7 @@ import { ledger, promptDiff, trajectory } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
 import { ExitCode, parseOffset, run } from "../src/cli.ts";
 import { toAnswer } from "../src/live.ts";
-import { formatDiff, formatQuestions, formatRecords, formatSession, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
+import { formatDiff, formatPlugins, formatQuestions, formatRecords, formatSession, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
 
 const hostMain = fileURLToPath(new URL("../../../packages/host/src/main.ts", import.meta.url));
 
@@ -951,4 +951,16 @@ describe("a host killed mid-turn", () => {
     const answer = rambleLog!.branch.filter((event) => event.data.type === "message" && event.data.message.role === "assistant").at(-1)!.data.message;
     expect(answer.content[0].text).toContain("word60");
   }, 60_000);
+});
+
+describe("formatPlugins", () => {
+  test("says why a plugin is left out, and what waits on it", () => {
+    const base = { version: "1", source: "bundled" as const, enabled: true, provides: [], requires: [] };
+    const text = formatPlugins([
+      { ...base, id: "agent", provides: ["lemma/Agent"], state: "disabled", problem: "its config is invalid at maxSteps: Expected number" },
+      { ...base, id: "compaction", requires: ["lemma/Agent"], state: "disabled", haltedBy: "agent" },
+    ]);
+    expect(text).toContain("left out: its config is invalid at maxSteps: Expected number");
+    expect(text).toContain("needs agent, which is left out");
+  });
 });

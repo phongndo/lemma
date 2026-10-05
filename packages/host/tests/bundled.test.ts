@@ -1,35 +1,30 @@
 import { describe, expect, test } from "vitest";
-import { cliCommand, webDist, withDefaults } from "../src/bundled.ts";
+import { Layer, Schema } from "effect";
+import { definePlugin } from "@lemma/core";
+import type { PluginRow } from "@lemma/contracts";
+import { planComposition } from "@lemma/plugin-host";
+import { appDefaults, cliCommand, webDist } from "../src/bundled.ts";
 
-describe("withDefaults", () => {
+const plugin = (id: string) => definePlugin({ id, config: Schema.Record({ key: Schema.String, value: Schema.Unknown }), layer: Layer.empty });
+const bundled = [plugin("agent"), plugin("transport"), plugin("tools")];
+const entries = (rows: Readonly<Record<string, PluginRow>> = {}) => planComposition({ bundled, local: [], rows, defaults: appDefaults }).composition.plugins;
+
+describe("appDefaults", () => {
   test("enables every plugin, with the web app served and the CLI named to the agent by default", () => {
-    expect(withDefaults(["agent", "transport"], { plugins: {} }).plugins).toEqual({
-      agent: { config: { cli: cliCommand } },
-      transport: { config: { staticDir: webDist } },
-    });
+    expect(entries()).toEqual({ agent: { config: { cli: cliCommand } }, transport: { config: { staticDir: webDist } }, tools: {} });
   });
 
   test("a transport config row keeps the web app unless it sets staticDir itself", () => {
-    expect(withDefaults(["transport"], { plugins: { transport: { config: { port: 8000 } } } }).plugins.transport).toEqual({
-      config: { staticDir: webDist, port: 8000 },
-    });
-    expect(withDefaults(["transport"], { plugins: { transport: { config: { staticDir: "/srv/ui" } } } }).plugins.transport).toEqual({
-      config: { staticDir: "/srv/ui" },
-    });
-    expect(withDefaults(["transport"], { plugins: { transport: { enabled: false } } }).plugins.transport).toEqual({
-      enabled: false,
-      config: { staticDir: webDist },
-    });
+    expect(entries({ transport: { config: { port: 8000 } } }).transport).toEqual({ config: { staticDir: webDist, port: 8000 } });
+    expect(entries({ transport: { config: { staticDir: "/srv/ui" } } }).transport).toEqual({ config: { staticDir: "/srv/ui" } });
+    expect(entries({ transport: { enabled: false } }).transport).toEqual({ config: { staticDir: webDist }, enabled: false });
   });
 
   test("an agent config row keeps the CLI unless it sets cli itself", () => {
-    expect(withDefaults(["agent"], { plugins: { agent: { config: { maxSteps: 5 } } } }).plugins.agent).toEqual({ config: { cli: cliCommand, maxSteps: 5 } });
+    expect(entries({ agent: { config: { maxSteps: 5 } } }).agent).toEqual({ config: { cli: cliCommand, maxSteps: 5 } });
   });
 
   test("other plugins' config rows replace their config", () => {
-    expect(withDefaults(["tools"], { plugins: { tools: { config: { timeoutMs: 5 } }, extra: {} } }).plugins).toEqual({
-      tools: { config: { timeoutMs: 5 } },
-      extra: {},
-    });
+    expect(entries({ tools: { config: { timeoutMs: 5 } } }).tools).toEqual({ config: { timeoutMs: 5 } });
   });
 });

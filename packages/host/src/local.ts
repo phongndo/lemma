@@ -8,8 +8,11 @@ import type { Plugin } from "@lemma/core";
 
 /**
  * Local plugins are `.ts` or `.js` files in `<home>/plugins` and, for a
- * trusted project, `<cwd>/.lemma/plugins`, whose default export is a plugin or
- * an array of plugins. They run with the host's permissions, like every plugin.
+ * trusted project, `<cwd>/.lemma/plugins`, whose default export is a plugin,
+ * an array of plugins, or a function of `{ bundled }` (the bundled plugins by
+ * id) returning either, so a replacement can wrap the bundled plugin it
+ * replaces and keep its updates. They run with the host's permissions, like
+ * every plugin.
  *
  * Bare imports that the file's own location cannot resolve (`effect`,
  * `@lemma/core`, `@lemma/contracts`) fall back to the host's packages, so a
@@ -31,6 +34,13 @@ function shareHostPackages(): void {
   });
 }
 
+/**
+ * What each file version made, by its versioned URL: a function export runs
+ * once per version, so a reload sees the same definitions and leaves them
+ * running, as it does a plain export (the module cache keeps that one).
+ */
+const made = new Map<string, unknown>();
+
 const isPlugin = (value: unknown): value is Plugin =>
   typeof value === "object" && value !== null && typeof (value as Plugin).id === "string" && typeof (value as Plugin).layer === "function";
 
@@ -46,7 +56,13 @@ export interface LocalPlugins {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-export function loadLocalPlugins(dirs: readonly string[]): Effect.Effect<LocalPlugins> {
+/** What a plugin file's default export receives when it is a function. */
+export interface LocalContext {
+  /** The bundled plugins by id: a replacement can wrap one, delegating to it. */
+  readonly bundled: Readonly<Record<string, Plugin>>;
+}
+
+export function loadLocalPlugins(dirs: readonly string[], context: LocalContext): Effect.Effect<LocalPlugins> {
   return Effect.promise(async () => {
     const plugins: LocalPlugin[] = [];
     const diagnostics: Diagnostic[] = [];
@@ -59,8 +75,11 @@ export function loadLocalPlugins(dirs: readonly string[]): Effect.Effect<LocalPl
           // Keyed by mtime: an unchanged file returns the cached module (the same
           // definition, so a reload leaves it running); an edited file is re-imported.
           const { mtimeMs } = await stat(file);
-          const module = await import(`${pathToFileURL(file).href}?v=${mtimeMs}`);
-          const exported: unknown[] = Array.isArray(module.default) ? module.default : [module.default];
+          const url = `${pathToFileURL(file).href}?v=${mtimeMs}`;
+          const module = await import(url);
+          if (!made.has(url)) made.set(url, typeof module.default === "function" && !isPlugin(module.default) ? module.default(context) : module.default);
+          const result = made.get(url);
+          const exported: unknown[] = Array.isArray(result) ? result : [result];
           const found = exported.filter(isPlugin);
           if (found.length === 0) {
             diagnostics.push(
@@ -73,7 +92,7 @@ export function loadLocalPlugins(dirs: readonly string[]): Effect.Effect<LocalPl
             new Diagnostic({
               severity: "error",
               message: `${file}: cannot load: ${cause instanceof Error ? cause.message : String(cause)}`,
-              suggestion: "Fix the file or move it out of the plugins directory",
+              suggestion: "Fix the file or move it out of the plugins directory (`--safe` starts Lemma without plugin files)",
             }),
           );
         }

@@ -12,12 +12,17 @@ const { composition, diagnostics, files } = await Effect.runPromise(loadComposit
 ```
 
 [Configuration](../../docs/configuration.md) describes the files these read,
-how project rows merge over user rows, and project trust. Each export's doc
-comment gives its contract: `loadComposition` never fails and reports bad
-files as diagnostics; `patchConfig` and `updateConfig` edit rows in place,
-keeping comments; `resolveComposition` and `withReplacements` decide what
-turning a plugin on or off does to the plugins around it; `compositionInfo`'s
-id is stable across processes, because session `request` events record it.
+how project rows merge over user rows, project trust, and what happens to a
+plugin that cannot run. Each export's doc comment gives its contract:
+`loadComposition` never fails and reports bad files as diagnostics;
+`patchConfig` and `updateConfig` edit rows in place, keeping comments, and
+write the file whole (through a link, to the file it points to);
+`planComposition` (also `@lemma/plugin-host/planner`, browser-safe, which the
+web app plans with too) turns plugins and rows into what runs, leaving out what
+cannot and saying why, with `required` naming what must start;
+`resolveComposition` and `withReplacements` decide what turning a plugin on or
+off does to the plugins around it; `compositionInfo`'s id is stable across
+processes, because session `request` events record it.
 
 ## Wiring in the app
 

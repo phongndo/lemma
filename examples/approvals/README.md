@@ -16,7 +16,10 @@ ln -s "$PWD/examples/approvals/approvals.ts" ~/.lemma/plugins/approvals.ts   # o
 lemma reload                                                                 # plugin files load on reload
 ```
 
-It then shows on the Plugins page as a user plugin, with its settings:
+As a plugin file it is required: if it cannot load or start, the host does
+not start rather than run tools without asking (see
+[configuration](../../docs/configuration.md#when-something-cannot-run)). It
+then shows on the Plugins page as a user plugin, with its settings:
 
 | Setting          | Default             | What it does                                                                  |
 | ---------------- | ------------------- | ----------------------------------------------------------------------------- |
