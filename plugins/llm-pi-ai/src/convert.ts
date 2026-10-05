@@ -1,6 +1,6 @@
-import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type * as Pi from "@earendil-works/pi-ai";
-import type { AssistantMessage, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall } from "@lemma/contracts";
+import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall } from "@lemma/contracts";
 
 // Pure mappings between pi-ai values and the contract shapes. Contract messages
 // are pi-ai-shaped, so requests pass through; results are rebuilt field by field
@@ -134,6 +134,36 @@ export function explainError(message: string | undefined, provider: { readonly i
   return message;
 }
 
+const RATE_LIMIT = /rate.?limit|too many requests|\b429\b|resource.?exhausted/i;
+/** pi-ai's wording when a provider asks for a longer wait than its SDK retries will sit through. */
+const REQUESTED_DELAY = /Server requested (\d+)s retry delay/;
+/** A request over a per-minute token limit: it never passes, however long the wait. */
+const TOO_LARGE = /request too large/i;
+/** The status a provider SDK puts first: a 4xx but a timeout, conflict, or rate limit is the request's own fault. */
+const CLIENT_ERROR = /^\s*4(?!08|09|29)\d\d\b/;
+/** Node's codes for a connection that failed, rather than the request. */
+const NETWORK = /\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_[A-Z_]+)\b/;
+
+/**
+ * Why a call failed, from pi-ai's own classifiers over the provider's wording
+ * (pi reports failures as text): overflow first, as pi advises, then whether
+ * asking again can help, and whether the provider is throttling. pi's test
+ * for that finds a status anywhere in the text (`500` in a byte count) and
+ * misses Node's connection errors, so a leading 4xx status and those codes
+ * are read first.
+ */
+export function classifyFailure(message: Pi.AssistantMessage, contextWindow: number): LlmFailure {
+  if (isContextOverflow(message, contextWindow)) return { kind: "overflow" };
+  const text = message.errorMessage ?? "";
+  if (TOO_LARGE.test(text) || CLIENT_ERROR.test(text)) return { kind: "fatal" };
+  if (!NETWORK.test(text) && !isRetryableAssistantError(message)) return { kind: "fatal" };
+  const requested = REQUESTED_DELAY.exec(text);
+  return { kind: RATE_LIMIT.test(text) ? "rate-limit" : "transient", ...(requested === null ? {} : { retryAfterMs: Number(requested[1]) * 1000 }) };
+}
+
+/** What a silent overflow (below) is logged as. */
+const SILENT_OVERFLOW = "The request filled the model's context window, leaving no room to answer";
+
 const emptyMessage = (model: Pi.Model<Pi.Api>): Pi.AssistantMessage => ({
   role: "assistant",
   content: [],
@@ -161,11 +191,23 @@ export function makeEventMapper(model: Pi.Model<Pi.Api>, provider: { readonly id
     started = true;
     return [{ type: "start" }];
   };
-  const terminal = (message: Pi.AssistantMessage, fallback?: string): StreamEvent[] => {
+  const terminal = (message: Pi.AssistantMessage, fallback?: string, failure?: LlmFailure): StreamEvent[] => {
     finished = true;
     const mapped = toAssistantMessage(message, explainError(message.errorMessage ?? fallback, provider));
-    const type = mapped.stopReason === "error" || mapped.stopReason === "aborted" ? "error" : "done";
-    return [...begin(), { type, message: mapped }];
+    if (mapped.stopReason === "aborted") return [...begin(), { type: "error", message: mapped }];
+    // Cut off at its limit having said nothing, its input filling the context window: some providers cut a request
+    // too long to fit rather than refuse it. (pi also counts a finished answer whose input exceeds the window, but
+    // that one is kept: a wrong window in the model's metadata would turn good answers into failures.)
+    if (mapped.stopReason === "length" && isContextOverflow(message, model.contextWindow)) {
+      return [
+        ...begin(),
+        { type: "error", message: toAssistantMessage({ ...message, stopReason: "error", errorMessage: SILENT_OVERFLOW }), failure: { kind: "overflow" } },
+      ];
+    }
+    if (mapped.stopReason !== "error") return [...begin(), { type: "done", message: mapped }];
+    const classified =
+      failure ?? classifyFailure({ ...message, stopReason: "error", errorMessage: message.errorMessage ?? fallback ?? "" }, model.contextWindow);
+    return [...begin(), { type: "error", message: mapped, failure: classified }];
   };
 
   return {
@@ -199,11 +241,15 @@ export function makeEventMapper(model: Pi.Model<Pi.Api>, provider: { readonly id
           return [];
       }
     },
-    /** Call when pi's stream ends or throws; closes a stream that ended without a terminal. */
-    end(cause?: unknown): StreamEvent[] {
+    /** Call when pi's stream ends or throws; closes a stream that ended without a terminal. `failure` overrides the classification. */
+    end(cause?: unknown, failure?: LlmFailure): StreamEvent[] {
       if (finished) return [];
       const reason = cause === undefined ? "The provider stream ended without a result" : cause instanceof Error ? cause.message : String(cause);
-      return terminal({ ...(latest ?? emptyMessage(model)), stopReason: "error", errorMessage: reason });
+      return terminal(
+        { ...(latest ?? emptyMessage(model)), stopReason: "error", errorMessage: reason },
+        undefined,
+        failure ?? (cause === undefined ? { kind: "transient" } : undefined),
+      );
     },
   };
 }

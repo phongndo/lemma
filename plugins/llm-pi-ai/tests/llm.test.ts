@@ -134,6 +134,54 @@ describe("stream", () => {
     if (last.type === "error") expect(last.message).toMatchObject({ stopReason: "aborted", errorMessage: "Request was aborted" });
   });
 
+  it("ends a response that sends nothing for streamTimeout as a transient failure, and aborts the request", async () => {
+    const { faux, plugins } = setup();
+    let aborted = false;
+    faux.setResponses([
+      (_, options) =>
+        new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          }),
+        ),
+    ]);
+    const events = await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })), { llm: { streamTimeout: 0.1 } });
+    events.forEach((event) => decodeEvent(event));
+    const last = events.at(-1)!;
+    expect(last).toMatchObject({ type: "error", failure: { kind: "transient" }, message: { stopReason: "error" } });
+    expect(last.type === "error" ? last.message.errorMessage : "").toContain("stalled");
+    expect(events.filter((e) => e.type === "done" || e.type === "error")).toHaveLength(1);
+    expect(aborted).toBe(true);
+  });
+
+  it("asks providers to keep the prompt cache as long as configured", async () => {
+    const { faux, plugins } = setup();
+    const seen: (SimpleStreamOptions | undefined)[] = [];
+    faux.setResponses([
+      (_, options) => {
+        seen.push(options);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })), { llm: { cacheRetention: "long" } });
+    expect(seen[0]?.cacheRetention).toBe("long");
+  });
+
+  it("has pi-ai ask a failing provider again itself, before a response starts, waiting the delay it names", async () => {
+    const { faux, plugins } = setup();
+    const seen: (SimpleStreamOptions | undefined)[] = [];
+    faux.setResponses([
+      (_, options) => {
+        seen.push(options);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })));
+    // pi-ai makes none unless asked, and reads no Retry-After without them.
+    expect(seen[0]?.maxRetries).toBeGreaterThan(0);
+  });
+
   it("fails with UnknownModel before starting", async () => {
     const { plugins } = setup();
     const error = await runWith(plugins, Effect.flip(collect(new LlmRequest({ model: "faux/missing", messages: [] }))));
@@ -183,6 +231,39 @@ describe("event mapper", () => {
     const mapper = makeEventMapper(model, provider);
     expect(mapper.end().map((e) => e.type)).toEqual(["start", "error"]);
     expect(mapper.end()).toEqual([]);
+  });
+
+  it("classifies a failure, so a caller knows whether asking again can help", () => {
+    const failure = (errorMessage: string, reason: "error" | "aborted" = "error") => {
+      const mapper = makeEventMapper(model, provider);
+      const last = mapper.push({ type: "error", reason, error: fauxAssistantMessage([], { stopReason: reason, errorMessage }) }).at(-1);
+      return last?.type === "error" ? last.failure : "no error event";
+    };
+    expect(failure('529 {"type":"error","error":{"type":"overloaded_error"}}')).toEqual({ kind: "transient" });
+    expect(failure("fetch failed")).toEqual({ kind: "transient" });
+    expect(failure("429 Too Many Requests")).toEqual({ kind: "rate-limit" });
+    expect(failure("Server requested 120s retry delay (max: 60s). Rate limit reached")).toEqual({ kind: "rate-limit", retryAfterMs: 120_000 });
+    expect(failure("prompt is too long: 210000 tokens > 200000 maximum")).toEqual({ kind: "overflow" });
+    expect(failure("401 Invalid API key")).toEqual({ kind: "fatal" });
+    expect(failure("429 insufficient_quota: You exceeded your current quota")).toEqual({ kind: "fatal" });
+    expect(failure("Request was aborted", "aborted")).toBeUndefined();
+    // A status pi-ai would find in the text, but the request's own fault, and one that can never pass.
+    expect(failure("400 invalid_request_error: request body of 5500123 bytes is too large")).toEqual({ kind: "fatal" });
+    expect(failure("429 Request too large for gpt-4o on tokens per min (TPM): Limit 30000, Requested 45000")).toEqual({ kind: "fatal" });
+    // A connection that failed, which pi-ai does not recognize.
+    expect(failure("read ECONNRESET")).toEqual({ kind: "transient" });
+    expect(failure("connect ETIMEDOUT 10.0.0.1:443")).toEqual({ kind: "transient" });
+  });
+
+  it("fails a response cut off at its limit having said nothing, its input filling the context window, as an overflow", () => {
+    const usage = (input: number, output: number) => ({ ...fauxAssistantMessage([]).usage, input, output });
+    const settle = (message: ReturnType<typeof fauxAssistantMessage>) =>
+      makeEventMapper(model, provider).push({ type: "done", reason: "length", message }).at(-1);
+    const silent = { ...fauxAssistantMessage([], { stopReason: "length" }), usage: usage(model.contextWindow, 0) };
+    expect(settle(silent)).toMatchObject({ type: "error", message: { stopReason: "error" }, failure: { kind: "overflow" } });
+    // An answer cut off at its output limit is still an answer.
+    const cut = { ...fauxAssistantMessage("half an answer", { stopReason: "length" }), usage: usage(1000, 4096) };
+    expect(settle(cut)).toMatchObject({ type: "done", message: { stopReason: "length" } });
   });
 
   it("maps a pending stop reason to an error", () => {

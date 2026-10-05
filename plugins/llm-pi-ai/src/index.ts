@@ -36,8 +36,24 @@ export const Config = Schema.Struct({
     title: "Live model catalogs",
     description: "Add the models a built-in provider serves now (its model list, described by models.dev) to the ones this version knows.",
   }),
+  streamTimeout: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => 300 }).annotations({
+    title: "Stream timeout",
+    description: "Seconds a model response may go without sending anything (its first event, or the next) before it fails as stalled. 0: wait forever.",
+  }),
+  cacheRetention: Schema.optionalWith(Schema.Literal("short", "long"), { default: () => "short" as const }).annotations({
+    title: "Prompt cache retention",
+    description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
+  }),
 });
 export type Config = typeof Config.Type;
+
+/**
+ * Times pi-ai asks again itself, before a response starts, when the provider
+ * fails in a way its SDK would retry (pi-ai makes none unless told). It waits
+ * the delay the provider names (`Retry-After`) up to a minute; a longer one it
+ * reports in the error, for the caller to wait out.
+ */
+const SDK_RETRIES = 2;
 
 export interface Options {
   /** Replaces pi-ai's built-in provider list (tests register the faux provider here). Filtered by `include`/`exclude`. */
@@ -200,29 +216,62 @@ export function makeLlmPlugin(options: Options = {}) {
                       const controller = new AbortController();
                       const streamOptions: SimpleStreamOptions = {
                         signal: controller.signal,
+                        cacheRetention: config.cacheRetention,
+                        maxRetries: SDK_RETRIES,
                         ...(headers === undefined ? {} : { headers }),
                         ...(reasoning === undefined ? {} : { reasoning }),
                         ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
                         ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
                       };
                       const mapper = makeEventMapper(model, provider);
-                      const send = (out: StreamEvent[]) => out.length > 0 && emit.array(out);
+                      let closed = false;
+                      const send = (out: StreamEvent[]) => !closed && out.length > 0 && emit.array(out);
+                      const close = (out: StreamEvent[]) => {
+                        send(out);
+                        if (!closed) emit.end();
+                        closed = true;
+                      };
+                      // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
+                      // request is aborted: a half-open connection would otherwise hold the turn forever.
+                      const idleMs = config.streamTimeout * 1000;
+                      let stalled = false;
+                      let timer: ReturnType<typeof setTimeout> | undefined;
+                      const arm = () => {
+                        if (idleMs <= 0) return;
+                        clearTimeout(timer);
+                        timer = setTimeout(() => {
+                          stalled = true;
+                          close(
+                            mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
+                              kind: "transient",
+                            }),
+                          );
+                          controller.abort();
+                        }, idleMs);
+                      };
                       void (async () => {
+                        arm();
                         try {
                           for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
+                            if (stalled) break;
+                            arm();
                             send(mapper.push(event));
                             if (mapper.finished) break;
                           }
-                          send(mapper.end());
+                          close(mapper.end());
                         } catch (error) {
-                          send(mapper.end(error));
+                          close(mapper.end(error));
+                        } finally {
+                          clearTimeout(timer);
                         }
-                        emit.end();
                       })();
-                      return controller;
+                      return () => {
+                        clearTimeout(timer);
+                        controller.abort();
+                      };
                     }),
                     // Interrupting the consumer aborts the provider request.
-                    (controller) => Effect.sync(() => controller.abort()),
+                    (stop) => Effect.sync(stop),
                   ),
                 { bufferSize: "unbounded" },
               );

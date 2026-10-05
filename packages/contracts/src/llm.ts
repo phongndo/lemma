@@ -215,6 +215,19 @@ export class LlmRequest extends Schema.Class<LlmRequest>("lemma/LlmRequest")({
 }) {}
 
 /**
+ * Why a model call failed, for a caller deciding whether to ask again:
+ * `transient` (the provider or the connection failed, or the stream stalled)
+ * and `rate-limit` may succeed when asked again, after `retryAfterMs` when the
+ * provider named a delay; `overflow` needs a shorter request; `fatal` will not
+ * succeed as asked (authentication, quota, an invalid request).
+ */
+export const LlmFailure = Schema.Struct({
+  kind: Schema.Literal("transient", "rate-limit", "overflow", "fatal"),
+  retryAfterMs: Schema.optional(Schema.Number),
+});
+export type LlmFailure = typeof LlmFailure.Type;
+
+/**
  * Streamed by `Llm.stream`. Every stream that starts ends with exactly one
  * `done` or `error`; both carry the complete assistant message so a failed
  * attempt can be logged with whatever it produced. `index` is the content
@@ -228,8 +241,11 @@ export const StreamEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("toolcall-delta"), index: Schema.Number, delta: Schema.String }),
   Schema.Struct({ type: Schema.Literal("toolcall-end"), index: Schema.Number, toolCall: ToolCall }),
   Schema.Struct({ type: Schema.Literal("done"), message: AssistantMessage }),
-  /** `message.stopReason` is `error` or `aborted`; `message.errorMessage` explains it. */
-  Schema.Struct({ type: Schema.Literal("error"), message: AssistantMessage }),
+  /**
+   * `message.stopReason` is `error` or `aborted`; `message.errorMessage` explains it, and `failure` classifies an error.
+   * An error without `failure` is one the caller cannot tell will pass: the agent ends the turn rather than ask again.
+   */
+  Schema.Struct({ type: Schema.Literal("error"), message: AssistantMessage, failure: Schema.optional(LlmFailure) }),
 );
 export type StreamEvent = typeof StreamEvent.Type;
 
