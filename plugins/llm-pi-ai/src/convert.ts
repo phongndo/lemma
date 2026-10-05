@@ -121,6 +121,19 @@ export function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: 
   };
 }
 
+/** Rewrites pi's terse auth failures into something a user can act on. */
+export function explainError(message: string | undefined, provider: { readonly id: string; readonly name: string }): string | undefined {
+  if (message === undefined) return undefined;
+  const login = `Run /login ${provider.id}`;
+  if (message.startsWith("Provider is not configured:") || message.startsWith("No API key for provider:")) {
+    return `${provider.name} is not authenticated. ${login} or set its API key environment variable.`;
+  }
+  if (message.startsWith("OAuth refresh failed") || message.startsWith("OAuth refresh returned")) {
+    return `${message}. ${login} to sign in again.`;
+  }
+  return message;
+}
+
 const emptyMessage = (model: Pi.Model<Pi.Api>): Pi.AssistantMessage => ({
   role: "assistant",
   content: [],
@@ -138,7 +151,7 @@ const emptyMessage = (model: Pi.Model<Pi.Api>): Pi.AssistantMessage => ({
  * precedes everything (pi may fail setup without one), exactly one terminal
  * is emitted, and events after it are ignored.
  */
-export function makeEventMapper(model: Pi.Model<Pi.Api>) {
+export function makeEventMapper(model: Pi.Model<Pi.Api>, provider: { readonly id: string; readonly name: string }) {
   let started = false;
   let finished = false;
   let latest: Pi.AssistantMessage | undefined;
@@ -150,8 +163,7 @@ export function makeEventMapper(model: Pi.Model<Pi.Api>) {
   };
   const terminal = (message: Pi.AssistantMessage, fallback?: string): StreamEvent[] => {
     finished = true;
-    // The provider that served it, which pi-ai may know by another id (`openai-api` speaks as `openai`).
-    const mapped = { ...toAssistantMessage(message, message.errorMessage ?? fallback), provider: model.provider };
+    const mapped = toAssistantMessage(message, explainError(message.errorMessage ?? fallback, provider));
     const type = mapped.stopReason === "error" || mapped.stopReason === "aborted" ? "error" : "done";
     return [...begin(), { type, message: mapped }];
   };

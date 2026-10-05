@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
+import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
@@ -64,11 +65,10 @@ export function noticeRecorder() {
   return { notices, plugin };
 }
 
-/** Environment variables for API keys, in place of the developer's own. */
-export const envOf =
-  (env: Record<string, string> = {}) =>
-  (name: string): string | undefined =>
-    env[name];
+export const envContext = (env: Record<string, string> = {}): AuthContext => ({
+  env: async (name) => env[name],
+  fileExists: async () => false,
+});
 
 /** A host that records the config changes plugins ask it to save; `configure` succeeds as a deferred change would. */
 export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
@@ -119,5 +119,5 @@ export const runWith = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A,
     ) as Effect.Effect<A>,
   );
 
-/** Keeps live catalogs and sign-ins off the network: every fetch fails, so providers keep their own lists. */
+/** Keeps live catalogs off the network: every fetch fails, so providers keep pi-ai's lists. */
 export const offline: typeof fetch = () => Promise.reject(new Error("offline in tests"));

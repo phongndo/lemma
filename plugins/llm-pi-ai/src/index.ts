@@ -1,21 +1,34 @@
-import { Effect, Either, Fiber, Layer, Schedule, Schema, Stream } from "effect";
-import { cleanupSessionResources, normalizeContext } from "@earendil-works/pi-ai";
-import type { Api, Model, ProviderStreams, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { Effect, Fiber, Layer, Queue, Schedule, Schema, Stream } from "effect";
+import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
+import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, PluginContext, definePlugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, Llm, LlmError, LlmRequestHook, ModelsChanged, Notice, Paths, parseModelRef } from "@lemma/contracts";
-import type { AuthType, LlmRequest, ProviderInfo, StreamEvent } from "@lemma/contracts";
-import { makeAuth } from "./auth.ts";
-import type { LoginUi, Token } from "./auth.ts";
-import { networkSources, planSource, withLiveCatalog } from "./catalog.ts";
-import { chatgptSignIn } from "./chatgpt.ts";
+import {
+  Credentials,
+  HostControl,
+  Interaction,
+  InteractionError,
+  Llm,
+  LlmError,
+  LlmRequestHook,
+  ModelsChanged,
+  Notice,
+  Paths,
+  parseModelRef,
+} from "@lemma/contracts";
+import type { AuthType, LlmRequest, NoticePayload, ProviderInfo, StreamEvent } from "@lemma/contracts";
+import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
+import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
+import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
-import { CustomProvider, apis, builtinProviders, customEntry, customProvider, forPi, selectProviders } from "./providers.ts";
-import type { LlmProvider } from "./providers.ts";
+import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
 export const Config = Schema.Struct({
-  include: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to offer; default all." }),
-  exclude: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to leave out." }),
+  include: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to register; default all." }),
+  exclude: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["openai-codex"] }).annotations({
+    description: "Built-in provider ids to leave out. Default: the legacy openai-codex, whose ChatGPT sign-in openai now offers.",
+  }),
   providers: Schema.optional(Schema.Array(CustomProvider)).annotations({
     description: "Providers on a known wire API (OpenAI-compatible servers, proxies). Replace a built-in with the same id.",
   }),
@@ -27,50 +40,42 @@ export const Config = Schema.Struct({
 export type Config = typeof Config.Type;
 
 export interface Options {
-  /** Replaces the built-in providers (tests send through pi-ai's faux provider). Filtered by `include`/`exclude`. */
-  readonly providers?: () => readonly LlmProvider[];
-  /** Reads an environment variable for API keys; default `process.env`. */
-  readonly env?: (name: string) => string | undefined;
-  /** How catalogs and sign-ins reach the network; default the global `fetch`. */
+  /** Replaces pi-ai's built-in provider list (tests register the faux provider here). Filtered by `include`/`exclude`. */
+  readonly providers?: () => readonly Provider[];
+  /** Environment used for auth resolution; default `process.env` and the filesystem. */
+  readonly authContext?: AuthContext;
+  /** How live catalogs are fetched; default the global `fetch`. */
   readonly fetch?: typeof fetch;
 }
 
-export function toProviderInfo(provider: LlmProvider, token: Token | undefined): ProviderInfo {
+/** `custom`: the user's entry for a provider they added (`true` when only that much is known). */
+export function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom: CustomProvider | boolean = false): ProviderInfo {
   const { apiKey, oauth } = provider.auth;
   return {
     id: provider.id,
     name: provider.name,
     auth: [
-      ...(apiKey === undefined ? [] : [{ type: "api_key" as const, name: apiKey, interactive: true }]),
-      ...(oauth === undefined ? [] : [{ type: "oauth" as const, name: oauth.name, interactive: true }]),
+      ...(apiKey === undefined ? [] : [{ type: "api_key" as const, name: apiKey.name, interactive: apiKey.login !== undefined }]),
+      ...(oauth === undefined ? [] : [{ type: "oauth" as const, name: oauth.loginLabel ?? oauth.name, interactive: true }]),
     ],
-    configured: token !== undefined,
-    ...(token === undefined ? {} : { source: token.source }),
-    ...(provider.custom === undefined ? {} : { custom: true }),
-    ...(provider.custom?.logo === undefined ? {} : { logo: provider.custom.logo }),
+    configured: check !== undefined,
+    ...(check?.source === undefined ? {} : { source: check.source }),
+    ...(custom === false ? {} : { custom: true }),
+    ...(typeof custom === "object" && custom.logo !== undefined ? { logo: custom.logo } : {}),
   };
 }
 
-/** Header sets merged in order, a later name replacing an earlier one whatever its case. */
-const mergeHeaders = (...sets: readonly (Readonly<Record<string, string>> | undefined)[]): Record<string, string> => {
-  const merged: Record<string, string> = {};
-  for (const set of sets) {
-    for (const [name, value] of Object.entries(set ?? {})) {
-      for (const existing of Object.keys(merged)) if (existing.toLowerCase() === name.toLowerCase()) delete merged[existing];
-      merged[name] = value;
-    }
-  }
-  return merged;
-};
+const isAbort = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
-/** One instance per wire API, made on first use; implementations load on first request. */
-const wires = new Map<string, ProviderStreams>();
-const wire = (api: string): ProviderStreams | undefined => {
-  if (!Object.hasOwn(apis, api)) return undefined;
-  let found = wires.get(api);
-  if (found === undefined) wires.set(api, (found = apis[api as keyof typeof apis]()));
-  return found;
-};
+function loginError(error: unknown, provider: Provider): LlmError {
+  const cause = error instanceof Error && error.cause !== undefined ? error.cause : undefined;
+  const dismissed = [error, cause].some((e) => e instanceof InteractionError && e.reason === "Dismissed");
+  if (dismissed || isAbort(error)) {
+    return new LlmError({ reason: "Cancelled", message: `${provider.name} login was cancelled`, cause: error });
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  return new LlmError({ reason: "LoginFailed", message: `${provider.name} login failed: ${detail}`, cause: error });
+}
 
 export function makeLlmPlugin(options: Options = {}) {
   return definePlugin({
@@ -89,40 +94,25 @@ export function makeLlmPlugin(options: Options = {}) {
           const interaction = yield* Interaction;
           const host = yield* HostControl;
           const { home } = yield* Paths;
-          const fetchImpl = options.fetch ?? fetch;
+          const run = runner(yield* Effect.runtime<never>());
 
-          const ui: LoginUi = {
-            ask: (message, askOptions) =>
-              interaction.ask(message, askOptions).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new LlmError({
-                      reason: error.reason === "Dismissed" ? "Cancelled" : "LoginFailed",
-                      message: error.reason === "Dismissed" ? "The login was cancelled" : error.message,
-                      cause: error,
-                    }),
-                ),
-              ),
-            notify: (notice) => events.publish(Notice, notice),
+          const models = createModels({
+            credentials: credentialStore(credentials, run),
+            ...(options.authContext === undefined ? {} : { authContext: options.authContext }),
+          });
+          const builtins = selectProviders((options.providers ?? builtinProviders)(), config).map(withoutAnthropicOAuth);
+          // A missing model may be described already by another built-in provider's catalog.
+          const siblings = () => builtins.flatMap((provider) => provider.getModels());
+          const sources = networkSources(options.fetch ?? fetch, siblings);
+          const plan = planSource(options.fetch ?? fetch);
+          // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
+          const live = (provider: Provider) => {
+            const caught = withLiveCatalog(provider, sources);
+            return provider.id === "openai" ? withPlanCatalog(caught, plan) : caught;
           };
-          const auth = makeAuth({ credentials, env: options.env ?? ((name) => process.env[name]), ui });
-
-          // A ChatGPT sign-in lists its plan's models, read from OpenAI, unless the lists are to stay pi-ai's.
-          const plan = config.liveCatalogs ? planSource(fetchImpl) : undefined;
-          const builtins = selectProviders(options.providers?.() ?? builtinProviders(chatgptSignIn({ home, fetch: fetchImpl }), plan), config);
-          // A model a provider adds may be described already by another built-in provider's catalog.
-          const siblings = () => builtins.flatMap((provider) => provider.catalog.models());
-          const sources = networkSources(fetchImpl, siblings);
-          const live = (provider: LlmProvider): LlmProvider =>
-            provider.live === undefined ? provider : { ...provider, catalog: withLiveCatalog(provider.id, provider.catalog, sources, provider.live) };
-          // The user's providers replace built-ins with the same id.
-          const custom = new Map((config.providers ?? []).map((entry) => [entry.id, entry]));
-          const providers = [
-            ...builtins.filter((provider) => !custom.has(provider.id)).map((provider) => (config.liveCatalogs ? live(provider) : provider)),
-            ...[...custom.values()].map(customProvider),
-          ];
-          const providerOf = (id: string) => providers.find((provider) => provider.id === id);
-
+          for (const provider of builtins) models.setProvider(config.liveCatalogs ? live(provider) : provider);
+          for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
+          const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
           /**
            * Saves a change to this plugin's own `providers` list, in the config file its config comes from; the host
            * reloads it, after replying when that restarts the caller's transport.
@@ -157,15 +147,8 @@ export function makeLlmPlugin(options: Options = {}) {
                 ? Effect.fail(new LlmError({ reason: "UnknownProvider", message: `No provider "${providerId}" was added by the user` }))
                 : Effect.succeed(entry);
             });
-          const providerFor = (providerId: string) =>
-            Effect.suspend(() => {
-              const provider = providerOf(providerId);
-              return provider === undefined
-                ? Effect.fail(new LlmError({ reason: "UnknownProvider", message: `Unknown provider: ${providerId}` }))
-                : Effect.succeed(provider);
-            });
 
-          // Pooled websockets keep the event loop alive until released.
+          // Pooled Codex websockets keep the event loop alive until released.
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
               try {
@@ -176,98 +159,63 @@ export function makeLlmPlugin(options: Options = {}) {
             }),
           );
 
-          const listed = () => providers.flatMap((provider) => provider.catalog.models().map((model) => `${provider.id}/${model.id}`)).join("\n");
-          // One refresh at a time, so an older one cannot finish after a newer one and bring back what it replaced.
-          const refreshing = yield* Effect.makeSemaphore(1);
+          const listed = () =>
+            models
+              .getProviders()
+              .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
+              .join("\n");
           /**
-           * Updates provider catalogs (live catalogs, a ChatGPT plan's); failures keep the previous list. Clients hear
-           * when the models changed, and list them again.
+           * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
+           * Clients hear when the models changed, and list them again.
            */
-          const refresh = (only?: readonly string[]) =>
-            refreshing.withPermits(1)(
-              Effect.gen(function* () {
-                const before = listed();
-                yield* Effect.forEach(
-                  providers.filter((provider) => provider.catalog.refresh !== undefined && (only === undefined || only.includes(provider.id))),
-                  (provider) =>
-                    Effect.gen(function* () {
-                      const token = yield* Effect.either(auth.token(provider));
-                      // Not known to be signed out (a sign-in that could not be renewed just now): its list stands.
-                      if (Either.isLeft(token)) return yield* Effect.logDebug(`llm: model refresh skipped for ${provider.id}: ${token.left.message}`);
-                      yield* Effect.tryPromise((signal) => provider.catalog.refresh!({ auth: token.right, signal })).pipe(
-                        Effect.catchAll((error) => Effect.logDebug(`llm: model refresh failed for ${provider.id}: ${String(error.error)}`)),
-                      );
-                    }),
-                  { concurrency: "unbounded", discard: true },
-                );
-                if (listed() !== before) yield* events.publish(ModelsChanged, {});
-              }),
-            );
+          const refresh = (providers?: readonly string[]) =>
+            Effect.gen(function* () {
+              const before = listed();
+              const result = yield* Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) }));
+              yield* Effect.forEach(result.errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`));
+              if (listed() !== before) yield* events.publish(ModelsChanged, {});
+              return result;
+            });
           // Now and every hour, so models a provider adds or retires show without a restart.
           yield* plugin.background("refresh models", Effect.repeat(refresh().pipe(Effect.ignore), Schedule.spaced("1 hour")));
-          const scope = yield* Effect.scope;
-          /**
-           * Refreshes `only`, waiting for it up to 20 seconds. It may queue behind the hourly refresh, so it is not cut
-           * off there: it finishes in the background and tells clients then.
-           */
-          const refreshAfterLogin = (only: readonly string[]) =>
-            Effect.flatMap(Effect.forkIn(refresh(only).pipe(Effect.ignore), scope), (fiber) =>
-              Fiber.join(fiber).pipe(Effect.timeout("20 seconds"), Effect.ignore),
-            );
 
           const unknownModel = (ref: string) => new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}. Model refs are <provider>/<model>.` });
 
-          const findModel = (ref: string): { readonly provider: LlmProvider; readonly model: Model<Api> } | undefined => {
+          const findModel = (ref: string) => {
             const parsed = parseModelRef(ref);
-            const provider = parsed === undefined ? undefined : providerOf(parsed.provider);
-            const model = provider?.catalog.models().find((candidate) => candidate.id === parsed!.model);
-            return provider === undefined || model === undefined ? undefined : { provider, model };
+            return parsed === undefined ? undefined : models.getModel(parsed.provider, parsed.model);
           };
 
           const terminal = (request: LlmRequest) =>
             Effect.gen(function* () {
-              const found = findModel(request.model);
-              if (found === undefined) return yield* Effect.fail(unknownModel(request.model));
-              const { provider, model } = found;
-              const mapper = makeEventMapper(model);
-              // Auth problems end the stream with an error event that says what to do, as provider failures do.
-              const token = yield* Effect.either(auth.token(provider));
-              if (Either.isLeft(token) || token.right === undefined) {
-                const reason = Either.isLeft(token)
-                  ? token.left.message
-                  : `${provider.name} is not authenticated. Run /login ${provider.id} or set its API key environment variable.`;
-                return Stream.fromIterable(mapper.end(new Error(reason)));
-              }
-              const apiKey = token.right.token;
-              const send = provider.stream ?? wire(model.api)?.streamSimple;
-              if (send === undefined) return Stream.fromIterable(mapper.end(new Error(`${provider.name} cannot send to the "${model.api}" API`)));
+              const model = findModel(request.model);
+              const provider = model === undefined ? undefined : models.getProvider(model.provider);
+              if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
               const reasoning = reasoningFor(model, request.thinking);
-              // The model's own headers too: some wire APIs (pi-messages, Bedrock) send only the request's.
-              const headers = mergeHeaders(model.headers, identityHeaders(model), provider.headers?.(request.sessionId));
+              const headers = identityHeaders(model);
               return Stream.asyncPush<StreamEvent>(
                 (emit) =>
                   Effect.acquireRelease(
                     Effect.sync(() => {
                       const controller = new AbortController();
                       const streamOptions: SimpleStreamOptions = {
-                        apiKey,
                         signal: controller.signal,
-                        ...(Object.keys(headers).length === 0 ? {} : { headers }),
+                        ...(headers === undefined ? {} : { headers }),
                         ...(reasoning === undefined ? {} : { reasoning }),
                         ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
                         ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
                       };
-                      const out = (events: StreamEvent[]) => events.length > 0 && emit.array(events);
+                      const mapper = makeEventMapper(model, provider);
+                      const send = (out: StreamEvent[]) => out.length > 0 && emit.array(out);
                       void (async () => {
                         try {
-                          const sent = forPi(provider, model, normalizeContext(toContext(request)));
-                          for await (const event of send(sent.model, sent.context, streamOptions)) {
-                            out(mapper.push(event));
+                          for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
+                            send(mapper.push(event));
                             if (mapper.finished) break;
                           }
-                          out(mapper.end());
+                          send(mapper.end());
                         } catch (error) {
-                          out(mapper.end(error));
+                          send(mapper.end(error));
                         }
                         emit.end();
                       })();
@@ -280,28 +228,29 @@ export function makeLlmPlugin(options: Options = {}) {
               );
             });
 
-          const status = (provider: LlmProvider) => auth.status(provider).pipe(Effect.orElseSucceed(() => undefined));
-
           return Llm.of({
-            providers: Effect.forEach(providers, (provider) => Effect.map(status(provider), (token) => toProviderInfo(provider, token)), {
-              concurrency: "unbounded",
-            }),
+            providers: Effect.forEach(
+              models.getProviders(),
+              (provider) =>
+                Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
+                  Effect.orElseSucceed(() => undefined),
+                  Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id) ?? false)),
+                ),
+              { concurrency: "unbounded" },
+            ),
 
             models: (query) =>
-              Effect.map(
-                Effect.filter(
-                  providers,
-                  (provider) => (query?.available === true ? Effect.map(status(provider), (token) => token !== undefined) : Effect.succeed(true)),
-                  {
-                    concurrency: "unbounded",
-                  },
-                ),
-                (shown) => shown.flatMap((provider) => provider.catalog.models().map(toModelInfo)),
-              ),
+              query?.available === true
+                ? Effect.forEach(
+                    models.getProviders(),
+                    (provider) => Effect.tryPromise((signal) => models.getAvailable(provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
+                    { concurrency: "unbounded" },
+                  ).pipe(Effect.map((lists) => lists.flat().map(toModelInfo)))
+                : Effect.sync(() => models.getModels().map(toModelInfo)),
 
             model: (ref) => {
-              const found = findModel(ref);
-              return found === undefined ? Effect.fail(unknownModel(ref)) : Effect.succeed(toModelInfo(found.model));
+              const model = findModel(ref);
+              return model === undefined ? Effect.fail(unknownModel(ref)) : Effect.succeed(toModelInfo(model));
             },
 
             stream: (request) =>
@@ -314,25 +263,63 @@ export function makeLlmPlugin(options: Options = {}) {
 
             login: (providerId: string, type: AuthType) =>
               Effect.gen(function* () {
-                const provider = yield* providerFor(providerId);
-                yield* auth.login(provider, type);
-                // Its catalog first, so clients that list models on hearing of the login see all of them.
-                yield* refreshAfterLogin([providerId]);
+                const provider = models.getProvider(providerId);
+                if (provider === undefined) {
+                  return yield* Effect.fail(new LlmError({ reason: "UnknownProvider", message: `Unknown provider: ${providerId}` }));
+                }
+                const method = type === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
+                if (method?.login === undefined) {
+                  const kind = type === "oauth" ? "OAuth" : "API key";
+                  return yield* Effect.fail(new LlmError({ reason: "LoginFailed", message: `${provider.name} does not support ${kind} login` }));
+                }
+                // Provider flows notify synchronously; a queue keeps notices ordered, and
+                // `undefined` ends it so every notice is published before login returns.
+                const notices = yield* Queue.unbounded<NoticePayload | undefined>();
+                const publishAll: Effect.Effect<void> = Queue.take(notices).pipe(
+                  Effect.flatMap((notice) =>
+                    notice === undefined
+                      ? Effect.void
+                      : Effect.zipRight(
+                          events.publish(Notice, notice),
+                          Effect.suspend(() => publishAll),
+                        ),
+                  ),
+                );
+                const publisher = yield* Effect.fork(publishAll);
+                const flush = Effect.zipRight(Queue.offer(notices, undefined), Fiber.join(publisher));
+                yield* Effect.tryPromise({
+                  try: (signal) =>
+                    models.login(
+                      providerId,
+                      type,
+                      authInteraction(interaction, run, signal, (event) => {
+                        Queue.unsafeOffer(notices, toNotice(event, provider.name));
+                      }),
+                      { getDeviceId: () => deviceId(home) },
+                    ),
+                  catch: (error) => loginError(error, provider),
+                }).pipe(Effect.ensuring(flush));
+                // Its live catalog first, so clients that list models on hearing of the login see all of them.
+                yield* refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore);
                 // Every client learns of it, including one that reloaded while the login ran.
                 yield* events.publish(Notice, { level: "info", source: "llm", message: `Logged in to ${provider.name}` });
               }),
 
             logout: (providerId) =>
-              Effect.gen(function* () {
-                const provider = yield* providerFor(providerId);
-                yield* auth.logout(provider);
+              Effect.tryPromise({
+                try: (signal) => models.logout(providerId, { signal }),
+                catch: (error) =>
+                  new LlmError({
+                    reason: "LoginFailed",
+                    message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
+                    cause: error,
+                  }),
                 // Signed out of a plan, the provider's own list returns.
-                yield* refreshAfterLogin([providerId]);
-              }),
+              }).pipe(Effect.tap(() => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore))),
 
             addCustom: (spec) =>
               Effect.gen(function* () {
-                const taken = new Set([...providers.map((provider) => provider.id), ...custom.keys()]);
+                const taken = new Set([...models.getProviders().map((provider) => provider.id), ...custom.keys()]);
                 const entry = customEntry(spec, taken);
                 if (entry === undefined) return yield* new LlmError({ reason: "InvalidProvider", message: `Unknown wire API "${spec.api}"` });
                 yield* saveProviders({ add: [entry] });
@@ -353,11 +340,6 @@ export function makeLlmPlugin(options: Options = {}) {
 
 export default makeLlmPlugin();
 
-export { makeAuth } from "./auth.ts";
-export type { Auth, AuthProvider, LoginUi, OAuthCredential, OAuthMethod, ProviderAuth, Token } from "./auth.ts";
-export { fixedCatalog } from "./catalog.ts";
-export type { Catalog, RefreshContext } from "./catalog.ts";
-export { chatgptSignIn } from "./chatgpt.ts";
-export { makeEventMapper, reasoningFor, toAssistantMessage, toContext, toModelInfo } from "./convert.ts";
-export { CustomModel, CustomProvider, apis, builtinProviders, customModel, customProvider } from "./providers.ts";
-export type { LlmProvider } from "./providers.ts";
+export { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
+export { explainError, makeEventMapper, reasoningFor, toAssistantMessage, toContext, toModelInfo } from "./convert.ts";
+export { CustomModel, CustomProvider, apis, customModel, customProvider, withoutAnthropicOAuth } from "./providers.ts";

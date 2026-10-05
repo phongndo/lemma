@@ -4,8 +4,8 @@ import { arch, platform, release } from "node:os";
 export const USER_AGENT = `lemma (${platform()} ${release()}; ${arch()})`;
 
 /**
- * Headers that name Lemma on a model request, unless the model sends its own `User-Agent` (a custom provider's
- * `headers` may set one). pi-ai lets request headers override its own.
+ * Headers that name Lemma on a model request, unless the model sends its own `User-Agent` (GitHub Copilot's models
+ * must name Copilot Chat). pi-ai lets request headers override its own.
  */
 export const identityHeaders = (model: { readonly headers?: Readonly<Record<string, string>> }): Record<string, string> | undefined =>
   Object.keys(model.headers ?? {}).some((name) => name.toLowerCase() === "user-agent") ? undefined : { "User-Agent": USER_AGENT };

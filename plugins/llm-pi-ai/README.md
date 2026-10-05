@@ -1,17 +1,8 @@
 # @lemma/plugin-llm-pi-ai
 
-Provides `Llm` (plugin id `llm`). Requires `Credentials`, `Interaction`, `HostControl`, and `Paths`.
+Provides `Llm` (plugin id `llm`) by wrapping [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi). Requires `Credentials`, `Interaction`, `HostControl`, and `Paths`.
 
-Lemma owns the providers and their logins; [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) only sends requests (its wire APIs, called with the token Lemma resolves) and supplies the built-in model lists. The built-in providers:
-
-| Provider     | Id            | Login                | Environment        | Models                   |
-| ------------ | ------------- | -------------------- | ------------------ | ------------------------ |
-| OpenAI       | `openai`      | Sign in with ChatGPT |                    | The ChatGPT plan's       |
-| OpenAI API   | `openai-api`  | API key              | `OPENAI_API_KEY`   | The ones the key can use |
-| OpenCode Zen | `opencode`    | API key              | `OPENCODE_API_KEY` | OpenCode Zen's           |
-| OpenCode Go  | `opencode-go` | API key              | `OPENCODE_API_KEY` | OpenCode Go's            |
-
-A credential stored by `/login` wins; without one, the provider's environment variable. One OpenCode key serves Zen and Go. OpenAI is two providers because a plan and a key serve different models and bill differently, and both can be set up at once.
+Every pi-ai built-in provider but the legacy OpenAI Codex is registered, with the logins pi-ai offers: OpenAI (API key, or signing in with a ChatGPT plan), Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI, OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the way pi does: a credential stored by `/login` wins, then the provider's environment variables or ambient config (AWS profiles, gcloud ADC).
 
 ## Config
 
@@ -22,8 +13,8 @@ All fields are optional.
   "plugins": {
     "llm": {
       "config": {
-        "include": ["openai", "opencode"], // built-ins to offer; default all
-        "exclude": ["opencode-go"], // built-ins to leave out
+        "include": ["anthropic", "openai", "openrouter"], // built-ins to register; default all
+        "exclude": ["amazon-bedrock"], // default ["openai-codex"]; [] registers it too
         "liveCatalogs": true, // list the models providers serve now (see Behavior); false keeps pi-ai's lists
         "providers": [
           // Keyless local server: no apiKey.
@@ -51,55 +42,22 @@ All fields are optional.
 }
 ```
 
-The web app's Providers page adds and removes these rows; a key typed there is
-stored with `/login`, and the row reads `<ID>_API_KEY` instead of holding it. A
-custom provider needs `id` (no `/`), `api`, `baseUrl`, and `models`, and one
-with a built-in's id replaces it. `api` is one of pi-ai's wire APIs
-(`openai-completions`, `openai-responses`, `anthropic-messages`, …). Model
-fields default as in pi's `models.json`, and `compat` and `thinkingLevelMap`
-pass through to pi-ai unchanged; see pi-ai's "OpenAI Compatibility Settings".
+The web app's Providers page adds and removes these rows for you (through the host's `add`/`remove` config edits, which never read the list back); a key typed there is stored with `/login`, and the row reads `<ID>_API_KEY` instead of holding it. A custom provider needs `id` (no `/`), `api`, `baseUrl`, and `models`. `api` is one of pi-ai's wire APIs: `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`, `mistral-conversations`, `bedrock-converse-stream`, `pi-messages`. Model defaults follow pi's `models.json`: `name` = `id`, `reasoning: false`, `input: ["text"]`, 128k context, 16,384 output tokens, zero cost (USD per million tokens). `compat` (provider-wide, overridden per model field by field) and `thinkingLevelMap` are passed through to pi-ai unchanged; see pi-ai's "OpenAI Compatibility Settings". A custom provider with the id of a built-in replaces it.
 
-Without an `apiKey`, a custom provider counts as configured and sends a
-placeholder key, because the OpenAI SDKs refuse an empty one and local servers
-ignore it. An `apiKey.env` that is unset leaves the provider unconfigured until
-`/login` stores a key.
+Without an `apiKey`, a custom provider counts as configured and sends a placeholder key, because the OpenAI SDKs refuse an empty one and local servers ignore it. A configured `apiKey.env` that is unset leaves the provider unconfigured until `/login` stores a key.
 
 ## Behavior
 
-- **Models.** Refs are `<provider>/<id>`; an unknown ref fails `UnknownModel`
-  before any request. A request's `thinking` is clamped to the levels the model
-  supports, and `"off"` sends no reasoning option.
-- **Requests** run `LlmRequestHook` around the provider and send through
-  pi-ai's `streamSimple` with the token Lemma resolves. Missing auth, or a
-  sign-in that cannot be renewed, ends the stream with an `error` event saying
-  what to do (`/login <provider>`). Providers see `User-Agent: lemma (…)`
-  unless a model sets its own.
-- **Sign-ins** are renewed shortly before they expire, under the credentials
-  lock, so concurrent requests and processes renew once. `logout` revokes the
-  sign-in where the provider allows; when it cannot confirm, a warning says to
-  end the session in the account's settings.
-- **Sign in with ChatGPT** follows OpenAI's
-  [flow for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-  and lists every model the plan's list offers, with the plan's context
-  windows, as the Codex app does. Until the plan's list is read, the
-  list is the models pi-ai knows plans serve, never the API's. The first sign-in
-  registers a client named Lemma, kept in `<home>/chatgpt.json` so signing in
-  again reuses it; delete that file to register anew. From a host on another
-  machine, paste the address the browser ends on. [`src/chatgpt.ts`](src/chatgpt.ts)
-  documents the checks.
-- **Live model lists** (`liveCatalogs`, default on; off, every list stays
-  pi-ai's). At startup, hourly, and after a login or logout,
-  [models.dev](https://models.dev) decides which built-in models are current,
-  and models the provider serves that pi-ai does not know are added. A model
-  keeps pi-ai's request settings and takes its limits and prices from
-  models.dev, which follows the provider's docs more closely than a pi-ai
-  release can. Only models an agent can work with are listed: ones that call
-  tools and answer in text, so embedding, image, and realtime models are left
-  out. The OpenAI API lists only what its key can use (`/v1/models`). Without
-  models.dev a provider keeps pi-ai's list. A change publishes `ModelsChanged`.
-- **The OpenAI API speaks to pi-ai as `openai`**, the id pi-ai shapes OpenAI's
-  requests for, while Lemma lists and logs it as `openai-api`.
+- Model refs are `<provider>/<id>`. An unknown ref fails with `LlmError` `UnknownModel` before any request. `thinkingLevels` come from pi-ai's `getSupportedThinkingLevels`, without pi's `max` (the contract has no equivalent). A request's `thinking` is clamped to the model's supported levels, and `"off"` sends no reasoning option.
+- `stream` runs `LlmRequestHook` around pi-ai's `streamSimple`. Interrupting the stream aborts the provider request. The plugin enforces the `StreamEvent` protocol even where pi-ai does not: it adds a `start` event when setup fails before one, emits exactly one `done`/`error`, and rebuilds the final message without pi-only fields such as diagnostics. pi's `pending` and `deferred` stop reasons become `error`. When auth is missing, the plugin returns an `error` event telling the user to run `/login <provider>`. It does not throw.
+- `login(provider, type)` runs the provider's pi-ai flow. Text, secret, and paste-the-code prompts become `Interaction.ask` (secret prompts are masked), and choices become `Interaction.select`. A prompt the flow abandons, such as a paste prompt that loses the race to the local callback server, is withdrawn by interrupting the question. Auth URLs, device codes, and progress are published as `Notice` events. A dismissed prompt fails with `Cancelled`, and other failures with `LoginFailed` and the provider's message. A flow that names the installation (OpenAI's ChatGPT sign-in) gets its device ID from `<home>/device-id`, a UUID made on first use and kept, since the provider expects the same one at every login.
+- Providers see Lemma, not pi. Model requests send `User-Agent: lemma (<os> <release>; <arch>)` in place of pi-ai's `pi (…)`, unless the model sets its own (GitHub Copilot's models name Copilot Chat, as Copilot requires); the plugin's own catalog requests send it too.
+- Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy, so Anthropic accepts API keys only. The other OAuth providers stay.
+- pi-ai's `openai-codex` (ChatGPT sign-in through the Codex backend) is left out by default: pi-ai calls it legacy now that `openai` signs in with ChatGPT itself, and two OpenAI sign-ins would only ask which. Its login is not `openai`'s (another OAuth client, a token for `api.openai.com`), so moving over means signing in again.
+- Built-in providers' model lists are live (`liveCatalogs`, default on). On refresh, at startup, every hour, and after a login (which waits for it before announcing itself, so clients listing models then see all of them) or logout, [models.dev](https://models.dev) decides which models are current: pi-ai's lists are generated from it, so a model it no longer lists has been retired and is hidden, even where the provider's own `/models` still names it. Current models pi-ai does not know are added: the ones the provider's OpenAI-style `/models` lists (asked with its key, then without, as OpenCode's refuses keys), or all of models.dev's when it has no such list. An added model is served like a known model on the same wire API; its request settings come from the same model at another built-in provider, else the known model with the nearest id, and its limits, prices, and inputs from models.dev. Without models.dev a provider keeps pi-ai's list. Radius keeps its own dynamic catalog. models.dev is read at most once an hour; catalogs are in memory only. A refresh that changed the models publishes `ModelsChanged`, which the transport forwards to clients as `models-changed`.
+- OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, rather than the API's (o1, gpt-4o, and the rest, which a plan does not serve). They come from `GET https://api.openai.com/v1/models` with the sign-in's token: the models it lists for pickers (`visibility: "list"`) that the API serves, in its order. It hides models newer than the Codex client it is told of, so Lemma asks as a client newer than any. A model pi-ai knows keeps pi-ai's entry; one it does not is served like the known model with the nearest id, named and sized by the list. When the list cannot be read, the one from the last refresh stands; with an API key, or signed out, the API's list returns.
+- On disposal the plugin calls pi-ai's `cleanupSessionResources()`, releasing pooled Codex websockets so the process can exit. This cleanup is process-global in pi-ai.
 
 ## Testing
 
-`makeLlmPlugin({ providers, env, fetch })` replaces the built-in providers, the environment read for API keys, and the network. Tests send through pi-ai's `fauxProvider` (a provider's `stream`) and isolate themselves from the developer's keys. `chatgptSignIn({ home, fetch })` runs against a fake auth server, with the real loopback callback.
+`makeLlmPlugin({ providers, authContext })` replaces the built-in provider list and the environment used for auth. Tests use it to register pi-ai's `fauxProvider` and isolate themselves from the developer's API keys.

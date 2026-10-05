@@ -1,20 +1,5 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, Provider, RefreshModelsContext } from "@earendil-works/pi-ai";
 import { USER_AGENT } from "./identity.ts";
-
-/** A provider's models, which `refresh` brings up to date; a refresh that fails keeps the list it had. */
-export interface Catalog {
-  readonly models: () => readonly Model<Api>[];
-  readonly refresh?: (context: RefreshContext) => Promise<void>;
-}
-
-export interface RefreshContext {
-  /** What the provider's requests authenticate with now, if anything; `oauth` for a sign-in rather than a key. */
-  readonly auth: { readonly token: string; readonly oauth: boolean } | undefined;
-  readonly signal: AbortSignal;
-}
-
-/** A list that never changes. */
-export const fixedCatalog = (models: readonly Model<Api>[]): Catalog => ({ models: () => models });
 
 /**
  * Live catalogs for built-in providers. pi-ai ships each provider's models as
@@ -29,21 +14,15 @@ export const fixedCatalog = (models: readonly Model<Api>[]): Catalog => ({ model
  * - Current models pi-ai does not know are added: the ones the provider's
  *   OpenAI-style `/models` lists, or all of models.dev's when it has no such
  *   list. models.dev describes them (limits, prices, inputs, reasoning, wire
- *   API).
- * - Models pi-ai knows keep its request settings, which are tuned per model,
- *   and take their limits and prices from models.dev, which follows the
- *   provider's docs more closely than a pi-ai release can.
- * - Only models an agent can work with are listed: ones that call tools and
- *   answer in text. Embedding, image, and realtime models are left out.
+ *   API); pi-ai's own entries always win, as they carry request settings tuned
+ *   per model.
  */
 
 /** The parts of a models.dev model this reads. */
 export interface DevModel {
   readonly name?: string;
   readonly reasoning?: boolean;
-  /** Whether it calls tools; an agent cannot work with a model that does not. */
-  readonly tool_call?: boolean;
-  readonly modalities?: { readonly input?: readonly string[]; readonly output?: readonly string[] };
+  readonly modalities?: { readonly input?: readonly string[] };
   readonly limit?: { readonly context?: number; readonly output?: number };
   readonly cost?: { readonly input?: number; readonly output?: number; readonly cache_read?: number; readonly cache_write?: number };
   /** Per-model override of the provider's SDK package, which names its wire API. */
@@ -68,9 +47,6 @@ const API_OF_NPM: Readonly<Record<string, Api>> = {
   "@ai-sdk/google": "google-generative-ai",
   "@ai-sdk/mistral": "mistral-conversations",
 };
-
-/** Calls tools and answers in text only, as a turn needs; models.dev leaving a field out does not count against it. */
-export const agentReady = (model: DevModel) => model.tool_call !== false && (model.modalities?.output ?? ["text"]).every((kind) => kind === "text");
 
 const commonPrefix = (a: string, b: string) => {
   let n = 0;
@@ -140,52 +116,37 @@ export interface CatalogSources {
   readonly siblings: () => readonly Model<Api>[];
 }
 
-export interface LiveOptions {
-  /** The provider's id at models.dev, when it differs from Lemma's. */
-  readonly devId?: string;
-  /** Base URL of the OpenAI-style `/models` that lists what a key can use, when models.dev names none. */
-  readonly listUrl?: string;
-  /**
-   * The list names every model the key can use, so a model it leaves out is hidden. Not so for a provider whose list
-   * covers one wire API of several (OpenCode's leaves out the models it serves over Anthropic's).
-   */
-  readonly listComplete?: boolean;
-}
-
-const positive = (value: number | undefined) => (value !== undefined && value > 0 ? value : undefined);
-
-/** A model pi-ai knows, with models.dev's limits and prices. */
-const described = (model: Model<Api>, info: DevModel): Model<Api> => ({
-  ...model,
-  contextWindow: positive(info.limit?.context) ?? model.contextWindow,
-  maxTokens: positive(info.limit?.output) ?? model.maxTokens,
-  cost:
-    info.cost === undefined
-      ? model.cost
-      : { input: info.cost.input ?? 0, output: info.cost.output ?? 0, cacheRead: info.cost.cache_read ?? 0, cacheWrite: info.cost.cache_write ?? 0 },
-});
-
-/** The catalog of provider `id`, extended on refresh with what the provider serves now. */
-export function withLiveCatalog(id: string, catalog: Catalog, sources: CatalogSources, options: LiveOptions = {}): Catalog {
-  let shown: readonly Model<Api>[] | undefined;
+/**
+ * `provider` with its list extended on refresh. A provider with its own
+ * refresh (Radius) keeps it and is left alone.
+ */
+export function withLiveCatalog(provider: Provider, sources: CatalogSources): Provider {
+  if (provider.refreshModels !== undefined) return provider;
+  let found: readonly Model<Api>[] = [];
+  let retired: ReadonlySet<string> = new Set();
   return {
-    models: () => shown ?? catalog.models(),
-    refresh: async ({ auth, signal }) => {
-      await catalog.refresh?.({ auth, signal });
-      const dev = (await sources.dev(signal))?.[options.devId ?? id];
-      // Without models.dev there is no telling a current model from a retired one: the list stands.
-      if (signal.aborted || dev === undefined || Object.keys(dev.models).length === 0) return;
-      const listUrl = options.listUrl ?? dev.api;
-      const listed = listUrl === undefined ? undefined : await sources.list(listUrl, auth?.token, signal);
-      if (signal.aborted) return;
-      const current = (model: string) => dev.models[model] !== undefined && agentReady(dev.models[model]);
+    ...provider,
+    getModels: () => [...provider.getModels().filter((model) => !retired.has(model.id)), ...found],
+    refreshModels: async (context: RefreshModelsContext) => {
+      if (!context.allowNetwork || context.signal.aborted) return;
+      const dev = (await sources.dev(context.signal))?.[provider.id];
+      const credential = context.credential;
+      const key = credential?.type === "api_key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined;
+      // Without models.dev there is no telling a current model from a retired one: pi-ai's list stands.
+      if (dev === undefined || Object.keys(dev.models).length === 0) return;
+      const listed = dev.api === undefined ? undefined : await sources.list(dev.api, key, context.signal);
+      if (context.signal.aborted) return;
+      const current = (id: string) => dev.models[id] !== undefined;
       const ids = (listed ?? Object.keys(dev.models)).filter(current);
-      const usable = (model: string) => current(model) && (listed === undefined || options.listComplete !== true || listed.includes(model));
-      const known = catalog.models();
-      shown = [
-        ...known.filter((model) => usable(model.id)).map((model) => described(model, dev.models[model.id]!)),
-        ...discoveredModels(id, known, ids, dev, sources.siblings()),
-      ];
+      const known = provider.getModels();
+      const next = discoveredModels(provider.id, known, ids, dev, sources.siblings());
+      const gone = new Set(known.filter((model) => !current(model.id)).map((model) => model.id));
+      await context.publish({
+        update: () => {
+          found = next;
+          retired = gone;
+        },
+      });
     },
   };
 }
@@ -252,9 +213,9 @@ export interface PlanModel {
 }
 
 /**
- * A ChatGPT plan's models: the ones its list offers, in its order, as the Codex CLI and app show them, with the plan's
- * context windows. A model pi-ai knows keeps pi-ai's name and request settings, which are tuned per model; one it does
- * not is served like the known model with the nearest id, described by the list.
+ * A ChatGPT plan's models: the ones its list offers, in its order, as the Codex CLI and app show them. A model pi-ai
+ * knows keeps pi-ai's entry, which carries request settings tuned per model; one it does not is served like the known
+ * model with the nearest id, described by the list.
  */
 export function planModels(known: readonly Model<Api>[], listed: readonly PlanModel[]): Model<Api>[] {
   if (known.length === 0) return [];
@@ -262,16 +223,17 @@ export function planModels(known: readonly Model<Api>[], listed: readonly PlanMo
     .filter((entry) => entry.visibility === "list" && entry.supported_in_api !== false)
     .map((entry) => {
       const own = known.find((model) => model.id === entry.slug);
-      const donor = own ?? known.reduce((best, model) => (commonPrefix(model.id, entry.slug) > commonPrefix(best.id, entry.slug) ? model : best), known[0]!);
+      if (own !== undefined) return own;
+      const donor = known.reduce((best, model) => (commonPrefix(model.id, entry.slug) > commonPrefix(best.id, entry.slug) ? model : best), known[0]!);
       const input = entry.input_modalities;
       const levels = entry.supported_reasoning_levels;
       return {
         ...donor,
         id: entry.slug,
-        name: own?.name ?? entry.display_name ?? entry.slug,
-        input: own !== undefined || input === undefined ? donor.input : input.includes("image") ? ["text", "image"] : ["text"],
+        name: entry.display_name ?? entry.slug,
+        input: input === undefined ? donor.input : input.includes("image") ? ["text", "image"] : ["text"],
         contextWindow: entry.context_window ?? donor.contextWindow,
-        reasoning: own !== undefined || levels === undefined ? donor.reasoning : levels.length > 0,
+        reasoning: levels === undefined ? donor.reasoning : levels.length > 0,
       } as Model<Api>;
     });
 }
@@ -282,28 +244,27 @@ export interface PlanSource {
 }
 
 /**
- * OpenAI signed in with ChatGPT: the plan's models (`planModels`), never the API's, most of which a plan does not
- * serve (o1, gpt-4o). `known` (pi-ai's OpenAI models) describes them. Until the plan's own list is read, or with no
- * `source`, the list is `usual`: the models pi-ai knows plans serve. A list that cannot be read keeps the one before.
+ * OpenAI's provider signed in with ChatGPT lists the plan's models (`planModels`) rather than the API's, most of
+ * which a plan does not serve (o1, gpt-4o). With an API key, or signed out, it is `provider` as it was.
  */
-export function planCatalog(known: readonly Model<Api>[], usual: readonly PlanModel[], source?: PlanSource): Catalog {
-  const fallback = planModels(known, usual);
+export function withPlanCatalog(provider: Provider, source: PlanSource): Provider {
   let plan: readonly Model<Api>[] | undefined;
   return {
-    models: () => plan ?? fallback,
-    ...(source === undefined
-      ? {}
-      : {
-          refresh: async ({ auth, signal }: RefreshContext) => {
-            if (auth?.oauth !== true) {
-              plan = undefined;
-              return;
-            }
-            const listed = await source.plan(auth.token, signal);
-            if (listed === undefined || signal.aborted) return;
-            plan = planModels(known, listed);
-          },
-        }),
+    ...provider,
+    getModels: () => (plan === undefined ? provider.getModels() : [...plan]),
+    refreshModels: async (context: RefreshModelsContext) => {
+      const credential = context.credential;
+      if (credential?.type !== "oauth") {
+        if (plan !== undefined) await context.publish({ update: () => (plan = undefined) });
+        return provider.refreshModels?.(context);
+      }
+      if (!context.allowNetwork || context.signal.aborted) return;
+      const listed = await source.plan(credential.access, context.signal);
+      // Out of reach: the list it had stands.
+      if (listed === undefined || context.signal.aborted) return;
+      const next = planModels(provider.getModels(), listed);
+      await context.publish({ update: () => (plan = next) });
+    },
   };
 }
 

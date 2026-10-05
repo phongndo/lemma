@@ -1,39 +1,26 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Chunk, Effect, Fiber, Layer, Schema, Stream } from "effect";
-import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
-import type { FauxProviderHandle, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { Chunk, Effect, Fiber, Layer, Runtime, Schema, Stream } from "effect";
+import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin } from "@lemma/core";
-import { CredentialError, Credentials, InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
+import { InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
 import { deviceId } from "../src/device.ts";
-import { fixedCatalog, makeEventMapper, makeLlmPlugin } from "../src/index.ts";
-import type { LlmProvider, OAuthMethod, ProviderAuth } from "../src/index.ts";
-import { envOf, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";
+import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
+import { envContext, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";
 
 const decodeEvent = Schema.decodeUnknownSync(StreamEvent, { onExcessProperty: "error" });
 
 const user = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }], timestamp: 1 });
 
-/** pi-ai's faux provider as a Lemma provider: its models, sent through its own stream; keyless unless `auth` says otherwise. */
-const fauxLlm = (
-  faux: FauxProviderHandle,
-  auth: ProviderAuth = { key: { token: "faux-key", source: "test" } },
-  extra: Partial<LlmProvider> = {},
-): LlmProvider => ({
-  id: faux.provider.id,
-  name: faux.provider.name,
-  auth,
-  catalog: fixedCatalog(faux.provider.getModels()),
-  stream: faux.provider.streamSimple,
-  ...extra,
-});
-
-function setup(options: { providers?: () => readonly LlmProvider[]; env?: Record<string, string>; credentials?: Record<string, Credential> } = {}) {
+function setup(options: { providers?: () => readonly Provider[]; env?: Record<string, string> } = {}) {
   const faux = fauxProvider({
     provider: "faux",
     models: [
@@ -41,9 +28,9 @@ function setup(options: { providers?: () => readonly LlmProvider[]; env?: Record
       { id: "thinker", reasoning: true },
     ],
   });
-  const credentials = fakeCredentials(options.credentials);
+  const credentials = fakeCredentials();
   const interaction = fakeInteraction(() => Effect.succeed("sk-test"));
-  const llm = makeLlmPlugin({ fetch: offline, providers: options.providers ?? (() => [fauxLlm(faux)]), env: envOf(options.env) });
+  const llm = makeLlmPlugin({ fetch: offline, providers: options.providers ?? (() => [faux.provider]), authContext: envContext(options.env) });
   return { faux, credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] as const };
 }
 
@@ -119,7 +106,7 @@ describe("stream", () => {
 
   it("aborts the provider request when the consumer stops", async () => {
     const faux = fauxProvider({ provider: "slow", tokensPerSecond: 20 });
-    const { plugins } = setup({ providers: () => [fauxLlm(faux)] });
+    const { plugins } = setup({ providers: () => [faux.provider] });
     let signal: AbortSignal | undefined;
     faux.setResponses([
       (_, options) => {
@@ -186,56 +173,20 @@ describe("stream", () => {
     const last = events[1]!;
     expect(last.type === "error" && last.message.errorMessage).toContain("/login gateway");
   });
-
-  it("treats a stored entry without a key as none, falling back to the environment", async () => {
-    const { plugins } = setup({
-      providers: () => [fauxLlm(fauxProvider({ provider: "zen" }), { apiKey: "Zen key", env: ["ZEN_KEY"] })],
-      env: { ZEN_KEY: "from-env" },
-      credentials: { zen: { type: "api_key", key: "" } },
-    });
-    const [zen] = await runWith(
-      plugins,
-      Effect.flatMap(Llm, (l) => l.providers),
-    );
-    expect(zen).toMatchObject({ configured: true, source: "ZEN_KEY" });
-  });
-
-  it("sends a stored key over the environment's, with the provider's session headers", async () => {
-    const faux = fauxProvider({ provider: "zen" });
-    const seen: (SimpleStreamOptions | undefined)[] = [];
-    const reply = (_: unknown, options: SimpleStreamOptions | undefined) => {
-      seen.push(options);
-      return fauxAssistantMessage("ok");
-    };
-    faux.setResponses([reply, reply]);
-    const zen = fauxLlm(
-      faux,
-      { apiKey: "Zen key", env: ["ZEN_KEY"] },
-      { headers: (sessionId) => (sessionId === undefined ? undefined : { "x-session": sessionId }) },
-    );
-    const request = new LlmRequest({ model: `zen/${faux.getModel().id}`, messages: [user("hi")], sessionId: "s1" });
-    await runWith(setup({ providers: () => [zen], env: { ZEN_KEY: "from-env" } }).plugins, collect(request));
-    await runWith(
-      setup({ providers: () => [zen], env: { ZEN_KEY: "from-env" }, credentials: { zen: { type: "api_key", key: "stored" } } }).plugins,
-      collect(request),
-    );
-
-    expect(seen.map((options) => options?.apiKey)).toEqual(["from-env", "stored"]);
-    expect(seen[0]?.headers).toMatchObject({ "x-session": "s1", "User-Agent": expect.stringMatching(/^lemma \(/) });
-  });
 });
 
 describe("event mapper", () => {
   const model = fauxProvider().getModel();
+  const provider = { id: "faux", name: "Faux" };
 
   it("synthesizes start and a terminal when pi-ai omits them", () => {
-    const mapper = makeEventMapper(model);
+    const mapper = makeEventMapper(model, provider);
     expect(mapper.end().map((e) => e.type)).toEqual(["start", "error"]);
     expect(mapper.end()).toEqual([]);
   });
 
   it("maps a pending stop reason to an error", () => {
-    const mapper = makeEventMapper(model);
+    const mapper = makeEventMapper(model, provider);
     const message = fauxAssistantMessage("x", { stopReason: "pending" });
     const [start, terminal] = mapper.push({ type: "done", reason: "stop", message });
     expect(start).toEqual({ type: "start" });
@@ -297,91 +248,59 @@ describe("catalog", () => {
     ]);
   });
 
-  it("offers OpenAI with ChatGPT, the OpenAI API, OpenCode Zen, and OpenCode Go, one OpenCode key serving both", async () => {
+  it("keeps Anthropic API keys but not its subscription OAuth", async () => {
     // Default built-ins: the plugin's real provider list.
-    const llm = makeLlmPlugin({ fetch: offline, env: envOf({ OPENCODE_API_KEY: "sk-oc", OPENAI_API_KEY: "sk-oa" }) });
+    const llm = makeLlmPlugin({ fetch: offline, authContext: envContext({ ANTHROPIC_API_KEY: "sk-ant" }) });
     const plugins = [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("")).plugin, llm];
     const providers = await runWith(
       plugins,
       Effect.flatMap(Llm, (l) => l.providers),
     );
-    expect(providers.map((p) => [p.id, p.name, p.configured, p.source])).toEqual([
-      // OPENAI_API_KEY is the API's: a ChatGPT plan is only signed in to.
-      ["openai", "OpenAI", false, undefined],
-      ["openai-api", "OpenAI API", true, "OPENAI_API_KEY"],
-      ["opencode", "OpenCode Zen", true, "OPENCODE_API_KEY"],
-      ["opencode-go", "OpenCode Go", true, "OPENCODE_API_KEY"],
-    ]);
-    expect(providers[0]!.auth).toEqual([{ type: "oauth", name: "Sign in with ChatGPT", interactive: true }]);
-    expect(providers[1]!.auth).toEqual([{ type: "api_key", name: "OpenAI API key", interactive: true }]);
+    const anthropic = providers.find((p) => p.id === "anthropic")!;
+    expect(anthropic.auth.map((a) => a.type)).toEqual(["api_key"]);
+    expect(anthropic).toMatchObject({ configured: true, source: "ANTHROPIC_API_KEY" });
+    // OpenAI signs in with ChatGPT itself; the legacy Codex provider is left out unless `exclude` says otherwise.
+    expect(providers.find((p) => p.id === "openai")?.auth.map((a) => a.type)).toEqual(["api_key", "oauth"]);
+    expect(providers.some((p) => p.id === "openai-codex")).toBe(false);
+    expect(providers.find((p) => p.id === "github-copilot")?.auth.map((a) => a.type)).toContain("oauth");
   });
 
-  it("lists what ChatGPT plans serve for OpenAI before a sign-in, and the API's models for the OpenAI API", async () => {
-    const llm = makeLlmPlugin({ fetch: offline, env: envOf() });
-    const models = await runWith(
-      [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("")).plugin, llm],
-      Effect.flatMap(Llm, (l) => l.models()),
-    );
-    const of = (provider: string) => models.filter((model) => model.provider === provider).map((model) => model.id);
-    expect(of("openai")).toContain("gpt-6-sol");
-    expect(of("openai")).not.toContain("gpt-4o");
-    expect(of("openai-api")).toContain("gpt-4o");
-    expect(models.find((model) => model.ref === "openai-api/gpt-4o")).toMatchObject({ provider: "openai-api", api: "openai-responses" });
-  });
-
-  it("filters built-ins with include and exclude, and lets the user's provider replace one", async () => {
-    const { plugins } = setup({ providers: () => [fauxLlm(fauxProvider({ provider: "a" })), fauxLlm(fauxProvider({ provider: "b" }))] });
-    const listed = await runWith(
+  it("filters built-ins with include and exclude", async () => {
+    const { plugins } = setup({ providers: () => [anthropicProvider(), fauxProvider({ provider: "faux" }).provider] });
+    const ids = await runWith(
       plugins,
-      Effect.flatMap(Llm, (l) => l.providers),
+      Effect.map(
+        Effect.flatMap(Llm, (l) => l.providers),
+        (ps) => ps.map((p) => p.id),
+      ),
       {
-        llm: {
-          include: ["a", "b"],
-          exclude: ["b"],
-          providers: [{ id: "a", name: "Mine", api: "openai-completions", baseUrl: "http://localhost:1/v1", models: [{ id: "m" }] }],
-        },
+        llm: { include: ["anthropic", "faux"], exclude: ["faux"] },
       },
     );
-    expect(listed.map((p) => [p.id, p.name, p.custom])).toEqual([["a", "Mine", true]]);
+    expect(ids).toEqual(["anthropic"]);
   });
 });
 
 describe("model catalogs", () => {
-  it("leaves a catalog as it is when its provider's sign-in cannot be renewed just now", async () => {
-    const refreshed: ("signed-in" | "signed-out")[] = [];
-    const sso: OAuthMethod = {
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: () => Effect.fail(new LlmError({ reason: "LoginFailed", message: "offline" })),
-    };
-    const faux = fauxProvider({ provider: "sso" });
-    const provider = fauxLlm(
-      faux,
-      { oauth: sso },
-      {
-        catalog: { models: () => faux.provider.getModels(), refresh: async ({ auth }) => void refreshed.push(auth === undefined ? "signed-out" : "signed-in") },
-      },
-    );
-    const { plugins } = setup({ providers: () => [provider], credentials: { sso: { type: "oauth", access: "a", refresh: "r", expires: Date.now() - 1 } } });
-    await runWith(plugins, Effect.sleep("50 millis"));
-    // Refreshing it as signed out would replace a ChatGPT plan's list with the API's.
-    expect(refreshed).toEqual([]);
-  });
-
   it("tells clients when a refresh changed the models, and not when it did not", async () => {
     // A provider whose list grows on every refresh after the first (at startup).
     let refreshes = 0;
-    const faux = fauxProvider({ provider: "grow", models: [{ id: "a" }] });
-    const models = [...faux.provider.getModels()];
-    const provider = fauxLlm(faux, undefined, {
-      catalog: {
-        models: () => models,
-        refresh: async () => {
-          if (refreshes++ === 0) return;
-          models.push({ ...models[0]!, id: `m${refreshes}` });
-        },
-      },
+    const models = [{ id: "a" }];
+    const growing = createProvider({
+      id: "grow",
+      name: "Grow",
+      auth: {},
+      models: [],
+      api: openAICompletionsApi(),
     });
+    const provider: Provider = {
+      ...growing,
+      getModels: () => models.map((entry) => ({ ...fauxProvider({ provider: "grow" }).provider.getModels()[0]!, ...entry, provider: "grow" })),
+      refreshModels: async (context) => {
+        if (refreshes++ === 0) return;
+        await context.publish({ update: () => models.push({ id: `m${refreshes}` }) });
+      },
+    };
     const { plugins } = setup({ providers: () => [provider] });
     const changes = await runWith(
       plugins,
@@ -435,7 +354,7 @@ describe("login", () => {
   it("reports a dismissed prompt as Cancelled and unknown providers as UnknownProvider", async () => {
     const credentials = fakeCredentials();
     const interaction = fakeInteraction(() => Effect.fail(new InteractionError({ reason: "Dismissed", message: "closed" })));
-    const plugins = [credentials.plugin, interaction.plugin, makeLlmPlugin({ fetch: offline, providers: () => [], env: envOf() })];
+    const plugins = [credentials.plugin, interaction.plugin, makeLlmPlugin({ fetch: offline, providers: () => [], authContext: envContext() })];
     const cancelled = await runWith(plugins, Effect.flip(Effect.flatMap(Llm, (l) => l.login("gateway", "api_key"))), { llm: gateway });
     expect(cancelled.reason).toBe("Cancelled");
     const unknown = await runWith(plugins, Effect.flip(Effect.flatMap(Llm, (l) => l.login("nope", "api_key"))), { llm: gateway });
@@ -444,7 +363,7 @@ describe("login", () => {
     expect(unsupported.reason).toBe("LoginFailed");
   });
 
-  it("signs in through the provider's flow, telling every client, and withdraws the prompt the flow abandons", async () => {
+  it("publishes auth events as notices and withdraws prompts the flow abandons", async () => {
     let withdrawn = false;
     const credentials = fakeCredentials();
     const interaction = fakeInteraction((question) =>
@@ -459,22 +378,39 @@ describe("login", () => {
         : Effect.succeed("unused"),
     );
     const recorder = noticeRecorder();
-    const sso: OAuthMethod = {
-      name: "SSO account",
-      login: (ui) =>
-        Effect.gen(function* () {
-          yield* ui.notify({ level: "info", source: "llm", message: "Open the link", links: [{ url: "https://sso.test/authorize" }] });
-          // A paste prompt raced by a browser callback that arrives first.
-          yield* Effect.raceFirst(ui.ask("Paste the code"), Effect.as(Effect.sleep("10 millis"), "callback"));
-          return { type: "oauth" as const, access: "token", refresh: "refresh", expires: Date.now() + 3_600_000, accountId: "acct" };
-        }),
-      refresh: (credential) => Effect.succeed(credential),
-    };
+    const devices: (string | undefined)[] = [];
+    const host = fakeHost();
+    const oauthProvider = createProvider({
+      id: "sso",
+      name: "SSO",
+      auth: {
+        oauth: {
+          name: "SSO account",
+          login: async (flow, options) => {
+            devices.push(options?.getDeviceId?.(), options?.getDeviceId?.());
+            flow.notify({ type: "auth_url", url: "https://sso.test/authorize" });
+            flow.notify({ type: "device_code", userCode: "ABCD-1234", verificationUri: "https://sso.test/device" });
+            flow.notify({ type: "progress", message: "Waiting for the browser" });
+            // Races a paste prompt against a callback that arrives first.
+            const callback = new AbortController();
+            const pasted = flow.prompt({ type: "manual_code", message: "Paste the code", signal: callback.signal });
+            setTimeout(() => callback.abort(), 10);
+            await pasted.catch(() => undefined);
+            return { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000, accountId: "acct" };
+          },
+          refresh: async (credential) => credential,
+          toAuth: async (credential) => ({ apiKey: credential.access }),
+        },
+      },
+      models: [],
+      api: openAICompletionsApi(),
+    });
     const plugins = [
       credentials.plugin,
       interaction.plugin,
       recorder.plugin,
-      makeLlmPlugin({ fetch: offline, providers: () => [fauxLlm(fauxProvider({ provider: "sso" }), { oauth: sso }, { name: "SSO" })], env: envOf() }),
+      host.plugin,
+      makeLlmPlugin({ fetch: offline, providers: () => [oauthProvider], authContext: envContext() }),
     ];
     const info = await runWith(
       plugins,
@@ -487,153 +423,49 @@ describe("login", () => {
     );
 
     expect(withdrawn).toBe(true);
+    // The installation's one device ID (OpenAI's ChatGPT sign-in requires it), kept in the host's home.
+    expect(devices[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(devices[1]).toBe(devices[0]);
+    expect(readFileSync(join(host.home, "device-id"), "utf8").trim()).toBe(devices[0]);
     expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token", accountId: "acct" });
     expect(info[0]).toMatchObject({ auth: [{ type: "oauth", name: "SSO account", interactive: true }], configured: true, source: "OAuth" });
     expect(recorder.notices).toEqual([
-      { level: "info", source: "llm", message: "Open the link", links: [{ url: "https://sso.test/authorize" }] },
+      { level: "info", source: "llm", message: "Open the link to sign in to SSO.", links: [{ url: "https://sso.test/authorize", label: "Sign in to SSO" }] },
+      {
+        level: "info",
+        source: "llm",
+        message: "Enter code ABCD-1234 at https://sso.test/device to sign in to SSO.",
+        code: "ABCD-1234",
+        links: [{ url: "https://sso.test/device", label: "Enter code" }],
+      },
+      { level: "info", source: "llm", message: "Waiting for the browser" },
       // Success is announced to every client after the flow's own notices.
       { level: "info", source: "llm", message: "Logged in to SSO" },
     ]);
   });
-
-  it("renews a sign-in about to expire once, for requests that need it at the same time", async () => {
-    const faux = fauxProvider({ provider: "sso" });
-    const sent: (string | undefined)[] = [];
-    const reply = (_: unknown, options: SimpleStreamOptions | undefined) => {
-      sent.push(options?.apiKey);
-      return fauxAssistantMessage("ok");
-    };
-    faux.setResponses([reply, reply]);
-    let renewals = 0;
-    const sso: OAuthMethod = {
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: (credential) =>
-        Effect.sync(() => ({ ...credential, access: `renewed-${++renewals}`, expires: Date.now() + 3_600_000 })).pipe(Effect.delay("10 millis")),
-    };
-    const { plugins, credentials } = setup({
-      providers: () => [fauxLlm(faux, { oauth: sso })],
-      credentials: { sso: { type: "oauth", access: "old", refresh: "r", expires: Date.now() + 60_000, clientId: "kept" } },
-    });
-    const request = new LlmRequest({ model: `sso/${faux.getModel().id}`, messages: [user("hi")] });
-    await runWith(plugins, Effect.all([collect(request), collect(request)], { concurrency: 2 }));
-
-    expect(renewals).toBe(1);
-    expect(sent).toEqual(["renewed-1", "renewed-1"]);
-    expect(credentials.store.get("sso")).toMatchObject({ access: "renewed-1", clientId: "kept" });
-  });
-
-  it("sends a token that has not expired when renewing it fails, or when the provider asks not to renew it yet", async () => {
-    const faux = fauxProvider({ provider: "sso" });
-    const sent: (string | undefined)[] = [];
-    const reply = (_: unknown, options: SimpleStreamOptions | undefined) => {
-      sent.push(options?.apiKey);
-      return fauxAssistantMessage("ok");
-    };
-    faux.setResponses([reply, reply]);
-    let renewals = 0;
-    const sso: OAuthMethod = {
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: () => Effect.suspend(() => (renewals++, Effect.fail(new LlmError({ reason: "LoginFailed", message: "offline" })))),
-    };
-    const request = new LlmRequest({ model: `sso/${faux.getModel().id}`, messages: [user("hi")] });
-    const due: Credential = { type: "oauth", access: "still-good", refresh: "r", expires: Date.now() + 60_000 };
-    await runWith(setup({ providers: () => [fauxLlm(faux, { oauth: sso })], credentials: { sso: due } }).plugins, collect(request));
-    expect(renewals).toBeGreaterThan(0);
-    const tried = renewals;
-    const later: Credential = { ...due, access: "not-yet", earliestRefreshAt: Date.now() + 30_000 };
-    await runWith(setup({ providers: () => [fauxLlm(faux, { oauth: sso })], credentials: { sso: later } }).plugins, collect(request));
-
-    expect(sent).toEqual(["still-good", "not-yet"]);
-    expect(renewals).toBe(tried);
-  });
-
-  it("ends the request with the renewal's failure, keeping the sign-in", async () => {
-    const sso: OAuthMethod = {
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: () => Effect.fail(new LlmError({ reason: "NotConfigured", message: "The sign-in expired. Run /login sso to sign in again." })),
-    };
-    const faux = fauxProvider({ provider: "sso" });
-    const stored: Credential = { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 };
-    const { plugins, credentials } = setup({ providers: () => [fauxLlm(faux, { oauth: sso })], credentials: { sso: stored } });
-    const events = await runWith(plugins, collect(new LlmRequest({ model: `sso/${faux.getModel().id}`, messages: [user("hi")] })));
-
-    expect(events.map((e) => e.type)).toEqual(["start", "error"]);
-    // The flow's own message, which says what to do.
-    expect(events[1]!.type === "error" && events[1]!.message.errorMessage).toBe("The sign-in expired. Run /login sso to sign in again.");
-    expect(credentials.store.get("sso")).toEqual(stored);
-  });
-
-  it("ends the session stored under the lock at logout, and forgets an entry it cannot read", async () => {
-    const revoked: string[] = [];
-    const sso: OAuthMethod = {
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: (credential) => Effect.succeed(credential),
-      revoke: (credential) => Effect.sync(() => void revoked.push(credential.refresh)),
-    };
-    // A read sees the token a renewal has since replaced; the lock holder sees the current one.
-    const store = (entry: (provider: string) => Effect.Effect<Credential | undefined, CredentialError>) => {
-      const removed: string[] = [];
-      const service: typeof Credentials.Service = {
-        read: () => Effect.succeed({ type: "oauth", access: "a", refresh: "stale", expires: Date.now() + 3_600_000 }),
-        list: Effect.succeed([]),
-        modify: (provider, update) => Effect.flatMap(entry(provider), (current) => Effect.as(update(current), current)),
-        remove: (provider) => Effect.sync(() => void removed.push(provider)),
-      };
-      return { removed, plugin: definePlugin({ id: "credentials", provides: [Credentials], layer: Layer.succeed(Credentials, service) }) };
-    };
-    const llm = makeLlmPlugin({ fetch: offline, providers: () => [fauxLlm(fauxProvider({ provider: "sso" }), { oauth: sso })], env: envOf() });
-    const interaction = fakeInteraction(() => Effect.succeed("")).plugin;
-
-    const current = store(() => Effect.succeed({ type: "oauth", access: "a", refresh: "current", expires: Date.now() + 3_600_000 }));
-    await runWith(
-      [current.plugin, interaction, llm],
-      Effect.flatMap(Llm, (l) => l.logout("sso")),
-    );
-    expect(revoked).toEqual(["current"]);
-    expect(current.removed).toEqual(["sso"]);
-
-    const recorder = noticeRecorder();
-    const corrupt = store(() => Effect.fail(new CredentialError({ reason: "Corrupt", message: "invalid credential" })));
-    await runWith(
-      [corrupt.plugin, interaction, recorder.plugin, llm],
-      Effect.flatMap(Llm, (l) => l.logout("sso")),
-    );
-    expect(corrupt.removed).toEqual(["sso"]);
-    expect(recorder.notices.map((notice) => notice.level)).toEqual(["warning"]);
-  });
-
-  it("ends a sign-in's session at logout, and forgets it locally even when that fails", async () => {
-    const revoked: string[] = [];
-    const sso = (works: boolean): OAuthMethod => ({
-      name: "SSO",
-      login: () => Effect.die("not used"),
-      refresh: (credential) => Effect.succeed(credential),
-      revoke: (credential) =>
-        works ? Effect.sync(() => void revoked.push(credential.refresh)) : Effect.fail(new LlmError({ reason: "LoginFailed", message: "offline" })),
-    });
-    const stored: Credential = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
-    for (const works of [true, false]) {
-      const recorder = noticeRecorder();
-      const { plugins, credentials } = setup({
-        providers: () => [fauxLlm(fauxProvider({ provider: "sso" }), { oauth: sso(works) })],
-        credentials: { sso: stored },
-      });
-      await runWith(
-        [...plugins, recorder.plugin],
-        Effect.flatMap(Llm, (llm) => llm.logout("sso")),
-      );
-      expect(credentials.store.has("sso")).toBe(false);
-      expect(recorder.notices.map((notice) => notice.level)).toEqual(works ? [] : ["warning"]);
-    }
-    expect(revoked).toEqual(["r"]);
-  });
 });
 
-describe("custom providers", () => {
+describe("credential store adapter", () => {
+  it("round-trips through the Credentials capability", async () => {
+    const { service, store } = fakeCredentials();
+    const adapter = credentialStore(service, runner(Runtime.defaultRuntime));
+    const oauth: Credential = { type: "oauth", access: "a", refresh: "r", expires: 1, extra: "kept" };
+
+    expect(await adapter.modify("x", async (current) => (current === undefined ? { ...oauth } : undefined) as never)).toEqual(oauth);
+    expect(await adapter.modify("x", async () => undefined)).toEqual(oauth);
+    expect(await adapter.read("x")).toEqual(oauth);
+    expect(await adapter.list()).toEqual([{ providerId: "x", type: "oauth" }]);
+    const failure = new Error("refresh failed");
+    await expect(
+      adapter.modify("x", async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(store.get("x")).toEqual(oauth);
+    await adapter.delete("x");
+    expect(await adapter.read("x")).toBeUndefined();
+  });
+
   it("adds, relabels, and removes the user's providers through its own config", async () => {
     const host = fakeHost();
     const { plugins } = setup({ providers: () => [] });
@@ -718,13 +550,10 @@ describe("deviceId", () => {
 });
 
 describe("identity", () => {
-  it("names Lemma, not pi, on every wire API, unless a model sends its own User-Agent, and sends the model's headers", async () => {
+  it("names Lemma, not pi, on every wire API, unless a model sends its own User-Agent", async () => {
     const agents: Record<string, string | undefined> = {};
-    const gateway: Record<string, string | undefined> = {};
     const server = createServer((request, response) => {
-      const path = new URL(request.url ?? "", "http://x").pathname;
-      agents[path] = request.headers["user-agent"];
-      gateway[path.split("/")[1]!] = request.headers["x-gateway-key"] as string | undefined;
+      agents[new URL(request.url ?? "", "http://x").pathname] = request.headers["user-agent"];
       response.writeHead(400, { "content-type": "application/json" }).end('{"error":{"message":"recorded"}}');
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -742,9 +571,6 @@ describe("identity", () => {
       provider("responses", "openai-responses"),
       provider("anthropic", "anthropic-messages"),
       provider("copilot", "openai-completions", { "User-Agent": "GitHubCopilotChat/0.35.0" }),
-      // pi-ai's pi-messages wire sends only the request's headers, not the model's.
-      provider("messages", "pi-messages", { "x-gateway-key": "gk" }),
-      provider("keyed", "openai-completions", { "x-gateway-key": "gk" }),
     ];
     const { plugins } = setup({ providers: () => [] });
     try {
@@ -758,48 +584,11 @@ describe("identity", () => {
     }
 
     const lemma = `lemma (${platform()} ${release()}; ${arch()})`;
-    expect(agents).toMatchObject({
+    expect(agents).toEqual({
       "/completions/chat/completions": lemma,
       "/responses/responses": lemma,
       "/anthropic/v1/messages": lemma,
       "/copilot/chat/completions": "GitHubCopilotChat/0.35.0",
-      "/keyed/chat/completions": lemma,
     });
-    expect(Object.entries(agents).find(([path]) => path.startsWith("/messages/"))?.[1]).toBe(lemma);
-    expect(gateway).toMatchObject({ messages: "gk", keyed: "gk" });
-  });
-});
-
-describe("a provider pi-ai knows by another id", () => {
-  const reply = (provider: string) => ({
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "earlier" }],
-    api: "faux",
-    provider,
-    model: "plain",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "stop" as const,
-    timestamp: 1,
-  });
-
-  it("is sent as that id, with its own turns as pi-ai's and another credential's kept apart, and answers under its own", async () => {
-    const faux = fauxProvider({ provider: "api", models: [{ id: "plain" }] });
-    faux.setResponses([fauxAssistantMessage([fauxText("now")])]);
-    let seen: { provider: string; turns: string[] } | undefined;
-    const provider = fauxLlm(faux, undefined, {
-      piProvider: "pi",
-      stream: (model, context, options) => {
-        seen = { provider: model.provider, turns: context.messages.flatMap((message) => (message.role === "assistant" ? [message.provider] : [])) };
-        return faux.provider.streamSimple(model, context, options);
-      },
-    });
-    const { plugins } = setup({ providers: () => [provider] });
-    const events = await runWith(
-      plugins,
-      collect(new LlmRequest({ model: "api/plain", messages: [user("a"), reply("api"), user("b"), reply("pi"), user("c"), reply("other"), user("d")] })),
-    );
-    expect(seen).toEqual({ provider: "pi", turns: ["pi", "lemma:pi", "other"] });
-    const done = events.find((event) => event.type === "done");
-    expect(done?.type === "done" && done.message.provider).toBe("api");
   });
 });
