@@ -8,10 +8,7 @@ import composer from "./composer.tsx";
 import connection from "./connection.tsx";
 import diagrams from "./diagrams.tsx";
 import dialogs from "./dialogs.ts";
-import devtools from "./devtools.tsx";
-import devtoolsKernel from "./devtools-kernel.tsx";
-import devtoolsRouter from "./devtools-router.tsx";
-import eventLog from "./event-log.tsx";
+import devtools from "./devtools/index.tsx";
 import fileIcons from "./file-icons.tsx";
 import fileMentions from "./file-mentions.tsx";
 import highlight from "./highlight.ts";
@@ -87,10 +84,7 @@ export const bundled: readonly Plugin[] = [
   projectsPage,
   archivedPage,
   addProject,
-  eventLog,
   devtools,
-  devtoolsRouter,
-  devtoolsKernel,
   interactionDialog,
   tooltips,
 ];

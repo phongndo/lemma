@@ -1,9 +1,8 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { RouterEvent, RouteVerdict } from "@lemma/router";
-import { Devtools, DevtoolsPanels, Pages, PLUGIN_PANEL, Router, Slots } from "../ui/contracts.ts";
-import type { DevtoolsService, RouterService } from "../ui/contracts.ts";
-import { defineUiPlugin } from "../ui/define.ts";
-import type { SlotsService } from "../ui/slots.ts";
+import { Pages, PLUGIN_PANEL } from "../../ui/contracts.ts";
+import type { DevtoolsPanel, DevtoolsService, RouterService } from "../../ui/contracts.ts";
+import type { SlotItem, SlotsService } from "../../ui/slots.ts";
 
 const VERDICT_CLASS: Readonly<Record<RouteVerdict["outcome"], string>> = {
   shown: "dt-ok",
@@ -335,28 +334,20 @@ function Navigation(props: { router: RouterService }) {
   );
 }
 
-/** The router in the devtools: why an address shows what it does, who shows each route, and what navigation did. */
-export default defineUiPlugin({
-  id: "devtools-router",
-  requires: { router: Router, slots: Slots, devtools: Devtools },
-  setup: ({ router, slots, devtools }, plugin) => {
-    plugin.onCleanup(
-      slots.add(DevtoolsPanels, {
-        id: "devtools.routes",
-        order: 0,
-        title: "Routes",
-        component: () => <Routes router={router} slots={slots} devtools={devtools} />,
-        snapshot: () => router.inspect(),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(DevtoolsPanels, {
-        id: "devtools.navigation",
-        order: 10,
-        title: "Navigation",
-        component: () => <Navigation router={router} />,
-        snapshot: () => ({ journal: router.journal(), entryStates: router.entryStates() }),
-      }),
-    );
+/** The router's panels: why an address shows what it does, who shows each route, and what navigation did. */
+export const routePanels = (router: RouterService, slots: SlotsService, devtools: DevtoolsService): readonly SlotItem<DevtoolsPanel>[] => [
+  {
+    id: "devtools.routes",
+    order: 0,
+    title: "Routes",
+    component: () => <Routes router={router} slots={slots} devtools={devtools} />,
+    snapshot: () => router.inspect(),
   },
-});
+  {
+    id: "devtools.navigation",
+    order: 10,
+    title: "Navigation",
+    component: () => <Navigation router={router} />,
+    snapshot: () => ({ journal: router.journal(), entryStates: router.entryStates() }),
+  },
+];

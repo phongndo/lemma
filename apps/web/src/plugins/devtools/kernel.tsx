@@ -2,18 +2,18 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, on, 
 import type { Accessor, JSX } from "solid-js";
 import { kernelOf, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelView, PluginStatus, Table } from "@lemma/contracts";
-import * as contracts from "../ui/contracts.ts";
-import { Client, Devtools, DevtoolsPanels, HostPlugins, PLUGIN_PANEL, Router, SettingsRoute, Slots, UiPlugins } from "../ui/contracts.ts";
-import type { ClientService, DevtoolsService, RouterService } from "../ui/contracts.ts";
-import { defineUiPlugin } from "../ui/define.ts";
-import { DEFAULT_PART_ORDER, definedSlots } from "../ui/slots.ts";
-import type { Slot, SlotItem, SlotsService } from "../ui/slots.ts";
+import * as contracts from "../../ui/contracts.ts";
+import { PLUGIN_PANEL, SettingsRoute } from "../../ui/contracts.ts";
+import type { ClientService, DevtoolsService, RouterService } from "../../ui/contracts.ts";
+import { DEFAULT_PART_ORDER, definedSlots } from "../../ui/slots.ts";
+import type { Slot, SlotItem, SlotsService } from "../../ui/slots.ts";
 
 type Kind = "web" | "host";
 const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
 const INSPECTORS_PANEL = "devtools.inspectors";
 
-interface Deps {
+/** What the kernel's panels read. */
+export interface Deps {
   readonly slots: SlotsService;
   readonly router: RouterService;
   readonly devtools: DevtoolsService;
@@ -833,50 +833,46 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
 }
 
 /**
- * The kernel in the devtools, for the web app and the host alike (both run the
+ * The kernel's panels, for the web app and the host alike (both run the
  * core): every plugin and everything it does, each hook's chain, every
  * registry, and what host plugins let you look into. A plugin's name anywhere
  * in the devtools opens it here.
  */
-export default defineUiPlugin({
-  id: "devtools-kernel",
-  requires: { slots: Slots, router: Router, devtools: Devtools, client: Client, ui: UiPlugins, host: HostPlugins },
-  setup: ({ slots, router, devtools, client, ui, host }, plugin) => {
-    const deps: Deps = { slots, router, devtools, client, lists: { web: ui.list, host: host.list } };
-    // Read again whenever the host's plugins change: inspectors come and go with them.
-    const [inspectors] = createResource(
-      () => host.list(),
-      () => client.host.host.inspectors().catch(() => [] as readonly InspectorInfo[]),
-      { initialValue: [] },
-    );
-    const add = (item: SlotItem<contracts.DevtoolsPanel>) => plugin.onCleanup(slots.add(DevtoolsPanels, item));
-    add({
+export function kernelPanels(deps: Deps): readonly SlotItem<contracts.DevtoolsPanel>[] {
+  // Read again whenever the host's plugins change: inspectors come and go with them.
+  const [inspectors] = createResource(
+    () => deps.lists.host(),
+    () => deps.client.host.host.inspectors().catch(() => [] as readonly InspectorInfo[]),
+    { initialValue: [] },
+  );
+  return [
+    {
       id: PLUGIN_PANEL,
       order: 20,
       title: "Plugins",
       component: () => <PluginsPanel deps={deps} inspectors={inspectors} />,
-      snapshot: () => ({ web: ui.list(), host: host.list() }),
-    });
-    add({
+      snapshot: () => ({ web: deps.lists.web(), host: deps.lists.host() }),
+    },
+    {
       id: "devtools.hooks",
       order: 30,
       title: "Hooks",
       component: () => <HooksPanel deps={deps} />,
-      snapshot: () => ({ web: kernelOf(ui.list()), host: kernelOf(host.list()) }),
-    });
-    add({
+      snapshot: () => ({ web: kernelOf(deps.lists.web()), host: kernelOf(deps.lists.host()) }),
+    },
+    {
       id: "devtools.registries",
       order: 40,
       title: "Registries",
       component: () => <RegistriesPanel deps={deps} />,
-      snapshot: () => ({ web: slotViews(slots), host: kernelOf(host.list()).registries }),
-    });
-    add({
+      snapshot: () => ({ web: slotViews(deps.slots), host: kernelOf(deps.lists.host()).registries }),
+    },
+    {
       id: INSPECTORS_PANEL,
       order: 50,
       title: "Inspectors",
       component: () => <InspectorsPanel deps={deps} inspectors={inspectors} />,
       snapshot: () => inspectors(),
-    });
-  },
-});
+    },
+  ];
+}

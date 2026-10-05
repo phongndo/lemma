@@ -9,9 +9,11 @@ file. Build every default so a user could have written it and could replace it.
 
 - **A plugin** (`src/plugins/`) owns one part of the app. It declares what it
   `requires` and `provides`, adds to slots, draws, and brings its own
-  stylesheet (`src/plugins/<id>.css`, passed as `styles`). It imports only
-  `ui/contracts`, `ui/define`, `ui/slots`, `ui/parts`, `model/`, `lib/`, and
-  its own stylesheet.
+  stylesheet (`src/plugins/<id>.css`, passed as `styles`). One too large for a
+  file is a directory, `src/plugins/<id>/`, with the plugin in `index.tsx`:
+  its files import each other, and nothing outside it imports them. It imports
+  only `ui/contracts`, `ui/define`, `ui/slots`, `ui/parts`, `model/`, `lib/`,
+  and its own files.
 - **A contract** (`src/ui/contracts.ts`) is how plugins meet: a capability (a
   service with one provider), a slot (a list or region many fill), a part, a
   shared id (`ActionIds`, `SectionIds`), or a DOM convention listed at the top
@@ -48,8 +50,13 @@ file. Build every default so a user could have written it and could replace it.
    with the `dialog` part; app-wide keys are `Actions`, and an overlay handles
    its own keys on its own element; the page's theme goes through
    `lib/paint.ts`; what covers the page stacks by the `--z-*` tokens.
-4. A plugin whose model other plugins need, and whose view a user might turn
-   off, is two plugins: the model (as `notify`) and the view (as `toasts`).
+4. Make it a plugin of its own only when someone would turn it off or replace
+   it on its own (`highlight`, `palette`); when it is a model other plugins
+   need beside a view a user might drop, which is then two plugins (`notify`
+   and `toasts`); or when what it requires can be missing while the rest still
+   works. Size, tidiness, or being one more panel, tab, or section is no
+   reason: those are files in a plugin's directory and items one plugin adds to
+   a slot, as the devtools add their panels.
 5. Document new contracts where they are declared: `ui/contracts.ts` is the
    list of slots and parts that users and the devtools read.
 

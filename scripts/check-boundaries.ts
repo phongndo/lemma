@@ -105,9 +105,11 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
     const to = target(file, specifier);
     if (within(file, "plugins")) {
       if (name === "plugins/index.ts") continue;
-      // Its own stylesheet is its; anything else under plugins/ is another plugin.
-      const ownStyles = to.replace(/\?inline$/, "") === name.replace(/\.tsx?$/, ".css");
-      if (to.startsWith("plugins/") && !ownStyles) rule(`imports another plugin "${specifier}" (use a capability, slot, or part)`);
+      // A plugin is a file with its own stylesheet beside it (`plugins/<id>.tsx`, `plugins/<id>.css`), or a directory
+      // (`plugins/<id>/`) whose files are all its own; anything else under plugins/ is another plugin.
+      const [, dir, ...inside] = name.split("/");
+      const own = inside.length > 0 ? to.startsWith(`plugins/${dir}/`) : to.replace(/\?inline$/, "") === name.replace(/\.tsx?$/, ".css");
+      if (to.startsWith("plugins/") && !own) rule(`imports another plugin "${specifier}" (use a capability, slot, or part)`);
       else if (to.startsWith("components/") && name !== "plugins/kit.tsx") rule(`imports "${specifier}" (draw it through ui/parts.tsx, so it can be replaced)`);
       else if (to.startsWith("ui/") && !["ui/contracts.ts", "ui/define.ts", "ui/slots.ts", "ui/parts.tsx"].includes(to))
         rule(`imports "${specifier}" (plugins use ui/contracts, define, slots, and parts)`);

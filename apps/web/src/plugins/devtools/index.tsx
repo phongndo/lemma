@@ -1,8 +1,12 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
-import { Actions, Devtools, DevtoolsPanels, Docks, Slots } from "../ui/contracts.ts";
-import { defineUiPlugin } from "../ui/define.ts";
-import { CodeIcon, Contained, XIcon } from "../ui/parts.tsx";
+import { ActionIds, Actions, Client, Devtools, DevtoolsPanels, Docks, HostPlugins, Router, Slots, UiPlugins } from "../../ui/contracts.ts";
+import type { DevtoolsService } from "../../ui/contracts.ts";
+import { defineUiPlugin } from "../../ui/define.ts";
+import { CodeIcon, Contained, LogIcon, XIcon } from "../../ui/parts.tsx";
 import styles from "./devtools.css?inline";
+import { EVENTS_PANEL, hostEventsPanel } from "./events.tsx";
+import { kernelPanels } from "./kernel.tsx";
+import { routePanels } from "./routes.tsx";
 
 const STATE_KEY = "lemma.devtools";
 const MIN_HEIGHT = 160;
@@ -22,16 +26,17 @@ const load = (): Saved => {
 
 /**
  * The devtools: a panel docked under the app (`mod+shift+d`), whose tabs are
- * the `DevtoolsPanels` items. They look into the app as it runs (the router,
- * slots, capabilities, and whatever a plugin adds) and never change what it
- * does. Whether they are open, and at which panel, lasts the tab's life.
+ * the `DevtoolsPanels` items. They look into the app as it runs and never
+ * change what it does. Its own panels (the router, the host's events, and both
+ * kernels' plugins, hooks, registries, and inspectors) are added there like any
+ * plugin's. Whether they are open, and at which panel, lasts the tab's life.
  */
 export default defineUiPlugin({
   id: "devtools",
   styles,
-  requires: { slots: Slots },
+  requires: { slots: Slots, router: Router, client: Client, ui: UiPlugins, host: HostPlugins },
   provides: { devtools: Devtools },
-  setup: ({ slots }, plugin) => {
+  setup: ({ slots, router, client, ui, host }, plugin) => {
     const saved = load();
     const [open, setOpen] = createSignal(saved.open);
     const [panel, setPanel] = createSignal(saved.panel);
@@ -112,18 +117,36 @@ export default defineUiPlugin({
       }),
     );
 
-    return {
-      devtools: {
-        open,
-        toggle,
-        show: (id: string, subject?: string) => {
-          if (subject !== undefined) setSubjects({ ...subjects(), [id]: subject });
-          setPanel(id);
-          setOpen(true);
-        },
-        subject: (id: string) => subjects()[id],
-        snapshot: () => Object.fromEntries(panels().flatMap((item) => (item.snapshot === undefined ? [] : [[item.id, item.snapshot()]]))),
+    const devtools: DevtoolsService = {
+      open,
+      toggle,
+      show: (id: string, subject?: string) => {
+        if (subject !== undefined) setSubjects({ ...subjects(), [id]: subject });
+        setPanel(id);
+        setOpen(true);
       },
+      subject: (id: string) => subjects()[id],
+      snapshot: () => Object.fromEntries(panels().flatMap((item) => (item.snapshot === undefined ? [] : [[item.id, item.snapshot()]]))),
     };
+
+    // Its own panels go through the slot a plugin's would.
+    const panelsMade = [
+      ...routePanels(router, slots, devtools),
+      hostEventsPanel(client, router, plugin.onCleanup),
+      ...kernelPanels({ slots, router, devtools, client, lists: { web: ui.list, host: host.list } }),
+    ];
+    for (const item of panelsMade) plugin.onCleanup(slots.add(DevtoolsPanels, item));
+    plugin.onCleanup(
+      slots.add(Actions, {
+        id: ActionIds.eventLog,
+        order: 10,
+        title: "Show host events",
+        category: "Developer",
+        keywords: ["debug", "events", "stream", "log", "devtools"],
+        icon: LogIcon,
+        run: () => devtools.show(EVENTS_PANEL),
+      }),
+    );
+    return { devtools };
   },
 });

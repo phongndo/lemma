@@ -2,13 +2,12 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
 import type { HostEvent } from "@lemma/contracts";
-import { ActionIds, Actions, Client, Devtools, DevtoolsPanels, Router, Slots, ThreadRoute } from "../ui/contracts.ts";
-import type { ClientService, RouterService } from "../ui/contracts.ts";
-import { defineUiPlugin } from "../ui/define.ts";
-import { LogIcon, XIcon } from "../ui/parts.tsx";
-import styles from "./event-log.css?inline";
+import { ThreadRoute } from "../../ui/contracts.ts";
+import type { ClientService, DevtoolsPanel, RouterService } from "../../ui/contracts.ts";
+import { XIcon } from "../../ui/parts.tsx";
+import type { SlotItem } from "../../ui/slots.ts";
 
-const PANEL = "devtools.events";
+export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */
 const LIMIT = 1000;
 
@@ -266,47 +265,29 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
 }
 
 /**
- * Records the host's event stream, and the connection carrying it, from when
- * it starts, and shows it as the devtools' Host events panel.
+ * Records the host's event stream, and the connection carrying it, from now
+ * until `onCleanup` runs, for the Host events panel.
  */
-export default defineUiPlugin({
-  id: "event-log",
-  styles,
-  requires: { client: Client, devtools: Devtools, router: Router, slots: Slots },
-  setup: ({ client, devtools, router, slots }, plugin) => {
-    const [lines, setLines] = createSignal<readonly Line[]>([]);
-    let seq = 0;
-    const push = (line: Line) => setLines((current) => [...(current.length >= LIMIT ? current.slice(current.length - LIMIT + 1) : current), line]);
-    plugin.onCleanup(client.onEvent((event) => push({ seq: ++seq, at: Date.now(), kind: "event", event, bytes: JSON.stringify(event).length })));
-    let last: string | undefined;
-    plugin.onCleanup(
-      client.host.onStatus((status) => {
-        // One line per change of state or generation, not per retry countdown.
-        const key = `${status.state}:${status.generation}`;
-        if (key === last) return;
-        last = key;
-        push({ seq: ++seq, at: Date.now(), kind: "conn", status });
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(DevtoolsPanels, {
-        id: PANEL,
-        order: 15,
-        title: "Host events",
-        component: () => <EventLog client={client} router={router} lines={lines} clear={() => setLines([])} />,
-        snapshot: () => lines().map((line) => ({ at: line.at, type: typeOf(line), session: sessionOf(line), message: describe(line) })),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: ActionIds.eventLog,
-        order: 10,
-        title: "Show host events",
-        category: "Developer",
-        keywords: ["debug", "events", "stream", "log", "devtools"],
-        icon: LogIcon,
-        run: () => devtools.show(PANEL),
-      }),
-    );
-  },
-});
+export function hostEventsPanel(client: ClientService, router: RouterService, onCleanup: (fn: () => void) => void): SlotItem<DevtoolsPanel> {
+  const [lines, setLines] = createSignal<readonly Line[]>([]);
+  let seq = 0;
+  const push = (line: Line) => setLines((current) => [...(current.length >= LIMIT ? current.slice(current.length - LIMIT + 1) : current), line]);
+  onCleanup(client.onEvent((event) => push({ seq: ++seq, at: Date.now(), kind: "event", event, bytes: JSON.stringify(event).length })));
+  let last: string | undefined;
+  onCleanup(
+    client.host.onStatus((status) => {
+      // One line per change of state or generation, not per retry countdown.
+      const key = `${status.state}:${status.generation}`;
+      if (key === last) return;
+      last = key;
+      push({ seq: ++seq, at: Date.now(), kind: "conn", status });
+    }),
+  );
+  return {
+    id: EVENTS_PANEL,
+    order: 15,
+    title: "Host events",
+    component: () => <EventLog client={client} router={router} lines={lines} clear={() => setLines([])} />,
+    snapshot: () => lines().map((line) => ({ at: line.at, type: typeOf(line), session: sessionOf(line), message: describe(line) })),
+  };
+}
