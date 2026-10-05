@@ -961,7 +961,7 @@ try {
   assert.equal(await fresh.locator(".settings").count(), 0, "with no provider set up, the app opened settings rather than the chat");
   await fresh.click(".composer-callout >> text=Log in to a provider");
   await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
-  await fresh.locator(".provider", { hasText: "Mistral" }).locator(".provider-connect").click();
+  await fresh.locator(".provider", { hasText: "OpenCode Zen" }).locator(".provider-connect").click();
   await fresh.fill(".provider-key input", "sk-check");
   await fresh.press(".provider-key input", "Enter");
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
