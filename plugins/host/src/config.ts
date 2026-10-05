@@ -1,9 +1,10 @@
-import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Effect, Either, ParseResult, Schema } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
 import { ConfigFile } from "@lemma/contracts";
+import { writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
 import { Diagnostic } from "@lemma/core";
 import type { Composition, PluginEntry } from "@lemma/core";
@@ -231,6 +232,36 @@ export interface ConfigUpdate {
   readonly restore: Effect.Effect<void>;
 }
 
+/**
+ * Where a config file's text goes: the file a link at `path` points to (a
+ * config kept in a dotfiles repository stays linked), with the mode it has
+ * (0600 for a new one: rows may hold provider settings).
+ */
+const destination = async (path: string): Promise<{ readonly file: string; readonly mode: number }> => {
+  // A link to a file not made yet (`realpath` fails) still names it: write there, so the link stays.
+  const file = await realpath(path).catch(() =>
+    readlink(path).then(
+      (target) => resolve(dirname(path), target),
+      () => path,
+    ),
+  );
+  const mode = await stat(file).then(
+    (info) => info.mode & 0o777,
+    () => 0o600,
+  );
+  return { file, mode };
+};
+
+/**
+ * Writes the file whole or not at all (a crash mid-write cannot leave a
+ * truncated config, which the host would refuse to start with), creating its
+ * directory as `mkdir` would.
+ */
+const writeConfig = async (path: string, text: string): Promise<void> => {
+  const { file, mode } = await destination(path);
+  await writeFileAtomic(file, text, { mode, dirMode: 0o777, sync: true });
+};
+
 /** Applies `patchConfig` to the file at `path`, creating it and its directory if needed. */
 export function updateConfig(
   path: string,
@@ -243,10 +274,7 @@ export function updateConfig(
     if (previous !== undefined && previous.trim() !== "") yield* parseConfig(path, previous);
     const text = patchConfig(previous ?? "", rows, scope, section);
     yield* Effect.tryPromise({
-      try: async () => {
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, text);
-      },
+      try: () => writeConfig(path, text),
       catch: (cause) =>
         new Diagnostic({
           severity: "error",
@@ -257,7 +285,10 @@ export function updateConfig(
     return {
       text,
       previous,
-      restore: Effect.tryPromise(() => (previous === undefined ? unlink(path) : writeFile(path, previous))).pipe(Effect.ignore),
+      // A file this made goes again (through a link, the file it points to, so the link stays); one it changed is put back.
+      restore: Effect.tryPromise(async () => (previous === undefined ? unlink((await destination(path)).file) : writeConfig(path, previous))).pipe(
+        Effect.ignore,
+      ),
     };
   });
 }

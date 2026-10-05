@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -296,6 +296,36 @@ describe("updateConfig", () => {
       expect((await Effect.runPromise(loadComposition(paths))).composition.plugins.edit).toBeUndefined();
       await Effect.runPromise(second.restore);
       expect((await Effect.runPromise(loadComposition(paths))).composition.plugins.edit).toEqual({ enabled: false });
+    }));
+
+  test("writes through a link to the file it points to, keeping that file's mode and leaving no temporary file", () =>
+    withPaths(async (paths) => {
+      const kept = join(paths.home, "..", "dotfiles", "lemma.jsonc");
+      await mkdir(join(kept, ".."), { recursive: true });
+      await writeFile(kept, `{ "plugins": {} } // mine`);
+      await chmod(kept, 0o640);
+      await symlink(kept, paths.userConfig);
+      const update = await Effect.runPromise(updateConfig(paths.userConfig, { bash: { enabled: false } }));
+      expect((await lstat(paths.userConfig)).isSymbolicLink()).toBe(true);
+      expect(await readFile(kept, "utf8")).toBe(update.text);
+      expect((await stat(kept)).mode & 0o777).toBe(0o640);
+      await Effect.runPromise(update.restore);
+      expect(await readFile(kept, "utf8")).toBe(`{ "plugins": {} } // mine`);
+      expect((await lstat(paths.userConfig)).isSymbolicLink()).toBe(true);
+      expect((await readdir(join(kept, ".."))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    }));
+
+  test("writes through a link to a file not made yet, keeping the link, and putting back removes only that file", () =>
+    withPaths(async (paths) => {
+      const kept = join(paths.home, "..", "dotfiles", "lemma.jsonc");
+      await mkdir(join(kept, ".."), { recursive: true });
+      await symlink(kept, paths.userConfig);
+      const update = await Effect.runPromise(updateConfig(paths.userConfig, { bash: { enabled: false } }));
+      expect((await lstat(paths.userConfig)).isSymbolicLink()).toBe(true);
+      expect(await readFile(kept, "utf8")).toBe(update.text);
+      await Effect.runPromise(update.restore);
+      expect((await lstat(paths.userConfig)).isSymbolicLink()).toBe(true);
+      await expect(stat(kept)).rejects.toThrow();
     }));
 
   test("refuses to patch a file it cannot parse", () =>
