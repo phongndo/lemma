@@ -11,18 +11,26 @@ makeCore([tools, ...builtin]); // default export: all five, as an array
 makeCore([tools, read, write, edit, myBash]); // replace one by leaving it out
 ```
 
-The tools themselves (`readTool`, …) and helpers (`applyEdits`, `unifiedPatch`,
-`truncateHead`/`truncateTail`) are exported for reuse. No config.
+The tools themselves (`readTool`, …, and `makeBashTool` for a `bash` with
+another default timeout) and helpers (`applyEdits`, `unifiedPatch`,
+`truncateHead`/`truncateTail`) are exported for reuse.
 
 | Tool       | Input                                   | Behavior                                                                                                                                                                                                                                                                                                                                                                |
 | ---------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `read`     | `path`, `offset?` (1-based), `limit?`   | Raw text, cut at 2000 lines or 50KB with a `Use offset=N to continue` notice. PNG/JPEG/GIF/WebP (by magic bytes) come back as an image part; images over 3.75MB are described instead.                                                                                                                                                                                  |
 | `write`    | `path`, `content`                       | Creates parent directories; overwrites.                                                                                                                                                                                                                                                                                                                                 |
 | `edit`     | `path`, `edits: [{ oldText, newText }]` | Every `oldText` must match exactly once in the original file; overlapping edits, no match, several matches, and no-op edits are errors that leave the file unchanged. `details.patch` is a unified diff, `details.firstChangedLine` the first changed line.                                                                                                             |
-| `bash`     | `command`, `timeout?` (seconds)         | `bash -c` in the session cwd, stdout+stderr combined, tail-truncated to 2000 lines or 50KB; the full output goes to a temp file named in the result. Non-zero exit, timeout, and abort are error results; `details.exitCode` carries the code.                                                                                                                          |
+| `bash`     | `command`, `timeout?` (seconds)         | `bash -c` in the session cwd, stdout+stderr combined, tail-truncated to 2000 lines or 50KB; the full output goes to a temp file named in the result. Without a `timeout`, the plugin's default applies. Non-zero exit, timeout, and abort are error results; `details.exitCode` carries the code.                                                                       |
 | `codemode` | `code`                                  | JavaScript in pi's QuickJS sandbox; `await tools.<name>(args)` resolves to a tool's text, and an error result rejects. Output past 10,000 tokens, or past what the `tools` plugin's `maxResultChars` leaves room for, keeps its start and end, the rest in a temp file. A `// @options:` first line sets `max_output_tokens` and `timeout_ms` (300 seconds by default). |
 
 Paths resolve against the session cwd; `~` expands and a leading `@` is dropped.
+
+## Config
+
+Only `bash` has any: `timeout`, the seconds a command runs when the model names
+no timeout of its own (default `600`; `0` for none). The tool description
+states it and tells the model to run servers in the background, so a command
+that never exits cannot hold a turn forever.
 
 ## Rationale
 

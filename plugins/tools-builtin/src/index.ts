@@ -1,15 +1,15 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Tools } from "@lemma/contracts";
 import type { Tool } from "@lemma/contracts";
-import { bashTool } from "./bash.ts";
+import { DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
 import { codemodeTool } from "./codemode.ts";
 import { editTool } from "./edit.ts";
 import { readTool } from "./read.ts";
 import { writeTool } from "./write.ts";
 
-export { bashTool, BashInput } from "./bash.ts";
+export { bashTool, BashInput, DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
 export type { BashDetails } from "./bash.ts";
 export { codemodeTool, CodemodeInput } from "./codemode.ts";
 export type { CodemodeDetails } from "./codemode.ts";
@@ -40,7 +40,20 @@ const toolPlugin = (id: string, tool: Tool<any> | ((registry: Context.Tag.Servic
 export const read = toolPlugin(readTool.name, readTool);
 export const write = toolPlugin(writeTool.name, writeTool);
 export const edit = toolPlugin(editTool.name, editTool);
-export const bash = toolPlugin(bashTool.name, bashTool);
+const BashConfig = Schema.Struct({
+  timeout: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => DEFAULT_BASH_TIMEOUT }).annotations({
+    title: "Default timeout",
+    description: "Seconds a command may run when the model names no timeout of its own. 0: no limit.",
+  }),
+});
+
+export const bash = definePlugin({
+  id: "bash",
+  version: "0.1.0",
+  config: BashConfig,
+  requires: [Tools],
+  layer: (config: typeof BashConfig.Type) => Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(makeBashTool(config.timeout)))),
+});
 export const codemode = toolPlugin("codemode", codemodeTool);
 
 /** All five plugins, for compositions that want the standard set. */

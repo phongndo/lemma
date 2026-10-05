@@ -12,7 +12,7 @@ import type { Truncation } from "./truncate.ts";
 
 export const BashInput = Schema.Struct({
   command: Schema.String.annotations({ description: "Bash command to execute" }),
-  timeout: Schema.optional(Schema.Number.annotations({ description: "Timeout in seconds (optional, no default timeout)" })),
+  timeout: Schema.optional(Schema.Number.annotations({ description: "Timeout in seconds (optional; the tool description names the default)" })),
 });
 export type BashInput = typeof BashInput.Type;
 
@@ -28,6 +28,8 @@ export interface BashDetails {
 
 /** setTimeout's ceiling. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
+/** Seconds a command runs when the model names no timeout: long enough for a build, short enough that a server started in the foreground does not hold the turn forever. */
+export const DEFAULT_BASH_TIMEOUT = 600;
 /** After exit, how long pipes held by a background descendant may stay idle before reading stops. */
 const EXIT_STDIO_GRACE_MS = 100;
 
@@ -103,11 +105,17 @@ function waitForExit(child: ChildProcess): Promise<number | null> {
   });
 }
 
-export const bashTool: Tool<BashInput> = {
+/** The `bash` tool; a command without a timeout of its own stops after `defaultTimeout` seconds (0: never). */
+export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Tool<BashInput> => ({
   name: "bash",
-  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds${
+    defaultTimeout > 0
+      ? `; without one, the command is stopped after ${defaultTimeout} seconds. Run long-lived processes such as servers in the background (with nohup and &, redirecting their output to a file)`
+      : ""
+  }.`,
   input: BashInput,
-  execute: async ({ command, timeout }, { cwd, signal, update }) => {
+  execute: async ({ command, timeout: requested }, { cwd, signal, update }) => {
+    const timeout = requested ?? (defaultTimeout > 0 ? defaultTimeout : undefined);
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) throw new Error("Invalid timeout: must be a finite number of seconds");
     if (timeout !== undefined && timeout * 1000 > MAX_TIMEOUT_MS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_MS / 1000} seconds`);
     if (signal.aborted) throw new Error("Command aborted");
@@ -189,4 +197,6 @@ export const bashTool: Tool<BashInput> = {
     const textBody = status === undefined ? body || "(no output)" : `${body ? `${body}\n\n` : ""}${status}`;
     return new ToolResult({ content: [{ type: "text", text: textBody }], ...(status === undefined ? {} : { isError: true }), details });
   },
-};
+});
+
+export const bashTool: Tool<BashInput> = makeBashTool();

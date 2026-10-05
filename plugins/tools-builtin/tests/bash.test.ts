@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bashTool } from "../src/index.ts";
+import { bashTool, makeBashTool } from "../src/index.ts";
 import type { BashDetails } from "../src/index.ts";
 import { call, context, tempDir, textOf } from "./support.ts";
 
@@ -59,6 +59,14 @@ describe("bash", () => {
     const pid = Number(await fs.readFile(pidFile, "utf8"));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(alive(pid)).toBe(false);
+  });
+
+  it("stops a command that names no timeout after the default, which its description states", async () => {
+    const tool = makeBashTool(0.3);
+    expect(tool.description).toContain("stopped after 0.3 seconds");
+    const result = await call(tool, { command: "sleep 30" }, context(dir));
+    expect(textOf(result)).toBe("Command timed out after 0.3 seconds");
+    expect(result.details).toMatchObject({ exitCode: null, timedOut: true });
   });
 
   it("aborts through the signal", async () => {
