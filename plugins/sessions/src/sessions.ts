@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Duration, Effect, Option, Schedule, Schema } from "effect";
+import { Duration, Effect, Either, Option, ParseResult, Schedule, Schema } from "effect";
 import type { Context, Scope } from "effect";
 import { Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
@@ -40,7 +40,26 @@ interface Entry {
   lastUsed: number;
 }
 
-const validateEvent = Schema.validateEither(SessionEvent);
+const decodeEvent = Schema.decodeUnknownEither(SessionEvent, { onExcessProperty: "error" });
+
+/**
+ * The event as reading its line back will give it, or why it cannot be written. JSON
+ * drops what it cannot carry (`NaN` becomes `null`, `undefined` disappears), and a field
+ * the schema lacks would be dropped on reading: either way memory and a reload would
+ * disagree, or the line would not read back at all.
+ */
+const asRead = (event: SessionEvent): Either.Either<SessionEvent, string> => {
+  let json: unknown;
+  try {
+    json = JSON.parse(JSON.stringify(event));
+  } catch (cause) {
+    return Either.left(cause instanceof Error ? cause.message : String(cause));
+  }
+  return Either.mapLeft(decodeEvent(json), (error) => {
+    const [issue] = ParseResult.ArrayFormatter.formatErrorSync(error);
+    return issue === undefined ? (error.message.split("\n")[0] ?? error.message) : `${issue.path.join(".")}: ${issue.message}`;
+  });
+};
 
 const notFound = (sessionId: string, message: string) => new SessionError({ sessionId, reason: "NotFound", message });
 
@@ -226,22 +245,18 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
             }
             let id = eventId();
             while (open.byId.has(id)) id = eventId();
-            const event: SessionEvent = { seq: open.events.length + 1, id, parent, at: Date.now(), data };
-            // A line that does not decode later would make the whole session unreadable, so refuse it now.
-            const valid = validateEvent(event);
-            if (valid._tag === "Left") {
-              return yield* new SessionError({
-                sessionId,
-                reason: "Corrupt",
-                message: `Refusing to append an invalid event: ${valid.left.message.split("\n")[0]}`,
-              });
+            // A line that does not read back as it was written would make memory and a reload disagree, or the session unreadable.
+            const read = asRead({ seq: open.events.length + 1, id, parent, at: Date.now(), data });
+            if (Either.isLeft(read)) {
+              return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.left}` });
             }
+            const event = read.right;
             yield* commit(entry, open, event, () => {
               open.events.push(event);
               open.byId.set(id, event);
               open.leaf = id;
               open.updatedAt = Math.max(open.updatedAt, event.at);
-              if (data.type === "title") open.title = data.title;
+              if (event.data.type === "title") open.title = event.data.title;
             });
             yield* events.publish(SessionAppended, { sessionId, event });
             yield* changed(entry);

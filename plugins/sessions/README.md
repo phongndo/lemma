@@ -53,8 +53,11 @@ event appended or the last checkout, whichever is later. The title is the latest
   complete line that does not decode, an unknown parent, a seq gap, or a checkout
   to nowhere makes the session `Corrupt`. Skipping such a line would silently
   change what the model saw.
-- **Validation.** `append` validates the event against the schema first, so a line
-  that could not be read back is never written. `parent` must exist (`InvalidParent`).
+- **Validation.** `append` decodes the event's JSON against the schema first, so
+  a line that could not be read back is never written, and memory holds the event
+  exactly as a reload will. A field the schema lacks is refused (it would be
+  dropped on reading), and so is a value JSON cannot carry where the schema needs
+  it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file; a file is
   re-read (with `JSON.parse` only) when its size or mtime changed. Sessions this
   process has opened are served from memory. A file that cannot be read is left

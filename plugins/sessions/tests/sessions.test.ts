@@ -668,6 +668,19 @@ describe("unloading idle sessions", () => {
     );
   });
 
+  it("refuses an event with a field its schema lacks, which reading the line back would drop", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const error = yield* Effect.flip(store.append(id, { ...title("x"), note: "lost on reload" } as unknown as EventData));
+        expect(error.reason).toBe("Corrupt");
+        expect(error.message).toContain("data.note: is unexpected");
+        expect((yield* store.get(id)).lastSeq).toBe(0);
+      }),
+    );
+  });
+
   it("reads lines longer than its read buffer", async () => {
     const long = "é".repeat(1_500_000);
     const id = await run(
@@ -684,6 +697,24 @@ describe("unloading idle sessions", () => {
         const store = yield* Sessions;
         expect((yield* store.list())[0]!.lastSeq).toBe(2);
         expect((yield* store.events(id)).map((event) => event.data)).toEqual([{ type: "custom", kind: "test/long", data: long }, custom(2)]);
+      }),
+    );
+  });
+
+  it("refuses an event JSON cannot carry, which would not read back", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, custom(1));
+        const compaction: EventData = { type: "compaction", summary: "s", firstKeptId: first.id, tokensBefore: Number.NaN, source: "test" };
+        const error = yield* Effect.flip(store.append(id, compaction));
+        expect(error.reason).toBe("Corrupt");
+        expect(error.message).toContain("tokensBefore");
+        // What JSON turns into something readable is kept as it reads back.
+        const kept = yield* store.append(id, { type: "custom", kind: "test/nan", data: [Number.NaN, undefined] });
+        expect(kept.data).toEqual({ type: "custom", kind: "test/nan", data: [null, null] });
+        expect((yield* store.events(id)).at(-1)).toBe(kept);
       }),
     );
   });
