@@ -93,6 +93,12 @@ export interface RequestDraft {
   readonly thinking?: ThinkingLevel;
   readonly sections: readonly SystemSection[];
   readonly tools: readonly ToolContribution[];
+  /**
+   * The previous call failed because its request was too long for the model: a handler that shortens the history
+   * (compaction) does so now, whatever its own estimate says. Asked once: another overflow before the model answers
+   * ends the turn.
+   */
+  readonly overflow?: boolean;
   /** The turn's branch, root to its last event: what the request continues. */
   readonly branch: readonly SessionEvent[];
   /** `deriveMessages(branch)`. */
@@ -106,14 +112,15 @@ export interface RequestDraft {
   readonly append: (data: EventData) => Effect.Effect<SessionEvent, AgentError>;
 }
 
-export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd">;
+export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd" | "overflow">;
 
 /** Runs before every model call. Skills, project context, and prompt plugins contribute here. */
 export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request");
 
 /**
  * Runs after each step. The default continues while the model asked for tools
- * and stops otherwise; a handler can stop early or push the model to continue.
+ * (or tools answered it, so it has results to read) and stops otherwise; a
+ * handler can stop early or push the model to continue.
  */
 export interface StepOutcome {
   readonly sessionId: string;

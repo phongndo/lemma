@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Cause, Effect, Exit, Stream } from "effect";
 import type { Context } from "effect";
+import { CoreClosed, Hook } from "@lemma/core";
 import type { Events, Hooks } from "@lemma/core";
 import {
   addUsage,
@@ -21,6 +22,7 @@ import type {
   EventData,
   HostControl,
   Llm,
+  LlmFailure,
   LlmRequest,
   ModelInfo,
   PromptContent,
@@ -40,7 +42,7 @@ import type {
 import { partialMessage } from "./live.ts";
 import type { LiveTurn, PartialMessage } from "./live.ts";
 import { baseSection, environmentSection, titleFrom } from "./prompt.ts";
-import { INTERRUPTED_CALL } from "./resume.ts";
+import { INTERRUPTED_CALL, RESUMED, TOOLS_STARTED } from "./resume.ts";
 import type { ResumePlan, StepOutcome } from "./resume.ts";
 import type { LiveFile } from "./state.ts";
 
@@ -60,7 +62,23 @@ export interface TurnSettings {
   /** Shell command for the `lemma` CLI, named in the environment section. */
   readonly cli?: string;
   readonly maxSteps: number;
+  /** Failed model calls asked again in a row before the turn ends in error (an overflow is asked again once even at 0). */
+  readonly retries: number;
+  /** Milliseconds before the first retry; each later one waits twice as long, up to `maxRetryDelay`. */
+  readonly retryDelay: number;
+  readonly maxRetryDelay: number;
 }
+
+/** Calls of one response that run at once, at most, when their tools may run together. */
+const PARALLEL_TOOLS = 8;
+/** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
+const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
+
+/** Milliseconds before retry `attempt` (from 1): the provider's delay when it named one, else doubling backoff with ±20% jitter. */
+export const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">, attempt: number, requested?: number): number =>
+  requested !== undefined
+    ? Math.min(requested, MAX_REQUESTED_DELAY_MS)
+    : Math.round(Math.min(settings.maxRetryDelay, settings.retryDelay * 2 ** (attempt - 1)) * (0.8 + Math.random() * 0.4));
 
 /** A prompt as a turn places it: a user message carrying the submission's id. */
 export interface Placed {
@@ -104,17 +122,30 @@ export interface TurnInput {
   readonly logged: (requestId: string) => void;
   /**
    * True once the agent is closing (the host stopping, or the agent
-   * reloading): a turn interrupted then is left open in the log, to resume
-   * when the agent starts again, rather than closed as cancelled.
+   * reloading): a turn interrupted then, or failing, is left open in the log,
+   * to resume when the agent starts again, rather than closed as cancelled or
+   * failed. The turn suspends itself at its next step or tool call, or when
+   * `stopping` completes while it waits to ask again. (A host stopping shuts
+   * the core's hooks before it closes the agent; a turn that finds them shut
+   * is left open the same way.)
    */
   readonly suspended: () => boolean;
+  readonly stopping: Effect.Effect<void>;
+  /** Runs a wait (before a failed call is asked again) during which the turn holds no slot, then waits for one. */
+  readonly idle: <A, E, R>(wait: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
 export type TurnReason = "done" | "cancelled" | "error" | "max-steps";
+/** How `runTurn` returns: the reason it ended, or `suspended` when it was left open in the log to resume. */
+export type TurnOutcome = TurnReason | "suspended";
 interface Ended {
   readonly reason: TurnReason;
   readonly error?: string;
 }
+
+/** What a tool call in a response cut off at its output limit returns, instead of running. */
+const TRUNCATED_CALL =
+  "Not run: your response reached its output token limit before this call was complete, so its arguments may be cut off. Make the call again; if it carries a lot of text (a long file), split it into smaller calls.";
 
 /** The text a cut-off tool call that is not run again returns to the model. */
 const interruptedText = (output: string | undefined) =>
@@ -144,6 +175,19 @@ const causeMessage = (cause: Cause.Cause<unknown>): string => {
   return error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error);
 };
 
+/** `error` is the core's `CoreClosed`, or wraps one (as a hook failure the turn reports does). */
+const isCoreClosed = (error: unknown, depth = 0): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  depth < 8 &&
+  ((error as { readonly _tag?: unknown })._tag === "CoreClosed" || ("cause" in error && isCoreClosed(error.cause, depth + 1)));
+
+/** The turn failed because the core is shutting down. */
+const closedCore = (cause: Cause.Cause<unknown>): boolean => [...Cause.failures(cause), ...Cause.defects(cause)].some((error) => isCoreClosed(error));
+
+/** Never handled: dispatching it says whether the core still dispatches hooks. */
+const Probe = Hook.make<void, void>("agent/core-closing");
+
 /**
  * One turn. The log is written as the turn goes: `turn-start`, the user
  * messages, then per step `step-start`, `request`, the assistant `message` (or
@@ -152,7 +196,7 @@ const causeMessage = (cause: Cause.Cause<unknown>): string => {
  * Every append names the previous one as its parent, so a checkout elsewhere
  * during the turn cannot splice the turn into another branch.
  */
-export function runTurn(services: TurnServices, settings: TurnSettings, input: TurnInput): Effect.Effect<TurnReason, AgentError> {
+export function runTurn(services: TurnServices, settings: TurnSettings, input: TurnInput): Effect.Effect<TurnOutcome, AgentError> {
   const { sessions, llm, tools, host, hooks, events, source } = services;
   const { sessionId, turnId, cwd, signal, live } = input;
 
@@ -166,22 +210,69 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     partialStartedAt: number;
     /** Tool calls of the logged assistant message that have no result yet. */
     pending: ToolCall[];
-  } = { lastId: undefined, usage: emptyUsage, step: undefined, partial: undefined, partialStartedAt: 0, pending: [] };
+    /** Tool calls a `TOOLS_STARTED` event names: they may have run, whatever becomes of the turn. */
+    started: Set<string>;
+    /** Failed calls asked again since the model last answered. */
+    retries: number;
+    /** One of them was an overflow (asked again once only). */
+    overflowed: boolean;
+    /** The last of them failed as too long: the next request asks handlers to shorten the history. */
+    shorten: boolean;
+  } = {
+    lastId: undefined,
+    usage: emptyUsage,
+    step: undefined,
+    partial: undefined,
+    partialStartedAt: 0,
+    pending: [],
+    started: new Set(),
+    retries: 0,
+    overflowed: false,
+    shorten: false,
+  };
 
   const sessionError = (error: SessionError) => new AgentError({ sessionId, reason: "Session", message: error.message, cause: error });
 
-  /** Uninterruptible so a cancelled turn never loses track of an event that did reach the log. */
+  /**
+   * Whether the core is shutting down. It refuses every hook call from the moment it begins (hooks fail closed, so
+   * that no guard is skipped), before it stops the agent: a turn can go no further, and is not over either.
+   */
+  const coreClosing = hooks
+    .invoke(Probe, undefined, () => Effect.void)
+    .pipe(
+      Effect.as(false),
+      Effect.catchAll((error) => Effect.succeed(error._tag === "CoreClosed")),
+    );
+  /** Stops the turn, to be left open, when the core is shutting down. */
+  const unlessClosing = Effect.flatMap(coreClosing, (closing) => (closing ? Effect.die(new CoreClosed()) : Effect.void));
+
+  /**
+   * Uninterruptible so a cancelled turn never loses track of an event that did reach the log. One at a time, so tool
+   * calls running together each chain after the last.
+   */
+  const appending = Effect.unsafeMakeSemaphore(1);
   const append = (data: EventData): Effect.Effect<SessionEvent, AgentError> =>
-    Effect.uninterruptible(
-      sessions.append(sessionId, data, state.lastId === undefined ? undefined : { parent: state.lastId }).pipe(
-        Effect.tap((event) =>
-          Effect.sync(() => {
-            state.lastId = event.id;
-          }),
+    appending.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.suspend(() => sessions.append(sessionId, data, state.lastId === undefined ? undefined : { parent: state.lastId })).pipe(
+          Effect.tap((event) =>
+            Effect.sync(() => {
+              state.lastId = event.id;
+            }),
+          ),
+          Effect.mapError(sessionError),
         ),
-        Effect.mapError(sessionError),
       ),
     );
+
+  /** Where a stopping agent suspends the turn: before a step or a tool call, never inside one. */
+  const boundary = Effect.suspend(() => (input.suspended() ? Effect.interrupt : Effect.void));
+
+  /**
+   * Waits until epoch `at`, without a slot; a stopping agent suspends the turn instead, and the rest of the wait comes
+   * when it resumes.
+   */
+  const waitUntil = (at: number) => Effect.zipRight(input.idle(Effect.raceFirst(Effect.sleep(Math.max(0, at - Date.now())), input.stopping)), boundary);
 
   const hookError = (hook: string) => (error: { readonly message: string }) =>
     new AgentError({ sessionId, reason: "Hook", message: `${hook}: ${error.message}`, cause: error });
@@ -216,6 +307,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           environmentSection(source, { cwd, sessionId, ...(settings.cli === undefined ? {} : { cli: settings.cli }) }),
         ],
         tools: listed,
+        ...(state.shorten ? { overflow: true } : {}),
         branch,
         history: deriveMessages(branch),
         // Through the turn's own append, so the event chains after the turn's last one and the turn continues from it.
@@ -274,7 +366,23 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       return { request, model, offered: specs.map((spec) => spec.name) };
     });
 
-  /** Streams one model call. Returns the settled message, or how the turn ends when the call failed. */
+  /**
+   * Whether a failed call is asked again, and when: a transient or rate-limit failure up to `retries` times in a row,
+   * and besides those, an overflow once (with a shortened history) until the model answers. A cancelled turn asks
+   * nothing again.
+   */
+  const retryOf = (failure: LlmFailure | undefined) => {
+    if (failure === undefined || signal.aborted) return undefined;
+    const attempt = state.retries + 1;
+    if (failure.kind === "overflow") return state.overflowed ? undefined : { reason: "failure" as const, attempt, at: Date.now() };
+    if (failure.kind === "fatal" || attempt - (state.overflowed ? 1 : 0) > settings.retries) return undefined;
+    return { reason: "failure" as const, attempt, at: Date.now() + retryDelay(settings, attempt, failure.retryAfterMs) };
+  };
+
+  /**
+   * Streams one model call. Returns the settled message; or, when the call failed, when it is to be asked again
+   * (`retry`) or how the turn ends.
+   */
   const callModel = (stepId: string, request: LlmRequest, model: ModelInfo) =>
     Effect.gen(function* () {
       const startedAt = Date.now();
@@ -283,7 +391,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const partial = live.startStep(stepId, startedAt);
       state.partial = partial;
       state.partialStartedAt = startedAt;
-      const failure = yield* llm.stream(request).pipe(
+      const streamError = yield* llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = Date.now();
@@ -296,23 +404,44 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         Effect.catchAll((error) => Effect.succeed(error.message)),
       );
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: Date.now() };
+      // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
+      if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
           state.partial = undefined;
           live.endStep();
           if (settled === undefined) {
-            const error = failure ?? "The model stream ended without a result";
+            const error = streamError ?? "The model stream ended without a result";
             yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error), timing });
             return { ended: { reason: "error", error } satisfies Ended };
           }
           state.usage = addUsage(state.usage, settled.message.usage);
           if (settled.type === "error") {
-            yield* append({ type: "attempt", turnId, stepId, message: settled.message, timing });
             const aborted = settled.message.stopReason === "aborted";
+            const failure = aborted ? undefined : settled.failure;
+            const retry = retryOf(failure);
+            yield* append({
+              type: "attempt",
+              turnId,
+              stepId,
+              message: settled.message,
+              timing,
+              ...(failure === undefined ? {} : { failure }),
+              ...(retry === undefined ? {} : { retry }),
+            });
+            if (retry !== undefined) {
+              state.retries = retry.attempt;
+              state.shorten = failure?.kind === "overflow";
+              state.overflowed ||= state.shorten;
+              return { retry };
+            }
             return {
               ended: { reason: aborted ? "cancelled" : "error", error: settled.message.errorMessage ?? (aborted ? "Aborted" : "Model error") } satisfies Ended,
             };
           }
+          state.retries = 0;
+          state.overflowed = false;
+          state.shorten = false;
           yield* append({ type: "message", message: settled.message, turnId, stepId, timing });
           state.pending = settled.message.content.filter((block): block is ToolCall => block.type === "toolCall");
           return { message: settled.message };
@@ -321,60 +450,123 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     });
 
   /**
-   * Runs the pending tool calls in order, logging each result as it arrives.
-   * A call in `interrupted` (cut off by a restart, and not safe to repeat) is
-   * not run: the model is told so, with the output it had printed. `offered`:
-   * the request's tools, the only ones its calls may run.
+   * Runs one tool call and logs its result. A call in `interrupted` (cut off by a restart, and not safe to repeat) is
+   * not run: the model is told so, with the output it had printed. `offered`: the request's tools, the only ones its
+   * calls may run.
+   */
+  const runCall = (stepId: string, call: ToolCall, interrupted: ReadonlyMap<string, string | undefined>, offered?: readonly string[]) =>
+    Effect.gen(function* () {
+      const startedAt = Date.now();
+      const invocation = new ToolInvocation({
+        sessionId,
+        toolCallId: call.id,
+        name: call.name,
+        input: call.arguments,
+        cwd,
+        ...(offered === undefined ? {} : { offered }),
+      });
+      // Run as the core shuts down, the call would fail for that alone (its tool not found, its guards closed).
+      if (!interrupted.has(call.id)) yield* unlessClosing;
+      const result = interrupted.has(call.id)
+        ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
+        : yield* tools.execute(invocation, signal).pipe(
+            Effect.map((value) => ({ content: value.content, isError: value.isError ?? false, details: value.details })),
+            Effect.catchAll((error) =>
+              isCoreClosed(error)
+                ? Effect.die(error)
+                : Effect.succeed({ content: [{ type: "text" as const, text: error.message }], isError: true, details: undefined }),
+            ),
+            Effect.catchAllDefect((defect) =>
+              isCoreClosed(defect)
+                ? Effect.die(defect)
+                : Effect.succeed({
+                    content: [{ type: "text" as const, text: `Tool ${call.name} crashed: ${String(defect)}` }],
+                    isError: true,
+                    details: undefined,
+                  }),
+            ),
+          );
+      const message: ToolResultMessage = {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        content: result.content,
+        isError: result.isError,
+        timestamp: Date.now(),
+      };
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* append({
+            type: "message",
+            message,
+            turnId,
+            stepId,
+            timing: { startedAt, endedAt: Date.now() },
+            ...(result.details === undefined ? {} : { details: result.details }),
+          });
+          state.pending = state.pending.filter((pending) => pending.id !== call.id);
+          live.toolEnded(call.id);
+        }),
+      );
+      return message;
+    });
+
+  /**
+   * Runs the pending tool calls, logging each result as it arrives: in order,
+   * except that a run of calls whose tools may run together (`parallel`) runs
+   * at once, up to `PARALLEL_TOOLS` of them. Before calls run, an event names
+   * them (`TOOLS_STARTED`), so a restart can tell a call that began from one
+   * that never did. Returns the results in call order.
    */
   const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map(), offered?: readonly string[]) =>
     Effect.gen(function* () {
+      const together = new Set((yield* tools.list).flatMap((tool) => (tool.parallel === "safe" ? [tool.spec.name] : [])));
+      const joins = (call: ToolCall) => together.has(call.name) && !interrupted.has(call.id);
+      const order = new Map(state.pending.map((call, index) => [call.id, index]));
       const results: ToolResultMessage[] = [];
       while (state.pending.length > 0) {
-        // `cancel` aborts before it interrupts; start nothing new in between.
+        // `cancel` aborts before it interrupts; start nothing new in between. A stopping agent suspends here.
         if (signal.aborted) return yield* Effect.interrupt;
+        yield* boundary;
+        // The next call, and when it may run together with others, those after it that may too.
+        const [first, ...rest] = state.pending as [ToolCall, ...ToolCall[]];
+        const group = [first];
+        if (joins(first)) {
+          for (const call of rest) {
+            if (!joins(call) || group.length >= PARALLEL_TOOLS) break;
+            group.push(call);
+          }
+        }
+        const running = group.filter((call) => !interrupted.has(call.id));
+        if (running.length > 0) {
+          yield* unlessClosing;
+          yield* append({ type: "custom", kind: TOOLS_STARTED, data: { turnId, stepId, toolCallIds: running.map((call) => call.id) } });
+          for (const call of running) state.started.add(call.id);
+        }
+        // Every call named starts now: none waits for another to finish first.
+        yield* Effect.forEach(
+          group,
+          (call) =>
+            Effect.map(runCall(stepId, call, interrupted, offered), (message) => {
+              results.push(message);
+            }),
+          { concurrency: "unbounded", discard: true },
+        );
+      }
+      return results.sort((a, b) => (order.get(a.toolCallId) ?? 0) - (order.get(b.toolCallId) ?? 0));
+    });
+
+  /** A response cut off at its output limit: its tool calls may be cut off too, so none runs, and each is answered for the model to make again. */
+  const answerTruncated = (stepId: string) =>
+    Effect.gen(function* () {
+      const results: ToolResultMessage[] = [];
+      while (state.pending.length > 0) {
         const call = state.pending[0]!;
-        const startedAt = Date.now();
-        const invocation = new ToolInvocation({
-          sessionId,
-          toolCallId: call.id,
-          name: call.name,
-          input: call.arguments,
-          cwd,
-          ...(offered === undefined ? {} : { offered }),
-        });
-        const result = interrupted.has(call.id)
-          ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
-          : yield* tools.execute(invocation, signal).pipe(
-              Effect.map((value) => ({ content: value.content, isError: value.isError ?? false, details: value.details })),
-              Effect.catchAll((error) => Effect.succeed({ content: [{ type: "text" as const, text: error.message }], isError: true, details: undefined })),
-              Effect.catchAllDefect((defect) =>
-                Effect.succeed({
-                  content: [{ type: "text" as const, text: `Tool ${call.name} crashed: ${String(defect)}` }],
-                  isError: true,
-                  details: undefined,
-                }),
-              ),
-            );
-        const message: ToolResultMessage = {
-          role: "toolResult",
-          toolCallId: call.id,
-          toolName: call.name,
-          content: result.content,
-          isError: result.isError,
-          timestamp: Date.now(),
-        };
+        const message = toolResult(call, TRUNCATED_CALL);
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* append({
-              type: "message",
-              message,
-              turnId,
-              stepId,
-              timing: { startedAt, endedAt: Date.now() },
-              ...(result.details === undefined ? {} : { details: result.details }),
-            });
-            state.pending.shift();
-            live.toolEnded(call.id);
+            yield* append({ type: "message", message, turnId, stepId });
+            state.pending = state.pending.slice(1);
           }),
         );
         results.push(message);
@@ -401,7 +593,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const decide = (step: number, outcome: StepOutcome) =>
     hooks
       .invoke(AgentContinueHook, { sessionId, turnId, step, message: outcome.message, results: outcome.results }, (final) =>
-        Effect.succeed(final.message.stopReason === "toolUse" ? ("continue" as const) : ("stop" as const)),
+        // Tool results the model has not read yet keep it going too, whatever the provider called its stop.
+        Effect.succeed(final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const)),
       )
       .pipe(Effect.mapError(hookError("AgentContinueHook")));
 
@@ -417,34 +610,47 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       return steered === 0 && decision === "stop" ? ({ reason: "done" } satisfies Ended) : undefined;
     });
 
-  /** Steps numbered from `first` until the turn ends. */
+  /**
+   * Steps numbered from `first` until the turn ends. A failed call asked
+   * again closes its step and waits; the step that asks again keeps the
+   * number, so retries take no steps from the turn.
+   */
   const steps = (first: number) =>
     Effect.gen(function* () {
-      for (let step = first; ; step++) {
+      for (let step = first; ;) {
         // A resumed turn can come here out of steps: a cut-off call counted as one.
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
+        yield* boundary;
         const stepId = newId();
         yield* append({ type: "step-start", turnId, stepId });
         state.step = { id: stepId, model: input.model };
         const { request, model, offered } = yield* prepareRequest(stepId);
         state.step = { id: stepId, model };
         const outcome = yield* callModel(stepId, request, model);
+        if ("retry" in outcome) {
+          yield* append({ type: "step-end", turnId, stepId });
+          state.step = undefined;
+          yield* waitUntil(outcome.retry.at);
+          continue;
+        }
         if ("ended" in outcome) return outcome.ended;
-        const results = yield* runTools(stepId, new Map(), offered);
+        const results = outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* runTools(stepId, new Map(), offered);
         const decision = yield* decide(step, { message: outcome.message, results });
         yield* append({ type: "step-end", turnId, stepId });
         state.step = undefined;
         const ended = yield* afterStep(step, decision);
         if (ended !== undefined) return ended;
+        step++;
       }
     });
 
   /**
    * Continues a turn a restart cut off, from where it stopped: a cut-off model
-   * call is logged as an interrupted attempt and asked again in a new step;
-   * cut-off tool calls run again when their tool is safe to repeat, and
-   * otherwise tell the model they were interrupted; a turn that was closing
-   * (cancelled, or failed) closes the same way.
+   * call is logged as an interrupted attempt and asked again in a new step (a
+   * failed one being retried is asked again once its wait is over); cut-off
+   * tool calls run again when their tool is safe to repeat, and otherwise
+   * tell the model they were interrupted, while calls that had not started
+   * run; a turn that was closing (cancelled, or failed) closes the same way.
    */
   const resumed = (resume: TurnResume) =>
     Effect.gen(function* () {
@@ -452,7 +658,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const at = plan.at;
       state.lastId = plan.lastId;
       state.usage = plan.usage;
-      yield* append({ type: "custom", kind: "agent.resumed", data: { turnId } });
+      if (plan.retry !== undefined) {
+        state.retries = plan.retry.attempts;
+        state.overflowed = plan.retry.overflowed;
+        state.shorten = plan.retry.overflow;
+      }
+      yield* append({ type: "custom", kind: RESUMED, data: { turnId } });
       for (const prompt of input.prompts) yield* userMessage(prompt);
       const stepId = at.kind === "between" ? undefined : at.stepId;
       const output = (toolCallId: string) => restored?.output.find((entry) => entry.toolCallId === toolCallId)?.output;
@@ -460,6 +671,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const cutStep = restored?.step !== undefined && restored.step.stepId === stepId ? restored.step : undefined;
       const cutOff = () => partialMessage(cutStep?.content ?? [], input.model, cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL);
       const timing = () => ({ startedAt: cutStep?.startedAt ?? Date.now(), endedAt: Date.now() });
+      /** The next step, once a retry's wait (cut short by the restart) is over. */
+      const again = () => Effect.zipRight(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
 
       if (at.kind === "failed") {
         if (!at.closed) state.step = { id: at.stepId, model: input.model };
@@ -475,19 +688,33 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       }
       switch (at.kind) {
         case "model":
-          if (!at.logged) yield* append({ type: "attempt", turnId, stepId: at.stepId, message: cutOff(), timing: timing() });
+          if (!at.logged) {
+            yield* append({
+              type: "attempt",
+              turnId,
+              stepId: at.stepId,
+              message: cutOff(),
+              timing: timing(),
+              retry: { reason: "restart", attempt: 1, at: Date.now() },
+            });
+          }
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
-          return yield* steps(plan.steps + 1);
+          return yield* again();
         case "before-request":
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
-          return yield* steps(plan.steps + 1);
+          return yield* again();
         case "tools": {
           state.step = { id: at.stepId, model: input.model };
           state.pending = [...at.pending];
+          for (const id of at.started) state.started.add(id);
           const listed = yield* tools.list;
           const repeatable = new Set(listed.filter((tool) => tool.replay === "safe").map((tool) => tool.spec.name));
-          const interrupted = new Map(at.pending.filter((call) => !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const));
-          const results = [...at.results, ...(yield* runTools(at.stepId, interrupted))];
+          // A call that may have begun is run again only when that is safe; one that had not begun runs now.
+          const interrupted = new Map(
+            at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
+          );
+          const ran = at.message.stopReason === "length" ? yield* answerTruncated(at.stepId) : yield* runTools(at.stepId, interrupted);
+          const results = [...at.results, ...ran];
           const decision = yield* decide(plan.steps, { message: at.message, results });
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
           state.step = undefined;
@@ -495,7 +722,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         }
         case "between": {
           // Prompts already placed after the last step are what the model answers next.
-          if (at.outcome === undefined || at.steered) return yield* steps(plan.steps + 1);
+          if (at.outcome === undefined || at.steered) return yield* again();
           const decision = yield* decide(plan.steps, at.outcome);
           return (yield* afterStep(plan.steps, decision)) ?? (yield* steps(plan.steps + 1));
         }
@@ -503,14 +730,28 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     });
 
   /**
-   * Closes the turn whatever happened: the partial output of an interrupted
-   * model call becomes an `attempt`, unanswered tool calls get error results so
-   * the next request is still valid, then `step-end` and `turn-end`.
+   * Whether the turn stopped because the agent or the core is stopping, rather
+   * than ending: then it is left as it is in the log, to resume when the agent
+   * starts again. Interrupted otherwise, it was cancelled.
+   */
+  const leftOpen = (exit: Exit.Exit<Ended, AgentError>): Effect.Effect<boolean> => {
+    if (Exit.isSuccess(exit)) return Effect.succeed(false);
+    if (input.suspended() || closedCore(exit.cause)) return Effect.succeed(true);
+    return Cause.isInterruptedOnly(exit.cause) ? Effect.succeed(false) : coreClosing;
+  };
+  /** Set by `finish`: the turn was left open. */
+  let open = false;
+
+  /**
+   * Closes the turn whatever happened, unless it is left open: the partial
+   * output of an interrupted model call becomes an `attempt`, unanswered tool
+   * calls get error results so the next request is still valid, then
+   * `step-end` and `turn-end`.
    */
   const finish = (exit: Exit.Exit<Ended, AgentError>) =>
     Effect.gen(function* () {
-      // Suspended: left as it is, to resume when the agent starts again.
-      if (Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause) && input.suspended()) return;
+      open = yield* leftOpen(exit);
+      if (open) return;
       const ended: Ended = Exit.isSuccess(exit)
         ? exit.value
         : Cause.isInterruptedOnly(exit.cause)
@@ -525,7 +766,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       }
       while (state.pending.length > 0) {
         const call = state.pending[0]!;
-        const text = cancelled ? "Tool execution was cancelled." : `Tool was not executed: the turn failed (${ended.error ?? "unknown error"}).`;
+        const failed = `the turn failed (${ended.error ?? "unknown error"})`;
+        const text = cancelled
+          ? "Tool execution was cancelled."
+          : state.started.has(call.id)
+            ? `Tool execution was stopped: ${failed}. It may or may not have finished; check before running it again.`
+            : `Tool was not executed: ${failed}.`;
         yield* append({ type: "message", message: toolResult(call, text), turnId, ...(step === undefined ? {} : { stepId: step.id }) });
         state.pending.shift();
         live.toolEnded(call.id);
@@ -536,7 +782,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       Effect.catchAll((error) => Effect.logWarning(`agent: could not close turn ${turnId} in session ${sessionId}: ${error.message}`)),
       Effect.ensuring(
         Effect.suspend(() =>
-          Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause) && input.suspended()
+          open
             ? Effect.void
             : events.publish(TurnEnded, {
                 sessionId,
@@ -571,7 +817,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           });
     return yield* body.pipe(
       Effect.onExit(finish),
-      Effect.map((ended) => ended.reason),
+      Effect.map((ended): TurnOutcome => ended.reason),
+      Effect.catchAllCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
     );
   });
 }

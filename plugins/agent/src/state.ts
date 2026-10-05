@@ -29,6 +29,11 @@ export const Journal = Schema.Struct({
       prompts: Schema.Array(QueuedPrompt),
       /** `cancel` was asked for: a resumed turn closes as cancelled instead of continuing. */
       cancelling: Schema.optional(Schema.Boolean),
+      /**
+       * The turn logs an `agent.started` event before it runs tool calls, so a call none names never ran. Absent for a
+       * turn an older agent started, which did not: any of its cut-off calls may have run.
+       */
+      marked: Schema.optional(Schema.Boolean),
     }),
   ),
   queue: Schema.Array(QueuedPrompt),

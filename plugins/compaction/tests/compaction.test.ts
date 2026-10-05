@@ -165,6 +165,39 @@ describe("in a session", () => {
     expect(turns[1]!.usage).toMatchObject({ input: 20, output: 10 });
   });
 
+  it("summarizes, whatever its estimate, once the model refused a request as too long", async () => {
+    const llm = fakeLlm([
+      reply("a"),
+      failWith("prompt is too long: 120000 tokens > 100000 maximum", { kind: "overflow" }),
+      reply("They asked about x."),
+      reply("b"),
+    ]);
+    const toolset = testTools();
+    const { events, requests } = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, compaction], {
+            configs: { compaction: { keepRecent: 10 }, agent: { retryDelay: 0.001 } },
+          });
+          return yield* core.run(
+            Effect.gen(function* () {
+              const store = yield* Sessions;
+              const { id } = yield* store.create();
+              const turns = yield* Agent;
+              yield* turns.prompt(id, long("x"));
+              yield* turns.prompt(id, long("y"));
+              return { events: yield* store.events(id), requests: llm.requests };
+            }),
+          );
+        }),
+      ),
+    );
+    // The first turn's request, the refused one, the summary, and the shortened request.
+    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, false, true, false]);
+    expect(events.filter((event) => event.data.type === "compaction")).toHaveLength(1);
+    expect(events.flatMap((event) => (event.data.type === "turn-end" ? [event.data.reason] : []))).toEqual(["done", "done"]);
+  });
+
   it("goes ahead without a summary when writing one fails, and tries no more that turn", async () => {
     const { events, notices, requests } = await twoTurns(failWith("overloaded"), [useTools(call("c1", "echo", { text: "hi" })), reply("b")]);
     expect(events.some((event) => event.data.type === "compaction")).toBe(false);

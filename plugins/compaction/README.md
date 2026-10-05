@@ -31,6 +31,10 @@ divider. Requires `Llm`.
 - **Its cost.** The event records the turn it happened in and what writing the
   summary cost (`turnId`, `usage`); the turn's usage (`TurnEnded`, the
   trajectory, `lemma run`, the web app's turn footer) includes it.
+- **When the model refuses a request as too long** (the agent asks again with
+  `RequestDraft.overflow`), it summarizes whatever its estimate says, even in a
+  turn where summarizing failed before: four characters a token can misjudge
+  dense text.
 - **When it fails** (the model errors, stops at its limit, or writes nothing),
   a warning `Notice` says so, the call goes ahead as it would have without this
   plugin, and the turn is not summarized again; the next turn tries once more.

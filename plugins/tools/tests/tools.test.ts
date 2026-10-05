@@ -1,6 +1,6 @@
-import { Chunk, Effect, Fiber, Layer, Schema, Scope, Stream } from "effect";
+import { Cause, Chunk, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { describe, expect, it } from "vitest";
-import { definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
+import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Inspectors, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/contracts";
 import type { Guard, Tool } from "@lemma/contracts";
@@ -251,6 +251,20 @@ describe("execute", () => {
         const result = yield* call("echo", { text: "fine" });
         expect(result.isError).toBe(true);
         expect(textOf(result)).toContain("Validation failed");
+      }),
+    );
+  });
+
+  it("reports a core shutting down under a call as a defect, not a result the model would read", async () => {
+    const closing = definePlugin({
+      id: "closing",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(ToolExecuteHook, () => Effect.fail(new CoreClosed())))),
+    });
+    await run(
+      [contributor("p", [echo]), closing],
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(call("echo", { text: "fine" }));
+        expect(Exit.isFailure(exit) && Cause.isDie(exit.cause) && Cause.squash(exit.cause)).toBeInstanceOf(CoreClosed);
       }),
     );
   });

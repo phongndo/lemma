@@ -241,8 +241,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const settled = yield* entry.decode(invocation.input).pipe(
             Effect.flatMap((decoded) => hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal, executeOptions?.update))),
             Effect.map((result) => capResult(result, options.maxResultChars)),
-            // Handler failures, invalid input, and denials are results the model reads and can act on.
-            Effect.catchAll((error) => Effect.succeed(errorResult(error.message))),
+            // Handler failures, invalid input, and denials are results the model reads and can act on. A core shutting
+            // down is not one: a defect, which the caller (the agent leaves its turn to resume) can tell apart.
+            Effect.catchAll((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),
             Effect.raceFirst(aborted(invocation.name, signal)),
           );
           yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: Date.now() - started });

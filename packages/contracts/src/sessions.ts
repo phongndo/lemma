@@ -1,7 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
 import { Event } from "@lemma/core";
-import { AssistantMessage, Message, ThinkingLevel, ToolSpec, Usage } from "./llm.ts";
+import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "./llm.ts";
 
 /**
  * A session is an append-only log of events. Each event names its parent, so
@@ -83,6 +83,14 @@ export const EventData = Schema.Union(
     stepId: Schema.String,
     message: AssistantMessage,
     timing: Timing,
+    /** How the call failed (`Llm.stream`'s classification), when it failed rather than being cut off or cancelled. */
+    failure: Schema.optional(LlmFailure),
+    /**
+     * The turn asks again in a new step, from `at` (epoch ms): after a `failure`, the `attempt`th failed call in a row
+     * since the model last answered; or because a host `restart` cut the call off (`attempt` is then 1: a restart
+     * counts no failure).
+     */
+    retry: Schema.optional(Schema.Struct({ reason: Schema.Literal("failure", "restart"), attempt: Schema.Number, at: Schema.Number })),
   }),
   /** Replaces the history before `firstKeptId` with `summary` in the model's view; the originals stay in the log. */
   Schema.Struct({

@@ -25,7 +25,9 @@ afterEach(async () => {
 /**
  * One run of the agent over `dir`. When `body` returns, the core closes, as
  * when the host stops: a turn still running is suspended, and the next run
- * over the same `dir` resumes it.
+ * over the same `dir` resumes it. Without a grace to finish what runs
+ * (`stopGrace: 0` unless the config says otherwise), closing cuts the turn
+ * off where it is, as a crash would.
  */
 const run = <A, E>(
   setup: {
@@ -47,7 +49,7 @@ const run = <A, E>(
     Effect.scoped(
       Effect.gen(function* () {
         const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])], {
-          configs: { agent: setup.config ?? {} },
+          configs: { agent: { stopGrace: 0, ...setup.config } },
         });
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
@@ -547,6 +549,49 @@ describe("planResume", () => {
     ];
     expect(planResume(closedOn("rate limited"), "t")).toMatchObject({ kind: "open", plan: { at: { kind: "failed", stepId: "s", closed: true } } });
     expect(planResume(closedOn(INTERRUPTED_CALL), "t")).toMatchObject({ kind: "open", plan: { at: { kind: "between", steered: false } } });
+  });
+
+  it("remembers an overflow asked again before other failures, so a restart does not ask one again", () => {
+    const failed = {
+      role: "assistant" as const,
+      content: [],
+      api: "a",
+      provider: "p",
+      model: "m",
+      usage: emptyUsage,
+      stopReason: "error" as const,
+      timestamp: 1,
+    };
+    const timing = { startedAt: 1, endedAt: 2 };
+    const events = [
+      event(1, "a", null, { type: "turn-start", turnId: "t" }),
+      event(2, "b", "a", { type: "step-start", turnId: "t", stepId: "s1" }),
+      event(3, "c", "b", {
+        type: "attempt",
+        turnId: "t",
+        stepId: "s1",
+        message: failed,
+        timing,
+        failure: { kind: "overflow" },
+        retry: { reason: "failure", attempt: 1, at: 2 },
+      }),
+      event(4, "d", "c", { type: "step-end", turnId: "t", stepId: "s1" }),
+      event(5, "e", "d", { type: "step-start", turnId: "t", stepId: "s2" }),
+      event(6, "f", "e", {
+        type: "attempt",
+        turnId: "t",
+        stepId: "s2",
+        message: failed,
+        timing,
+        failure: { kind: "transient" },
+        retry: { reason: "failure", attempt: 2, at: 9 },
+      }),
+      event(7, "g", "f", { type: "step-end", turnId: "t", stepId: "s2" }),
+    ];
+    expect(planResume(events, "t")).toMatchObject({
+      kind: "open",
+      plan: { steps: 0, retry: { attempts: 2, overflow: false, overflowed: true, at: 9 }, at: { kind: "between" } },
+    });
   });
 
   it("follows the turn's own events past renames chained off it while its call was pending", () => {

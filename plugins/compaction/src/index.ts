@@ -89,7 +89,8 @@ export default definePlugin({
               branch,
               () => draft.sections.reduce((sum, section) => sum + section.text.length, 0) + JSON.stringify(draft.tools.map((tool) => tool.spec)).length,
             );
-            if (tokens < config.at * model.contextWindow) return;
+            // The previous call was refused as too long: the estimate was wrong, so summarize now.
+            if (tokens < config.at * model.contextWindow && draft.overflow !== true) return;
             const first = chooseCut(branch, Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3)));
             if (first === undefined) return;
             const { start, compaction } = modelView(branch);
@@ -118,12 +119,13 @@ export default definePlugin({
           });
 
         // A summary that fails leaves the conversation as it was: the call goes ahead (and may fail for length), and the
-        // turn goes on without trying again, so a lasting cause costs one attempt and one warning a turn.
+        // turn goes on without trying again, so a lasting cause costs one attempt and one warning a turn. A call the model
+        // refused as too long (`overflow`) is tried once more whatever happened before: without a summary it fails again.
         yield* owner.on(
           AgentRequestHook,
           (draft, next) =>
             Effect.gen(function* () {
-              if (failedIn.get(draft.sessionId) !== draft.turnId) {
+              if (draft.overflow === true || failedIn.get(draft.sessionId) !== draft.turnId) {
                 yield* compact(draft).pipe(
                   Effect.catchAll((error) =>
                     Effect.zipRight(

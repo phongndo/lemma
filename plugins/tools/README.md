@@ -50,7 +50,9 @@ const greet = definePlugin({
   3. `ToolExecuteHook`, whose terminal re-decodes input a handler rewrote, runs the
      guards, then the tool;
   4. throws, rejections, Effect failures, defects, malformed results, handler
-     failures, and denials all become `isError` results;
+     failures, and denials all become `isError` results; but the core shutting
+     down under the call (`CoreClosed` from the hook) is a defect, as the call
+     failed for that alone and its caller may run it again later;
   5. an aborted `signal` fails with `Cancelled`, interrupting the tool. Promise
      tools see the abort on `ToolContext.signal`.
 - `guard(name, guard)`: `name` is the tool the guard applies to, or `*` for every

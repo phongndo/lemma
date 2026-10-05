@@ -5,7 +5,7 @@ import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { AssistantDelta, emptyUsage, HostControl, Llm, LlmError, Paths, ToolResult, Tools, TurnEnded, TurnStarted } from "@lemma/contracts";
-import type { AssistantMessage, LlmRequest, ModelInfo, StreamEvent, Tool, ToolCall, Usage } from "@lemma/contracts";
+import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, Tool, ToolCall, Usage } from "@lemma/contracts";
 
 export const model = (ref: string): ModelInfo => {
   const [provider, id] = ref.split("/") as [string, string];
@@ -70,8 +70,15 @@ export const useTools = (...calls: ToolCall[]): Script =>
     { type: "done", message: assistant(calls, "toolUse") },
   ]);
 
-export const failWith = (errorMessage: string): Script =>
-  Stream.fromIterable<StreamEvent>([{ type: "start" }, { type: "error", message: assistant([], "error", { errorMessage }) }]);
+export const failWith = (errorMessage: string, failure?: LlmFailure): Script =>
+  Stream.fromIterable<StreamEvent>([
+    { type: "start" },
+    { type: "error", message: assistant([], "error", { errorMessage }), ...(failure === undefined ? {} : { failure }) },
+  ]);
+
+/** A response of `content` that stops for `stopReason`, whatever it holds. */
+export const respond = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): Script =>
+  Stream.fromIterable<StreamEvent>([{ type: "start" }, { type: "done", message: assistant(content, stopReason) }]);
 
 /** Emits some text, then never settles: for cancellation. */
 export const hang = (text: string): Script =>
