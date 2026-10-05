@@ -12,6 +12,7 @@ import {
   ChatWorkPart,
   ConfigFormPart,
   DialogPart,
+  FileIconPart,
   IconPart,
   MarkdownPart,
   PopoverPart,
@@ -63,6 +64,8 @@ export const Segmented = partView(SegmentedPart) as unknown as <T extends string
 export const ConfigForm = partView(ConfigFormPart);
 export const ProviderLogo = partView(ProviderLogoPart);
 export const Icon = partView(IconPart);
+/** A file's or folder's icon (the `file-icon` part). */
+export const FileTypeIcon = partView(FileIconPart);
 
 export const ChatUser = partView(ChatUserPart);
 export const ComposerQueued = partView(ComposerQueuedPart);
@@ -95,6 +98,7 @@ export const MenuIcon = () => <Icon name="menu" />;
 export const LogIcon = () => <Icon name="log" />;
 export const RefreshIcon = () => <Icon name="refresh" />;
 export const ExternalIcon = () => <Icon name="external" />;
+export const FileIcon = () => <Icon name="file" />;
 export const FolderIcon = () => <Icon name="folder" />;
 export const FolderOpenIcon = () => <Icon name="folder-open" />;
 export const FilterIcon = () => <Icon name="filter" />;

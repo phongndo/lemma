@@ -63,11 +63,18 @@ the prompt for after the turn; queued prompts show above the composer, where
 each can be withdrawn. A thread opened or reconnected midway shows what the
 running turn has produced so far (`Agent.View`).
 
-The composer completes the word at the cursor when it starts with a trigger:
-a menu shows what plugins suggest for it, arrows move, Enter or Tab writes the
-pick in place of the word, and Escape closes the menu until the cursor leaves
-the word (`@"…"` quotes a word with spaces). A plugin adds a trigger, or more
-suggestions for one, with a `ComposerCompletions` item:
+Typing `@` at the start of a word in the composer offers the project's files
+and folders, searched on the host as you type (fuzzy, typos forgiven,
+`.gitignore` honoured); arrows move, Enter or Tab writes the pick as a path
+(`@src/app.ts`, relative to the thread's directory, which the agent reads like
+any path; `@"my notes/a b.md"` with spaces), and Escape closes the menu.
+Picking a folder writes `@src/` and goes on completing inside it, as typing a
+folder that exists before a `/` does. That is the `file-mentions` plugin,
+configured like any other (`trigger`, `limit`, `folders`), on the host's
+`file-search` plugin, which `lemma workspace files <query>` uses too; either
+can be turned off or replaced.
+Any plugin can add its own trigger, or more suggestions for `@`, with a
+`ComposerCompletions` item:
 
 ```js
 // ~/.lemma/ui/thread-links.js: `#` offers threads by title
@@ -184,15 +191,15 @@ plugins use nothing else.
   (what the palette searches), `ThreadHeader`, `SidebarActions`,
   `ThreadActions` and `ProjectActions` (the sidebar's ⋯ menus),
   `ComposerActions`, `ComposerCompletions` (what a word typed after a
-  trigger can become), `WorkspaceBarItems`, `PluginTabs` (the Plugins page
+  trigger can become: `file-mentions` fills `@`), `WorkspaceBarItems`, `PluginTabs` (the Plugins page
   inspector), `DevtoolsPanels`, `TrajectoryTabs` and `TrajectoryActions`. The bundled plugins add
   their own buttons, tabs, and sources through these same slots. Take over a
   region by adding with a lower `order`, or turn its plugin off. An item leaves
   when the plugin that added it stops.
 - **Parts** are the pieces plugins draw with, each a region-like slot: the
   shared ones (`markdown`, `dialog`, `popover`, `toggle`, `setting-row`,
-  `segmented`, `config-form`, `provider-logo`, `search-field` (a page's search), and `icon` for every icon, all
-  from the `kit` plugin) and a view's own (`chat.user`, `chat.thinking`,
+  `segmented`, `config-form`, `provider-logo`, `search-field` (a page's search), `icon` for every icon, and
+  `file-icon` for a file's or folder's, all from the `kit` plugin) and a view's own (`chat.user`, `chat.thinking`,
   `chat.tool`, `chat.work`, `chat.working`, `chat.turn-footer`,
   `composer.queued`, `composer.suggestion`, `sidebar.row`, `providers.row`). Replace one
   everywhere by adding an item with an `order` below `DEFAULT_PART_ORDER`;

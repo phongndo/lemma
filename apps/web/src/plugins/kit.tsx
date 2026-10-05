@@ -1,5 +1,6 @@
 import { ConfigForm } from "../components/config-form.tsx";
 import { Dialog } from "../components/dialog.tsx";
+import { PlainFileIcon } from "../components/file-icon.tsx";
 import { DefaultIcon } from "../components/icons.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { Popover } from "../components/popover.tsx";
@@ -10,6 +11,7 @@ import { Toggle } from "../components/toggle.tsx";
 import {
   ConfigFormPart,
   DialogPart,
+  FileIconPart,
   IconPart,
   MarkdownPart,
   PopoverPart,
@@ -27,7 +29,7 @@ import styles from "./kit.css?inline";
 
 /**
  * The shared parts every view draws with: markdown, dialogs, menus, toggles,
- * setting rows, the config form, provider logos, and icons. The only plugin
+ * setting rows, the config form, provider logos, icons, and file icons. The only plugin
  * that imports rendering components; everything else draws these parts, so
  * replacing one here (or adding one with a lower order from any plugin or UI
  * file) changes it everywhere.
@@ -49,5 +51,6 @@ export default defineUiPlugin({
     add(ConfigFormPart, ConfigForm);
     add(ProviderLogoPart, ProviderLogo);
     add(IconPart, DefaultIcon);
+    add(FileIconPart, PlainFileIcon);
   },
 });

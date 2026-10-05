@@ -7,6 +7,7 @@ import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
 import { ConfigForm as DefaultConfigForm } from "../components/config-form.tsx";
 import { Dialog as DefaultDialog } from "../components/dialog.tsx";
+import { PlainFileIcon } from "../components/file-icon.tsx";
 import { DefaultIcon, icons as defaultIcons } from "../components/icons.tsx";
 import { Markdown as DefaultMarkdown } from "../components/markdown.tsx";
 import { Popover as DefaultPopover } from "../components/popover.tsx";
@@ -56,6 +57,7 @@ export const api = {
     SettingRow: parts.SettingRow,
     Toggle: parts.Toggle,
     SearchField: parts.SearchField,
+    FileIcon: parts.FileTypeIcon,
   },
   /** Every part's proxy (icons by name included), and `partView` for a plugin's own parts. */
   parts,
@@ -65,6 +67,7 @@ export const api = {
   defaults: {
     ConfigForm: DefaultConfigForm,
     Dialog: DefaultDialog,
+    FileIcon: PlainFileIcon,
     Icon: DefaultIcon,
     icons: defaultIcons,
     Markdown: DefaultMarkdown,

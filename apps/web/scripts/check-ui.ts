@@ -20,8 +20,10 @@ import { createServer } from "vite";
  * 5. A plugin's stylesheet leaves when it stops and returns once when it starts.
  * 6. What a plugin adds to the places the defaults use (header, sidebar and
  *    composer buttons, workspace bar, palette sources, inspector tabs) shows.
- *    A plugin's completion source answers its own trigger in the composer,
- *    Escape and Tab work in the menu, and its rows are a replaceable part.
+ *    Typing `@` offers the project's files and a pick writes the mention; a
+ *    plugin's completion source answers its own trigger, Escape and Tab work
+ *    in the menu, and its rows are a replaceable part. Enter waits for
+ *    suggestions on their way, and a picked folder narrows to what is in it.
  * 7. The address names the page: settings sections and their state, threads
  *    and their views survive a reload and back and forward; a page whose
  *    plugin is off says so and returns with it; a plugin adds a page; a page
@@ -205,8 +207,16 @@ try {
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.waitForSelector(".palette", { state: "detached" });
-  // Completions: a plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
+  // Completions: the bundled `@` finds the project's files, and Enter writes the pick in place of the word.
   await page.click("textarea");
+  await page.keyboard.type("see @compo");
+  await page
+    .waitForSelector(".completions .completion >> text=Composer.tsx", { timeout: 5_000 })
+    .catch(() => assert.fail("typing @ does not offer the project's files"));
+  await page.keyboard.press("Enter");
+  assert.equal(await page.inputValue("textarea"), "see @src/components/Composer.tsx ", "picking a file does not write its mention");
+  await page.waitForSelector(".completions", { state: "detached" });
+  // A plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
   await page.evaluate(async () => {
     const { ComposerCompletions, ComposerSuggestionPart } = await import("/src/ui/contracts.ts" as string);
     const slots = (window as any).lemma.slots();
@@ -231,7 +241,7 @@ try {
       },
     });
   });
-  await page.keyboard.type("see #x");
+  await page.keyboard.type("#x");
   await page
     .waitForSelector(".completion .replaced-suggestion >> text=Check x", { timeout: 5_000 })
     .catch(() => assert.fail("a plugin's completions do not show"));
@@ -245,7 +255,34 @@ try {
     .waitForSelector(".completion .menu-label >> text=Check z", { timeout: 5_000 })
     .catch(() => assert.fail("the default suggestion row does not return"));
   await page.keyboard.press("Tab");
-  assert.equal(await page.inputValue("textarea"), "see #xy #checked ", "Tab does not pick the suggestion");
+  assert.equal(await page.inputValue("textarea"), "see @src/components/Composer.tsx #xy #checked ", "Tab does not pick the suggestion");
+  // Enter while the answer is on its way waits for it, rather than sending a half-typed mention.
+  await page.fill("textarea", "");
+  await page.keyboard.type("@READ");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.inputValue("textarea"), "@READ", "Enter sent the prompt while its suggestions loaded");
+  await page.waitForSelector(".completion >> text=README.md", { timeout: 5_000 });
+  await page.keyboard.press("Enter");
+  assert.equal(await page.inputValue("textarea"), "@README.md ", "Enter does not pick once the suggestions arrive");
+  // A folder picked goes on completing inside it, and only inside it.
+  await page.keyboard.type("@src");
+  const folderRow = () =>
+    page.evaluate(() => [...document.querySelectorAll(".completion")].findIndex((row) => row.querySelector(".menu-label")?.textContent === "src"));
+  await page.waitForFunction(() => [...document.querySelectorAll(".completion .menu-label")].some((label) => label.textContent === "src"), undefined, {
+    timeout: 5_000,
+  });
+  await page
+    .locator(".completion")
+    .nth(await folderRow())
+    .click();
+  assert.equal(await page.inputValue("textarea"), "@README.md @src/", "picking a folder does not leave it open to type on");
+  await page.waitForSelector('.completions [role="listbox"][aria-busy="false"]', { timeout: 5_000 });
+  const outside: string[] = await page.evaluate(() =>
+    [...document.querySelectorAll(".completion")]
+      .map((row) => `${row.querySelector(".menu-hint")?.textContent ?? ""}/${row.querySelector(".menu-label")?.textContent ?? ""}`)
+      .filter((path) => !path.startsWith("src/") || path === "src/src"),
+  );
+  assert.deepEqual(outside, [], "inside a picked folder, the menu offers what is outside it");
   await page.fill("textarea", "");
   expectNoErrors("completing in the composer");
   // An inspector tab: it lists for the selected plugin.
@@ -948,7 +985,7 @@ try {
   expectNoErrors("connecting a first provider and reloading the UI");
 
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; a plugin adds completions to the composer; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
   );
 } finally {
   await browser.close();

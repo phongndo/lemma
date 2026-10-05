@@ -551,8 +551,8 @@ export type ComposerCompletionAnswer =
  * word with spaces), the composer shows a menu of what every source with that
  * trigger suggests, in slot order, and picking one replaces the word. Arrow
  * keys move, Enter or Tab picks, Escape closes it until the cursor leaves the
- * word. A plugin adds a trigger of its own (`#` for threads), or more
- * suggestions for one another plugin answers.
+ * word. File mentions (`@`) are the bundled source; a plugin adds its own
+ * trigger (`#` for threads) or more suggestions for `@`.
  */
 export interface ComposerCompletion {
   /** What starts a word to complete: `@`, `#`, `$`. */
@@ -897,6 +897,7 @@ export type IconName =
   | "log"
   | "refresh"
   | "external"
+  | "file"
   | "folder"
   | "folder-open"
   | "filter"
@@ -929,6 +930,19 @@ export interface IconProps {
 }
 /** Every icon, by name: one part, so a set replaces them all and can fall back to the defaults (`api.defaults.Icon`). */
 export const IconPart = definePart<IconProps>("icon");
+
+export interface FileIconProps {
+  /** The file's path or name; only its name is read. */
+  readonly path: string;
+  readonly kind: "file" | "directory";
+  readonly class?: string;
+}
+/**
+ * The icon for a file or folder, wherever one is named (the composer's `@`
+ * menu). `kit`'s default is the plain `file` and `folder` icons; an item below
+ * `DEFAULT_PART_ORDER` replaces it.
+ */
+export const FileIconPart = definePart<FileIconProps>("file-icon");
 
 // ------------------------------------------------------------------ composer parts
 

@@ -119,6 +119,12 @@ export const ExternalIcon = () => (
     <path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" />
   </Icon>
 );
+export const FileIcon = () => (
+  <Icon>
+    <path d="M4.5 2.5h4.5l2.5 2.5v7.5a1 1 0 01-1 1h-6a1 1 0 01-1-1v-9a1 1 0 011-1z" />
+    <path d="M9 2.5V5h2.5" />
+  </Icon>
+);
 export const FolderIcon = () => (
   <Icon>
     <path d="M2.5 4.5a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1z" />
@@ -289,6 +295,7 @@ export const icons: Readonly<Record<IconName, Component<{ class?: string; filled
   log: LogIcon,
   refresh: RefreshIcon,
   external: ExternalIcon,
+  file: FileIcon,
   folder: FolderIcon,
   "folder-open": FolderOpenIcon,
   filter: FilterIcon,

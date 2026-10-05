@@ -1,8 +1,11 @@
 /**
  * Completion in the composer: which word the cursor is in when it starts with
- * a trigger (`@src/ap|`), and what picking a suggestion makes of the text.
- * Pure, so the composer only wires keys and draws.
+ * a trigger (`@src/ap|`), what picking a suggestion makes of the text, and how
+ * a file becomes a mention. Pure, so the composer only wires keys and draws.
  */
+import type { FileEntry } from "@lemma/contracts";
+import { fuzzy } from "./palette.ts";
+
 export interface TriggerMatch {
   readonly trigger: string;
   /** What follows the trigger, up to the cursor: for a quoted word, inside the quotes and unescaped. */
@@ -36,7 +39,7 @@ const wordEnd = (text: string, from: number) => {
  * start of the text or after whitespace (so `a@b.c` does not complete). The
  * longest trigger that fits wins, for triggers that share a first character.
  * A trigger followed by `"` starts a quoted word, which runs past spaces to
- * its closing quote, on one line.
+ * its closing quote, on one line (see `mentionPath`).
  */
 export const findTrigger = (text: string, cursor: number, triggers: readonly string[]): TriggerMatch | undefined => {
   if (cursor < 0 || cursor > text.length) return undefined;
@@ -80,4 +83,44 @@ export const applySuggestion = (
   const spaced = /^\s/.test(after) ? insert : `${insert} `;
   // After the space either way: the one added, or the one that was there.
   return { text: text.slice(0, match.start) + spaced + after, cursor: match.start + insert.length + 1 };
+};
+
+/**
+ * How a path is written after the trigger: as is, or quoted when it has
+ * whitespace or quotes (`@"my notes/a b.md"`). `open` leaves a quoted one
+ * unclosed, to go on typing inside it (a folder: `@"my notes/`).
+ */
+export const mentionPath = (path: string, options: { readonly open?: boolean } = {}): string =>
+  /[\s"]/.test(path) ? `"${path.replace(/(["\\])/g, "\\$1")}${options.open === true ? "" : '"'}` : path;
+
+export interface FileSuggestionView {
+  /** The last segment: a file's name, a directory's own. */
+  readonly label: string;
+  /** The folder it is in, without a trailing slash; empty at the top. */
+  readonly detail: string;
+  readonly matches: readonly number[];
+  readonly detailMatches: readonly number[];
+}
+
+/**
+ * A file entry split for a row, with the letters the query found marked.
+ * Every token of the query is looked for in the whole path; tokens that do
+ * not match in order (a typo, which the host's search forgives, or a glob)
+ * mark nothing.
+ */
+export const fileView = (entry: FileEntry, query: string): FileSuggestionView => {
+  const slash = entry.path.lastIndexOf("/");
+  const label = entry.path.slice(slash + 1);
+  const detail = slash === -1 ? "" : entry.path.slice(0, slash);
+  const marked = new Set<number>();
+  for (const token of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+    for (const index of fuzzy(entry.path, token)?.matches ?? []) marked.add(index);
+  }
+  const indices = [...marked].sort((a, b) => a - b);
+  return {
+    label,
+    detail,
+    matches: indices.filter((index) => index > slash).map((index) => index - slash - 1),
+    detailMatches: indices.filter((index) => index < slash),
+  };
 };
