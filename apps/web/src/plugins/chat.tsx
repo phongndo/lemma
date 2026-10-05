@@ -798,17 +798,20 @@ function PromptRail(props: {
     ticks[Math.max(0, Math.min(count() - 1, to))]?.focus();
   };
   // The card's middle is level with its tick unless that takes it out of the chat view, and it is no larger than the view leaves.
-  createEffect(() => {
-    const index = shown()?.index;
-    if (index === undefined || card === undefined) return;
-    const view = rail.getBoundingClientRect();
-    const box = strip.getBoundingClientRect();
-    card.style.maxWidth = `${Math.max(0, view.right - card.getBoundingClientRect().left - CARD_INSET)}px`;
-    card.style.maxHeight = `${Math.max(0, view.height - 2 * CARD_INSET)}px`;
-    const tick = box.top + (at(index) / 100) * box.height;
-    const top = Math.max(view.top + CARD_INSET, Math.min(tick - card.offsetHeight / 2, view.bottom - card.offsetHeight - CARD_INSET));
-    card.style.top = `${top - box.top}px`;
-  });
+  // It is placed again whenever the strip moves under it: the composer settling below (`below`), the room beside the text, a new prompt.
+  createEffect(
+    on([shown, () => props.below, () => props.room, count], () => {
+      const index = shown()?.index;
+      if (index === undefined || card === undefined) return;
+      const view = rail.getBoundingClientRect();
+      const box = strip.getBoundingClientRect();
+      card.style.maxWidth = `${Math.max(0, view.right - card.getBoundingClientRect().left - CARD_INSET)}px`;
+      card.style.maxHeight = `${Math.max(0, view.height - 2 * CARD_INSET)}px`;
+      const tick = box.top + (at(index) / 100) * box.height;
+      const top = Math.max(view.top + CARD_INSET, Math.min(tick - card.offsetHeight / 2, view.bottom - card.offsetHeight - CARD_INSET));
+      card.style.top = `${top - box.top}px`;
+    }),
+  );
   return (
     <nav
       class="prompt-rail"
