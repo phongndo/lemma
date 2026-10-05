@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { Agent, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
+import { Agent, Commands, Harnesses, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
 import { definePlugin, Events, PluginContext, Registries } from "@lemma/core";
 import { makeHandlers } from "./handlers.ts";
 import { makeHub } from "./hub.ts";
@@ -49,7 +49,7 @@ export default definePlugin({
   id: "transport",
   version: VERSION,
   config: TransportConfig,
-  requires: [Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands],
+  requires: [Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands, Harnesses],
   // Owns the listening port: a reload stops this instance before starting its replacement.
   exclusive: true,
   layer: (config) =>
@@ -57,7 +57,16 @@ export default definePlugin({
       Effect.gen(function* () {
         const owner = yield* PluginContext;
         const events = yield* Events;
-        const [paths, sessions, agent, llm, control, workspace, commands] = yield* Effect.all([Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands]);
+        const [paths, sessions, agent, llm, control, workspace, commands, harnesses] = yield* Effect.all([
+          Paths,
+          Sessions,
+          Agent,
+          Llm,
+          HostControl,
+          Workspace,
+          Commands,
+          Harnesses,
+        ]);
         const registries = yield* Registries;
 
         let hub: Hub | undefined;
@@ -68,7 +77,7 @@ export default definePlugin({
         const token = config.token ?? (yield* loadToken(paths.home));
         const login = makeLogins(llm, yield* Effect.scope);
         const handlers = HostRpcs.toLayer(
-          makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }),
+          makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, harnesses, registries, login }),
         );
         const address = yield* startServer(
           { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },

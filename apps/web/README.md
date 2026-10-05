@@ -147,7 +147,7 @@ slots. [`ui/contracts.ts`](src/ui/contracts.ts) lists them all; the bundled
 plugins use nothing else.
 
 - **Capabilities** are services with one provider: the host's state
-  (`Threads`, `Models`, `Workspace`, `HostPlugins`, `Commands`,
+  (`Threads`, `Models`, `Harnesses`, `Workspace`, `HostPlugins`, `Commands`,
   `Interactions`, the `Client` connection) and screen state (`Router`,
   `Dialogs`, `Settings`, `Layout`, `Devtools`). Replacing a provider restarts its
   dependents with the new one.

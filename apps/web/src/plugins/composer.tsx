@@ -14,6 +14,7 @@ import {
   ComposerNotices,
   ComposerQueuedPart,
   ComposerRegion,
+  Harnesses,
   Models,
   Notify,
   Router,
@@ -25,6 +26,7 @@ import type {
   ClientService,
   ComposerActionProps,
   ComposerQueuedProps,
+  HarnessesService,
   ModelsService,
   NotifyService,
   ThreadsService,
@@ -84,6 +86,7 @@ interface Deps {
   readonly client: ClientService;
   readonly threads: ThreadsService;
   readonly models: ModelsService;
+  readonly harnesses: HarnessesService;
   readonly workspace: WorkspaceService;
   readonly notify: NotifyService;
   readonly slots: SlotsService;
@@ -96,7 +99,7 @@ interface Deps {
 }
 
 function Composer(props: { deps: Deps }) {
-  const { client, threads, models, workspace, notify, slots, drafts } = props.deps;
+  const { client, threads, models, harnesses, workspace, notify, slots, drafts } = props.deps;
   const draftKey = () => threads.activeId() ?? "";
   const saved = drafts.get(draftKey());
   const [text, setText] = createSignal(saved?.text ?? "");
@@ -151,7 +154,8 @@ function Composer(props: { deps: Deps }) {
 
   // While a turn runs, sending steers it (or, with Alt, queues the prompt for after it).
   const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
-  const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
+  // A harness on a model of its own is not limited by the one picked here.
+  const acceptsImages = () => harnesses.selected()?.capabilities.models === false || (models.selected()?.input.includes("image") ?? true);
 
   const submit = async (whenBusy: "steer" | "follow-up" = "steer") => {
     if (!canSend()) return;
@@ -164,7 +168,7 @@ function Composer(props: { deps: Deps }) {
     try {
       // A new chat may start in its own worktree, named from the prompt.
       const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
-      ok = await threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
+      ok = await threads.send(content, { turn: harnesses.turnOptions(models.turnOptions()), cwd, requestId: sent.requestId, whenBusy });
     } catch (error) {
       notify.report(error, "Could not create a session");
     }
@@ -386,7 +390,16 @@ export default defineUiPlugin({
   id: "composer",
   styles,
   config: ComposerConfig,
-  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router },
+  requires: {
+    client: Client,
+    threads: Threads,
+    models: Models,
+    harnesses: Harnesses,
+    workspace: Workspace,
+    notify: Notify,
+    slots: Slots,
+    router: Router,
+  },
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const drafts = new Map<string, Draft>();

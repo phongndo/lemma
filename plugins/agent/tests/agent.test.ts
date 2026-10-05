@@ -6,6 +6,7 @@ import type { Plugin } from "@lemma/core";
 import { Agent, AgentContinueHook, AgentError, AgentRequestHook, branchOf, emptyUsage, rebuildRequest, Sessions, ToolResult } from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
+import harnesses from "../../harnesses/src/index.ts";
 import tools from "../../tools/src/index.ts";
 import agent from "../src/index.ts";
 import { call, failWith, fakeLlm, gated, hang, host, paths, recorder, reply, tempDir, testTools, useTools, waitFor } from "./fakes.ts";
@@ -41,9 +42,12 @@ const withAgent = <A, E>(
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])], {
-          configs: { agent: setup.config ?? {} },
-        });
+        const core = yield* makeCore(
+          [paths(dir, dir), host(), sessions, harnesses, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
+          {
+            configs: { agent: setup.config ?? {} },
+          },
+        );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
     ),

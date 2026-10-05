@@ -9,6 +9,7 @@ import type {
   ConfigScope,
   DirectoryListing,
   GitBranch,
+  HarnessInfo,
   HostEvent,
   HostInfo,
   InteractionAnswer,
@@ -84,6 +85,12 @@ export interface Host {
     readonly withdraw: (sessionId: string, requestId: string) => Promise<boolean>;
     /** The session as a client joining now shows it: model and tool output so far, and the queue. */
     readonly view: (sessionId: string) => Promise<AgentView>;
+  };
+  readonly harness: {
+    /** Every registered harness, the native one first. */
+    readonly list: () => Promise<readonly HarnessInfo[]>;
+    /** Asks each harness its status again (after installing one, say); every client hears `harnesses-changed`. */
+    readonly refresh: () => Promise<readonly HarnessInfo[]>;
   };
   readonly llm: {
     readonly providers: () => Promise<readonly ProviderInfo[]>;
@@ -260,6 +267,10 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       queue: (sessionId) => call(rpc.Agent.Queue({ sessionId })),
       withdraw: (sessionId, requestId) => call(rpc.Agent.Withdraw({ sessionId, requestId })),
       view: (sessionId) => call(rpc.Agent.View({ sessionId })),
+    },
+    harness: {
+      list: () => call(rpc.Harness.List()),
+      refresh: () => call(rpc.Harness.Refresh()),
     },
     llm: {
       providers: () => call(rpc.Llm.Providers()),

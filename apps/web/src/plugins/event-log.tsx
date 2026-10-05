@@ -75,6 +75,8 @@ const describe = (line: Line): string => {
       return event.commands.map((command) => command.id).join(" ");
     case "models-changed":
       return "list them again";
+    case "harnesses-changed":
+      return event.harnesses.map((harness) => `${harness.id}=${harness.status.state}`).join(" ");
     case "ui-changed":
       return `${Object.keys(event.ui.plugins).length} rows · files ${event.ui.files.map((file) => file.name).join(" ") || "none"}`;
   }

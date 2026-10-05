@@ -10,11 +10,14 @@ import {
   AssistantDelta,
   deriveMessages,
   emptyUsage,
+  NATIVE_HARNESS,
   rebuildRequest,
   requestState,
   ToolInvocation,
+  transcript,
   TurnEnded,
   TurnStarted,
+  viewHasOtherHarness,
 } from "@lemma/contracts";
 import type {
   Contribution,
@@ -23,7 +26,7 @@ import type {
   Llm,
   LlmRequest,
   ModelInfo,
-  PromptContent,
+  PlacedPrompt,
   RequestDraft,
   RequestPlan,
   SessionError,
@@ -35,6 +38,8 @@ import type {
   ToolResultMessage,
   Tools,
   ToolSpec,
+  TurnInbox,
+  TurnReason,
   Usage,
 } from "@lemma/contracts";
 import { partialMessage } from "./live.ts";
@@ -63,18 +68,7 @@ export interface TurnSettings {
 }
 
 /** A prompt as a turn places it: a user message carrying the submission's id. */
-export interface Placed {
-  readonly requestId: string;
-  readonly content: PromptContent;
-}
-
-/** The session's queue as the turn sees it: steers join the turn between steps. */
-export interface TurnInbox {
-  /** Queued steers, oldest first. They stay queued until `placed`, so one is never lost between the queue and the log. */
-  readonly steers: Effect.Effect<readonly Placed[]>;
-  /** These steers' messages are in the log: take them out of the queue. */
-  readonly placed: (requestIds: readonly string[]) => Effect.Effect<void>;
-}
+export type Placed = PlacedPrompt;
 
 /** A turn that a host restart cut off: where it stopped, and what its cut-off calls had produced then. */
 export interface TurnResume {
@@ -110,7 +104,7 @@ export interface TurnInput {
   readonly suspended: () => boolean;
 }
 
-export type TurnReason = "done" | "cancelled" | "error" | "max-steps";
+export type { TurnReason } from "@lemma/contracts";
 interface Ended {
   readonly reason: TurnReason;
   readonly error?: string;
@@ -199,6 +193,29 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     isError: true,
     timestamp: Date.now(),
   });
+
+  /**
+   * When turns before this one ran on another harness, the model gets the
+   * conversation as text: another agent's tool calls are not ones this loop
+   * can send as its own. Logged as a `compaction` that keeps the turn's
+   * prompts, so every reader of the log sees what the model sees.
+   */
+  const handoff = (firstKeptId: string) =>
+    Effect.gen(function* () {
+      const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
+      const start = branch.findIndex((event) => event.data.type === "turn-start" && event.data.turnId === turnId);
+      const before = start === -1 ? [] : branch.slice(0, start);
+      if (!viewHasOtherHarness(before, NATIVE_HARNESS)) return;
+      const messages = deriveMessages(before);
+      yield* append({
+        type: "compaction",
+        summary: `Earlier turns ran on another agent; this is the conversation so far.\n\n${transcript(messages)}`,
+        firstKeptId,
+        tokensBefore: Math.ceil(JSON.stringify(messages).length / 4),
+        source,
+        turnId,
+      });
+    });
 
   /** Builds, logs, and returns the exact request for this step. */
   const prepareRequest = (stepId: string) =>
@@ -563,10 +580,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       resume !== undefined
         ? resumed(resume)
         : Effect.gen(function* () {
-            for (const prompt of input.prompts) yield* userMessage(prompt);
+            let firstId: string | undefined;
+            for (const prompt of input.prompts) {
+              const logged = yield* userMessage(prompt);
+              firstId ??= logged.id;
+            }
             const first = input.prompts[0];
             const title = input.title === undefined && first !== undefined ? titleFrom(first.content) : undefined;
             if (title !== undefined) yield* append({ type: "title", title });
+            if (firstId !== undefined) yield* handoff(firstId);
             return yield* steps(1);
           });
     return yield* body.pipe(

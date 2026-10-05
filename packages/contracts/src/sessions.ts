@@ -36,8 +36,17 @@ export const Contribution = Schema.Struct({
 export type Contribution = typeof Contribution.Type;
 
 export const EventData = Schema.Union(
-  /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
-  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
+  /**
+   * `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them.
+   * `harness` ran it; absent, the native harness (`NATIVE_HARNESS`).
+   */
+  Schema.Struct({
+    type: Schema.Literal("turn-start"),
+    turnId: Schema.String,
+    model: Schema.optional(Schema.String),
+    thinking: Schema.optional(ThinkingLevel),
+    harness: Schema.optional(Schema.String),
+  }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,

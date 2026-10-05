@@ -3,10 +3,13 @@ import { definePlugin, Events, Hooks, PluginContext } from "@lemma/core";
 import {
   Agent,
   AgentError,
+  Harnesses,
   HostControl,
   Inspectors,
   InteractionOrigin,
+  lastHarness,
   Llm,
+  NATIVE_HARNESS,
   Paths,
   QueueChanged,
   SessionRemoved,
@@ -14,16 +17,17 @@ import {
   ToolOutput,
   Tools,
 } from "@lemma/contracts";
-import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionEvent, TurnOptions } from "@lemma/contracts";
+import type { AgentView, Harness, HarnessTurn, PromptContent, PromptOptions, QueuedPrompt, SessionEvent, SessionInfo, TurnReason } from "@lemma/contracts";
+import { recordTurn } from "@lemma/plugin-harnesses";
 import { LiveTurn } from "./live.ts";
-import { planResume } from "./resume.ts";
-import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
+import { nativeHarness } from "./native.ts";
+import { LIVE_INTERVAL_MS, readJournals, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
 import type { Journal } from "./state.ts";
-import { newId, runTurn } from "./turn.ts";
-import type { TurnReason, TurnResume } from "./turn.ts";
+import { newId } from "./turn.ts";
 
 export { basePrompt, environment, titleFrom } from "./prompt.ts";
 export type { EnvironmentFacts } from "./prompt.ts";
+export { nativeHarness } from "./native.ts";
 export { runTurn } from "./turn.ts";
 
 export const AgentConfig = Schema.Struct({
@@ -34,6 +38,9 @@ export const AgentConfig = Schema.Struct({
   }),
   maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({
     description: "Model calls allowed in one turn before it ends with max-steps.",
+  }),
+  defaultHarness: Schema.optional(Schema.String).annotations({
+    description: `Harness for a session's first turn when the prompt names none (see Harnesses). Absent: "${NATIVE_HARNESS}", Lemma's own loop.`,
   }),
 });
 export type AgentConfig = typeof AgentConfig.Type;
@@ -83,7 +90,7 @@ export default definePlugin({
   version: "0.1.0",
   config: AgentConfig,
   provides: [Agent],
-  requires: [Sessions, Llm, Tools, HostControl, Paths],
+  requires: [Sessions, Llm, Tools, HostControl, Paths, Harnesses],
   // Turns resume in the next instance: a reload stops this one (suspending its turns) before starting that one.
   exclusive: true,
   layer: (config) =>
@@ -101,7 +108,8 @@ export default definePlugin({
           events: yield* Events,
           source: owner.id,
         };
-        const { sessions, llm, host, events } = services;
+        const { sessions, host, events } = services;
+        const harnesses = yield* Harnesses;
         const settings = {
           maxSteps: config.maxSteps,
           ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
@@ -185,30 +193,12 @@ export default definePlugin({
             return events.publish(QueueChanged, { sessionId, queue: state.queue.map((item) => item.prompt), revision: state.revision });
           });
 
-        const resolveModel = (sessionId: string, options?: TurnOptions): Effect.Effect<ModelInfo, AgentError> =>
-          Effect.gen(function* () {
-            const ref = options?.model ?? config.defaultModel;
-            if (ref !== undefined) {
-              return yield* llm
-                .model(ref)
-                .pipe(Effect.mapError((error) => new AgentError({ sessionId, reason: "NoModel", message: error.message, cause: error })));
-            }
-            const [first] = yield* llm.models({ available: true });
-            if (first === undefined) {
-              return yield* new AgentError({
-                sessionId,
-                reason: "NoModel",
-                message: "No model is available. Log in to a provider or configure agent.defaultModel.",
-              });
-            }
-            return first;
-          });
-
         const makeItem = (content: PromptContent, options: PromptOptions, mode: QueuedPrompt["mode"]) =>
           Effect.map(Deferred.make<void, AgentError>(), (done): Item => {
             const turnOptions = {
               ...(options.model === undefined ? {} : { model: options.model }),
               ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
+              ...(options.harness === undefined ? {} : { harness: options.harness }),
             };
             return {
               prompt: {
@@ -274,29 +264,95 @@ export default definePlugin({
           requestsOf(sessionId).set(requestId, turnId);
         };
 
-        /** A new turn: the prompts it starts with, the last one's options choosing the model. */
+        // The native loop is a harness like any other: the orchestration here is the same whichever runs a turn. This
+        // plugin runs it from its own reference, since what it registers is listed only once it is up, after the
+        // turns it resumes have started.
+        const native = nativeHarness({ services, settings, home, ...(config.defaultModel === undefined ? {} : { defaultModel: config.defaultModel }) });
+        yield* harnesses.register(native);
+
+        /** The registered harness `id`, ready to run turns; `NoHarness` (before anything is logged) otherwise. */
+        const harnessOf = (sessionId: string, id: string): Effect.Effect<Harness, AgentError> =>
+          Effect.gen(function* () {
+            if (id === native.id) return native;
+            const harness = yield* harnesses.get(id);
+            if (harness === undefined) {
+              const known = (yield* harnesses.list).map((info) => info.id);
+              return yield* new AgentError({
+                sessionId,
+                reason: "NoHarness",
+                message: `No harness "${id}" is registered. Registered: ${known.join(", ") || "(none)"}`,
+              });
+            }
+            const status = yield* harness.status.pipe(
+              Effect.catchAllCause((cause) => Effect.succeed({ state: "unavailable" as const, detail: String(cause) })),
+            );
+            if (status.state !== "ready") {
+              return yield* new AgentError({
+                sessionId,
+                reason: "NoHarness",
+                message: `${harness.title} cannot run turns now${status.detail === undefined ? "." : `: ${status.detail}`}`,
+              });
+            }
+            return harness;
+          });
+
+        /**
+         * A harness no longer registered, standing in for it to close a turn of
+         * its that a restart cut off: the turn ends as interrupted, its open
+         * calls answered, rather than staying open in the log.
+         */
+        const gone = (id: string): Harness => ({
+          id,
+          title: id,
+          capabilities: { steer: false, models: false, resume: false, requests: false },
+          status: Effect.succeed({ state: "unavailable", detail: "Not registered" }),
+          run: (turn) =>
+            recordTurn({ sessions, events }, turn, { harness: id, api: id, provider: id, model: "default" }, () => Effect.succeed({ reason: "error" })),
+        });
+
+        const turnOf = (
+          sessionId: string,
+          entry: Running,
+          info: SessionInfo,
+          prompts: readonly QueuedPrompt[],
+          resume?: HarnessTurn["resume"],
+        ): HarnessTurn => ({
+          sessionId,
+          turnId: entry.turnId,
+          cwd: info.cwd,
+          ...(info.title === undefined ? {} : { title: info.title }),
+          options: entry.prompts[entry.prompts.length - 1]?.options ?? {},
+          prompts: prompts.map(({ requestId, content }) => ({ requestId, content })),
+          ...(resume === undefined ? {} : { resume }),
+          signal: entry.controller.signal,
+          inbox: inboxOf(sessionId, entry),
+          live: entry.live,
+          logged: loggedIn(sessionId, entry.turnId),
+          suspended: () => suspending,
+        });
+
+        /**
+         * A new turn: the prompts it starts with, the last one's options
+         * choosing the harness (else the one that ran the session's last turn,
+         * else the configured default) and, for the harness, the model.
+         */
         const fresh = (sessionId: string, entry: Running) =>
           Effect.gen(function* () {
             const info = yield* sessions.get(sessionId).pipe(Effect.mapError(userError(sessionId)));
-            const last = entry.prompts[entry.prompts.length - 1]?.options;
-            const model = yield* resolveModel(sessionId, last);
-            return yield* runTurn(services, settings, {
-              sessionId,
-              turnId: entry.turnId,
-              cwd: info.cwd,
-              model,
-              prompts: entry.prompts.map(({ requestId, content }) => ({ requestId, content })),
-              signal: entry.controller.signal,
-              inbox: inboxOf(sessionId, entry),
-              live: entry.live,
-              logged: loggedIn(sessionId, entry.turnId),
-              suspended: () => suspending,
-              ...(info.title === undefined ? {} : { title: info.title }),
-              ...(last?.thinking === undefined ? {} : { thinking: last.thinking }),
-            });
+            let id = entry.prompts[entry.prompts.length - 1]?.options?.harness;
+            if (id === undefined) {
+              const branch = yield* sessions.branch(sessionId).pipe(Effect.mapError(userError(sessionId)));
+              id = lastHarness(branch) ?? config.defaultHarness ?? NATIVE_HARNESS;
+            }
+            const harness = yield* harnessOf(sessionId, id);
+            return yield* harness.run(turnOf(sessionId, entry, info, entry.prompts));
           });
 
-        /** A turn a restart cut off, continued once the composition is up (the tools it may run again are registered). */
+        /**
+         * A turn a restart cut off, continued once the composition is up (its
+         * harness is registered, and the tools it may run again). The harness
+         * that began it continues it, without the prompts it placed already.
+         */
         const resumed = (sessionId: string, entry: Running) =>
           Effect.gen(function* () {
             yield* host.composition;
@@ -305,39 +361,23 @@ export default definePlugin({
               return entry.cancelling;
             });
             const log = yield* sessions.events(sessionId).pipe(Effect.mapError(userError(sessionId)));
-            const resume = planResume(log, entry.turnId);
+            const begun = log.find((event) => event.data.type === "turn-start" && event.data.turnId === entry.turnId);
             // Cut off before its first event: cancelled meanwhile, it never runs.
-            if (resume.kind === "not-started") return cancelling ? ("cancelled" as const) : yield* fresh(sessionId, entry);
-            if (resume.kind === "ended") {
-              const end = log.find((event) => event.data.type === "turn-end" && event.data.turnId === entry.turnId);
-              return end?.data.type === "turn-end" ? end.data.reason : "done";
-            }
-            const { plan } = resume;
+            if (begun?.data.type !== "turn-start") return cancelling ? ("cancelled" as const) : yield* fresh(sessionId, entry);
+            const end = log.find((event) => event.data.type === "turn-end" && event.data.turnId === entry.turnId);
+            if (end?.data.type === "turn-end") return end.data.reason;
+            const placed = new Set(
+              log.flatMap((event) =>
+                event.data.type === "message" && event.data.turnId === entry.turnId && event.data.requestId !== undefined ? [event.data.requestId] : [],
+              ),
+            );
             const info = yield* sessions.get(sessionId).pipe(Effect.mapError(userError(sessionId)));
-            // The model it ran on, if it still exists; else the default, as a new turn would get.
-            const model =
-              plan.model === undefined ? yield* resolveModel(sessionId) : yield* llm.model(plan.model).pipe(Effect.orElse(() => resolveModel(sessionId)));
-            const restored = yield* readLive(home, sessionId);
-            const turnResume: TurnResume = {
-              plan,
-              cancelling,
-              ...(restored?.turnId === entry.turnId ? { restored } : {}),
-            };
-            return yield* runTurn(services, settings, {
-              sessionId,
-              turnId: entry.turnId,
-              cwd: info.cwd,
-              model,
-              prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(({ requestId, content }) => ({ requestId, content })),
-              resume: turnResume,
-              signal: entry.controller.signal,
-              inbox: inboxOf(sessionId, entry),
-              live: entry.live,
-              logged: loggedIn(sessionId, entry.turnId),
-              suspended: () => suspending,
-              ...(info.title === undefined ? {} : { title: info.title }),
-              ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
-            });
+            const id = begun.data.harness ?? NATIVE_HARNESS;
+            const found = id === native.id ? native : yield* harnesses.get(id);
+            // Closing a cut-off turn needs neither the harness's program nor, when its plugin has gone, the harness.
+            const harness = found === undefined ? gone(id) : found.capabilities.resume ? yield* harnessOf(sessionId, id) : found;
+            const prompts = entry.prompts.filter((prompt) => !placed.has(prompt.requestId));
+            return yield* harness.run(turnOf(sessionId, entry, info, prompts, { cancelling }));
           });
 
         /**

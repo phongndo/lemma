@@ -2,7 +2,7 @@ import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { HostError, HostRpcs, Inspectors, InteractionOrigin } from "@lemma/contracts";
-import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
+import type { Agent, Commands, ConfigureReport, Harnesses, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { toHostError, toPluginStatus } from "./errors.ts";
 import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
@@ -19,6 +19,7 @@ export interface HandlerServices {
   readonly control: Context.Tag.Service<HostControl>;
   readonly workspace: Context.Tag.Service<Workspace>;
   readonly commands: Context.Tag.Service<Commands>;
+  readonly harnesses: Context.Tag.Service<Harnesses>;
   /** The core's registries: host plugins' `Inspectors` are read from them. */
   readonly registries: Context.Tag.Service<Registries>;
   /** Runs `Llm.login` in the plugin's scope; see `makeLogins`. */
@@ -28,7 +29,21 @@ export interface HandlerServices {
 const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : { cwd });
 
 /** Every RPC maps to one capability call; only the error boundary is transport-specific. */
-export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }: HandlerServices) =>
+export const makeHandlers = ({
+  version,
+  hub,
+  interactions,
+  paths,
+  sessions,
+  agent,
+  llm,
+  control,
+  workspace,
+  commands,
+  harnesses,
+  registries,
+  login,
+}: HandlerServices) =>
   HostRpcs.of({
     "Session.List": ({ cwd }) => sessions.list(cwdOption(cwd)).pipe(Effect.mapError(toHostError)),
     "Session.Get": ({ sessionId }) => sessions.get(sessionId).pipe(Effect.mapError(toHostError)),
@@ -63,6 +78,9 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Agent.Queue": ({ sessionId }) => agent.queue(sessionId),
     "Agent.Withdraw": ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId),
     "Agent.View": ({ sessionId }) => agent.view(sessionId),
+
+    "Harness.List": () => harnesses.list,
+    "Harness.Refresh": () => harnesses.refresh,
 
     "Llm.Providers": () => llm.providers,
     "Llm.Models": ({ available }) => llm.models(available === undefined ? undefined : { available }),

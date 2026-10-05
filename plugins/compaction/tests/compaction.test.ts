@@ -5,6 +5,7 @@ import { Events, makeCore } from "@lemma/core";
 import { Agent, branchOf, emptyUsage, Notice, rebuildRequest, Sessions, trajectory } from "@lemma/contracts";
 import type { AssistantMessage, EventData, Message, NoticePayload, SessionEvent, StreamEvent } from "@lemma/contracts";
 import agent from "../../agent/src/index.ts";
+import harnesses from "../../harnesses/src/index.ts";
 import { call, failWith, fakeLlm, host, paths, reply, tempDir, testTools, useTools } from "../../agent/tests/fakes.ts";
 import type { Script } from "../../agent/tests/fakes.ts";
 import sessions from "../../sessions/src/index.ts";
@@ -98,7 +99,7 @@ const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")]) => 
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, compaction], {
+        const core = yield* makeCore([paths(dir, dir), host(), sessions, harnesses, tools, toolset.plugin, llm.plugin, agent, compaction], {
           configs: { compaction: { at: 0.0005, keepRecent: 10 } },
         });
         return yield* core.run(
@@ -184,7 +185,7 @@ describe("in a session", () => {
     const order = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, fakeLlm([]).plugin, agent, compaction]);
+          const core = yield* makeCore([paths(dir, dir), host(), sessions, harnesses, tools, fakeLlm([]).plugin, agent, compaction]);
           const snapshot = yield* core.inspect;
           return snapshot.hooks.find((hook) => hook.name === "lemma/agent.request")?.handlers.find((handler) => handler.pluginId === "compaction")?.order;
         }),

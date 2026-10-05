@@ -53,9 +53,18 @@ they load only for projects listed (or under a directory listed) in
 ignores them. Providers come from pi-ai (`plugins/llm-pi-ai`): log in from the
 key icon in the web app, or set a provider's API key environment variable.
 
-The session log is the source of truth: every model request can be rebuilt from
-it (`rebuildRequest` in the contracts) and records which plugins contributed
-each part. `scripts/fixtures/mock-openai.ts` is a scripted provider for
+A turn runs on a harness: Lemma's own loop (`lemma`, in `plugins/agent`), or
+another coding agent such as Claude, Codex, or OpenCode, driven over the
+Agent Client Protocol (`plugins/harness-acp`). Every harness logs a turn the
+same way, so the web app and the CLI show any session alike; a session stays on
+its harness until a prompt names another (`lemma run --harness opencode`, the
+composer's harness menu), which then gets the conversation so far as text.
+`lemma harnesses` lists them and whether each is installed.
+
+The session log is the source of truth: every request Lemma's own loop sends a
+model can be rebuilt from it (`rebuildRequest` in the contracts) and records
+which plugins contributed each part; another agent's turns are recorded as
+what it did. `scripts/fixtures/mock-openai.ts` is a scripted provider for
 end-to-end runs without an API key.
 
 ## Core

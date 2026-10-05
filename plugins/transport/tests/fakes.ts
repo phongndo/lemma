@@ -6,6 +6,7 @@ import {
   AssistantDelta,
   Commands,
   emptyUsage,
+  Harnesses,
   HostControl,
   Interaction,
   InteractionError,
@@ -403,4 +404,21 @@ export const fakeWorkspace = definePlugin({
         ),
     };
   }),
+});
+
+/** Another agent's harness, registered so `Harness.List` has something to list beside nothing. */
+export const fakeHarness = definePlugin({
+  id: "harness-other",
+  requires: [Harnesses],
+  layer: Layer.scopedDiscard(
+    Effect.flatMap(Harnesses, (registry) =>
+      registry.register({
+        id: "other",
+        title: "Other",
+        capabilities: { steer: false, models: false, resume: false, requests: false },
+        status: Effect.succeed({ state: "unavailable", detail: "Not installed" }),
+        run: () => Effect.succeed("done"),
+      }),
+    ),
+  ),
 });

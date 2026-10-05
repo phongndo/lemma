@@ -19,6 +19,8 @@
     "@lemma/plugin-commands-builtin": "workspace:*",
     "@lemma/plugin-compaction": "workspace:*",
     "@lemma/plugin-credentials": "workspace:*",
+    "@lemma/plugin-harness-acp": "workspace:*",
+    "@lemma/plugin-harnesses": "workspace:*",
     "@lemma/plugin-host": "workspace:*",
     "@lemma/plugin-interaction": "workspace:*",
     "@lemma/plugin-llm-pi-ai": "workspace:*",

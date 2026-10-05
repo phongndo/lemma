@@ -18,7 +18,7 @@ import type {
 import type { HostRpcClient } from "@lemma/client";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Connection, Io, Options, Output } from "./command.ts";
-import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions, formatTurnResult } from "./format.ts";
+import { formatCommands, formatHarnesses, formatModels, formatProviders, formatQueue, formatQuestions, formatTurnResult } from "./format.ts";
 
 /**
  * Commands that act on the host and, with `--follow`, watch it: they
@@ -163,6 +163,7 @@ const turnOptions = (options: Options): TurnOptions | CliError => {
   return {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinking === undefined ? {} : { thinking: options.thinking as Thinking }),
+    ...(options.harness === undefined ? {} : { harness: options.harness }),
   };
 };
 
@@ -510,6 +511,8 @@ const eventLine = (event: HostEvent): string => {
       return `commands: ${event.commands.map((command) => command.id).join(" ")}`;
     case "models-changed":
       return "models changed";
+    case "harnesses-changed":
+      return `harnesses: ${event.harnesses.map((harness) => `${harness.id}=${harness.status.state}`).join(" ")}`;
     case "ui-changed":
       return uiLine(event.ui);
   }
@@ -560,6 +563,12 @@ export const dismissCommand =
 
 export const modelsCommand: Command = ({ rpc }, _io, options) =>
   Effect.map(rpc.Llm.Models(options.all ? {} : { available: true }), (models) => ({ json: models, text: formatModels(models) }));
+
+/** `lemma harnesses`: what can run turns, and whether each can now; `--refresh` asks each again (after installing one). */
+export const harnessesCommand =
+  (refresh: boolean): Command =>
+  ({ rpc }) =>
+    Effect.map(refresh ? rpc.Harness.Refresh() : rpc.Harness.List(), (harnesses) => ({ json: harnesses, text: formatHarnesses(harnesses) }));
 
 export const providersCommand: Command = ({ rpc }) => Effect.map(rpc.Llm.Providers(), (providers) => ({ json: providers, text: formatProviders(providers) }));
 

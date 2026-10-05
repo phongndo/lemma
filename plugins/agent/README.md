@@ -1,8 +1,16 @@
 # @lemma/plugin-agent
 
-Provides `Agent` (`@lemma/contracts`): the turn loop. Requires `Sessions`, `Llm`,
-`Tools`, `HostControl`, and `Paths`. Exclusive: a reload stops it, suspending
-its turns, before the new instance resumes them.
+Provides `Agent` (`@lemma/contracts`): a session's turns, whichever harness runs
+them, and the native harness, Lemma's own loop. Requires `Sessions`, `Llm`,
+`Tools`, `HostControl`, `Paths`, and `Harnesses`. Exclusive: a reload stops it,
+suspending its turns, before the new instance resumes them.
+
+Everything around a turn is the same whichever harness runs it: one turn per
+session, queued and steering prompts, exactly-once submission, the journal that
+resumes a turn after a restart, and the live view. What runs the turn is a
+`Harness` from the [registry](../harnesses/README.md): the native one, which this
+plugin registers as `lemma` and runs as [below](#a-turn), or another agent (such
+as OpenCode, through the [ACP harness](../harness-acp/README.md)).
 
 ```ts
 const agent = yield * Agent;
@@ -13,14 +21,37 @@ yield * agent.cancel(sessionId);
 
 ## Config
 
-| Key            | Default                                       | Meaning                                                                                              |
-| -------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `defaultModel` | first of `Llm.models({ available: true })`    | `<provider>/<model>` for turns that name none.                                                       |
-| `systemPrompt` | pi-style base prompt                          | Replaces the base section; the environment section is still added.                                   |
-| `maxSteps`     | `200`                                         | Model calls per turn before it ends with `max-steps`.                                                |
-| `cli`          | set by `packages/host` to this checkout's CLI | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself. |
+| Key              | Default                                       | Meaning                                                                                              |
+| ---------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `defaultModel`   | first of `Llm.models({ available: true })`    | `<provider>/<model>` for turns that name none.                                                       |
+| `systemPrompt`   | pi-style base prompt                          | Replaces the base section; the environment section is still added.                                   |
+| `maxSteps`       | `200`                                         | Model calls per turn before it ends with `max-steps`.                                                |
+| `cli`            | set by `packages/host` to this checkout's CLI | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself. |
+| `defaultHarness` | `lemma`                                       | Harness for a session's first turn when the prompt names none.                                       |
+
+## Choosing a harness
+
+A turn runs on the harness its prompt names (`TurnOptions.harness`), else the
+one that ran the session's last turn, else `defaultHarness`. An unknown harness,
+or one whose `status` is not `ready`, fails the prompt `NoHarness` before
+anything is logged. The harness logs the turn, from a `turn-start` naming it
+(absent for the native one) to its `turn-end`. A turn a restart cut off is
+continued by the harness that began it, without the prompts it placed already;
+one that cannot continue turns (`capabilities.resume`) closes it as interrupted
+(and closes its turns itself when the host stops), and one no longer registered
+has the turn closed for it, its open calls answered.
+A harness that cannot steer leaves steers queued: they start the next turn.
+
+When the turns before a native one ran on another harness, the native loop
+cannot send that agent's tool calls to its model as its own. After placing the
+prompts it appends a `compaction` (source `agent`) whose summary is the
+conversation so far as text (`transcript` in the contracts), keeping the turn's
+prompts, so the model sees what the log says it sees. Another harness that has
+not seen the conversation is handed the same text.
 
 ## A turn
+
+The native harness's turn:
 
 1. One turn per session at a time (see [Busy sessions](#busy-sessions)). The
    model is resolved (options → config → first available) and checked with

@@ -3,6 +3,7 @@ import type { Context } from "effect";
 import {
   AssistantDelta,
   CommandsChanged,
+  HarnessesChanged,
   ModelsChanged,
   Notice,
   PluginsChanged,
@@ -75,6 +76,7 @@ export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => I
     yield* forward(PluginsChanged, (e) => ({ type: "plugins-changed", plugins: e.plugins.map(toPluginStatus) }));
     yield* forward(CommandsChanged, (e) => ({ type: "commands-changed", commands: e.commands }));
     yield* forward(ModelsChanged, () => ({ type: "models-changed" }));
+    yield* forward(HarnessesChanged, ({ harnesses }) => ({ type: "harnesses-changed", harnesses }));
     yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
 
     const join = Effect.gen(function* () {

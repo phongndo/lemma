@@ -1,9 +1,10 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Schema } from "effect";
-import { HostError, configValues, describeConfig, emptyUsage, secret } from "@lemma/contracts";
+import { HostError, NATIVE_HARNESS, configValues, describeConfig, emptyUsage, lastHarness, secret } from "@lemma/contracts";
 import type {
   AssistantMessage,
   EventData,
+  HarnessInfo,
   HostEvent,
   InteractionAnswer,
   InteractionRequest,
@@ -214,6 +215,37 @@ const MOCK_COMMANDS = [
   { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands-host" },
 ];
 
+/** The native harness, then the acp plugin's agents by title: one installed, one not. */
+const HARNESSES: readonly HarnessInfo[] = [
+  {
+    id: NATIVE_HARNESS,
+    title: "Lemma",
+    description: "Lemma's own loop: the model you pick, the tools and plugins running here, and every model request in the log.",
+    source: "agent",
+    capabilities: { steer: true, models: true, resume: true, requests: true },
+    status: { state: "ready" },
+  },
+  {
+    id: "gemini",
+    title: "Gemini CLI",
+    description: "Google's Gemini CLI, in its ACP mode.",
+    source: "acp",
+    capabilities: { steer: false, models: false, resume: false, requests: false },
+    status: {
+      state: "unavailable",
+      detail: "gemini was not found on PATH. Install it with `npm install -g @google/gemini-cli`, then run `gemini` once to sign in.",
+    },
+  },
+  {
+    id: "opencode",
+    title: "OpenCode",
+    description: "OpenCode, through its built-in ACP server.",
+    source: "acp",
+    capabilities: { steer: false, models: false, resume: false, requests: false },
+    status: { state: "ready" },
+  },
+];
+
 export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
@@ -307,7 +339,13 @@ export const createMockHost = (): Host => {
     bundled("bash", { requires: ["lemma/Tools"] }),
     bundled("codemode", { requires: ["lemma/Tools"] }),
     bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"], locked: needed }),
-    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"], locked: needed }),
+    bundled("harnesses", { provides: ["lemma/Harnesses"], locked: needed }),
+    bundled("agent", {
+      provides: ["lemma/Agent"],
+      requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl", "lemma/Harnesses"],
+      locked: needed,
+    }),
+    bundled("acp", { requires: ["lemma/Harnesses", "lemma/Sessions", "lemma/Interaction", "lemma/Paths"] }),
     bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
     bundled("project-context", { requires: ["lemma/Paths"] }),
     bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"], locked: needed }),
@@ -316,7 +354,7 @@ export const createMockHost = (): Host => {
     bundled("commands-llm", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
     bundled("commands-workspace", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
     bundled("transport", {
-      requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands"],
+      requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands", "lemma/Harnesses"],
       locked: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
     }),
   ];
@@ -613,13 +651,25 @@ export const createMockHost = (): Host => {
     return true;
   };
 
-  /** Answers as the model the turn names, else the first available one, as the host does. */
+  /**
+   * Runs on the harness the turn names, else the session's last, as the host does; on the native one, answers as the
+   * model the turn names, else the first available one.
+   */
   const runTurn = async (sessionId: string, content: PromptContent, options?: TurnOptions, requestId?: string): Promise<void> => {
+    const named = options?.harness ?? lastHarness(sessions.get(sessionId)!.events) ?? NATIVE_HARNESS;
+    const harness = HARNESSES.find((candidate) => candidate.id === named);
+    if (harness?.status.state !== "ready") {
+      const message = harness === undefined ? `No harness "${named}" is registered` : `${harness.title} cannot run turns now: ${harness.status.detail}`;
+      throw new HostError({ code: "NoHarness", subject: sessionId, message });
+    }
     const available = MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured);
-    const by = available.find((model) => model.ref === options?.model) ?? available[0] ?? MODELS[0]!;
+    const model = available.find((model) => model.ref === options?.model) ?? available[0] ?? MODELS[0]!;
+    const native = harness.id === NATIVE_HARNESS;
+    // Another agent's messages name its protocol and itself, on a model of its own.
+    const by = native ? model : { api: "acp", provider: harness.id, id: "default" };
     const turnId = id("t");
     const started = Date.now();
-    append(sessionId, { type: "turn-start", turnId, model: by.ref });
+    append(sessionId, native ? { type: "turn-start", turnId, model: model.ref } : { type: "turn-start", turnId, harness: harness.id });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     emit({ type: "turn-started", sessionId, turnId });
     running.add(sessionId);
@@ -810,6 +860,14 @@ export const createMockHost = (): Host => {
         return true;
       },
       view: async (sessionId) => ({ output: [], queue: queueOf(sessionId).map((queued) => queued.prompt), queueRevision }),
+    },
+    harness: {
+      list: async () => HARNESSES.slice(),
+      refresh: async () => {
+        await sleep(400);
+        emit({ type: "harnesses-changed", harnesses: HARNESSES.slice() });
+        return HARNESSES.slice();
+      },
     },
     llm: {
       providers: async () => providers.slice(),

@@ -12,6 +12,7 @@ import devtools from "./devtools.tsx";
 import devtoolsKernel from "./devtools-kernel.tsx";
 import devtoolsRouter from "./devtools-router.tsx";
 import eventLog from "./event-log.tsx";
+import harnesses from "./harnesses.ts";
 import highlight from "./highlight.ts";
 import hostPlugins from "./host-plugins.ts";
 import interactionDialog from "./interaction-dialog.tsx";
@@ -55,6 +56,7 @@ export const bundled: readonly Plugin[] = [
   toasts,
   threads,
   models,
+  harnesses,
   workspace,
   hostPlugins,
   commands,

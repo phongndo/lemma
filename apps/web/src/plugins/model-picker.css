@@ -51,6 +51,67 @@
   font-weight: 500;
 }
 
+/* What does not apply: the model, while the harness runs on its own. */
+.select-chip.static {
+  cursor: default;
+}
+
+.select-chip.static:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.select-chip.static:active {
+  transform: none;
+}
+
+.harness-chip > .icon:not(:last-child) {
+  color: var(--warn);
+}
+
+.harness-menu {
+  width: 380px;
+  max-width: calc(100vw - 16px);
+}
+
+.harness-item.menu-item {
+  align-items: flex-start;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  white-space: normal;
+}
+
+.harness-item .menu-check {
+  margin-top: 2px;
+}
+
+.harness-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.harness-title {
+  font-weight: 450;
+}
+
+.harness-desc,
+.harness-detail {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
+.harness-item[aria-disabled="true"] .harness-title {
+  color: var(--text-3);
+}
+
+.harness-detail {
+  color: var(--warn);
+}
+
 .model-menu {
   width: 580px;
   max-width: calc(100vw - 16px);

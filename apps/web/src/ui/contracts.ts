@@ -7,6 +7,7 @@ import type {
   ConfigField,
   ConfigValues,
   CustomProviderSpec,
+  HarnessInfo,
   ImageContent,
   HostEvent,
   HostInfo,
@@ -223,6 +224,30 @@ export interface ModelsService {
   readonly refresh: () => Promise<void>;
 }
 export class Models extends Context.Tag("lemma-ui/Models")<Models, ModelsService>() {}
+
+export interface HarnessesService {
+  /** Every registered harness, the native one first. */
+  readonly list: Accessor<readonly HarnessInfo[]>;
+  /** What new threads start on: the remembered choice while it is ready, else the native harness. */
+  readonly preferred: Accessor<string>;
+  /** The harness the active thread's last turn ran on; undefined for a new thread and before its first turn. */
+  readonly current: Accessor<string | undefined>;
+  /** What the next prompt runs on: a harness picked for it, else the active thread's, else `preferred`. */
+  readonly selectedId: Accessor<string>;
+  /** `selectedId`'s entry; undefined while it is not listed. */
+  readonly selected: Accessor<HarnessInfo | undefined>;
+  /** Picks the harness for the active thread's next prompt, which the thread then stays on; for a new thread, `preferred` (remembered). */
+  readonly choose: (id: string) => void;
+  /**
+   * The model's options (`Models.turnOptions`) as the next prompt sends them: naming its harness unless the host keeps
+   * the thread on it anyway, and without the model when the harness runs on one of its own.
+   */
+  readonly turnOptions: (options: TurnOptions | undefined) => TurnOptions | undefined;
+  /** Asks the host to check every harness's status again (after installing one, say); failures are reported. */
+  readonly refresh: () => Promise<void>;
+}
+/** The harnesses turns run on: Lemma's own loop, or another coding agent. */
+export class Harnesses extends Context.Tag("lemma-ui/Harnesses")<Harnesses, HarnessesService>() {}
 
 export interface WorktreeDraft {
   readonly enabled: boolean;
@@ -531,7 +556,7 @@ export interface ThreadHeaderItem extends Region {
 export const ThreadHeader = defineSlot<ThreadHeaderItem>("thread.header");
 /** Above the composer box: the connection notice, the provider callout. */
 export const ComposerNotices = defineSlot<Region>("composer.notices");
-/** The composer's toolbar, left of its buttons: the model and reasoning pickers. */
+/** The composer's toolbar, left of its buttons: the harness, model, and reasoning pickers. */
 export const ComposerControls = defineSlot<Region>("composer.controls");
 /** Under the composer: the workspace bar. */
 export const ComposerFooter = defineSlot<Region>("composer.footer");

@@ -46,6 +46,10 @@ export interface Options {
   readonly range?: string | undefined;
   readonly model?: string | undefined;
   readonly thinking?: string | undefined;
+  /** `run`: the harness for the turn (see `lemma harnesses`). */
+  readonly harness?: string | undefined;
+  /** `harnesses`: ask each harness its status again. */
+  readonly refresh: boolean;
   readonly images: readonly string[];
   readonly follow: boolean;
   readonly questions?: QuestionPolicy | undefined;

@@ -15,9 +15,10 @@ import type { HostEvent } from "@lemma/contracts";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
+import harnesses from "@lemma/plugin-harnesses";
 import transport, { readDiscovery } from "../src/index.ts";
 import { loadToken } from "../src/token.ts";
-import { fakeAgent, prompted, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
+import { fakeAgent, prompted, fakeGreeter, fakeHarness, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
 import type { ControlHolder } from "./fakes.ts";
 
 type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
@@ -86,6 +87,8 @@ const withHost = <A, E>(
             fakeWorkspace,
             commands,
             fakeGreeter,
+            harnesses,
+            fakeHarness,
             ...extra,
           ],
           {
@@ -267,6 +270,18 @@ describe("transport", () => {
             subject: "missing",
           });
 
+          expect(yield* client.Harness.List()).toEqual([
+            {
+              id: "other",
+              title: "Other",
+              source: "harness-other",
+              capabilities: { steer: false, models: false, resume: false, requests: false },
+              status: { state: "unavailable", detail: "Not installed" },
+            },
+          ]);
+          expect((yield* client.Harness.Refresh()).map((harness) => harness.id)).toEqual(["other"]);
+          yield* waitFor(events, (event) => event.type === "harnesses-changed" && event.harnesses[0]?.id === "other");
+
           expect((yield* client.Llm.Models({})).map((model) => model.ref)).toEqual(["fake/echo"]);
           expect(yield* client.Llm.Models({ available: false })).toEqual([]);
           expect((yield* client.Llm.Providers()).map((provider) => provider.id)).toEqual(["fake"]);
@@ -286,7 +301,16 @@ describe("transport", () => {
             enabled: true,
             state: "active",
             provides: [],
-            requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands"],
+            requires: [
+              "lemma/Paths",
+              "lemma/Sessions",
+              "lemma/Agent",
+              "lemma/Llm",
+              "lemma/HostControl",
+              "lemma/Workspace",
+              "lemma/Commands",
+              "lemma/Harnesses",
+            ],
           });
           yield* client.Host.RestartPlugin({ pluginId: "llm" });
           yield* client.Host.RestartPlugin({ pluginId: "llm", force: true });

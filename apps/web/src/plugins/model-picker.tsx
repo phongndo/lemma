@@ -1,11 +1,24 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import type { ModelInfo, ThinkingLevel } from "@lemma/contracts";
+import type { HarnessInfo, ModelInfo, ThinkingLevel } from "@lemma/contracts";
 import { contextSize } from "../model/format.ts";
 import { DEFAULT_THINKING, filterModels, thinkingLevels } from "../model/prefs.ts";
-import { ActionIds, Actions, ComposerControls, Models, SectionIds, SettingsGroups, Slots } from "../ui/contracts.ts";
-import type { ModelsService } from "../ui/contracts.ts";
+import { ActionIds, Actions, ComposerControls, Harnesses, Models, SectionIds, SettingsGroups, Slots } from "../ui/contracts.ts";
+import type { HarnessesService, ModelsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, ProviderLogo, SearchIcon, SettingRow, StarIcon } from "../ui/parts.tsx";
+import {
+  AlertIcon,
+  BrainIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ImageIcon,
+  Popover,
+  ProviderLogo,
+  RefreshIcon,
+  SearchIcon,
+  SettingRow,
+  Spinner,
+  StarIcon,
+} from "../ui/parts.tsx";
 import type { Placement } from "../ui/contracts.ts";
 import styles from "./model-picker.css?inline";
 
@@ -67,6 +80,103 @@ function ThinkingPicker(props: { models: ModelsService; placement?: Placement; a
         )}
       </Popover>
     </Show>
+  );
+}
+
+/** Picks the harness the next prompt runs on; shown while there is another to switch to. */
+function HarnessPicker(props: { harnesses: HarnessesService; afterPick?: () => void }) {
+  const { list, selected, selectedId, current, choose, refresh } = props.harnesses;
+  const [checking, setChecking] = createSignal(false);
+  const title = (id: string | undefined) => list().find((harness) => harness.id === id)?.title ?? id;
+  const tip = () => {
+    const from = current();
+    if (from !== undefined && from !== selectedId()) return `The next prompt moves this thread from ${title(from)} to ${title(selectedId())}`;
+    return selected()?.status.state === "unavailable" ? `${title(selectedId())} cannot run turns now` : "Harness";
+  };
+  const check = async () => {
+    setChecking(true);
+    await refresh();
+    setChecking(false);
+  };
+  return (
+    <Show when={list().some((harness) => harness.id !== selectedId())}>
+      <Popover
+        label="Harness"
+        tip={tip()}
+        triggerClass="select-chip harness-chip"
+        placement="top-start"
+        menuClass="harness-menu"
+        trigger={
+          <>
+            <Show when={selected()?.status.state === "unavailable"}>
+              <AlertIcon />
+            </Show>
+            <span class="picker-label">{title(selectedId())}</span>
+            <ChevronDownIcon />
+          </>
+        }
+      >
+        {(close) => (
+          <>
+            <div class="menu-section">Harness</div>
+            <For each={list()}>
+              {(harness) => {
+                const ready = () => harness.status.state === "ready";
+                return (
+                  <button
+                    class="menu-item harness-item"
+                    role="menuitemradio"
+                    aria-checked={harness.id === selectedId()}
+                    aria-disabled={!ready()}
+                    onClick={() => {
+                      if (!ready()) return;
+                      choose(harness.id);
+                      close();
+                      props.afterPick?.();
+                    }}
+                  >
+                    <span class="menu-check">
+                      <Show when={harness.id === selectedId()}>
+                        <CheckIcon />
+                      </Show>
+                    </span>
+                    <span class="harness-text">
+                      <span class="harness-title">{harness.title}</span>
+                      <Show when={harness.description}>{(description) => <span class="harness-desc">{description()}</span>}</Show>
+                      <Show when={!ready()}>
+                        <span class="harness-detail">{harness.status.detail ?? "Cannot run turns now"}</span>
+                      </Show>
+                    </span>
+                  </button>
+                );
+              }}
+            </For>
+            <div class="menu-sep" />
+            <button
+              class="menu-item"
+              role="menuitem"
+              aria-disabled={checking()}
+              onClick={() => {
+                if (!checking()) void check();
+              }}
+            >
+              <span class="menu-check">{checking() ? <Spinner /> : <RefreshIcon />}</span>
+              <span class="menu-label">{checking() ? "Checking…" : "Check again"}</span>
+            </button>
+          </>
+        )}
+      </Popover>
+      <span class="control-separator" aria-hidden="true" />
+    </Show>
+  );
+}
+
+/** In place of the model picker while the harness runs on a model of its own. */
+function OwnModel(props: { harness: HarnessInfo }) {
+  return (
+    <span class="select-chip static" data-tip={`${props.harness.title} runs on a model of its own: the model picked here does not apply`}>
+      <span class="picker-label">{props.harness.title}'s model</span>
+    </span>
   );
 }
 
@@ -281,29 +391,48 @@ function ModelPicker(props: {
 }
 
 /**
- * The model and reasoning pickers: in the composer's toolbar, in General
- * settings, and behind "Switch model…".
+ * The harness, model, and reasoning pickers: in the composer's toolbar, in
+ * General settings, and behind "Switch model…".
  */
 export default defineUiPlugin({
   id: "model-picker",
   styles,
-  requires: { models: Models, slots: Slots },
-  setup: ({ models, slots }, plugin) => {
+  requires: { models: Models, harnesses: Harnesses, slots: Slots },
+  setup: ({ models, harnesses, slots }, plugin) => {
     const [open, setOpen] = createSignal<() => void>();
+    /** The harness the next prompt runs on, while it runs on a model of its own. */
+    const ownModel = () => {
+      const harness = harnesses.selected();
+      return harness?.capabilities.models === false ? harness : undefined;
+    };
     /** Other plugins' actions, run when they exist: focus the prompt, open the providers settings. */
     const runAction = (id: string) => slots.get(Actions, id)?.run();
     const providers = () => (slots.get(Actions, ActionIds.providers) === undefined ? undefined : () => runAction(ActionIds.providers));
     const add = plugin.onCleanup;
     add(
       slots.add(ComposerControls, {
+        id: "harness",
+        order: -10,
+        component: () => <HarnessPicker harnesses={harnesses} afterPick={() => runAction(ActionIds.focusComposer)} />,
+      }),
+    );
+    add(
+      slots.add(ComposerControls, {
         id: "model",
         component: () => (
-          <ModelPicker
-            models={models}
-            afterPick={() => runAction(ActionIds.focusComposer)}
-            onProviders={providers()}
-            controller={(handle) => setOpen(() => handle.open)}
-          />
+          <Show
+            when={ownModel()}
+            fallback={
+              <ModelPicker
+                models={models}
+                afterPick={() => runAction(ActionIds.focusComposer)}
+                onProviders={providers()}
+                controller={(handle) => setOpen(() => handle.open)}
+              />
+            }
+          >
+            {(harness) => <OwnModel harness={harness()} />}
+          </Show>
         ),
       }),
     );
@@ -311,7 +440,11 @@ export default defineUiPlugin({
       slots.add(ComposerControls, {
         id: "thinking",
         order: 10,
-        component: () => <ThinkingPicker models={models} afterPick={() => runAction(ActionIds.focusComposer)} />,
+        component: () => (
+          <Show when={ownModel() === undefined}>
+            <ThinkingPicker models={models} afterPick={() => runAction(ActionIds.focusComposer)} />
+          </Show>
+        ),
       }),
     );
     add(
@@ -322,7 +455,7 @@ export default defineUiPlugin({
         category: "Model",
         keywords: ["provider", "llm"],
         icon: BrainIcon,
-        when: () => open() !== undefined,
+        when: () => open() !== undefined && ownModel() === undefined,
         run: () => open()?.(),
       }),
     );

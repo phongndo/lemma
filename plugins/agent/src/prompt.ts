@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { PromptContent, SystemSection } from "@lemma/contracts";
+import type { SystemSection } from "@lemma/contracts";
 
 /**
  * The default base prompt, after pi's: an identity line and guidelines for the
@@ -66,18 +66,4 @@ export const baseSection = (source: string, toolNames: ReadonlySet<string>, over
 
 export const environmentSection = (source: string, facts: EnvironmentFacts): SystemSection => ({ id: "environment", source, text: environment(facts) });
 
-const TITLE_CHARS = 60;
-
-/** A session title from the first prompt: its text, whitespace collapsed, cut at a word near 60 characters. */
-export function titleFrom(content: PromptContent): string | undefined {
-  const text = content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text === "") return undefined;
-  if (text.length <= TITLE_CHARS) return text;
-  const cut = text.slice(0, TITLE_CHARS);
-  const space = cut.lastIndexOf(" ");
-  return `${space > TITLE_CHARS / 2 ? cut.slice(0, space) : cut}…`;
-}
+export { titleFrom } from "@lemma/contracts";

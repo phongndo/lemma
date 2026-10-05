@@ -8,8 +8,11 @@ import type { ToolContribution } from "./tools.ts";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
-  /** `Withdrawn`: the prompt was taken out of the queue before a turn placed it. */
-  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Withdrawn";
+  /**
+   * `Withdrawn`: the prompt was taken out of the queue before a turn placed it. `NoHarness`: the harness the turn
+   * names is not registered, or cannot run turns now.
+   */
+  readonly reason: "Busy" | "NoModel" | "NoHarness" | "Session" | "Hook" | "Withdrawn";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -18,6 +21,11 @@ export const TurnOptions = Schema.Struct({
   /** Falls back to the agent's configured default, then the first available model. */
   model: Schema.optional(ModelRef),
   thinking: Schema.optional(ThinkingLevel),
+  /**
+   * The harness that runs the turn (see `Harnesses`). Falls back to the one that ran the session's last turn, then
+   * the agent's configured default, then the native harness.
+   */
+  harness: Schema.optional(Schema.String),
 });
 export type TurnOptions = typeof TurnOptions.Type;
 
@@ -189,3 +197,19 @@ export class Agent extends Context.Tag("lemma/Agent")<
     readonly view: (sessionId: string) => Effect.Effect<AgentView>;
   }
 >() {}
+
+const TITLE_CHARS = 60;
+
+/** A session title from the first prompt: its text, whitespace collapsed, cut at a word near 60 characters. */
+export function titleFrom(content: PromptContent): string | undefined {
+  const text = content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text === "") return undefined;
+  if (text.length <= TITLE_CHARS) return text;
+  const cut = text.slice(0, TITLE_CHARS);
+  const space = cut.lastIndexOf(" ");
+  return `${space > TITLE_CHARS / 2 ? cut.slice(0, space) : cut}…`;
+}

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from "./agent.ts";
 import { CommandInfo, CommandResult } from "./commands.ts";
 import { ConfigField, ConfigValues } from "./config.ts";
+import { HarnessInfo } from "./harness.ts";
 import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, PluginChange, PluginSource, RegistryUse, UiComposition } from "./host.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
@@ -94,6 +95,7 @@ export const HostEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("plugins-changed"), plugins: Schema.Array(PluginStatus) }),
   Schema.Struct({ type: Schema.Literal("commands-changed"), commands: Schema.Array(CommandInfo) }),
   Schema.Struct({ type: Schema.Literal("models-changed") }),
+  Schema.Struct({ type: Schema.Literal("harnesses-changed"), harnesses: Schema.Array(HarnessInfo) }),
   Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
 );
 export type HostEvent = typeof HostEvent.Type;
@@ -143,6 +145,11 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Agent.Withdraw", { payload: { sessionId: Schema.String, requestId: Schema.String }, success: Schema.Boolean }),
   /** What a client joining now shows of the session beyond its log: model output and tool output so far, and the queue. */
   Rpc.make("Agent.View", { payload: { sessionId: Schema.String }, success: AgentView }),
+
+  /** Every registered harness, the native one first. */
+  Rpc.make("Harness.List", { success: Schema.Array(HarnessInfo) }),
+  /** Asks each harness its status again (after installing one, say); also published as `harnesses-changed`. */
+  Rpc.make("Harness.Refresh", { success: Schema.Array(HarnessInfo) }),
 
   Rpc.make("Llm.Providers", { success: Schema.Array(ProviderInfo), error: HostError }),
   Rpc.make("Llm.Models", { payload: { available: Schema.optional(Schema.Boolean) }, success: Schema.Array(ModelInfo), error: HostError }),

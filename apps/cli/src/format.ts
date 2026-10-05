@@ -5,6 +5,7 @@ import type {
   KernelView,
   DirectoryListing,
   GitBranch,
+  HarnessInfo,
   HostInfo,
   InteractionRequest,
   LedgerRecord,
@@ -480,6 +481,30 @@ export const formatModels = (models: readonly ModelInfo[]): string =>
           model.cost.input === 0 && model.cost.output === 0 ? "" : `${model.cost.input}/${model.cost.output}`,
         ]),
       ]);
+
+const CAPABILITIES: Readonly<Record<keyof HarnessInfo["capabilities"], string>> = {
+  steer: "steer",
+  models: "models",
+  resume: "resume",
+  requests: "requests",
+};
+
+export const formatHarnesses = (harnesses: readonly HarnessInfo[]): string =>
+  harnesses.length === 0
+    ? "No harnesses. The agent plugin registers the native one; is it running?"
+    : [
+        pad([
+          ["harness", "name", "ready", "can", "plugin"],
+          ...harnesses.map((harness) => [
+            harness.id,
+            harness.title,
+            harness.status.state === "ready" ? "yes" : "no",
+            (Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[]).filter((key) => harness.capabilities[key]).join(",") || "-",
+            harness.source,
+          ]),
+        ]),
+        ...harnesses.flatMap((harness) => (harness.status.detail === undefined ? [] : [`${harness.id}: ${harness.status.detail}`])),
+      ].join("\n");
 
 export const formatProviders = (providers: readonly ProviderInfo[]): string =>
   pad([

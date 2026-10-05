@@ -5,6 +5,8 @@ import commands from "@lemma/plugin-commands";
 import compaction from "@lemma/plugin-compaction";
 import * as builtinCommands from "@lemma/plugin-commands-builtin";
 import credentials from "@lemma/plugin-credentials";
+import acp from "@lemma/plugin-harness-acp";
+import harnesses from "@lemma/plugin-harnesses";
 import interaction from "@lemma/plugin-interaction";
 import llm from "@lemma/plugin-llm-pi-ai";
 import projectContext from "@lemma/plugin-project-context";
@@ -37,7 +39,9 @@ export function bundled(host: Plugin): readonly Plugin[] {
     bash,
     codemode,
     sessions,
+    harnesses,
     agent,
+    acp,
     compaction,
     projectContext,
     workspace,

@@ -7,6 +7,7 @@ import type { Plugin } from "@lemma/core";
 import { Agent, emptyUsage, SessionAppended, Sessions, ToolResult } from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
+import harnesses from "../../harnesses/src/index.ts";
 import tools from "../../tools/src/index.ts";
 import agent from "../src/index.ts";
 import { LiveTurn } from "../src/live.ts";
@@ -46,9 +47,12 @@ const run = <A, E>(
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])], {
-          configs: { agent: setup.config ?? {} },
-        });
+        const core = yield* makeCore(
+          [paths(dir, dir), host(), sessions, harnesses, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
+          {
+            configs: { agent: setup.config ?? {} },
+          },
+        );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
     ),

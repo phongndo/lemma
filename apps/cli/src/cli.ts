@@ -57,6 +57,7 @@ import {
   eventsCommand,
   loginCommand,
   logoutCommand,
+  harnessesCommand,
   modelsCommand,
   providersCommand,
   listCommandsCommand,
@@ -121,6 +122,8 @@ Sessions and turns
   run <id|new> <prompt…>         Send a prompt and wait for the turn to end
     --model <provider/model>     Model for this turn (see lemma models)
     --thinking <level>           off, minimal, low, medium, high, xhigh, max
+    --harness <id>               Run the turn on this harness (see lemma harnesses); later turns
+                                 stay on it until one names another
     --image <file>               Attach an image (repeatable)
     --follow                     Stream the turn: text, tool calls, results (NDJSON with --json)
     --cwd <dir>                  Directory for a new session
@@ -147,6 +150,10 @@ Questions the host asks (logins, tools that confirm)
     --questions ask|ignore|dismiss   ask at the terminal (default when there is one), leave them
                                      to another client such as the web app (default otherwise), or dismiss
     --answer <value>               Answer the next question with this (repeatable, in order)
+
+Harnesses (what runs a turn: Lemma's own loop, or another agent such as OpenCode over ACP)
+  harnesses [--refresh]          Each harness, whether it is ready, and what it can do
+                                 (--refresh: ask each again, after installing one)
 
 Providers and models
   providers                      Providers, whether they are configured, and how to log in
@@ -367,6 +374,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return extra(1) ?? providersCommand;
     case "models":
       return extra(1) ?? modelsCommand;
+    case "harnesses":
+      return extra(1) ?? harnessesCommand(options.refresh);
     case "login":
       if (sub === undefined) return usage("login needs a provider id (see lemma providers)");
       return extra(2) ?? loginCommand(sub);
@@ -670,6 +679,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         range: { type: "string" },
         model: { type: "string" },
         thinking: { type: "string" },
+        harness: { type: "string" },
+        refresh: { type: "boolean", default: false },
         image: { type: "string", multiple: true, default: [] },
         follow: { type: "boolean", short: "f", default: false },
         questions: { type: "string" },
@@ -720,6 +731,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     range: values.range,
     model: values.model,
     thinking: values.thinking,
+    harness: values.harness,
+    refresh: values.refresh,
     images: values.image,
     follow: values.follow,
     questions: values.questions as QuestionPolicy | undefined,
