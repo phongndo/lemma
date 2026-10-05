@@ -74,8 +74,8 @@ const assistant = (
   u: Usage,
   stopReason: AssistantMessage["stopReason"] = "stop",
   errorMessage?: string,
-  /** The model that answered; the seeded history's is Claude Sonnet 4.5. */
-  by: Pick<ModelInfo, "api" | "provider" | "id"> = { api: "anthropic-messages", provider: "anthropic", id: "claude-sonnet-4-5" },
+  /** The model that answered; the seeded history's is Claude Sonnet 4.5 on OpenCode Zen. */
+  by: Pick<ModelInfo, "api" | "provider" | "id"> = { api: "anthropic-messages", provider: "opencode", id: "claude-sonnet-4-5" },
 ): AssistantMessage => ({
   role: "assistant",
   content,
@@ -89,32 +89,6 @@ const assistant = (
 });
 
 const MODELS: ModelInfo[] = [
-  {
-    ref: "anthropic/claude-sonnet-4-5",
-    provider: "anthropic",
-    id: "claude-sonnet-4-5",
-    name: "Claude Sonnet 4.5",
-    api: "anthropic-messages",
-    reasoning: true,
-    thinkingLevels: ["off", "low", "medium", "high"],
-    input: ["text", "image"],
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  },
-  {
-    ref: "anthropic/claude-haiku-4-5",
-    provider: "anthropic",
-    id: "claude-haiku-4-5",
-    name: "Claude Haiku 4.5",
-    api: "anthropic-messages",
-    reasoning: false,
-    thinkingLevels: [],
-    input: ["text", "image"],
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-    cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-  },
   {
     ref: "openai/gpt-5",
     provider: "openai",
@@ -218,41 +192,11 @@ export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
   const oauth = (name: string) => ({ type: "oauth", name, interactive: true }) as const;
-  /** The real llm plugin's providers (pi-ai's built-ins), as `Llm.providers` reports them. */
+  /** The real llm plugin's providers, as `Llm.providers` reports them. */
   const providers: ProviderInfo[] = [
-    ["amazon-bedrock", "Amazon Bedrock", [key]],
-    ["ant-ling", "Ant Ling", [key]],
-    // As in the real llm plugin: Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy.
-    ["anthropic", "Anthropic", [key]],
-    ["azure-openai-responses", "Azure OpenAI", [key]],
-    ["baseten", "Baseten", [key]],
-    ["cerebras", "Cerebras", [key]],
-    ["cloudflare-workers-ai", "Cloudflare Workers AI", [key]],
-    ["deepseek", "DeepSeek", [key]],
-    ["fireworks", "Fireworks", [key]],
-    ["github-copilot", "GitHub Copilot", [oauth("GitHub Copilot"), key]],
-    ["google", "Google", [key]],
-    ["google-vertex", "Google Vertex AI", [key]],
-    ["groq", "Groq", [key]],
-    ["huggingface", "Hugging Face", [key]],
-    ["kimi-coding", "Kimi For Coding", [oauth("Kimi Code (subscription)"), key]],
-    ["meta", "Meta", [oauth("Meta (Muse subscription)"), key]],
-    ["minimax", "MiniMax", [key]],
-    ["mistral", "Mistral", [key]],
-    ["moonshotai", "Moonshot AI", [key]],
-    ["nvidia", "NVIDIA", [key]],
-    // As in the real llm plugin: OpenAI signs in with ChatGPT itself, and the legacy OpenAI Codex is left out.
-    ["openai", "OpenAI", [key, oauth("Sign in with ChatGPT")]],
-    ["opencode", "OpenCode Zen", [key]],
-    ["opencode-go", "OpenCode Go", [key]],
-    ["openrouter", "OpenRouter", [oauth("OpenRouter OAuth"), key]],
-    ["qwen-token-plan", "Qwen Token Plan", [key]],
-    ["radius", "Radius", [oauth("Radius"), key]],
-    ["together", "Together", [key]],
-    ["vercel-ai-gateway", "Vercel AI Gateway", [key]],
-    ["xai", "xAI", [oauth("xAI (Grok/X subscription)"), key]],
-    ["xiaomi", "Xiaomi", [key]],
-    ["zai", "Z.AI", [key]],
+    ["openai", "OpenAI", [{ ...key, name: "OpenAI API key" }, oauth("Sign in with ChatGPT")]],
+    ["opencode", "OpenCode Zen", [{ ...key, name: "OpenCode API key" }]],
+    ["opencode-go", "OpenCode Go", [{ ...key, name: "OpenCode API key" }]],
   ].map(([id, name, auth]) => ({ id: id as string, name: name as string, auth: auth as ProviderInfo["auth"], configured: false }));
   const bundled = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => ({
     id,
@@ -850,7 +794,7 @@ export const createMockHost = (): Host => {
           await sleep(4000);
         }
         const i = providers.indexOf(p);
-        providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "auth.json" };
+        providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "stored credential" };
         emit({ type: "notice", notice: { level: "info", source: "llm", message: `Logged in to ${p.name}` } });
       },
       logout: async (provider) => {
