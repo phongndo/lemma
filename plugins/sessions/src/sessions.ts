@@ -6,7 +6,7 @@ import { Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
 import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved } from "@lemma/contracts";
 import type { SessionInfo, Sessions } from "@lemma/contracts";
-import { applyMarks, createFile, errorCode, infoOf, io, load, openFile, scan, unfiled } from "./file.ts";
+import { applyMarks, CHANGED_ON_DISK, createFile, errorCode, infoOf, io, load, openFile, scan, unfiled } from "./file.ts";
 import type { FiledAs, Writer } from "./file.ts";
 import { encodeCwd, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
 import type { Header, Line } from "./format.ts";
@@ -23,7 +23,9 @@ interface Open {
   title: string | undefined;
   marks: FiledAs;
   updatedAt: number;
+  /** What reading the file saw: the first write cuts a torn tail past `validBytes`, unless the file is no longer `size`. */
   readonly validBytes: number;
+  readonly size: number;
   writer?: Writer;
 }
 
@@ -186,16 +188,25 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
     const writerOf = (entry: Entry, open: Open) =>
       open.writer !== undefined
         ? Effect.succeed(open.writer)
-        : Effect.tap(openFile(entry.file, entry.id, open.validBytes), (writer) =>
+        : Effect.tap(openFile(entry.file, entry.id, open), (writer) =>
             Effect.sync(() => {
               open.writer = writer;
             }),
           );
 
+    /** Drops the session from memory and closes its file: the next use reads it again. */
+    const forget = (entry: Entry) =>
+      Effect.suspend(() => {
+        const writer = entry.open?.writer;
+        delete entry.open;
+        return writer?.close ?? Effect.void;
+      });
+
     /**
      * Writes `line` and then applies `update` to the in-memory session, uninterruptibly: an
      * interrupted write can still reach disk, and memory that missed it would reuse its `seq`.
-     * Callers hold `entry.lock`.
+     * A file another program changed no longer matches memory, which is dropped. Callers hold
+     * `entry.lock`.
      */
     const commit = (entry: Entry, open: Open, line: Line, update: () => void) =>
       Effect.uninterruptible(
@@ -204,7 +215,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
           yield* writer.write(line);
           update();
           entry.info = infoOfOpen(open);
-        }),
+        }).pipe(Effect.tapError((error) => (error.cause === CHANGED_ON_DISK ? forget(entry) : Effect.void))),
       );
 
     const create: Service["create"] = (options) =>
@@ -215,20 +226,27 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         while (entries.has(id)) id = newSessionId();
         const header: Header = { type: "session", version: 1, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
-        const writer = yield* createFile(file, header);
-        const open: Open = {
-          header,
-          events: [],
-          byId: new Map(),
-          leaf: undefined,
-          title: undefined,
-          marks: unfiled,
-          updatedAt: createdAt,
-          validBytes: 0,
-          writer,
-        };
-        const entry = yield* remember(id, file, infoOfOpen(open));
-        entry.open = open;
+        // Uninterruptible until the entry holds the writer, so its file is always closed.
+        const entry = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const writer = yield* createFile(file, header);
+            const open: Open = {
+              header,
+              events: [],
+              byId: new Map(),
+              leaf: undefined,
+              title: undefined,
+              marks: unfiled,
+              updatedAt: createdAt,
+              validBytes: 0,
+              size: 0,
+              writer,
+            };
+            const entry = yield* remember(id, file, infoOfOpen(open));
+            entry.open = open;
+            return entry;
+          }),
+        );
         yield* changed(entry);
         return entry.info;
       });
@@ -303,13 +321,16 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         yield* entry.lock.withPermits(1)(
-          Effect.gen(function* () {
-            if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
-            // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
-            yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
-            entries.delete(sessionId);
-            yield* entry.open?.writer?.close ?? Effect.void;
-          }),
+          // Uninterruptible, so memory matches whether the file went.
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
+              // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
+              yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
+              entries.delete(sessionId);
+              yield* entry.open?.writer?.close ?? Effect.void;
+            }),
+          ),
         );
         yield* events.publish(SessionRemoved, { sessionId });
       });

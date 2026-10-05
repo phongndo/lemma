@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Effect, Either } from "effect";
 import { SessionError } from "@lemma/contracts";
@@ -18,6 +18,15 @@ export const io = (sessionId: string | undefined, message: string) => (cause: un
   });
 
 const corrupt = (sessionId: string, file: string, message: string) => new SessionError({ sessionId, reason: "Corrupt", message: `${file}: ${message}` });
+
+/** The `cause` of a `SessionError` saying another program changed the file: what this process read no longer describes it. */
+export const CHANGED_ON_DISK = Symbol("changed on disk");
+
+const changedOnDisk = (sessionId: string, file: string, how = "changed on disk since this process read it") =>
+  new SessionError({ sessionId, reason: "Io", message: `${file} ${how}: another program wrote to it`, cause: CHANGED_ON_DISK });
+
+/** Keeps a `SessionError` thrown inside a promise; anything else is `Io`. */
+const orIo = (sessionId: string, message: string) => (cause: unknown) => (cause instanceof SessionError ? cause : io(sessionId, message)(cause));
 
 /** What reading a file saw. */
 export interface Extent {
@@ -265,7 +274,11 @@ export const infoOf = (
  * A failed write may leave bytes behind (a torn line, or a whole line that was
  * never confirmed); they are truncated away at once, or failing that before
  * the next write or by `settle`, so the file keeps matching what callers were
- * told was appended.
+ * told was appended. Before each write the file must still be linked and its
+ * size what this writer left: anything else means another program changed it
+ * (the sessions lock keeps out only other Lemma processes), and the write
+ * fails with `CHANGED_ON_DISK` instead of interleaving with it or going to a
+ * deleted file.
  */
 export interface Writer {
   readonly write: (line: Line) => Effect.Effect<void, SessionError>;
@@ -288,6 +301,9 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
     write: (line) =>
       Effect.tryPromise({
         try: async () => {
+          const { size, nlink } = await handle.stat();
+          if (nlink === 0) throw changedOnDisk(sessionId, file, "was deleted or replaced on disk");
+          if (size < end || size > end + unconfirmed) throw changedOnDisk(sessionId, file);
           await cut();
           const text = encodeLine(line);
           const bytes = Buffer.byteLength(text);
@@ -303,7 +319,7 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
           unconfirmed = 0;
           end += bytes;
         },
-        catch: io(sessionId, `Cannot write ${file}`),
+        catch: orIo(sessionId, `Cannot write ${file}`),
       }),
     settle: Effect.tryPromise({ try: cut, catch: io(sessionId, `Cannot write ${file}`) }),
     close: Effect.promise(() => handle.close()).pipe(Effect.ignore),
@@ -324,6 +340,7 @@ const syncDirectory = async (dir: string) => {
   }
 };
 
+/** Creates a session file with its header. Uninterruptible, so its handle always reaches the writer. */
 export function createFile(file: string, header: Header): Effect.Effect<Writer, SessionError> {
   return Effect.tryPromise({
     try: async () => {
@@ -341,18 +358,29 @@ export function createFile(file: string, header: Header): Effect.Effect<Writer, 
       return handle;
     },
     catch: io(header.id, `Cannot create ${file}`),
-  }).pipe(Effect.map((handle) => writerFor(handle, file, header.id, Buffer.byteLength(encodeLine(header)))));
+  }).pipe(
+    Effect.map((handle) => writerFor(handle, file, header.id, Buffer.byteLength(encodeLine(header)))),
+    Effect.uninterruptible,
+  );
 }
 
-/** Opens an existing file for appending, first cutting a torn final line so the next record starts on its own line. */
-export function openFile(file: string, sessionId: string, validBytes: number): Effect.Effect<Writer, SessionError> {
+/**
+ * Opens an existing file for appending, first cutting what the read judged
+ * torn (`seen` past its `validBytes`) so the next record starts on its own
+ * line. A file another program changed since that read is refused
+ * (`CHANGED_ON_DISK`): cutting it to `validBytes` would delete what it wrote.
+ * Uninterruptible, so the handle always reaches the writer.
+ */
+export function openFile(file: string, sessionId: string, seen: { readonly validBytes: number; readonly size: number }): Effect.Effect<Writer, SessionError> {
   return Effect.tryPromise({
     try: async () => {
-      const handle = await fs.open(file, "a");
+      // Without O_CREAT: a session deleted meanwhile stays deleted.
+      const handle = await fs.open(file, constants.O_WRONLY | constants.O_APPEND);
       try {
         const { size } = await handle.stat();
-        if (size > validBytes) {
-          await handle.truncate(validBytes);
+        if (size !== seen.size) throw changedOnDisk(sessionId, file);
+        if (size > seen.validBytes) {
+          await handle.truncate(seen.validBytes);
           await handle.datasync();
         }
       } catch (cause) {
@@ -361,6 +389,9 @@ export function openFile(file: string, sessionId: string, validBytes: number): E
       }
       return handle;
     },
-    catch: io(sessionId, `Cannot open ${file}`),
-  }).pipe(Effect.map((handle) => writerFor(handle, file, sessionId, validBytes)));
+    catch: orIo(sessionId, `Cannot open ${file}`),
+  }).pipe(
+    Effect.map((handle) => writerFor(handle, file, sessionId, seen.validBytes)),
+    Effect.uninterruptible,
+  );
 }

@@ -90,6 +90,13 @@ event appended or the last checkout, whichever is later. The title is the latest
   frozen) fails, stopping the plugins that write through it. The plugin is
   `exclusive`: a reload closes the old instance, which removes the lock, before
   the new one takes it, so two never write one log.
+- **Other programs.** The lock keeps out other Lemma processes, not other
+  programs. Before each write the file must still be linked and its size what
+  this process left, and a file is opened for writing only while it is the size
+  it was read at: a program that writes to, deletes, or replaces it makes the
+  write fail (`Io`) instead of interleaving with it or going to a deleted file,
+  and the session is read again on its next use. A deleted session is not
+  recreated.
 - **Reading.** Files are read a chunk at a time, so no string holds a whole file
   and a session larger than the longest string Node allows still opens (each line
   must still fit in one). Opening validates every line; listing uses `JSON.parse`

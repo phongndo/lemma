@@ -740,4 +740,108 @@ describe("unloading idle sessions", () => {
       }),
     );
   });
+
+  it("stops writing a file another program changed, then reads it again", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, custom(1));
+        const [file] = yield* Effect.promise(sessionFiles);
+        const outside = { seq: 2, id: "outside", parent: first.id, at: Date.now(), data: custom(2) };
+        yield* Effect.promise(() => fs.appendFile(file!, `${JSON.stringify(outside)}\n`));
+        const error = yield* Effect.flip(store.append(id, custom(3)));
+        expect(error.reason).toBe("Io");
+        expect(error.message).toContain("changed on disk");
+        expect(yield* store.append(id, custom(3))).toMatchObject({ seq: 3, parent: "outside" });
+      }),
+    );
+  });
+
+  it("refuses to open for writing a file another program changed since it was read, then reads it again", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        return id;
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const [first] = yield* store.events(id);
+        // Read, not yet written: then another program appends.
+        const [file] = yield* Effect.promise(sessionFiles);
+        const outside = { seq: 2, id: "outside", parent: first!.id, at: Date.now(), data: custom(2) };
+        yield* Effect.promise(() => fs.appendFile(file!, `${JSON.stringify(outside)}\n`));
+        expect((yield* Effect.flip(store.append(id, custom(3)))).message).toContain("changed on disk");
+        expect(yield* store.append(id, custom(3))).toMatchObject({ seq: 3, parent: "outside" });
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1), custom(2), custom(3)]);
+      }),
+    );
+  });
+
+  it("stops writing a file that was deleted or replaced under it", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        const [file] = yield* Effect.promise(sessionFiles);
+        yield* Effect.promise(async () => {
+          const copy = `${file}.copy`;
+          await fs.copyFile(file!, copy);
+          await fs.rename(copy, file!);
+        });
+        const error = yield* Effect.flip(store.append(id, custom(2)));
+        expect(error).toMatchObject({ reason: "Io" });
+        expect(error.message).toContain("deleted or replaced");
+        // The replacement is read and written from then on.
+        expect((yield* store.append(id, custom(2))).seq).toBe(2);
+      }),
+    );
+  });
+
+  it("finishes a removal or creation interrupted part-way, so memory matches the disk", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        return (yield* store.create()).id;
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        // The removal is interrupted while it deletes the file.
+        const rm = fs.rm;
+        let resume: (() => void) | undefined;
+        const deleting = new Promise<void>((resolve) => {
+          vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+            if (String(target).endsWith(".jsonl") && resume === undefined) {
+              await new Promise<void>((done) => {
+                resume = done;
+                resolve();
+              });
+            }
+            return rm(target, options);
+          });
+        });
+        const removal = yield* Effect.fork(store.remove(id));
+        yield* Effect.promise(() => deleting);
+        const interrupting = yield* Effect.fork(Fiber.interrupt(removal));
+        resume!();
+        yield* Fiber.join(interrupting);
+        vi.restoreAllMocks();
+        expect(yield* store.list()).toEqual([]);
+        expect((yield* Effect.flip(store.get(id))).reason).toBe("NotFound");
+        // Interrupting a creation leaves a session that can be written, or none.
+        const creating = yield* Effect.fork(store.create());
+        yield* Effect.yieldNow();
+        yield* Fiber.interrupt(creating);
+        for (const info of yield* store.list()) yield* store.append(info.id, custom(1));
+      }),
+    );
+    expect((await sessionFiles()).length).toBeLessThanOrEqual(1);
+  });
 });
