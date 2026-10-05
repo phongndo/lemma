@@ -83,6 +83,9 @@ const watchCloses = () => {
   return closed;
 };
 
+/** Handles on a session's file closed so far: reading it, and unloading it, each close one. */
+const closesOf = (closed: readonly string[], id: string) => closed.filter((file) => file.endsWith(`_${id}.jsonl`)).length;
+
 /** Waits for the sweep to unload a session: closing its file is the last thing it does. */
 const unloaded = (closed: readonly string[], id: string) =>
   Effect.promise(() => vi.waitFor(() => expect(closed.some((file) => file.endsWith(`_${id}.jsonl`))).toBe(true)));
@@ -198,7 +201,8 @@ describe("sessions", () => {
       }),
     );
     const [bad] = await sessionFiles();
-    await fs.appendFile(bad!, "garbage\n");
+    // Damage with a line after it, so not a write cut short at the end.
+    await fs.appendFile(bad!, `garbage\n${JSON.stringify({ seq: 1, id: "x1", parent: null, at: 1, data: custom(1) })}\n`);
     const badId = idOfFile(bad!);
     await run(
       Effect.gen(function* () {
@@ -535,11 +539,11 @@ describe("unloading idle sessions", () => {
         const second = yield* store.append(id, custom(2));
         const info = yield* store.checkout(id, first.id);
         yield* unloaded(closed, id);
-        const readFile = vi.spyOn(fs, "readFile");
+        const atUnload = closesOf(closed, id);
         expect(yield* store.list()).toEqual([info]);
-        expect(readFile).not.toHaveBeenCalled();
+        expect(closesOf(closed, id)).toBe(atUnload);
         expect((yield* store.events(id)).map((event) => event.id)).toEqual([first.id, second.id]);
-        expect(readFile).toHaveBeenCalledTimes(1);
+        expect(closesOf(closed, id)).toBe(atUnload + 1);
         expect(yield* store.get(id)).toEqual(info);
         expect(yield* store.append(id, custom(3))).toMatchObject({ seq: 3, parent: first.id });
       }),
@@ -604,13 +608,13 @@ describe("unloading idle sessions", () => {
       Effect.gen(function* () {
         const store = yield* Sessions;
         const { id } = yield* store.create();
-        const readFile = vi.spyOn(fs, "readFile");
+        const closed = watchCloses();
         for (let i = 0; i < 25; i++) {
           yield* store.get(id);
           yield* Effect.sleep(10);
         }
         yield* store.events(id);
-        expect(readFile).not.toHaveBeenCalled();
+        expect(closesOf(closed, id)).toBe(0);
       }),
       { unloadAfter: 0.1 },
     );
@@ -622,12 +626,87 @@ describe("unloading idle sessions", () => {
         const store = yield* Sessions;
         const { id } = yield* store.create();
         yield* store.append(id, custom(1));
+        const closed = watchCloses();
         yield* Effect.sleep(50);
-        const readFile = vi.spyOn(fs, "readFile");
         expect((yield* store.events(id)).length).toBe(1);
-        expect(readFile).not.toHaveBeenCalled();
+        expect(closesOf(closed, id)).toBe(0);
       }),
       { unloadAfter: 0 },
+    );
+  });
+
+  it("treats an unreadable last line as a write a crash cut short: ignored with a notice, then cut before the next append", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        return id;
+      }),
+    );
+    const [file] = await sessionFiles();
+    // A power loss can keep a line's newline but leave zeros where its bytes were.
+    await fs.appendFile(file!, `${"\0".repeat(40)}\n`);
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const events = yield* Events;
+        expect((yield* store.list()).map((info) => info.lastSeq)).toEqual([1]);
+        const notices = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
+        yield* Effect.yieldNow();
+        expect((yield* store.events(id)).length).toBe(1);
+        expect(Chunk.toArray(yield* Fiber.join(notices))[0]!.message).toContain("ignored the last 41 bytes");
+        expect((yield* store.append(id, custom(2))).seq).toBe(2);
+      }),
+    );
+    expect(await fs.readFile(file!, "utf8")).not.toContain("\0");
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1), custom(2)]);
+      }),
+    );
+  });
+
+  it("reads lines longer than its read buffer", async () => {
+    const long = "é".repeat(1_500_000);
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, { type: "custom", kind: "test/long", data: long });
+        yield* store.append(id, custom(2));
+        return id;
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]!.lastSeq).toBe(2);
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([{ type: "custom", kind: "test/long", data: long }, custom(2)]);
+      }),
+    );
+  });
+
+  it("removes a line whose sync failed even when nothing is written after it", async () => {
+    const probe = await fs.open(path.join(dir, "probe"), "w");
+    const FileHandle = Object.getPrototypeOf(probe) as fs.FileHandle;
+    await probe.close();
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        vi.spyOn(FileHandle, "datasync").mockRejectedValueOnce(Object.assign(new Error("I/O error"), { code: "EIO" }));
+        expect((yield* Effect.flip(store.append(id, custom(2)))).reason).toBe("Io");
+        return id;
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1)]);
+      }),
     );
   });
 });

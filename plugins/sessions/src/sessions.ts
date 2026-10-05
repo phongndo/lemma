@@ -150,6 +150,10 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         if (entries.get(entry.id) !== entry) return yield* notFound(entry.id, `Session ${entry.id} does not exist`);
         if (entry.open !== undefined) return entry.open;
         const loaded = yield* load(entry.file, entry.id);
+        if (loaded.size > loaded.validBytes) {
+          const ignored = loaded.size - loaded.validBytes;
+          yield* warn(`Session ${entry.id}: ignored the last ${ignored} bytes of ${entry.file}, a write a crash cut short; they are cut before the next write`);
+        }
         const open: Open = { ...loaded };
         entry.open = open;
         entry.info = infoOfOpen(open);

@@ -56,6 +56,11 @@ export function decodeLine(text: string, header: boolean): Either.Either<Line, s
   } catch {
     return Either.left("not JSON");
   }
+  return decodeRecord(json, header);
+}
+
+/** Decodes a line already parsed as JSON. Left carries a one-line reason. */
+export function decodeRecord(json: unknown, header: boolean): Either.Either<Line, string> {
   if (header) return Either.mapLeft(decodeHeader(json), (error) => firstLine(error.message));
   const type = typeof json === "object" && json !== null ? (json as { type?: unknown }).type : undefined;
   const decoded: Either.Either<Line, ParseResult.ParseError> =

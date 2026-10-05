@@ -42,13 +42,17 @@ event appended or the last checkout, whichever is later. The title is the latest
   and `fdatasync` before returning; `create` also fsyncs the directory. Appends to
   one session are serialized by a semaphore. The cost is one sync per event, and
   the agent appends only settled events (never stream deltas).
-- **Crash tolerance.** Bytes after the last newline are a torn write: they are
-  ignored when reading and cut off before the next append. A write that fails at
-  runtime (full disk, failed sync) fails the append, and the next write (or
-  unloading the session, or the plugin closing) first truncates the file back to
-  the last confirmed line. Any _complete_ line that does not decode, an unknown parent, a seq gap,
-  or a checkout to nowhere makes the session `Corrupt`. Skipping such a line
-  would silently change what the model saw.
+- **Crash tolerance.** A write a crash cut short is a torn write: bytes after the
+  last newline, or a last line that is not JSON (a power loss can keep a line's
+  newline but not its bytes). It is ignored when reading, with a `Notice` when
+  the session is opened, and cut off before the next append. A write that fails at
+  runtime (full disk, failed sync) fails the append and truncates the file back to
+  the last confirmed line, at once or, failing that, before the next write, when
+  the session is unloaded, or when the plugin closes; every confirmed line was
+  synced when it was written, so retrying never relies on a failed sync. Any other
+  complete line that does not decode, an unknown parent, a seq gap, or a checkout
+  to nowhere makes the session `Corrupt`. Skipping such a line would silently
+  change what the model saw.
 - **Validation.** `append` validates the event against the schema first, so a line
   that could not be read back is never written. `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file; a file is
@@ -61,7 +65,7 @@ event appended or the last checkout, whichever is later. The title is the latest
   once a minute) then closes the file and drops the events, skipping a session
   in the middle of an operation; `list` keeps its info without re-reading the
   file, and the next use reloads it. A loaded session takes about 1.1× its file
-  size in heap, and reloading a 40 MB one about 85 ms: without unloading, a
+  size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
   long-running host's heap and open files grow with every session it touches.
 - **One process per directory.** The store holds `<Paths.sessions>/.lock`
   (`{ pid, hostname, token, startedAt }`) while it runs, and touches it every 10
@@ -83,6 +87,10 @@ event appended or the last checkout, whichever is later. The title is the latest
   frozen) fails, stopping the plugins that write through it. The plugin is
   `exclusive`: a reload closes the old instance, which removes the lock, before
   the new one takes it, so two never write one log.
+- **Reading.** Files are read a chunk at a time, so no string holds a whole file
+  and a session larger than the longest string Node allows still opens (each line
+  must still fit in one). Opening validates every line; listing uses `JSON.parse`
+  alone.
 - **Removal.** `remove` closes the file and deletes it; the session is gone from
   memory and listings, and `SessionRemoved` is published.
 - `SessionAppended` and `SessionChanged` are published after each write. They are

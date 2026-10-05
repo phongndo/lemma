@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { Effect, Either } from "effect";
 import { SessionError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
-import { decodeLine, encodeLine } from "./format.ts";
+import { decodeRecord, encodeLine } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
 export const errorCode = (cause: unknown): string | undefined =>
@@ -19,13 +19,85 @@ export const io = (sessionId: string | undefined, message: string) => (cause: un
 
 const corrupt = (sessionId: string, file: string, message: string) => new SessionError({ sessionId, reason: "Corrupt", message: `${file}: ${message}` });
 
-/** Complete lines of a file and where they end. Bytes after the last newline are a torn write and are ignored. */
-function splitComplete(buffer: Buffer): { readonly lines: string[]; readonly validBytes: number } {
-  const end = buffer.lastIndexOf(0x0a) + 1;
-  const text = buffer.subarray(0, end).toString("utf8");
-  const lines = text.split("\n");
-  lines.pop();
-  return { lines, validBytes: end };
+/** What reading a file saw. */
+export interface Extent {
+  /** End of the last line taken; bytes after it are a torn write. */
+  readonly validBytes: number;
+  /** Bytes read in all. */
+  readonly size: number;
+}
+
+const CHUNK = 1 << 20;
+
+/**
+ * Calls `visit` with each complete line, and the byte it starts at, reading a
+ * chunk at a time: no string ever holds the whole file, so one too big for a
+ * single string still reads. `visit` returning false stops the read. Bytes
+ * after the last newline are not a line.
+ */
+async function readLines(file: string, visit: (text: string, start: number) => boolean): Promise<Extent> {
+  const handle = await fs.open(file, "r");
+  try {
+    const { size } = await handle.stat();
+    // Small files get a small buffer: a cold `list` reads many at once.
+    const chunk = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1 << 16, size)));
+    /** The current line's bytes from earlier chunks. */
+    let carried: Buffer[] = [];
+    let position = 0;
+    let lineStart = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) return { validBytes: lineStart, size: position };
+      const view = chunk.subarray(0, bytesRead);
+      let at = 0;
+      for (let newline = view.indexOf(0x0a); newline !== -1; newline = view.indexOf(0x0a, at)) {
+        const text = carried.length === 0 ? view.toString("utf8", at, newline) : Buffer.concat([...carried, view.subarray(at, newline)]).toString("utf8");
+        carried = [];
+        const start = lineStart;
+        at = newline + 1;
+        lineStart = position + at;
+        if (!visit(text, start)) return { validBytes: lineStart, size: position + bytesRead };
+      }
+      // The chunk is reused, so a line it ends inside is copied out.
+      if (at < bytesRead) carried.push(Buffer.from(view.subarray(at)));
+      position += bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * The lines of a file as JSON, to `visit` in order. A last line that is not
+ * JSON is a write a crash cut short (a power loss can leave one ending in a
+ * newline), so it is left out of `validBytes` like a torn tail; one with lines
+ * after it is damage. Returns why reading stopped, if it failed.
+ */
+async function readJson(
+  file: string,
+  visit: (json: unknown, line: number) => string | undefined,
+): Promise<{ readonly extent: Extent; readonly failure?: string }> {
+  let line = 0;
+  let failure: string | undefined;
+  let unreadable: { readonly line: number; readonly start: number } | undefined;
+  const extent = await readLines(file, (text, start) => {
+    line++;
+    if (unreadable !== undefined) {
+      failure = `line ${unreadable.line}: not JSON`;
+      return false;
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      unreadable = { line, start };
+      return true;
+    }
+    failure = visit(json, line);
+    return failure === undefined;
+  });
+  if (failure !== undefined) return { extent, failure };
+  return { extent: unreadable === undefined ? extent : { ...extent, validBytes: unreadable.start } };
 }
 
 /** Where a session is filed: the latest value of each mark. */
@@ -49,59 +121,65 @@ export interface Loaded {
   readonly title: string | undefined;
   readonly marks: FiledAs;
   readonly updatedAt: number;
-  /** Length of the file's complete lines; a longer file has a torn tail to cut before appending. */
+  /** End of the lines taken; a longer file has a torn tail to cut before appending. */
   readonly validBytes: number;
   readonly size: number;
 }
 
 /**
- * Reads and validates a whole session. Any unreadable complete line, an event
- * whose parent is unknown, or a checkout to nowhere is `Corrupt`: skipping one
- * would silently change what the model saw.
+ * Reads and validates a whole session. Any unreadable complete line but the
+ * last, an event whose parent is unknown, or a checkout to nowhere is
+ * `Corrupt`: skipping one would silently change what the model saw.
  */
 export function load(file: string, sessionId: string): Effect.Effect<Loaded, SessionError> {
-  return Effect.tryPromise({ try: () => fs.readFile(file), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
-    Effect.flatMap((buffer) =>
-      Effect.suspend(() => {
-        const { lines, validBytes } = splitComplete(buffer);
-        if (lines.length === 0) return Effect.fail(corrupt(sessionId, file, "missing header"));
-        const first = decodeLine(lines[0]!, true);
-        if (Either.isLeft(first)) return Effect.fail(corrupt(sessionId, file, `unreadable header (${first.left})`));
-        const header = first.right as Header;
-        const events: SessionEvent[] = [];
-        const byId = new Map<string, SessionEvent>();
-        let leaf: string | undefined;
-        let title: string | undefined;
-        let marks = unfiled;
-        let updatedAt = header.createdAt;
-        for (let i = 1; i < lines.length; i++) {
-          const decoded = decodeLine(lines[i]!, false);
-          if (Either.isLeft(decoded)) return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: ${decoded.left}`));
-          const line = decoded.right as Exclude<Line, Header>;
-          if ("type" in line && line.type === "marks") {
-            marks = applyMarks(marks, line);
-            continue;
-          }
-          if ("type" in line) {
-            if (!byId.has(line.leaf)) return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: checkout to unknown event ${line.leaf}`));
-            leaf = line.leaf;
-            updatedAt = Math.max(updatedAt, line.at);
-            continue;
-          }
-          if (line.seq !== events.length + 1)
-            return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: expected seq ${events.length + 1}, found ${line.seq}`));
-          if (byId.has(line.id)) return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: duplicate event id ${line.id}`));
-          if (line.parent !== null && !byId.has(line.parent)) return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: unknown parent ${line.parent}`));
-          events.push(line);
-          byId.set(line.id, line);
-          leaf = line.id;
-          if (line.data.type === "title") title = line.data.title;
-          updatedAt = Math.max(updatedAt, line.at);
-        }
-        return Effect.succeed({ header, events, byId, leaf, title, marks, updatedAt, validBytes, size: buffer.length });
+  return Effect.suspend(() => {
+    let header: Header | undefined;
+    const events: SessionEvent[] = [];
+    const byId = new Map<string, SessionEvent>();
+    let leaf: string | undefined;
+    let title: string | undefined;
+    let marks = unfiled;
+    let updatedAt = 0;
+    const visit = (json: unknown, n: number): string | undefined => {
+      if (header === undefined) {
+        const decoded = decodeRecord(json, true);
+        if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
+        header = decoded.right as Header;
+        updatedAt = header.createdAt;
+        return undefined;
+      }
+      const decoded = decodeRecord(json, false);
+      if (Either.isLeft(decoded)) return `line ${n}: ${decoded.left}`;
+      const line = decoded.right as Exclude<Line, Header>;
+      if ("type" in line && line.type === "marks") {
+        marks = applyMarks(marks, line);
+        return undefined;
+      }
+      if ("type" in line) {
+        if (!byId.has(line.leaf)) return `line ${n}: checkout to unknown event ${line.leaf}`;
+        leaf = line.leaf;
+        updatedAt = Math.max(updatedAt, line.at);
+        return undefined;
+      }
+      if (line.seq !== events.length + 1) return `line ${n}: expected seq ${events.length + 1}, found ${line.seq}`;
+      if (byId.has(line.id)) return `line ${n}: duplicate event id ${line.id}`;
+      if (line.parent !== null && !byId.has(line.parent)) return `line ${n}: unknown parent ${line.parent}`;
+      events.push(line);
+      byId.set(line.id, line);
+      leaf = line.id;
+      if (line.data.type === "title") title = line.data.title;
+      updatedAt = Math.max(updatedAt, line.at);
+      return undefined;
+    };
+    return Effect.tryPromise({ try: () => readJson(file, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
+      Effect.flatMap(({ extent, failure }) => {
+        if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
+        // The header is synced before `create` returns, so a file without one was never a session.
+        if (header === undefined) return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
+        return Effect.succeed({ header, events, byId, leaf, title, marks, updatedAt, validBytes: extent.validBytes, size: extent.size });
       }),
-    ),
-  );
+    );
+  });
 }
 
 /**
@@ -110,54 +188,54 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
  * still validates before anything is appended.
  */
 export function scan(file: string, sessionId: string): Effect.Effect<SessionInfo, SessionError> {
-  return Effect.tryPromise({ try: () => fs.readFile(file), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
-    Effect.flatMap((buffer) =>
-      Effect.suspend(() => {
-        const { lines } = splitComplete(buffer);
-        const first = lines.length === 0 ? Either.left("missing header") : decodeLine(lines[0]!, true);
-        if (Either.isLeft(first)) return Effect.fail(corrupt(sessionId, file, `unreadable header (${first.left})`));
-        const header = first.right as Header;
-        let leaf: string | undefined;
-        let title: string | undefined;
-        let marks = unfiled;
-        let updatedAt = header.createdAt;
-        let lastSeq = 0;
-        for (let i = 1; i < lines.length; i++) {
-          let line: {
-            type?: string;
-            leaf?: string;
-            id?: string;
-            seq?: number;
-            at?: number;
-            data?: { type?: string; title?: string };
-            pinned?: boolean;
-            archived?: boolean;
-          };
-          try {
-            line = JSON.parse(lines[i]!);
-          } catch {
-            return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: not JSON`));
-          }
-          if (typeof line !== "object" || line === null || Array.isArray(line)) {
-            return Effect.fail(corrupt(sessionId, file, `line ${i + 1}: not a record`));
-          }
-          if (line.type === "marks") {
-            marks = applyMarks(marks, line);
-            continue;
-          }
-          if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
-          if (line.type === "checkout") {
-            leaf = line.leaf;
-            continue;
-          }
-          leaf = line.id;
-          lastSeq = line.seq ?? lastSeq;
-          if (line.data?.type === "title") title = line.data.title;
-        }
+  return Effect.suspend(() => {
+    let header: Header | undefined;
+    let leaf: string | undefined;
+    let title: string | undefined;
+    let marks = unfiled;
+    let updatedAt = 0;
+    let lastSeq = 0;
+    const visit = (json: unknown, n: number): string | undefined => {
+      if (header === undefined) {
+        const decoded = decodeRecord(json, true);
+        if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
+        header = decoded.right as Header;
+        updatedAt = header.createdAt;
+        return undefined;
+      }
+      if (typeof json !== "object" || json === null || Array.isArray(json)) return `line ${n}: not a record`;
+      const line = json as {
+        type?: string;
+        leaf?: string;
+        id?: string;
+        seq?: number;
+        at?: number;
+        data?: { type?: string; title?: string };
+        pinned?: boolean;
+        archived?: boolean;
+      };
+      if (line.type === "marks") {
+        marks = applyMarks(marks, line);
+        return undefined;
+      }
+      if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
+      if (line.type === "checkout") {
+        leaf = line.leaf;
+        return undefined;
+      }
+      leaf = line.id;
+      lastSeq = line.seq ?? lastSeq;
+      if (line.data?.type === "title") title = line.data.title;
+      return undefined;
+    };
+    return Effect.tryPromise({ try: () => readJson(file, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
+      Effect.flatMap(({ extent, failure }) => {
+        if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
+        if (header === undefined) return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
         return Effect.succeed(infoOf(header, { leaf, title, marks, updatedAt, lastSeq }));
       }),
-    ),
-  );
+    );
+  });
 }
 
 export const infoOf = (
@@ -185,8 +263,9 @@ export const infoOf = (
  * Append-only handle on one file. Each write is followed by `fdatasync`, so a
  * returned append survives a crash or power loss, not just a process exit.
  * A failed write may leave bytes behind (a torn line, or a whole line that was
- * never confirmed); the next write first truncates back to the last confirmed
- * line, so the file keeps matching what callers were told was appended.
+ * never confirmed); they are truncated away at once, or failing that before
+ * the next write or by `settle`, so the file keeps matching what callers were
+ * told was appended.
  */
 export interface Writer {
   readonly write: (line: Line) => Effect.Effect<void, SessionError>;
@@ -197,12 +276,13 @@ export interface Writer {
 
 const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confirmed: number): Writer => {
   let end = confirmed;
-  let dirty = false;
+  /** Bytes a failed write may have left after `end`. */
+  let unconfirmed = 0;
   const cut = async () => {
-    if (!dirty) return;
+    if (unconfirmed === 0) return;
     await handle.truncate(end);
     await handle.datasync();
-    dirty = false;
+    unconfirmed = 0;
   };
   return {
     write: (line) =>
@@ -210,11 +290,18 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
         try: async () => {
           await cut();
           const text = encodeLine(line);
-          dirty = true;
-          await handle.appendFile(text);
-          await handle.datasync();
-          dirty = false;
-          end += Buffer.byteLength(text);
+          const bytes = Buffer.byteLength(text);
+          unconfirmed = bytes;
+          try {
+            await handle.appendFile(text);
+            await handle.datasync();
+          } catch (cause) {
+            // So a restart does not find a line whose append failed, should this be the session's last write.
+            await cut().catch(() => undefined);
+            throw cause;
+          }
+          unconfirmed = 0;
+          end += bytes;
         },
         catch: io(sessionId, `Cannot write ${file}`),
       }),
