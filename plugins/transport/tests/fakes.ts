@@ -24,6 +24,8 @@ import {
   UiChanged,
   Workspace,
   WorkspaceError,
+  FileSearchError,
+  FileSearchers,
 } from "@lemma/contracts";
 import type {
   AssistantMessage,
@@ -39,7 +41,7 @@ import type {
   UiComposition,
   WorkspaceStatus,
 } from "@lemma/contracts";
-import { definePlugin, Events, Hooks, ReloadError, Diagnostic } from "@lemma/core";
+import { definePlugin, Events, Hooks, PluginContext, ReloadError, Diagnostic } from "@lemma/core";
 import type { Core } from "@lemma/core";
 
 /** In-memory session logs that publish the same events the real plugin does. */
@@ -403,4 +405,32 @@ export const fakeWorkspace = definePlugin({
         ),
     };
   }),
+});
+
+/** `/work` holds `src/app.ts` and `src/`; any other path is not a directory. */
+export const fakeFileSearch = definePlugin({
+  id: "file-search",
+  layer: Layer.scopedDiscard(
+    Effect.flatMap(PluginContext, (owner) =>
+      owner
+        .add(FileSearchers, {
+          id: owner.id,
+          search: (cwd, query, options) => {
+            if (cwd !== "/work") return Effect.fail(new FileSearchError({ path: cwd, reason: "NotFound", message: `"${cwd}" is not a directory` }));
+            const all = [
+              { path: "src/app.ts", kind: "file" as const },
+              { path: "src", kind: "directory" as const },
+            ].filter(
+              (entry) =>
+                entry.path.includes(query) &&
+                (options?.kind === undefined || entry.kind === options.kind) &&
+                (options?.within === undefined || entry.path.startsWith(`${options.within}/`)),
+            );
+            const limit = options?.limit ?? 50;
+            return Effect.succeed({ root: cwd, entries: all.slice(0, limit), truncated: all.length > limit });
+          },
+        })
+        .pipe(Effect.orDie),
+    ),
+  ),
 });

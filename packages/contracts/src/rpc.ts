@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from "./agent.ts";
 import { CommandInfo, CommandResult } from "./commands.ts";
 import { ConfigField, ConfigValues } from "./config.ts";
+import { FileSearchOptions, FileSearchResult } from "./files.ts";
 import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, PluginChange, PluginSource, RegistryUse, UiComposition } from "./host.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
@@ -170,6 +171,13 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Workspace.Checkout", {
     payload: { path: Schema.String, branch: Schema.String, create: Schema.optional(Schema.Boolean) },
     success: WorkspaceStatus,
+    error: HostError,
+  }),
+
+  /** Entries in `cwd` matching `query`, best first (see `FileSearch`). */
+  Rpc.make("Files.Search", {
+    payload: { cwd: Schema.String, query: Schema.String, ...FileSearchOptions.fields },
+    success: FileSearchResult,
     error: HostError,
   }),
 

@@ -4,6 +4,7 @@ export * from "./commands.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
 export * from "./derive.ts";
+export * from "./files.ts";
 export * from "./host.ts";
 export * from "./inspectors.ts";
 export * from "./interaction.ts";

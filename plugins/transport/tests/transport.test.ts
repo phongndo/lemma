@@ -17,7 +17,18 @@ import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
 import transport, { readDiscovery } from "../src/index.ts";
 import { loadToken } from "../src/token.ts";
-import { fakeAgent, prompted, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
+import {
+  fakeAgent,
+  prompted,
+  fakeGreeter,
+  fakeHostControl,
+  fakeInteraction,
+  fakeLlm,
+  fakePaths,
+  fakeSessions,
+  fakeWorkspace,
+  fakeFileSearch,
+} from "./fakes.ts";
 import type { ControlHolder } from "./fakes.ts";
 
 type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
@@ -392,6 +403,51 @@ describe("transport", () => {
           expect(hostError(yield* Effect.exit(client.Workspace.Checkout({ path: "/work", branch: "nope" })))).toEqual(
             new HostError({ code: "Failed", message: "fatal: invalid reference: nope", subject: "/work" }),
           );
+        }),
+      ),
+    30_000,
+  );
+
+  test(
+    "searches files with the caller's options, through the first searcher",
+    () =>
+      withHost(
+        (host) =>
+          Effect.gen(function* () {
+            const client = yield* host.connect("websocket");
+            expect(yield* client.Files.Search({ cwd: "/work", query: "src" })).toEqual({
+              root: "/work",
+              entries: [
+                { path: "src/app.ts", kind: "file" },
+                { path: "src", kind: "directory" },
+              ],
+              truncated: false,
+            });
+            expect(yield* client.Files.Search({ cwd: "/work", query: "src", limit: 1, kind: "directory" })).toEqual({
+              root: "/work",
+              entries: [{ path: "src", kind: "directory" }],
+              truncated: false,
+            });
+            expect(hostError(yield* Effect.exit(client.Files.Search({ cwd: "/elsewhere", query: "" })))).toEqual(
+              new HostError({ code: "NotFound", message: '"/elsewhere" is not a directory', subject: "/elsewhere" }),
+            );
+            expect((yield* client.Files.Search({ cwd: "/work", query: "", within: "src" })).entries).toEqual([{ path: "src/app.ts", kind: "file" }]);
+          }),
+        {},
+        undefined,
+        [fakeFileSearch],
+      ),
+    30_000,
+  );
+
+  test(
+    "answers Unavailable with no file searcher, and keeps serving",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          expect(hostError(yield* Effect.exit(client.Files.Search({ cwd: "/work", query: "" })))).toMatchObject({ code: "Unavailable", subject: "/work" });
+          expect((yield* client.Workspace.Status({ path: "/work" })).exists).toBe(true);
         }),
       ),
     30_000,

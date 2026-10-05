@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin } from "@lemma/contracts";
+import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles } from "@lemma/contracts";
 import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { toHostError, toPluginStatus } from "./errors.ts";
 import type { Hub } from "./hub.ts";
@@ -19,7 +19,7 @@ export interface HandlerServices {
   readonly control: Context.Tag.Service<HostControl>;
   readonly workspace: Context.Tag.Service<Workspace>;
   readonly commands: Context.Tag.Service<Commands>;
-  /** The core's registries: host plugins' `Inspectors` are read from them. */
+  /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
   readonly registries: Context.Tag.Service<Registries>;
   /** Runs `Llm.login` in the plugin's scope; see `makeLogins`. */
   readonly login: ReturnType<typeof makeLogins>;
@@ -85,6 +85,14 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Workspace.Branches": ({ path }) => workspace.branches(path).pipe(Effect.mapError(toHostError)),
     "Workspace.Checkout": ({ path, branch, create }) =>
       workspace.checkout(path, branch, create === undefined ? undefined : { create }).pipe(Effect.mapError(toHostError)),
+
+    // Read at each call, not required: turning file search off leaves the transport, and everything else, running.
+    "Files.Search": ({ cwd, query, limit, kind, within }) =>
+      searchFiles(registries, cwd, query, {
+        ...(limit === undefined ? {} : { limit }),
+        ...(kind === undefined ? {} : { kind }),
+        ...(within === undefined ? {} : { within }),
+      }).pipe(Effect.mapError(toHostError)),
 
     "Command.List": () => commands.list,
     "Command.Run": ({ id, cwd, sessionId, origin }) =>

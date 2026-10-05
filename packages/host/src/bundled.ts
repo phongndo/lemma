@@ -5,6 +5,7 @@ import commands from "@lemma/plugin-commands";
 import compaction from "@lemma/plugin-compaction";
 import * as builtinCommands from "@lemma/plugin-commands-builtin";
 import credentials from "@lemma/plugin-credentials";
+import fileSearch from "@lemma/plugin-file-search-fff";
 import interaction from "@lemma/plugin-interaction";
 import llm from "@lemma/plugin-llm-pi-ai";
 import projectContext from "@lemma/plugin-project-context";
@@ -41,6 +42,7 @@ export function bundled(host: Plugin): readonly Plugin[] {
     compaction,
     projectContext,
     workspace,
+    fileSearch,
     commands,
     builtinCommands.host,
     builtinCommands.llm,

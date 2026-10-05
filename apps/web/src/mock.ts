@@ -1,6 +1,7 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Schema } from "effect";
 import { HostError, configValues, describeConfig, emptyUsage, secret } from "@lemma/contracts";
+import { fuzzy } from "./model/palette.ts";
 import type {
   AssistantMessage,
   EventData,
@@ -225,6 +226,12 @@ export const createMockHost = (): Host => {
         description: "Total text characters one result may carry to the model.",
       }),
     }),
+    "file-search": Schema.Struct({
+      idleMinutes: Schema.optionalWith(Schema.Number.pipe(Schema.positive()), { default: () => 15 }).annotations({
+        title: "Keep an index for",
+        description: "Minutes a directory's index stays in memory after its last search; the next search opens it again.",
+      }),
+    }),
     transport: Schema.Struct({
       port: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 65535)), { default: () => 7433 }).annotations({
         description: "0 asks the OS for a free port.",
@@ -255,6 +262,7 @@ export const createMockHost = (): Host => {
     bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
     bundled("project-context", { requires: ["lemma/Paths"] }),
     bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"], locked: needed }),
+    bundled("file-search", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["file-search"] }] }),
     bundled("commands", { provides: ["lemma/Commands"], locked: needed }),
     bundled("commands-host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
     bundled("commands-llm", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
@@ -679,6 +687,28 @@ export const createMockHost = (): Host => {
 
   const notFound = (sessionId: string) => new Error(`Session ${sessionId} not found`);
 
+  /** Every project has these: the composer's `@` searches them. */
+  const mockFiles = [
+    "README.md",
+    "package.json",
+    "src/main.ts",
+    "src/app.tsx",
+    "src/components/Composer.tsx",
+    "src/components/Sidebar.tsx",
+    "src/lib/format.ts",
+    "src/styles.css",
+    "tests/app.test.ts",
+    "flake.nix",
+    "Dockerfile",
+    ".gitignore",
+    "scripts/release.sh",
+    "tools/codegen.py",
+  ];
+  const mockEntries = [
+    ...mockFiles.map((path) => ({ path, kind: "file" as const })),
+    ...["src", "src/components", "src/lib", "tests"].map((path) => ({ path, kind: "directory" as const })),
+  ];
+
   return {
     session: {
       list: async () => [...sessions.values()].map((s) => s.info).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -871,6 +901,31 @@ export const createMockHost = (): Host => {
         if (options?.create === true || !mockBranches.includes(name)) mockBranches.unshift(name);
         currentBranch = name;
         return workspaceStatus(path);
+      },
+    },
+    files: {
+      search: async (cwd, query, options) => {
+        await sleep(40);
+        const within = options?.within?.replace(/\/+$/, "");
+        if (within !== undefined && !mockEntries.some((entry) => entry.kind === "directory" && entry.path === within)) {
+          throw new HostError({ code: "NotFound", message: `"${cwd}/${within}" is not a folder in ${cwd}`, subject: `${cwd}/${within}` });
+        }
+        const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+        const ranked = mockEntries
+          .filter((entry) => options?.kind === undefined || entry.kind === options.kind)
+          .filter((entry) => within === undefined || entry.path.startsWith(`${within}/`))
+          .flatMap((entry) => {
+            let score = 0;
+            for (const token of tokens) {
+              const found = fuzzy(entry.path, token);
+              if (found === undefined) return [];
+              score += found.score;
+            }
+            return [{ entry, score }];
+          })
+          .sort((a, b) => b.score - a.score);
+        const limit = options?.limit ?? 50;
+        return { root: cwd, entries: ranked.slice(0, limit).map((item) => item.entry), truncated: ranked.length > limit };
       },
     },
     interaction: {

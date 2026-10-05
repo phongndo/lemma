@@ -8,6 +8,8 @@ import type {
   CommandResult,
   ConfigScope,
   DirectoryListing,
+  FileSearchOptions,
+  FileSearchResult,
   GitBranch,
   HostEvent,
   HostInfo,
@@ -108,6 +110,10 @@ export interface Host {
     readonly createWorktree: (path: string, options: { branch: string; base?: string }) => Promise<WorkspaceStatus>;
     readonly branches: (path: string) => Promise<readonly GitBranch[]>;
     readonly checkout: (path: string, branch: string, options?: { create?: boolean }) => Promise<WorkspaceStatus>;
+  };
+  readonly files: {
+    /** Entries in `cwd` matching `query`, best first (see `FileSearch`); rejects `NotFound` or `Unavailable`. */
+    readonly search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<FileSearchResult>;
   };
   readonly commands: {
     readonly list: () => Promise<readonly CommandInfo[]>;
@@ -286,6 +292,9 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       branches: (path) => call(rpc.Workspace.Branches({ path })),
       checkout: (path, branch, options) =>
         call(rpc.Workspace.Checkout(options?.create === undefined ? { path, branch } : { path, branch, create: options.create })),
+    },
+    files: {
+      search: (cwd, query, options) => call(rpc.Files.Search({ cwd, query, ...options })),
     },
     commands: {
       list: () => call(rpc.Command.List()),
