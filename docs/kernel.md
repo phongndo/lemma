@@ -54,44 +54,32 @@ pending → activating → active → draining → closed
                 ↘ failed ↗ (restart policy or explicit restart)
 ```
 
-Plugins activate in dependency order and dispose in reverse. `draining` admits no new work while in-flight work finishes. Closing the owning scope interrupts initialization and in-flight `core.run` work, then disposes plugins. Cancellation is cooperative: a stuck asynchronous finalizer can be reported as a deadline fault, but a synchronous loop blocking the event loop also prevents the deadline timer from running. In-process code cannot be forcibly killed by this library.
-
-Shutdown separates the caller's bounded wait from actual resource cleanup. After
-a timeout the core remains `closing`; cleanup continues in dependency order and
-retains resources that unfinished work may still use. It becomes `closed` only
-after cleanup finishes. The [lifetime contract](../packages/core/README.md#lifetime-and-failure-semantics)
-defines deadlines and observable failures. A stuck task has a core-level timeout,
-without inventing a plugin owner.
+Plugins activate in dependency order and dispose in reverse. `draining` admits
+no new work while in-flight work finishes. The [lifetime contract](../packages/core/README.md#lifetime-and-failure-semantics)
+specifies shutdown, deadlines, and what cooperative cancellation can and cannot
+stop.
 
 ## Reload
 
-`Loader.apply(next)`:
+The unit of reload is the plugin instance, not the operation: replacements
+start while the old instances keep serving, and in-flight work finishes on the
+instance it started with. A resource that cannot exist twice (a port, a lock, a
+unique name kept in a plugin's own data structure) makes its plugin
+`exclusive`, stopped before its replacement starts: that gap is explicit rather
+than pretending the swap was transactional. A core registry's items follow
+their contributor through the swap, so a contributor to one needs no such gap.
+The [loader contract](../packages/core/README.md#loader-and-reload) gives the
+steps and what each failure leaves running.
 
-1. Plan: resolve definitions, then decode configs and validate the whole graph. Collect diagnostics within each stage; on errors, stop before activation.
-2. Compute the affected set: plugins whose definition or config changed, plus their dependents.
-3. Start replacements in a staging scope while old instances keep serving. `exclusive` plugins (a port, a lock) are stopped first instead; that gap is explicit rather than pretending the swap was transactional.
-4. Swap. Old instances drain, then close.
-5. If staging fails, close the staging scope and return the failure. Old instances keep serving unless they were stopped for exclusive replacement; those can remain failed. After a successful swap, disposal faults are reported without undoing the new composition.
+## Faults
 
-The unit of reload is the plugin instance, not the operation: in-flight work finishes on the instance it started with.
-
-A registry's items follow their contributor through a reload: a replacement's
-items are added hidden while it stages, appear at the swap as the old
-instance's disappear, and leave when their scope closes. A unique key may pass
-to the plugin's own replacement, so a contributor needs no `exclusive` gap. A
-unique registration kept in a plugin's own data structure (not a core registry)
-is an exclusive resource instead: the contributor must release it during
-disposal before its replacement can register the same name. Once a swap or
-exclusive interruption begins, the supervised lifecycle operation completes even
-if its initiating caller is interrupted. The owner scope still controls shutdown.
-
-## Faults and diagnostics
-
-- `PluginFault { pluginId, phase, operation?, deadline?, cause }` carries a framework-observed failure and its original Effect cause. Phases: `config`, `activate`, `service`, `intercept`, `observe`, `background`, `dispose`.
-- `Diagnostic { severity, pluginId?, path?, message, suggestion? }` is a Schema class for structured composition diagnostics. Config problems carry the path into the config.
-- `Core.faults` provides bounded, ordered live delivery with sequence gaps revealing loss; `Core.inspect` retains the latest fault of each current instance. See the [supervision contract](../packages/core/README.md#supervision) for capacity and ownership semantics.
-- `CapabilityMismatch` and `DeadlineExceeded` appear as the cause inside a `PluginFault`, never on their own.
-- Effect's timeout races cannot fire inside an uninterruptible region, and lifecycle bookkeeping is uninterruptible by design. Deadlines therefore wait on a daemon fiber plus a timer rather than `Effect.timeout`; on expiry, cleanup keeps running in the background and is reported, while a drain is abandoned and its stale work interrupted.
+Faults and diagnostics are data attributed to a plugin instance; the
+[supervision contract](../packages/core/README.md#supervision) gives their
+shapes and delivery. Deadlines wait on a daemon fiber plus a timer rather than
+`Effect.timeout`, because Effect's timeout races cannot fire inside an
+uninterruptible region and lifecycle bookkeeping is uninterruptible by design.
+On expiry, cleanup keeps running in the background and is reported, while a
+drain is abandoned and its stale work interrupted.
 
 ## Limits
 
@@ -108,22 +96,3 @@ The core does not require a daemon, a filesystem layout, a central contract cata
 or an application registry. A `PluginSource` maps identifiers to definitions using
 the embedding application's choices. Remote proxies and untrusted-code isolation
 would need explicit designs and are outside the current library's guarantees.
-
-## Verification
-
-The property test (`packages/core/tests/sequences.test.ts`) drives a fault-injecting
-fixture through random sequences of apply, background failure, restart, and fault
-toggles. It checks resource ownership, registration lifetimes, dependency state,
-rollback, and shutdown. Focused regressions cover lifecycle calls from owned work,
-cancellation, deadlines, event closure, and exclusive registrations.
-
-`package:check` installs a packed build in a temporary consumer, checks emitted
-types, and exercises provider replacement and an actual HTTP listener on Node.js. `browser:check` also drives a DOM consumer in Chromium, checking hooks,
-events, replacement, failure isolation, and listener cleanup through package exports.
-
-`core:bench` measures framework costs; `core:stress` checks resource invariants and
-measures startup, operation latency, and memory during lifecycle churn. The
-[budget definitions](../packages/core/bench/budgets.ts) own the numerical limits
-and reference environment. These synthetic workloads do not establish superiority
-over another framework or production stability. CI checks deterministic contracts
-and retains advisory performance results on scheduled/manual runs.

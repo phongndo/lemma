@@ -2,13 +2,12 @@
 
 An Effect-native, domain-neutral plugin runtime. It composes typed capabilities,
 plugin-defined hooks and events, configuration, and scoped lifetimes. Applications
-and plugin authors define their own contracts and behavior. In the source repository,
-`docs/kernel.md` holds the design rationale.
+and plugin authors define their own contracts and behavior.
+[`docs/kernel.md`](../../docs/kernel.md) holds the design rationale.
 
 Only `effect` is a runtime dependency. Plugins are trusted, in-process modules;
 there is no security sandbox. The package exports ESM JavaScript and TypeScript
-declarations and targets Node.js 24 and browsers. `package:check` verifies a packed
-consumer on Node.js.
+declarations and targets Node.js 24 and browsers.
 
 ## Use
 
@@ -34,18 +33,7 @@ await Effect.runPromise(
 );
 ```
 
-See [`examples/hello.ts`](examples/hello.ts) for a capability implementation extended by a separate plugin through its own hook. From the repository root:
-
-```sh
-nix develop -c pnpm install --frozen-lockfile
-nix develop -c pnpm example
-nix develop -c pnpm core:check
-nix develop -c pnpm core:test
-nix develop -c pnpm core:bench
-```
-
-The package is private during development. `pnpm pack` in `packages/core` builds
-and packs it for local installation into another application.
+See [`examples/hello.ts`](examples/hello.ts) for a capability implementation extended by a separate plugin through its own hook (`nix develop -c pnpm example` runs it).
 
 ## Plugin contract
 
@@ -103,7 +91,7 @@ const result = yield * hooks.invoke(Render, "hello", Effect.succeed);
 
 These snippets assume the exports are imported from `@lemma/core`; the complete runnable example shows the wiring.
 
-The hook contract is deliberately one mechanism: awaited, sequential around middleware. A handler can modify the input passed to `next`, wrap its result, or short-circuit by not calling it. Side-effect observers can call `next` and preserve the result. Plugins needing fan-out or streams can provide those capabilities using Effect; the core does not silently detach event listeners or create queues.
+The hook contract is one mechanism: awaited, sequential around middleware. A handler can modify the input passed to `next`, wrap its result, or short-circuit by not calling it. Side-effect observers can call `next` and preserve the result. Plugins needing fan-out or streams can provide those capabilities using Effect; the core does not silently detach event listeners or create queues.
 
 - Lower `order` runs first; ties use plugin id, then that plugin's registration order.
 - A call snapshots its handler array. New registrations affect subsequent calls.
@@ -226,25 +214,44 @@ These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.
 Runtime-generated spans do not include hook arguments/results or plugin configuration.
 
-## Performance checks
+## Develop
 
-`core:bench` reports warm microbenchmarks for direct Effects, hook dispatch at several chain lengths (with tracing enabled/disabled), event publishing, `core.run` entry, mounting/disposing compositions, and reloading one plugin. It prints the runtime and machine and reports median/min/max **batch means**, not per-request latency percentiles. No external trace exporter is attached.
+From the repository root:
 
-Dispatch reuses immutable, pre-ordered registration arrays; it does not resolve the plugin graph per call. No-listener dispatch avoids constructing a middleware environment. Lifecycle steps cost more than dispatch: each activation and disposal forks supervised fibers and waits under a deadline, which is measured in the mount and reload cases. The property test in `tests/sequences.test.ts` runs random load/reload/fail/restart sequences against a fault-injecting fixture and checks resource, registration, and dependency invariants after every step; set `LEMMA_SEQUENCE_RUNS` to run more cases.
+```sh
+nix develop -c pnpm core:check                # type-check
+nix develop -c pnpm core:test                 # contract, lifecycle, failure, and property tests
+nix develop -c pnpm package:check             # install the packed package into a temporary consumer
+nix develop .#browser -c pnpm browser:check   # the same, plus a DOM consumer in Chromium
+nix develop -c pnpm perf:check                # build, then core:bench and core:stress
+```
 
-`core:stress` measures a separate cold package import, individual operation
-latencies, and heap/RSS across 200 mount/reload/fail/restart/dispose cycles, after
-20 warmup cycles. It forces GC every 20 cycles and asserts resource ownership.
-The packed HTTP consumer measures serial loopback request p99/throughput; the
-browser check measures the complete minified fixture including Effect, raw and
-gzip. These are synthetic consumer workloads, not application SLAs or a Cordis
-comparison.
+The package is private. `pnpm --filter @lemma/core pack` builds and packs it
+for installation into another application; Effect stays an external dependency.
 
-Initial numerical budgets and their reference environment live with the benchmark
-definitions in `bench/budgets.ts` in the source repository. `LEMMA_PERF_ENFORCE=1`
-turns budget misses into failing commands; default timing results are advisory.
-`LEMMA_BENCH_OUTPUT_DIR` writes dated JSON artifacts. Use an otherwise idle,
-comparable machine for before/after measurements. CI enforces correctness and
-keeps shared-runner performance advisory. Extended sequences accept
-`LEMMA_SEQUENCE_RUNS`, `LEMMA_SEQUENCE_SEED`, and the fast-check replay
-`LEMMA_SEQUENCE_PATH` shown by a failing run.
+`package:check` checks the emitted declarations and runs a consumer through the
+package export, outside this workspace: provider replacement, dependent
+reconstruction, cleanup, and an HTTP listener. Its temporary install may need
+network access. `browser:check` also drives a DOM consumer in Chromium.
+
+The property test (`tests/sequences.test.ts`) runs random
+load/reload/fail/restart sequences against a fault-injecting fixture and checks
+resource, registration, and dependency invariants after every step.
+`LEMMA_SEQUENCE_RUNS` runs more cases, `LEMMA_SEQUENCE_SEED` fixes the seed, and
+a failing run prints the `LEMMA_SEQUENCE_PATH` that replays it.
+
+`core:bench` reports warm microbenchmarks (direct Effects, hook dispatch at
+several chain lengths with tracing on and off, event publishing, `core.run`
+entry, mounting and disposing, reloading one plugin) as median/min/max batch
+means, not per-request percentiles. `core:stress` measures a cold package
+import, operation latencies, and heap/RSS across 200
+mount/reload/fail/restart/dispose cycles after 20 warmup cycles, forcing GC
+every 20 and asserting resource ownership. The packed consumers also measure
+loopback request p99 and throughput, and the minified browser bundle's size.
+These synthetic workloads measure framework overhead, not an application's
+performance.
+
+The budgets and their reference environment are in
+[`bench/budgets.ts`](bench/budgets.ts). Results are advisory:
+`LEMMA_PERF_ENFORCE=1` turns a budget miss into a failure (measure on an idle,
+comparable machine), and `LEMMA_BENCH_OUTPUT_DIR` writes dated JSON artifacts.

@@ -13,25 +13,19 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
 
 ## Behavior
 
-- **Attach first.** Like the CLI, it opens the page of the host `LEMMA_URL`
-  (with `LEMMA_TOKEN`) or `$LEMMA_HOME/remote.json` names, a host on another
-  machine ([remote access](../../docs/remote.md)), else of a running local host
-  found through `$LEMMA_HOME/transport.json`. With a remote host it never starts
-  a local one; if the remote does not answer at start, a dialog names its URL
-  and offers Retry or Quit. With neither, it starts one with Electron's Node
-  (`packages/host/src/main.ts --no-open`, the project being the directory
-  `pnpm desktop` ran from, else `~`). Never two: the sessions store has a
+- **Attach first.** Like the CLI, it opens the page of a remote host
+  ([remote access](../../docs/remote.md)) or of a running local one. With
+  neither, it starts a host with Electron's Node, for the directory
+  `pnpm desktop` ran from (else `~`). Never two: the sessions store has a
   single writer.
 - **A host it started stops when it quits.** One it attached to keeps running.
   On macOS, closing the last window leaves the app (and its host) running until
   you quit it.
-- **Reload** (the web app's `reload` plugin: a button beside the connection
-  dot, and a palette action) restarts a host the app started, which loads
-  changed code and dependencies (a turn it cuts off resumes), then reloads each
-  window at its address. Any other host (the one
-  `pnpm dev` runs, another terminal's, a remote one) keeps running: it re-reads
-  its config and plugin files, and the page reloads. Neither rebuilds the web
-  app for `pnpm desktop` nor reloads the desktop's own main process.
+- **Reload** (the button beside the connection dot) restarts a host the app
+  started, loading changed code (a turn it cuts off resumes), then reloads
+  each window at its address. Any other host keeps running and re-reads its
+  config and plugin files. Neither rebuilds the web app for `pnpm desktop` nor
+  reloads the desktop's own main process.
 - **Links open in the system browser.** Navigation stays within the host's
   origin.
 - **`lemma://` links open in the app.** `lemma://threads/<id>` shows that

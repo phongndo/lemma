@@ -46,8 +46,8 @@ file. Build every default so a user could have written it and could replace it.
    `lib/paint.ts`; what covers the page stacks by the `--z-*` tokens.
 4. A plugin whose model other plugins need, and whose view a user might turn
    off, is two plugins: the model (as `notify`) and the view (as `toasts`).
-5. Document new contracts where they are declared, and update the user-facing
-   list in [README.md](README.md) when a slot or part is added.
+5. Document new contracts where they are declared: `ui/contracts.ts` is the
+   list of slots and parts that users and the devtools read.
 
 Done means these pass:
 
