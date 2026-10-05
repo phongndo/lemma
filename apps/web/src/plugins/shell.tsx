@@ -1,9 +1,8 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { Dynamic } from "solid-js/web";
+import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { load, save } from "../lib/storage.ts";
 import { Actions, Docks, Layers, Layout, MainRegion, Root, SidebarRegion, Slots } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { SidebarIcon } from "../ui/parts.tsx";
+import { Contained, Each, SidebarIcon } from "../ui/parts.tsx";
 import styles from "./shell.css?inline";
 
 const WIDTH_KEY = "lemma.sidebar.width";
@@ -128,7 +127,7 @@ export default defineUiPlugin({
                 <>
                   {/* The shell owns the sidebar's box (width, collapse, drawer); whatever fills the region only fills it. */}
                   <div class="sidebar-slot">
-                    <Dynamic component={region.component} onPick={closeDrawer} />
+                    <Contained slot={SidebarRegion} item={region} component={region.component} props={{ onPick: closeDrawer }} />
                   </div>
                   <div
                     class="sidebar-rail"
@@ -147,13 +146,13 @@ export default defineUiPlugin({
             </Show>
             <div class="main-col">
               <Show when={main()} keyed>
-                {(region) => <Dynamic component={region.component} />}
+                {(region) => <Contained slot={MainRegion} item={region} component={region.component} />}
               </Show>
             </div>
-            <For each={slots.list(Layers)}>{(layer) => <Dynamic component={layer.component} />}</For>
+            <Each slot={Layers} />
           </div>
           {/* Docked under the app, which shrinks to the space left: each dock sizes itself. */}
-          <For each={slots.list(Docks)}>{(dock) => <Dynamic component={dock.component} />}</For>
+          <Each slot={Docks} />
         </div>
       );
     }

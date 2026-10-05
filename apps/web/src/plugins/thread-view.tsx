@@ -1,6 +1,5 @@
 import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "../model/format.ts";
 import { sessionTitle } from "../model/threads.ts";
@@ -23,7 +22,7 @@ import {
 import type { Action } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotItem } from "../ui/slots.ts";
-import { CopyIcon, PenSquareIcon, SidebarIcon, Spinner, StopIcon } from "../ui/parts.tsx";
+import { Contained, CopyIcon, Each, First, PenSquareIcon, SidebarIcon, Spinner, StopIcon } from "../ui/parts.tsx";
 import { copyText } from "../lib/clipboard.ts";
 import styles from "./thread-view.css?inline";
 
@@ -185,7 +184,7 @@ export default defineUiPlugin({
                 aria-selected={view()?.id === item.id}
                 onClick={() => setChosen(item.id)}
               >
-                <Dynamic component={item.icon} />
+                <Contained slot={Views} item={item} component={item.icon} />
               </button>
             )}
           </For>
@@ -197,15 +196,15 @@ export default defineUiPlugin({
       return (
         <main class="main">
           <header class="main-head">
-            <For each={slots.list(ThreadHeader).filter((item) => item.side === "start")}>{(item) => <Dynamic component={item.component} />}</For>
+            <Each slot={ThreadHeader} filter={(item) => item.side === "start"} />
             <span class="spacer" />
-            <For each={slots.list(ThreadHeader).filter((item) => item.side === "end")}>{(item) => <Dynamic component={item.component} />}</For>
+            <Each slot={ThreadHeader} filter={(item) => item.side === "end"} />
           </header>
           <Show
             when={unknown()}
             fallback={
               <Show when={view()} keyed fallback={<div class="scroller" />}>
-                {(item) => <Dynamic component={item.component} />}
+                {(item) => <Contained slot={Views} item={item} component={item.component} />}
               </Show>
             }
           >
@@ -219,9 +218,7 @@ export default defineUiPlugin({
             )}
           </Show>
           <Show when={unknown() === undefined && view()?.composer === true}>
-            <Show when={slots.first(ComposerRegion)} keyed>
-              {(composer) => <Dynamic component={composer.component} />}
-            </Show>
+            <First slot={ComposerRegion} />
           </Show>
         </main>
       );

@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import type { Accessor, Component, Setter } from "solid-js";
 import { Registry } from "@lemma/core";
 import type { Contribution, PluginContext, Registries } from "@lemma/core";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import type { Stream } from "effect";
 
 /**
@@ -78,8 +78,25 @@ export interface SlotsService {
   readonly owner: <T>(slot: Slot<T>, id: string) => string | undefined;
   /** The slot's items in order, each with the plugin that added it and its order. Reactive. */
   readonly contributions: <T>(slot: Slot<T>) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly order: number }[];
+  /**
+   * An item that threw while drawing (`Contained` calls this): reported as a
+   * fault of the plugin that added it, and left out of `list`, `first`, and
+   * `get` from then on, so a region shows its next item and a part its default.
+   * The item returns when its plugin adds it again (a restart).
+   */
+  readonly fail: <T>(slot: Slot<T>, item: SlotItem<T>, error: unknown) => void;
+  /** The slot's items that failed, with who added each and what it threw. Reactive. */
+  readonly failures: <T>(slot: Slot<T>) => readonly SlotFailure<T>[];
   /** The same registry, adding as `contributor`'s. `defineUiPlugin` hands each plugin its own. */
   readonly as: (contributor: Contributor) => SlotsService;
+}
+
+/** An item left out of its slot because it threw while drawing. */
+export interface SlotFailure<T> {
+  readonly item: SlotItem<T>;
+  /** The plugin that added it, when known. */
+  readonly pluginId?: string;
+  readonly error: unknown;
 }
 
 /** Runs a synchronous Effect: everything here only reads or changes registries in memory. */
@@ -109,7 +126,24 @@ export function createSlots(
     return found;
   };
   const refresh = <T>(slot: Slot<T>) => signal(slot)[1](run(registries.items(slot)) as readonly Contribution<unknown>[]);
-  const items = <T>(slot: Slot<T>) => signal(slot)[0]().map((contribution) => contribution.item as SlotItem<T>);
+  /** Who added each item last, to report its failures as theirs; a restarted plugin adding it again is a new contributor. */
+  const contributors = new WeakMap<object, Contributor>();
+  /**
+   * Items that threw while drawing, by slot name, each with the plugin instance
+   * that had added it: the same item added again by a restart is tried afresh.
+   * `failing` changes with it, so readers see an item leave.
+   */
+  const failed = new Map<string, (SlotFailure<unknown> & { readonly by: Contributor | undefined })[]>();
+  const [failing, setFailing] = createSignal(0);
+  const stillFailed = (failure: { readonly item: unknown; readonly by: Contributor | undefined }) => contributors.get(failure.item as object) === failure.by;
+  const working = (name: string, contribution: Contribution<unknown>) =>
+    !(failed.get(name)?.some((failure) => failure.item === contribution.item && stillFailed(failure)) ?? false);
+  const visible = <T>(slot: Slot<T>) => {
+    const all = signal(slot)[0]();
+    failing();
+    return failed.has(slot.name) ? all.filter((contribution) => working(slot.name, contribution)) : all;
+  };
+  const items = <T>(slot: Slot<T>) => visible(slot).map((contribution) => contribution.item as SlotItem<T>);
   const service = (owner: Contributor): SlotsService => ({
     add: (slot, item) => {
       // A stopping plugin's effects can still run; what they add would leave with it at once.
@@ -122,11 +156,30 @@ export function createSlots(
         ),
       );
       if (remove === undefined) return () => {};
+      contributors.set(item, owner);
       refresh(slot);
       return () => {
         run(remove);
         refresh(slot);
       };
+    },
+    fail: (slot, item, error) => {
+      const list = (failed.get(slot.name) ?? []).filter(stillFailed);
+      if (list.some((failure) => failure.item === item)) return;
+      const contributor = contributors.get(item);
+      failed.set(slot.name, [...list, { item, error, by: contributor, ...(contributor === undefined ? {} : { pluginId: contributor.id }) }]);
+      setFailing((count) => count + 1);
+      if (contributor === undefined) console.error(`lemma ui: an item of ${slot.name} failed`, error);
+      else run(contributor.fault(`draw ${slot.name} "${item.id}"`, Cause.die(error)));
+    },
+    failures: <T>(slot: Slot<T>) => {
+      const all = signal(slot)[0]();
+      failing();
+      // An item that has left, or that a restart added again, failed no longer.
+      const current = (failed.get(slot.name) ?? []).filter((failure) => stillFailed(failure) && all.some((contribution) => contribution.item === failure.item));
+      if (current.length === 0) failed.delete(slot.name);
+      else failed.set(slot.name, current);
+      return current.map(({ by: _, ...failure }) => failure) as unknown as readonly SlotFailure<T>[];
     },
     list: items,
     first: (slot) => items(slot)[0],

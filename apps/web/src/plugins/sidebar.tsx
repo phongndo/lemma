@@ -1,6 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import type { SessionInfo } from "@lemma/contracts";
 import { copyText } from "../lib/clipboard.ts";
 import { formatKeys } from "../lib/keys.ts";
@@ -24,14 +23,16 @@ import {
 } from "../ui/contracts.ts";
 import type { Action, ClientService, MenuAction, ThreadAction, ThreadsService, SidebarRowProps, WorkspaceService } from "../ui/contracts.ts";
 import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
-import type { SlotsService } from "../ui/slots.ts";
+import type { Slot, SlotItem, SlotsService } from "../ui/slots.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import {
   ArchiveIcon,
   ChatIcon,
   CheckIcon,
   CommandIcon,
+  Contained,
   CopyIcon,
+  Each,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
@@ -63,7 +64,14 @@ interface Deps {
  * A menu's items for one subject, grouped by `section`. An item with a
  * `confirm` text arms on the first pick, showing the text, and runs on the second.
  */
-function ActionMenu<Subject, Control>(props: { subject: Subject; control: Control; actions: readonly MenuAction<Subject, Control>[]; close: () => void }) {
+function ActionMenu<Subject, Control>(props: {
+  subject: Subject;
+  control: Control;
+  /** The slot the actions are items of, so one whose icon throws is named. */
+  slot: Slot<any>;
+  actions: readonly MenuAction<Subject, Control>[];
+  close: () => void;
+}) {
   const [armed, setArmed] = createSignal<MenuAction<Subject, Control> | undefined>();
   return (
     <For each={props.actions}>
@@ -87,7 +95,7 @@ function ActionMenu<Subject, Control>(props: { subject: Subject; control: Contro
                 action.run(props.subject, props.control);
               }}
             >
-              <Show when={action.icon}>{(icon) => <Dynamic component={icon()} />}</Show>
+              <Show when={action.icon}>{(icon) => <Contained slot={props.slot} item={action as unknown as SlotItem<unknown>} component={icon()} />}</Show>
               <span class="menu-label">{armed() === action ? confirm() : action.label(props.subject)}</span>
             </button>
           </>
@@ -148,7 +156,9 @@ function SessionRow(props: SidebarRowProps) {
               placement="bottom-start"
               controller={(handle) => (openMenu = handle.open)}
             >
-              {(close) => <ActionMenu subject={props.session} control={{ rename: () => setEditing(true) }} actions={props.actions} close={close} />}
+              {(close) => (
+                <ActionMenu subject={props.session} control={{ rename: () => setEditing(true) }} slot={ThreadActions} actions={props.actions} close={close} />
+              )}
             </Popover>
           </Show>
         </div>
@@ -277,7 +287,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
           </Show>
         </label>
         <div class="sidebar-actions">
-          <For each={slots.list(SidebarActions)}>{(item) => <Dynamic component={item.component} onPick={props.onPick} />}</For>
+          <Each slot={SidebarActions} props={{ onPick: props.onPick }} />
         </div>
       </div>
       <div class="session-groups">
@@ -332,7 +342,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
                     placement="bottom-start"
                     controller={(handle) => openProjectMenu.set(group.cwd, handle.open)}
                   >
-                    {(close) => <ActionMenu subject={group.cwd} control={undefined} actions={projectActions(group.cwd)} close={close} />}
+                    {(close) => <ActionMenu subject={group.cwd} control={undefined} slot={ProjectActions} actions={projectActions(group.cwd)} close={close} />}
                   </Popover>
                 </Show>
                 <button
@@ -356,7 +366,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
         </For>
       </div>
       <div class="sidebar-foot">
-        <For each={slots.list(SidebarFooter)}>{(item) => <Dynamic component={item.component} onPick={props.onPick} />}</For>
+        <Each slot={SidebarFooter} props={{ onPick: props.onPick }} />
       </div>
     </nav>
   );

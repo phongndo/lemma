@@ -132,6 +132,11 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
     ] as const) {
       if (pattern.test(text)) rule(why);
     }
+    // What a slot holds is drawn contained (`Contained`, `Each`, `First` in ui/parts.tsx), so a throw fails that item alone,
+    // named for its plugin, rather than freezing every view updated after it.
+    if (/import\s*\{[^}]*\bDynamic\b[^}]*\}\s*from\s*["']solid-js\/web["']/.test(text)) {
+      rule("draws with Dynamic (draw slot items with Contained, Each, or First from ui/parts.tsx, so a throw fails alone)");
+    }
     // One owner of global keys: overlays handle keys on their own element, and app keys are Actions.
     if (!["plugins/keymap.ts", "plugins/tooltips.tsx"].includes(name) && /(document|window)\.addEventListener\(\s*["']key/.test(text)) {
       rule("listens to keys page-wide (add an Action, or handle keys on your own element)");

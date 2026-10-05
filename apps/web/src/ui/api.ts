@@ -16,8 +16,9 @@ import { Segmented as DefaultSegmented, SettingRow as DefaultSettingRow } from "
 import { SearchField as DefaultSearchField } from "../components/search-field.tsx";
 import { Toggle as DefaultToggle } from "../components/toggle.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { bundled } from "../plugins/index.ts";
 import * as contracts from "./contracts.ts";
-import { defineUiPlugin } from "./define.ts";
+import { defineUiPlugin, extendUiPlugin } from "./define.ts";
 import * as parts from "./parts.tsx";
 import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
 
@@ -32,6 +33,10 @@ import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
  */
 export const api = {
   defineUiPlugin,
+  /** A plugin made from another's definition, such as a bundled one's: a replacement that keeps the original's later updates. */
+  extendUiPlugin,
+  /** The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. */
+  bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
   /** A route of the plugin's own (`/notes/:id`), for a `Pages` item; links to it are `router.href(route, params)`. */
   defineRoute,
@@ -46,7 +51,7 @@ export const api = {
   web,
   store,
   html,
-  /** The shared parts, as the bundled plugins draw them: each follows whatever replaces it. */
+  /** The shared parts, as the bundled plugins draw them: each follows whatever replaces it. `parts.Contained`, `Each`, and `First` draw a slot's items, each contained. */
   components: {
     ConfigForm: parts.ConfigForm,
     Dialog: parts.Dialog,

@@ -16,7 +16,8 @@ import { createServer } from "vite";
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
  *    page does it, and the page stays up and error-free either way.
  * 4. A part replaced by a lower-order item changes what renders, and the
- *    default returns when the replacement goes.
+ *    default returns when the replacement goes, or when the replacement throws
+ *    (named for its plugin, the rest of the app updating on).
  * 5. A plugin's stylesheet leaves when it stops and returns once when it starts.
  * 6. What a plugin adds to the places the defaults use (header, sidebar and
  *    composer buttons, workspace bar, palette sources, inspector tabs) shows.
@@ -60,6 +61,8 @@ const executablePath = engine === chromium ? process.env.LEMMA_CHROMIUM : undefi
 const browser = await engine.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 
 const errors: string[] = [];
+/** The app's warnings (`lemma ui: …` problems, each also a toast). */
+const warnings: string[] = [];
 const expectNoErrors = (when: string) => {
   const found = errors.splice(0);
   assert.deepEqual(found, [], `errors ${when}`);
@@ -72,6 +75,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "warning") warnings.push(message.text());
   });
   await page.goto(`${url}/?mock`);
   await settled(page);
@@ -133,6 +137,12 @@ try {
       .map((plugin: any) => plugin.id),
   );
   assert.deepEqual(off, [], "plugins not back on after the round trip");
+  // Turning a plugin off takes what needs it along, as the Plugins page shows: nothing to warn about.
+  assert.deepEqual(
+    warnings.filter((warning) => warning.includes("is not loaded")),
+    [],
+    "turning plugins off warned about the plugins that need them",
+  );
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
   await page.fill("textarea", "hello");
@@ -163,6 +173,45 @@ try {
   await page.waitForSelector(".turn .md");
   assert.equal(await page.locator(".replaced-markdown").count(), 0, "the replacement outlives its removal");
   expectNoErrors("replacing a part");
+  // A replacement that throws while drawing is left out for the default, its failure named for its plugin, and the
+  // app keeps updating: a later turn still draws.
+  await page.evaluate(async () => {
+    const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
+    (window as any).removeBroken = (window as any).lemma.slots().add(MarkdownPart, {
+      id: "check.broken-markdown",
+      order: 0,
+      component: () => {
+        throw new Error("check markdown boom");
+      },
+    });
+  });
+  await page.waitForFunction(async () => {
+    const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
+    return (window as any).lemma.slots().failures(MarkdownPart).length === 1;
+  });
+  assert.deepEqual(
+    await page.evaluate(async () => {
+      const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
+      return (window as any).lemma
+        .slots()
+        .failures(MarkdownPart)
+        .map((failure: any) => [failure.item.id, failure.pluginId, failure.error.message]);
+    }),
+    [["check.broken-markdown", "slots", "check markdown boom"]],
+    "the failing part is not named for its plugin",
+  );
+  await page.waitForSelector(".turn .md");
+  const turns = await page.locator(".turn").count();
+  await page.fill("textarea", "again");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((before) => document.querySelectorAll(".turn .md").length > before, turns, { timeout: 20_000 });
+  assert(await page.locator(".toast >> text=check markdown boom").count(), "the failing part's fault is not reported");
+  await page.evaluate(() => (window as any).removeBroken());
+  assert(
+    errors.some((error) => error.includes("check markdown boom")),
+    "the failing part is not logged",
+  );
+  errors.splice(0);
 
   // 6. What a plugin adds to the places the defaults use renders there: a marker in each.
   const marker = (slot: string, extra: Record<string, unknown> = {}) =>
@@ -338,6 +387,15 @@ try {
   const thread = await where();
   await page.reload();
   await page.waitForSelector(".turn", { timeout: 10_000 }).catch(() => assert.fail("a reload does not reopen the thread"));
+  // A tool view with a summary and no body retitles its calls and leaves the body to the chat's own.
+  await page.evaluate(async () => {
+    const { ToolViews } = await import("/src/ui/contracts.ts" as string);
+    (window as any).removeToolView = (window as any).lemma.slots().add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
+  });
+  if ((await page.locator(".work-head[aria-expanded=false]").count()) > 0) await page.click(".work-head[aria-expanded=false] >> nth=0");
+  await page.click(".tool-head:has-text('summarized by a plugin') >> nth=0");
+  await page.waitForSelector(".tool-body", { timeout: 5_000 }).catch(() => assert.fail("a tool view without a body hid the chat's own"));
+  await page.evaluate(() => (window as any).removeToolView());
   // A saved position out of reach (the window grew) ends at the nearest, and scrolling is remembered again after.
   await page.evaluate(async () => {
     const { Router } = await import("/src/ui/contracts.ts" as string);

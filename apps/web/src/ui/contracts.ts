@@ -288,6 +288,8 @@ export class HostPlugins extends Context.Tag("lemma-ui/HostPlugins")<HostPlugins
 export interface UiPluginsService extends PluginsService {
   /** Files loaded from `~/.lemma/ui` and a trusted project's `.lemma/ui`. */
   readonly files: Accessor<readonly UiFile[]>;
+  /** The routes known plugins declare (`defineUiPlugin({ routes })`), running or not, with the plugin declaring each. */
+  readonly routes: Accessor<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>;
   /** What went wrong loading UI files or planning the composition; each names its file or plugin. */
   readonly problems: Accessor<readonly string[]>;
   /** Opened with `?safe`: `ui` rows and UI files are ignored. */
@@ -295,6 +297,18 @@ export interface UiPluginsService extends PluginsService {
 }
 /** The web app's own plugins, which this page runs. */
 export class UiPlugins extends Context.Tag("lemma-ui/UiPlugins")<UiPlugins, UiPluginsService>() {}
+
+/**
+ * The version of these contracts: a major number that changes when one of
+ * them changes incompatibly. A plugin says which it is written for with
+ * `defineUiPlugin({ api })`, which requires `UiApi(api)`; the app provides
+ * each version it supports, so a plugin written for another is left out,
+ * saying so, rather than failing at some later call. As with `HostApi`, a
+ * breaking change gives the changed capability, slot, or part a new key.
+ */
+export const UI_API = 1;
+/** Required by a plugin written for version `version` of these contracts (see `UI_API`). */
+export const UiApi = (version: number): Context.Tag<`lemma-ui/api@${number}`, number> => Context.GenericTag(`lemma-ui/api@${version}`);
 
 export interface CommandsService {
   /** What host plugins offer to run (`lemma do`). */

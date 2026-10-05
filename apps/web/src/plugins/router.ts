@@ -1,7 +1,7 @@
 import { createEffect, createSignal } from "solid-js";
 import { createBrowserHistory, createRouter, interceptLinks } from "@lemma/router";
 import { createRouteSignals } from "@lemma/router-solid";
-import { KnownRoutes, Notify, Pages, Router, Slots } from "../ui/contracts.ts";
+import { KnownRoutes, Notify, Pages, Router, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { Page } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotItem } from "../ui/slots.ts";
@@ -23,17 +23,26 @@ const loadEntries = (): EntryStates => {
   }
 };
 
+/** What a failure the router reports is, for its toast. */
+const FAILED: Readonly<Record<string, string>> = {
+  navigate: "Could not go there",
+  history: "The browser did not finish going back or forward",
+  listener: "A route listener failed",
+  blocker: "A route blocker failed",
+};
+
 /**
  * The page's address as state: the history, which route it names, and which
- * `Pages` item shows there. Plain clicks on links to the app's own pages
- * navigate in place, so any plugin links with an ordinary `<a href>`, and
- * hovering one preloads its page.
+ * `Pages` item shows there. The app's routes, and those every known plugin
+ * declares, match while nothing shows them, so a page whose plugin is off says
+ * so. Plain clicks on links to the app's own pages navigate in place, so any
+ * plugin links with an ordinary `<a href>`, and hovering one preloads its page.
  */
 export default defineUiPlugin({
   id: "router",
-  requires: { slots: Slots, notify: Notify },
+  requires: { slots: Slots, notify: Notify, plugins: UiPlugins },
   provides: { router: Router },
-  setup: ({ slots, notify }, plugin) => {
+  setup: ({ slots, notify, plugins }, plugin) => {
     const history = createBrowserHistory();
     const router = createRouter<SlotItem<Page>>({
       history,
@@ -41,7 +50,7 @@ export default defineUiPlugin({
       retain: RETAIN,
       // A page is named by its `Pages` item id; the devtools find its plugin from that.
       label: (page: SlotItem<Page>) => page.id,
-      onError: (error, during) => notify.report(error, during === "navigate" ? "Could not go there" : `A route ${during} failed`),
+      onError: (error, during) => notify.report(error, FAILED[during] ?? `A route ${during} failed`),
       // Plugins' routes in conflict: the app still shows one, but which is probably not what either plugin meant.
       onIssue: (issue) => {
         console.warn(`lemma router: ${issue.message}`);
@@ -60,6 +69,8 @@ export default defineUiPlugin({
     plugin.onCleanup(router.onEvent(() => setJournal(router.journal())));
     // Pages come and go with their plugins; the location is matched again each time.
     createEffect(() => router.setEntries(slots.list(Pages)));
+    // Plugins come and go from the composition too: a route is known while any known plugin declares it.
+    createEffect(() => router.setKnown([...KnownRoutes, ...plugins.routes().map((declared) => declared.route)]));
 
     // Links to pages navigate in place; hovering or focusing one warms what it shows (its page's `preload`).
     plugin.onCleanup(

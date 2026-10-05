@@ -30,9 +30,17 @@ and Alt with the send key queues the prompt for after the turn.
 Edits apply without a reload: the plugins that changed, and what depends on
 them, restart. Change rows from the Plugins settings page or with
 `lemma ui enable|disable|config`. Keyboard shortcuts are the `keymap`
-plugin's config, which Settings › Keyboard records. Open the app with `?safe`
+plugin's config, which Settings › Keyboard records.
+
+A customization that breaks fails alone. A plugin that cannot run (a file
+that does not load, a config that does not decode, a plugin written for
+another `api`) is left out with what needs it, and one that fails to start is
+left failed; the Plugins page says why. A slot item that throws while it draws
+is reported as its plugin's fault and leaves the slot, so a replaced part
+shows its default again, and a plugin whose own effects throw stops, with what
+needs it, while the rest of the page keeps updating. Open the app with `?safe`
 to ignore rows and files, the way back from a customization that broke the
-page.
+frame itself.
 
 ## Writing a plugin
 
@@ -101,10 +109,32 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletio
 
 `setup` runs in its own Solid root; release what it adds with
 `plugin.onCleanup`. A `config` Schema (from `api.Schema`) becomes the plugin's
-settings form, and `styles` apply while it runs. A file is one ES module:
-bundle anything it imports, and take from the api what it offers, so it shares
-the page's module instances. UI files run with the page's permissions and
-token, as host plugins run with the host's.
+settings form, and `styles` apply while it runs. `api: 1` says which version of
+the contracts it is written for (`contracts.UI_API`), so a later incompatible
+version leaves it out, saying so, rather than letting it fail at a call;
+`routes` lists the routes it shows pages at, so their addresses name it while
+it is off. Draw what a slot holds with `api.parts.Contained`, `Each`, or
+`First`, so an item that throws fails alone. A file is one ES module: bundle
+anything it imports, and take from the api what it offers, so it shares the
+page's module instances. UI files run with the page's permissions and token,
+as host plugins run with the host's.
+
+A replacement with a bundled plugin's id can wrap it rather than copy it, and
+so keep what it gains in later versions: `api.bundled` holds the bundled
+plugins, and `api.extendUiPlugin` makes a plugin from another's definition.
+
+```js
+// ~/.lemma/ui/toasts.js: the bundled toasts, logging each one too
+export default ({ bundled, extendUiPlugin }) =>
+  extendUiPlugin(bundled.toasts, (base) => ({
+    ...base,
+    setup: (use, plugin) => {
+      const made = base.setup(use, plugin);
+      console.log("toasts started");
+      return made;
+    },
+  }));
+```
 
 ## Addresses
 
@@ -120,16 +150,24 @@ the desktop app's `lemma://` links and `lemma open`:
 | `/settings/<section>?…`                 | A settings section; the search is the section's own state                             |
 
 A plugin adds a page with `api.defineRoute` and a `Pages` item, routed by
-[`@lemma/router`](../../packages/router/README.md):
+[`@lemma/router`](../../packages/router/README.md), and lists the route in its
+`routes`:
 
 ```js
 const Note = api.defineRoute("notes.note", { path: "/notes/:id" }); // params: { id: string }
-slots.add(Pages, { id: "notes.note", route: Note, component: NotePage });
+api.defineUiPlugin({
+  id: "notes",
+  routes: [Note],
+  requires: { slots: Slots },
+  setup: ({ slots }, plugin) => {
+    plugin.onCleanup(slots.add(Pages, { id: "notes.note", route: Note, component: NotePage }));
+  },
+});
 // <a href={router.href(Note, { id })}>, or router.navigate(Note, { id }); the page reads router.matchOf(Note)
 ```
 
-A page whose plugin is off says so at the same address until the plugin
-returns, and a page that throws fails alone.
+A page whose plugin is off or failed says so at the same address, naming the
+plugin, until it returns, and a page that throws fails alone.
 
 ## Devtools
 

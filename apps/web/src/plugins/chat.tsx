@@ -1,6 +1,5 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Component, JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { Schema } from "effect";
 import type { ImageContent, TextContent } from "@lemma/contracts";
 import { diffStats, parseDiff, readDetails } from "../model/details.ts";
@@ -51,6 +50,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronIcon,
+  Contained,
   CopyIcon,
   FileTypeIcon,
   Markdown,
@@ -331,7 +331,8 @@ const toolView = (deps: { readonly client: ClientService; readonly threads: Thre
         <Show when={props.output}>{(text) => <pre class="tool-live">{text()}</pre>}</Show>
         <Show when={open()}>
           <Show
-            when={custom()?.body}
+            // A view with a summary and no body leaves the body to the chat's own.
+            when={custom()?.body === undefined ? undefined : custom()}
             keyed
             fallback={
               <DefaultBody
@@ -346,8 +347,13 @@ const toolView = (deps: { readonly client: ClientService; readonly threads: Thre
               />
             }
           >
-            {(body) => (
-              <Dynamic component={body} id={props.id} name={props.name} args={props.args} result={props.result} state={props.state} output={props.output} />
+            {(view) => (
+              <Contained
+                slot={ToolViews}
+                item={view}
+                component={view.body}
+                props={{ id: props.id, name: props.name, args: props.args, result: props.result, state: props.state, output: props.output }}
+              />
             )}
           </Show>
         </Show>

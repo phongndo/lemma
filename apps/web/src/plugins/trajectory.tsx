@@ -1,6 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import {
   RECORD_KIND_LABEL,
   contentText,
@@ -23,7 +22,7 @@ import { Notify, Threads, Slots, ToolViews, TrajectoryActions, TrajectoryTabs, V
 import type { NotifyService, ThreadsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { CopyIcon, Markdown, TrajectoryIcon, XIcon } from "../ui/parts.tsx";
+import { Contained, CopyIcon, Markdown, TrajectoryIcon, XIcon } from "../ui/parts.tsx";
 import { copyText } from "../lib/clipboard.ts";
 import styles from "./trajectory.css?inline";
 
@@ -1288,7 +1287,8 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
 
   /** A tool's own view (its `ToolViews` body), then the tabs plugins add for the record. */
   function addedTabs(record: LedgerRecord): Tab[] {
-    const view = record.kind === "tool" ? deps.slots.get(ToolViews, record.run.call.name)?.body : undefined;
+    const item = record.kind === "tool" ? deps.slots.get(ToolViews, record.run.call.name) : undefined;
+    const view = item?.body;
     const tool: Tab[] =
       view === undefined || record.kind !== "tool"
         ? []
@@ -1300,17 +1300,20 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
                 const run = record.run;
                 const result = run.result;
                 return (
-                  <Dynamic
+                  <Contained
+                    slot={ToolViews}
+                    item={item!}
                     component={view}
-                    id={run.call.id}
-                    name={run.call.name}
-                    args={run.call.arguments}
-                    result={
-                      result === undefined
-                        ? undefined
-                        : { eventId: run.eventId ?? record.id, content: result.content, isError: result.isError, details: run.details }
-                    }
-                    state={result === undefined ? "interrupted" : result.isError ? "error" : "ok"}
+                    props={{
+                      id: run.call.id,
+                      name: run.call.name,
+                      args: run.call.arguments,
+                      result:
+                        result === undefined
+                          ? undefined
+                          : { eventId: run.eventId ?? record.id, content: result.content, isError: result.isError, details: run.details },
+                      state: result === undefined ? "interrupted" : result.isError ? "error" : "ok",
+                    }}
                   />
                 );
               },
@@ -1321,7 +1324,11 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       ...deps.slots
         .list(TrajectoryTabs)
         .filter((tab) => tab.when(record))
-        .map((tab): Tab => ({ id: `added:${tab.id}`, label: tab.label, render: () => <Dynamic component={tab.component} record={record} /> })),
+        .map((tab): Tab => ({
+          id: `added:${tab.id}`,
+          label: tab.label,
+          render: () => <Contained slot={TrajectoryTabs} item={tab} component={tab.component} props={{ record }} />,
+        })),
     ];
   }
 

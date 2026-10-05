@@ -1,6 +1,6 @@
 import type { UiFile } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
-import type { LocalPlugin } from "./plan.ts";
+import type { LocalPlugin } from "@lemma/plugin-host/planner";
 
 export interface LoadedFiles {
   readonly plugins: readonly LocalPlugin[];
@@ -14,8 +14,9 @@ const isPlugin = (value: unknown): value is Plugin =>
 /**
  * Loads the host's UI files into the page. A script is an ES module whose
  * default export is a plugin, an array of them, or a function that receives
- * `api` (Solid, the contracts, `defineUiPlugin`, the app's components) and
- * returns either; it runs with the page's permissions and token. A stylesheet
+ * `api` (Solid, the contracts, `defineUiPlugin`, the app's components and
+ * bundled plugins) and returns either; it runs with the page's permissions
+ * and token. A stylesheet
  * is linked after the app's own, so it can override any `--` token. File URLs
  * change when a file does, so an edited file is imported again.
  */

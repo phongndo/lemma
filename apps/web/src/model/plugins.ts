@@ -26,6 +26,7 @@ export const pluginText = (plugin: PluginStatus): string =>
     plugin.source,
     plugin.enabled ? "on enabled" : "off disabled",
     plugin.fault?.message,
+    plugin.problem,
     plugin.haltedBy,
     plugin.locked,
     ...plugin.provides.map(capabilityName),
@@ -90,7 +91,7 @@ export function describeState(plugin: PluginStatus): string {
     case "closed":
       return plugin.haltedBy === undefined ? "Stopped" : `Halted by ${plugin.haltedBy}`;
     case "disabled":
-      return plugin.haltedBy === undefined ? "Not loaded" : `Needs ${plugin.haltedBy}`;
+      return plugin.problem !== undefined ? "Left out" : plugin.haltedBy === undefined ? "Not loaded" : `Needs ${plugin.haltedBy}`;
   }
 }
 
@@ -121,7 +122,7 @@ export interface KindedPlugin {
 
 const STATES: Readonly<Record<string, (plugin: PluginStatus) => boolean>> = {
   running: (plugin) => plugin.state === "active",
-  failed: (plugin) => plugin.state === "failed",
+  failed: (plugin) => plugin.state === "failed" || plugin.problem !== undefined,
   off: (plugin) => !plugin.enabled,
   halted: (plugin) => plugin.enabled && plugin.haltedBy !== undefined,
   locked: (plugin) => plugin.locked !== undefined,

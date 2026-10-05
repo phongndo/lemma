@@ -1,8 +1,7 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { Actions, Devtools, DevtoolsPanels, Docks, Slots } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { CodeIcon, XIcon } from "../ui/parts.tsx";
+import { CodeIcon, Contained, XIcon } from "../ui/parts.tsx";
 import styles from "./devtools.css?inline";
 
 const STATE_KEY = "lemma.devtools";
@@ -78,7 +77,7 @@ export default defineUiPlugin({
           </div>
           <div class="devtools-body" role="tabpanel">
             <Show when={current()} keyed fallback={<p class="dt-empty">No panels: the plugins that add them are off.</p>}>
-              {(item) => <Dynamic component={item.component} />}
+              {(item) => <Contained slot={DevtoolsPanels} item={item} component={item.component} />}
             </Show>
           </div>
         </section>

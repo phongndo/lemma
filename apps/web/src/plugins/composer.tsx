@@ -1,5 +1,4 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { Schema } from "effect";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
 import { randomId } from "../lib/id.ts";
@@ -42,7 +41,7 @@ import type {
 import { defineUiPlugin } from "../ui/define.ts";
 import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
-import { ChatIcon, ComposerQueued, ComposerSuggestionView, ImageIcon, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
+import { ChatIcon, ComposerQueued, ComposerSuggestionView, Each, ImageIcon, Isolated, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
 
 /** The formats every provider accepts; others (SVG, HEIC, TIFF…) would fail every later request in the session. */
@@ -441,7 +440,7 @@ function Composer(props: { deps: Deps }) {
 
   return (
     <div class="composer-wrap">
-      <For each={slots.list(ComposerNotices)}>{(notice) => <Dynamic component={notice.component} />}</For>
+      <Each slot={ComposerNotices} />
       <form
         class="composer"
         classList={{ dragging: dragging(), busy: threads.busy() }}
@@ -574,10 +573,10 @@ function Composer(props: { deps: Deps }) {
         />
         <div class="composer-bar">
           <div class="composer-controls">
-            <For each={slots.list(ComposerControls)}>{(control) => <Dynamic component={control.component} />}</For>
+            <Each slot={ComposerControls} />
           </div>
           <div class="composer-actions">
-            <For each={slots.list(ComposerActions)}>{(action) => <Dynamic component={action.component} addFiles={addFiles} insert={insert} />}</For>
+            <Each slot={ComposerActions} props={{ addFiles, insert }} />
             <Show
               when={threads.busy()}
               fallback={
@@ -598,7 +597,7 @@ function Composer(props: { deps: Deps }) {
           </div>
         </div>
       </form>
-      <For each={slots.list(ComposerFooter)}>{(item) => <Dynamic component={item.component} />}</For>
+      <Each slot={ComposerFooter} />
     </div>
   );
 }
@@ -626,7 +625,7 @@ function Marked(props: { text: string; matches: readonly number[] }) {
 function SuggestionRow(props: ComposerSuggestionProps) {
   return (
     <>
-      <Show when={props.suggestion.icon}>{(icon) => <Dynamic component={icon()} />}</Show>
+      <Show when={props.suggestion.icon}>{(icon) => <Isolated component={icon()} />}</Show>
       <span class="menu-label">
         <Marked text={props.suggestion.label} matches={props.suggestion.matches ?? []} />
       </span>

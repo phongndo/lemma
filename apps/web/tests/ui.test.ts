@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { Context, Effect, Exit, Schema, Scope } from "effect";
-import { createSignal } from "solid-js";
-import { makeLoader } from "@lemma/core";
+import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { createEffect, createRoot, createSignal } from "solid-js";
+import { definePlugin, makeLoader } from "@lemma/core";
 import type { Loader, Plugin } from "@lemma/core";
-import { Slots } from "../src/ui/contracts.ts";
-import { defineUiPlugin } from "../src/ui/define.ts";
+import { defineRoute } from "@lemma/router";
+import { Slots, UiApi } from "../src/ui/contracts.ts";
+import { defineUiPlugin, extendUiPlugin, routesOf } from "../src/ui/define.ts";
 import slotsPlugin from "../src/plugins/slots.ts";
 import { defineSlot } from "../src/ui/slots.ts";
 import type { SlotsService } from "../src/ui/slots.ts";
@@ -71,6 +72,29 @@ describe("slots", () => {
       await Effect.runPromise(loader.apply({ plugins: { slots: {}, palette: {}, sidebar: { enabled: false } } }));
       await waitFor(() => slots.list(Items).length === 1);
       expect(slots.list(Items).map((item) => item.id)).toEqual(["b"]);
+    });
+  });
+
+  it("an item that fails while drawing leaves the slot's views, named for its plugin, until the plugin adds it again", async () => {
+    await run([slotsPlugin, adding("custom", [{ id: "mine", label: "M" }]), adding("kit", [{ id: "default", label: "D", order: 100 }])], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      const shown: (string | undefined)[] = [];
+      const dispose = createRoot((dispose) => {
+        createEffect(() => shown.push(slots.first(Items)?.id));
+        return dispose;
+      });
+      slots.fail(Items, slots.first(Items)!, new Error("draw failed"));
+      // Readers draw the next item: a part's default, the rest of a list.
+      expect(shown).toEqual(["mine", "default"]);
+      expect(slots.list(Items).map((item) => item.id)).toEqual(["default"]);
+      expect(slots.failures(Items)).toMatchObject([{ item: { id: "mine" }, pluginId: "custom", error: new Error("draw failed") }]);
+      const custom = (await Effect.runPromise(loader.core.inspect)).plugins.find((plugin) => plugin.id === "custom");
+      expect(custom).toMatchObject({ state: "active", fault: { phase: "service", operation: 'draw test.items "mine"' } });
+      // A restart adds it again: a new item, tried afresh.
+      await Effect.runPromise(loader.core.restart("custom", { force: true }));
+      await waitFor(() => slots.first(Items)?.id === "mine");
+      expect(slots.failures(Items)).toEqual([]);
+      dispose();
     });
   });
 
@@ -174,6 +198,58 @@ describe("defineUiPlugin", () => {
       await Effect.runPromise(loader.apply({ plugins: { configured: { config: { size: 5 } } } }));
     });
     expect(seen).toEqual([{ size: 3 }, { size: 5 }]);
+  });
+
+  it("a computation that throws after setup stops its plugin and what needs it, and the others keep updating", async () => {
+    class Model extends Context.Tag("test/Model")<Model, { readonly ok: true }>() {}
+    const [count, setCount] = createSignal(0);
+    const seen: number[] = [];
+    const faulty = defineUiPlugin({
+      id: "faulty",
+      provides: { model: Model },
+      setup: () => {
+        createEffect(() => {
+          if (count() === 2) throw new Error("bad state");
+        });
+        return { model: { ok: true } };
+      },
+    });
+    const needs = defineUiPlugin({ id: "needs", requires: { model: Model }, setup: () => {} });
+    // Activated after `faulty` (ids in order), so its effect runs after the one that throws in the same update.
+    const steady = defineUiPlugin({ id: "steady", setup: () => void createEffect(() => seen.push(count())) });
+    await run([faulty, needs, steady], async (loader) => {
+      const states = async () => Object.fromEntries((await Effect.runPromise(loader.core.inspect)).plugins.map((plugin) => [plugin.id, plugin.state]));
+      setCount(1);
+      setCount(2);
+      setCount(3);
+      expect(seen).toEqual([0, 1, 2, 3]);
+      let now: Record<string, string> = {};
+      await waitFor(() => (void states().then((value) => (now = value)), now.faulty === "failed"));
+      expect(now).toEqual({ faulty: "failed", needs: "closed", steady: "active" });
+      const fault = (await Effect.runPromise(loader.core.inspect)).plugins.find((plugin) => plugin.id === "faulty")?.fault;
+      expect(fault).toMatchObject({ phase: "service", operation: "effects" });
+    });
+  });
+
+  it("extends a definition, declares routes, and requires the API version it is written for", async () => {
+    const Note = defineRoute("test.note", { path: "/notes/:id" });
+    const calls: string[] = [];
+    const base = defineUiPlugin({ id: "notes", api: 1, routes: [Note], setup: () => void calls.push("base") });
+    expect(base.requires.map((tag) => tag.key)).toEqual(["lemma-ui/api@1"]);
+    expect(routesOf(base)).toEqual([Note]);
+    const extended = extendUiPlugin(base, (definition) => ({
+      ...definition,
+      setup: (use, plugin) => {
+        calls.push("mine");
+        return definition.setup(use, plugin);
+      },
+    }));
+    expect([extended.id, routesOf(extended)]).toEqual(["notes", [Note]]);
+    expect(() => extendUiPlugin(definePlugin({ id: "raw", layer: Layer.empty }), (definition) => definition)).toThrow(/not made with defineUiPlugin/);
+    const app = defineUiPlugin({ id: "app", provides: { api: UiApi(1) }, setup: () => ({ api: 1 }) });
+    await run([app, extended], async () => {
+      expect(calls).toEqual(["mine", "base"]);
+    });
   });
 
   it("a setup that throws fails only its own plugin, releasing what it added", async () => {

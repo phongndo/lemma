@@ -1,21 +1,22 @@
 import { Cause, Effect, Exit, Scope, Stream } from "effect";
 import type { Context } from "effect";
 import { Show, createSignal } from "solid-js";
-import { Dynamic, render } from "solid-js/web";
+import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import type { PluginInfo, PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
-import type { Loader, Plugin, PluginSource, ReloadReport } from "@lemma/core";
+import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, faultMessage, withReplacements } from "@lemma/plugin-host/catalog";
+import { planComposition } from "@lemma/plugin-host/planner";
+import type { Plan } from "@lemma/plugin-host/planner";
+import type { AnyRoute } from "@lemma/router";
 import { createClientPlugin } from "./client.ts";
-import { Notify, Root, Slots, UiPlugins } from "./contracts.ts";
+import { Notify, Root, Slots, UI_API, UiApi, UiPlugins } from "./contracts.ts";
 import type { UiPluginsService } from "./contracts.ts";
-import { defineUiPlugin } from "./define.ts";
-import { SlotsContext } from "./parts.tsx";
+import { defineUiPlugin, routesOf } from "./define.ts";
+import { First, SlotsContext } from "./parts.tsx";
 import { createFileLoader } from "./files.ts";
-import { planUi } from "./plan.ts";
-import type { UiPlan } from "./plan.ts";
 import type { SlotsService } from "./slots.ts";
 
 const APP_ID = "app";
@@ -82,9 +83,10 @@ export async function boot(options: BootOptions): Promise<void> {
   const [files, setFiles] = createSignal<readonly UiFile[]>([]);
   const [problems, setProblems] = createSignal<readonly string[]>([]);
   const [slots, setSlots] = createSignal<SlotsService>();
+  const [routes, setRoutes] = createSignal<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>([]);
   const fileLoader = createFileLoader(options.token, options.api);
   let ui: UiComposition = EMPTY;
-  let plan!: UiPlan;
+  let plan!: Plan;
   let loader!: Loader;
   let queue: Promise<unknown> = Promise.resolve();
   const toasted = new Set<string>();
@@ -104,6 +106,7 @@ export async function boot(options: BootOptions): Promise<void> {
       events: snapshot.events,
       registries: snapshot.registries,
       faults: faults.get(),
+      problems: plan.problems,
       enabledIn: safe ? {} : ui.enabledIn,
       configIn: safe ? {} : ui.configIn,
       pinned: PINNED,
@@ -126,6 +129,7 @@ export async function boot(options: BootOptions): Promise<void> {
   const service: UiPluginsService = {
     list: statuses,
     files,
+    routes,
     problems,
     safe,
     refresh,
@@ -144,20 +148,32 @@ export async function boot(options: BootOptions): Promise<void> {
       return toResult(await apply(next));
     },
   };
-  const app = defineUiPlugin({ id: APP_ID, provides: { plugins: UiPlugins }, setup: () => ({ plugins: service }) });
+  // The app provides the contracts' version, so a plugin written for another is left out rather than run.
+  const app = defineUiPlugin({ id: APP_ID, provides: { plugins: UiPlugins, api: UiApi(UI_API) }, setup: () => ({ plugins: service, api: UI_API }) });
   const fixed = [client, app, ...options.bundled];
 
+  /**
+   * The composition for these rows and files (`planComposition`): what cannot
+   * run is left out, with what needs it, and said so; `errors` are what keeps
+   * it from running at all (a pinned plugin that cannot).
+   */
   const planFor = async (next: UiComposition) => {
     const loaded = safe ? { plugins: [], problems: [] } : await fileLoader.load(next.files);
-    const planned = planUi(fixed, loaded.plugins, safe ? {} : next.plugins, new Set(Object.keys(PINNED)));
+    const planned = planComposition({ bundled: fixed, local: loaded.plugins, rows: safe ? {} : next.plugins, pinned: Object.keys(PINNED) });
+    const said = (diagnostic: Diagnostic) => `${diagnostic.message}${diagnostic.suggestion === undefined ? "" : `. ${diagnostic.suggestion}`}`;
     return {
       plan: planned,
+      errors: planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error").map(said),
+      // A plugin waiting on one that is off is what turning that one off means: the Plugins page shows it, unannounced.
       problems: [
         ...loaded.problems,
-        ...planned.unknown.map((id) => `ui row "${id}" names no web app plugin`),
-        ...planned.resolved.overridden.map((id) => `ui row turning "${id}" off is ignored: ${PINNED[id] ?? `"${planned.resolved.locked.get(id)}" needs it`}`),
+        ...planned.diagnostics.filter((diagnostic) => diagnostic.severity === "warning" && !planned.resolved.haltedBy.has(diagnostic.pluginId ?? "")).map(said),
       ],
     };
+  };
+  const adopt = (next: Plan) => {
+    plan = next;
+    setRoutes(next.known.flatMap(({ plugin }) => routesOf(plugin).map((route) => ({ route, pluginId: plugin.id }))));
   };
   const source: PluginSource = {
     resolve: (id) => {
@@ -174,16 +190,25 @@ export async function boot(options: BootOptions): Promise<void> {
       : [String(failure)];
   };
 
-  /** Applies the host's rows and files; unchanged ones are a no-op. One at a time, in arrival order. */
+  /**
+   * Applies the host's rows and files; unchanged ones are a no-op. One at a
+   * time, in arrival order. A change that cannot start keeps the running
+   * composition (the plugins it would replace go on as they were), and says why.
+   */
   const apply = (next: UiComposition): Promise<ReloadReport | undefined> => {
     const run = queue.then(async () => {
       if (safe || JSON.stringify(next) === JSON.stringify(ui)) return undefined;
       const planned = await planFor(next);
+      if (planned.errors.length > 0) {
+        await report([...planned.problems, ...planned.errors]);
+        return undefined;
+      }
       const previous = plan;
       // The source resolves ids against the plan being applied.
       plan = planned.plan;
       const exit = await Effect.runPromiseExit(loader.apply(planned.plan.resolved.composition));
       if (Exit.isSuccess(exit)) {
+        adopt(planned.plan);
         ui = next;
         setFiles(next.files);
       } else plan = previous;
@@ -206,33 +231,58 @@ export async function boot(options: BootOptions): Promise<void> {
       });
   const initial = firstRows === undefined ? EMPTY : ((await timeout(firstRows, FIRST_ROWS_MS).catch(() => undefined)) ?? EMPTY);
   const scope = await runPromise(Scope.make());
+  /** Starts `planned` with what can start: a plugin that fails is left failed, unless it is pinned or a pinned plugin needs it. */
+  const start = (planned: Plan) =>
+    Effect.runPromiseExit(Scope.extend(makeLoader({ source, composition: planned.resolved.composition, partialStart: { required: planned.required } }), scope));
   let first = await planFor(initial);
-  plan = first.plan;
-  let made = await Effect.runPromiseExit(Scope.extend(makeLoader({ source, composition: plan.resolved.composition }), scope));
-  let bootProblems = first.problems;
-  if (Exit.isSuccess(made)) ui = initial;
+  adopt(first.plan);
+  let made = first.errors.length > 0 ? undefined : await start(first.plan);
+  let bootProblems = [...first.problems, ...first.errors];
+  if (made !== undefined && Exit.isSuccess(made)) ui = initial;
   else {
-    // A composition the rows or files break still leaves the app as shipped.
-    bootProblems = [...first.problems, ...describeFailure(made.cause)];
+    // Rows or files that keep the app's own frame from starting still leave the app as shipped.
+    if (made !== undefined) bootProblems = [...bootProblems, ...describeFailure(made.cause)];
     first = await planFor(EMPTY);
-    plan = first.plan;
-    made = await Effect.runPromiseExit(Scope.extend(makeLoader({ source, composition: plan.resolved.composition }), scope));
+    adopt(first.plan);
+    made = await start(first.plan);
     if (Exit.isFailure(made)) throw new Error(`The web app cannot start: ${describeFailure(made.cause).join("; ")}`);
   }
   loader = made.value;
+  // Plugins that failed to start, left failed: no fault stream existed yet to hear them.
+  for (const plugin of (await runPromise(loader.core.inspect)).plugins) {
+    if (plugin.state !== "failed" || plugin.fault === undefined) continue;
+    faults.record(plugin.fault as ReportedFault);
+    bootProblems = [...bootProblems, `"${plugin.id}" failed to start: ${faultMessage(plugin.fault)}`];
+  }
   setFiles(ui.files);
   await refresh();
 
   // Development builds: the running composition for DevTools and the UI check (`scripts/check-ui.ts`).
   if (import.meta.env.DEV) Object.assign(window, { lemma: { slots, plugins: service, faults, service: serviceOf } });
   render(() => {
-    const root = () => slots()?.first(Root);
+    // The frame failing leaves nothing that could say so: the page says it itself, with the way back.
+    const failure = () => slots()?.failures(Root)[0];
     // Parts anywhere on the page find their providers through this.
     return (
       <SlotsContext.Provider value={slots}>
-        <Show when={root()} keyed>
-          {(entry) => <Dynamic component={entry.component} />}
-        </Show>
+        <First
+          slot={Root}
+          fallback={
+            <Show when={failure()} keyed>
+              {(failed) => (
+                <main class="boot-failed" role="alert">
+                  <p>
+                    The app's frame{failed.pluginId === undefined ? "" : `, from the “${failed.pluginId}” plugin,`} failed:{" "}
+                    <code>{failed.error instanceof Error ? failed.error.message : String(failed.error)}</code>
+                  </p>
+                  <p>
+                    <a href="?safe">Open the app as shipped</a>, without your UI files and <code>ui</code> rows, to fix it.
+                  </p>
+                </main>
+              )}
+            </Show>
+          }
+        />
       </SlotsContext.Provider>
     );
   }, options.element);

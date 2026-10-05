@@ -1,5 +1,4 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import { formatKeys } from "../lib/keys.ts";
 import { filterGroups } from "../model/settings.ts";
 import type { EntryGroup } from "../model/settings.ts";
@@ -19,7 +18,7 @@ import {
 import type { SettingsEntry, SettingsSection } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
-import { ArrowLeftIcon, GearIcon, SearchIcon, SlidersIcon, XIcon } from "../ui/parts.tsx";
+import { ArrowLeftIcon, Contained, GearIcon, SearchIcon, SlidersIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./settings.css?inline";
 
 type Section = SlotItem<SettingsSection>;
@@ -126,7 +125,7 @@ function SettingsView(props: {
                 aria-current={!searching() && current()?.id === item.id ? "page" : undefined}
                 onClick={() => go(item.id)}
               >
-                <Dynamic component={item.icon} />
+                <Contained slot={SettingsSections} item={item} component={item.icon} />
                 <span class="settings-nav-label">{item.title}</span>
                 <Show when={searching() && count(item.id) > 0}>
                   <span class="settings-nav-count">{count(item.id)}</span>
@@ -148,7 +147,9 @@ function SettingsView(props: {
           <span class="settings-crumb-sep">/</span>
           <span>{searching() ? "Search" : current()?.title}</span>
           <span class="spacer" />
-          <Show when={!searching() && current()?.actions}>{(actions) => <Dynamic component={actions()} />}</Show>
+          <Show when={!searching() && current()?.actions !== undefined && current()} keyed>
+            {(section) => <Contained slot={SettingsSections} item={section} component={section.actions} />}
+          </Show>
           <button class="icon-button" aria-label="Close settings" data-tip="Close · Esc" onClick={() => props.open(undefined)}>
             <XIcon />
           </button>
@@ -160,20 +161,20 @@ function SettingsView(props: {
               <Show when={current()}>
                 {(section) => (
                   <>
-                    <Show when={section().intro}>{(intro) => <Dynamic component={intro()} />}</Show>
+                    <Show when={section().intro}>{(intro) => <Contained slot={SettingsSections} item={section()} component={intro()} />}</Show>
                     <Show
                       when={section().body}
                       keyed
                       fallback={
                         <Show
                           when={groups().some((group) => group.entries.length > 0)}
-                          fallback={<Show when={section().empty}>{(empty) => <Dynamic component={empty()} />}</Show>}
+                          fallback={<Show when={section().empty}>{(empty) => <Contained slot={SettingsSections} item={section()} component={empty()} />}</Show>}
                         >
                           <Groups groups={groups()} />
                         </Show>
                       }
                     >
-                      {(body) => <Dynamic component={body} />}
+                      {(body) => <Contained slot={SettingsSections} item={section()} component={body} />}
                     </Show>
                   </>
                 )}
@@ -185,7 +186,7 @@ function SettingsView(props: {
                 {(found) => (
                   <section class="settings-result">
                     <button class="settings-result-title" onClick={() => go(found.section.id)} data-tip={`Open ${found.section.title}`}>
-                      <Dynamic component={found.section.icon} />
+                      <Contained slot={SettingsSections} item={found.section} component={found.section.icon} />
                       {found.section.title}
                     </button>
                     <Groups groups={found.groups} />

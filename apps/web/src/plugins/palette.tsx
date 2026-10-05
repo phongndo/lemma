@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
 import type { Component } from "solid-js";
-import { Dynamic, Portal } from "solid-js/web";
+import { Portal } from "solid-js/web";
 import type { CommandInfo, InteractionRequest } from "@lemma/contracts";
 import { keysFor, overridesFrom } from "../model/keybindings.ts";
 import { formatKeys, shortcut } from "../lib/keys.ts";
@@ -22,7 +22,7 @@ import type {
 } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "../ui/parts.tsx";
+import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, Isolated, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "../ui/parts.tsx";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -426,7 +426,7 @@ function Palette(props: { deps: Deps }) {
                         submit();
                       }}
                     >
-                      <Show when={row.item.icon}>{(icon) => <Dynamic component={icon()} />}</Show>
+                      <Show when={row.item.icon}>{(icon) => <Isolated component={icon()} />}</Show>
                       <span class="palette-name">
                         <Show when={row.item.category}>
                           <span class="palette-category">{row.item.category}: </span>

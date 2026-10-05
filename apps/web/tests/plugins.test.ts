@@ -85,6 +85,7 @@ describe("describeState and recoverable", () => {
     expect(describeState(plugin("a"))).toBe("Running");
     expect(describeState(plugin("a", { enabled: false, state: "disabled" }))).toBe("Off");
     expect(describeState(plugin("a", { state: "disabled", haltedBy: "tools" }))).toBe("Needs tools");
+    expect(describeState(plugin("a", { state: "disabled", problem: "its config is invalid at x: Expected number" }))).toBe("Left out");
     expect(describeState(plugin("a", { state: "closed", haltedBy: "llm" }))).toBe("Halted by llm");
     expect(describeState(plugin("a", { state: "failed" }))).toBe("Failed");
     expect(recoverable(plugin("a", { state: "failed" }))).toBe(true);

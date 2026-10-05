@@ -1,6 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import type { GitBranch, WorkspaceStatus } from "@lemma/contracts";
 import {
   ActionIds,
@@ -22,6 +21,7 @@ import {
   ChatIcon,
   CheckIcon,
   ChevronDownIcon,
+  Each,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -50,14 +50,13 @@ interface Deps {
  * project is only choosable for a new chat.
  */
 function WorkspaceBar(props: { deps: Deps }) {
-  const { workspace, slots } = props.deps;
-  const side = (which: "start" | "end") => slots.list(WorkspaceBarItems).filter((item) => item.side === which);
+  const { workspace } = props.deps;
   return (
     <Show when={workspace.workingDir() !== undefined}>
       <div class="workspace-bar">
-        <For each={side("start")}>{(item) => <Dynamic component={item.component} />}</For>
+        <Each slot={WorkspaceBarItems} filter={(item) => item.side === "start"} />
         <span class="spacer" />
-        <For each={side("end")}>{(item) => <Dynamic component={item.component} />}</For>
+        <Each slot={WorkspaceBarItems} filter={(item) => item.side === "end"} />
       </div>
     </Show>
   );

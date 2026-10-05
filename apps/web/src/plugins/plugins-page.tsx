@@ -1,6 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "../model/format.ts";
 import {
@@ -22,7 +21,7 @@ import { Actions, Client, HostPlugins, Notify, PluginTabs, Threads, Settings, Se
 import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
+import { ConfigForm, Contained, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
 import styles from "./plugins-page.css?inline";
 
 const SECTION = "plugins";
@@ -244,7 +243,9 @@ function Overview(props: { inspector: Inspector; kind: PluginKind; plugin: Plugi
           ["State", describeState(plugin())],
           [
             "Why",
-            plugin().haltedBy === undefined ? undefined : (
+            plugin().problem !== undefined ? (
+              `Left out: ${plugin().problem}`
+            ) : plugin().haltedBy === undefined ? undefined : (
               <>
                 {plugin().state === "disabled" ? "Needs " : "Halted by "}
                 <PluginLink inspector={inspector} kind={props.kind} id={plugin().haltedBy!} />
@@ -515,12 +516,12 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
   const tabs = () =>
     inspector.slots.list(PluginTabs).flatMap((tab) => {
       const label = tab.label(plugin(), kind());
-      return label === undefined ? [] : [{ id: tab.id, label, component: tab.component }];
+      return label === undefined ? [] : [{ id: tab.id, label, item: tab }];
     });
   /** The chosen tab, or the first when it has none for this plugin. */
   const current = () => tabs().find((tab) => tab.id === inspector.tab()) ?? tabs()[0];
   // The same tab stays mounted, with its open disclosures and unsaved edits, while the plugin's status refreshes.
-  const component = createMemo(() => current()?.component);
+  const item = createMemo(() => current()?.item);
   return (
     <>
       <header class="inspector-detail-head">
@@ -551,7 +552,9 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
         </For>
       </nav>
       <div class="inspector-tab-body">
-        <Dynamic component={component()} plugin={plugin()} kind={kind()} />
+        <Show when={item()} keyed>
+          {(tab) => <Contained slot={PluginTabs} item={tab} component={tab.component} props={{ plugin: plugin(), kind: kind() }} />}
+        </Show>
       </div>
     </>
   );
