@@ -68,6 +68,8 @@ describe("registry", () => {
         count: Schema.optional(Schema.Int.pipe(Schema.positive()).annotations({ description: "How many" })),
         points: Schema.Array(Point),
       }),
+      replay: "safe",
+      parallel: "safe",
       execute: async () => ok(""),
     };
     const listed = await run(
@@ -77,6 +79,10 @@ describe("registry", () => {
     expect(listed.map((tool) => [tool.spec.name, tool.source])).toEqual([
       ["echo", "mine"],
       ["shapes", "mine"],
+    ]);
+    expect(listed.map((tool) => [tool.replay, tool.parallel])).toEqual([
+      [undefined, undefined],
+      ["safe", "safe"],
     ]);
     const parameters = listed[1]!.spec.parameters;
     expect(JSON.stringify(parameters)).not.toMatch(/\$schema|\$ref|\$defs|"title"/);

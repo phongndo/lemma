@@ -51,8 +51,9 @@ export const readTool: Tool<ReadInput> = {
   name: "read",
   description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
   input: ReadInput,
-  // It only reads: cut off by a host restart, it runs again.
+  // It only reads: cut off by a host restart, it runs again, and reads the model asks for together run together.
   replay: "safe",
+  parallel: "safe",
   execute: async ({ path, offset, limit }, { cwd, signal }) => {
     throwIfAborted(signal);
     const absolute = await resolveReadPath(path, cwd);

@@ -50,6 +50,11 @@ export interface Tool<Input = any> {
    * run again. Absent: a cut-off call is not repeated, and the model is told it was interrupted, with its output so far.
    */
   readonly replay?: "safe";
+  /**
+   * `safe`: it may run at the same time as other calls of one response that are `safe` too (it only reads), so the agent
+   * runs a run of consecutive such calls together. Absent: its calls run one at a time, in order.
+   */
+  readonly parallel?: "safe";
   readonly execute: (input: Input, context: ToolContext) => Promise<ToolResult> | Effect.Effect<ToolResult, unknown>;
 }
 
@@ -104,6 +109,8 @@ export interface ToolContribution {
   readonly source: string;
   /** The tool's `replay`. */
   readonly replay?: "safe";
+  /** The tool's `parallel`. */
+  readonly parallel?: "safe";
 }
 
 export interface ExecuteOptions {

@@ -77,6 +77,37 @@ describe("deriveMessages", () => {
     });
     expect(deriveMessages(events)).toHaveLength(1);
   });
+
+  it("shows tool results in the order of the calls, however they were logged", () => {
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+    const result = (toolCallId: string): EventData => ({
+      type: "message",
+      message: { role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text: toolCallId }], isError: false, timestamp: 0 },
+    });
+    const calls: EventData = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [call("c1"), call("c2"), call("c3")],
+        api: "test",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+    };
+    const events = log(user("go"), calls, result("c3"), result("c1"), result("c2"), assistant("done"));
+    const messages = deriveMessages(events);
+    expect(messages.map((message) => (message.role === "toolResult" ? message.toolCallId : message.role))).toEqual([
+      "user",
+      "assistant",
+      "c1",
+      "c2",
+      "c3",
+      "assistant",
+    ]);
+  });
 });
 
 describe("request reconstruction", () => {

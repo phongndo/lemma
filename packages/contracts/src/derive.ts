@@ -55,6 +55,31 @@ export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
   for (const event of branch.slice(start)) {
     if (event.data.type === "message") messages.push(event.data.message);
   }
+  return inCallOrder(messages);
+}
+
+/**
+ * Tool results that ran together are logged as each finished; the model reads
+ * them in the order it made the calls. Reorders, in place, each run of results
+ * that follows an assistant message; a result for a call it did not make keeps
+ * its place after the others.
+ */
+function inCallOrder(messages: Message[]): Message[] {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (message.role !== "assistant") continue;
+    let end = i + 1;
+    while (end < messages.length && messages[end]!.role === "toolResult") end++;
+    if (end - i <= 2) continue;
+    const order = new Map<string, number>();
+    for (const block of message.content) if (block.type === "toolCall") order.set(block.id, order.size);
+    const rank = (result: Message) => (result.role === "toolResult" ? (order.get(result.toolCallId) ?? order.size) : order.size);
+    const results = messages.slice(i + 1, end);
+    if (results.every((result, index) => index === 0 || rank(results[index - 1]!) <= rank(result))) continue;
+    results.sort((a, b) => rank(a) - rank(b));
+    messages.splice(i + 1, results.length, ...results);
+    i = end - 1;
+  }
   return messages;
 }
 

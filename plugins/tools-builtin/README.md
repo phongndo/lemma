@@ -51,7 +51,8 @@ Paths resolve against the session cwd; `~` expands and a leading `@` is dropped.
   resolves to text (pi's `bash` returns an object), `store`/`load` keep nothing
   between scripts, `models` is absent, and `searchTools` matches words rather
   than ranking with BM25.
-- **Only `read` repeats.** It is `replay: "safe"`, so a read a host restart cut
-  off runs again; a cut-off `write`, `edit`, `bash`, or `codemode` is reported to
+- **Only `read` repeats or runs alongside others.** It is `replay: "safe"` and
+  `parallel: "safe"`: reads the model asks for together run together, and a
+  read a host restart cut off runs again; a cut-off `write`, `edit`, `bash`, or `codemode` is reported to
   the model as interrupted instead, since running it twice could do harm (pi's
   tools repeat none).

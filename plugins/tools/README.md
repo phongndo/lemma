@@ -37,8 +37,9 @@ const greet = definePlugin({
   `InvalidInput`, so contributors should be `exclusive` to reload cleanly.
 - A tool that only reads declares `replay: "safe"`: a call a host restart cut
   off then runs again when the turn resumes, where any other is reported to the
-  model as interrupted (see the [agent](../agent/README.md#durability)). `list`
-  carries it.
+  model as interrupted (see the [agent](../agent/README.md#durability)). One
+  that may run alongside others declares `parallel: "safe"`: the agent runs a
+  run of consecutive such calls of one response at once. `list` carries both.
 - `list` is sorted by name, so re-registration after a reload does not reorder
   (and re-log) the tool list. Parameters come from `JSONSchema.make(tool.input)`
   with `$schema`, ids, and Effect's generated titles removed and every `$ref`
