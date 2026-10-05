@@ -126,7 +126,8 @@ export function describeConfig(schema: Schema.Schema.AnyNoContext): ConfigField[
       title: title ?? titleOf(property.key),
       ...(description === undefined ? {} : { description }),
       ...classify(property.type),
-      optional: property.optional,
+      // A field an empty config gives a value to may be left out too, whatever the Schema's encoded side says.
+      optional: property.optional || property.key in defaults,
       ...(secretField ? { secret: true } : {}),
       ...(property.key in defaults && !secretField ? { default: defaults[property.key] } : {}),
     };
@@ -152,6 +153,31 @@ export function configValues(schema: Schema.Schema.AnyNoContext, config: unknown
   }
   return { values, secretsSet };
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * `schema`, also reading the rows earlier versions of a plugin wrote:
+ * `migrate` turns a row's config into the current shape before it decodes, so
+ * renaming or restructuring a setting keeps existing rows working without
+ * rewriting anyone's file. It sees current rows too, and must leave them as
+ * they are. The settings form is still `schema`'s.
+ *
+ *   config: migrateConfig(Config, ({ steps, ...rest }) => (steps === undefined ? rest : { maxSteps: steps, ...rest }))
+ */
+export const migrateConfig = <A, I>(
+  schema: Schema.Schema<A, I>,
+  migrate: (config: Readonly<Record<string, unknown>>) => Record<string, unknown>,
+): Schema.Schema<A, unknown> =>
+  Schema.compose(
+    Schema.transform(Schema.Unknown, Schema.Unknown, {
+      strict: true,
+      decode: (config) => (isRecord(config) ? migrate(config) : config),
+      encode: (config) => config,
+    }),
+    schema,
+    { strict: false },
+  );
 
 const BOOLEANS: Readonly<Record<string, boolean>> = { true: true, false: false, on: true, off: false, yes: true, no: false };
 

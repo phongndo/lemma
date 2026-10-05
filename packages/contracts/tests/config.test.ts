@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Schema } from "effect";
-import { configValues, describeConfig, parseConfigValue, secret } from "../src/config.ts";
+import { Either, Schema } from "effect";
+import { configValues, describeConfig, migrateConfig, parseConfigValue, secret } from "../src/config.ts";
 
 const Config = Schema.Struct({
   defaultModel: Schema.optional(Schema.String).annotations({ description: "Model for turns that name none" }),
@@ -80,6 +80,30 @@ describe("configValues", () => {
 
   it("shows an invalid config as written", () => {
     expect(configValues(Config, { baseUrl: "http://x", maxSteps: -1 }).values).toEqual({ baseUrl: "http://x", maxSteps: -1 });
+  });
+});
+
+describe("migrateConfig", () => {
+  const Current = Schema.Struct({
+    maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({ description: "Model calls per turn" }),
+    model: Schema.optional(Schema.String),
+  });
+  // An earlier version called it `steps`.
+  const Migrated = migrateConfig(Current, ({ steps, ...rest }) => (steps === undefined ? rest : { maxSteps: steps, ...rest }));
+  const decode = Schema.decodeUnknownEither(Migrated, { onExcessProperty: "error" });
+
+  it("reads rows an earlier version wrote, and current ones as they are", () => {
+    expect(decode({ steps: 50, model: "m" })).toEqual(Either.right({ maxSteps: 50, model: "m" }));
+    expect(decode({ maxSteps: 70 })).toEqual(Either.right({ maxSteps: 70 }));
+    expect(decode({})).toEqual(Either.right({ maxSteps: 200 }));
+    // The current key wins when a row has both.
+    expect(decode({ steps: 50, maxSteps: 70 })).toEqual(Either.right({ maxSteps: 70 }));
+    expect(Either.isLeft(decode({ steps: -1 }))).toBe(true);
+  });
+
+  it("keeps the current Schema's form and values", () => {
+    expect(describeConfig(Migrated)).toEqual(describeConfig(Current));
+    expect(configValues(Migrated, { steps: 50 }).values).toEqual({ maxSteps: 50 });
   });
 });
 

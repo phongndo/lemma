@@ -26,8 +26,18 @@ export class Paths extends Context.Tag("lemma/Paths")<
   }
 >() {}
 
-/** One plugin's row in a config file: whether it runs, and with what config. */
-export const PluginRow = Schema.Struct({ enabled: Schema.optional(Schema.Boolean), config: Schema.optional(Schema.Unknown) });
+/**
+ * One plugin's row in a config file: whether it runs, with what config, and
+ * whether the host may start without it. `required: true` makes a plugin that
+ * cannot run stop the host from starting rather than be left out (a plugin
+ * enforcing a policy, such as approvals); plugins from your own files are
+ * required unless their row says `required: false`.
+ */
+export const PluginRow = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  config: Schema.optional(Schema.Unknown),
+  required: Schema.optional(Schema.Boolean),
+});
 export type PluginRow = typeof PluginRow.Type;
 
 /**
@@ -114,6 +124,8 @@ export interface PluginInfo {
   readonly state?: PluginState;
   readonly fault?: PluginFault;
   readonly haltedBy?: string;
+  /** Why it is left out though enabled: it does not decode its config, is written for another API, or failed to start with the host. */
+  readonly problem?: string;
   /** Its settings form, projected from its config Schema; absent when it takes no config. */
   readonly configFields?: readonly ConfigField[];
   /** The config it runs with, as the form shows it. */
@@ -162,6 +174,19 @@ export const Notice = Event.make<NoticePayload>("lemma/notice");
 export interface ConfigureReport extends ReloadReport {
   readonly deferred?: boolean;
 }
+
+/**
+ * The host contracts' API version: a major number that changes when one of
+ * them changes incompatibly. A plugin written for a version requires
+ * `HostApi(version)`, and the host plugin provides each version it supports,
+ * so a plugin written for another is left out with a message naming the
+ * version rather than failing at some later call. A breaking change gives the
+ * changed capability a new key, keeping the old one provided by an adapter for
+ * as long as its version is supported.
+ */
+export const HOST_API = 1;
+/** A plugin written for host API `version` requires this; the host plugin provides the versions it supports. */
+export const HostApi = (version: number): Context.Tag<`lemma/api@${number}`, number> => Context.GenericTag(`lemma/api@${version}`);
 
 /**
  * Handle on the loader, provided by the host application (which owns it) so

@@ -74,6 +74,7 @@ export const toPluginStatus = (info: PluginInfo): PluginStatus => {
           },
         }),
     ...(info.haltedBy === undefined ? {} : { haltedBy: info.haltedBy }),
+    ...(info.problem === undefined ? {} : { problem: info.problem }),
     ...(info.configFields === undefined ? {} : { configFields: info.configFields }),
     ...(info.config === undefined ? {} : { config: info.config }),
     ...(info.configScope === undefined ? {} : { configScope: info.configScope }),

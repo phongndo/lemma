@@ -38,6 +38,8 @@ export const PluginStatus = Schema.Struct({
   fault: Schema.optional(Schema.Struct({ phase: Schema.String, operation: Schema.optional(Schema.String), message: Schema.String })),
   /** The plugin whose failure or absence keeps this one from running. */
   haltedBy: Schema.optional(Schema.String),
+  /** Why it is left out though enabled (see `PluginInfo.problem`). */
+  problem: Schema.optional(Schema.String),
   configFields: Schema.optional(Schema.Array(ConfigField)),
   config: Schema.optional(ConfigValues),
   configScope: Schema.optional(ConfigScope),
