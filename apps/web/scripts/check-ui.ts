@@ -741,6 +741,24 @@ try {
   }
   const ticks = page.locator("nav[aria-label='Prompts'] button.prompt-tick");
   assert.equal(await ticks.count(), 3, "the prompts landmark does not have a tick button per prompt");
+  // The strip is level with the middle of the whole pane, the composer included, not just the chat above it.
+  const railPlace = () =>
+    page.evaluate(() => {
+      const strip = document.querySelector(".prompt-strip")!.getBoundingClientRect();
+      const head = document.querySelector(".main-head")!.getBoundingClientRect();
+      const main = document.querySelector(".main")!.getBoundingClientRect();
+      return {
+        offCenter: Math.abs(strip.top + strip.height / 2 - (head.bottom + main.bottom) / 2),
+        stepsOut:
+          document.querySelector(".prompt-step.next")!.getBoundingClientRect().bottom - document.querySelector(".chat-view")!.getBoundingClientRect().bottom,
+      };
+    });
+  assert.ok((await railPlace()).offCenter <= 1, "the prompt rail is not level with the middle of the pane");
+  // With a composer too tall for that, it stops while its steps still fit in the chat view.
+  await page.fill("textarea", Array.from({ length: 40 }, (_, line) => `line ${line}`).join("\n"));
+  await page.waitForTimeout(200);
+  assert.ok((await railPlace()).stepsOut <= 0, "a tall composer pushes the prompt rail's steps out of the chat view");
+  await page.fill("textarea", "");
   assert.deepEqual(
     await ticks.evaluateAll((all) => all.map((tick) => [tick.tabIndex, tick.getAttribute("aria-current")])),
     [

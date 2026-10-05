@@ -139,15 +139,18 @@
  * 12px from the edge (nearer when the space is tight), at most 40px wide, and
  * 8px short of the transcript's text (`--room`), so it never takes the pointer
  * from the text. Its ticks are 8px apart until that would leave the steps no
- * room in the view; then they move closer.
+ * room in the view; then they move closer. Its middle is the whole pane's,
+ * the composer below the view (`--below`) included, but it stops while its
+ * steps still fit above the view's bottom.
  */
 .prompt-strip {
   --strip-left: clamp(4px, var(--room) - 36px, 12px);
+  --strip-height: min(calc((var(--count) - 1) * 8px), max(0px, 100% - 96px));
   position: absolute;
-  top: 50%;
+  top: min(calc(50% + var(--below) / 2), calc(100% - 48px - var(--strip-height) / 2));
   left: var(--strip-left);
   width: clamp(0px, var(--room) - 8px - var(--strip-left), 40px);
-  height: min(calc((var(--count) - 1) * 8px), max(0px, 100% - 96px));
+  height: var(--strip-height);
   transform: translateY(-50%);
 }
 

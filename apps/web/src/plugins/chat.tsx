@@ -726,7 +726,9 @@ const JUMP_MARGIN = 8;
  * with it; clicking goes there. Each tick is also a button: one tab stop, the
  * arrow keys, Home, and End move between them. The ticks of the turns in view
  * are lit. The strip keeps to the space beside the transcript's text
- * (`--room`), so it never covers what the reader is selecting.
+ * (`--room`), so it never covers what the reader is selecting, and sits level
+ * with the middle of the whole pane, the composer below the chat included
+ * (`--below`), as far as the chat view leaves room.
  */
 function PromptRail(props: {
   marks: readonly PromptMark[];
@@ -739,6 +741,8 @@ function PromptRail(props: {
   seen: { readonly first: number; readonly last: number } | undefined;
   /** The space between the chat's left edge and the transcript's text, in pixels. */
   room: number;
+  /** How far the pane the chat is in reaches below the chat view (its composer), in pixels. */
+  below: number;
   onJump: (key: string) => void;
 }) {
   let rail!: HTMLElement;
@@ -803,7 +807,7 @@ function PromptRail(props: {
       classList={{ tucked: props.room < RAIL_ROOM }}
       aria-label="Prompts"
       ref={rail}
-      style={{ "--room": `${props.room}px`, "--count": count() }}
+      style={{ "--room": `${props.room}px`, "--below": `${props.below}px`, "--count": count() }}
     >
       <div class="prompt-strip" ref={strip}>
         <button class="prompt-step previous" aria-label="Previous prompt" disabled={props.previous === undefined} onClick={() => jump(props.previous)}>
@@ -857,6 +861,7 @@ function PromptRail(props: {
 
 function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   const threads = props.chat.threads;
+  let view!: HTMLDivElement;
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
   const [stuck, setStuck] = createSignal(true);
@@ -871,6 +876,8 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   });
   /** The space beside the transcript's text, where the prompt rail goes. */
   const [room, setRoom] = createSignal(0);
+  /** How far the pane reaches below the chat view (the composer), so the prompt rail can center on the whole pane. */
+  const [below, setBelow] = createSignal(0);
   const turnElement = (key: string) => content.querySelector<HTMLElement>(`[data-turn="${CSS.escape(key)}"]`);
   /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
   let heading: number | undefined;
@@ -975,6 +982,14 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
     measure.observe(scroller);
     measure.observe(content);
     onCleanup(() => measure.disconnect());
+    // The pane is the box the view is laid out in; the composer below it grows as the reader types.
+    const pane = view.offsetParent as HTMLElement | null;
+    if (pane !== null) {
+      const height = new ResizeObserver(() => setBelow(Math.max(0, pane.clientHeight - view.offsetTop - view.offsetHeight)));
+      height.observe(view);
+      height.observe(pane);
+      onCleanup(() => height.disconnect());
+    }
     // Follow new output while the reader is at the bottom; leave them alone once they scroll up.
     const observer = new ResizeObserver(() => {
       const held = anchor;
@@ -1016,7 +1031,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
 
   const empty = () => props.turns().length === 0;
   return (
-    <div class="chat-view">
+    <div class="chat-view" ref={view}>
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="content" ref={content}>
           <Switch>
@@ -1051,7 +1066,16 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
         </Show>
       </div>
       <Show when={props.chat.config.promptRail && marks().length > 1}>
-        <PromptRail marks={marks()} current={current()} previous={steps().previous} next={steps().next} seen={seen()} room={room()} onJump={jump} />
+        <PromptRail
+          marks={marks()}
+          current={current()}
+          previous={steps().previous}
+          next={steps().next}
+          seen={seen()}
+          room={room()}
+          below={below()}
+          onJump={jump}
+        />
       </Show>
     </div>
   );
