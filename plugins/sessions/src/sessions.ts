@@ -6,10 +6,11 @@ import { Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
 import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved } from "@lemma/contracts";
 import type { SessionInfo, Sessions } from "@lemma/contracts";
-import { applyMarks, CHANGED_ON_DISK, createFile, errorCode, infoOf, io, load, openFile, scan, unfiled } from "./file.ts";
-import type { FiledAs, Writer } from "./file.ts";
-import { encodeCwd, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
+import { applyMarks, CHANGED_ON_DISK, createFile, errorCode, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
+import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
+import { encodeCwd, encodeLine, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
 import type { Header, Line } from "./format.ts";
+import { readIndex, writeIndex } from "./listing.ts";
 import { acquireLock, REFRESH_MS, refreshLock, releaseLock } from "./lock.ts";
 
 type Service = Context.Tag.Service<typeof Sessions>;
@@ -26,17 +27,19 @@ interface Open {
   /** What reading the file saw: the first write cuts a torn tail past `validBytes`, unless the file is no longer `size`. */
   readonly validBytes: number;
   readonly size: number;
+  /** The file through the last line read or written: what `list` knows of it once the session is unloaded. */
+  tail: { readonly validBytes: number; readonly lines: number } & LastLine;
   writer?: Writer;
 }
 
-/** Every session file seen. `info` is cached for `list`; `stamp` says when it was read from disk. */
+/** Every session file seen. `info` is cached for `list`; `scanned` is the file as last read, or as memory knew it when unloaded. */
 interface Entry {
   readonly id: string;
   readonly file: string;
   /** Serializes loading, appends, checkouts, and unloading. */
   readonly lock: Effect.Semaphore;
   info: SessionInfo;
-  stamp?: { readonly mtimeMs: number; readonly size: number };
+  scanned?: Scanned;
   open?: Open;
   /** Epoch milliseconds of the last operation on the session; `list` does not count. */
   lastUsed: number;
@@ -68,6 +71,15 @@ const notFound = (sessionId: string, message: string) => new SessionError({ sess
 const infoOfOpen = (open: Open): SessionInfo =>
   infoOf(open.header, { leaf: open.leaf, title: open.title, marks: open.marks, updatedAt: open.updatedAt, lastSeq: open.events.length });
 
+/** What `list` knows of an open session's file, from memory and its `stat`: nothing is read. */
+const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: number; readonly ino: number }): Scanned => ({
+  size: stat.size,
+  mtimeMs: stat.mtimeMs,
+  ino: stat.ino,
+  ...open.tail,
+  info: infoOfOpen(open),
+});
+
 export interface Options {
   /** Seconds an open session may go unused before it is unloaded; 0 keeps it loaded. */
   readonly unloadAfter: number;
@@ -86,26 +98,49 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
       required: true,
     });
     const entries = new Map<string, Entry>();
-    // A failed write's leftover bytes are cut first: the next start would read them as appended.
+    /** The listing index: each file's `Scanned`, by path under `root`. */
+    const index = yield* readIndex(root);
+    let indexChanged = false;
+    const keyOf = (file: string) => path.relative(root, file);
+    const record = (entry: Entry, scanned: Scanned) => {
+      entry.scanned = scanned;
+      index.set(keyOf(entry.file), scanned);
+      indexChanged = true;
+    };
+    const saveIndex = Effect.suspend(() => {
+      if (!indexChanged) return Effect.void;
+      indexChanged = false;
+      return writeIndex(root, index);
+    });
+    // A failed write's leftover bytes are cut first: the next start would read them as appended. Each open
+    // session is then indexed from memory, so the next start reads none of them.
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(
-        entries.values(),
-        (entry) => {
-          const writer = entry.open?.writer;
-          return writer === undefined ? Effect.void : Effect.zipRight(Effect.ignore(writer.settle), writer.close);
-        },
-        { discard: true },
+      Effect.zipRight(
+        Effect.forEach(
+          entries.values(),
+          (entry) => {
+            const open = entry.open;
+            if (open === undefined) return Effect.void;
+            const indexed = Effect.gen(function* () {
+              if (open.writer !== undefined) yield* open.writer.settle;
+              record(entry, scannedOf(open, yield* stat(entry.file)));
+            });
+            return Effect.zipRight(Effect.ignore(indexed), open.writer?.close ?? Effect.void);
+          },
+          { discard: true },
+        ),
+        saveIndex,
       ),
     );
 
     const warn = (message: string) => events.publish(Notice, { level: "warning", message, source: "sessions" });
     const changed = (entry: Entry) => events.publish(SessionChanged, { info: entry.info });
 
-    const remember = (id: string, file: string, info: SessionInfo, stamp?: Entry["stamp"]) =>
+    const remember = (id: string, file: string, info: SessionInfo, scanned?: Scanned) =>
       Effect.map(Effect.makeSemaphore(1), (lock) => {
         const existing = entries.get(id);
         if (existing !== undefined) return existing;
-        const entry: Entry = { id, file, lock, info, ...(stamp === undefined ? {} : { stamp }), lastUsed: Date.now() };
+        const entry: Entry = { id, file, lock, info, ...(scanned === undefined ? {} : { scanned }), lastUsed: Date.now() };
         entries.set(id, entry);
         return entry;
       });
@@ -134,18 +169,25 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
 
     const stat = (file: string) => Effect.tryPromise({ try: () => fs.stat(file), catch: io(undefined, `Cannot stat ${file}`) });
 
-    /** Current info for a file, re-reading it only when its size or mtime changed. Open sessions are authoritative. */
+    /**
+     * Current info for a file, from memory or the index while its size, mtime, and inode are unchanged.
+     * A file appended to since is read on from where the last read stopped. Open sessions are authoritative.
+     */
     const refresh = (id: string, file: string): Effect.Effect<Entry, SessionError> =>
       Effect.gen(function* () {
         const known = entries.get(id);
         if (known?.open !== undefined) return known;
-        const { mtimeMs, size } = yield* stat(known?.file ?? file);
-        if (known?.stamp !== undefined && known.stamp.mtimeMs === mtimeMs && known.stamp.size === size) return known;
-        const info = yield* scan(known?.file ?? file, id);
-        if (known === undefined) return yield* remember(id, file, info, { mtimeMs, size });
-        known.info = info;
-        known.stamp = { mtimeMs, size };
-        return known;
+        const at = known?.file ?? file;
+        const { mtimeMs, size, ino } = yield* stat(at);
+        const prior = known?.scanned ?? index.get(keyOf(at));
+        if (prior !== undefined && prior.size === size && prior.mtimeMs === mtimeMs && prior.ino === ino) {
+          return known ?? (yield* remember(id, at, prior.info, prior));
+        }
+        const scanned = yield* scan(at, id, prior !== undefined && prior.ino === ino && size >= prior.validBytes ? prior : undefined);
+        const entry = known ?? (yield* remember(id, at, scanned.info));
+        entry.info = scanned.info;
+        record(entry, scanned);
+        return entry;
       });
 
     /** The session an operation is on, which counts as using it now. */
@@ -170,15 +212,16 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
       Effect.gen(function* () {
         if (entries.get(entry.id) !== entry) return yield* notFound(entry.id, `Session ${entry.id} does not exist`);
         if (entry.open !== undefined) return entry.open;
-        const loaded = yield* load(entry.file, entry.id);
+        const { scanned, ...loaded } = yield* load(entry.file, entry.id);
         if (loaded.size > loaded.validBytes) {
           const ignored = loaded.size - loaded.validBytes;
           yield* warn(`Session ${entry.id}: ignored the last ${ignored} bytes of ${entry.file}, a write a crash cut short; they are cut before the next write`);
         }
-        const open: Open = { ...loaded };
+        const { validBytes, lines, lastStart, lastHash } = scanned;
+        const open: Open = { ...loaded, tail: { validBytes, lines, lastStart, lastHash } };
         entry.open = open;
         entry.info = infoOfOpen(open);
-        delete entry.stamp;
+        record(entry, scanned);
         return open;
       });
 
@@ -212,7 +255,10 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
       Effect.uninterruptible(
         Effect.gen(function* () {
           const writer = yield* writerOf(entry, open);
-          yield* writer.write(line);
+          const text = encodeLine(line);
+          yield* writer.write(text);
+          const start = open.tail.validBytes;
+          open.tail = { validBytes: start + Buffer.byteLength(text), lines: open.tail.lines + 1, lastStart: start, lastHash: lineHash(text.slice(0, -1)) };
           update();
           entry.info = infoOfOpen(open);
         }).pipe(Effect.tapError((error) => (error.cause === CHANGED_ON_DISK ? forget(entry) : Effect.void))),
@@ -226,6 +272,8 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         while (entries.has(id)) id = newSessionId();
         const header: Header = { type: "session", version: 1, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
+        const line = encodeLine(header);
+        const bytes = Buffer.byteLength(line);
         // Uninterruptible until the entry holds the writer, so its file is always closed.
         const entry = yield* Effect.uninterruptible(
           Effect.gen(function* () {
@@ -238,8 +286,9 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
               title: undefined,
               marks: unfiled,
               updatedAt: createdAt,
-              validBytes: 0,
-              size: 0,
+              validBytes: bytes,
+              size: bytes,
+              tail: { validBytes: bytes, lines: 1, lastStart: 0, lastHash: lineHash(line.slice(0, -1)) },
               writer,
             };
             const entry = yield* remember(id, file, infoOfOpen(open));
@@ -247,6 +296,9 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
             return entry;
           }),
         );
+        // Indexed as created, so a restarted host reads only what was appended since.
+        const created = yield* Effect.option(stat(file));
+        if (Option.isSome(created) && entry.open !== undefined) record(entry, scannedOf(entry.open, created.value));
         yield* changed(entry);
         return entry.info;
       });
@@ -328,6 +380,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
               // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
               yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
               entries.delete(sessionId);
+              indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
               yield* entry.open?.writer?.close ?? Effect.void;
             }),
           ),
@@ -362,14 +415,20 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
             ),
           { concurrency: 16 },
         );
+        if (cwd === undefined) {
+          // Every file was listed, so the index forgets the ones that are gone.
+          const present = new Set(found.map(({ file }) => keyOf(file)));
+          for (const key of index.keys()) if (!present.has(key)) indexChanged = index.delete(key) || indexChanged;
+        }
+        yield* saveIndex;
         return infos
           .flatMap((info) => (Option.isSome(info) && (cwd === undefined || info.value.cwd === cwd) ? [info.value] : []))
           .sort((a, b) => b.updatedAt - a.updatedAt);
       });
 
     /**
-     * Closes a session unused since `cutoff` and drops its events; `info` stays for `list`, under a fresh
-     * `stamp` so it is not re-read, and the next operation reloads it through `openLocked`. Callers hold
+     * Closes a session unused since `cutoff` and drops its events; `info` stays for `list`, indexed from
+     * memory so the file is not re-read, and the next operation reloads it through `openLocked`. Callers hold
      * `entry.lock`. A failed write's leftover bytes are cut first, or the session stays: a reload would read them.
      */
     const unload = (entry: Entry, cutoff: number) =>
@@ -379,7 +438,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         if (open.writer !== undefined) yield* open.writer.settle;
         const stamp = yield* Effect.option(stat(entry.file));
         delete entry.open;
-        if (Option.isSome(stamp)) entry.stamp = { mtimeMs: stamp.value.mtimeMs, size: stamp.value.size };
+        if (Option.isSome(stamp)) record(entry, scannedOf(open, stamp.value));
         yield* open.writer?.close ?? Effect.void;
       });
 

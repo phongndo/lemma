@@ -692,6 +692,7 @@ describe("unloading idle sessions", () => {
         return id;
       }),
     );
+    await fs.rm(path.join(dir, "sessions", ".index.json"));
     await run(
       Effect.gen(function* () {
         const store = yield* Sessions;
@@ -843,5 +844,84 @@ describe("unloading idle sessions", () => {
       }),
     );
     expect((await sessionFiles()).length).toBeLessThanOrEqual(1);
+  });
+
+  it("lists a restarted host's sessions from its index, reading only what was appended since", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, title("first"));
+        return id;
+      }),
+    );
+    // The first host indexed the session from memory as it stopped, so this one lists it without reading the file.
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]).toMatchObject({ id, title: "first", lastSeq: 1 });
+      }),
+    );
+    const index = path.join(dir, "sessions", ".index.json");
+    const saved = JSON.parse(await fs.readFile(index, "utf8")) as { files: Record<string, { info: { title?: string; leaf?: string } }> };
+    const [record] = Object.values(saved.files);
+    // A title only the index has shows that an unchanged file is not read again.
+    record!.info.title = "from the index";
+    await fs.writeFile(index, JSON.stringify(saved));
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]!.title).toBe("from the index");
+      }),
+    );
+    // Appended by another program: only the new line is read, so the index's title stays.
+    const [file] = await sessionFiles();
+    const line = { seq: 2, id: "x2", parent: record!.info.leaf, at: Date.now(), data: custom(2) };
+    await fs.appendFile(file!, `${JSON.stringify(line)}\n`);
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]).toMatchObject({ title: "from the index", lastSeq: 2, leaf: "x2" });
+      }),
+    );
+    // An unreadable index is rebuilt from the files.
+    await fs.writeFile(index, "{");
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]).toMatchObject({ title: "first", lastSeq: 2 });
+        yield* store.remove(id);
+        expect(yield* store.list()).toEqual([]);
+      }),
+    );
+    expect(JSON.parse(await fs.readFile(index, "utf8")).files).toEqual({});
+  });
+
+  it("reads a whole file again for the listing when the line it read last has changed", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, title("AAAA"));
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]!.title).toBe("AAAA");
+      }),
+    );
+    // As when a failed write's line, already read by another host, is replaced by one of the same length.
+    const [file] = await sessionFiles();
+    const text = await fs.readFile(file!, "utf8");
+    const handle = await fs.open(file!, "r+");
+    await handle.write(Buffer.from("BBBB"), 0, 4, Buffer.byteLength(text.slice(0, text.lastIndexOf("AAAA"))));
+    await handle.close();
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.list())[0]!.title).toBe("BBBB");
+      }),
+    );
   });
 });

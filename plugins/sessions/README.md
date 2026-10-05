@@ -36,6 +36,11 @@ event appended or the last checkout, whichever is later. The title is the latest
 `title` event; `pinned` and `archived` are the latest value each marks line gave
 (a marks line moves neither the leaf nor `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
+`<Paths.sessions>/.index.json` is the listing index: for each file, its size,
+mtime, and inode when last read or written, the `SessionInfo` it described up
+to those bytes, and a hash of its last line. It is a cache, so deleting it only
+costs re-reading the files.
+
 ## Behavior
 
 - **Durability.** `append` and `checkout` write through a per-session file handle
@@ -58,10 +63,15 @@ event appended or the last checkout, whichever is later. The title is the latest
   exactly as a reload will. A field the schema lacks is refused (it would be
   dropped on reading), and so is a value JSON cannot carry where the schema needs
   it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
-- **Listing.** `list` reads directory entries and `stat`s each file; a file is
-  re-read (with `JSON.parse` only) when its size or mtime changed. Sessions this
-  process has opened are served from memory. A file that cannot be read is left
-  out with a `Notice` warning instead of failing the listing.
+- **Listing.** `list` reads directory entries and `stat`s each file. A file whose
+  size, mtime, and inode match the listing index is not read; one that grew is read
+  (with `JSON.parse` only) from where the last read stopped, since sessions are
+  only appended to, once the line read last is found unchanged (a failed write's
+  line may since have been replaced; if it was, the whole file is read). Sessions
+  are indexed when created, read, unloaded, and when the plugin stops, those last
+  two from memory, so a restarted host reads only what changed since. Sessions
+  this process has opened are served from memory. A file that cannot be read is
+  left out with a `Notice` warning instead of failing the listing.
 - **Memory.** A session opened for `events`, `branch`, `append`, `checkout`, or
   `mark` stays in memory, with its file open, until no operation but `list` has
   used it for `unloadAfter` seconds. A sweep (every `unloadAfter / 2`, at least

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Effect, Either } from "effect";
@@ -36,27 +37,54 @@ export interface Extent {
   readonly size: number;
 }
 
+/** A file's identity when it was read: a different size, mtime, or inode means it changed since. */
+export interface Stamp {
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ino: number;
+}
+
+/** The last line a read took: where it starts, and a hash of its text. */
+export interface LastLine {
+  readonly lastStart: number;
+  readonly lastHash: string;
+}
+
+/**
+ * What `list` knows of a file: its info as of `validBytes` (`lines` lines),
+ * and its stamp when read. Reading on from `validBytes` is only sound while
+ * the last line is still the one read, so `lastHash` checks that first: a
+ * failed write's line can be replaced after another process read it.
+ */
+export interface Scanned extends Stamp, LastLine {
+  readonly validBytes: number;
+  readonly lines: number;
+  readonly info: SessionInfo;
+}
+
+export const lineHash = (text: string): string => createHash("sha1").update(text).digest("base64");
+
 const CHUNK = 1 << 20;
 
 /**
- * Calls `visit` with each complete line, and the byte it starts at, reading a
- * chunk at a time: no string ever holds the whole file, so one too big for a
- * single string still reads. `visit` returning false stops the read. Bytes
- * after the last newline are not a line.
+ * Calls `visit` with each complete line from byte `from` on, and the byte it
+ * starts at, reading a chunk at a time: no string ever holds the whole file,
+ * so one too big for a single string still reads. `visit` returning false
+ * stops the read. Bytes after the last newline are not a line.
  */
-async function readLines(file: string, visit: (text: string, start: number) => boolean): Promise<Extent> {
+async function readLines(file: string, from: number, visit: (text: string, start: number) => boolean): Promise<Extent & Stamp> {
   const handle = await fs.open(file, "r");
   try {
-    const { size } = await handle.stat();
+    const { mtimeMs, ino, size } = await handle.stat();
     // Small files get a small buffer: a cold `list` reads many at once.
-    const chunk = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1 << 16, size)));
+    const chunk = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1 << 16, size - from)));
     /** The current line's bytes from earlier chunks. */
     let carried: Buffer[] = [];
-    let position = 0;
-    let lineStart = 0;
+    let position = from;
+    let lineStart = from;
     for (;;) {
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
-      if (bytesRead === 0) return { validBytes: lineStart, size: position };
+      if (bytesRead === 0) return { validBytes: lineStart, size: position, mtimeMs, ino };
       const view = chunk.subarray(0, bytesRead);
       let at = 0;
       for (let newline = view.indexOf(0x0a); newline !== -1; newline = view.indexOf(0x0a, at)) {
@@ -65,7 +93,7 @@ async function readLines(file: string, visit: (text: string, start: number) => b
         const start = lineStart;
         at = newline + 1;
         lineStart = position + at;
-        if (!visit(text, start)) return { validBytes: lineStart, size: position + bytesRead };
+        if (!visit(text, start)) return { validBytes: lineStart, size: position + bytesRead, mtimeMs, ino };
       }
       // The chunk is reused, so a line it ends inside is copied out.
       if (at < bytesRead) carried.push(Buffer.from(view.subarray(at)));
@@ -77,19 +105,24 @@ async function readLines(file: string, visit: (text: string, start: number) => b
 }
 
 /**
- * The lines of a file as JSON, to `visit` in order. A last line that is not
- * JSON is a write a crash cut short (a power loss can leave one ending in a
- * newline), so it is left out of `validBytes` like a torn tail; one with lines
- * after it is damage. Returns why reading stopped, if it failed.
+ * The lines of a file from byte `from` (line `lines + 1`) on, as JSON, to
+ * `visit` in order. A last line that is not JSON is a write a crash cut short
+ * (a power loss can leave one ending in a newline), so it is left out of
+ * `validBytes` like a torn tail; one with lines after it is damage. Returns
+ * the lines taken in all, and why reading stopped if it failed.
  */
 async function readJson(
   file: string,
+  from: { readonly validBytes: number; readonly lines: number } & Partial<LastLine>,
   visit: (json: unknown, line: number) => string | undefined,
-): Promise<{ readonly extent: Extent; readonly failure?: string }> {
-  let line = 0;
+): Promise<{ readonly extent: Extent & Stamp; readonly lines: number; readonly last?: LastLine; readonly failure?: string }> {
+  let line = from.lines;
   let failure: string | undefined;
   let unreadable: { readonly line: number; readonly start: number } | undefined;
-  const extent = await readLines(file, (text, start) => {
+  /** The last line taken: where it starts, and its text. */
+  let lastStart = -1;
+  let lastText = "";
+  const extent = await readLines(file, from.validBytes, (text, start) => {
     line++;
     if (unreadable !== undefined) {
       failure = `line ${unreadable.line}: not JSON`;
@@ -103,10 +136,34 @@ async function readJson(
       return true;
     }
     failure = visit(json, line);
+    lastStart = start;
+    lastText = text;
     return failure === undefined;
   });
-  if (failure !== undefined) return { extent, failure };
-  return { extent: unreadable === undefined ? extent : { ...extent, validBytes: unreadable.start } };
+  const lastLine =
+    lastStart >= 0
+      ? { lastStart, lastHash: lineHash(lastText) }
+      : from.lastStart !== undefined && from.lastHash !== undefined
+        ? { lastStart: from.lastStart, lastHash: from.lastHash }
+        : undefined;
+  const taken = lastLine === undefined ? {} : { last: lastLine };
+  if (failure !== undefined) return { extent, lines: line, failure, ...taken };
+  if (unreadable === undefined) return { extent, lines: line, ...taken };
+  return { extent: { ...extent, validBytes: unreadable.start }, lines: unreadable.line - 1, ...taken };
+}
+
+/** Whether the line `from` read last is still there, unchanged and complete, so reading on from it is sound. */
+async function lastLineHolds(file: string, from: Scanned): Promise<boolean> {
+  const length = from.validBytes - from.lastStart;
+  if (length <= 0) return false;
+  const handle = await fs.open(file, "r");
+  try {
+    const bytes = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, from.lastStart);
+    return bytesRead === length && bytes[length - 1] === 0x0a && lineHash(bytes.toString("utf8", 0, length - 1)) === from.lastHash;
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Where a session is filed: the latest value of each mark. */
@@ -133,6 +190,8 @@ export interface Loaded {
   /** End of the lines taken; a longer file has a torn tail to cut before appending. */
   readonly validBytes: number;
   readonly size: number;
+  /** What `list` would know of the file after this read. */
+  readonly scanned: Scanned;
 }
 
 /**
@@ -180,12 +239,26 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
       updatedAt = Math.max(updatedAt, line.at);
       return undefined;
     };
-    return Effect.tryPromise({ try: () => readJson(file, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
-      Effect.flatMap(({ extent, failure }) => {
+    return Effect.tryPromise({ try: () => readJson(file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
+      Effect.flatMap(({ extent, lines, last, failure }) => {
         if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
         // The header is synced before `create` returns, so a file without one was never a session.
-        if (header === undefined) return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
-        return Effect.succeed({ header, events, byId, leaf, title, marks, updatedAt, validBytes: extent.validBytes, size: extent.size });
+        if (header === undefined || last === undefined) {
+          return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
+        }
+        const info = infoOf(header, { leaf, title, marks, updatedAt, lastSeq: events.length });
+        return Effect.succeed({
+          header,
+          events,
+          byId,
+          leaf,
+          title,
+          marks,
+          updatedAt,
+          validBytes: extent.validBytes,
+          size: extent.size,
+          scanned: { size: extent.size, mtimeMs: extent.mtimeMs, ino: extent.ino, validBytes: extent.validBytes, lines, ...last, info },
+        });
       }),
     );
   });
@@ -194,57 +267,72 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
 /**
  * The `SessionInfo` a file describes, from `JSON.parse` alone: `list` calls
  * this for every changed file, so it skips schema validation. A full `load`
- * still validates before anything is appended.
+ * still validates before anything is appended. Given what an earlier scan
+ * found, it reads only the bytes after it, since the file is only appended
+ * to; unless the line that scan read last has changed, as when a failed
+ * write's line was replaced.
  */
-export function scan(file: string, sessionId: string): Effect.Effect<SessionInfo, SessionError> {
-  return Effect.suspend(() => {
-    let header: Header | undefined;
-    let leaf: string | undefined;
-    let title: string | undefined;
-    let marks = unfiled;
-    let updatedAt = 0;
-    let lastSeq = 0;
-    const visit = (json: unknown, n: number): string | undefined => {
-      if (header === undefined) {
-        const decoded = decodeRecord(json, true);
-        if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
-        header = decoded.right as Header;
-        updatedAt = header.createdAt;
-        return undefined;
-      }
-      if (typeof json !== "object" || json === null || Array.isArray(json)) return `line ${n}: not a record`;
-      const line = json as {
-        type?: string;
-        leaf?: string;
-        id?: string;
-        seq?: number;
-        at?: number;
-        data?: { type?: string; title?: string };
-        pinned?: boolean;
-        archived?: boolean;
-      };
-      if (line.type === "marks") {
-        marks = applyMarks(marks, line);
-        return undefined;
-      }
-      if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
-      if (line.type === "checkout") {
-        leaf = line.leaf;
-        return undefined;
-      }
-      leaf = line.id;
-      lastSeq = line.seq ?? lastSeq;
-      if (line.data?.type === "title") title = line.data.title;
+export function scan(file: string, sessionId: string, prior?: Scanned): Effect.Effect<Scanned, SessionError> {
+  return Effect.tryPromise({
+    try: async () => scanFrom(file, prior !== undefined && (await lastLineHolds(file, prior)) ? prior : undefined),
+    catch: io(sessionId, `Cannot read ${file}`),
+  }).pipe(Effect.flatMap((result) => (typeof result === "string" ? Effect.fail(corrupt(sessionId, file, result)) : Effect.succeed(result))));
+}
+
+/** `scan` from `from` (or the start): the scan, or why the file is not a session. */
+async function scanFrom(file: string, from: Scanned | undefined): Promise<Scanned | string> {
+  let header: Header | undefined =
+    from === undefined ? undefined : { type: "session", version: 1, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
+  let leaf = from?.info.leaf;
+  let title = from?.info.title;
+  let marks: FiledAs = from === undefined ? unfiled : { pinned: from.info.pinned === true, archived: from.info.archived === true };
+  let updatedAt = from?.info.updatedAt ?? 0;
+  let lastSeq = from?.info.lastSeq ?? 0;
+  const visit = (json: unknown, n: number): string | undefined => {
+    if (header === undefined) {
+      const decoded = decodeRecord(json, true);
+      if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
+      header = decoded.right as Header;
+      updatedAt = header.createdAt;
       return undefined;
+    }
+    if (typeof json !== "object" || json === null || Array.isArray(json)) return `line ${n}: not a record`;
+    const line = json as {
+      type?: string;
+      leaf?: string;
+      id?: string;
+      seq?: number;
+      at?: number;
+      data?: { type?: string; title?: string };
+      pinned?: boolean;
+      archived?: boolean;
     };
-    return Effect.tryPromise({ try: () => readJson(file, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
-      Effect.flatMap(({ extent, failure }) => {
-        if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
-        if (header === undefined) return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
-        return Effect.succeed(infoOf(header, { leaf, title, marks, updatedAt, lastSeq }));
-      }),
-    );
-  });
+    if (line.type === "marks") {
+      marks = applyMarks(marks, line);
+      return undefined;
+    }
+    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
+    if (line.type === "checkout") {
+      leaf = line.leaf;
+      return undefined;
+    }
+    leaf = line.id;
+    lastSeq = line.seq ?? lastSeq;
+    if (line.data?.type === "title") title = line.data.title;
+    return undefined;
+  };
+  const { extent, lines, last, failure } = await readJson(file, from ?? { validBytes: 0, lines: 0 }, visit);
+  if (failure !== undefined) return failure;
+  if (header === undefined || last === undefined) return extent.size === 0 ? "missing header" : "unreadable header";
+  return {
+    size: extent.size,
+    mtimeMs: extent.mtimeMs,
+    ino: extent.ino,
+    validBytes: extent.validBytes,
+    lines,
+    ...last,
+    info: infoOf(header, { leaf, title, marks, updatedAt, lastSeq }),
+  };
 }
 
 export const infoOf = (
@@ -281,7 +369,8 @@ export const infoOf = (
  * deleted file.
  */
 export interface Writer {
-  readonly write: (line: Line) => Effect.Effect<void, SessionError>;
+  /** Appends `text`, one encoded line (`encodeLine`). */
+  readonly write: (text: string) => Effect.Effect<void, SessionError>;
   /** Cuts what a failed write left, so the file ends at the last confirmed line again; due before a reload reads it. */
   readonly settle: Effect.Effect<void, SessionError>;
   readonly close: Effect.Effect<void>;
@@ -298,14 +387,13 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
     unconfirmed = 0;
   };
   return {
-    write: (line) =>
+    write: (text) =>
       Effect.tryPromise({
         try: async () => {
           const { size, nlink } = await handle.stat();
           if (nlink === 0) throw changedOnDisk(sessionId, file, "was deleted or replaced on disk");
           if (size < end || size > end + unconfirmed) throw changedOnDisk(sessionId, file);
           await cut();
-          const text = encodeLine(line);
           const bytes = Buffer.byteLength(text);
           unconfirmed = bytes;
           try {
