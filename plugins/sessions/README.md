@@ -1,7 +1,7 @@
 # @lemma/plugin-sessions
 
 Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
-`SessionEvent`s stored as one JSONL file. Requires `Paths`. No config.
+`SessionEvent`s stored as one JSONL file. Requires `Paths`.
 
 ```ts
 const store = yield * Sessions;
@@ -10,6 +10,14 @@ const event = yield * store.append(id, { type: "title", title: "Fix the build" }
 const branch = yield * store.branch(id); // root → leaf
 yield * store.checkout(id, event.id); // later appends branch from here
 ```
+
+```jsonc
+{ "plugins": { "sessions": { "config": { "unloadAfter": 300 } } } }
+```
+
+| Config        | Default | Meaning                                                                                                                                    |
+| ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `unloadAfter` | `300`   | Seconds a session may go unused before its events leave memory and its file is closed; the next use reloads it. `0` keeps sessions loaded. |
 
 ## Storage
 
@@ -36,21 +44,45 @@ event appended or the last checkout, whichever is later. The title is the latest
   the agent appends only settled events (never stream deltas).
 - **Crash tolerance.** Bytes after the last newline are a torn write: they are
   ignored when reading and cut off before the next append. A write that fails at
-  runtime (full disk, failed sync) fails the append, and the next write first
-  truncates the file back to the last confirmed line. Any _complete_ line
-  that does not decode, an unknown parent, a seq gap, or a checkout to nowhere
-  makes the session `Corrupt`. Skipping such a line would silently change what the
-  model saw.
+  runtime (full disk, failed sync) fails the append, and the next write (or
+  unloading the session, or the plugin closing) first truncates the file back to
+  the last confirmed line. Any _complete_ line that does not decode, an unknown parent, a seq gap,
+  or a checkout to nowhere makes the session `Corrupt`. Skipping such a line
+  would silently change what the model saw.
 - **Validation.** `append` validates the event against the schema first, so a line
   that could not be read back is never written. `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file; a file is
   re-read (with `JSON.parse` only) when its size or mtime changed. Sessions this
   process has opened are served from memory. A file that cannot be read is left
   out with a `Notice` warning instead of failing the listing.
-- **Memory.** A session opened for `events`, `branch`, `append`, or `checkout` stays
-  in memory, with its handle open, for the plugin's lifetime.
-- **Single writer.** Two processes appending to one session would interleave;
-  the store assumes one host per sessions directory.
+- **Memory.** A session opened for `events`, `branch`, `append`, `checkout`, or
+  `mark` stays in memory, with its file open, until no operation but `list` has
+  used it for `unloadAfter` seconds. A sweep (every `unloadAfter / 2`, at least
+  once a minute) then closes the file and drops the events, skipping a session
+  in the middle of an operation; `list` keeps its info without re-reading the
+  file, and the next use reloads it. A loaded session takes about 1.1× its file
+  size in heap, and reloading a 40 MB one about 85 ms: without unloading, a
+  long-running host's heap and open files grow with every session it touches.
+- **One process per directory.** The store holds `<Paths.sessions>/.lock`
+  (`{ pid, hostname, token, startedAt }`) while it runs, and touches it every 10
+  seconds, so a second host on the same directory fails to activate this plugin
+  instead of interleaving appends with the first (and resuming its turns
+  twice). The error names the holder and the file: stop that host, or delete
+  the file if it is not running. A lock is taken over when its holder, on this
+  machine, is no longer running, or was started before the machine last booted
+  (its pid may be another process's now, and a host restarted at boot must not
+  refuse to start) and has not touched the lock for 30 seconds (a clock set
+  after the holder started makes it look older than the boot, but it still
+  touches the lock). A lock from another hostname (another machine sharing the
+  directory, or this one under an old name: a Mac's follows its network) cannot
+  be checked, so it holds until it goes 30 seconds untouched. One that names
+  nobody is taken over once it is ten seconds old (a crash while it was
+  written). Only the process that creates `.lock.takeover` takes a stale lock
+  over, so two starting at once cannot both have it. A store that finds the lock
+  held by another process (it took the lock over, say after this host was
+  frozen) fails, stopping the plugins that write through it. The plugin is
+  `exclusive`: a reload closes the old instance, which removes the lock, before
+  the new one takes it, so two never write one log.
 - **Removal.** `remove` closes the file and deletes it; the session is gone from
   memory and listings, and `SessionRemoved` is published.
 - `SessionAppended` and `SessionChanged` are published after each write. They are

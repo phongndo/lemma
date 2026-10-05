@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Chunk, Effect, Fiber, Layer, Stream } from "effect";
+import { Cause, Chunk, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { definePlugin, Events, makeCore } from "@lemma/core";
+import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
 import { Notice, Paths, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/contracts";
 import type { EventData } from "@lemma/contracts";
 import sessions, { encodeCwd } from "../src/index.ts";
@@ -32,15 +33,18 @@ const paths = () =>
   });
 
 /** Runs `body` against a fresh core over the same directory, as a restarted host would. */
-const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>) =>
+const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>, config?: { readonly unloadAfter?: number }) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(), sessions]);
+        const core = yield* makeCore([paths(), sessions], config === undefined ? {} : { configs: { sessions: config } });
         return yield* core.run(body);
       }),
     ),
   );
+
+/** Short enough that a test sees sessions unloaded: swept every 10ms. */
+const quickly = { unloadAfter: 0.02 };
 
 const title = (value: string): EventData => ({ type: "title", title: value });
 const custom = (n: number): EventData => ({ type: "custom", kind: "test/n", data: n });
@@ -48,11 +52,42 @@ const custom = (n: number): EventData => ({ type: "custom", kind: "test/n", data
 const sessionFiles = async () => {
   const root = path.join(dir, "sessions");
   const out: string[] = [];
-  for (const project of await fs.readdir(root)) {
-    for (const name of await fs.readdir(path.join(root, project))) out.push(path.join(root, project, name));
+  for (const project of await fs.readdir(root, { withFileTypes: true })) {
+    // Not the lock.
+    if (!project.isDirectory()) continue;
+    for (const name of await fs.readdir(path.join(root, project.name))) out.push(path.join(root, project.name, name));
   }
   return out;
 };
+
+/** `FileHandle.prototype`, to fake what the disk does. */
+const fileHandles = async () => {
+  const probe = await fs.open(path.join(dir, "probe"), "w");
+  await probe.close();
+  return Object.getPrototypeOf(probe) as fs.FileHandle;
+};
+
+/** Files closed, among those opened from now on: each handle has its own `close`, not one on the prototype. */
+const watchCloses = () => {
+  const closed: string[] = [];
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode);
+    const close = handle.close;
+    handle.close = () => {
+      closed.push(String(file));
+      return close.call(handle);
+    };
+    return handle;
+  });
+  return closed;
+};
+
+/** Waits for the sweep to unload a session: closing its file is the last thing it does. */
+const unloaded = (closed: readonly string[], id: string) =>
+  Effect.promise(() => vi.waitFor(() => expect(closed.some((file) => file.endsWith(`_${id}.jsonl`))).toBe(true)));
+
+const lockPath = () => path.join(dir, "sessions", ".lock");
 
 /** The session id in a file name; ids may themselves contain `_`, so take the fixed-length tail. */
 const idOfFile = (file: string) => path.basename(file, ".jsonl").slice(-12);
@@ -280,9 +315,7 @@ describe("sessions", () => {
     );
   });
   it("recovers from a failed write: the next append follows the last good line, and the file stays loadable", async () => {
-    const probe = await fs.open(path.join(dir, "probe"), "w");
-    const FileHandle = Object.getPrototypeOf(probe) as fs.FileHandle;
-    await probe.close();
+    const FileHandle = await fileHandles();
     const appendFile = FileHandle.appendFile;
     const id = await run(
       Effect.gen(function* () {
@@ -395,6 +428,206 @@ describe("sessions", () => {
         const store = yield* Sessions;
         expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1), custom(2)]);
       }),
+    );
+  });
+
+  it("fails to activate while another host holds the sessions directory, and leaves its lock alone", async () => {
+    const held = { pid: 4242, hostname: "another-machine", token: "theirs", startedAt: Date.now() };
+    await fs.mkdir(path.dirname(lockPath()), { recursive: true });
+    await fs.writeFile(lockPath(), JSON.stringify(held));
+    const fault = await Effect.runPromise(Effect.scoped(Effect.flip(makeCore([paths(), sessions]))));
+    expect(fault).toBeInstanceOf(PluginFault);
+    expect(Cause.squash((fault as PluginFault).cause)).toMatchObject({
+      _tag: "SessionError",
+      message: expect.stringContaining(`${lockPath()} is held by process 4242 on another-machine`),
+    });
+    expect(JSON.parse(await fs.readFile(lockPath(), "utf8"))).toEqual(held);
+  });
+
+  it("stops before a reloaded instance starts, so the two never write one log, and the last removes the lock at shutdown", async () => {
+    const holder = () => Effect.promise(async () => JSON.parse(await fs.readFile(lockPath(), "utf8")) as { readonly pid: number; readonly token: string });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths(), sessions]);
+          const before = yield* holder();
+          const { id } = yield* core.run(Effect.flatMap(Sessions, (store) => store.create()));
+          // An operation the old instance admitted, still going when the reload begins.
+          const ready = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const old = yield* Effect.fork(
+            core.run(
+              Effect.gen(function* () {
+                const store = yield* Sessions;
+                yield* store.events(id);
+                yield* Deferred.succeed(ready, undefined);
+                yield* Deferred.await(release);
+                yield* store.append(id, title("old"));
+              }),
+            ),
+          );
+          yield* Deferred.await(ready);
+          const restarting = yield* Effect.fork(core.restart("sessions", { force: true }));
+          yield* Effect.sleep(50);
+          // A write made meanwhile: a replacement running beside the old instance would take it first.
+          const meanwhile = yield* Effect.fork(core.run(Effect.flatMap(Sessions, (store) => store.append(id, title("meanwhile")))));
+          yield* Effect.sleep(50);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.await(old);
+          yield* Fiber.await(meanwhile);
+          yield* Fiber.join(restarting);
+          const after = yield* holder();
+          expect(after.pid).toBe(process.pid);
+          expect(after.token).not.toBe(before.token);
+          const appended = yield* core.run(Effect.flatMap(Sessions, (store) => store.append(id, title("new"))));
+          // One writer at a time: what is on disk is one unbroken sequence, and the new instance read all of it.
+          const [file] = yield* Effect.promise(sessionFiles);
+          const lines = (yield* Effect.promise(() => fs.readFile(file!, "utf8"))).trim().split("\n").slice(1);
+          const seqs = lines.map((line) => (JSON.parse(line) as { readonly seq: number }).seq);
+          expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+          expect(appended.seq).toBe(seqs.length);
+        }),
+      ),
+    );
+    await expect(fs.stat(lockPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves no instance writing without the lock when a reload fails after it", async () => {
+    let activations = 0;
+    const flaky = definePlugin({
+      id: "flaky",
+      requires: [Sessions],
+      layer: Layer.effectDiscard(Effect.suspend(() => (activations++ === 0 ? Effect.void : Effect.fail(new Error("fails when restarted"))))),
+    });
+    const plugins: Record<string, Plugin> = { paths: paths(), sessions, flaky };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const loader = yield* makeLoader({
+            source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+            composition: { plugins: { paths: {}, sessions: {}, flaky: {} } },
+          });
+          const applied = yield* Effect.either(loader.apply({ plugins: { paths: {}, sessions: { config: { unloadAfter: 100 } }, flaky: {} } }));
+          expect(applied._tag).toBe("Left");
+          const locked = yield* Effect.promise(() =>
+            fs.stat(lockPath()).then(
+              () => true,
+              () => false,
+            ),
+          );
+          // The old instance stopped before the new one started; the new one went with the failed reload.
+          const wrote = yield* Effect.exit(loader.core.run(Effect.flatMap(Sessions, (store) => store.create())));
+          expect(Exit.isFailure(wrote) || locked).toBe(true);
+        }),
+      ),
+    );
+  });
+});
+
+describe("unloading idle sessions", () => {
+  it("closes a session unused for unloadAfter, lists it without re-reading, and reloads it unchanged on the next use", async () => {
+    const closed = watchCloses();
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, title("first"));
+        const second = yield* store.append(id, custom(2));
+        const info = yield* store.checkout(id, first.id);
+        yield* unloaded(closed, id);
+        const readFile = vi.spyOn(fs, "readFile");
+        expect(yield* store.list()).toEqual([info]);
+        expect(readFile).not.toHaveBeenCalled();
+        expect((yield* store.events(id)).map((event) => event.id)).toEqual([first.id, second.id]);
+        expect(readFile).toHaveBeenCalledTimes(1);
+        expect(yield* store.get(id)).toEqual(info);
+        expect(yield* store.append(id, custom(3))).toMatchObject({ seq: 3, parent: first.id });
+      }),
+      quickly,
+    );
+  });
+
+  it("cuts what a failed write left before unloading, and ignores a torn tail after reloading", async () => {
+    const FileHandle = await fileHandles();
+    const closed = watchCloses();
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        // The line lands but is not confirmed durable, so the append fails: a reload must not read it.
+        vi.spyOn(FileHandle, "datasync").mockRejectedValueOnce(Object.assign(new Error("I/O error"), { code: "EIO" }));
+        expect((yield* Effect.flip(store.append(id, custom(2)))).reason).toBe("Io");
+        yield* unloaded(closed, id);
+        const [file] = yield* Effect.promise(sessionFiles);
+        expect((yield* Effect.promise(() => fs.readFile(file!, "utf8"))).trimEnd().split("\n")).toHaveLength(2);
+        yield* Effect.promise(() => fs.appendFile(file!, '{"seq":2,"id":"torn","par'));
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1)]);
+        expect((yield* store.append(id, custom(3))).seq).toBe(2);
+        return id;
+      }),
+      quickly,
+    );
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1), custom(3)]);
+      }),
+    );
+  });
+
+  it("does not unload a session while an append to it is in flight", async () => {
+    const FileHandle = await fileHandles();
+    const datasync = FileHandle.datasync;
+    const closed = watchCloses();
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        // Far longer than unloadAfter: sweeps run meanwhile, and closing the file under the append would fail it.
+        vi.spyOn(FileHandle, "datasync").mockImplementationOnce(async function (this: fs.FileHandle) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          return datasync.call(this);
+        });
+        expect((yield* store.append(id, custom(2))).seq).toBe(2);
+        // Unloaded once idle: the sweep was running all along.
+        yield* unloaded(closed, id);
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1), custom(2)]);
+      }),
+      quickly,
+    );
+  });
+
+  it("keeps a session in use loaded past unloadAfter", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const readFile = vi.spyOn(fs, "readFile");
+        for (let i = 0; i < 25; i++) {
+          yield* store.get(id);
+          yield* Effect.sleep(10);
+        }
+        yield* store.events(id);
+        expect(readFile).not.toHaveBeenCalled();
+      }),
+      { unloadAfter: 0.1 },
+    );
+  });
+
+  it("keeps sessions loaded when unloadAfter is 0", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        yield* Effect.sleep(50);
+        const readFile = vi.spyOn(fs, "readFile");
+        expect((yield* store.events(id)).length).toBe(1);
+        expect(readFile).not.toHaveBeenCalled();
+      }),
+      { unloadAfter: 0 },
     );
   });
 });

@@ -190,21 +190,25 @@ export const infoOf = (
  */
 export interface Writer {
   readonly write: (line: Line) => Effect.Effect<void, SessionError>;
+  /** Cuts what a failed write left, so the file ends at the last confirmed line again; due before a reload reads it. */
+  readonly settle: Effect.Effect<void, SessionError>;
   readonly close: Effect.Effect<void>;
 }
 
 const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confirmed: number): Writer => {
   let end = confirmed;
   let dirty = false;
+  const cut = async () => {
+    if (!dirty) return;
+    await handle.truncate(end);
+    await handle.datasync();
+    dirty = false;
+  };
   return {
     write: (line) =>
       Effect.tryPromise({
         try: async () => {
-          if (dirty) {
-            await handle.truncate(end);
-            await handle.datasync();
-            dirty = false;
-          }
+          await cut();
           const text = encodeLine(line);
           dirty = true;
           await handle.appendFile(text);
@@ -214,6 +218,7 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
         },
         catch: io(sessionId, `Cannot write ${file}`),
       }),
+    settle: Effect.tryPromise({ try: cut, catch: io(sessionId, `Cannot write ${file}`) }),
     close: Effect.promise(() => handle.close()).pipe(Effect.ignore),
   };
 };
