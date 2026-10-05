@@ -2,11 +2,12 @@ import { Effect, Either, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, normalizeContext } from "@earendil-works/pi-ai";
 import type { Api, Model, ProviderStreams, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { Events, Hooks, PluginContext, definePlugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, Llm, LlmError, LlmRequestHook, ModelsChanged, Notice, parseModelRef } from "@lemma/contracts";
+import { Credentials, HostControl, Interaction, Llm, LlmError, LlmRequestHook, ModelsChanged, Notice, Paths, parseModelRef } from "@lemma/contracts";
 import type { AuthType, LlmRequest, ProviderInfo, StreamEvent } from "@lemma/contracts";
 import { makeAuth } from "./auth.ts";
 import type { LoginUi, Token } from "./auth.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
+import { chatgptSignIn } from "./chatgpt.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { identityHeaders } from "./identity.ts";
 import { CustomProvider, apis, builtinProviders, customEntry, customProvider, selectProviders } from "./providers.ts";
@@ -76,7 +77,7 @@ export function makeLlmPlugin(options: Options = {}) {
     id: "llm",
     config: Config,
     provides: [Llm],
-    requires: [Credentials, Interaction, HostControl],
+    requires: [Credentials, Interaction, HostControl, Paths],
     layer: (config: Config) =>
       Layer.scoped(
         Llm,
@@ -87,6 +88,7 @@ export function makeLlmPlugin(options: Options = {}) {
           const credentials = yield* Credentials;
           const interaction = yield* Interaction;
           const host = yield* HostControl;
+          const { home } = yield* Paths;
           const fetchImpl = options.fetch ?? fetch;
 
           const ui: LoginUi = {
@@ -105,7 +107,7 @@ export function makeLlmPlugin(options: Options = {}) {
           };
           const auth = makeAuth({ credentials, env: options.env ?? ((name) => process.env[name]), ui });
 
-          const builtins = selectProviders(options.providers?.() ?? builtinProviders(), config);
+          const builtins = selectProviders(options.providers?.() ?? builtinProviders(chatgptSignIn({ home, fetch: fetchImpl })), config);
           // A model a provider adds may be described already by another built-in provider's catalog.
           const siblings = () => builtins.flatMap((provider) => provider.catalog.models());
           const sources = networkSources(fetchImpl, siblings);
@@ -356,6 +358,7 @@ export { makeAuth } from "./auth.ts";
 export type { Auth, AuthProvider, LoginUi, OAuthCredential, OAuthMethod, ProviderAuth, Token } from "./auth.ts";
 export { fixedCatalog } from "./catalog.ts";
 export type { Catalog, RefreshContext } from "./catalog.ts";
+export { chatgptSignIn } from "./chatgpt.ts";
 export { makeEventMapper, reasoningFor, toAssistantMessage, toContext, toModelInfo } from "./convert.ts";
 export { CustomModel, CustomProvider, apis, builtinProviders, customModel, customProvider } from "./providers.ts";
 export type { LlmProvider } from "./providers.ts";

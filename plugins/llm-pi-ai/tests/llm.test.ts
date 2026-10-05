@@ -310,7 +310,10 @@ describe("catalog", () => {
       ["opencode", "OpenCode Zen", true, "OPENCODE_API_KEY"],
       ["opencode-go", "OpenCode Go", true, "OPENCODE_API_KEY"],
     ]);
-    expect(providers[0]!.auth).toEqual([{ type: "api_key", name: "OpenAI API key", interactive: true }]);
+    expect(providers[0]!.auth).toEqual([
+      { type: "api_key", name: "OpenAI API key", interactive: true },
+      { type: "oauth", name: "Sign in with ChatGPT", interactive: true },
+    ]);
   });
 
   it("filters built-ins with include and exclude, and lets the user's provider replace one", async () => {

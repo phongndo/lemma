@@ -14,7 +14,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
 import { Schema } from "effect";
-import type { ProviderAuth } from "./auth.ts";
+import type { OAuthMethod, ProviderAuth } from "./auth.ts";
 import { fixedCatalog } from "./catalog.ts";
 import type { Catalog } from "./catalog.ts";
 
@@ -114,13 +114,13 @@ export interface LlmProvider {
 /** OpenCode routes the requests of one conversation together by this header. */
 const openCodeSession = (sessionId: string | undefined) => (sessionId === undefined ? undefined : { "x-opencode-session": sessionId });
 
-/** The providers Lemma offers built in. */
-export function builtinProviders(): LlmProvider[] {
+/** The providers Lemma offers built in. `chatgpt` signs in to OpenAI with a ChatGPT plan. */
+export function builtinProviders(chatgpt: OAuthMethod): LlmProvider[] {
   return [
     {
       id: "openai",
       name: "OpenAI",
-      auth: { apiKey: "OpenAI API key", env: ["OPENAI_API_KEY"] },
+      auth: { apiKey: "OpenAI API key", env: ["OPENAI_API_KEY"], oauth: chatgpt },
       catalog: fixedCatalog(Object.values(OPENAI_MODELS)),
     },
     {
