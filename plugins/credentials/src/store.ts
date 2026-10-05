@@ -179,7 +179,9 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
   return Effect.scoped(
     Effect.gen(function* () {
       yield* Effect.acquireRelease(acquire, () => release);
-      yield* Effect.forkScoped(heartbeat);
+      // Interruptible even when the body is not (a token refresh that must not lose its rotated token): a fiber
+      // forked in an uninterruptible region inherits it, and closing the scope would wait on this one forever.
+      yield* Effect.forkScoped(Effect.interruptible(heartbeat));
       return yield* body;
     }),
   );

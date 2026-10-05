@@ -12,6 +12,6 @@ Provides `Credentials` over `auth.json` at `Paths.auth`: a JSON object mapping p
 
 ## Lock
 
-`auth.json.lock` is created with `O_EXCL` and holds `{ pid, host, nonce }`. The holder touches it every 10s, so a lock is abandoned when its process is gone (same host) or it has not been touched for 30s; a waiter then removes exactly that lock (matched by content) and retries. Waiting polls with jitter and fails `Locked` after 10s. This is a cooperation convention between processes using this plugin, not protection against other programs. `withFileLock`, `readStore`, `writeStore`, and `decodeEntry` are exported for tools that must edit the file consistently.
+`auth.json.lock` is created with `O_EXCL` and holds `{ pid, host, nonce }`. The holder touches it every 10s (a heartbeat that stops with the lock even when the work under it runs uninterruptibly, as a token refresh does), so a lock is abandoned when its process is gone (same host) or it has not been touched for 30s; a waiter then removes exactly that lock (matched by content) and retries. Waiting polls with jitter and fails `Locked` after 10s. This is a cooperation convention between processes using this plugin, not protection against other programs. `withFileLock`, `readStore`, `writeStore`, and `decodeEntry` are exported for tools that must edit the file consistently.
 
 Because `update` runs under the file lock, a slow update (a network refresh) delays other providers' writes; keep interactive steps such as login prompts outside `modify` and store the result with it.

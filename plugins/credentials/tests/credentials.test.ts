@@ -162,6 +162,14 @@ describe("file lock", () => {
     }
   };
 
+  test("releases the lock when its body runs uninterruptibly", async () => {
+    // A token refresh runs so, to keep a rotated token; the lock's heartbeat must still stop.
+    const run = withFileLock(auth, Effect.succeed("done")).pipe(Effect.uninterruptible);
+    const outcome = await Promise.race([Effect.runPromise(run), new Promise((resolve) => setTimeout(() => resolve("hung"), 2_000))]);
+    expect(outcome).toBe("done");
+    await expect(stat(`${auth}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   test("fails Locked after the wait bound while a live process holds it", async () => {
     await holdLock({ pid: process.pid, host: hostname(), nonce: "other" });
     const error = await Effect.runPromise(withFileLock(auth, Effect.void, { waitMs: 150 }).pipe(Effect.flip));
