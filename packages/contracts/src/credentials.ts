@@ -3,7 +3,7 @@ import type { Effect } from "effect";
 
 /**
  * One credential per provider id, stored in `auth.json` (mode 0600). The shape
- * matches pi-ai's `Credential`, so provider auth flows store it unchanged.
+ * is pi-ai's `Credential`, so logins pi-ai stored keep working.
  */
 export const ApiKeyCredential = Schema.Struct({
   type: Schema.Literal("api_key"),

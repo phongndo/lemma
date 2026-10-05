@@ -1,6 +1,6 @@
 # @lemma/plugin-credentials
 
-Provides `Credentials` over `auth.json` at `Paths.auth`: a JSON object mapping provider id to a pi-ai-shaped `Credential`. Requires `Paths`. No config. Environment variables and provider login flows belong to the LLM plugin; this plugin only stores.
+Provides `Credentials` over `auth.json` at `Paths.auth`: a JSON object mapping provider id to a `Credential` (an API key, or a sign-in's tokens and the fields its flow keeps). Requires `Paths`. No config. Environment variables and provider login flows belong to the LLM plugin; this plugin only stores.
 
 ## Behavior
 

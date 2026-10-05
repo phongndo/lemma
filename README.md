@@ -50,8 +50,10 @@ A plugin's config Schema is also its settings form, on the Plugins page and
 through `lemma plugins config`. Project files and plugins can run code and redirect credentials, so
 they load only for projects listed (or under a directory listed) in
 `"trustedProjects"` in `~/.lemma/config.jsonc`; otherwise the host warns and
-ignores them. Providers come from pi-ai (`plugins/llm-pi-ai`): log in from the
-key icon in the web app, or set a provider's API key environment variable.
+ignores them. Providers (OpenAI, OpenCode Zen, OpenCode Go, and your own) come
+from `plugins/llm-pi-ai`, which runs their logins itself and sends requests
+through pi-ai: log in from the key icon in the web app, or set a provider's API
+key environment variable.
 
 The session log is the source of truth: every model request can be rebuilt from
 it (`rebuildRequest` in the contracts) and records which plugins contributed

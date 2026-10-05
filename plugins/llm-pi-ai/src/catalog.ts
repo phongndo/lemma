@@ -1,5 +1,20 @@
-import type { Api, Model, Provider, RefreshModelsContext } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { USER_AGENT } from "./identity.ts";
+
+/** A provider's models, which `refresh` brings up to date; a refresh that fails keeps the list it had. */
+export interface Catalog {
+  readonly models: () => readonly Model<Api>[];
+  readonly refresh?: (context: RefreshContext) => Promise<void>;
+}
+
+export interface RefreshContext {
+  /** What the provider's requests authenticate with now, if anything; `oauth` for a sign-in rather than a key. */
+  readonly auth: { readonly token: string; readonly oauth: boolean } | undefined;
+  readonly signal: AbortSignal;
+}
+
+/** A list that never changes. */
+export const fixedCatalog = (models: readonly Model<Api>[]): Catalog => ({ models: () => models });
 
 /**
  * Live catalogs for built-in providers. pi-ai ships each provider's models as
@@ -116,37 +131,24 @@ export interface CatalogSources {
   readonly siblings: () => readonly Model<Api>[];
 }
 
-/**
- * `provider` with its list extended on refresh. A provider with its own
- * refresh (Radius) keeps it and is left alone.
- */
-export function withLiveCatalog(provider: Provider, sources: CatalogSources): Provider {
-  if (provider.refreshModels !== undefined) return provider;
+/** The catalog of provider `id`, extended on refresh with what the provider serves now. */
+export function withLiveCatalog(id: string, catalog: Catalog, sources: CatalogSources): Catalog {
   let found: readonly Model<Api>[] = [];
   let retired: ReadonlySet<string> = new Set();
   return {
-    ...provider,
-    getModels: () => [...provider.getModels().filter((model) => !retired.has(model.id)), ...found],
-    refreshModels: async (context: RefreshModelsContext) => {
-      if (!context.allowNetwork || context.signal.aborted) return;
-      const dev = (await sources.dev(context.signal))?.[provider.id];
-      const credential = context.credential;
-      const key = credential?.type === "api_key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined;
-      // Without models.dev there is no telling a current model from a retired one: pi-ai's list stands.
-      if (dev === undefined || Object.keys(dev.models).length === 0) return;
-      const listed = dev.api === undefined ? undefined : await sources.list(dev.api, key, context.signal);
-      if (context.signal.aborted) return;
-      const current = (id: string) => dev.models[id] !== undefined;
+    models: () => [...catalog.models().filter((model) => !retired.has(model.id)), ...found],
+    refresh: async ({ auth, signal }) => {
+      await catalog.refresh?.({ auth, signal });
+      const dev = (await sources.dev(signal))?.[id];
+      // Without models.dev there is no telling a current model from a retired one: the list stands.
+      if (signal.aborted || dev === undefined || Object.keys(dev.models).length === 0) return;
+      const listed = dev.api === undefined ? undefined : await sources.list(dev.api, auth?.token, signal);
+      if (signal.aborted) return;
+      const current = (model: string) => dev.models[model] !== undefined;
       const ids = (listed ?? Object.keys(dev.models)).filter(current);
-      const known = provider.getModels();
-      const next = discoveredModels(provider.id, known, ids, dev, sources.siblings());
-      const gone = new Set(known.filter((model) => !current(model.id)).map((model) => model.id));
-      await context.publish({
-        update: () => {
-          found = next;
-          retired = gone;
-        },
-      });
+      const known = catalog.models();
+      found = discoveredModels(id, known, ids, dev, sources.siblings());
+      retired = new Set(known.filter((model) => !current(model.id)).map((model) => model.id));
     },
   };
 }
@@ -244,26 +246,22 @@ export interface PlanSource {
 }
 
 /**
- * OpenAI's provider signed in with ChatGPT lists the plan's models (`planModels`) rather than the API's, most of
- * which a plan does not serve (o1, gpt-4o). With an API key, or signed out, it is `provider` as it was.
+ * OpenAI's catalog signed in with ChatGPT lists the plan's models (`planModels`) rather than the API's, most of which
+ * a plan does not serve (o1, gpt-4o). With an API key, or signed out, it is `catalog` as it was.
  */
-export function withPlanCatalog(provider: Provider, source: PlanSource): Provider {
+export function withPlanCatalog(catalog: Catalog, source: PlanSource): Catalog {
   let plan: readonly Model<Api>[] | undefined;
   return {
-    ...provider,
-    getModels: () => (plan === undefined ? provider.getModels() : [...plan]),
-    refreshModels: async (context: RefreshModelsContext) => {
-      const credential = context.credential;
-      if (credential?.type !== "oauth") {
-        if (plan !== undefined) await context.publish({ update: () => (plan = undefined) });
-        return provider.refreshModels?.(context);
+    models: () => plan ?? catalog.models(),
+    refresh: async (context) => {
+      if (context.auth?.oauth !== true) {
+        plan = undefined;
+        return catalog.refresh?.(context);
       }
-      if (!context.allowNetwork || context.signal.aborted) return;
-      const listed = await source.plan(credential.access, context.signal);
+      const listed = await source.plan(context.auth.token, context.signal);
       // Out of reach: the list it had stands.
       if (listed === undefined || context.signal.aborted) return;
-      const next = planModels(provider.getModels(), listed);
-      await context.publish({ update: () => (plan = next) });
+      plan = planModels(catalog.models(), listed);
     },
   };
 }

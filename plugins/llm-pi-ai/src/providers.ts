@@ -1,6 +1,8 @@
 import type { CustomProviderSpec } from "@lemma/contracts";
-import { createProvider } from "@earendil-works/pi-ai";
-import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessageEventStream, Model, ProviderStreams, SimpleStreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
+import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
+import { OPENCODE_GO_MODELS } from "@earendil-works/pi-ai/providers/opencode-go.models";
+import { OPENCODE_MODELS } from "@earendil-works/pi-ai/providers/opencode.models";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { azureOpenAIResponsesApi } from "@earendil-works/pi-ai/api/azure-openai-responses.lazy";
 import { bedrockConverseStreamApi } from "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy";
@@ -12,6 +14,9 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
 import { Schema } from "effect";
+import type { ProviderAuth } from "./auth.ts";
+import { fixedCatalog } from "./catalog.ts";
+import type { Catalog } from "./catalog.ts";
 
 /** Wire APIs a configured provider can speak. Implementations load on first request. */
 export const apis = {
@@ -90,49 +95,73 @@ export function customEntry(spec: CustomProviderSpec, taken: ReadonlySet<string>
 export type CustomProvider = typeof CustomProvider.Type;
 
 /**
- * Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy; the
- * provider keeps its API-key auth. `createProvider` results are closures, so a
- * shallow copy with a new `auth` is a complete provider.
+ * A provider Lemma offers: how it authenticates (Lemma's own logins), its models, and how a request is sent (pi-ai's
+ * wire API for the model, by default).
  */
-export function withoutAnthropicOAuth(provider: Provider): Provider {
-  if (provider.id !== "anthropic" || provider.auth.oauth === undefined) return provider;
-  const { oauth: _oauth, ...auth } = provider.auth;
-  return { ...provider, auth };
+export interface LlmProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly auth: ProviderAuth;
+  readonly catalog: Catalog;
+  /** Headers a request adds for a session (OpenCode routes a conversation by it). */
+  readonly headers?: (sessionId: string | undefined) => Readonly<Record<string, string>> | undefined;
+  /** Sends a request; by default through `apis[model.api]`. */
+  readonly stream?: (model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions) => AssistantMessageEventStream;
+  /** The user's entry, for a provider they added. */
+  readonly custom?: CustomProvider;
 }
 
-export function selectProviders(
-  providers: readonly Provider[],
+/** OpenCode routes the requests of one conversation together by this header. */
+const openCodeSession = (sessionId: string | undefined) => (sessionId === undefined ? undefined : { "x-opencode-session": sessionId });
+
+/** The providers Lemma offers built in. */
+export function builtinProviders(): LlmProvider[] {
+  return [
+    {
+      id: "openai",
+      name: "OpenAI",
+      auth: { apiKey: "OpenAI API key", env: ["OPENAI_API_KEY"] },
+      catalog: fixedCatalog(Object.values(OPENAI_MODELS)),
+    },
+    {
+      id: "opencode",
+      name: "OpenCode Zen",
+      auth: { apiKey: "OpenCode API key", env: ["OPENCODE_API_KEY"] },
+      catalog: fixedCatalog(Object.values(OPENCODE_MODELS)),
+      headers: openCodeSession,
+    },
+    {
+      id: "opencode-go",
+      name: "OpenCode Go",
+      auth: { apiKey: "OpenCode API key", env: ["OPENCODE_API_KEY"] },
+      catalog: fixedCatalog(Object.values(OPENCODE_GO_MODELS)),
+      headers: openCodeSession,
+    },
+  ];
+}
+
+export function selectProviders<P extends { readonly id: string }>(
+  providers: readonly P[],
   filter: { readonly include?: readonly string[] | undefined; readonly exclude?: readonly string[] | undefined },
-): Provider[] {
+): P[] {
   const include = filter.include === undefined ? undefined : new Set(filter.include);
   const exclude = new Set(filter.exclude ?? []);
   return providers.filter((provider) => (include === undefined || include.has(provider.id)) && !exclude.has(provider.id));
 }
 
 /**
- * Stored credential first (from `/login`), then the configured key. Without a
- * configured key the provider counts as keyless: OpenAI-compatible SDKs refuse
- * an empty key, so a placeholder is sent, which local servers ignore.
+ * A stored key first (from `/login`), then the configured one. Without a configured key the provider counts as
+ * keyless: OpenAI-compatible SDKs refuse an empty key, so a placeholder is sent, which local servers ignore.
  */
-function customAuth(config: CustomProvider, name: string): ApiKeyAuth {
+function customAuth(config: CustomProvider, name: string): ProviderAuth {
+  const { env, value } = config.apiKey ?? {};
   return {
-    name: `${name} API key`,
-    login: async (interaction) => {
-      const key = await interaction.prompt({ type: "secret", message: `Enter the ${name} API key` });
-      return { type: "api_key", key };
-    },
-    resolve: async ({ ctx, credential }) => {
-      if (credential?.key) {
-        return { auth: { apiKey: credential.key }, ...(credential.env === undefined ? {} : { env: credential.env }), source: "stored credential" };
-      }
-      const { env, value } = config.apiKey ?? {};
-      if (value !== undefined) return { auth: { apiKey: value }, source: "config" };
-      if (env !== undefined) {
-        const key = await ctx.env(env);
-        return key ? { auth: { apiKey: key }, source: env } : undefined;
-      }
-      return { auth: { apiKey: "unused" }, source: "no key required" };
-    },
+    apiKey: `${name} API key`,
+    ...(value !== undefined
+      ? { key: { token: value, source: "config" } }
+      : env !== undefined
+        ? { env: [env] }
+        : { key: { token: "unused", source: "no key required" } }),
   };
 }
 
@@ -150,21 +179,20 @@ export function customModel(config: CustomProvider, model: CustomModel): Model<A
     cost: model.cost === undefined ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : { ...model.cost },
     contextWindow: model.contextWindow ?? 128_000,
     maxTokens: model.maxTokens ?? 16_384,
-    // Model headers are merged into request auth by pi-ai's Models.
+    // pi-ai's wire APIs send a model's headers with each request.
     ...(config.headers === undefined ? {} : { headers: { ...config.headers } }),
     ...(model.thinkingLevelMap === undefined ? {} : { thinkingLevelMap: { ...model.thinkingLevelMap } }),
     ...(compat === undefined ? {} : { compat: compat as NonNullable<Model<Api>["compat"]> }),
   };
 }
 
-export function customProvider(config: CustomProvider): Provider {
+export function customProvider(config: CustomProvider): LlmProvider {
   const name = config.name ?? config.id;
-  return createProvider({
+  return {
     id: config.id,
     name,
-    baseUrl: config.baseUrl,
-    auth: { apiKey: customAuth(config, name) },
-    models: config.models.map((model) => customModel(config, model)),
-    api: apis[config.api](),
-  });
+    auth: customAuth(config, name),
+    catalog: fixedCatalog(config.models.map((model) => customModel(config, model))),
+    custom: config,
+  };
 }

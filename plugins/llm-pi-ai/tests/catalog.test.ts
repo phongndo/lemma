@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Api, Model, Provider, RefreshModelsContext } from "@earendil-works/pi-ai";
-import { discoveredModels, networkSources, planModels, planSource, withLiveCatalog, withPlanCatalog } from "../src/catalog.ts";
-import type { CatalogSources, DevProvider, PlanModel } from "../src/catalog.ts";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { discoveredModels, fixedCatalog, networkSources, planModels, planSource, withLiveCatalog, withPlanCatalog } from "../src/catalog.ts";
+import type { CatalogSources, DevProvider, PlanModel, RefreshContext } from "../src/catalog.ts";
+
+const signal = new AbortController().signal;
+const withKey = (token: string): RefreshContext => ({ auth: { token, oauth: false }, signal });
 
 const model = (id: string, extra: Record<string, unknown> = {}): Model<Api> =>
   ({
@@ -85,17 +88,6 @@ describe("discoveredModels", () => {
 });
 
 describe("withLiveCatalog", () => {
-  const provider = { id: "go", name: "Go", auth: {}, getModels: () => known } as unknown as Provider;
-  const context = (credential?: RefreshModelsContext["credential"]): RefreshModelsContext => ({
-    ...(credential === undefined ? {} : { credential }),
-    allowNetwork: true,
-    signal: new AbortController().signal,
-    publish: async ({ update }) => {
-      update?.();
-      return true;
-    },
-  });
-
   it("lists what the provider serves now, asking with its key, without what it retired", async () => {
     const asked: (string | undefined)[] = [];
     const sources: CatalogSources = {
@@ -107,25 +99,20 @@ describe("withLiveCatalog", () => {
       },
       siblings: () => [],
     };
-    const live = withLiveCatalog(provider, sources);
-    expect(live.getModels().map((m) => m.id)).toEqual(["glm-5.1", "kimi-k2.6", "minimax-m3"]);
-    await live.refreshModels!(context({ type: "api_key", key: "sk-go" }));
+    const live = withLiveCatalog("go", fixedCatalog(known), sources);
+    expect(live.models().map((m) => m.id)).toEqual(["glm-5.1", "kimi-k2.6", "minimax-m3"]);
+    await live.refresh!(withKey("sk-go"));
     expect(asked).toEqual(["https://go.test/v1 sk-go"]);
-    expect(live.getModels().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3", "glm-5"]);
+    expect(live.models().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3", "glm-5"]);
   });
 
-  it("falls back to models.dev's list, and keeps pi-ai's when both are out of reach", async () => {
-    const fromDev = withLiveCatalog(provider, { dev: async () => ({ go: dev }), list: async () => undefined, siblings: () => [] });
-    await fromDev.refreshModels!(context());
-    expect(fromDev.getModels().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3", "glm-5", "minimax-m2.5"]);
-    const offline = withLiveCatalog(provider, { dev: async () => undefined, list: async () => undefined, siblings: () => [] });
-    await offline.refreshModels!(context());
-    expect(offline.getModels()).toEqual(known);
-  });
-
-  it("leaves a provider with its own refresh alone", () => {
-    const radius = { ...provider, refreshModels: async () => {} } as Provider;
-    expect(withLiveCatalog(radius, { dev: async () => undefined, list: async () => undefined, siblings: () => [] })).toBe(radius);
+  it("falls back to models.dev's list, and keeps the provider's own when both are out of reach", async () => {
+    const fromDev = withLiveCatalog("go", fixedCatalog(known), { dev: async () => ({ go: dev }), list: async () => undefined, siblings: () => [] });
+    await fromDev.refresh!({ auth: undefined, signal });
+    expect(fromDev.models().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3", "glm-5", "minimax-m2.5"]);
+    const offline = withLiveCatalog("go", fixedCatalog(known), { dev: async () => undefined, list: async () => undefined, siblings: () => [] });
+    await offline.refresh!({ auth: undefined, signal });
+    expect(offline.models()).toEqual(known);
   });
 });
 
@@ -182,17 +169,7 @@ describe("ChatGPT plans", () => {
     { slug: "gpt-6-sol", visibility: "list" },
     { slug: "gpt-app-only", visibility: "list", supported_in_api: false },
   ];
-  const provider = { id: "openai", name: "OpenAI", auth: {}, getModels: () => api } as unknown as Provider;
-  const context = (credential?: RefreshModelsContext["credential"]): RefreshModelsContext => ({
-    ...(credential === undefined ? {} : { credential }),
-    allowNetwork: true,
-    signal: new AbortController().signal,
-    publish: async ({ update }) => {
-      update?.();
-      return true;
-    },
-  });
-  const oauth = { type: "oauth", access: "chatgpt-token", refresh: "r", expires: Date.now() + 60_000 } as RefreshModelsContext["credential"];
+  const signedIn: RefreshContext = { auth: { token: "chatgpt-token", oauth: true }, signal };
 
   it("offers what the plan lists for its pickers, in its order, pi-ai's entries where it has them", () => {
     const models = planModels(api, listed);
@@ -211,27 +188,27 @@ describe("ChatGPT plans", () => {
 
   it("lists the plan's models signed in with ChatGPT, and the API's otherwise", async () => {
     const asked: string[] = [];
-    const planned = withPlanCatalog(provider, {
+    const planned = withPlanCatalog(fixedCatalog(api), {
       plan: async (token) => {
         asked.push(token);
         return listed;
       },
     });
-    await planned.refreshModels!(context(oauth));
+    await planned.refresh!(signedIn);
     expect(asked).toEqual(["chatgpt-token"]);
-    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+    expect(planned.models().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
     // Signed out, or with an API key: the API's list again.
-    await planned.refreshModels!(context({ type: "api_key", key: "sk-x" }));
-    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "o1", "gpt-4o"]);
+    await planned.refresh!(withKey("sk-x"));
+    expect(planned.models().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "o1", "gpt-4o"]);
   });
 
   it("keeps the plan's list it had when the plan cannot be read", async () => {
     let reachable = true;
-    const planned = withPlanCatalog(provider, { plan: async () => (reachable ? listed : undefined) });
-    await planned.refreshModels!(context(oauth));
+    const planned = withPlanCatalog(fixedCatalog(api), { plan: async () => (reachable ? listed : undefined) });
+    await planned.refresh!(signedIn);
     reachable = false;
-    await planned.refreshModels!(context(oauth));
-    expect(planned.getModels().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+    await planned.refresh!(signedIn);
+    expect(planned.models().map((m) => m.id)).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
   });
 
   it("asks OpenAI as a client newer than any, with the sign-in's token", async () => {
