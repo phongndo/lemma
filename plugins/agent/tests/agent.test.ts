@@ -159,6 +159,33 @@ describe("agent", () => {
     );
   });
 
+  it("offers a tool moved to reachable without declaring it to the model", async () => {
+    const indirect = definePlugin({
+      id: "indirect",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentRequestHook, (draft, next) =>
+            next({
+              ...draft,
+              tools: draft.tools.filter((tool) => tool.spec.name !== "echo"),
+              reachable: [...draft.reachable, ...draft.tools.filter((tool) => tool.spec.name === "echo")],
+            }),
+          ),
+        ),
+      ),
+    });
+    await withAgent({ plugins: [indirect], scripts: [useTools(call("c1", "echo", { text: "one" })), reply("ok")] }, ({ requests, executed }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        expect(requests[0]!.tools?.map((tool) => tool.name) ?? []).not.toContain("echo");
+        expect(executed).toEqual(["one"]);
+        const [result] = requests[1]!.messages.filter((message) => message.role === "toolResult");
+        expect(result!.isError).toBeFalsy();
+      }),
+    );
+  });
+
   it("records contributions with plugin ids and omits unchanged system and tools", async () => {
     let calls = 0;
     const context = definePlugin({

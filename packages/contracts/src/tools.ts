@@ -3,12 +3,18 @@ import type { Effect, Scope } from "effect";
 import { Event, Hook } from "@lemma/core";
 import type { PluginContext } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "./llm.ts";
+import type { JsonSchema } from "./llm.ts";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
   content: Schema.Array(Schema.Union(TextContent, ImageContent)),
   isError: Schema.optional(Schema.Boolean),
   /** Structured data for UIs (diffs, exit codes); logged, never sent to the model. */
   details: Schema.optional(Schema.Unknown),
+  /**
+   * The result as data, shaped as the tool's `outputSchema` says: what a call from a codemode script resolves to, error
+   * results included. Logged, never sent to the model.
+   */
+  structuredContent: Schema.optional(Schema.Unknown),
 }) {}
 
 export interface ToolContext {
@@ -50,6 +56,11 @@ export interface Tool<Input = any> {
    * run again. Absent: a cut-off call is not repeated, and the model is told it was interrupted, with its output so far.
    */
   readonly replay?: "safe";
+  /**
+   * JSON Schema of the `structuredContent` its results carry. A codemode script's call resolves to that data, typed by
+   * this; without it, to the result's text.
+   */
+  readonly outputSchema?: JsonSchema;
   readonly execute: (input: Input, context: ToolContext) => Promise<ToolResult> | Effect.Effect<ToolResult, unknown>;
 }
 
@@ -60,8 +71,9 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
   input: Schema.Unknown,
   cwd: Schema.String,
   /**
-   * The tools, by name, the model request behind this call offered (after `AgentRequestHook`); the registry refuses
-   * any other as `NotFound`. Absent: no request to hold it to, as for a call resumed after a restart.
+   * The tools, by name, the model request behind this call offered (after `AgentRequestHook`): those it declared to
+   * the model and those it left reachable (`RequestDraft.reachable`). The registry refuses any other as `NotFound`.
+   * Absent: no request to hold it to, as for a call resumed after a restart.
    */
   offered: Schema.optional(Schema.Array(Schema.String)),
 }) {}
@@ -104,6 +116,8 @@ export interface ToolContribution {
   readonly source: string;
   /** The tool's `replay`. */
   readonly replay?: "safe";
+  /** The tool's `outputSchema`. */
+  readonly outputSchema?: JsonSchema;
 }
 
 export interface ExecuteOptions {

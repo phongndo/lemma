@@ -8,6 +8,7 @@ import credentials from "@lemma/plugin-credentials";
 import fileSearch from "@lemma/plugin-file-search-fff";
 import interaction from "@lemma/plugin-interaction";
 import llm from "@lemma/plugin-llm-pi-ai";
+import mcp from "@lemma/plugin-mcp";
 import projectContext from "@lemma/plugin-project-context";
 import sessions from "@lemma/plugin-sessions";
 import tools from "@lemma/plugin-tools";
@@ -37,6 +38,7 @@ export function bundled(host: Plugin): readonly Plugin[] {
     edit,
     bash,
     codemode,
+    mcp,
     sessions,
     agent,
     compaction,

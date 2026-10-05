@@ -1,4 +1,4 @@
-import { contentText, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
+import { contentText, joinCommandLine, MCP_HIDDEN, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
 import type {
   CommandInfo,
   InspectorInfo,
@@ -9,6 +9,10 @@ import type {
   HostInfo,
   InteractionRequest,
   LedgerRecord,
+  McpLogEntry,
+  McpServerInfo,
+  McpServerSpec,
+  McpToolInfo,
   ModelInfo,
   PluginStatus,
   ProviderInfo,
@@ -640,3 +644,157 @@ export const formatSnapshot = (value: unknown): string => {
     })
     .join("\n\n");
 };
+
+// ------------------------------------------------------------------ MCP servers
+
+/** `npx -y @scope/server` for a server run as a command, else its URL. */
+const mcpTarget = (spec: McpServerSpec): string => (spec.command === undefined ? (spec.url ?? "") : joinCommandLine([spec.command, ...(spec.args ?? [])]));
+
+const mcpLabel = (info: McpServerInfo): string => (info.spec.name === undefined || info.spec.name === info.id ? info.id : `${info.id} (${info.spec.name})`);
+
+const clock = (ms: number): string => {
+  const date = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+};
+
+const mcpStatus = (info: McpServerInfo): string => (info.status === "auth" ? "needs sign-in" : info.status);
+
+const hints = (tool: McpToolInfo): string =>
+  [tool.hints.readOnly ? "read-only" : "", tool.hints.destructive ? "destructive" : "", tool.hints.openWorld ? "open-world" : ""].filter(Boolean).join(", ");
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Why a server lists no tools. */
+const mcpNoTools = (info: McpServerInfo): string => {
+  switch (info.status) {
+    case "ready":
+      return "No tools.";
+    case "auth":
+      return "No tools listed: it needs a sign-in.";
+    case "error":
+      return "No tools listed: it did not connect.";
+    case "starting":
+      return "No tools listed yet: it is connecting.";
+    case "off":
+      return "No tools listed: it is off.";
+  }
+};
+
+/** One row per server: what it is called, how it is doing, how many of its tools are on, and where it is. */
+export const formatMcpServers = (servers: readonly McpServerInfo[]): string =>
+  servers.length === 0
+    ? "No MCP servers. `lemma mcp add` adds one from its URL, its command, or a config."
+    : pad([
+        ["server", "status", "tools", "transport"],
+        ...servers.map((info) => {
+          const target = mcpTarget(info.spec).replace(/^https?:\/\//, "");
+          return [
+            mcpLabel(info),
+            // An error's reason, cut to a short line; `show` has all of it.
+            info.status === "error" ? `error: ${firstLine(info.error ?? "no reason given", 40)}` : mcpStatus(info),
+            info.tools.length === 0 ? "-" : `${info.tools.filter((tool) => tool.enabled).length}/${info.tools.length}`,
+            `${info.type} ${target.length > 50 ? `${target.slice(0, 49)}…` : target}`,
+          ];
+        }),
+      ]);
+
+/** Its tools, one row each: on or off, the server's name, title, and hints. */
+const formatMcpTools = (tools: readonly McpToolInfo[]): string => {
+  const rows = tools.map((tool) => [`  ${tool.enabled ? "on" : "off"}`, tool.name, tool.title ?? "", hints(tool)]);
+  // A column no tool fills (no titles, no hints) is left out rather than shown as a gap.
+  const used = rows[0]!.map((_, column) => rows.some((row) => row[column] !== ""));
+  return [`Tools (${tools.filter((tool) => tool.enabled).length} of ${tools.length} on)`, pad(rows.map((row) => row.filter((_, column) => used[column])))].join(
+    "\n",
+  );
+};
+
+/** `MCP_HIDDEN` is a credential the host keeps to itself; anything else (a `${NAME}` included) is shown as written. */
+const shown = (value: string): string => (value === MCP_HIDDEN ? "(hidden)" : value);
+
+/** Rows with the label on the first only. */
+const labelled = (label: string, values: readonly string[]): string[][] => values.map((value, index) => [index === 0 ? label : "", value]);
+
+/** Everything about one server: its status, config, what it reported, what it lacks, and its tools. */
+export const formatMcpServer = (info: McpServerInfo): string => {
+  const spec = info.spec;
+  const status = `${mcpStatus(info)} (since ${time(info.since)}${info.retryAt === undefined ? "" : `, trying again at ${clock(info.retryAt)}`})`;
+  const rows: string[][] = [
+    ["status", status],
+    // Why it is in `error` or `auth`, which may run to several lines.
+    ...labelled("reason", info.error?.trimEnd().split("\n") ?? []),
+    ["transport", info.type],
+  ];
+  if (info.type === "stdio") {
+    rows.push(["command", mcpTarget(spec)]);
+    if (spec.cwd !== undefined) rows.push(["cwd", spec.cwd]);
+    rows.push(
+      ...labelled(
+        "env",
+        Object.entries(spec.env ?? {}).map(([key, value]) => `${key}=${shown(value)}`),
+      ),
+    );
+  } else {
+    rows.push(["url", spec.url ?? ""]);
+    rows.push(
+      ...labelled(
+        "headers",
+        Object.entries(spec.headers ?? {}).map(([key, value]) => `${key}: ${shown(value)}`),
+      ),
+    );
+    if (info.signedIn !== undefined) rows.push(["sign-in", info.signedIn ? "signed in" : "not signed in"]);
+    const oauth = spec.oauth;
+    if (oauth !== undefined) {
+      const parts = [
+        oauth.clientId === undefined ? "" : `client ${oauth.clientId}`,
+        oauth.clientSecret === undefined ? "" : `secret ${shown(oauth.clientSecret)}`,
+        oauth.scopes === undefined ? "" : `scopes ${oauth.scopes.join(" ")}`,
+        oauth.callbackPort === undefined ? "" : `callback port ${oauth.callbackPort}`,
+      ].filter(Boolean);
+      if (parts.length) rows.push(["oauth", parts.join(", ")]);
+    }
+  }
+  rows.push(["secrets", info.secrets.length ? info.secrets.join(", ") : "none"]);
+  if (spec.toolTimeoutMs !== undefined) rows.push(["tool timeout", seconds(spec.toolTimeoutMs)]);
+  if (spec.startupTimeoutMs !== undefined) rows.push(["startup timeout", seconds(spec.startupTimeoutMs)]);
+  rows.push(["saved in", `the ${info.scope} config`]);
+  if (info.server !== undefined) {
+    const server = info.server;
+    rows.push([
+      "server",
+      `${server.title ?? server.name} ${server.version}${server.title === undefined || server.title === server.name ? "" : ` (${server.name})`}`,
+    ]);
+  }
+  if (info.protocol !== undefined) rows.push(["protocol", info.protocol]);
+  if (info.status === "ready")
+    rows.push(["offers", `${plural(info.tools.length, "tool")}, ${plural(info.resources, "resource")}, ${plural(info.prompts, "prompt")}`]);
+  // Tools turned off are listed with the rest once it connects; until then only the config knows them.
+  if (info.tools.length === 0 && spec.disabledTools?.length) rows.push(["tools off", spec.disabledTools.join(", ")]);
+
+  const lines = [mcpLabel(info), pad(rows.map(([label, value]) => [`  ${label}`, value!]))];
+  if (info.status === "auth") lines.push(`Sign in with lemma mcp login ${info.id}.`);
+  if (info.status === "error") lines.push(`lemma mcp logs ${info.id} shows what it printed.`);
+  for (const name of info.missing) {
+    lines.push(
+      `warning: \${${name}} is not set: no secret of ${info.id}'s and nothing in the host's environment sets it (the web app's Settings → MCP servers stores one)`,
+    );
+  }
+  if (info.instructions !== undefined && info.instructions.trim() !== "") lines.push("", "Instructions", indent(info.instructions.trim()));
+  lines.push("", info.tools.length === 0 ? mcpNoTools(info) : formatMcpTools(info.tools));
+  return lines.join("\n");
+};
+
+const logSource = (entry: McpLogEntry): string => (entry.source === "server" && entry.level !== undefined ? `server ${entry.level}` : entry.source);
+
+/** Oldest first: when, from where, and what; a line's continuation lines sit under its text. */
+export const formatMcpLogs = (entries: readonly McpLogEntry[]): string =>
+  entries.length === 0
+    ? "Nothing logged."
+    : pad(
+        entries.flatMap((entry) =>
+          entry.text
+            .trimEnd()
+            .split("\n")
+            .map((line, index) => (index === 0 ? [clock(entry.at), logSource(entry), line] : ["", "", line])),
+        ),
+      );

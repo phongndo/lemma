@@ -15,6 +15,9 @@ import type {
   HostInfo,
   InteractionAnswer,
   InteractionRequest,
+  McpLogEntry,
+  McpServerInfo,
+  McpServerSpec,
   ModelInfo,
   PluginChange,
   InspectorInfo,
@@ -96,6 +99,21 @@ export interface Host {
     readonly addCustom: (spec: CustomProviderSpec) => Promise<string>;
     readonly removeCustom: (provider: string) => Promise<void>;
     readonly setLogo: (provider: string, svg: string | undefined) => Promise<void>;
+  };
+  readonly mcp: {
+    /** MCP servers and their state; rejects `Unavailable` while no plugin manages them. */
+    readonly servers: () => Promise<readonly McpServerInfo[]>;
+    /** Adds a server or replaces the one with its id. `secrets` are stored for it, not in config; `null` removes one. */
+    readonly save: (spec: McpServerSpec, options?: { secrets?: Readonly<Record<string, string | null>>; scope?: ConfigScope }) => Promise<void>;
+    readonly remove: (id: string) => Promise<void>;
+    readonly setEnabled: (id: string, enabled: boolean) => Promise<void>;
+    /** `tool` is the server's name for it. */
+    readonly setTool: (id: string, tool: string, enabled: boolean) => Promise<void>;
+    readonly restart: (id: string) => Promise<void>;
+    /** Resolves once signed in; questions arrive as `interaction` events with origin `mcp:<id>`. */
+    readonly login: (id: string) => Promise<void>;
+    readonly logout: (id: string) => Promise<void>;
+    readonly logs: (id: string) => Promise<readonly McpLogEntry[]>;
   };
   readonly interaction: {
     /** Questions still waiting on an answer. */
@@ -275,6 +293,24 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       addCustom: (spec) => call(rpc.Llm.AddCustom({ spec })),
       removeCustom: (provider) => unit(rpc.Llm.RemoveCustom({ provider })),
       setLogo: (provider, svg) => unit(rpc.Llm.SetLogo({ provider, ...(svg === undefined ? {} : { svg }) })),
+    },
+    mcp: {
+      servers: () => call(rpc.Mcp.Servers()),
+      save: (spec, options) =>
+        unit(
+          rpc.Mcp.Save({
+            spec,
+            ...(options?.secrets === undefined ? {} : { secrets: options.secrets }),
+            ...(options?.scope === undefined ? {} : { scope: options.scope }),
+          }),
+        ),
+      remove: (id) => unit(rpc.Mcp.Remove({ id })),
+      setEnabled: (id, enabled) => unit(rpc.Mcp.SetEnabled({ id, enabled })),
+      setTool: (id, tool, enabled) => unit(rpc.Mcp.SetTool({ id, tool, enabled })),
+      restart: (id) => unit(rpc.Mcp.Restart({ id })),
+      login: (id) => unit(rpc.Mcp.Login({ id })),
+      logout: (id) => unit(rpc.Mcp.Logout({ id })),
+      logs: (id) => call(rpc.Mcp.Logs({ id })),
     },
     interaction: {
       list: () => call(rpc.Interaction.List()),

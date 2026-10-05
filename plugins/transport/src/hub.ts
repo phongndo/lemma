@@ -3,6 +3,7 @@ import type { Context } from "effect";
 import {
   AssistantDelta,
   CommandsChanged,
+  McpChanged,
   ModelsChanged,
   Notice,
   PluginsChanged,
@@ -76,6 +77,7 @@ export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => I
     yield* forward(CommandsChanged, (e) => ({ type: "commands-changed", commands: e.commands }));
     yield* forward(ModelsChanged, () => ({ type: "models-changed" }));
     yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
+    yield* forward(McpChanged, (e) => ({ type: "mcp-changed", servers: e.servers }));
 
     const join = Effect.gen(function* () {
       const subscriber: Subscriber = { feed: yield* Queue.sliding<HostEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<HostEvent>() };

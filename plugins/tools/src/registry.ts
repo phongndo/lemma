@@ -180,6 +180,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           source: contribution.pluginId,
           spec: contribution.item.spec,
           ...(contribution.item.tool.replay === undefined ? {} : { replay: contribution.item.tool.replay }),
+          ...(contribution.item.tool.outputSchema === undefined ? {} : { outputSchema: contribution.item.tool.outputSchema }),
         }))
         .sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0)),
     );

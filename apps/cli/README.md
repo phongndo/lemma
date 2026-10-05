@@ -23,9 +23,9 @@ so the two show the same records and accept the same queries.
   ([remote access](../../docs/remote.md)), else the local one. With none, a
   command fails with `NoHost` rather than starting one: a second host would
   break the sessions store's single writer.
-- **Questions.** While `run`, `do`, `events`, or `login` watches the host,
-  it is offered the host's questions, such as a login's API key or a tool
-  asking to confirm. `--answer <value>` answers them in order; otherwise
+- **Questions.** While `run`, `do`, `events`, `login`, or `mcp login` watches
+  the host, it is offered the host's questions, such as a login's API key or a
+  tool asking to confirm. `--answer <value>` answers them in order; otherwise
   `--questions ask` prompts at the terminal (the default when stdin is one),
   `ignore` leaves them to another client and prints how to answer from the CLI
   (the default otherwise, so an agent never answers for the person), and
@@ -44,3 +44,26 @@ so the two show the same records and accept the same queries.
   `workspace` default to the directory the command runs in (`--all` lists
   every session). With a remote host that directory is this machine's: give
   the host's path with `--cwd` (`--path` for `workspace`).
+
+## MCP servers
+
+`lemma mcp` manages the servers the [mcp plugin](../../plugins/mcp/README.md)
+connects to, as the web app's settings do.
+
+- **Adding.** `mcp add` reads what Settings → MCP servers reads from a paste
+  (`parseMcpInput` in the contracts): a URL, a command after `--` (leading
+  `NAME=value` words become its environment), or a config from a server's
+  README or another client, given as one argument or read from standard input
+  with `-`. Credential-looking values are stored as the server's secrets, not
+  in the config, and only their names are printed. `add` never replaces a
+  server: a taken id gets a suffix (`linear-2`).
+- **After `add`.** It waits up to 10 seconds for the servers to connect, then
+  says how each went and what is next: `lemma mcp login <id>` for one that
+  wants a sign-in, `lemma mcp logs <id>` for one that failed.
+- **Changing a server.** The CLI adds and removes servers; their secrets,
+  tools, and other settings are changed in Settings → MCP servers or the
+  config file. `show` prints values the host keeps hidden as `(hidden)`.
+- **Remote hosts.** A command server runs on the host's machine, so its
+  command and paths are paths there. When the browser is not on that machine,
+  `mcp login` gets a question asking for the address the browser landed on;
+  answer it as any other.

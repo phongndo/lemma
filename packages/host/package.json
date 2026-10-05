@@ -23,6 +23,7 @@
     "@lemma/plugin-host": "workspace:*",
     "@lemma/plugin-interaction": "workspace:*",
     "@lemma/plugin-llm-pi-ai": "workspace:*",
+    "@lemma/plugin-mcp": "workspace:*",
     "@lemma/plugin-project-context": "workspace:*",
     "@lemma/plugin-sessions": "workspace:*",
     "@lemma/plugin-tools": "workspace:*",

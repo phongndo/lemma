@@ -1,0 +1,727 @@
+/* The MCP servers page: a list of servers beside the selected one's inspector, divided by hairlines like Plugins. */
+.mcp-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container: mcp / inline-size;
+}
+
+.mcp-total {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-page .search-field .button {
+  margin-left: 6px;
+}
+
+.mcp-loading {
+  padding: 16px 0;
+}
+
+/* Both panes run to the bottom of the screen and scroll on their own. */
+.mcp-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+}
+
+.mcp-list {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+}
+
+.mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+}
+
+.mcp-row:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-row.selected {
+  background: var(--bg-active);
+}
+
+.mcp-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mcp-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-row.off .mcp-row-name {
+  color: var(--text-3);
+}
+
+.mcp-row-target {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-row-status {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-row-toggle {
+  flex: none;
+  display: inline-flex;
+}
+
+.mcp-none {
+  padding: 14px 12px;
+}
+
+/* A server's state: green connected, a pulse while starting, amber for a sign-in, red failing, a ring when off. */
+.mcp-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.mcp-dot-ok {
+  background: var(--ok);
+}
+
+.mcp-dot-busy {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.mcp-dot-warn {
+  background: var(--warn);
+}
+
+.mcp-dot-err {
+  background: var(--err);
+}
+
+.mcp-dot-off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-dot-busy {
+    animation: none;
+  }
+}
+
+.mcp-tone-warn {
+  color: var(--warn);
+}
+
+.mcp-tone-err {
+  color: var(--err);
+}
+
+/* The inspector: its sections in one column, divided by hairlines. */
+.mcp-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 4px 32px 20px;
+  border-left: 1px solid var(--border);
+}
+
+.mcp-detail > .mcp-section,
+.mcp-detail > .mcp-disclosure {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.mcp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.mcp-head > .mcp-dot {
+  margin-top: 8px;
+}
+
+.mcp-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-head h2 {
+  font-size: 15px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-status {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.mcp-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-item.mcp-menu-danger,
+.menu-item.mcp-menu-danger > .icon {
+  color: var(--err);
+}
+
+.menu-item.mcp-menu-danger[data-active="true"] {
+  background: var(--err-soft);
+}
+
+.mcp-callout-block {
+  align-items: center;
+}
+
+.mcp-callout-block > span {
+  flex: 1;
+}
+
+/* A running sign-in: where to continue, and any question it asks. */
+.mcp-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+}
+
+.mcp-signin-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-signin-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-signin .button .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.mcp-question-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-question-row .field {
+  flex: 1;
+  min-width: 200px;
+  height: 28px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-question-title {
+  flex-basis: 100%;
+  color: var(--text-2);
+}
+
+.mcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-section-title,
+.mcp-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.mcp-count {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-quiet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  list-style: none;
+}
+
+.mcp-tools {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.mcp-tool + .mcp-tool {
+  border-top: 1px solid var(--border);
+}
+
+.mcp-tool > .switch {
+  margin-top: 1px;
+}
+
+.mcp-tool-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-tool-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+  min-width: 0;
+}
+
+.mcp-tool-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.mcp-tool-name.code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.mcp-tool.off .mcp-tool-name {
+  color: var(--text-3);
+}
+
+.mcp-tool-id {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.mcp-hint {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.mcp-tool-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+button.mcp-tool-desc:hover {
+  color: var(--text-2);
+}
+
+.mcp-tool-desc.open {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.mcp-disclosure > summary {
+  cursor: default;
+  list-style: none;
+  min-height: 24px;
+}
+
+.mcp-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A chevron that turns as it opens. */
+.mcp-disclosure > summary::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.12s;
+}
+
+.mcp-disclosure[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.mcp-disclosure > summary:hover {
+  color: var(--text-2);
+}
+
+.mcp-summary-button {
+  width: 22px;
+  height: 22px;
+}
+
+.mcp-summary-button .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.mcp-instructions {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.mcp-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.mcp-facts dt {
+  color: var(--text-3);
+}
+
+.mcp-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-facts .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-log {
+  max-height: 280px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  font: 11.5px/1.55 var(--font-mono);
+}
+
+.mcp-log-line {
+  display: grid;
+  grid-template-columns: max-content 44px minmax(0, 1fr);
+  gap: 10px;
+  color: var(--text);
+}
+
+.mcp-log-time,
+.mcp-log-source {
+  color: var(--text-3);
+}
+
+.mcp-log-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-log-stderr .mcp-log-text {
+  color: var(--text-2);
+}
+
+.mcp-log-host .mcp-log-text {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.mcp-log-warning .mcp-log-text,
+.mcp-log-warning .mcp-log-source {
+  color: var(--warn);
+}
+
+.mcp-log-error .mcp-log-text,
+.mcp-log-error .mcp-log-source {
+  color: var(--err);
+}
+
+/* No servers yet, or MCP turned off. */
+.mcp-empty {
+  align-self: center;
+  max-width: 440px;
+  margin-top: 12vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.mcp-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-2);
+}
+
+.mcp-empty-lead {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.mcp-empty-detail {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.mcp-empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* A server or tool in the settings search: a row, not a boxed button (the list's own hairlines stay). */
+:where(.setting-row.mcp-result) {
+  border: 0;
+}
+
+.setting-row.mcp-result {
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  background: none;
+  text-align: left;
+}
+
+.mcp-result-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mcp-result-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.mcp-result-status {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* Above the composer while a server waits on a sign-in. */
+.mcp-callout {
+  margin-bottom: 8px;
+  align-items: center;
+  background: var(--accent-soft);
+}
+
+.mcp-callout > .icon {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.mcp-callout-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Adding servers from pasted text, or editing one's config; below it, what saving it would save. */
+.dialog.mcp-dialog {
+  width: 560px;
+  max-height: 86vh;
+}
+
+.mcp-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-label {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.mcp-text {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  font: 12px/1.55 var(--font-mono);
+}
+
+.mcp-help {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.mcp-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-preview > .mcp-note {
+  padding-top: 4px;
+}
+
+.mcp-found {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.mcp-found-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-found-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mcp-found-id,
+.mcp-found-target {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.mcp-found-type {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* A line about what is saved: a secret moved out, a placeholder to fill in, a problem. */
+.mcp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.mcp-note.mcp-tone-warn {
+  color: var(--warn);
+}
+
+.mcp-note.mcp-tone-err {
+  color: var(--err);
+}
+
+.mcp-note .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+}
+
+.mcp-dialog-text {
+  color: var(--text-2);
+}
+
+.button.mcp-danger-button {
+  background: var(--err);
+  border-color: transparent;
+  color: #fff;
+}
+
+.button.mcp-danger-button:hover:not(:disabled) {
+  background: var(--err);
+  filter: brightness(1.08);
+}
+
+/* Side by side only while both panes fit; otherwise the inspector goes below the list. */
+@container mcp (max-width: 720px) {
+  .mcp-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+  }
+  .mcp-detail {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

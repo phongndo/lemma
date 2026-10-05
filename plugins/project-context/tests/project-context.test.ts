@@ -67,6 +67,7 @@ describe("project context", () => {
       cwd: path.join(dir, "repo"),
       model: "p/m",
       tools: [],
+      reachable: [],
       branch: [],
       history: [],
       append: () => Effect.die("not used"),
@@ -82,7 +83,7 @@ describe("project context", () => {
           return yield* core.run(
             Effect.flatMap(Hooks, (hooks) =>
               hooks.invoke(AgentRequestHook, draft, (final) =>
-                Effect.succeed<RequestPlan>({ model: final.model, sections: final.sections, tools: final.tools }),
+                Effect.succeed<RequestPlan>({ model: final.model, sections: final.sections, tools: final.tools, reachable: final.reachable }),
               ),
             ),
           );

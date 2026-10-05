@@ -28,6 +28,8 @@ export interface Io {
   readonly err: (text: string) => void;
   /** Asks the person at the terminal; absent when stdin is not one. Aborting `signal` withdraws the prompt. */
   readonly ask?: (question: string, secret: boolean, signal?: AbortSignal) => Promise<string>;
+  /** Standard input, read whole (`mcp add -`). */
+  readonly input?: () => Promise<string>;
 }
 
 /** What to do with a question the host asks while a command is attached. */
@@ -65,6 +67,8 @@ export interface Options {
   readonly requestId?: string | undefined;
   /** `run`: what the prompt does while the session has a turn running. */
   readonly whenBusy?: "steer" | "follow-up" | "reject" | undefined;
+  /** `mcp add`: the server's id, in place of the one its URL or command suggests. */
+  readonly name?: string | undefined;
 }
 
 /** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */

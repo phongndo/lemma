@@ -296,7 +296,9 @@ const toolView = (deps: { readonly client: ClientService; readonly threads: Thre
               </Match>
             </Switch>
           </span>
-          <span class="tool-name">{props.name || "tool"}</span>
+          <span class="tool-name" classList={{ titled: summary().title !== undefined }} data-tip={summary().title === undefined ? undefined : props.name}>
+            {summary().title ?? (props.name || "tool")}
+          </span>
           <Show when={summary().file}>{(file) => <FileTypeIcon path={file().path} kind={file().kind} class="tool-file" />}</Show>
           <Show when={primary()}>
             <span class="tool-primary" classList={{ shell: summary().shell === true || props.name === "bash" }}>

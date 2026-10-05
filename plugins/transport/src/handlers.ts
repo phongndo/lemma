@@ -1,8 +1,8 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles } from "@lemma/contracts";
-import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
+import { HostError, HostRpcs, Inspectors, InteractionOrigin, McpManagers, searchFiles } from "@lemma/contracts";
+import type { Agent, Commands, ConfigureReport, HostControl, Llm, McpManager, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { toHostError, toPluginStatus } from "./errors.ts";
 import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
@@ -19,7 +19,7 @@ export interface HandlerServices {
   readonly control: Context.Tag.Service<HostControl>;
   readonly workspace: Context.Tag.Service<Workspace>;
   readonly commands: Context.Tag.Service<Commands>;
-  /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
+  /** The core's registries: host plugins' `Inspectors`, `FileSearchers`, and `McpManagers` are read from them. */
   readonly registries: Context.Tag.Service<Registries>;
   /** Runs `Llm.login` in the plugin's scope; see `makeLogins`. */
   readonly login: ReturnType<typeof makeLogins>;
@@ -28,8 +28,15 @@ export interface HandlerServices {
 const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : { cwd });
 
 /** Every RPC maps to one capability call; only the error boundary is transport-specific. */
-export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }: HandlerServices) =>
-  HostRpcs.of({
+export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }: HandlerServices) => {
+  /** The first `McpManagers` contribution, read at each call like `FileSearchers`: MCP can be off without the transport noticing. */
+  const mcp = <A, E>(use: (manager: McpManager) => Effect.Effect<A, E>) =>
+    Effect.flatMap(registries.items(McpManagers), ([first]) =>
+      first === undefined
+        ? Effect.fail(new HostError({ code: "Unavailable", message: "No plugin manages MCP servers: turn on the mcp plugin, or add one" }))
+        : use(first.item).pipe(Effect.mapError(toHostError)),
+    );
+  return HostRpcs.of({
     "Session.List": ({ cwd }) => sessions.list(cwdOption(cwd)).pipe(Effect.mapError(toHostError)),
     "Session.Get": ({ sessionId }) => sessions.get(sessionId).pipe(Effect.mapError(toHostError)),
     "Session.Create": ({ cwd }) => sessions.create({ cwd: cwd ?? paths.cwd }).pipe(Effect.mapError(toHostError)),
@@ -94,6 +101,18 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
         ...(within === undefined ? {} : { within }),
       }).pipe(Effect.mapError(toHostError)),
 
+    "Mcp.Servers": () => mcp((manager) => manager.servers),
+    "Mcp.Save": ({ spec, secrets, scope }) =>
+      mcp((manager) => manager.save(spec, { ...(secrets === undefined ? {} : { secrets }), ...(scope === undefined ? {} : { scope }) })),
+    "Mcp.Remove": ({ id }) => mcp((manager) => manager.remove(id)),
+    "Mcp.SetEnabled": ({ id, enabled }) => mcp((manager) => manager.setEnabled(id, enabled)),
+    "Mcp.SetTool": ({ id, tool, enabled }) => mcp((manager) => manager.setTool(id, tool, enabled)),
+    "Mcp.Restart": ({ id }) => mcp((manager) => manager.restart(id)),
+    // The sign-in belongs to the mcp plugin: a client that drops mid-way can return and answer its questions.
+    "Mcp.Login": ({ id }) => mcp((manager) => manager.login(id)),
+    "Mcp.Logout": ({ id }) => mcp((manager) => manager.logout(id)),
+    "Mcp.Logs": ({ id }) => mcp((manager) => manager.logs(id)),
+
     "Command.List": () => commands.list,
     "Command.Run": ({ id, cwd, sessionId, origin }) =>
       commands
@@ -132,6 +151,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Ui.Composition": () => control.ui,
     "Ui.Configure": ({ plugins, scope }) => control.configureUi(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.mapError(toHostError)),
   });
+};
 
 const toReloadResult = (report: ConfigureReport): ReloadResult => ({
   started: report.started,

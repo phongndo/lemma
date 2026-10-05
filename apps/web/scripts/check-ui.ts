@@ -40,6 +40,10 @@ import { createServer } from "vite";
  *    goes there, lighting it; the previous and next buttons move a turn each.
  * 11. With no provider set up, the app opens in the chat; the composer's notice
  *    opens Providers, which goes back to the chat once one connects.
+ * 12. The MCP servers page keeps its selected server in the address and switches
+ *    a tool; a pasted URL is previewed, added, and selected; Edit opens the
+ *    server's config and saves a change, a credential typed in kept as a secret;
+ *    a sign-in shows inline until it connects; and a server is removed.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
@@ -624,7 +628,7 @@ try {
     const { Threads } = await import("/src/ui/contracts.ts" as string);
     return (await (window as any).lemma.service(Threads)).list()[0].id;
   });
-  const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects", "archived"].map((section) => `/settings/${section}`);
+  const sections = ["general", "appearance", "keyboard", "providers", "mcp", "plugins", "projects", "archived"].map((section) => `/settings/${section}`);
   for (const path of ["/", `/threads/${firstThread}`, `/threads/${firstThread}/trajectory`, ...sections, "/nowhere"]) {
     await page.evaluate(async (path) => {
       const { Router } = await import("/src/ui/contracts.ts" as string);
@@ -822,6 +826,8 @@ try {
     const { Settings } = await import("/src/ui/contracts.ts" as string);
     (await (window as any).lemma.service(Settings)).open(undefined);
   });
+  // The mock's Linear server wants a sign-in; its notice is put aside, so the composer is as tall as the rail expects.
+  await page.click(".mcp-callout [aria-label='Not now']");
   for (const [index, prompt] of ["first prompt", "second prompt", "third prompt"].entries()) {
     await page.fill("textarea", prompt);
     await page.keyboard.press("Enter");
@@ -990,8 +996,65 @@ try {
   await fresh.close();
   expectNoErrors("connecting a first provider and reloading the UI");
 
+  // 12. MCP servers: the selected server is in the address, a tool switches off and on, a pasted URL is previewed and
+  // added, its config is edited, a sign-in runs inline, and a server is removed.
+  const mcp = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  mcp.on("pageerror", (error) => errors.push(error.message));
+  mcp.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  await mcp.goto(`${url}/settings/mcp?mock`);
+  await mcp.click(".mcp-row[data-server=github]");
+  await mcp.waitForFunction(() => new URLSearchParams(location.search).get("server") === "github");
+  const toolSwitch = mcp.locator(".mcp-tool", { hasText: "get_me" }).getByRole("switch");
+  await toolSwitch.click();
+  await mcp.waitForSelector(".mcp-tool.off:has-text('get_me')", { timeout: 5_000 }).catch(() => assert.fail("a tool switched off does not show off"));
+  await toolSwitch.click();
+  await mcp.waitForSelector(".mcp-tool:not(.off):has-text('get_me')", { timeout: 5_000 });
+  await mcp.click(".mcp-page .search-field button:has-text('Add server')");
+  await mcp.fill(".mcp-dialog textarea", "https://mcp.example.com/mcp");
+  await mcp
+    .waitForSelector(".mcp-found:has-text('example'):has-text('mcp.example.com/mcp')", { timeout: 5_000 })
+    .catch(() => assert.fail("a pasted URL is not previewed as a server"));
+  await mcp.click(".mcp-dialog .dialog-foot button:has-text('Add server')");
+  await mcp.waitForSelector(".mcp-dialog", { state: "detached", timeout: 5_000 });
+  await mcp
+    .waitForSelector(".mcp-row.selected[data-server=example]", { timeout: 5_000 })
+    .catch(() => assert.fail("an added server is not listed and selected"));
+  assert.equal(await mcp.evaluate(() => new URLSearchParams(location.search).get("server")), "example", "an added server is not in the address");
+  await mcp.waitForSelector(".mcp-head >> text=Connected", { timeout: 5_000 });
+  // Edit opens the config less the id; a key typed into it is kept as a secret, out of the config.
+  await mcp.click(".mcp-head button:has-text('Edit')");
+  const config = JSON.parse(await mcp.inputValue(".mcp-dialog textarea"));
+  assert.deepEqual(config, { url: "https://mcp.example.com/mcp" }, "Edit does not open with the server's config");
+  await mcp.fill(".mcp-dialog textarea", JSON.stringify({ ...config, name: "Example", headers: { "X-Api-Key": "abc123" } }, null, 2));
+  await mcp
+    .waitForSelector(".mcp-note:has-text('X_API_KEY is kept as a secret')", { timeout: 5_000 })
+    .catch(() => assert.fail("Edit does not say a credential typed in is kept as a secret"));
+  await mcp.click(".mcp-dialog .dialog-foot button:has-text('Save')");
+  await mcp.waitForSelector(".mcp-dialog", { state: "detached", timeout: 5_000 });
+  await mcp
+    .waitForSelector(".mcp-row[data-server=example] .mcp-row-name:text-is('Example')", { timeout: 5_000 })
+    .catch(() => assert.fail("an edit is not saved"));
+  await mcp.waitForSelector(".mcp-facts dd:text-is('X_API_KEY')", { timeout: 5_000 }).catch(() => assert.fail("a secret from Edit is not stored"));
+  // Linear wants a sign-in: its page shows inline until it connects.
+  await mcp.click(".mcp-row[data-server=linear]");
+  await mcp.click(".mcp-head button:has-text('Sign in')");
+  await mcp.waitForSelector(".mcp-signin a:has-text('Open sign-in page')", { timeout: 5_000 }).catch(() => assert.fail("a sign-in does not show its page"));
+  await mcp.waitForSelector(".mcp-head >> text=Connected", { timeout: 10_000 }).catch(() => assert.fail("a sign-in does not connect the server"));
+  // Removing asks first.
+  await mcp.click(".mcp-row[data-server=example]");
+  await mcp.click(".mcp-head [aria-label='Example options']");
+  await mcp.click("[role=menuitem]:has-text('Remove server')");
+  await mcp.click(".mcp-remove-dialog .dialog-foot button:has-text('Remove server')");
+  await mcp
+    .waitForSelector(".mcp-row[data-server=example]", { state: "detached", timeout: 5_000 })
+    .catch(() => assert.fail("a removed server is still listed"));
+  await mcp.close();
+  expectNoErrors("managing MCP servers");
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; MCP servers are listed, switched, added from a pasted URL, edited, signed in to, and removed.`,
   );
 } finally {
   await browser.close();

@@ -71,6 +71,11 @@ try {
     await shot(page, `${theme}-20-trajectory`);
     await page.click(".trj-table tbody tr[data-record]");
     await shot(page, `${theme}-21-trajectory-details`);
+    // Settings › MCP servers, with a server selected.
+    await page.keyboard.press("ControlOrMeta+,");
+    await page.click(".settings nav >> text=MCP servers");
+    await page.click(".mcp-row[data-server=github]");
+    await shot(page, `${theme}-22-settings-mcp`);
     await page.close();
   }
   console.log(`Shots in ${out}`);

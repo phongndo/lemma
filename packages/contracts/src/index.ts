@@ -11,6 +11,8 @@ export * from "./interaction.ts";
 export * from "./kernel.ts";
 export * from "./ledger.ts";
 export * from "./llm.ts";
+export * from "./mcp.ts";
+export * from "./mcp-import.ts";
 export * from "./rpc.ts";
 export * from "./sessions.ts";
 export * from "./tools.ts";

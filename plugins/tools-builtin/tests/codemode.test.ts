@@ -173,6 +173,45 @@ describe("pi codemode", () => {
     await expect(run("await tools.slow({})", process.cwd(), [slow], controller.signal)).rejects.toThrow();
     expect(cancelled).toBe(true);
   });
+  it("resolves a tool that declares an outputSchema to its data, typed, error results included", async () => {
+    const typed = definePlugin({
+      id: "typed",
+      requires: [Tools],
+      layer: Layer.scopedDiscard(
+        Effect.flatMap(Tools, (registry) =>
+          registry.register({
+            name: "lookup",
+            description: "Looks a user up.",
+            input: Schema.Struct({ id: Schema.String }),
+            outputSchema: { type: "object", properties: { name: { type: "string" }, found: { type: "boolean" } }, required: ["name", "found"] },
+            execute: async ({ id }) =>
+              id === "gone"
+                ? new ToolResult({ content: [{ type: "text", text: "no such user" }], isError: true, structuredContent: { name: "", found: false } })
+                : id === "broken"
+                  ? new ToolResult({ content: [{ type: "text", text: "the lookup failed" }], isError: true })
+                  : new ToolResult({ content: [{ type: "text", text: `user ${id}` }], structuredContent: { name: id.toUpperCase(), found: true } }),
+          }),
+        ),
+      ),
+    });
+    const result = await call(
+      `const declaration = ALL_TOOLS.find((tool) => tool.name === "lookup").description;
+       const ada = await tools.lookup({ id: "ada" });
+       const gone = await tools.lookup({ id: "gone" });
+       const broken = await tools.lookup({ id: "broken" }).catch((error) => error.message);
+       return { declaration, ada, gone, broken };`,
+      { extra: [typed] },
+    );
+    expect(result.isError).toBeUndefined();
+    const output = textOf(result);
+    expect(JSON.parse(output.slice(output.indexOf("{")))).toEqual({
+      declaration: expect.stringContaining("lookup(args: { id: string; }): Promise<{ found: boolean; name: string; }>"),
+      ada: { name: "ADA", found: true },
+      gone: { name: "", found: false },
+      broken: "the lookup failed",
+    });
+  });
+
   it("reaches only the tools the request offered", async () => {
     const result = await call(`text(ALL_TOOLS.map((t) => t.name)); await tools.bash({ command: "echo unoffered" });`, { offered: ["codemode", "read"] });
     expect(result.isError).toBe(true);

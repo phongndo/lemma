@@ -77,6 +77,8 @@ const describe = (line: Line): string => {
       return "list them again";
     case "ui-changed":
       return `${Object.keys(event.ui.plugins).length} rows · files ${event.ui.files.map((file) => file.name).join(" ") || "none"}`;
+    case "mcp-changed":
+      return event.servers.map((server) => `${server.id}=${server.status}`).join(" ") || "no servers";
   }
 };
 

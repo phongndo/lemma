@@ -8,6 +8,7 @@ import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, Plug
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, StreamEvent, Usage } from "./llm.ts";
+import { McpLogEntry, McpServerInfo, McpServerSpec } from "./mcp.ts";
 import { SessionEvent, SessionInfo } from "./sessions.ts";
 import { DirectoryListing, GitBranch, WorkspaceStatus } from "./workspace.ts";
 
@@ -96,6 +97,7 @@ export const HostEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("commands-changed"), commands: Schema.Array(CommandInfo) }),
   Schema.Struct({ type: Schema.Literal("models-changed") }),
   Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
+  Schema.Struct({ type: Schema.Literal("mcp-changed"), servers: Schema.Array(McpServerInfo) }),
 );
 export type HostEvent = typeof HostEvent.Type;
 
@@ -180,6 +182,27 @@ export class HostRpcs extends RpcGroup.make(
     success: FileSearchResult,
     error: HostError,
   }),
+
+  /** MCP servers and their state (see `McpManagers`); every `Mcp.*` call fails `Unavailable` while no plugin manages them. */
+  Rpc.make("Mcp.Servers", { success: Schema.Array(McpServerInfo), error: HostError }),
+  /** Adds a server or replaces the one with its id; `secrets` are stored for it, not in config (`null` removes one). */
+  Rpc.make("Mcp.Save", {
+    payload: {
+      spec: McpServerSpec,
+      secrets: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) })),
+      scope: Schema.optional(ConfigScope),
+    },
+    error: HostError,
+  }),
+  Rpc.make("Mcp.Remove", { payload: { id: Schema.String }, error: HostError }),
+  Rpc.make("Mcp.SetEnabled", { payload: { id: Schema.String, enabled: Schema.Boolean }, error: HostError }),
+  /** `tool` is the server's name for it. */
+  Rpc.make("Mcp.SetTool", { payload: { id: Schema.String, tool: Schema.String, enabled: Schema.Boolean }, error: HostError }),
+  Rpc.make("Mcp.Restart", { payload: { id: Schema.String }, error: HostError }),
+  /** Signs in to a URL server; its questions arrive as `interaction` events with origin `mcp:<id>`, the link to open as a `notice`. */
+  Rpc.make("Mcp.Login", { payload: { id: Schema.String }, error: HostError }),
+  Rpc.make("Mcp.Logout", { payload: { id: Schema.String }, error: HostError }),
+  Rpc.make("Mcp.Logs", { payload: { id: Schema.String }, success: Schema.Array(McpLogEntry), error: HostError }),
 
   Rpc.make("Command.List", { success: Schema.Array(CommandInfo) }),
   /**

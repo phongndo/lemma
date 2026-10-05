@@ -92,7 +92,15 @@ export interface RequestDraft {
   readonly model: ModelRef;
   readonly thinking?: ThinkingLevel;
   readonly sections: readonly SystemSection[];
+  /** Declared to the model: the request's tool list. */
   readonly tools: readonly ToolContribution[];
+  /**
+   * Offered without being declared: the model does not see them, but a tool
+   * that runs others (codemode's scripts) may call them. A handler moves a
+   * tool here from `tools` to keep its definition out of the request (the
+   * `mcp` plugin does, for servers reached through codemode). Starts empty.
+   */
+  readonly reachable: readonly ToolContribution[];
   /** The turn's branch, root to its last event: what the request continues. */
   readonly branch: readonly SessionEvent[];
   /** `deriveMessages(branch)`. */

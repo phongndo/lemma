@@ -94,6 +94,8 @@ const str = (value: unknown): string | undefined => (typeof value === "string" &
 const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
 
 export interface ToolSummary {
+  /** What to call the call in place of the tool's name (an MCP tool's `GitHub · Create issue`); the name shows on hover. */
+  readonly title?: string;
   /** Short primary argument: a command, a path, a pattern. */
   readonly primary?: string;
   /** Secondary detail, e.g. a line range or search root. */

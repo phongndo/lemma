@@ -122,4 +122,5 @@ export const CommandIcon = () => <Icon name="command" />;
 export const SlidersIcon = () => <Icon name="sliders" />;
 export const PaletteIcon = () => <Icon name="palette" />;
 export const ArrowLeftIcon = () => <Icon name="arrow-left" />;
+export const PlugIcon = () => <Icon name="plug" />;
 export const Spinner = () => <Icon name="spinner" />;

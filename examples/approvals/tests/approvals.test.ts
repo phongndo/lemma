@@ -19,7 +19,7 @@ import tools from "@lemma/plugin-tools";
 import approvals, { question } from "../approvals.ts";
 
 const file = fileURLToPath(new URL("../approvals.ts", import.meta.url));
-const defaults = { ask: ["bash"], outsideProject: ["write", "edit"] };
+const defaults = { ask: ["bash"], mcp: "writes" as const, outsideProject: ["write", "edit"] };
 const call = (name: string, input: unknown, sessionId = "s1") => new ToolInvocation({ sessionId, toolCallId: "c1", name, input, cwd: "/work/project" });
 
 describe("which calls ask", () => {
@@ -33,6 +33,27 @@ describe("which calls ask", () => {
     expect(question(call("write", { path: "/work/projects-evil/a.ts" }), defaults)?.detail).toBe("/work/projects-evil/a.ts");
     expect(question(call("read", { path: "/etc/passwd" }), defaults)).toBeUndefined();
     expect(question(call("read", { path: "/etc/passwd" }), { ...defaults, outsideProject: ["read"] })?.detail).toBe("/etc/passwd");
+  });
+
+  test("asks for MCP tools their server does not mark read-only, and for names an `ask` pattern matches", () => {
+    const tool = (name: string, readOnly?: boolean) => ({
+      name,
+      tool: `mcp__gh__${name}`,
+      enabled: true,
+      hints: readOnly === undefined ? {} : { readOnly },
+    });
+    const search = call("mcp__gh__search", { q: "x" });
+    expect(question(search, defaults, { server: "GitHub", tool: tool("search", true) })).toBeUndefined();
+    expect(question(call("mcp__gh__create_issue", { title: "t" }), defaults, { server: "GitHub", tool: tool("create_issue") })).toEqual({
+      title: "Allow GitHub's create_issue?",
+      detail: '{\n  "title": "t"\n}',
+    });
+    expect(question(search, { ...defaults, mcp: "all" }, { server: "GitHub", tool: tool("search", true) })?.title).toBe("Allow GitHub's search?");
+    expect(question(call("mcp__gh__create_issue", {}), { ...defaults, mcp: "none" }, { server: "GitHub", tool: tool("create_issue") })).toBeUndefined();
+    expect(question(search, { ...defaults, mcp: "none", ask: ["mcp__gh__*"] }, { server: "GitHub", tool: tool("search", true) })?.title).toBe(
+      "Allow mcp__gh__search?",
+    );
+    expect(question(call("bash_like", {}), { ...defaults, ask: ["bash*"] })?.title).toBe("Allow bash_like?");
   });
 
   test("resolves a path as the file tools do: `~` is home and a leading `@` is dropped; `..name` is a name", () => {

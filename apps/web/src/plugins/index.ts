@@ -21,6 +21,8 @@ import interactions from "./interactions.ts";
 import keymap from "./keymap.ts";
 import keysPage from "./keys-page.tsx";
 import kit from "./kit.tsx";
+import mcp from "./mcp.ts";
+import mcpPage from "./mcp-page.tsx";
 import modelPicker from "./model-picker.tsx";
 import models from "./models.ts";
 import notify from "./notify.ts";
@@ -58,6 +60,7 @@ export const bundled: readonly Plugin[] = [
   toasts,
   threads,
   models,
+  mcp,
   workspace,
   hostPlugins,
   commands,
@@ -82,6 +85,7 @@ export const bundled: readonly Plugin[] = [
   palette,
   settings,
   providers,
+  mcpPage,
   pluginsPage,
   keysPage,
   projectsPage,

@@ -27,7 +27,7 @@ import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryT
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
 import { resolvePaths } from "@lemma/plugin-host";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
+import type { Command, Connection, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
   formatConfig,
   formatDiff,
@@ -66,11 +66,12 @@ import {
   runCommand,
   withdrawCommand,
 } from "./live.ts";
+import { mcpCommand } from "./mcp.ts";
 import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
 import { workspaceCommand } from "./workspace.ts";
 
 export { CliError, ExitCode } from "./command.ts";
-export type { Io } from "./command.ts";
+export type { Connection, Io } from "./command.ts";
 
 export const USAGE = `Usage: lemma <command> [options] [--json]
 
@@ -144,7 +145,7 @@ Questions the host asks (logins, tools that confirm)
   questions                      Open questions, with their ids
   answer <question> <value>      Answer one: yes/no, text, or an option (value, label, or number)
   dismiss <question>             Dismiss one
-    While run, login, do, or events --questions … is attached:
+    While run, login, mcp login, do, or events --questions … is attached:
     --questions ask|ignore|dismiss   ask at the terminal (default when there is one), leave them
                                      to another client such as the web app (default otherwise), or dismiss
     --answer <value>               Answer the next question with this (repeatable, in order)
@@ -154,6 +155,23 @@ Providers and models
   login <provider> [--method api_key|oauth]
   logout <provider>
   models [--all]                 Models you can use now (--all: every known model)
+
+MCP servers (tools from Model Context Protocol servers, through the mcp plugin)
+  mcp [list]                     Each server: status, tools on/total, transport and target
+  mcp show <id>                  One server: status, config (hidden values as such), secrets, unset
+                                 variables, what the server reported, its instructions and tools
+  mcp add <url>                  Add the server at a URL
+  mcp add -- <command> [args…]   Add a server the host runs as a command; leading K=V words set its env
+  mcp add -                      Add the servers in a config read from standard input (from a README,
+                                 Claude, Cursor, VS Code, OpenCode…), or given as one argument.
+                                 add keeps credential-looking values out of the config, as secrets,
+                                 and never replaces a server: a taken id gets a suffix (-2)
+    --name <id>                  Its id, in place of the one the URL or command suggests
+    --project                    Save in the project's config
+  mcp remove|restart <id>
+  mcp login <id>                 Sign in to a URL server: prints the page to open (questions as for login)
+  mcp logout <id>                Forget its sign-in
+  mcp logs <id>                  What it printed and logged recently
 
 Workspace (the project directory; --path defaults to the current one)
   workspace status [path]        Whether it exists, git branch, head, changes, upstream
@@ -378,6 +396,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return extra(2) ?? logoutCommand(sub);
     case "workspace":
       return workspaceCommand(sub, positionals.slice(2), io, options);
+    case "mcp":
+      return mcpCommand(positionals.slice(1), options, io);
     case "kernel": {
       const views = { hooks: formatHooks, registries: formatRegistries, events: formatEvents, capabilities: formatCapabilities } as const;
       const view = sub ?? "capabilities";
@@ -598,7 +618,7 @@ const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: T
  * commands, and a WebSocket (opened only when a command follows events) for
  * streaming and questions, as the web app uses.
  */
-const connect = (io: Io) =>
+const connect = (io: Io): Effect.Effect<Connection, Failure, Scope.Scope> =>
   Effect.gen(function* () {
     const target = yield* findTarget(io);
     if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
@@ -648,8 +668,11 @@ const report = (io: Io, json: boolean, error: CliError): number => {
 
 const QUESTION_POLICIES = new Set(["ask", "ignore", "dismiss"]);
 
-/** Runs one command (anything but `serve`) and returns the exit code. */
-export async function run(argv: readonly string[], io: Io): Promise<number> {
+/**
+ * Runs one command (anything but `serve`) and returns the exit code. `reach`
+ * finds and connects to the host; tests pass one that reaches a fake.
+ */
+export async function run(argv: readonly string[], io: Io, reach: (io: Io) => Effect.Effect<Connection, Failure, Scope.Scope> = connect): Promise<number> {
   const wantsJson = argv.includes("--json");
   let parsed;
   try {
@@ -690,6 +713,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         "request-id": { type: "string" },
         "when-busy": { type: "string" },
         steer: { type: "boolean", default: false },
+        name: { type: "string" },
         help: { type: "boolean", short: "h", default: false },
       },
     });
@@ -743,13 +767,14 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     token: values.token,
     requestId: values["request-id"],
     whenBusy,
+    name: values.name,
   };
   const command = route(positionals, options, io);
   if (command instanceof CliError) return report(io, options.json, command);
 
   const program: Effect.Effect<Output | undefined, Failure, Scope.Scope> =
     typeof command === "function"
-      ? Effect.flatMap(connect(io), (connection) => command(connection, io, options).pipe(Effect.mapError((error) => toCliError(error, connection.target))))
+      ? Effect.flatMap(reach(io), (connection) => command(connection, io, options).pipe(Effect.mapError((error) => toCliError(error, connection.target))))
       : command.unattached;
   const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.either));
   if (result._tag === "Left") return report(io, options.json, toCliError(result.left));

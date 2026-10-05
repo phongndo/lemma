@@ -75,7 +75,7 @@ const promptText = (request: InteractionRequest): string => {
  * own fiber, so events keep flowing while the terminal waits, and its prompt
  * closes when the question is answered elsewhere or the command ends.
  */
-const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined) =>
+export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined) =>
   Effect.gen(function* () {
     const answers = [...options.answers];
     const seen = new Set<string>();
@@ -124,7 +124,7 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
  * the same socket (calls on one socket are handled in order), so nothing the
  * command causes next is missed.
  */
-const subscribe = (rpc: HostRpcClient, onEvent: (event: HostEvent) => Effect.Effect<void>) =>
+export const subscribe = (rpc: HostRpcClient, onEvent: (event: HostEvent) => Effect.Effect<void>) =>
   Effect.gen(function* () {
     const fiber = yield* rpc.Host.Events().pipe(
       Stream.runForEach((event) => onEvent(event).pipe(Effect.catchAllCause(() => Effect.void))),
@@ -134,7 +134,7 @@ const subscribe = (rpc: HostRpcClient, onEvent: (event: HostEvent) => Effect.Eff
     return fiber;
   });
 
-const noticeLine = (event: Extract<HostEvent, { type: "notice" }>) => {
+export const noticeLine = (event: Extract<HostEvent, { type: "notice" }>) => {
   const notice = event.notice;
   const links = notice.links?.map((link) => ` ${link.label === undefined ? link.url : `${link.label}: ${link.url}`}`).join("") ?? "";
   return `[${notice.level}]${notice.source === undefined ? "" : ` ${notice.source}:`} ${notice.message}${notice.code === undefined ? "" : ` (code: ${notice.code})`}${links}`;
@@ -512,6 +512,8 @@ const eventLine = (event: HostEvent): string => {
       return "models changed";
     case "ui-changed":
       return uiLine(event.ui);
+    case "mcp-changed":
+      return `mcp: ${event.servers.length ? event.servers.map((server) => `${server.id}=${server.status}`).join(" ") : "no servers"}`;
   }
 };
 

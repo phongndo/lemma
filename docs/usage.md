@@ -16,6 +16,11 @@ set the provider's API key environment variable. The
 [llm plugin](../plugins/llm-pi-ai/README.md) lists the providers and how to add
 your own.
 
+Give the model more tools by connecting MCP servers: paste a server's URL, its
+command, or a config from its README or another client into Settings → MCP
+servers, or pass it to `lemma mcp add`. The [mcp plugin](../plugins/mcp/README.md)
+describes the config, sign-in, and how the model reaches the tools.
+
 ## Working on Lemma
 
 Keep `pnpm dev` running: it starts the host, the web app's dev server, and the

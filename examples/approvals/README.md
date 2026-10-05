@@ -1,8 +1,9 @@
 # Approvals (an example plugin file)
 
-Asks before the agent runs a command or writes outside the session's
-directory: **Allow once**, **Allow bash for this session**, or **Deny** (the
-model is told you declined). With nobody to ask (no web app open, no CLI
+Asks before the agent runs a command, writes outside the session's
+directory, or calls an MCP server's tool that may change something: **Allow
+once**, **Allow bash for this session**, or **Deny** (the model is told you
+declined). With nobody to ask (no web app open, no CLI
 attached to answer), the call is denied.
 
 It is a plugin file, not a bundled plugin: [`approvals.ts`](approvals.ts)
@@ -20,8 +21,14 @@ It then shows on the Plugins page as a user plugin, with its settings:
 
 | Setting          | Default             | What it does                                                                  |
 | ---------------- | ------------------- | ----------------------------------------------------------------------------- |
-| `ask`            | `["bash"]`          | Tools that need approval for every call                                       |
+| `ask`            | `["bash"]`          | Tools that need approval for every call; `*` matches any characters           |
+| `mcp`            | `"writes"`          | MCP tools: `writes` asks unless the server marks one read-only; `all`, `none` |
 | `outsideProject` | `["write", "edit"]` | Tools that need approval when their `path` is outside the session's directory |
+
+An MCP tool's read-only mark is its server's claim (the
+[mcp plugin](../../plugins/mcp/README.md) reports it); `mcp: "all"` asks for
+every call to a server you do not trust that far. Calls a codemode script
+makes are asked about one by one, as the model's own are.
 
 Questions reach whichever client is attached: the web app shows a dialog (or
 the palette, while it is open), `lemma run` asks at the terminal or takes

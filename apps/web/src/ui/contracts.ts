@@ -13,6 +13,10 @@ import type {
   InteractionAnswer,
   InteractionRequest,
   LedgerRecord,
+  McpLogEntry,
+  McpServerInfo,
+  McpServerSpec,
+  McpToolInfo,
   ModelInfo,
   NoticePayload,
   PluginChange,
@@ -223,6 +227,32 @@ export interface ModelsService {
   readonly refresh: () => Promise<void>;
 }
 export class Models extends Context.Tag("lemma-ui/Models")<Models, ModelsService>() {}
+
+/** MCP servers as the host reports them, and the changes clients make. Changes reject when the host refuses; whoever asked reports it. */
+export interface McpService {
+  readonly servers: Accessor<readonly McpServerInfo[]>;
+  readonly loaded: Accessor<boolean>;
+  /** Why servers cannot be listed (no host plugin manages them), when they cannot. */
+  readonly unavailable: Accessor<string | undefined>;
+  /** Adds a server or replaces the one with its id; `secrets` are stored on the host, not in config (`null` removes one). */
+  readonly save: (spec: McpServerSpec, options?: { readonly secrets?: Readonly<Record<string, string | null>> }) => Promise<void>;
+  readonly remove: (id: string) => Promise<void>;
+  readonly setEnabled: (id: string, enabled: boolean) => Promise<void>;
+  /** `tool` is the server's name for it. */
+  readonly setTool: (id: string, tool: string, enabled: boolean) => Promise<void>;
+  readonly restart: (id: string) => Promise<void>;
+  /** Resolves once signed in; its questions carry origin `mcp:<id>`. */
+  readonly login: (id: string) => Promise<void>;
+  readonly logout: (id: string) => Promise<void>;
+  /** The server whose sign-in is running. */
+  readonly signingIn: Accessor<string | undefined>;
+  /** The page a running sign-in waits for the user to open (from the host's notice), if any. */
+  readonly signInUrl: (id: string) => string | undefined;
+  readonly logs: (id: string) => Promise<readonly McpLogEntry[]>;
+  /** The server and tool a model-facing tool name (`mcp__github__create_issue`) belongs to. */
+  readonly toolOwner: (name: string) => { readonly server: McpServerInfo; readonly tool: McpToolInfo } | undefined;
+}
+export class Mcp extends Context.Tag("lemma-ui/Mcp")<Mcp, McpService>() {}
 
 export interface WorktreeDraft {
   readonly enabled: boolean;
@@ -599,7 +629,10 @@ export interface ToolBodyProps {
   /** The last lines a running tool printed, until its result arrives. */
   readonly output?: string | undefined;
 }
-/** How the chat shows calls to one tool; the item's id is the tool's name. Either part falls back to the chat's own. */
+/**
+ * How the chat shows calls to one tool; the item's id is the tool's name. Either part falls back to the chat's own.
+ * A summary's `title` names the call in place of the tool's name (the `mcp-page` plugin's `GitHub · Create issue`).
+ */
 export interface ToolView {
   readonly summary?: (args: Record<string, unknown> | undefined, context: { readonly cwd?: string; readonly home?: string }) => ToolSummary;
   readonly body?: Component<ToolBodyProps>;
@@ -764,6 +797,8 @@ export const ActionIds = {
   palette: "palette.open",
   addProject: "add-project.open",
   providers: "providers.open",
+  /** Opens the MCP servers settings; run with a server id, shows that server. */
+  mcp: "mcp.open",
   focusComposer: "composer.focus",
   eventLog: "event-log.open",
 } as const;
@@ -921,6 +956,7 @@ export type IconName =
   | "sliders"
   | "palette"
   | "arrow-left"
+  | "plug"
   | "spinner";
 export interface IconProps {
   readonly name: IconName;

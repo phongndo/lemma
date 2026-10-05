@@ -1,6 +1,6 @@
 # @lemma/plugin-transport
 
-Serves `HostRpcs` from `@lemma/contracts` with `@effect/rpc` on Node's HTTP server, so the web app, the desktop shell, and CLI clients can drive a running host. Requires `Paths`, `Sessions`, `Agent`, `Llm`, `HostControl`, `Workspace`, and `Commands`; provides nothing; reads `Inspectors` and `FileSearchers` from the core's registries; answers `InteractionHook` for connected clients. Marked `exclusive`: it owns the port, so a reload stops the old instance before starting the new one.
+Serves `HostRpcs` from `@lemma/contracts` with `@effect/rpc` on Node's HTTP server, so the web app, the desktop shell, and CLI clients can drive a running host. Requires `Paths`, `Sessions`, `Agent`, `Llm`, `HostControl`, `Workspace`, and `Commands`; provides nothing; reads `Inspectors`, `FileSearchers`, and `McpManagers` from the core's registries; answers `InteractionHook` for connected clients. Marked `exclusive`: it owns the port, so a reload stops the old instance before starting the new one.
 
 ## Use
 
@@ -35,9 +35,10 @@ After listening it writes `<Paths.home>/transport.json` as `{ url, token, pid, s
   documents. Two outlive their caller: `Agent.Prompt` (the agent keeps the turn)
   and `Llm.Login`, which runs in this plugin's scope, so a login survives a
   dropped connection and a second call for the same provider joins it.
-  `Files.Search` asks `FileSearchers` at each call, so file search can be off
-  without the transport noticing.
-- **`Host.Events`.** `SessionAppended`, `SessionChanged`, `SessionRemoved`, `AssistantDelta`, `TurnStarted`, `TurnEnded`, `Notice`, and `PluginsChanged` are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and repairs from `Session.Events`. Each kind has its own observer queue, so order holds within a kind but not across kinds (`turn-ended` can overtake the last `delta`). The `@effect/rpc` client sends a stream request asynchronously; a client that must see the effects of its own next call should wait for its first event.
+  `Files.Search` asks `FileSearchers` at each call, and `Mcp.*` the first
+  `McpManagers` entry, so file search and MCP can be off without the
+  transport noticing (their calls fail `Unavailable`).
+- **`Host.Events`.** `SessionAppended`, `SessionChanged`, `SessionRemoved`, `AssistantDelta`, `TurnStarted`, `TurnEnded`, `Notice`, `PluginsChanged`, and `McpChanged` are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and repairs from `Session.Events`. Each kind has its own observer queue, so order holds within a kind but not across kinds (`turn-ended` can overtake the last `delta`). The `@effect/rpc` client sends a stream request asynchronously; a client that must see the effects of its own next call should wait for its first event.
 - **Interaction.** With at least one subscriber, an `InteractionHook` request is broadcast as an `interaction` event through a per-subscriber queue that never drops, and replayed to clients that subscribe while it is open. The first `Interaction.Answer` wins; `Interaction.Dismiss` fails it `Dismissed`. Once it settles, or the asking fiber is interrupted, every client receives `interaction-closed`. With no subscriber the request passes to the next handler (and the interaction plugin's terminal reports `Unavailable`). If all clients leave and none returns within `interactionGraceMs`, it fails `Unavailable`.
 - **Shutdown** closes the listener and destroys open sockets, including upgraded WebSockets, before any other cleanup: `server.close` and the platform's WebSocket server would each wait for connected clients, so a reload with a UI attached would miss its deadline and leave the port bound.
 

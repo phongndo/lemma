@@ -13,6 +13,7 @@ interface Tagged {
   readonly tool?: unknown;
   readonly path?: unknown;
   readonly command?: unknown;
+  readonly server?: unknown;
   readonly diagnostics?: readonly Diagnostic[];
 }
 
@@ -28,7 +29,7 @@ export const formatDiagnostic = (diagnostic: Diagnostic): string =>
  * Domain errors cross the wire as `HostError`. `code` is the error's `reason`
  * when it has one (`Busy`, `NotFound`), else its tag (`ReloadError`,
  * `CoreClosed`); `subject` is the session, provider, plugin, tool, workspace
- * path, or command concerned.
+ * path, command, or MCP server concerned.
  * A `ReloadError`'s diagnostics become the message, one per line, and the
  * plugin they all name (if one) the subject.
  */
@@ -44,6 +45,7 @@ export const toHostError = (error: unknown): HostError => {
     text(error.tool) ??
     text(error.path) ??
     text(error.command) ??
+    text(error.server) ??
     (named.size === 1 ? text([...named][0]) : undefined);
   const message = error.diagnostics?.length ? error.diagnostics.map(formatDiagnostic).join("\n") : (text(error.message) ?? code);
   return new HostError({ code, message, ...(subject === undefined ? {} : { subject }) });

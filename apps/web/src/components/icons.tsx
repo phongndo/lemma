@@ -274,6 +274,12 @@ export const ArrowLeftIcon = () => (
     <path d="M13 8H3.5M7.5 4L3.5 8l4 4" />
   </Icon>
 );
+export const PlugIcon = () => (
+  <Icon>
+    <path d="M6 2v3M10 2v3M8 11.5V14" />
+    <path d="M4 5h8v2.5a4 4 0 01-8 0z" />
+  </Icon>
+);
 
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<{ class?: string; filled?: boolean }>>> = {
@@ -319,6 +325,7 @@ export const icons: Readonly<Record<IconName, Component<{ class?: string; filled
   sliders: SlidersIcon,
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,
+  plug: PlugIcon,
   spinner: Spinner,
 };
 

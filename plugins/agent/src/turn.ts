@@ -216,6 +216,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           environmentSection(source, { cwd, sessionId, ...(settings.cli === undefined ? {} : { cli: settings.cli }) }),
         ],
         tools: listed,
+        reachable: [],
         branch,
         history: deriveMessages(branch),
         // Through the turn's own append, so the event chains after the turn's last one and the turn continues from it.
@@ -237,6 +238,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             ...(final.thinking === undefined ? {} : { thinking: final.thinking }),
             sections: final.sections,
             tools: final.tools,
+            reachable: final.reachable,
           }),
         )
         .pipe(Effect.mapError(hookError("AgentRequestHook")));
@@ -271,7 +273,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
       if (request === undefined) return yield* Effect.dieMessage(`request ${logged.id} is not on its own branch`);
-      return { request, model, offered: specs.map((spec) => spec.name) };
+      // Tools that run others may also call the reachable ones, which the model is not shown.
+      const offered = [
+        ...specs.map((spec) => spec.name),
+        ...plan.reachable.map((tool) => tool.spec.name).filter((name) => !specs.some((spec) => spec.name === name)),
+      ];
+      return { request, model, offered };
     });
 
   /** Streams one model call. Returns the settled message, or how the turn ends when the call failed. */

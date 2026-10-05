@@ -484,6 +484,13 @@
   flex: none;
 }
 
+/* A tool's view titles its calls in words (`GitHub · Create issue`): set as text, not code. */
+.tool-name.titled {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 /* The file a call acts on (the `file-icon` part), tucked against its path. */
 .tool-file {
   width: 14px;

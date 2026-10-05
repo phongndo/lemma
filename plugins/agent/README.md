@@ -31,8 +31,9 @@ yield * agent.cancel(sessionId);
 3. Each step: `step-start`; a `RequestDraft` with the base section and an
    environment section (cwd, date, platform, session id, and the `cli` command
    when configured; source `agent`), `Tools.list`, the turn's branch and
-   `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
-   change what the model sees by appending events with `append` (a
+   `deriveMessages(branch)`, an empty `reachable`, and `append`; `AgentRequestHook`,
+   whose handlers may move tools to `reachable` (offered to tools that run others,
+   not declared to the model) and change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with
    per-section and per-tool `contributions`, the `HostControl.composition` id, and
    `system`/`tools` only when they differ from `requestState(branch)`. The request
@@ -42,7 +43,8 @@ yield * agent.cancel(sessionId);
    assistant `message` with timing (`firstTokenAt` = first text, thinking, or
    tool-call delta). `error` appends an `attempt` and ends the turn (`cancelled`
    for an aborted stream, else `error`). No automatic retry.
-5. Tool calls run in order through `Tools.execute` with the turn's signal; each
+5. Tool calls run in order through `Tools.execute` with the turn's signal,
+   offered the request's declared and `reachable` tools; each
    result is appended with timing and `details`. Unknown tools and tool failures
    are error results the model reads.
 6. `AgentContinueHook` (default: continue iff `stopReason === "toolUse"`), then

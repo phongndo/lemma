@@ -35,22 +35,23 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const CHARS_PER_TOKEN = 4;
 /** Room for the result's header and truncation notes, so output cut here still fits the registry's cap whole. */
 const RESERVED_CHARS = 1_000;
-/** What a nested call resolves to: its text, since Lemma's tools declare no output schema. */
+/** What a nested call of a tool without an `outputSchema` resolves to: its text. */
 const TEXT_OUTPUT = { type: "string" };
 /** Results of `searchTools` without a `limit`. */
 const SEARCH_LIMIT = 8;
 
 /**
- * pi's description with the tools all directly callable, as pi's default mode has them: their
- * declarations are the model's own tool list, so they are not repeated here.
+ * pi's description with the tools directly callable, as pi's default mode has them: their
+ * declarations are the model's own tool list, so they are not repeated here. Tools a request
+ * offers without declaring (`RequestDraft.reachable`) are found through `searchTools`.
  */
 const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw JavaScript (no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
-- \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to the tool's text output as a string and rejects with an Error on failure. Calls still running when the script ends are cancelled.
+- \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to the tool's text output as a string, or to data when the tool's declaration says so, and rejects with an Error on failure. Calls still running when the script ends are cancelled.
 - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\`. Without \`timeout_ms\`, a script stops after 300 seconds.
 
 Globals:
 - \`text(value)\`, \`image(dataUrlOrImageBlock)\`, \`console.log(...)\`, and top-level \`return\` add output; \`exit()\` ends the script.
-- \`ALL_TOOLS\` and \`searchTools(query, { limit? })\` list \`{ name, description }\` of callable tools, each description ending in the tool's TypeScript declaration.
+- \`ALL_TOOLS\` and \`await searchTools(query, { limit? })\` list \`{ name, description }\` of callable tools, each description ending in the tool's TypeScript declaration. Some tools are callable only here and are not in your tool list (an MCP server's, say): find them this way.
 
 Use codemode to batch independent tool calls (Promise.allSettled), chain them, or filter large output, instead of many separate calls.`;
 
@@ -149,10 +150,15 @@ export const codemodeTool = (registry: Context.Tag.Service<typeof Tools>): Tool<
       let count = 0;
       const tools = listed
         .filter(({ spec }) => spec.name !== "codemode" && (offered === undefined || offered.includes(spec.name)))
-        .map(({ spec }): CodemodeTool => ({
+        .map(({ spec, outputSchema }): CodemodeTool => ({
           name: spec.name,
           // `ALL_TOOLS` entries carry the declaration.
-          description: renderToolSample({ name: spec.name, description: spec.description, inputSchema: spec.parameters, outputSchema: TEXT_OUTPUT }),
+          description: renderToolSample({
+            name: spec.name,
+            description: spec.description,
+            inputSchema: spec.parameters,
+            outputSchema: outputSchema ?? TEXT_OUTPUT,
+          }),
           // The sandbox aborts `call.signal` when the script ends, times out, or is aborted.
           execute: async (args, call) => {
             const invocation = new ToolInvocation({
@@ -165,6 +171,8 @@ export const codemodeTool = (registry: Context.Tag.Service<typeof Tools>): Tool<
             });
             const outcome = await Runtime.runPromise(runtime)(Effect.either(registry.execute(invocation, call.signal, { update: update ?? (() => {}) })));
             if (Either.isLeft(outcome)) throw new Error(outcome.left.message);
+            // Its data, error results included (an MCP tool's `isError`): the script reads why from it.
+            if (outputSchema !== undefined && outcome.right.structuredContent !== undefined) return outcome.right.structuredContent;
             const text = contentText(outcome.right.content);
             if (outcome.right.isError) throw new Error(text || `Tool "${spec.name}" failed`);
             return text;
