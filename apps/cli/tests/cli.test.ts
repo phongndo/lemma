@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,7 @@ describe("without a host", () => {
       ["cancel"],
       ["workspace", "checkout"],
       ["workspace", "nope"],
+      ["workspace", "files", "--limit", "0"],
       ["session", "title", "s"],
       ["session", "checkout", "s"],
       ["events", "x"],
@@ -519,6 +520,25 @@ describe("against a running host", () => {
       await rm(repo, { recursive: true, force: true });
     }
     expect(JSON.parse((await invoke(["do", "nope", "--json"], home)).err).error).toMatchObject({ code: "NotFound", subject: "nope" });
+  }, 30_000);
+
+  test("workspace files finds a project's files by a fuzzy query", async () => {
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "lemma-cli-files-")));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+      await mkdir(join(repo, "src", "components"), { recursive: true });
+      await writeFile(join(repo, "src", "components", "Composer.tsx"), "");
+      await writeFile(join(repo, "README.md"), "");
+      const found = JSON.parse((await invoke(["workspace", "files", "src", "compoesr", "--json"], home, repo)).out);
+      expect(found).toMatchObject({ root: repo, truncated: false });
+      expect(found.entries[0]).toEqual({ path: "src/components/Composer.tsx", kind: "file" });
+      expect((await invoke(["workspace", "files", "--limit", "1", "--path", repo], home)).out.split("\n")).toHaveLength(2);
+      expect(JSON.parse((await invoke(["workspace", "files", "--json", "--path", join(repo, "missing")], home)).err).error).toMatchObject({
+        code: "NotFound",
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   }, 30_000);
 
   test("a rejected token fails instead of waiting", async () => {

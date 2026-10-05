@@ -54,6 +54,8 @@ export interface Options {
   readonly create: boolean;
   readonly base?: string | undefined;
   readonly path?: string | undefined;
+  /** `workspace files`: at most this many entries. */
+  readonly limit?: number | undefined;
   readonly session?: string | undefined;
   readonly force: boolean;
   readonly project: boolean;

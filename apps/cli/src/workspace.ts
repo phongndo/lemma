@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { Effect } from "effect";
 import { usage } from "./command.ts";
 import type { CliError, Command, Io, Options } from "./command.ts";
-import { formatBranches, formatListing, formatWorkspace } from "./format.ts";
+import { formatBranches, formatFiles, formatListing, formatWorkspace } from "./format.ts";
 
 /**
  * `lemma workspace …`: the project directory controls the web app's
@@ -74,6 +74,15 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
       return (
         extra(1) ?? (({ rpc }) => Effect.map(rpc.Workspace.Browse({ partialPath: partial }), (listing) => ({ json: listing, text: formatListing(listing) })))
       );
+    }
+    case "files": {
+      // The words after `files` are one query, as typed after `@` in the composer.
+      const query = args.join(" ");
+      return ({ rpc }) =>
+        Effect.map(
+          rpc.Files.Search({ cwd: hostPath(io, options.path), query, ...(options.limit === undefined ? {} : { limit: options.limit }) }),
+          (result) => ({ json: result, text: formatFiles(result) }),
+        );
     }
     default:
       return usage(`Unknown workspace command "${sub}"`);

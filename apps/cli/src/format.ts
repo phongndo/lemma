@@ -4,6 +4,7 @@ import type {
   InspectorInfo,
   KernelView,
   DirectoryListing,
+  FileSearchResult,
   GitBranch,
   HostInfo,
   InteractionRequest,
@@ -572,6 +573,13 @@ export const formatBranches = (branches: readonly GitBranch[]): string =>
 
 export const formatListing = (listing: DirectoryListing): string =>
   [listing.parent, ...listing.entries.map((entry) => `  ${entry.name}/${entry.git ? "  (git)" : ""}`), ...(listing.truncated ? ["  …"] : [])].join("\n");
+
+export const formatFiles = (result: FileSearchResult): string =>
+  [
+    ...(result.entries.length === 0 ? ["No matches."] : result.entries.map((entry) => (entry.kind === "directory" ? `${entry.path}/` : entry.path))),
+    ...(result.truncated ? ["…"] : []),
+    ...(result.indexing === true ? ["(still reading the directory: some may be missing)"] : []),
+  ].join("\n");
 
 /** Each hook's chain, in the order its handlers run. */
 export const formatHooks = (kernel: KernelView): string =>

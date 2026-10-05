@@ -6,6 +6,7 @@ import type { Scope } from "effect";
 import {
   appUrl,
   branchOf,
+  FILE_SEARCH_LIMIT,
   HostError,
   kernelOf,
   NewThreadRoute,
@@ -162,6 +163,8 @@ Workspace (the project directory; --path defaults to the current one)
                                  A linked worktree on a new branch, as the web app's "new worktree"
   workspace mkdir <path>         Create a directory
   workspace browse [partial]     Complete a directory path, as the add-project dialog does
+  workspace files [query…] [--limit <n>] [--path <dir>]
+                                 Its files and directories matching the query, best first, as the composer's @ finds them
 
 Inspect (the web app's Trajectory view)
   kernel [capabilities]          Each capability: who provides it, in what state, and who requires it
@@ -678,6 +681,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         create: { type: "boolean", default: false },
         base: { type: "string" },
         path: { type: "string" },
+        limit: { type: "string" },
         session: { type: "string" },
         force: { type: "boolean", default: false },
         project: { type: "boolean", default: false },
@@ -705,6 +709,9 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   const whenBusy = values.steer ? "steer" : values["when-busy"];
   if (values.steer && values["when-busy"] !== undefined && values["when-busy"] !== "steer")
     return report(io, values.json, usage("Use either --steer or --when-busy"));
+  const limit = values.limit === undefined ? undefined : Number(values.limit);
+  if (limit !== undefined && !(Number.isInteger(limit) && limit >= 1 && limit <= FILE_SEARCH_LIMIT))
+    return report(io, values.json, usage(`--limit must be a whole number from 1 to ${FILE_SEARCH_LIMIT}`));
   if (whenBusy !== undefined && whenBusy !== "steer" && whenBusy !== "follow-up" && whenBusy !== "reject")
     return report(io, values.json, usage("--when-busy must be steer, follow-up, or reject"));
   const options: Options = {
@@ -728,6 +735,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     create: values.create,
     base: values.base,
     path: values.path,
+    limit,
     session: values.session,
     force: values.force,
     project: values.project,
