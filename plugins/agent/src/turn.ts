@@ -11,6 +11,7 @@ import {
   AssistantDelta,
   deriveMessages,
   emptyUsage,
+  modelView,
   rebuildRequest,
   requestState,
   ToolInvocation,
@@ -155,6 +156,31 @@ const interruptedText = (output: string | undefined) =>
 
 export const newId = (): string => randomBytes(6).toString("base64url");
 
+/** What a tool call the branch left without a result tells the model. */
+export const BRANCHED_CALL = "No result was recorded for this tool call: the conversation continued without it.";
+
+/**
+ * The last assistant message on `branch` the model sees, and its tool calls
+ * that have no result after it. A turn answers its calls, so this is set
+ * where a checkout put the leaf inside a turn, or a turn ended without
+ * logging its results (a write that failed).
+ */
+export function unansweredCalls(branch: readonly SessionEvent[]): { readonly event: SessionEvent; readonly calls: readonly ToolCall[] } | undefined {
+  const { start } = modelView(branch);
+  for (let i = branch.length - 1; i >= start; i--) {
+    const event = branch[i]!;
+    if (event.data.type !== "message" || event.data.message.role !== "assistant") continue;
+    const answered = new Set(
+      branch
+        .slice(i + 1)
+        .flatMap((later) => (later.data.type === "message" && later.data.message.role === "toolResult" ? [later.data.message.toolCallId] : [])),
+    );
+    const calls = event.data.message.content.filter((block): block is ToolCall => block.type === "toolCall" && !answered.has(block.id));
+    return calls.length === 0 ? undefined : { event, calls };
+  }
+  return undefined;
+}
+
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -289,6 +315,30 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     content: [{ type: "text", text }],
     isError: true,
     timestamp: Date.now(),
+  });
+
+  /**
+   * Answers tool calls the branch left without a result, before the turn
+   * starts after them: every request needs a result for each call, and a
+   * provider adapter that made one up would send what the log does not hold.
+   * The results name the call's own turn and step, as that turn's closing
+   * results would.
+   */
+  const closeBranch = Effect.gen(function* () {
+    const branch = yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
+    // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
+    state.lastId = branch.at(-1)?.id;
+    const open = unansweredCalls(branch);
+    if (open === undefined || open.event.data.type !== "message") return;
+    const { turnId: callTurn, stepId: callStep } = open.event.data;
+    for (const call of open.calls) {
+      yield* append({
+        type: "message",
+        message: toolResult(call, BRANCHED_CALL),
+        ...(callTurn === undefined ? {} : { turnId: callTurn }),
+        ...(callStep === undefined ? {} : { stepId: callStep }),
+      });
+    }
   });
 
   /** Builds, logs, and returns the exact request for this step. */
@@ -797,6 +847,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   return Effect.gen(function* () {
     const resume = input.resume;
     if (resume === undefined) {
+      yield* closeBranch;
       yield* append({
         type: "turn-start",
         turnId,

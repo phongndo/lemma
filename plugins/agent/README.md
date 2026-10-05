@@ -34,9 +34,13 @@ yield * agent.cancel(sessionId);
    it ends at once, having logged nothing. The model is resolved (options →
    config → first available) and checked with `Llm.model`; failure is
    `NoModel`, before anything is logged.
-2. Appends `turn-start` (with the model and thinking level), a user `message`
-   per prompt it starts with (each with its `requestId`), and a `title` from the
-   first if the session has none.
+2. Answers tool calls the branch left without a result (a checkout put the leaf
+   inside a turn, after an answer and before its results, or a turn ended
+   without logging them): an error result each, naming the call's turn and
+   step. The turn follows the leaf it read, even if a checkout moves it
+   meanwhile. Then appends `turn-start` (with the model and thinking level), a
+   user `message` per prompt it starts with (each with its `requestId`), and a
+   `title` from the first if the session has none.
 3. Each step: `step-start`; a `RequestDraft` with the base section and an
    environment section (cwd, date, platform, session id, and the `cli` command
    when configured; source `agent`), `Tools.list`, the turn's branch and
@@ -190,6 +194,10 @@ asked again, or run (or reported interrupted) when the turn resumes.
   branch. Request handlers append through the turn too (`RequestDraft.append`),
   so their events chain the same way, and one appended before a later handler
   fails or the turn is cancelled stays on the turn's branch.
+- **Branch points in the log.** A provider needs a result for every tool call,
+  and pi-ai would make one up for a call that has none, sending what the log
+  does not hold. So a turn begun after a checkout into a turn logs those
+  results first; `rebuildRequest` then rebuilds what was sent.
 - **Plugin-owned turns.** Turns are forked into the plugin's scope. `prompt` awaits
   the turn, but interrupting the caller does not cancel it; only `cancel` does
   (abort the signal, then interrupt), and it returns after `turn-end` is logged

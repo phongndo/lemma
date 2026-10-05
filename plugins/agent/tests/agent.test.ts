@@ -3,11 +3,12 @@ import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Agent, AgentContinueHook, AgentError, AgentRequestHook, branchOf, emptyUsage, rebuildRequest, Sessions, ToolResult } from "@lemma/contracts";
+import { Agent, AgentContinueHook, AgentError, AgentRequestHook, branchOf, emptyUsage, Paths, rebuildRequest, Sessions, ToolResult } from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
 import tools from "../../tools/src/index.ts";
 import agent from "../src/index.ts";
+import { BRANCHED_CALL, unansweredCalls } from "../src/turn.ts";
 import { call, failWith, fakeLlm, gated, hang, host, paths, recorder, reply, tempDir, testTools, useTools, waitFor } from "./fakes.ts";
 import type { Script } from "./fakes.ts";
 
@@ -25,6 +26,8 @@ interface Setup {
   readonly tools?: readonly Tool<any>[];
   readonly config?: Record<string, unknown>;
   readonly models?: readonly string[];
+  /** In place of the sessions store. */
+  readonly sessions?: Plugin;
 }
 
 const withAgent = <A, E>(
@@ -41,9 +44,12 @@ const withAgent = <A, E>(
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])], {
-          configs: { agent: setup.config ?? {} },
-        });
+        const core = yield* makeCore(
+          [paths(dir, dir), host(), setup.sessions ?? sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
+          {
+            configs: { agent: setup.config ?? {} },
+          },
+        );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
     ),
@@ -56,6 +62,28 @@ const ofType = <T extends EventData["type"]>(events: readonly SessionEvent[], ty
   events.flatMap((event) => (event.data.type === type ? [event.data as Extract<EventData, { type: T }>] : []));
 
 const newSession = Effect.flatMap(Sessions, (store) => store.create());
+
+/** The sessions store, but the next `branch` read is followed by `race.checkout`: a client moving the leaf as a turn starts. */
+const racingSessions = (race: { checkout?: { readonly sessionId: string; readonly eventId: string } }) =>
+  definePlugin({
+    id: "sessions",
+    provides: [Sessions],
+    requires: [Paths],
+    exclusive: true,
+    layer: Layer.effect(
+      Sessions,
+      Effect.map(Sessions, (store) => ({
+        ...store,
+        branch: (sessionId: string, options?: { readonly leaf?: string }) =>
+          Effect.tap(store.branch(sessionId, options), () => {
+            const move = race.checkout;
+            if (move === undefined) return Effect.void;
+            delete race.checkout;
+            return Effect.asVoid(store.checkout(move.sessionId, move.eventId));
+          }),
+      })),
+    ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+  });
 const log = (sessionId: string) => Effect.flatMap(Sessions, (store) => store.events(sessionId));
 
 /** Every `request` event rebuilds to exactly what the model received, in order. */
@@ -342,6 +370,60 @@ describe("agent", () => {
           // History stays valid: the next request pairs every tool call with a result.
           yield* a.prompt(id, text("continue"));
           expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "toolResult", "toolResult", "user"]);
+        }),
+    );
+  });
+
+  it("answers the tool calls a checkout left open before the next turn, so the request sent is the one logged", async () => {
+    await withAgent({ scripts: [useTools(call("c1", "echo", { text: "one" })), reply("Done"), reply("Again"), reply("More")] }, ({ requests, executed }) =>
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        const first = yield* log(id);
+        const asked = first.find((event) => event.data.type === "message" && event.data.message.role === "assistant")!;
+        // Back to the answer that called the tool, before its result.
+        yield* store.checkout(id, asked.id);
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("instead")));
+        const events = yield* log(id);
+        expect(executed).toEqual(["one"]);
+        const closing = events[first.length]!;
+        expect(closing.parent).toBe(asked.id);
+        const askedData = asked.data as Extract<EventData, { type: "message" }>;
+        expect(closing.data).toMatchObject({
+          type: "message",
+          turnId: askedData.turnId,
+          stepId: askedData.stepId,
+          message: { role: "toolResult", toolCallId: "c1", isError: true, content: text(BRANCHED_CALL) },
+        });
+        expect(events[first.length + 1]!.data.type).toBe("turn-start");
+        expect(requests[2]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+        expectLogInvariant(events, id, requests);
+        // A turn after one that ended has nothing to answer.
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("more")));
+        expect(unansweredCalls(yield* store.branch(id))).toBeUndefined();
+      }),
+    );
+  });
+
+  it("starts a turn after the leaf it checked for unanswered calls, though a checkout moves the leaf meanwhile", async () => {
+    const race: Parameters<typeof racingSessions>[0] = {};
+    await withAgent(
+      { sessions: racingSessions(race), scripts: [useTools(call("c1", "echo", { text: "one" })), reply("Done"), reply("Again")] },
+      ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+          const first = yield* log(id);
+          const asked = first.find((event) => event.data.type === "message" && event.data.message.role === "assistant")!;
+          // Right after the next turn reads its branch, a client checks out the answer that called the tool.
+          race.checkout = { sessionId: id, eventId: asked.id };
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("again")));
+          expect(race.checkout).toBeUndefined();
+          const events = yield* log(id);
+          expect(events[first.length]).toMatchObject({ parent: first.at(-1)!.id, data: { type: "turn-start" } });
+          expect(requests[2]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "assistant", "user"]);
+          expectLogInvariant(events, id, requests);
         }),
     );
   });
