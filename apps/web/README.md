@@ -63,6 +63,29 @@ the prompt for after the turn; queued prompts show above the composer, where
 each can be withdrawn. A thread opened or reconnected midway shows what the
 running turn has produced so far (`Agent.View`).
 
+The composer completes the word at the cursor when it starts with a trigger:
+a menu shows what plugins suggest for it, arrows move, Enter or Tab writes the
+pick in place of the word, and Escape closes the menu until the cursor leaves
+the word (`@"…"` quotes a word with spaces). A plugin adds a trigger, or more
+suggestions for one, with a `ComposerCompletions` item:
+
+```js
+// ~/.lemma/ui/thread-links.js: `#` offers threads by title
+export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletions } }) =>
+  defineUiPlugin({
+    id: "thread-links",
+    requires: { slots: Slots, threads: Threads },
+    setup: ({ slots, threads }, plugin) => {
+      const suggest = (query) =>
+        threads
+          .list()
+          .filter((thread) => thread.title?.toLowerCase().includes(query.toLowerCase()))
+          .map((thread) => ({ key: thread.id, label: thread.title, insert: `[${thread.title}](${threads.href(thread.id)})` }));
+      plugin.onCleanup(slots.add(ComposerCompletions, { id: "thread-links", trigger: "#", label: "Threads", suggest }));
+    },
+  });
+```
+
 Open the app with `?safe` to ignore rows and files: the way back from a
 customization that broke the page, including one that turned the settings off.
 
@@ -160,7 +183,8 @@ plugins use nothing else.
   fenced code renders: `highlight` and `diagrams` fill it), `PaletteSources`
   (what the palette searches), `ThreadHeader`, `SidebarActions`,
   `ThreadActions` and `ProjectActions` (the sidebar's ⋯ menus),
-  `ComposerActions`, `WorkspaceBarItems`, `PluginTabs` (the Plugins page
+  `ComposerActions`, `ComposerCompletions` (what a word typed after a
+  trigger can become), `WorkspaceBarItems`, `PluginTabs` (the Plugins page
   inspector), `DevtoolsPanels`, `TrajectoryTabs` and `TrajectoryActions`. The bundled plugins add
   their own buttons, tabs, and sources through these same slots. Take over a
   region by adding with a lower `order`, or turn its plugin off. An item leaves
@@ -170,7 +194,7 @@ plugins use nothing else.
   `segmented`, `config-form`, `provider-logo`, `search-field` (a page's search), and `icon` for every icon, all
   from the `kit` plugin) and a view's own (`chat.user`, `chat.thinking`,
   `chat.tool`, `chat.work`, `chat.working`, `chat.turn-footer`,
-  `composer.queued`, `sidebar.row`, `providers.row`). Replace one
+  `composer.queued`, `composer.suggestion`, `sidebar.row`, `providers.row`). Replace one
   everywhere by adding an item with an `order` below `DEFAULT_PART_ORDER`;
   `api.defaults` holds the bundled implementations to wrap or fall back to.
 

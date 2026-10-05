@@ -1,19 +1,24 @@
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { Schema } from "effect";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
 import { randomId } from "../lib/id.ts";
 import { formatKeys, modKey } from "../lib/keys.ts";
+import { applySuggestion, findTrigger } from "../model/completion.ts";
+import type { TriggerMatch } from "../model/completion.ts";
+import { highlight } from "../model/palette.ts";
 import {
   ActionIds,
   Actions,
   Client,
   ComposerActions,
+  ComposerCompletions,
   ComposerControls,
   ComposerFooter,
   ComposerNotices,
   ComposerQueuedPart,
   ComposerRegion,
+  ComposerSuggestionPart,
   Models,
   Notify,
   Router,
@@ -24,7 +29,11 @@ import {
 import type {
   ClientService,
   ComposerActionProps,
+  ComposerCompletion,
+  ComposerCompletionAnswer,
   ComposerQueuedProps,
+  ComposerSuggestion,
+  ComposerSuggestionProps,
   ModelsService,
   NotifyService,
   ThreadsService,
@@ -32,8 +41,8 @@ import type {
 } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
-import type { SlotsService } from "../ui/slots.ts";
-import { ChatIcon, ComposerQueued, ImageIcon, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
+import type { SlotItem, SlotsService } from "../ui/slots.ts";
+import { ChatIcon, ComposerQueued, ComposerSuggestionView, ImageIcon, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
 
 /** The formats every provider accepts; others (SVG, HEIC, TIFF…) would fail every later request in the session. */
@@ -95,6 +104,130 @@ interface Deps {
   readonly setFocus: (focus: (() => void) | undefined) => void;
 }
 
+/** What one completion source has for the word: its suggestions and note, or why it has none. */
+interface CompletionGroup {
+  readonly source: SlotItem<ComposerCompletion>;
+  readonly suggestions: readonly ComposerSuggestion[];
+  readonly loading: boolean;
+  readonly note?: string | undefined;
+  readonly error?: string;
+}
+
+/** A suggestion in the menu: its group, its place across all groups, and a key that stays with it as answers arrive. */
+interface CompletionItem {
+  readonly group: CompletionGroup;
+  readonly suggestion: ComposerSuggestion;
+  readonly index: number;
+  readonly key: string;
+}
+
+const sameWord = (a: TriggerMatch | undefined, b: TriggerMatch | undefined) =>
+  a?.trigger === b?.trigger && a?.query === b?.query && a?.start === b?.start && a?.end === b?.end;
+
+const settled = (answer: ComposerCompletionAnswer): Omit<CompletionGroup, "source"> =>
+  "suggestions" in answer ? { suggestions: answer.suggestions, note: answer.note, loading: false } : { suggestions: answer, loading: false };
+const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
+  suggestions: [],
+  loading: false,
+  error: error instanceof Error ? error.message : String(error),
+});
+
+/**
+ * The completion menu's state: the trigger word at the cursor, what every
+ * source with that trigger suggests for it, and which suggestion is active.
+ * Escape dismisses the word until the cursor leaves it.
+ */
+function createCompletion(slots: SlotsService, text: () => string, cursor: () => number, focused: () => boolean) {
+  const sources = () => slots.list(ComposerCompletions);
+  const [dismissed, setDismissed] = createSignal<number>();
+  const word = createMemo(() => (focused() ? findTrigger(text(), cursor(), [...new Set(sources().map((source) => source.trigger))]) : undefined), undefined, {
+    equals: sameWord,
+  });
+  createEffect(() => {
+    if (dismissed() !== undefined && word()?.start !== dismissed()) setDismissed(undefined);
+  });
+  const match = createMemo(() => {
+    const current = word();
+    return current === undefined || current.start === dismissed() ? undefined : current;
+  });
+
+  const [groups, setGroups] = createSignal<readonly CompletionGroup[]>([]);
+  let shown: TriggerMatch | undefined;
+  createEffect(() => {
+    const current = match();
+    const answering = current === undefined ? [] : sources().filter((source) => source.trigger === current.trigger);
+    // Typing on in a word keeps what shows until the next answers arrive. Another word starts empty, and so does the
+    // same word asked again because what a source read changed (another project): its old answer is not this one.
+    const kept =
+      current !== undefined && shown !== undefined && !sameWord(current, shown) && shown.trigger === current.trigger && shown.start === current.start;
+    shown = current;
+    if (current === undefined) return void setGroups([]);
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    const before = untrack(groups);
+    setGroups(
+      answering.map((source) => ({
+        source,
+        suggestions: kept ? (before.find((group) => group.source.id === source.id)?.suggestions ?? []) : [],
+        loading: true,
+      })),
+    );
+    const settle = (id: string, group: Omit<CompletionGroup, "source">) => {
+      if (!controller.signal.aborted) setGroups((all) => all.map((existing) => (existing.source.id === id ? { source: existing.source, ...group } : existing)));
+    };
+    for (const source of answering) {
+      // Asked here, inside the effect, so the reactive values it reads before its first await are tracked.
+      let answer: ReturnType<ComposerCompletion["suggest"]>;
+      try {
+        answer = source.suggest(current.query, { signal: controller.signal });
+      } catch (error) {
+        settle(source.id, failed(error));
+        continue;
+      }
+      Promise.resolve(answer).then(
+        (result) => settle(source.id, settled(result)),
+        (error: unknown) => settle(source.id, failed(error)),
+      );
+    }
+  });
+
+  const items = createMemo(() => {
+    let index = 0;
+    return groups().flatMap((group) =>
+      group.suggestions.map((suggestion): CompletionItem => ({ group, suggestion, index: index++, key: `${group.source.id}\u0000${suggestion.key}` })),
+    );
+  });
+  /** The groups with suggestions, each with its items: what the listbox shows. */
+  const sections = createMemo(() =>
+    groups()
+      .filter((group) => group.suggestions.length > 0)
+      .map((group) => ({ group, items: items().filter((item) => item.group.source.id === group.source.id) })),
+  );
+  // The active suggestion by its key, so it stays put while answers arrive; a new word starts at the first.
+  const [chosen, setChosen] = createSignal<string>();
+  createEffect(on(match, () => setChosen(undefined)));
+  const active = () => {
+    const key = chosen();
+    return Math.max(0, key === undefined ? 0 : items().findIndex((item) => item.key === key));
+  };
+  return {
+    match,
+    groups,
+    items,
+    sections,
+    active,
+    /** Some source has yet to answer this word. */
+    loading: () => groups().some((group) => group.loading),
+    setActive: (index: number) => setChosen(items()[index]?.key),
+    open: () => match() !== undefined && groups().length > 0,
+    move: (by: number) => {
+      const all = items();
+      if (all.length > 0) setChosen(all[(active() + by + all.length) % all.length]!.key);
+    },
+    dismiss: () => setDismissed(match()?.start),
+  };
+}
+
 function Composer(props: { deps: Deps }) {
   const { client, threads, models, workspace, notify, slots, drafts } = props.deps;
   const draftKey = () => threads.activeId() ?? "";
@@ -104,6 +237,17 @@ function Composer(props: { deps: Deps }) {
   const [dragging, setDragging] = createSignal(false);
   const [sending, setSending] = createSignal(false);
   let input!: HTMLTextAreaElement;
+  let suggestionList: HTMLDivElement | undefined;
+  const [cursor, setCursor] = createSignal(0);
+  const [focused, setFocused] = createSignal(false);
+  const syncCursor = () => setCursor(input.selectionStart ?? text().length);
+  const completion = createCompletion(slots, text, cursor, focused);
+  const listId = createUniqueId();
+  const optionId = (index: number) => `${listId}-${index}`;
+  createEffect(() => {
+    const id = optionId(completion.active());
+    if (completion.open()) suggestionList?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: "nearest" });
+  });
 
   createEffect(
     on(
@@ -115,6 +259,7 @@ function Composer(props: { deps: Deps }) {
         queueMicrotask(() => {
           resize();
           input.focus();
+          syncCursor();
         });
       },
       { defer: true },
@@ -191,6 +336,24 @@ function Composer(props: { deps: Deps }) {
     queueMicrotask(() => {
       input.focus();
       input.setSelectionRange(start + value.length, start + value.length);
+      syncCursor();
+      resize();
+    });
+  };
+  /** Puts a suggestion in place of the word being completed. */
+  const pick = (suggestion: ComposerSuggestion) => {
+    const word = completion.match();
+    if (word === undefined) return;
+    const next = applySuggestion(text(), word, suggestion.insert, { space: suggestion.partial !== true });
+    edited();
+    // Together, so completion never sees the new text with the old cursor (and asks for a word nobody typed).
+    batch(() => {
+      setText(next.text);
+      setCursor(next.cursor);
+    });
+    queueMicrotask(() => {
+      input.focus();
+      input.setSelectionRange(next.cursor, next.cursor);
       resize();
     });
   };
@@ -217,6 +380,34 @@ function Composer(props: { deps: Deps }) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // The completion menu, while open, takes the keys that move through it, pick, and close it.
+    // Only plain keys: with a modifier they stay the app's (mod+alt+arrows switch threads, mod+enter sends).
+    const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+    if (completion.open() && plain && !event.isComposing) {
+      const count = completion.items().length;
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count > 0) {
+        event.preventDefault();
+        completion.move(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (event.key === "Tab" || event.key === "Enter") {
+        if (count > 0) {
+          event.preventDefault();
+          pick(completion.items()[completion.active()]!.suggestion);
+          return;
+        }
+        // An answer is on its way: the key waits for it rather than sending a half-typed mention.
+        if (completion.loading()) {
+          event.preventDefault();
+          return;
+        }
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        completion.dismiss();
+        return;
+      }
+    }
     const sends = props.deps.config.send === "mod+enter" ? modKey(event) : !modKey(event) && !event.ctrlKey && !event.metaKey;
     if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
       // Alt queues it for after the running turn; with none running, Alt+Enter is left to the field.
@@ -269,6 +460,55 @@ function Composer(props: { deps: Deps }) {
         }}
         onDrop={onDrop}
       >
+        <Show when={completion.open()}>
+          {/* A press anywhere in it keeps the focus, and so the cursor and the menu, in the prompt. */}
+          <div class="completions" ref={suggestionList} onMouseDown={(event) => event.preventDefault()}>
+            <Show when={completion.items().length > 0}>
+              {/* Busy while it still shows the last word's suggestions, until this one's arrive. */}
+              <div id={listId} role="listbox" aria-label="Suggestions" aria-busy={completion.loading()}>
+                <For each={completion.sections()}>
+                  {(section) => (
+                    <div role="group" aria-label={section.group.source.label}>
+                      <Show when={completion.sections().length > 1}>
+                        <div class="menu-section" aria-hidden="true">
+                          {section.group.source.label}
+                        </div>
+                      </Show>
+                      <For each={section.items}>
+                        {(item) => (
+                          <div
+                            id={optionId(item.index)}
+                            role="option"
+                            class="menu-item completion"
+                            aria-selected={item.index === completion.active()}
+                            data-active={item.index === completion.active()}
+                            onMouseMove={() => completion.setActive(item.index)}
+                            onClick={() => pick(item.suggestion)}
+                          >
+                            <ComposerSuggestionView suggestion={item.suggestion} active={item.index === completion.active()} />
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <div class="completions-status" role="status" aria-live="polite">
+              <For each={completion.groups().filter((group) => (group.error ?? group.note) !== undefined)}>
+                {(group) => (
+                  <div class="completions-note" classList={{ error: group.error !== undefined }}>
+                    {completion.groups().length > 1 ? `${group.source.label}: ` : ""}
+                    {group.error ?? group.note}
+                  </div>
+                )}
+              </For>
+              <Show when={completion.items().length === 0 && completion.groups().every((group) => group.error === undefined)}>
+                <div class="completions-note">{completion.loading() ? "Searching…" : "No matches"}</div>
+              </Show>
+            </div>
+          </div>
+        </Show>
         <Show when={threads.queue().length > 0}>
           <ul class="composer-queue" aria-label="Queued prompts">
             <For each={threads.queue()}>{(queued) => <ComposerQueued prompt={queued} withdraw={() => void threads.withdraw(queued.requestId)} />}</For>
@@ -305,12 +545,30 @@ function Composer(props: { deps: Deps }) {
           value={text()}
           placeholder={placeholder()}
           aria-label="Message"
+          aria-autocomplete="list"
+          aria-controls={completion.open() && completion.items().length > 0 ? listId : undefined}
+          aria-activedescendant={completion.open() && completion.items().length > 0 ? optionId(completion.active()) : undefined}
           spellcheck={true}
           onInput={(event) => {
             edited();
-            setText(event.currentTarget.value);
+            const value = event.currentTarget.value;
+            // Text and cursor together: completion asks for the word once, not for each half of the change.
+            batch(() => {
+              setText(value);
+              syncCursor();
+            });
             resize();
           }}
+          onFocus={() =>
+            batch(() => {
+              setFocused(true);
+              syncCursor();
+            })
+          }
+          onBlur={() => setFocused(false)}
+          onKeyUp={syncCursor}
+          onClick={syncCursor}
+          onSelect={syncCursor}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
@@ -345,7 +603,7 @@ function Composer(props: { deps: Deps }) {
   );
 }
 
-/** Where prompts are written: text, pasted or dropped images, send and stop. Its notices, controls, and footer are slots. */
+/** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
 /** The default `composer.queued` part: the prompt's mode and text on one line, and a button to withdraw it. */
 function QueuedRow(props: ComposerQueuedProps) {
   return (
@@ -356,6 +614,30 @@ function QueuedRow(props: ComposerQueuedProps) {
         <XIcon />
       </button>
     </li>
+  );
+}
+
+function Marked(props: { text: string; matches: readonly number[] }) {
+  const parts = createMemo(() => highlight(props.text, props.matches));
+  return <For each={parts()}>{(part) => (part.hit ? <mark>{part.text}</mark> : part.text)}</For>;
+}
+
+/** The default `composer.suggestion` part: icon, label with the matched letters marked, then the detail. */
+function SuggestionRow(props: ComposerSuggestionProps) {
+  return (
+    <>
+      <Show when={props.suggestion.icon}>{(icon) => <Dynamic component={icon()} />}</Show>
+      <span class="menu-label">
+        <Marked text={props.suggestion.label} matches={props.suggestion.matches ?? []} />
+      </span>
+      <Show when={props.suggestion.detail}>
+        {(detail) => (
+          <span class="menu-hint completion-detail">
+            <Marked text={detail()} matches={props.suggestion.detailMatches ?? []} />
+          </span>
+        )}
+      </Show>
+    </>
   );
 }
 
@@ -401,6 +683,7 @@ export default defineUiPlugin({
     // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     plugin.onCleanup(use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages }));
     plugin.onCleanup(use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow }));
+    plugin.onCleanup(use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow }));
     plugin.onCleanup(
       use.slots.add(Actions, {
         id: ActionIds.focusComposer,

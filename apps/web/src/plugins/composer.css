@@ -120,6 +120,55 @@
   stroke-width: 1.9;
 }
 
+/* What the word at the cursor could become (`ComposerCompletions`): over the conversation, as wide as the box. */
+.completions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-raised);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.45);
+  animation: menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
+  transform-origin: bottom center;
+}
+
+.completion .menu-label {
+  flex: none;
+  max-width: 60%;
+}
+
+.completion .menu-hint {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.completion mark {
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+}
+
+.completions-note {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.completions-note.error {
+  color: var(--text-2);
+}
+
 /* Prompts sent while a turn runs, waiting to steer it or to follow it. */
 .composer-queue {
   display: flex;

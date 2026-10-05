@@ -20,6 +20,8 @@ import { createServer } from "vite";
  * 5. A plugin's stylesheet leaves when it stops and returns once when it starts.
  * 6. What a plugin adds to the places the defaults use (header, sidebar and
  *    composer buttons, workspace bar, palette sources, inspector tabs) shows.
+ *    A plugin's completion source answers its own trigger in the composer,
+ *    Escape and Tab work in the menu, and its rows are a replaceable part.
  * 7. The address names the page: settings sections and their state, threads
  *    and their views survive a reload and back and forward; a page whose
  *    plugin is off says so and returns with it; a plugin adds a page; a page
@@ -203,6 +205,49 @@ try {
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.waitForSelector(".palette", { state: "detached" });
+  // Completions: a plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
+  await page.click("textarea");
+  await page.evaluate(async () => {
+    const { ComposerCompletions, ComposerSuggestionPart } = await import("/src/ui/contracts.ts" as string);
+    const slots = (window as any).lemma.slots();
+    ((window as any).removals ??= []).push(
+      slots.add(ComposerCompletions, {
+        id: "check.completion",
+        order: 1_000,
+        trigger: "#",
+        label: "Checks",
+        suggest: (query: string) => [{ key: "one", label: `Check ${query}`, insert: "#checked" }],
+      }),
+    );
+    // Its rows draw through the `composer.suggestion` part, which a plugin replaces.
+    (window as any).removeSuggestion = slots.add(ComposerSuggestionPart, {
+      id: "check.suggestion",
+      order: 0,
+      component: (props: { suggestion: { label: string } }) => {
+        const element = document.createElement("span");
+        element.className = "replaced-suggestion";
+        element.textContent = props.suggestion.label;
+        return element;
+      },
+    });
+  });
+  await page.keyboard.type("see #x");
+  await page
+    .waitForSelector(".completion .replaced-suggestion >> text=Check x", { timeout: 5_000 })
+    .catch(() => assert.fail("a plugin's completions do not show"));
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".completions", { state: "detached" });
+  await page.keyboard.type("y");
+  assert.equal(await page.locator(".completions").count(), 0, "a dismissed word reopens its menu while it is typed on");
+  await page.keyboard.type(" #z");
+  await page.evaluate(() => (window as any).removeSuggestion());
+  await page
+    .waitForSelector(".completion .menu-label >> text=Check z", { timeout: 5_000 })
+    .catch(() => assert.fail("the default suggestion row does not return"));
+  await page.keyboard.press("Tab");
+  assert.equal(await page.inputValue("textarea"), "see #xy #checked ", "Tab does not pick the suggestion");
+  await page.fill("textarea", "");
+  expectNoErrors("completing in the composer");
   // An inspector tab: it lists for the selected plugin.
   await page.evaluate(async () => {
     const { PluginTabs, Settings } = await import("/src/ui/contracts.ts" as string);
@@ -903,7 +948,7 @@ try {
   expectNoErrors("connecting a first provider and reloading the UI");
 
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; a plugin adds completions to the composer; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
   );
 } finally {
   await browser.close();

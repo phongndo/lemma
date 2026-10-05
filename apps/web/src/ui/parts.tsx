@@ -7,6 +7,7 @@ import {
   ChatTurnFooterPart,
   ChatUserPart,
   ComposerQueuedPart,
+  ComposerSuggestionPart,
   ChatWorkingPart,
   ChatWorkPart,
   ConfigFormPart,
@@ -65,6 +66,7 @@ export const Icon = partView(IconPart);
 
 export const ChatUser = partView(ChatUserPart);
 export const ComposerQueued = partView(ComposerQueuedPart);
+export const ComposerSuggestionView = partView(ComposerSuggestionPart);
 export const ChatThinking = partView(ChatThinkingPart);
 export const ChatTool = partView(ChatToolPart);
 export const ChatWork = partView(ChatWorkPart);

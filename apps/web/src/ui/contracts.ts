@@ -523,6 +523,54 @@ export interface ComposerActionProps {
 /** Buttons beside send: attaching images is the default one. */
 export const ComposerActions = defineSlot<Region<ComposerActionProps>>("composer.actions");
 
+/** Something the composer offers to put in place of the word being typed. */
+export interface ComposerSuggestion {
+  /** Unique within its source. */
+  readonly key: string;
+  readonly label: string;
+  /** Muted after the label: a file's folder. */
+  readonly detail?: string | undefined;
+  readonly icon?: Component | undefined;
+  /** Indices into `label`, and into `detail`, that the query matched, for highlighting. */
+  readonly matches?: readonly number[] | undefined;
+  readonly detailMatches?: readonly number[] | undefined;
+  /** Replaces the trigger and the word (`@src/app.ts`); a space follows unless one is there. */
+  readonly insert: string;
+  /** The start of a longer word (a directory, to look inside): no space follows, and completing goes on. */
+  readonly partial?: boolean | undefined;
+}
+
+/** What a completion source answers: its suggestions, and optionally a line to show under them (`Still reading…`). */
+export type ComposerCompletionAnswer =
+  | readonly ComposerSuggestion[]
+  | { readonly suggestions: readonly ComposerSuggestion[]; readonly note?: string | undefined };
+
+/**
+ * A source of completions: while the word at the cursor starts with its
+ * `trigger` (at the start of the prompt or after whitespace; `@"…"` quotes a
+ * word with spaces), the composer shows a menu of what every source with that
+ * trigger suggests, in slot order, and picking one replaces the word. Arrow
+ * keys move, Enter or Tab picks, Escape closes it until the cursor leaves the
+ * word. A plugin adds a trigger of its own (`#` for threads), or more
+ * suggestions for one another plugin answers.
+ */
+export interface ComposerCompletion {
+  /** What starts a word to complete: `@`, `#`, `$`. */
+  readonly trigger: string;
+  /** What it suggests (`Files`): the menu's heading for its group when several sources answer. */
+  readonly label: string;
+  /**
+   * Suggestions for what follows the trigger (`query`, possibly empty; a
+   * quoted word's text inside the quotes), best first. Called again whenever
+   * the word changes, and whenever a reactive value it read before its first
+   * `await` changes (the project, the connection): read those first. `signal`
+   * aborts once its answer is no longer wanted, so a source asking the host
+   * can wait a moment and ask once. A rejection's message shows in the menu.
+   */
+  readonly suggest: (query: string, context: { readonly signal: AbortSignal }) => ComposerCompletionAnswer | Promise<ComposerCompletionAnswer>;
+}
+export const ComposerCompletions = defineSlot<ComposerCompletion>("composer.completions");
+
 /** An item in the session's header bar, at its start (after the sidebar toggle) or its end. */
 export interface ThreadHeaderItem extends Region {
   readonly side: "start" | "end";
@@ -892,6 +940,18 @@ export interface ComposerQueuedProps {
 }
 /** A queued prompt above the composer: its default shows the prompt's mode and text, and a button to withdraw it. */
 export const ComposerQueuedPart = definePart<ComposerQueuedProps>("composer.queued");
+
+export interface ComposerSuggestionProps {
+  readonly suggestion: ComposerSuggestion;
+  /** The one Enter would pick. */
+  readonly active: boolean;
+}
+/**
+ * The inside of a row in the composer's completion menu: its default shows the
+ * icon, the label with matched letters marked, then the detail. The composer
+ * owns the row itself (its selection, clicks, and keys).
+ */
+export const ComposerSuggestionPart = definePart<ComposerSuggestionProps>("composer.suggestion");
 
 // ------------------------------------------------------------------ chat parts
 
