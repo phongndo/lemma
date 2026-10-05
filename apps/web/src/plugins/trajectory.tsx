@@ -68,11 +68,18 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const [stuck, setStuck] = createSignal(true);
   let filterInput: HTMLInputElement | undefined;
   let scroller: HTMLDivElement | undefined;
+  /** Where the table last was: a scroll above it is the reader's, which stops following. */
+  let lastTop = 0;
 
   /** Brings the newest row into view and keeps it there. */
   const follow = () => {
     setStuck(true);
-    queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+    queueMicrotask(() => {
+      if (scroller === undefined) return;
+      scroller.scrollTo({ top: scroller.scrollHeight });
+      // Its own move, recorded now: one scroll event may cover it and the reader's scroll up after it.
+      lastTop = scroller.scrollTop;
+    });
   };
 
   const select = (next: Selection | undefined, initialTab?: string) => {
@@ -1476,7 +1483,6 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         { defer: true },
       ),
     );
-    let lastTop = 0;
     const onScroll = () => {
       const top = scroller!.scrollTop;
       // Only scrolling up stops following: rows added below move the bottom away too.
