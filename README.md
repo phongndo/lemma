@@ -15,3 +15,4 @@ Lemma runs from a checkout and is under active development.
 - [Architecture](docs/architecture.md): packages, plugins, and the session log
 - [Kernel design](docs/kernel.md): the plugin runtime's rationale and limits
 - [Development](docs/development.md): dev shell, checks, and git hooks
+- [App icons](assets/brand/README.md): shared light and dark artwork
