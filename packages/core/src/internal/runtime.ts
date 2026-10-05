@@ -29,11 +29,20 @@ export class PlanError extends Data.TaggedError("PlanError")<{
 
 export type ApplyError = PlanError | PluginFault;
 
+/** A change that tolerates activation failures: only `required` plugins (and what they need) must activate. */
+export interface PartialStart {
+  readonly required: ReadonlySet<string>;
+}
+
 export interface Runtime {
   readonly core: Core<any>;
   readonly members: Effect.Effect<readonly Member[]>;
-  /** Transactional change to the running composition; see docs/kernel.md. */
-  readonly apply: (members: readonly Member[], onApplied?: () => void) => Effect.Effect<ReloadReport, ApplyError>;
+  /**
+   * Transactional change to the running composition; see docs/kernel.md. With
+   * `partial`, a plugin that fails to activate is left failed instead, unless
+   * it is required or something required needs it.
+   */
+  readonly apply: (members: readonly Member[], onApplied?: () => void, partial?: PartialStart) => Effect.Effect<ReloadReport, ApplyError>;
   /** Begin shutdown now and wait within the closing-caller deadline. */
   readonly shutdown: Effect.Effect<void>;
 }
@@ -53,6 +62,8 @@ interface Instance {
   state: PluginState;
   fault?: PluginFault;
   haltedBy?: string;
+  /** A fatal fault reported while it was staged: it fails once published. */
+  failing?: PluginFault;
 }
 
 /** One published composition. In-flight work keeps the environment it entered with. */
@@ -214,6 +225,19 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             observe: instance.observers.observe,
             background: <R>(name: string, task: Effect.Effect<unknown, unknown, R>, options?: { readonly required?: boolean }) =>
               background(instance, name, task, options?.required ?? false) as Effect.Effect<void, CoreClosed, R>,
+            fault: (operation, cause, options) =>
+              Effect.suspend(() => {
+                // A retired instance's replacement owns the faults now; a staged one is live, if not yet published.
+                if (instance.state === "draining" || instance.state === "closed" || instance.state === "failed") return Effect.void;
+                const fault = new PluginFault({ pluginId: instance.id, phase: "service", operation, cause });
+                const published = instances.get(instance.id) === instance;
+                if (options?.fatal && !published) instance.failing ??= fault;
+                // Reported at once; failing waits on the lifecycle lock, so it runs on its own supervised fiber.
+                return report(instance, fault).pipe(
+                  Effect.zipRight(options?.fatal && published ? Effect.forkIn(fail(instance, fault), supervisor) : Effect.void),
+                  Effect.asVoid,
+                );
+              }),
             trace: (name, effect) => effect.pipe(Effect.withSpan(name, { attributes: attributes(instance.identity) })),
           };
           // Only declared dependencies are visible during activation, not the entire graph.
@@ -371,7 +395,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             applyLocked(
               currentMembers(),
               new Set([id]),
-              true,
+              { required: new Set([id]) },
               undefined,
               () => instances.get(id) === failed && failed.state === "failed" && drivers.get(id) === driver,
             ),
@@ -388,14 +412,15 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
       });
 
     /**
-     * `lenient` (restart): the forced plugin must activate; a dependent that cannot
-     * is left failed, and its own dependents halted, without aborting the change.
-     * A loader apply is never lenient: the whole composition applies or nothing does.
+     * `partial` (a restart, or a loader's first start when asked): the required
+     * plugins, and every plugin they need, must activate; another that cannot is
+     * left failed, and its own dependents halted, without aborting the change.
+     * Otherwise the whole composition applies or nothing does.
      */
     const applyLocked = (
       members: readonly Member[],
       force: ReadonlySet<string>,
-      lenient = false,
+      partial?: PartialStart,
       operation?: { committed: boolean },
       stillNeeded?: () => boolean,
     ): Effect.Effect<ReloadReport, ApplyError> =>
@@ -415,6 +440,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             );
             if (Either.isLeft(planned)) return yield* new PlanError({ errors: planned.left });
             const { ordered, configs, providers: nextProviders } = planned.right;
+            const required = partial === undefined ? undefined : requiredClosure(ordered, nextProviders, partial.required);
 
             // Changed: new, different definition or config, forced, or depending on a changed provider.
             const changed = new Set<string>();
@@ -484,7 +510,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                   }
                   const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment)));
                   if (Exit.isFailure(exit)) {
-                    if (!lenient || force.has(plugin.id) || Cause.isInterruptedOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
+                    if (required === undefined || required.has(plugin.id) || Cause.isInterruptedOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
                     inactive.add(plugin.id);
                     continue;
                   }
@@ -540,6 +566,8 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               if (instance.fault?.phase === "dispose") reloadFaults.push(instance.fault);
             }
             const activated = staged.filter((instance) => instance.state === "active");
+            // Fatal faults reported while staged, now that their instances are published: failed after this change, under the lock.
+            for (const instance of activated) if (instance.failing !== undefined) yield* Effect.forkIn(fail(instance, instance.failing), supervisor);
             return {
               started: activated.filter((instance) => !previousOrder.includes(instance.id)).map((instance) => instance.id),
               restarted: activated.filter((instance) => previousOrder.includes(instance.id)).map((instance) => instance.id),
@@ -659,18 +687,38 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
           }
           if (instance.state === "active" && !options?.force) return Effect.void;
           drivers.delete(id);
-          return supervised((operation) => applyLocked(currentMembers(), new Set([id]), true, operation)).pipe(Effect.mapError(toReloadError), Effect.asVoid);
+          return supervised((operation) => applyLocked(currentMembers(), new Set([id]), { required: new Set([id]) }, operation)).pipe(
+            Effect.mapError(toReloadError),
+            Effect.asVoid,
+          );
         }),
     };
 
     return {
       core,
       members: Effect.sync(currentMembers),
-      apply: (members, onApplied) =>
-        supervised((operation) => applyLocked(members, new Set(), false, operation).pipe(Effect.tap(() => Effect.sync(() => onApplied?.())))),
+      apply: (members, onApplied, partial) =>
+        supervised((operation) => applyLocked(members, new Set(), partial, operation).pipe(Effect.tap(() => Effect.sync(() => onApplied?.())))),
       shutdown,
     };
   });
+}
+
+/** `ids` and, transitively, the providers of everything they require: what must activate for them to. */
+function requiredClosure(ordered: readonly Plugin[], providers: ReadonlyMap<string, string>, ids: ReadonlySet<string>): ReadonlySet<string> {
+  const byId = new Map(ordered.map((plugin) => [plugin.id, plugin]));
+  const found = new Set<string>();
+  const stack = [...ids];
+  while (stack.length) {
+    const plugin = byId.get(stack.pop()!);
+    if (plugin === undefined || found.has(plugin.id)) continue;
+    found.add(plugin.id);
+    for (const tag of plugin.requires) {
+      const provider = providers.get(tag.key);
+      if (provider !== undefined) stack.push(provider);
+    }
+  }
+  return found;
 }
 
 /**

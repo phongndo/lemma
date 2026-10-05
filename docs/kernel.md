@@ -71,6 +71,12 @@ their contributor through the swap, so a contributor to one needs no such gap.
 The [loader contract](../packages/core/README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
+A change is all or nothing because it has a running composition to keep. The
+first start has none, so refusing it for one failing plugin only takes away the
+others: a loader may start partially, leaving that plugin failed and
+inspectable, while the plugins the application marks required still start or
+fail the whole start.
+
 ## Faults
 
 Faults and diagnostics are data attributed to a plugin instance; the

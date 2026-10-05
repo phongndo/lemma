@@ -4,7 +4,7 @@ import type { Core, CoreOptions } from "./core.ts";
 import { Diagnostic, ReloadError } from "./errors.ts";
 import type { PluginFault } from "./errors.ts";
 import { makeRuntime, toReloadError } from "./internal/runtime.ts";
-import type { Member } from "./internal/runtime.ts";
+import type { Member, PartialStart } from "./internal/runtime.ts";
 import type { Plugin } from "./plugin.ts";
 
 /** One row of a composition, keyed by plugin id. Config is validated by the plugin's schema. */
@@ -39,6 +39,14 @@ export interface ReloadReport {
 export interface LoaderOptions extends Pick<CoreOptions, "deadlines" | "shutdownTimeout"> {
   readonly source: PluginSource;
   readonly composition: Composition;
+  /**
+   * Starts the first composition with what can start: a plugin that fails to
+   * activate is left `failed` (its fault in `core.inspect`, its dependents
+   * halted, restartable) and the rest run. Only `required` plugins, and the
+   * plugins they need, must activate, or the loader fails as without this.
+   * `apply` stays all or nothing: it has a running composition to keep.
+   */
+  readonly partialStart?: { readonly required?: readonly string[] };
 }
 
 /**
@@ -91,18 +99,23 @@ export function makeLoader(options: LoaderOptions): Effect.Effect<Loader, Reload
         return members;
       });
 
-    const apply = (next: Composition): Effect.Effect<ReloadReport, ReloadError> =>
+    const apply = (next: Composition, partial?: PartialStart): Effect.Effect<ReloadReport, ReloadError> =>
       Effect.gen(function* () {
         const members = yield* resolve(next);
         const report = yield* runtime
-          .apply(members, () => {
-            current = next;
-          })
+          .apply(
+            members,
+            () => {
+              current = next;
+            },
+            partial,
+          )
           .pipe(Effect.mapError(toReloadError));
         return report;
       });
 
-    yield* apply(options.composition).pipe(Effect.onError(() => runtime.shutdown));
-    return { core: runtime.core, composition: Effect.sync(() => current), apply };
+    const partial = options.partialStart === undefined ? undefined : { required: new Set(options.partialStart.required ?? []) };
+    yield* apply(options.composition, partial).pipe(Effect.onError(() => runtime.shutdown));
+    return { core: runtime.core, composition: Effect.sync(() => current), apply: (next) => apply(next) };
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule, Scope, Stream } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule, Scope, Stream } from "effect";
 import { CoreClosed, DeadlineExceeded, definePlugin, makeCore, PluginContext } from "../src/index.ts";
 import { waitFor } from "./support.ts";
 
@@ -188,6 +188,74 @@ describe("supervision", () => {
     );
     const error = await Effect.runPromise(Effect.flip(context.background("late", Effect.void)));
     expect(error).toBeInstanceOf(CoreClosed);
+  });
+
+  test("a fault a plugin reports for its own work is attributed, and a fatal one stops it and its dependents only", async () => {
+    let owner!: Context.Tag.Service<PluginContext>;
+    const reporter = definePlugin({
+      id: "db",
+      provides: [Db],
+      layer: Layer.effect(
+        Db,
+        Effect.map(PluginContext, (context) => {
+          owner = context;
+          return { name: "db" };
+        }),
+      ),
+    });
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const core = yield* makeCore([reporter, api(log), bystander(log)]);
+        const states = Effect.map(core.inspect, (snapshot) => Object.fromEntries(snapshot.plugins.map((plugin) => [plugin.id, plugin.state])));
+
+        yield* owner.fault("render menu", Cause.die(new Error("menu threw")));
+        const reported = (yield* core.inspect).plugins.find((plugin) => plugin.id === "db")?.fault;
+        expect(reported).toMatchObject({ pluginId: "db", phase: "service", operation: "render menu" });
+        expect(reported?.message).toBe('Plugin "db" failed during service render menu');
+        expect(yield* states).toEqual({ db: "active", api: "active", bystander: "active" });
+
+        yield* owner.fault("effects", Cause.die(new Error("state broke")), { fatal: true });
+        expect(yield* waitFor(states, (now) => now.db === "failed")).toEqual({ db: "failed", api: "closed", bystander: "active" });
+        // A stopped plugin's reports change nothing.
+        const sequence = (yield* core.inspect).faultSequence;
+        yield* owner.fault("late", Cause.die("late"));
+        expect((yield* core.inspect).faultSequence).toBe(sequence);
+      }),
+    );
+  });
+
+  test("a fault reported while its plugin is still staged is kept, and a fatal one fails it once it is published", async () => {
+    class Breaker extends Context.Tag("test/Breaker")<Breaker, { readonly breakIt: (fatal: boolean) => Effect.Effect<void> }>() {}
+    const breaker = definePlugin({
+      id: "breaker",
+      provides: [Breaker],
+      layer: Layer.effect(
+        Breaker,
+        Effect.map(PluginContext, (owner) => ({ breakIt: (fatal: boolean) => owner.fault("effects", Cause.die(new Error("broke")), { fatal }) })),
+      ),
+    });
+    // Activates after `breaker`, in the same start, and breaks it before either is published.
+    const trigger = (fatal: boolean) =>
+      definePlugin({ id: "trigger", requires: [Breaker], layer: Layer.effectDiscard(Effect.flatMap(Breaker, (service) => service.breakIt(fatal))) });
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([breaker, trigger(false)]);
+        const plugins = (yield* core.inspect).plugins;
+        expect(plugins.map((plugin) => [plugin.id, plugin.state])).toEqual([
+          ["breaker", "active"],
+          ["trigger", "active"],
+        ]);
+        expect(plugins[0]?.fault).toMatchObject({ phase: "service", operation: "effects" });
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([breaker, trigger(true)]);
+        const states = Effect.map(core.inspect, (snapshot) => Object.fromEntries(snapshot.plugins.map((plugin) => [plugin.id, plugin.state])));
+        expect(yield* waitFor(states, (now) => now.breaker === "failed")).toEqual({ breaker: "failed", trigger: "closed" });
+      }),
+    );
   });
 
   test("activation and disposal deadlines produce attributed faults instead of hangs", async () => {

@@ -1,4 +1,5 @@
 import { Context, Effect } from "effect";
+import type { Cause } from "effect";
 import type { CoreClosed, EventError, HookError, RegistryError } from "./errors.ts";
 import type { Event, Observer, ObserveOptions } from "./events.ts";
 import type { ContributeOptions, Registry } from "./registries.ts";
@@ -44,6 +45,11 @@ export interface BackgroundOptions {
   readonly required?: boolean;
 }
 
+export interface FaultOptions {
+  /** Fails the plugin (and halts its dependents), as a required background task's failure does. Default false. */
+  readonly fatal?: boolean;
+}
+
 export interface PluginIdentity {
   readonly id: string;
   readonly version?: string;
@@ -69,6 +75,14 @@ export class PluginContext extends Context.Tag("@lemma/core/PluginContext")<
      * the core can see the failure.
      */
     readonly background: <R>(name: string, work: Effect.Effect<unknown, unknown, R>, options?: BackgroundOptions) => Effect.Effect<void, CoreClosed, R>;
+    /**
+     * Report a failure of this plugin's own work that the core does not run (a
+     * callback another library calls, a view it draws): a `PluginFault` (phase
+     * "service", `operation`), and with `fatal`, the plugin fails as a required
+     * background task's failure would fail it. Reporting from a plugin that has
+     * stopped does nothing.
+     */
+    readonly fault: (operation: string, cause: Cause.Cause<unknown>, options?: FaultOptions) => Effect.Effect<void>;
     /** Attribute custom capability operations without wrapping or proxying their values. */
     readonly trace: <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   }

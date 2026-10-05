@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import type { Duration, Scope, Stream } from "effect";
 import type { CompositionError, CoreClosed, PluginFault, ReloadError, ReportedFault, ShutdownTimeout } from "./errors.ts";
 import type { Events } from "./events.ts";
@@ -7,6 +7,7 @@ import type { EventSnapshot } from "./internal/events.ts";
 import type { HookSnapshot } from "./internal/hooks.ts";
 import type { RegistrySnapshot } from "./internal/registries.ts";
 import type { Registries } from "./registries.ts";
+import { plan } from "./internal/graph.ts";
 import { makeRuntime } from "./internal/runtime.ts";
 import type { Deadlines, Identifiers, Plugin } from "./plugin.ts";
 
@@ -93,4 +94,17 @@ export function makeCore<const Plugins extends readonly Plugin[]>(
     );
     return runtime.core;
   });
+}
+
+/**
+ * What planning would refuse in this set of plugins, found without running any
+ * of them: invalid or duplicate ids, competing providers, reserved or missing
+ * capabilities, cycles, and configs their Schemas reject. Empty when it would
+ * plan. An application decides from it what to leave out before starting.
+ */
+export function checkComposition(plugins: readonly Plugin[], configs: Readonly<Record<string, unknown>> = {}): readonly CompositionError[] {
+  return Either.match(
+    plan(plugins, (id) => configs[id]),
+    { onLeft: (errors) => errors, onRight: () => [] },
+  );
 }

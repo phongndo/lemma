@@ -1,4 +1,4 @@
-export { makeCore } from "./core.ts";
+export { checkComposition, makeCore } from "./core.ts";
 export type { Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState, RestartOptions } from "./core.ts";
 export type { ReportedFault } from "./errors.ts";
 export {
@@ -18,7 +18,7 @@ export {
 export { Event, Events } from "./events.ts";
 export type { Observer, ObserveOptions } from "./events.ts";
 export { Hook, Hooks, PluginContext } from "./hooks.ts";
-export type { BackgroundOptions, Handler, HookOptions, Next, PluginIdentity } from "./hooks.ts";
+export type { BackgroundOptions, FaultOptions, Handler, HookOptions, Next, PluginIdentity } from "./hooks.ts";
 export { makeLoader } from "./loader.ts";
 export { Registries, Registry } from "./registries.ts";
 export type { ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";

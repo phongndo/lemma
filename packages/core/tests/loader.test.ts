@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { Context, Deferred, Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
-import { definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
+import { checkComposition, definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
 import type { Composition, Plugin, PluginSource } from "../src/index.ts";
 import { waitFor } from "./support.ts";
 
@@ -329,5 +329,78 @@ describe("loader", () => {
     expect(error.diagnostics[0]?.pluginId).toBe("broken");
     expect(log).toEqual(["db+1", "db-1"]);
     await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  test("checkComposition finds what planning would refuse, without running anything", () => {
+    const log: string[] = [];
+    const { all } = fixtures(log);
+    expect(checkComposition([all.db!, all.api!], { db: { name: "main" } })).toEqual([]);
+    const errors = checkComposition([all.db!, all.api!, all.broken!, all.greeter!], { db: { name: 5 } });
+    expect(errors.map((error) => [error.reason, error.plugins[0]])).toEqual([
+      ["InvalidConfig", "db"],
+      ["InvalidConfig", "greeter"],
+    ]);
+    expect(checkComposition([all.api!]).map((error) => error.reason)).toEqual(["MissingCapability"]);
+    expect(log).toEqual([]);
+  });
+
+  test("a partial start leaves a plugin that cannot start failed, halts its dependents, and runs the rest", async () => {
+    class Flaky extends Context.Tag("test/Flaky")<Flaky, string>() {}
+    let attempts = 0;
+    const flaky = definePlugin({
+      id: "flaky",
+      provides: [Flaky],
+      layer: Layer.effect(
+        Flaky,
+        Effect.suspend(() => (++attempts === 1 ? Effect.fail("not yet") : Effect.succeed("ready"))),
+      ),
+    });
+    const user = definePlugin({ id: "user", requires: [Flaky], layer: Layer.empty });
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const { all } = fixtures(log);
+        const plugins: Record<string, Plugin> = { ...all, flaky, user };
+        const loader = yield* makeLoader({
+          source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+          composition: composition({ db: { config: { name: "main" } }, api: {}, flaky: {}, user: {} }),
+          partialStart: { required: ["api"] },
+        });
+        const states = Object.fromEntries((yield* loader.core.inspect).plugins.map((plugin) => [plugin.id, [plugin.state, plugin.haltedBy]]));
+        expect(states).toEqual({ db: ["active", undefined], api: ["active", undefined], flaky: ["failed", undefined], user: ["closed", "flaky"] });
+        expect((yield* loader.core.inspect).plugins.find((plugin) => plugin.id === "flaky")?.fault?.phase).toBe("activate");
+        expect(yield* loader.core.run(Effect.map(Api, (api) => api()))).toBe("main#1");
+        // A plugin left failed at start restarts like any failed plugin, with the dependents it halted.
+        yield* loader.core.restart("flaky");
+        expect((yield* loader.core.inspect).plugins.map((plugin) => plugin.state)).toEqual(["active", "active", "active", "active"]);
+      }),
+    );
+  });
+
+  test("a partial start still fails when a required plugin, or one it needs, cannot start", async () => {
+    for (const required of ["broken", "api"]) {
+      const log: string[] = [];
+      const { all } = fixtures(log);
+      const failingDb = definePlugin({ ...all.db!, id: "db", layer: () => Layer.fail("db is down") as never });
+      const plugins: Record<string, Plugin> = { ...all, db: required === "api" ? failingDb : all.db! };
+      const scope = await Effect.runPromise(Scope.make());
+      const error = await Effect.runPromise(
+        Effect.flip(
+          Scope.extend(
+            makeLoader({
+              source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+              composition: composition({ db: { config: { name: "main" } }, api: {}, broken: {}, bystander: {} }),
+              partialStart: { required: [required] },
+            }),
+            scope,
+          ),
+        ),
+      );
+      expect(error.diagnostics[0]?.pluginId).toBe(required === "api" ? "db" : "broken");
+      // Nothing is left running.
+      const started = log.filter((entry) => entry.includes("+")).map((entry) => entry.replace("+", ""));
+      expect(log.filter((entry) => entry.includes("-")).map((entry) => entry.replace("-", ""))).toEqual(started.reverse());
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
   });
 });
