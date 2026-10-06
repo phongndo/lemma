@@ -3,7 +3,7 @@ import type { Effect } from "effect";
 import { Event, Hook } from "@lemma/core";
 import { AssistantMessage, ImageContent, Message, ModelRef, StreamEvent, TextContent, ThinkingLevel, Usage } from "./llm.ts";
 import type { ToolResultMessage } from "./llm.ts";
-import type { EventData, SessionEvent } from "./sessions.ts";
+import type { EventData, SessionEvent, TurnEndReason } from "./sessions.ts";
 import type { ToolContribution } from "./tools.ts";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
@@ -136,7 +136,7 @@ export const TurnEnded = Event.make<{
   readonly sessionId: string;
   readonly turnId: string;
   readonly usage: Usage;
-  readonly reason: "done" | "cancelled" | "error" | "max-steps";
+  readonly reason: TurnEndReason;
 }>("lemma/agent.turn.ended");
 /**
  * The session's queue changed: a prompt was queued, placed, or withdrawn.

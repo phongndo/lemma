@@ -1,5 +1,5 @@
 import { addUsage, emptyUsage } from "@lemma/contracts";
-import type { AssistantMessage, ImageContent, SessionEvent, TextContent, Timing, ToolCall, ToolResultMessage, Usage } from "@lemma/contracts";
+import type { AssistantMessage, ImageContent, SessionEvent, TextContent, Timing, ToolCall, ToolResultMessage, TurnEndReason, Usage } from "@lemma/contracts";
 import { answerText } from "./fold.ts";
 
 /**
@@ -10,8 +10,6 @@ import { answerText } from "./fold.ts";
  * items and blocks across calls so keyed lists in the UI keep their DOM (and
  * expanded/collapsed state) while the log grows.
  */
-
-export type TurnEndReason = "done" | "cancelled" | "error" | "max-steps";
 
 export interface ToolResultView {
   readonly eventId: string;

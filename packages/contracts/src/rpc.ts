@@ -8,7 +8,7 @@ import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, Plug
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, StreamEvent, Usage } from "./llm.ts";
-import { SessionEvent, SessionInfo } from "./sessions.ts";
+import { SessionEvent, SessionInfo, TurnEndReason } from "./sessions.ts";
 import { DirectoryListing, GitBranch, WorkspaceStatus } from "./workspace.ts";
 
 /**
@@ -89,7 +89,7 @@ export const HostEvent = Schema.Union(
     sessionId: Schema.String,
     turnId: Schema.String,
     usage: Usage,
-    reason: Schema.Literal("done", "cancelled", "error", "max-steps"),
+    reason: TurnEndReason,
   }),
   Schema.Struct({ type: Schema.Literal("interaction"), request: InteractionRequest }),
   Schema.Struct({ type: Schema.Literal("interaction-closed"), id: Schema.String }),

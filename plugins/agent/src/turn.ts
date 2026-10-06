@@ -38,6 +38,7 @@ import type {
   ToolResultMessage,
   Tools,
   ToolSpec,
+  TurnEndReason,
   Usage,
 } from "@lemma/contracts";
 import { partialMessage } from "./live.ts";
@@ -136,11 +137,10 @@ interface TurnInput {
   readonly idle: <A, E, R>(wait: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
-export type TurnReason = "done" | "cancelled" | "error" | "max-steps";
 /** How `runTurn` returns: the reason it ended, or `suspended` when it was left open in the log to resume. */
-export type TurnOutcome = TurnReason | "suspended";
+export type TurnOutcome = TurnEndReason | "suspended";
 interface Ended {
-  readonly reason: TurnReason;
+  readonly reason: TurnEndReason;
   readonly error?: string;
 }
 

@@ -1,7 +1,7 @@
 import { deriveMessages } from "./derive.ts";
 import { addUsage, emptyUsage } from "./llm.ts";
 import type { AssistantMessage, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "./llm.ts";
-import type { Contribution, SessionEvent, Timing } from "./sessions.ts";
+import type { Contribution, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -86,7 +86,7 @@ export interface TrajectoryTurn {
    * (`after` 0), and steers that joined it after the step numbered `after`.
    */
   readonly steers: readonly { readonly eventId: string; readonly message: UserMessage; readonly at: number; readonly after: number }[];
-  readonly end?: { readonly reason: "done" | "cancelled" | "error" | "max-steps"; readonly error?: string };
+  readonly end?: { readonly reason: TurnEndReason; readonly error?: string };
   readonly steps: readonly TrajectoryStep[];
   /** Summed over the turn's responses and failed attempts. */
   readonly usage: Usage;

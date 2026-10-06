@@ -35,13 +35,17 @@ export const Contribution = Schema.Struct({
 });
 export type Contribution = typeof Contribution.Type;
 
+/** Why a turn ended: it finished, was cancelled, failed, or ran out of steps. */
+export const TurnEndReason = Schema.Literal("done", "cancelled", "error", "max-steps");
+export type TurnEndReason = typeof TurnEndReason.Type;
+
 export const EventData = Schema.Union(
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
   Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,
-    reason: Schema.Literal("done", "cancelled", "error", "max-steps"),
+    reason: TurnEndReason,
     error: Schema.optional(Schema.String),
   }),
   Schema.Struct({ type: Schema.Literal("step-start"), turnId: Schema.String, stepId: Schema.String }),
