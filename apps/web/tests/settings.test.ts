@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterGroups, matchesQuery } from "../src/model/settings.ts";
+import { matchesQuery } from "../src/model/palette.ts";
+import { filterGroups } from "../src/model/settings.ts";
 
 describe("matchesQuery", () => {
   it("needs every word, in any order and case", () => {

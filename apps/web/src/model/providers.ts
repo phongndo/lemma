@@ -1,4 +1,5 @@
 import type { ProviderInfo, CustomProviderSpec } from "@lemma/contracts";
+import { matchesQuery } from "./palette.ts";
 import claude from "../assets/providers/claude-ai-icon.svg?url";
 import openai from "../assets/providers/openai.svg?url";
 import openaiDark from "../assets/providers/openai_dark.svg?url";
@@ -153,12 +154,8 @@ interface ProviderGroup {
 export const providerGroups = (all: readonly ProviderInfo[], query = "", filter: AuthFilter = "all"): ProviderGroup[] => {
   const providers = filter === "all" ? all : all.filter((provider) => provider.auth.some((method) => method.type === filter));
   const byName = (a: ProviderInfo, b: ProviderInfo) => a.name.localeCompare(b.name);
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length > 0) {
-    const found = providers.filter((provider) => {
-      const text = providerText(provider).toLowerCase();
-      return words.every((word) => text.includes(word));
-    });
+  if (query.trim() !== "") {
+    const found = providers.filter((provider) => matchesQuery(query, providerText(provider)));
     const connected = found.filter((p) => p.configured).sort(byName);
     return found.length === 0 ? [] : [{ title: "Results", providers: [...connected, ...found.filter((p) => !p.configured).sort(byName)] }];
   }

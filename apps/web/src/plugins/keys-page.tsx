@@ -2,6 +2,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { bindingOf, formatKeys } from "../lib/keys.ts";
 import { KEYMAP_PLUGIN, conflicts, defaultKeys, formatBindings, keysFor, overridesFrom, withOverride } from "../model/keybindings.ts";
 import type { KeyOverrides } from "../model/keybindings.ts";
+import { matchesQuery } from "../model/palette.ts";
 import { Actions, Notify, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { Action, NotifyService, UiPluginsService } from "../ui/contracts.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
@@ -174,12 +175,10 @@ function KeysBody(props: { deps: Deps }) {
   const [query, setQuery] = createSignal("");
   const keymapOn = () => props.deps.uiPlugins.list().some((plugin) => plugin.id === KEYMAP_PLUGIN && plugin.state === "active");
   const groups = createMemo(() => {
-    const words = query().toLowerCase().split(/\s+/).filter(Boolean);
     const byCategory = new Map<string, Item[]>();
     for (const action of props.deps.slots.list(Actions)) {
       const keys = keysFor(action.id, action.keys, props.deps.overrides());
-      const haystack = `${titleOf(action)} ${action.keywords?.join(" ") ?? ""} ${keys.map(formatKeys).join(" ")} ${keys.join(" ")}`.toLowerCase();
-      if (!words.every((word) => haystack.includes(word))) continue;
+      if (!matchesQuery(query(), `${titleOf(action)} ${action.keywords?.join(" ") ?? ""} ${keys.map(formatKeys).join(" ")} ${keys.join(" ")}`)) continue;
       const category = action.category ?? "General";
       byCategory.set(category, [...(byCategory.get(category) ?? []), action]);
     }

@@ -1,19 +1,16 @@
 import type { ModelInfo, ThinkingLevel } from "@lemma/contracts";
+import { matchesQuery } from "./palette.ts";
 
 interface ModelGroup {
   readonly provider: string;
   readonly models: readonly ModelInfo[];
 }
 
-const tokens = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean);
-
 /** Models matching every word of `query` (in ref or name), grouped by provider in first-seen order. */
 export const filterModels = (models: readonly ModelInfo[], query: string): ModelGroup[] => {
-  const words = tokens(query);
   const groups = new Map<string, ModelInfo[]>();
   for (const model of models) {
-    const haystack = `${model.ref} ${model.name}`.toLowerCase();
-    if (!words.every((word) => haystack.includes(word))) continue;
+    if (!matchesQuery(query, `${model.ref} ${model.name}`)) continue;
     const group = groups.get(model.provider);
     if (group === undefined) groups.set(model.provider, [model]);
     else group.push(model);

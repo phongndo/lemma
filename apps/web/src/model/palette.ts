@@ -1,8 +1,19 @@
 /**
- * Search for the command palette: fuzzy matching, ranking, and the prefixes
- * that narrow a search to one kind of item. Pure, so the palette component only
- * decides what the items are and what choosing one does.
+ * Search: the command palette's fuzzy matching, ranking, and the prefixes
+ * that narrow a search to one kind of item, and the plain word match lists
+ * filter by (`matchesQuery`). Pure, so the palette component only decides what
+ * the items are and what choosing one does.
  */
+
+/** True when every word of `query` appears in `text`, ignoring case; an empty query matches everything. */
+export const matchesQuery = (query: string, text: string): boolean => {
+  const haystack = text.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => haystack.includes(word));
+};
 
 interface Match {
   readonly score: number;
