@@ -108,7 +108,7 @@ export default defineUiPlugin({
   id: "tooltips",
   styles,
   requires: { slots: Slots },
-  setup: ({ slots }, plugin) => {
-    plugin.onCleanup(slots.add(Layers, { id: "tooltips", order: 200, component: TooltipLayer }));
+  setup: ({ slots }) => {
+    slots.add(Layers, { id: "tooltips", order: 200, component: TooltipLayer });
   },
 });

@@ -18,7 +18,7 @@ export default defineUiPlugin({
   id: "pages",
   styles,
   requires: { router: Router, slots: Slots, notify: Notify, plugins: UiPlugins },
-  setup: ({ router, slots, notify, plugins }, plugin) => {
+  setup: ({ router, slots, notify, plugins }) => {
     function Failed(props: { failure: RouteFailure<SlotItem<Page>> }) {
       const owner = slots.owner(Pages, props.failure.entry.id);
       const message = props.failure.error instanceof Error ? props.failure.error.message : String(props.failure.error);
@@ -77,6 +77,6 @@ export default defineUiPlugin({
         unmatched={(match) => missing("No page here", `Nothing in the app lives at ${match().location.pathname}.`)}
       />
     );
-    plugin.onCleanup(slots.add(MainRegion, { id: "pages", component: Outlet }));
+    slots.add(MainRegion, { id: "pages", component: Outlet });
   },
 });

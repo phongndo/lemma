@@ -222,7 +222,7 @@ export default defineUiPlugin({
   id: "keys-page",
   styles,
   requires: { slots: Slots, settings: Settings, uiPlugins: UiPlugins, notify: Notify },
-  setup: ({ slots, settings, uiPlugins, notify }, plugin) => {
+  setup: ({ slots, settings, uiPlugins, notify }) => {
     // What was just saved, shown until the plugin list catches up with it.
     const [pending, setPending] = createSignal<KeyOverrides>();
     const overrides = () => pending() ?? overridesFrom(uiPlugins.list());
@@ -244,46 +244,40 @@ export default defineUiPlugin({
     const bound = () => slots.list(Actions).map((action) => ({ id: action.id, keys: keysFor(action.id, action.keys, overrides()) }));
     const deps: Deps = { slots, uiPlugins, notify, overrides, save, bound };
 
-    plugin.onCleanup(
-      slots.add(SettingsSections, {
-        id: SECTION,
-        order: 15,
-        title: "Keyboard",
-        icon: CommandIcon,
-        actions: () => (
-          <Show when={Object.keys(overrides()).length > 0}>
-            <button class="button small" onClick={() => void save({})}>
-              Reset all
-            </button>
-          </Show>
-        ),
-        body: () => <KeysBody deps={deps} />,
-      }),
-    );
+    slots.add(SettingsSections, {
+      id: SECTION,
+      order: 15,
+      title: "Keyboard",
+      icon: CommandIcon,
+      actions: () => (
+        <Show when={Object.keys(overrides()).length > 0}>
+          <button class="button small" onClick={() => void save({})}>
+            Reset all
+          </button>
+        </Show>
+      ),
+      body: () => <KeysBody deps={deps} />,
+    });
     // Browsing shows the body; these answer the settings search.
-    plugin.onCleanup(
-      slots.add(SettingsGroups, {
-        id: SECTION,
-        section: SECTION,
-        title: "Shortcuts",
-        entries: () =>
-          slots.list(Actions).map((action) => ({
-            text: `shortcut keybinding hotkey ${titleOf(action)} ${keysFor(action.id, action.keys, overrides()).map(formatKeys).join(" ")}`,
-            view: () => <ShortcutRow deps={deps} action={action} />,
-          })),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "keys-page.open",
-        order: 12,
-        title: "Keyboard shortcuts",
-        category: "Settings",
-        keywords: ["hotkeys", "keybindings", "keys"],
-        icon: CommandIcon,
-        keys: "mod+/",
-        run: () => settings.open(SECTION),
-      }),
-    );
+    slots.add(SettingsGroups, {
+      id: SECTION,
+      section: SECTION,
+      title: "Shortcuts",
+      entries: () =>
+        slots.list(Actions).map((action) => ({
+          text: `shortcut keybinding hotkey ${titleOf(action)} ${keysFor(action.id, action.keys, overrides()).map(formatKeys).join(" ")}`,
+          view: () => <ShortcutRow deps={deps} action={action} />,
+        })),
+    });
+    slots.add(Actions, {
+      id: "keys-page.open",
+      order: 12,
+      title: "Keyboard shortcuts",
+      category: "Settings",
+      keywords: ["hotkeys", "keybindings", "keys"],
+      icon: CommandIcon,
+      keys: "mod+/",
+      run: () => settings.open(SECTION),
+    });
   },
 });

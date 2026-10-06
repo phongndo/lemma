@@ -98,32 +98,28 @@ export default defineUiPlugin({
     }
 
     // Docked: the app shrinks to the space above them, as a browser's own devtools do.
-    plugin.onCleanup(
-      slots.add(Docks, {
-        id: "devtools",
-        component: () => (
-          <Show when={open()}>
-            <Dock />
-          </Show>
-        ),
-      }),
-    );
+    slots.add(Docks, {
+      id: "devtools",
+      component: () => (
+        <Show when={open()}>
+          <Dock />
+        </Show>
+      ),
+    });
     const toggle = (next?: boolean) => setOpen(next ?? !open());
     const [subjects, setSubjects] = createSignal<Readonly<Record<string, string>>>({});
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "devtools.toggle",
-        order: 9,
-        title: "Toggle devtools",
-        category: "Developer",
-        keywords: ["inspect", "debug", "routes", "slots", "capabilities"],
-        icon: CodeIcon,
-        keys: TOGGLE_KEYS,
-        whileTyping: true,
-        global: true,
-        run: () => toggle(),
-      }),
-    );
+    slots.add(Actions, {
+      id: "devtools.toggle",
+      order: 9,
+      title: "Toggle devtools",
+      category: "Developer",
+      keywords: ["inspect", "debug", "routes", "slots", "capabilities"],
+      icon: CodeIcon,
+      keys: TOGGLE_KEYS,
+      whileTyping: true,
+      global: true,
+      run: () => toggle(),
+    });
 
     const devtools: DevtoolsService = {
       open,
@@ -143,18 +139,16 @@ export default defineUiPlugin({
       hostEventsPanel(client, router, plugin.onCleanup),
       ...kernelPanels({ slots, router, devtools, client, lists: { web: ui.list, host: host.list } }),
     ];
-    for (const item of panelsMade) plugin.onCleanup(slots.add(DevtoolsPanels, item));
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: ActionIds.eventLog,
-        order: 10,
-        title: "Show host events",
-        category: "Developer",
-        keywords: ["debug", "events", "stream", "log", "devtools"],
-        icon: LogIcon,
-        run: () => devtools.show(EVENTS_PANEL),
-      }),
-    );
+    for (const item of panelsMade) slots.add(DevtoolsPanels, item);
+    slots.add(Actions, {
+      id: ActionIds.eventLog,
+      order: 10,
+      title: "Show host events",
+      category: "Developer",
+      keywords: ["debug", "events", "stream", "log", "devtools"],
+      icon: LogIcon,
+      run: () => devtools.show(EVENTS_PANEL),
+    });
     return { devtools };
   },
 });

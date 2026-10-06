@@ -70,37 +70,35 @@ export default defineUiPlugin({
   requires: { client: Client, workspace: Workspace, slots: Slots },
   setup: ({ client, workspace, slots }, plugin) => {
     const { trigger, limit, folders } = plugin.config;
-    plugin.onCleanup(
-      slots.add(ComposerCompletions, {
-        id: "file-mentions",
-        order: 100,
-        trigger,
-        label: "Files",
-        suggest: async (typed, { signal }) => {
-          // Read before any await, so the composer asks again when they change: another project, a reconnect.
-          const cwd = workspace.workingDir();
-          const connected = client.connected();
-          const query = typed.replace(/^\.\//, "");
-          if (query !== "") await pause(PAUSE_MS, signal);
-          if (cwd === undefined || !connected) throw new Error("Waiting for the host…");
-          signal.throwIfAborted();
-          const options = { limit, ...(folders ? {} : { kind: "file" as const }) };
-          // `src/ap` looks for `ap` inside `src` when there is such a folder; otherwise the whole of it is fuzzy.
-          const slash = query.lastIndexOf("/");
-          const inFolder =
-            slash > 0
-              ? await client.host.files.search(cwd, query.slice(slash + 1), { ...options, within: query.slice(0, slash) }).catch((error: unknown) => {
-                  if (error instanceof HostError && error.code === "NotFound") return undefined;
-                  throw error;
-                })
-              : undefined;
-          const result = inFolder ?? (await client.host.files.search(cwd, query, options));
-          return {
-            suggestions: result.entries.map((entry) => suggestion(entry, query, trigger)),
-            note: result.indexing === true ? "Still reading the project: some files may be missing" : undefined,
-          };
-        },
-      }),
-    );
+    slots.add(ComposerCompletions, {
+      id: "file-mentions",
+      order: 100,
+      trigger,
+      label: "Files",
+      suggest: async (typed, { signal }) => {
+        // Read before any await, so the composer asks again when they change: another project, a reconnect.
+        const cwd = workspace.workingDir();
+        const connected = client.connected();
+        const query = typed.replace(/^\.\//, "");
+        if (query !== "") await pause(PAUSE_MS, signal);
+        if (cwd === undefined || !connected) throw new Error("Waiting for the host…");
+        signal.throwIfAborted();
+        const options = { limit, ...(folders ? {} : { kind: "file" as const }) };
+        // `src/ap` looks for `ap` inside `src` when there is such a folder; otherwise the whole of it is fuzzy.
+        const slash = query.lastIndexOf("/");
+        const inFolder =
+          slash > 0
+            ? await client.host.files.search(cwd, query.slice(slash + 1), { ...options, within: query.slice(0, slash) }).catch((error: unknown) => {
+                if (error instanceof HostError && error.code === "NotFound") return undefined;
+                throw error;
+              })
+            : undefined;
+        const result = inFolder ?? (await client.host.files.search(cwd, query, options));
+        return {
+          suggestions: result.entries.map((entry) => suggestion(entry, query, trigger)),
+          note: result.indexing === true ? "Still reading the project: some files may be missing" : undefined,
+        };
+      },
+    });
   },
 });

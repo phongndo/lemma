@@ -168,10 +168,10 @@ describe("defineUiPlugin", () => {
     const reader = defineUiPlugin({
       id: "reader",
       requires: { counter: Counter, slots: Slots },
-      setup: ({ counter, slots }, plugin) => {
+      setup: ({ counter, slots }) => {
         counter.add();
         seen.push(counter.count());
-        plugin.onCleanup(slots.add(Items, { id: "reader", label: String(counter.count()) }));
+        slots.add(Items, { id: "reader", label: String(counter.count()) });
       },
     });
     await run([counter, slotsPlugin, reader], async (loader) => {
@@ -256,8 +256,8 @@ describe("defineUiPlugin", () => {
     const broken = defineUiPlugin({
       id: "broken",
       requires: { slots: Slots },
-      setup: ({ slots }, plugin) => {
-        plugin.onCleanup(slots.add(Items, { id: "broken", label: "half-made" }));
+      setup: ({ slots }) => {
+        slots.add(Items, { id: "broken", label: "half-made" });
         throw new Error("boom");
       },
     });

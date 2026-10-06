@@ -72,12 +72,10 @@ export default defineUiPlugin({
       image.src = await renderDiagram(code, dark());
     };
     const [viewing, setViewing] = createSignal<Viewing>();
-    plugin.onCleanup(
-      slots.add(Layers, {
-        id: "diagram-viewer",
-        component: () => <Show when={viewing()}>{(shown) => <Viewer viewing={shown()} onClose={() => setViewing(undefined)} />}</Show>,
-      }),
-    );
+    slots.add(Layers, {
+      id: "diagram-viewer",
+      component: () => <Show when={viewing()}>{(shown) => <Viewer viewing={shown()} onClose={() => setViewing(undefined)} />}</Show>,
+    });
     /** Its diagrams on the page, redrawn in the new colors when the theme changes. */
     const drawn = new Set<HTMLImageElement>();
     const redraw = () => {
@@ -91,30 +89,28 @@ export default defineUiPlugin({
       }
     };
     plugin.onCleanup(onThemeChange(redraw));
-    plugin.onCleanup(
-      slots.add(CodeBlocks, {
-        id: "mermaid",
-        order: 50,
-        preview: true,
-        match: (lang) => lang === "mermaid",
-        render: async (block, target) => {
-          if (!block.complete) {
-            // A diagram is on its way: load Mermaid now, while the model writes it, not when it is done.
-            void load().catch(() => {});
-            return;
-          }
-          if (block.code.trim() === "") return;
-          const image = document.createElement("img");
-          image.className = "mermaid-diagram";
-          image.alt = "Mermaid diagram";
-          image.dataset.tip = "Open";
-          image.addEventListener("click", () => setViewing({ src: image.src, alt: image.alt, width: image.naturalWidth, height: image.naturalHeight }));
-          await draw(image, block.code);
-          sources.set(image, block.code);
-          drawn.add(image);
-          target.append(image);
-        },
-      }),
-    );
+    slots.add(CodeBlocks, {
+      id: "mermaid",
+      order: 50,
+      preview: true,
+      match: (lang) => lang === "mermaid",
+      render: async (block, target) => {
+        if (!block.complete) {
+          // A diagram is on its way: load Mermaid now, while the model writes it, not when it is done.
+          void load().catch(() => {});
+          return;
+        }
+        if (block.code.trim() === "") return;
+        const image = document.createElement("img");
+        image.className = "mermaid-diagram";
+        image.alt = "Mermaid diagram";
+        image.dataset.tip = "Open";
+        image.addEventListener("click", () => setViewing({ src: image.src, alt: image.alt, width: image.naturalWidth, height: image.naturalHeight }));
+        await draw(image, block.code);
+        sources.set(image, block.code);
+        drawn.add(image);
+        target.append(image);
+      },
+    });
   },
 });

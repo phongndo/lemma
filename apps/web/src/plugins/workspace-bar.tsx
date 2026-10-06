@@ -424,12 +424,12 @@ export default defineUiPlugin({
   id: "workspace-bar",
   styles,
   requires: { threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
-  setup: (deps, plugin) => {
-    plugin.onCleanup(deps.slots.add(ComposerFooter, { id: "workspace-bar", component: () => <WorkspaceBar deps={deps} /> }));
+  setup: (deps) => {
+    deps.slots.add(ComposerFooter, { id: "workspace-bar", component: () => <WorkspaceBar deps={deps} /> });
     // Its own pickers go through the slot other plugins add theirs to.
     const status = deps.workspace.status;
     const item = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) =>
-      plugin.onCleanup(deps.slots.add(WorkspaceBarItems, { id, order, side, component }));
+      deps.slots.add(WorkspaceBarItems, { id, order, side, component });
     item("workspace.project", 0, "start", () => <ProjectPicker deps={deps} />);
     item("workspace.mode", 10, "start", () => (
       <Show when={status()?.git}>
@@ -449,26 +449,24 @@ export default defineUiPlugin({
     item("workspace.branch", 0, "end", () => (
       <Show when={status()?.git}>{(git) => <BranchPicker deps={deps} git={git()} onChanged={deps.workspace.setStatus} />}</Show>
     ));
-    plugin.onCleanup(
-      deps.slots.add(SettingsGroups, {
-        id: "workspace-bar",
-        section: SectionIds.general,
-        title: "New threads",
-        order: 10,
-        entries: () => [
-          {
-            text: "Start in a new worktree git branch checkout workspace",
-            view: () => (
-              <SettingRow
-                title="Start in a new worktree"
-                description="In a git repository, a new thread gets its own checkout on a new branch, so its changes stay apart."
-              >
-                <Toggle label="Start in a new worktree" checked={deps.workspace.worktree().enabled} onChange={deps.workspace.setWorktree} />
-              </SettingRow>
-            ),
-          },
-        ],
-      }),
-    );
+    deps.slots.add(SettingsGroups, {
+      id: "workspace-bar",
+      section: SectionIds.general,
+      title: "New threads",
+      order: 10,
+      entries: () => [
+        {
+          text: "Start in a new worktree git branch checkout workspace",
+          view: () => (
+            <SettingRow
+              title="Start in a new worktree"
+              description="In a git repository, a new thread gets its own checkout on a new branch, so its changes stay apart."
+            >
+              <Toggle label="Start in a new worktree" checked={deps.workspace.worktree().enabled} onChange={deps.workspace.setWorktree} />
+            </SettingRow>
+          ),
+        },
+      ],
+    });
   },
 });

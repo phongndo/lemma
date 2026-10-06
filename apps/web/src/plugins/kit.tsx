@@ -38,9 +38,9 @@ export default defineUiPlugin({
   id: "kit",
   styles,
   requires: { slots: Slots },
-  setup: ({ slots }, plugin) => {
+  setup: ({ slots }) => {
     const add = <P extends Record<string, any>>(part: Part<P>, component: (props: P) => any) =>
-      plugin.onCleanup(slots.add(part, { id: `kit.${part.name.slice("part.".length)}`, order: DEFAULT_PART_ORDER, component }));
+      slots.add(part, { id: `kit.${part.name.slice("part.".length)}`, order: DEFAULT_PART_ORDER, component });
     add(MarkdownPart, Markdown);
     add(DialogPart, Dialog);
     add(PopoverPart, Popover);

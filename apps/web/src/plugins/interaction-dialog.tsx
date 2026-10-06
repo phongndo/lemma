@@ -126,7 +126,7 @@ export default defineUiPlugin({
   id: "interaction-dialog",
   styles,
   requires: { interactions: Interactions, slots: Slots },
-  setup: ({ interactions, slots }, plugin) => {
-    plugin.onCleanup(slots.add(Layers, { id: "interaction", order: 50, component: () => <InteractionModal interactions={interactions} /> }));
+  setup: ({ interactions, slots }) => {
+    slots.add(Layers, { id: "interaction", order: 50, component: () => <InteractionModal interactions={interactions} /> });
   },
 });

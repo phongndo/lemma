@@ -493,7 +493,7 @@ export default defineUiPlugin({
     uiPlugins: UiPlugins,
     slots: Slots,
   },
-  setup: (services, plugin) => {
+  setup: (services) => {
     const { client, threads, workspace, commands, dialogs, interactions, uiPlugins, slots } = services;
     let requested: string | undefined;
     const deps: Deps = {
@@ -507,7 +507,7 @@ export default defineUiPlugin({
       },
     };
     // Its own sources go through the slot a plugin adds a source to (files, symbols): they are defaults, not built in.
-    const source = (id: string, order: number, value: PaletteSource) => plugin.onCleanup(slots.add(PaletteSources, { id, order, ...value }));
+    const source = (id: string, order: number, value: PaletteSource) => slots.add(PaletteSources, { id, order, ...value });
     source("palette.commands", 0, {
       label: "commands",
       prefix: ">",
@@ -575,35 +575,31 @@ export default defineUiPlugin({
         }));
       },
     });
-    plugin.onCleanup(
-      slots.add(Layers, {
-        id: DIALOG,
-        component: () => (
-          <Show when={dialogs.current() === DIALOG}>
-            <Palette deps={deps} />
-          </Show>
-        ),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: ActionIds.palette,
-        title: "Command palette",
-        icon: CommandIcon,
-        hidden: true,
-        keys: "mod+k",
-        // Opens over any other dialog; a question the host asks keeps the screen until answered.
-        global: true,
-        when: () => dialogs.current() === DIALOG || interactions.open().length === 0,
-        // With an action's id, opens asking for that action's value (the keymap does this for an action that needs one).
-        run: (actionId) => {
-          if (actionId !== undefined) {
-            requested = actionId;
-            dialogs.open(undefined);
-            queueMicrotask(() => dialogs.open(DIALOG));
-          } else dialogs.open(dialogs.current() === DIALOG ? undefined : DIALOG);
-        },
-      }),
-    );
+    slots.add(Layers, {
+      id: DIALOG,
+      component: () => (
+        <Show when={dialogs.current() === DIALOG}>
+          <Palette deps={deps} />
+        </Show>
+      ),
+    });
+    slots.add(Actions, {
+      id: ActionIds.palette,
+      title: "Command palette",
+      icon: CommandIcon,
+      hidden: true,
+      keys: "mod+k",
+      // Opens over any other dialog; a question the host asks keeps the screen until answered.
+      global: true,
+      when: () => dialogs.current() === DIALOG || interactions.open().length === 0,
+      // With an action's id, opens asking for that action's value (the keymap does this for an action that needs one).
+      run: (actionId) => {
+        if (actionId !== undefined) {
+          requested = actionId;
+          dialogs.open(undefined);
+          queueMicrotask(() => dialogs.open(DIALOG));
+        } else dialogs.open(dialogs.current() === DIALOG ? undefined : DIALOG);
+      },
+    });
   },
 });

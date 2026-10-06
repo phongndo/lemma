@@ -361,28 +361,24 @@ export default defineUiPlugin({
   id: "add-project",
   styles,
   requires: { client: Client, workspace: Workspace, notify: Notify, dialogs: Dialogs, slots: Slots },
-  setup: (deps, plugin) => {
+  setup: (deps) => {
     const { dialogs, slots } = deps;
-    plugin.onCleanup(
-      slots.add(Layers, {
-        id: DIALOG,
-        component: () => (
-          <Show when={dialogs.current() === DIALOG}>
-            <AddProjectDialog deps={deps} />
-          </Show>
-        ),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: ActionIds.addProject,
-        order: 6,
-        title: "Add project…",
-        category: "Projects",
-        keywords: ["open folder", "directory"],
-        icon: FolderPlusIcon,
-        run: () => dialogs.open(DIALOG),
-      }),
-    );
+    slots.add(Layers, {
+      id: DIALOG,
+      component: () => (
+        <Show when={dialogs.current() === DIALOG}>
+          <AddProjectDialog deps={deps} />
+        </Show>
+      ),
+    });
+    slots.add(Actions, {
+      id: ActionIds.addProject,
+      order: 6,
+      title: "Add project…",
+      category: "Projects",
+      keywords: ["open folder", "directory"],
+      icon: FolderPlusIcon,
+      run: () => dialogs.open(DIALOG),
+    });
   },
 });

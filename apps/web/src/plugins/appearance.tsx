@@ -60,46 +60,44 @@ export default defineUiPlugin({
     // A replacement paints before this instance stops; `unpaint` leaves its look alone.
     plugin.onCleanup(() => unpaint(owner));
 
-    plugin.onCleanup(slots.add(SettingsSections, { id: "appearance", order: 10, title: "Appearance", icon: PaletteIcon }));
-    plugin.onCleanup(
-      slots.add(SettingsGroups, {
-        id: "appearance",
-        section: "appearance",
-        entries: () => [
-          {
-            text: "Theme color scheme dark light system mode",
-            view: () => (
-              <SettingRow title="Theme" description="System follows your browser or OS setting.">
-                <Segmented
-                  label="Theme"
-                  value={theme()}
-                  options={THEMES}
-                  onChange={(next) => {
-                    save(THEME_KEY, next === "system" ? undefined : next);
-                    setTheme(next);
-                  }}
-                />
-              </SettingRow>
-            ),
-          },
-          {
-            text: "Conversation width layout wide full",
-            view: () => (
-              <SettingRow title="Conversation width" description="How wide the transcript and composer run on large screens.">
-                <Segmented
-                  label="Conversation width"
-                  value={width()}
-                  options={WIDTHS}
-                  onChange={(next) => {
-                    save(WIDTH_KEY, next === "default" ? undefined : next);
-                    setWidth(next);
-                  }}
-                />
-              </SettingRow>
-            ),
-          },
-        ],
-      }),
-    );
+    slots.add(SettingsSections, { id: "appearance", order: 10, title: "Appearance", icon: PaletteIcon });
+    slots.add(SettingsGroups, {
+      id: "appearance",
+      section: "appearance",
+      entries: () => [
+        {
+          text: "Theme color scheme dark light system mode",
+          view: () => (
+            <SettingRow title="Theme" description="System follows your browser or OS setting.">
+              <Segmented
+                label="Theme"
+                value={theme()}
+                options={THEMES}
+                onChange={(next) => {
+                  save(THEME_KEY, next === "system" ? undefined : next);
+                  setTheme(next);
+                }}
+              />
+            </SettingRow>
+          ),
+        },
+        {
+          text: "Conversation width layout wide full",
+          view: () => (
+            <SettingRow title="Conversation width" description="How wide the transcript and composer run on large screens.">
+              <Segmented
+                label="Conversation width"
+                value={width()}
+                options={WIDTHS}
+                onChange={(next) => {
+                  save(WIDTH_KEY, next === "default" ? undefined : next);
+                  setWidth(next);
+                }}
+              />
+            </SettingRow>
+          ),
+        },
+      ],
+    });
   },
 });

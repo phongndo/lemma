@@ -81,7 +81,7 @@ export default defineUiPlugin({
   id: "projects-page",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, settings: Settings, dialogs: Dialogs, notify: Notify, slots: Slots },
-  setup: ({ client, threads, workspace, settings, dialogs, notify, slots }, plugin) => {
+  setup: ({ client, threads, workspace, settings, dialogs, notify, slots }) => {
     /** The project chosen, in the address (`?project=<directory>`). */
     const chosen = () => (settings.section() === SECTION ? settings.params().project : undefined);
     const setChosen = (cwd: string) => settings.setParams({ project: cwd });
@@ -151,40 +151,36 @@ export default defineUiPlugin({
       </Show>
     );
 
-    plugin.onCleanup(
-      slots.add(SettingsSections, {
-        id: SECTION,
-        order: 40,
-        title: "Projects",
-        icon: FolderIcon,
-        intro: picker,
-        actions: () => (
-          <Show when={slots.get(Actions, ActionIds.addProject)}>
-            {(action) => (
-              <button class="button small" onClick={() => action().run()}>
-                <FolderPlusIcon /> Add project
-              </button>
-            )}
-          </Show>
-        ),
-        empty: () => <p class="settings-empty">No projects yet. Add one to start threads in it.</p>,
-      }),
-    );
+    slots.add(SettingsSections, {
+      id: SECTION,
+      order: 40,
+      title: "Projects",
+      icon: FolderIcon,
+      intro: picker,
+      actions: () => (
+        <Show when={slots.get(Actions, ActionIds.addProject)}>
+          {(action) => (
+            <button class="button small" onClick={() => action().run()}>
+              <FolderPlusIcon /> Add project
+            </button>
+          )}
+        </Show>
+      ),
+      empty: () => <p class="settings-empty">No projects yet. Add one to start threads in it.</p>,
+    });
 
     /** A settings group about the current project; none while there is no project. */
     const group = (id: string, order: number, title: string | undefined, entries: (cwd: string) => { text: string; view: () => JSX.Element }[]) =>
-      plugin.onCleanup(
-        slots.add(SettingsGroups, {
-          id,
-          order,
-          section: SECTION,
-          ...(title === undefined ? {} : { title }),
-          entries: () => {
-            const cwd = current();
-            return cwd === undefined ? [] : entries(cwd);
-          },
-        }),
-      );
+      slots.add(SettingsGroups, {
+        id,
+        order,
+        section: SECTION,
+        ...(title === undefined ? {} : { title }),
+        entries: () => {
+          const cwd = current();
+          return cwd === undefined ? [] : entries(cwd);
+        },
+      });
 
     group("projects-page.general", 0, undefined, (cwd) => [
       {
@@ -284,46 +280,38 @@ export default defineUiPlugin({
       },
     ]);
 
-    plugin.onCleanup(
-      slots.add(ProjectActions, {
-        id: "projects-page.settings",
-        order: 30,
-        label: () => "Project settings",
-        icon: GearIcon,
-        run: (cwd) => settings.open(SECTION, { project: cwd }),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Layers, {
-        id: DELETE_DIALOG,
-        component: () => (
-          <Show when={dialogs.current() === DELETE_DIALOG && deleting()}>
-            {(cwd) => <DeleteProjectDialog client={client} threads={threads} workspace={workspace} cwd={cwd()} close={() => dialogs.open(undefined)} />}
-          </Show>
-        ),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(ProjectActions, {
-        id: "projects-page.delete",
-        order: 90,
-        section: true,
-        danger: true,
-        label: () => "Delete project…",
-        icon: TrashIcon,
-        run: askDelete,
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "projects-page.open",
-        order: 9,
-        title: "Project settings",
-        category: "Projects",
-        keywords: ["folders", "directories", "settings", "manage"],
-        icon: FolderIcon,
-        run: () => settings.open(SECTION),
-      }),
-    );
+    slots.add(ProjectActions, {
+      id: "projects-page.settings",
+      order: 30,
+      label: () => "Project settings",
+      icon: GearIcon,
+      run: (cwd) => settings.open(SECTION, { project: cwd }),
+    });
+    slots.add(Layers, {
+      id: DELETE_DIALOG,
+      component: () => (
+        <Show when={dialogs.current() === DELETE_DIALOG && deleting()}>
+          {(cwd) => <DeleteProjectDialog client={client} threads={threads} workspace={workspace} cwd={cwd()} close={() => dialogs.open(undefined)} />}
+        </Show>
+      ),
+    });
+    slots.add(ProjectActions, {
+      id: "projects-page.delete",
+      order: 90,
+      section: true,
+      danger: true,
+      label: () => "Delete project…",
+      icon: TrashIcon,
+      run: askDelete,
+    });
+    slots.add(Actions, {
+      id: "projects-page.open",
+      order: 9,
+      title: "Project settings",
+      category: "Projects",
+      keywords: ["folders", "directories", "settings", "manage"],
+      icon: FolderIcon,
+      run: () => settings.open(SECTION),
+    });
   },
 });

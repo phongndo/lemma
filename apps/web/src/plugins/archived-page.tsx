@@ -41,42 +41,36 @@ export default defineUiPlugin({
   id: "archived-page",
   styles,
   requires: { client: Client, threads: Threads, settings: Settings, slots: Slots },
-  setup: ({ client, threads, settings, slots }, plugin) => {
+  setup: ({ client, threads, settings, slots }) => {
     const archived = () =>
       threads
         .list()
         .filter((session) => session.archived === true)
         .sort((a, b) => b.updatedAt - a.updatedAt);
-    plugin.onCleanup(
-      slots.add(SettingsSections, {
-        id: SECTION,
-        order: 45,
-        title: "Archived",
-        icon: ArchiveIcon,
-        empty: () => <p class="settings-empty">No archived threads. Archive one from its menu in the sidebar.</p>,
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(SettingsGroups, {
-        id: SECTION,
-        section: SECTION,
-        entries: () =>
-          archived().map((session) => ({
-            text: `archived ${sessionTitle(session)} ${session.cwd}`,
-            view: () => <ArchivedRow client={client} threads={threads} settings={settings} session={session} />,
-          })),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "archived-page.open",
-        order: 10,
-        title: "Archived threads",
-        category: "Thread",
-        keywords: ["archive", "hidden", "restore"],
-        icon: ArchiveIcon,
-        run: () => settings.open(SECTION),
-      }),
-    );
+    slots.add(SettingsSections, {
+      id: SECTION,
+      order: 45,
+      title: "Archived",
+      icon: ArchiveIcon,
+      empty: () => <p class="settings-empty">No archived threads. Archive one from its menu in the sidebar.</p>,
+    });
+    slots.add(SettingsGroups, {
+      id: SECTION,
+      section: SECTION,
+      entries: () =>
+        archived().map((session) => ({
+          text: `archived ${sessionTitle(session)} ${session.cwd}`,
+          view: () => <ArchivedRow client={client} threads={threads} settings={settings} session={session} />,
+        })),
+    });
+    slots.add(Actions, {
+      id: "archived-page.open",
+      order: 10,
+      title: "Archived threads",
+      category: "Thread",
+      keywords: ["archive", "hidden", "restore"],
+      icon: ArchiveIcon,
+      run: () => settings.open(SECTION),
+    });
   },
 });

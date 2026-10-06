@@ -37,7 +37,7 @@ export default defineUiPlugin({
   id: "thread-view",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, slots: Slots, layout: Layout, notify: Notify, router: Router },
-  setup: ({ client, threads, workspace, slots, layout, notify, router }, plugin) => {
+  setup: ({ client, threads, workspace, slots, layout, notify, router }) => {
     const views = () => slots.list(Views);
     /** The view the address names while it exists (its plugin may be off: the address is left as it is), else the first. */
     const view = createMemo(() => {
@@ -56,7 +56,7 @@ export default defineUiPlugin({
     };
 
     const add = (...actions: SlotItem<Action>[]) => {
-      for (const action of actions) plugin.onCleanup(slots.add(Actions, action));
+      for (const action of actions) slots.add(Actions, action);
     };
     add(
       {
@@ -133,8 +133,7 @@ export default defineUiPlugin({
     });
 
     // Its header's items go through the slot other plugins add theirs to.
-    const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) =>
-      plugin.onCleanup(slots.add(ThreadHeader, { id, order, side, component }));
+    const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) => slots.add(ThreadHeader, { id, order, side, component });
     header("thread.sidebar-toggle", 0, "start", () => (
       <button class="icon-button sidebar-toggle" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
         <SidebarIcon />
@@ -223,16 +222,14 @@ export default defineUiPlugin({
         </main>
       );
     }
-    plugin.onCleanup(slots.add(Pages, { id: "thread-view.new", route: NewThreadRoute, component: Main }));
-    plugin.onCleanup(
-      slots.add(Pages, {
-        id: "thread-view",
-        route: ThreadRoute,
-        component: Main,
-        preload: (match) => {
-          if (isRoute(match, ThreadRoute)) threads.preload(match.params.id);
-        },
-      }),
-    );
+    slots.add(Pages, { id: "thread-view.new", route: NewThreadRoute, component: Main });
+    slots.add(Pages, {
+      id: "thread-view",
+      route: ThreadRoute,
+      component: Main,
+      preload: (match) => {
+        if (isRoute(match, ThreadRoute)) threads.preload(match.params.id);
+      },
+    });
   },
 });

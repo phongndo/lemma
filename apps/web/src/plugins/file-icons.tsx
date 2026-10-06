@@ -49,6 +49,6 @@ export default defineUiPlugin({
       );
     }
     // Just below the default: it replaces `kit`'s, and any replacement below `DEFAULT_PART_ORDER` still replaces it.
-    plugin.onCleanup(slots.add(FileIconPart, { id: "file-icons", order: DEFAULT_PART_ORDER - 1, component: TypedFileIcon }));
+    slots.add(FileIconPart, { id: "file-icons", order: DEFAULT_PART_ORDER - 1, component: TypedFileIcon });
   },
 });

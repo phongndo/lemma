@@ -38,7 +38,7 @@ export default defineUiPlugin({
   id: "reload",
   styles,
   requires: { client: Client, slots: Slots, notify: Notify },
-  setup: ({ client, slots, notify }, plugin) => {
+  setup: ({ client, slots, notify }) => {
     const left = takeReport();
     if (left !== undefined) notify.toast({ level: "info", message: `Reloaded: ${left}` });
     const [reloading, setReloading] = createSignal(false);
@@ -65,37 +65,33 @@ export default defineUiPlugin({
     };
     const detail = desktop?.ownsHost ? "Restart the host, then the window" : "Re-read config and plugin files, then the page";
 
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: ACTION,
-        title: "Reload Lemma",
-        category: "Host",
-        detail,
-        keywords: ["refresh", "restart", "hot reload", "plugins", "config"],
-        icon: RefreshIcon,
-        run: () => void reload(),
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(SidebarFooter, {
-        id: "reload",
-        // After the connection's dot (100), which also pushes both to the right.
-        order: 110,
-        component: () => (
-          <button
-            class="icon-button reload-button"
-            aria-label="Reload Lemma"
-            aria-busy={reloading()}
-            disabled={reloading()}
-            data-tip={`Reload: ${detail.toLowerCase()}`}
-            onClick={() => slots.get(Actions, ACTION)?.run()}
-          >
-            <Show when={reloading()} fallback={<RefreshIcon />}>
-              <Spinner />
-            </Show>
-          </button>
-        ),
-      }),
-    );
+    slots.add(Actions, {
+      id: ACTION,
+      title: "Reload Lemma",
+      category: "Host",
+      detail,
+      keywords: ["refresh", "restart", "hot reload", "plugins", "config"],
+      icon: RefreshIcon,
+      run: () => void reload(),
+    });
+    slots.add(SidebarFooter, {
+      id: "reload",
+      // After the connection's dot (100), which also pushes both to the right.
+      order: 110,
+      component: () => (
+        <button
+          class="icon-button reload-button"
+          aria-label="Reload Lemma"
+          aria-busy={reloading()}
+          disabled={reloading()}
+          data-tip={`Reload: ${detail.toLowerCase()}`}
+          onClick={() => slots.get(Actions, ACTION)?.run()}
+        >
+          <Show when={reloading()} fallback={<RefreshIcon />}>
+            <Spinner />
+          </Show>
+        </button>
+      ),
+    });
   },
 });

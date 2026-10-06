@@ -1552,9 +1552,7 @@ export default defineUiPlugin({
   id: "trajectory",
   styles,
   requires: { threads: Threads, notify: Notify, slots: Slots },
-  setup: ({ threads, notify, slots }, plugin) => {
-    plugin.onCleanup(
-      slots.add(Views, { id: "trajectory", title: "Trajectory", icon: TrajectoryIcon, component: createTrajectory({ threads, notify, slots }) }),
-    );
+  setup: ({ threads, notify, slots }) => {
+    slots.add(Views, { id: "trajectory", title: "Trajectory", icon: TrajectoryIcon, component: createTrajectory({ threads, notify, slots }) });
   },
 });

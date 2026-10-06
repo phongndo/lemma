@@ -71,9 +71,9 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, SidebarFooter }, 
   defineUiPlugin({
     id: "tool-count",
     requires: { slots: Slots, threads: Threads },
-    setup: ({ slots, threads }, plugin) => {
+    setup: ({ slots, threads }) => {
       const calls = () => threads.branch().filter((event) => event.data.type === "message" && event.data.message.role === "toolResult").length;
-      plugin.onCleanup(slots.add(SidebarFooter, { id: "tool-count", order: 50, component: () => html`<span class="muted small">${calls} tool calls</span>` }));
+      slots.add(SidebarFooter, { id: "tool-count", order: 50, component: () => html`<span class="muted small">${calls} tool calls</span>` });
     },
   });
 ```
@@ -84,8 +84,8 @@ export default ({ defineUiPlugin, contracts: { Slots, ChatThinkingPart }, html }
   defineUiPlugin({
     id: "quiet-thoughts",
     requires: { slots: Slots },
-    setup: ({ slots }, plugin) => {
-      plugin.onCleanup(slots.add(ChatThinkingPart, { id: "quiet", order: 0, component: () => html`<p class="muted small">thought for a moment</p>` }));
+    setup: ({ slots }) => {
+      slots.add(ChatThinkingPart, { id: "quiet", order: 0, component: () => html`<p class="muted small">thought for a moment</p>` });
     },
   });
 ```
@@ -96,19 +96,19 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletio
   defineUiPlugin({
     id: "thread-links",
     requires: { slots: Slots, threads: Threads },
-    setup: ({ slots, threads }, plugin) => {
+    setup: ({ slots, threads }) => {
       const suggest = (query) =>
         threads
           .list()
           .filter((thread) => thread.title?.toLowerCase().includes(query.toLowerCase()))
           .map((thread) => ({ key: thread.id, label: thread.title, insert: `[${thread.title}](${threads.href(thread.id)})` }));
-      plugin.onCleanup(slots.add(ComposerCompletions, { id: "thread-links", trigger: "#", label: "Threads", suggest }));
+      slots.add(ComposerCompletions, { id: "thread-links", trigger: "#", label: "Threads", suggest });
     },
   });
 ```
 
-`setup` runs in its own Solid root; release what it adds with
-`plugin.onCleanup`. A `config` Schema (from `api.Schema`) becomes the plugin's
+`setup` runs in its own Solid root. What it adds to slots leaves when it stops;
+release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A `config` Schema (from `api.Schema`) becomes the plugin's
 settings form, and `styles` apply while it runs. `api: 1` says which version of
 the contracts it is written for (`contracts.UI_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
@@ -159,8 +159,8 @@ api.defineUiPlugin({
   id: "notes",
   routes: [Note],
   requires: { slots: Slots },
-  setup: ({ slots }, plugin) => {
-    plugin.onCleanup(slots.add(Pages, { id: "notes.note", route: Note, component: NotePage }));
+  setup: ({ slots }) => {
+    slots.add(Pages, { id: "notes.note", route: Note, component: NotePage });
   },
 });
 // <a href={router.href(Note, { id })}>, or router.navigate(Note, { id }); the page reads router.matchOf(Note)

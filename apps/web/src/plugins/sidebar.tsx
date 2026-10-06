@@ -395,11 +395,11 @@ export default defineUiPlugin({
     };
     const scopeName = (cwd: string) => (workspace.isStandalone(cwd) ? "No project" : workspace.projectName(cwd));
     const deps: Deps = { client, threads, slots, workspace, now, newChatIn, scope };
-    plugin.onCleanup(slots.add(SidebarRegion, { id: "sidebar", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> }));
-    plugin.onCleanup(slots.add(SidebarRowPart, { id: "sidebar.row", order: DEFAULT_PART_ORDER, component: SessionRow }));
+    slots.add(SidebarRegion, { id: "sidebar", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
+    slots.add(SidebarRowPart, { id: "sidebar.row", order: DEFAULT_PART_ORDER, component: SessionRow });
 
     // Its menus' items go through the slots other plugins add theirs to.
-    const sessionAction = (id: string, order: number, action: ThreadAction) => plugin.onCleanup(slots.add(ThreadActions, { id, order, ...action }));
+    const sessionAction = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });
     sessionAction("sidebar.rename", 10, { label: () => "Rename", icon: PencilIcon, run: (_, row) => row.rename() });
     sessionAction("sidebar.pin", 20, {
       label: (session) => (session.pinned === true ? "Unpin" : "Pin"),
@@ -422,7 +422,7 @@ export default defineUiPlugin({
     // The open thread, from the keyboard and the palette; Settings › Keyboard rebinds these.
     const open = () => threads.active();
     const threadAction = (id: string, order: number, action: Omit<Action, "category" | "when"> & { readonly when?: () => boolean }) =>
-      plugin.onCleanup(slots.add(Actions, { id, order, category: "Thread", ...action, when: () => open() !== undefined && (action.when?.() ?? true) }));
+      slots.add(Actions, { id, order, category: "Thread", ...action, when: () => open() !== undefined && (action.when?.() ?? true) });
     /** The thread `step` rows away from the open one in the sidebar's order (pinned first, then by project), wrapping. */
     const neighbor = (step: number) => {
       const { pinned, groups } = fileSessions(threads.list());
@@ -431,34 +431,30 @@ export default defineUiPlugin({
       const at = order.findIndex((session) => session.id === threads.activeId());
       return order[at === -1 ? 0 : (at + step + order.length) % order.length];
     };
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "sidebar.next-thread",
-        order: 20,
-        category: "Thread",
-        title: "Next thread",
-        keys: "mod+alt+arrowdown",
-        whileTyping: true,
-        run: () => {
-          const next = neighbor(1);
-          if (next !== undefined) void threads.select(next.id);
-        },
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "sidebar.previous-thread",
-        order: 21,
-        category: "Thread",
-        title: "Previous thread",
-        keys: "mod+alt+arrowup",
-        whileTyping: true,
-        run: () => {
-          const previous = neighbor(-1);
-          if (previous !== undefined) void threads.select(previous.id);
-        },
-      }),
-    );
+    slots.add(Actions, {
+      id: "sidebar.next-thread",
+      order: 20,
+      category: "Thread",
+      title: "Next thread",
+      keys: "mod+alt+arrowdown",
+      whileTyping: true,
+      run: () => {
+        const next = neighbor(1);
+        if (next !== undefined) void threads.select(next.id);
+      },
+    });
+    slots.add(Actions, {
+      id: "sidebar.previous-thread",
+      order: 21,
+      category: "Thread",
+      title: "Previous thread",
+      keys: "mod+alt+arrowup",
+      whileTyping: true,
+      run: () => {
+        const previous = neighbor(-1);
+        if (previous !== undefined) void threads.select(previous.id);
+      },
+    });
     threadAction("sidebar.pin-thread", 23, {
       title: "Pin or unpin thread",
       icon: PinIcon,
@@ -487,25 +483,18 @@ export default defineUiPlugin({
       },
     });
 
-    plugin.onCleanup(
-      slots.add(ProjectActions, { id: "sidebar.new-chat", order: 10, label: () => "New thread", icon: PenSquareIcon, run: (cwd) => newChatIn(cwd) }),
-    );
-    plugin.onCleanup(
-      slots.add(ProjectActions, {
-        id: "sidebar.copy-path",
-        order: 20,
-        label: () => "Copy path",
-        icon: CopyIcon,
-        run: (cwd) =>
-          void copyText(cwd).then((copied) =>
-            notify.toast(copied ? { level: "info", message: `Copied ${cwd}` } : { level: "error", message: "Could not copy" }),
-          ),
-      }),
-    );
+    slots.add(ProjectActions, { id: "sidebar.new-chat", order: 10, label: () => "New thread", icon: PenSquareIcon, run: (cwd) => newChatIn(cwd) });
+    slots.add(ProjectActions, {
+      id: "sidebar.copy-path",
+      order: 20,
+      label: () => "Copy path",
+      icon: CopyIcon,
+      run: (cwd) =>
+        void copyText(cwd).then((copied) => notify.toast(copied ? { level: "info", message: `Copied ${cwd}` } : { level: "error", message: "Could not copy" })),
+    });
     // Its head's buttons go through the slot other plugins add theirs to.
     type ActionProps = { readonly onPick: () => void };
-    const action = (id: string, order: number, component: (props: ActionProps) => JSX.Element) =>
-      plugin.onCleanup(slots.add(SidebarActions, { id, order, component }));
+    const action = (id: string, order: number, component: (props: ActionProps) => JSX.Element) => slots.add(SidebarActions, { id, order, component });
     /** Another plugin's action, when one is running: the sidebar offers it without knowing who provides it. */
     const runAction = (id: string, props: ActionProps) => {
       slots.get(Actions, id)?.run();

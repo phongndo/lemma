@@ -630,7 +630,7 @@ export default defineUiPlugin({
   id: "plugins-page",
   styles,
   requires: { client: Client, threads: Threads, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
-  setup: ({ client, threads, notify, settings, slots, host, ui }, plugin) => {
+  setup: ({ client, threads, notify, settings, slots, host, ui }) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.
     const params = () => (settings.section() === SECTION ? settings.params() : {});
@@ -725,7 +725,7 @@ export default defineUiPlugin({
     };
     // Its own tabs go through the slot other plugins add theirs to.
     const addTab = (id: string, order: number, label: PluginTab["label"], component: PluginTab["component"]) =>
-      plugin.onCleanup(slots.add(PluginTabs, { id, order, label, component }));
+      slots.add(PluginTabs, { id, order, label, component });
     addTab(
       "plugins.overview",
       0,
@@ -761,64 +761,57 @@ export default defineUiPlugin({
       });
 
     const failed = () => [...host.list(), ...ui.list()].filter((candidate) => candidate.state === "failed").length;
-    const add = (remove: () => void) => plugin.onCleanup(remove);
-    add(
-      slots.add(SettingsSections, {
-        id: SECTION,
-        order: 30,
-        title: "Plugins",
-        icon: PuzzleIcon,
-        badge: () => (failed() > 0 ? `${failed()} failed` : undefined),
-        body: () => <PluginsInspector inspector={inspector} filter={filter} setFilter={setFilter} />,
-        actions: () => (
-          <>
-            <button
-              class="icon-button"
-              aria-label="Reload config"
-              disabled={busy() !== undefined}
-              onClick={() => void reload()}
-              data-tip="Reload config: re-read the config files and apply them"
-            >
-              <Show when={busy() === "reload"} fallback={<RefreshIcon />}>
-                <Spinner />
-              </Show>
-            </button>
-          </>
-        ),
-      }),
-    );
+    slots.add(SettingsSections, {
+      id: SECTION,
+      order: 30,
+      title: "Plugins",
+      icon: PuzzleIcon,
+      badge: () => (failed() > 0 ? `${failed()} failed` : undefined),
+      body: () => <PluginsInspector inspector={inspector} filter={filter} setFilter={setFilter} />,
+      actions: () => (
+        <>
+          <button
+            class="icon-button"
+            aria-label="Reload config"
+            disabled={busy() !== undefined}
+            onClick={() => void reload()}
+            data-tip="Reload config: re-read the config files and apply them"
+          >
+            <Show when={busy() === "reload"} fallback={<RefreshIcon />}>
+              <Spinner />
+            </Show>
+          </button>
+        </>
+      ),
+    });
     // What the settings search finds; picking one opens it in the inspector.
-    add(
-      slots.add(SettingsGroups, {
-        id: SECTION,
-        section: SECTION,
-        entries: () =>
-          (["host", "web"] as const).flatMap((kind) =>
-            services[kind].list().map((target) => ({
-              text: `plugin ${kind === "web" ? "web app interface" : "host"} ${pluginText(target)}`,
-              view: () => (
-                <button class="setting-row inspector-result" onClick={() => settings.open(SECTION, { plugin: target.id, kind })}>
-                  <span class={`state-dot state-${target.state}`} />
-                  <span class="plugin-id">{target.id}</span>
-                  <span class="muted small">{KIND_LABEL[kind]}</span>
-                  <span class="spacer" />
-                  <span class={`status-pill state-${target.state}`}>{describeState(target)}</span>
-                </button>
-              ),
-            })),
-          ),
-      }),
-    );
-    add(
-      slots.add(Actions, {
-        id: "plugins-page.open",
-        order: 7,
-        title: "Show plugins",
-        category: "Host",
-        keywords: ["status", "restart", "composition", "web app", "ui", "inspect"],
-        icon: PuzzleIcon,
-        run: () => settings.open(SECTION),
-      }),
-    );
+    slots.add(SettingsGroups, {
+      id: SECTION,
+      section: SECTION,
+      entries: () =>
+        (["host", "web"] as const).flatMap((kind) =>
+          services[kind].list().map((target) => ({
+            text: `plugin ${kind === "web" ? "web app interface" : "host"} ${pluginText(target)}`,
+            view: () => (
+              <button class="setting-row inspector-result" onClick={() => settings.open(SECTION, { plugin: target.id, kind })}>
+                <span class={`state-dot state-${target.state}`} />
+                <span class="plugin-id">{target.id}</span>
+                <span class="muted small">{KIND_LABEL[kind]}</span>
+                <span class="spacer" />
+                <span class={`status-pill state-${target.state}`}>{describeState(target)}</span>
+              </button>
+            ),
+          })),
+        ),
+    });
+    slots.add(Actions, {
+      id: "plugins-page.open",
+      order: 7,
+      title: "Show plugins",
+      category: "Host",
+      keywords: ["status", "restart", "composition", "web app", "ui", "inspect"],
+      icon: PuzzleIcon,
+      run: () => settings.open(SECTION),
+    });
   },
 });

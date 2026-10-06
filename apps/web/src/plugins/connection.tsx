@@ -78,7 +78,7 @@ export default defineUiPlugin({
   id: "connection",
   styles,
   requires: { client: Client, slots: Slots },
-  setup: ({ client, slots }, plugin) => {
+  setup: ({ client, slots }) => {
     // Ticks only while a retry is being counted down to.
     const [now, setNow] = createSignal(Date.now());
     const counting = () => client.status().retryAt !== undefined;
@@ -88,18 +88,16 @@ export default defineUiPlugin({
       const timer = window.setInterval(() => setNow(Date.now()), 1_000);
       onCleanup(() => window.clearInterval(timer));
     });
-    plugin.onCleanup(
-      slots.add(SidebarFooter, {
-        id: "connection",
-        order: 100,
-        component: () => (
-          <>
-            <span class="spacer" />
-            <ConnectionBadge status={client.status()} now={now} compact />
-          </>
-        ),
-      }),
-    );
-    plugin.onCleanup(slots.add(ComposerNotices, { id: "connection", component: () => <ConnectionNotice status={client.status} now={now} /> }));
+    slots.add(SidebarFooter, {
+      id: "connection",
+      order: 100,
+      component: () => (
+        <>
+          <span class="spacer" />
+          <ConnectionBadge status={client.status()} now={now} compact />
+        </>
+      ),
+    });
+    slots.add(ComposerNotices, { id: "connection", component: () => <ConnectionNotice status={client.status} now={now} /> });
   },
 });

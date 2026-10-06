@@ -585,15 +585,13 @@ export default defineUiPlugin({
     };
     const groups = createMemo(() => providerGroups(models.providers(), query(), filter()));
     // Its rows are a part: its own is the default, and a plugin replaces it everywhere by adding a lower order.
-    plugin.onCleanup(
-      slots.add(ProviderRowPart, {
-        id: "providers.row",
-        order: DEFAULT_PART_ORDER,
-        component: (props: ProviderRowProps) => (
-          <ProviderRow models={models} interactions={interactions} provider={props.provider} login={(_, type) => props.login(type)} custom={custom} />
-        ),
-      }),
-    );
+    slots.add(ProviderRowPart, {
+      id: "providers.row",
+      order: DEFAULT_PART_ORDER,
+      component: (props: ProviderRowProps) => (
+        <ProviderRow models={models} interactions={interactions} provider={props.provider} login={(_, type) => props.login(type)} custom={custom} />
+      ),
+    });
     const row = (provider: ProviderInfo) => () => <ProviderRowView provider={provider} login={(type) => void login(provider, type)} />;
 
     function Search() {
@@ -665,85 +663,74 @@ export default defineUiPlugin({
       );
     }
 
-    const add = (remove: () => void) => plugin.onCleanup(remove);
-    add(
-      slots.add(SettingsSections, {
-        id: SECTION,
-        order: 20,
-        title: "Providers",
-        icon: KeyIcon,
-        intro: Search,
-        empty: () => (
-          <Switch fallback={<p class="settings-empty">No provider plugins are loaded. Check Plugins.</p>}>
-            <Match when={!models.providersLoaded()}>
-              <p class="settings-empty">
-                <Spinner /> Loading providers…
-              </p>
-            </Match>
-            <Match when={query().trim() !== "" || filter() !== "all"}>
-              <p class="settings-empty">No providers match{query().trim() === "" ? "" : ` “${query().trim()}”`}</p>
-            </Match>
-          </Switch>
-        ),
-      }),
-    );
+    slots.add(SettingsSections, {
+      id: SECTION,
+      order: 20,
+      title: "Providers",
+      icon: KeyIcon,
+      intro: Search,
+      empty: () => (
+        <Switch fallback={<p class="settings-empty">No provider plugins are loaded. Check Plugins.</p>}>
+          <Match when={!models.providersLoaded()}>
+            <p class="settings-empty">
+              <Spinner /> Loading providers…
+            </p>
+          </Match>
+          <Match when={query().trim() !== "" || filter() !== "all"}>
+            <p class="settings-empty">No providers match{query().trim() === "" ? "" : ` “${query().trim()}”`}</p>
+          </Match>
+        </Switch>
+      ),
+    });
     for (const [order, title] of GROUPS.entries()) {
-      add(
-        slots.add(SettingsGroups, {
-          id: `${SECTION}.${order}`,
-          order,
-          section: SECTION,
-          // A search's matches need no heading.
-          ...(title === "Results" ? {} : { title }),
-          entries: () =>
-            (groups().find((group) => group.title === title)?.providers ?? []).map((provider) => ({
-              text: `provider login ${providerText(provider)}`,
-              view: row(provider),
-            })),
-        }),
-      );
+      slots.add(SettingsGroups, {
+        id: `${SECTION}.${order}`,
+        order,
+        section: SECTION,
+        // A search's matches need no heading.
+        ...(title === "Results" ? {} : { title }),
+        entries: () =>
+          (groups().find((group) => group.title === title)?.providers ?? []).map((provider) => ({
+            text: `provider login ${providerText(provider)}`,
+            view: row(provider),
+          })),
+      });
     }
     // Last: adding a custom provider, while browsing (it answers no search).
-    add(
-      slots.add(SettingsGroups, {
-        id: `${SECTION}.custom`,
-        order: GROUPS.length,
-        section: SECTION,
-        // Titled, so it is not merged into the untitled search results.
-        title: "Custom",
-        entries: () =>
-          models.providersLoaded() && query().trim() === "" && filter() !== "oauth"
-            ? [{ text: "provider add custom openai compatible ollama gateway", view: () => <CustomProviderRow add={addCustom} /> }]
-            : [],
-      }),
-    );
-    add(
-      slots.add(ComposerNotices, {
-        id: SECTION,
-        order: 10,
-        component: () => (
-          <Show when={models.providersLoaded() && !models.configured()}>
-            <div class="callout callout-info composer-callout">
-              <KeyIcon />
-              <span>No model provider is set up yet.</span>
-              <button class="button button-primary small" onClick={open}>
-                Log in to a provider
-              </button>
-            </div>
-          </Show>
-        ),
-      }),
-    );
-    add(
-      slots.add(Actions, {
-        id: ActionIds.providers,
-        order: 5,
-        title: "Log in to a provider…",
-        category: "Providers",
-        keywords: ["sign in", "api key", "credentials"],
-        icon: KeyIcon,
-        run: open,
-      }),
-    );
+    slots.add(SettingsGroups, {
+      id: `${SECTION}.custom`,
+      order: GROUPS.length,
+      section: SECTION,
+      // Titled, so it is not merged into the untitled search results.
+      title: "Custom",
+      entries: () =>
+        models.providersLoaded() && query().trim() === "" && filter() !== "oauth"
+          ? [{ text: "provider add custom openai compatible ollama gateway", view: () => <CustomProviderRow add={addCustom} /> }]
+          : [],
+    });
+    slots.add(ComposerNotices, {
+      id: SECTION,
+      order: 10,
+      component: () => (
+        <Show when={models.providersLoaded() && !models.configured()}>
+          <div class="callout callout-info composer-callout">
+            <KeyIcon />
+            <span>No model provider is set up yet.</span>
+            <button class="button button-primary small" onClick={open}>
+              Log in to a provider
+            </button>
+          </div>
+        </Show>
+      ),
+    });
+    slots.add(Actions, {
+      id: ActionIds.providers,
+      order: 5,
+      title: "Log in to a provider…",
+      category: "Providers",
+      keywords: ["sign in", "api key", "credentials"],
+      icon: KeyIcon,
+      run: open,
+    });
   },
 });

@@ -1128,21 +1128,19 @@ export default defineUiPlugin({
     };
     // Its own parts' defaults; any plugin replaces one by adding with a lower order.
     const part = <P extends Record<string, any>>(slot: Part<P>, component: Component<P>) =>
-      plugin.onCleanup(slots.add(slot, { id: `chat.${slot.name.slice("part.chat.".length)}`, order: DEFAULT_PART_ORDER, component }));
+      slots.add(slot, { id: `chat.${slot.name.slice("part.chat.".length)}`, order: DEFAULT_PART_ORDER, component });
     part(ChatUserPart, UserView);
     part(ChatThinkingPart, ThinkingView);
     part(ChatToolPart, toolView({ client, threads, slots }));
     part(ChatWorkPart, WorkView);
     part(ChatWorkingPart, WorkingView);
     part(ChatTurnFooterPart, TurnFooter);
-    plugin.onCleanup(
-      slots.add(Views, {
-        id: "chat",
-        title: "Chat",
-        icon: ChatIcon,
-        composer: true,
-        component: () => <ChatView chat={chat} turns={() => transcript().turns} />,
-      }),
-    );
+    slots.add(Views, {
+      id: "chat",
+      title: "Chat",
+      icon: ChatIcon,
+      composer: true,
+      component: () => <ChatView chat={chat} turns={() => transcript().turns} />,
+    });
   },
 });

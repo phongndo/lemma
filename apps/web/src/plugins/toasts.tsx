@@ -77,17 +77,15 @@ export default defineUiPlugin({
   id: "toasts",
   styles,
   requires: { notify: Notify, slots: Slots },
-  setup: ({ notify, slots }, plugin) => {
-    plugin.onCleanup(
-      slots.add(Layers, {
-        id: "toasts",
-        order: 100,
-        component: () => (
-          <div class="toasts" aria-live="polite">
-            <For each={notify.toasts()}>{(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} />}</For>
-          </div>
-        ),
-      }),
-    );
+  setup: ({ notify, slots }) => {
+    slots.add(Layers, {
+      id: "toasts",
+      order: 100,
+      component: () => (
+        <div class="toasts" aria-live="polite">
+          <For each={notify.toasts()}>{(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} />}</For>
+        </div>
+      ),
+    });
   },
 });

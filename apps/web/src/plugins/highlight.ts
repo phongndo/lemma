@@ -13,27 +13,25 @@ export default defineUiPlugin({
   id: "highlight",
   styles,
   requires: { slots: Slots },
-  setup: ({ slots }, plugin) => {
+  setup: ({ slots }) => {
     let loaded: Highlighter | undefined;
     let loading: Promise<Highlighter> | undefined;
     const load = () => (loading ??= import("../lib/highlight.ts").then((module) => (loaded = module)));
-    plugin.onCleanup(
-      slots.add(CodeBlocks, {
-        id: "highlight",
-        order: 100,
-        match: (lang) => lang !== "",
-        render: (block, target) => {
-          const now = loaded?.highlight(block.code, block.lang, block.complete);
-          if (now !== undefined) return void target.append(now);
-          const language = load().then((module) => module.loadLanguage(block.lang));
-          // Incomplete code is rendered again as it grows, and highlighted from the first update after its grammar loads.
-          if (!block.complete) return void language.catch(() => {});
-          return language.then((known) => {
-            const element = known ? loaded!.highlight(block.code, block.lang, true) : undefined;
-            if (element !== undefined) target.append(element);
-          });
-        },
-      }),
-    );
+    slots.add(CodeBlocks, {
+      id: "highlight",
+      order: 100,
+      match: (lang) => lang !== "",
+      render: (block, target) => {
+        const now = loaded?.highlight(block.code, block.lang, block.complete);
+        if (now !== undefined) return void target.append(now);
+        const language = load().then((module) => module.loadLanguage(block.lang));
+        // Incomplete code is rendered again as it grows, and highlighted from the first update after its grammar loads.
+        if (!block.complete) return void language.catch(() => {});
+        return language.then((known) => {
+          const element = known ? loaded!.highlight(block.code, block.lang, true) : undefined;
+          if (element !== undefined) target.append(element);
+        });
+      },
+    });
   },
 });

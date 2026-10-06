@@ -33,7 +33,7 @@ export default defineUiPlugin({
   styles,
   requires: { slots: Slots },
   provides: { layout: Layout },
-  setup: ({ slots }, plugin) => {
+  setup: ({ slots }) => {
     const [drawer, setDrawer] = createSignal(false);
     // The chosen width survives a narrower window; only the displayed width is clamped.
     const [chosen, setChosen] = createSignal(Number(load(WIDTH_KEY)) || DEFAULT_WIDTH);
@@ -53,29 +53,25 @@ export default defineUiPlugin({
     const toggleSidebar = () => (window.matchMedia(NARROW).matches ? setDrawer(!drawer()) : setCollapsedSaved(!collapsed()));
     const closeDrawer = () => setDrawer(false);
 
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "shell.toggle-sidebar",
-        order: 4,
-        title: "Toggle sidebar",
-        category: "View",
-        icon: SidebarIcon,
-        keys: "mod+b",
-        run: toggleSidebar,
-      }),
-    );
-    plugin.onCleanup(
-      slots.add(Actions, {
-        id: "shell.close-drawer",
-        title: "Close the sidebar",
-        hidden: true,
-        keys: "escape",
-        whileTyping: true,
-        order: 20,
-        when: drawer,
-        run: closeDrawer,
-      }),
-    );
+    slots.add(Actions, {
+      id: "shell.toggle-sidebar",
+      order: 4,
+      title: "Toggle sidebar",
+      category: "View",
+      icon: SidebarIcon,
+      keys: "mod+b",
+      run: toggleSidebar,
+    });
+    slots.add(Actions, {
+      id: "shell.close-drawer",
+      title: "Close the sidebar",
+      hidden: true,
+      keys: "escape",
+      whileTyping: true,
+      order: 20,
+      when: drawer,
+      run: closeDrawer,
+    });
 
     const startResize = (event: PointerEvent) => {
       event.preventDefault();
@@ -156,7 +152,7 @@ export default defineUiPlugin({
         </div>
       );
     }
-    plugin.onCleanup(slots.add(Root, { id: "shell", component: Shell }));
+    slots.add(Root, { id: "shell", component: Shell });
     return { layout: { toggleSidebar, closeDrawer } };
   },
 });

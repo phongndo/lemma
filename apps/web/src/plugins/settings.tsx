@@ -234,7 +234,7 @@ export default defineUiPlugin({
   styles,
   requires: { slots: Slots, router: Router, uiPlugins: UiPlugins },
   provides: { settings: Settings },
-  setup: ({ slots, router, uiPlugins }, plugin) => {
+  setup: ({ slots, router, uiPlugins }) => {
     const [visits, setVisits] = createSignal(0);
     const [focus, setFocus] = createSignal<() => void>();
     const here = () => router.matchOf(SettingsRoute);
@@ -292,87 +292,76 @@ export default defineUiPlugin({
       router.navigate(SettingsRoute, { section: open }, { search: next, replace: true });
     };
 
-    const add = (remove: () => void) => plugin.onCleanup(remove);
     /** One of its actions' bindings, as the user has it. */
     const keysOf = (id: string) => {
       const action = slots.get(Actions, id);
       return action === undefined ? undefined : shownKeys(action, uiPlugins.list());
     };
-    add(slots.add(SettingsSections, { id: SectionIds.general, order: 0, title: "General", icon: SlidersIcon }));
-    add(
-      slots.add(Pages, {
-        id: "settings",
-        route: SettingsRoute,
-        component: () => (
-          <SettingsView
-            slots={slots}
-            section={() => section() ?? SectionIds.general}
-            visits={visits}
-            open={open}
-            setFocus={(next) => setFocus(() => next)}
-            closeKeys={() => keysOf("settings.close")}
-          />
-        ),
-      }),
-    );
-    add(
-      slots.add(Actions, {
-        id: "settings.open",
-        order: 8,
-        title: "Open settings",
-        category: "Settings",
-        keywords: ["preferences", "theme", "appearance", "general"],
-        icon: GearIcon,
-        keys: "mod+,",
-        when: () => section() === undefined,
-        run: () => open("general"),
-      }),
-    );
-    add(
-      slots.add(Actions, {
-        id: "settings.close",
-        title: "Close settings",
-        category: "Settings",
-        icon: ArrowLeftIcon,
-        keys: ["escape", "mod+,"],
-        whileTyping: true,
-        order: -10,
-        when: () => section() !== undefined,
-        run: () => open(undefined),
-      }),
-    );
-    add(
-      slots.add(Actions, {
-        id: "settings.search",
-        title: "Search settings",
-        hidden: true,
-        keys: "/",
-        order: -10,
-        when: () => section() !== undefined && focus() !== undefined,
-        run: () => focus()?.(),
-      }),
-    );
+    slots.add(SettingsSections, { id: SectionIds.general, order: 0, title: "General", icon: SlidersIcon });
+    slots.add(Pages, {
+      id: "settings",
+      route: SettingsRoute,
+      component: () => (
+        <SettingsView
+          slots={slots}
+          section={() => section() ?? SectionIds.general}
+          visits={visits}
+          open={open}
+          setFocus={(next) => setFocus(() => next)}
+          closeKeys={() => keysOf("settings.close")}
+        />
+      ),
+    });
+    slots.add(Actions, {
+      id: "settings.open",
+      order: 8,
+      title: "Open settings",
+      category: "Settings",
+      keywords: ["preferences", "theme", "appearance", "general"],
+      icon: GearIcon,
+      keys: "mod+,",
+      when: () => section() === undefined,
+      run: () => open("general"),
+    });
+    slots.add(Actions, {
+      id: "settings.close",
+      title: "Close settings",
+      category: "Settings",
+      icon: ArrowLeftIcon,
+      keys: ["escape", "mod+,"],
+      whileTyping: true,
+      order: -10,
+      when: () => section() !== undefined,
+      run: () => open(undefined),
+    });
+    slots.add(Actions, {
+      id: "settings.search",
+      title: "Search settings",
+      hidden: true,
+      keys: "/",
+      order: -10,
+      when: () => section() !== undefined && focus() !== undefined,
+      run: () => focus()?.(),
+    });
     // A section needing attention is the likeliest reason to open settings, so the button goes straight to it.
     const attention = () => slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
-    add(
-      slots.add(SidebarFooter, {
-        id: "settings",
-        component: (props) => (
-          <button
-            class="icon-button with-badge"
-            aria-label="Settings"
-            data-tip={attention() === undefined ? withKeys("Settings", keysOf("settings.open")) : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
-            onClick={() => {
-              open(attention()?.id ?? "general");
-              props.onPick();
-            }}
-          >
-            <GearIcon />
-            <Show when={attention()?.badge?.()}>{(badge) => <span class="count-badge">{Number.parseInt(badge(), 10) || "!"}</span>}</Show>
-          </button>
-        ),
-      }),
-    );
+    slots.add(SidebarFooter, {
+      id: "settings",
+      component: (props) => (
+        <button
+          class="icon-button with-badge"
+          aria-label="Settings"
+          data-tip={attention() === undefined ? withKeys("Settings", keysOf("settings.open")) : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
+          onClick={() => {
+            open(attention()?.id ?? "general");
+            props.onPick();
+          }}
+        >
+          <GearIcon />
+          <Show when={attention()?.badge?.()}>{(badge) => <span class="count-badge">{Number.parseInt(badge(), 10) || "!"}</span>}</Show>
+        </button>
+      ),
+    });
     return { settings: { section, open, params, setParams } };
   },
 });

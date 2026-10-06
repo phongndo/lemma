@@ -674,22 +674,20 @@ export default defineUiPlugin({
         label: "composer: an unsent prompt asks before the tab closes",
       }),
     );
-    plugin.onCleanup(use.slots.add(ComposerRegion, { id: "composer", component: () => <Composer deps={deps} /> }));
+    use.slots.add(ComposerRegion, { id: "composer", component: () => <Composer deps={deps} /> });
     // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
-    plugin.onCleanup(use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages }));
-    plugin.onCleanup(use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow }));
-    plugin.onCleanup(use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow }));
-    plugin.onCleanup(
-      use.slots.add(Actions, {
-        id: ActionIds.focusComposer,
-        order: 3,
-        title: "Focus prompt",
-        category: "Thread",
-        icon: ChatIcon,
-        keys: "/",
-        when: () => focus() !== undefined,
-        run: () => focus()?.(),
-      }),
-    );
+    use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
+    use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow });
+    use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow });
+    use.slots.add(Actions, {
+      id: ActionIds.focusComposer,
+      order: 3,
+      title: "Focus prompt",
+      category: "Thread",
+      icon: ChatIcon,
+      keys: "/",
+      when: () => focus() !== undefined,
+      run: () => focus()?.(),
+    });
   },
 });
