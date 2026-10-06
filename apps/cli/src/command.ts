@@ -1,7 +1,7 @@
 import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "@effect/rpc";
-import type { HostError } from "@lemma/contracts";
+import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/plugin-transport";
 
@@ -45,7 +45,7 @@ export interface Options {
   readonly desc: boolean;
   readonly range?: string | undefined;
   readonly model?: string | undefined;
-  readonly thinking?: string | undefined;
+  readonly thinking?: ThinkingLevel | undefined;
   readonly images: readonly string[];
   readonly follow: boolean;
   readonly questions?: QuestionPolicy | undefined;
@@ -64,7 +64,7 @@ export interface Options {
   /** `run`: the submission's id, for exactly-once delivery. */
   readonly requestId?: string | undefined;
   /** `run`: what the prompt does while the session has a turn running. */
-  readonly whenBusy?: "steer" | "follow-up" | "reject" | undefined;
+  readonly whenBusy?: WhenBusy | undefined;
 }
 
 /** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */

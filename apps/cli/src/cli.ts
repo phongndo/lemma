@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import {
   appUrl,
@@ -21,7 +21,9 @@ import {
   recordsBetween,
   recordSummary,
   sortRecords,
+  ThinkingLevel,
   trajectory,
+  WhenBusy,
 } from "@lemma/contracts";
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
@@ -195,8 +197,6 @@ Options
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
 2 usage error, 3 no running host or it could not be reached.`;
 
-const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
 /** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
 export const parseOffset = (text: string): number | undefined => {
   if (/^\d+(\.\d+)?$/.test(text)) return Number(text) * 1000;
@@ -340,7 +340,6 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return sessionCommand(sub, arg, rest, options, io);
     case "run": {
       if (sub === undefined || (positionals.length < 3 && options.images.length === 0)) return usage("run needs a session id (or new) and a prompt");
-      if (options.thinking !== undefined && !THINKING.has(options.thinking)) return usage(`--thinking must be one of ${[...THINKING].join(", ")}`);
       return runCommand(sub, positionals.slice(2));
     }
     case "open":
@@ -711,8 +710,11 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   const limit = values.limit === undefined ? undefined : Number(values.limit);
   if (limit !== undefined && !(Number.isInteger(limit) && limit >= 1 && limit <= FILE_SEARCH_LIMIT))
     return report(io, values.json, usage(`--limit must be a whole number from 1 to ${FILE_SEARCH_LIMIT}`));
-  if (whenBusy !== undefined && whenBusy !== "steer" && whenBusy !== "follow-up" && whenBusy !== "reject")
-    return report(io, values.json, usage("--when-busy must be steer, follow-up, or reject"));
+  if (whenBusy !== undefined && !Schema.is(WhenBusy)(whenBusy))
+    return report(io, values.json, usage(`--when-busy must be one of ${WhenBusy.literals.join(", ")}`));
+  const thinking = values.thinking;
+  if (thinking !== undefined && !Schema.is(ThinkingLevel)(thinking))
+    return report(io, values.json, usage(`--thinking must be one of ${ThinkingLevel.literals.join(", ")}`));
   const options: Options = {
     json: values.json,
     all: values.all,
@@ -725,7 +727,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     desc: values.desc,
     range: values.range,
     model: values.model,
-    thinking: values.thinking,
+    thinking,
     images: values.image,
     follow: values.follow,
     questions: values.questions as QuestionPolicy | undefined,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Deferred, Duration, Effect, Fiber, FiberMap, Stream } from "effect";
-import { branchOf, contentText, ThinkingLevel, trajectory } from "@lemma/contracts";
+import { branchOf, contentText, trajectory } from "@lemma/contracts";
 import type {
   AssistantMessage,
   HostEvent,
@@ -11,7 +11,6 @@ import type {
   InteractionRequest,
   PromptContent,
   TextContent,
-  ThinkingLevel as Thinking,
   TurnOptions,
   UiComposition,
 } from "@lemma/contracts";
@@ -156,15 +155,10 @@ const readImage = (io: Io, path: string) =>
     return { type: "image", data: data.toString("base64"), mimeType } satisfies ImageContent;
   });
 
-const turnOptions = (options: Options): TurnOptions | CliError => {
-  if (options.thinking !== undefined && !(ThinkingLevel.literals as readonly string[]).includes(options.thinking)) {
-    return usage(`--thinking must be one of ${ThinkingLevel.literals.join(", ")}`);
-  }
-  return {
-    ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.thinking === undefined ? {} : { thinking: options.thinking as Thinking }),
-  };
-};
+const turnOptions = (options: Options): TurnOptions => ({
+  ...(options.model === undefined ? {} : { model: options.model }),
+  ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
+});
 
 /**
  * How a turn ended, from the log: the reply, the reason, usage, and time. The
@@ -201,7 +195,6 @@ export const runCommand =
   (connection, io, options) =>
     Effect.gen(function* () {
       const turn = turnOptions(options);
-      if (turn instanceof CliError) return yield* turn;
       const text = words.join(" ").trim();
       const images = yield* Effect.forEach(options.images, (path) => readImage(io, path));
       if (text === "" && images.length === 0) return yield* usage("run needs a prompt");
