@@ -55,8 +55,6 @@ export interface FileSearchInit {
   readonly open?: OpenFinder;
   /** An index nobody has searched for this long is closed. */
   readonly idleMs: number;
-  /** What `~` expands to. Defaults to the OS home directory. */
-  readonly home?: string;
 }
 
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
@@ -105,7 +103,7 @@ interface Index {
 export const makeFileSearch = (init: FileSearchInit) =>
   Effect.gen(function* () {
     const open = init.open ?? openFff;
-    const home = init.home ?? homedir();
+    const home = homedir();
     const realHome = yield* Effect.promise(() => realpath(home).catch(() => home));
     const idleMs = Math.min(init.idleMs, MAX_TIMEOUT_MS);
     const indexes = new Map<string, Index>();

@@ -64,8 +64,8 @@ interface Options {
   readonly fetch?: typeof fetch;
 }
 
-/** `custom`: the user's entry for a provider they added (`true` when only that much is known). */
-export function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom: CustomProvider | boolean = false): ProviderInfo {
+/** `custom`: the user's entry for a provider they added. */
+function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom: CustomProvider | undefined): ProviderInfo {
   const { apiKey, oauth } = provider.auth;
   return {
     id: provider.id,
@@ -76,8 +76,8 @@ export function toProviderInfo(provider: Provider, check: AuthCheck | undefined,
     ],
     configured: check !== undefined,
     ...(check?.source === undefined ? {} : { source: check.source }),
-    ...(custom === false ? {} : { custom: true }),
-    ...(typeof custom === "object" && custom.logo !== undefined ? { logo: custom.logo } : {}),
+    ...(custom === undefined ? {} : { custom: true }),
+    ...(custom?.logo === undefined ? {} : { logo: custom.logo }),
   };
 }
 
@@ -283,7 +283,7 @@ export function makeLlmPlugin(options: Options = {}) {
               (provider) =>
                 Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
                   Effect.orElseSucceed(() => undefined),
-                  Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id) ?? false)),
+                  Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id))),
                 ),
               { concurrency: "unbounded" },
             ),

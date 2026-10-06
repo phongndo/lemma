@@ -41,7 +41,8 @@ interface EnvironmentFacts {
  * day precision and the session id is fixed per session, so the system prompt
  * (and with it the provider's prompt cache) stays stable within a session and day.
  */
-export function environment(facts: EnvironmentFacts, now: Date = new Date()): string {
+function environment(facts: EnvironmentFacts): string {
+  const now = new Date();
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return [
     "<environment>",

@@ -12,7 +12,7 @@ interface HostPluginOptions {
   /** The app owns the loader; it hands the plugin a handle rather than the loader itself. */
   readonly control: HostControlService;
   /** `core.faults` of the composition this plugin runs in, so clients hear about failures. */
-  readonly faults?: Stream.Stream<PluginFault>;
+  readonly faults: Stream.Stream<PluginFault>;
 }
 
 /** The host API version this host provides (see `HostApi`); a plugin written for another is left out. */
@@ -40,16 +40,14 @@ export function hostPlugin(options: HostPluginOptions): Plugin<readonly [typeof 
             const events = yield* Events;
             const owner = yield* PluginContext;
             const changed = Effect.flatMap(options.control.plugins, (plugins) => events.publish(PluginsChanged, { plugins }));
-            if (options.faults) {
-              yield* owner.background(
-                "faults",
-                Stream.runForEach(options.faults, (fault) =>
-                  events
-                    .publish(Notice, { level: "error", source: fault.pluginId, message: `${fault.message}: ${Cause.pretty(fault.cause)}` })
-                    .pipe(Effect.zipRight(changed)),
-                ),
-              );
-            }
+            yield* owner.background(
+              "faults",
+              Stream.runForEach(options.faults, (fault) =>
+                events
+                  .publish(Notice, { level: "error", source: fault.pluginId, message: `${fault.message}: ${Cause.pretty(fault.cause)}` })
+                  .pipe(Effect.zipRight(changed)),
+              ),
+            );
             return {
               plugins: options.control.plugins,
               composition: options.control.composition,

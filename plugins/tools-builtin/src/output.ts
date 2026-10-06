@@ -22,9 +22,9 @@ const bytes = (text: string) => Buffer.byteLength(text, "utf8");
  * file the model can read or grep.
  */
 export class OutputAccumulator {
-  private readonly maxLines: number;
-  private readonly maxBytes: number;
-  private readonly rollingBytes: number;
+  private readonly maxLines = DEFAULT_MAX_LINES;
+  private readonly maxBytes = DEFAULT_MAX_BYTES;
+  private readonly rollingBytes = DEFAULT_MAX_BYTES * 2;
   private readonly decoder = new TextDecoder();
   private raw: Buffer[] = [];
   private tail = "";
@@ -41,11 +41,8 @@ export class OutputAccumulator {
 
   private readonly prefix: string;
 
-  constructor(prefix: string, limits: { readonly maxLines?: number; readonly maxBytes?: number } = {}) {
+  constructor(prefix: string) {
     this.prefix = prefix;
-    this.maxLines = limits.maxLines ?? DEFAULT_MAX_LINES;
-    this.maxBytes = limits.maxBytes ?? DEFAULT_MAX_BYTES;
-    this.rollingBytes = Math.max(this.maxBytes * 2, 1);
   }
 
   private get totalLines(): number {
