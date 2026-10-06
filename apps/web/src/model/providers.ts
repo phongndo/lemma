@@ -1,4 +1,4 @@
-import type { ProviderInfo, CustomProviderSpec } from "@lemma/contracts";
+import type { CustomProviderSpec, NoticePayload, ProviderInfo } from "@lemma/contracts";
 import { matchesQuery } from "./palette.ts";
 import claude from "../assets/providers/claude-ai-icon.svg?url";
 import openai from "../assets/providers/openai.svg?url";
@@ -224,3 +224,34 @@ export const logoProblem = (svg: string): string | undefined => {
  * handlers in the file do not run and its ids cannot clash with the page's.
  */
 export const logoSource = (svg: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
+
+/** What a login shows, from its notices: the page to open, the code to enter there, what it says on the way, and the latest progress. */
+export interface SignInState {
+  readonly link?: { readonly url: string } | undefined;
+  readonly device?: { readonly code: string; readonly url: string } | undefined;
+  /** The latest of its other notices, such as documentation for the credentials it asks for. */
+  readonly info?: { readonly message: string; readonly links: NonNullable<NoticePayload["links"]> } | undefined;
+  /** Progress since the latest link or code, without its trailing ellipsis. */
+  readonly status?: string | undefined;
+}
+
+export const signInState = (notices: readonly NoticePayload[]): SignInState =>
+  notices.reduce<SignInState>((state, notice) => {
+    const url = notice.links?.[0]?.url;
+    switch (notice.kind) {
+      case "device-code":
+        return notice.code === undefined || url === undefined ? state : { ...state, device: { code: notice.code, url }, status: undefined };
+      case "sign-in":
+        return url === undefined ? state : { ...state, link: { url }, status: undefined };
+      case "progress":
+        return { ...state, status: notice.message.replace(/(\.{3}|…)$/, "") };
+      case "signed-in":
+      case "ended":
+        return state;
+      default:
+        return { ...state, info: { message: notice.message, links: notice.links ?? [] } };
+    }
+  }, {});
+
+/** A login's notices that end it: after one, its earlier link and code are no longer any use. */
+export const endsLogin = (notice: NoticePayload) => notice.kind === "signed-in" || notice.kind === "ended";

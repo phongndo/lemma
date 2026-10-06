@@ -27,7 +27,7 @@ export default defineUiPlugin({
     const overrides = parseBindings(plugin.config.bindings ?? []);
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
-      // A question some view shows inline (a login on the Providers page) is not a modal; the question dialog's are.
+      // A question some view shows itself (the palette's) is that view's; one the question dialog shows is a modal.
       const modal = dialogs.current() !== undefined || interactions.open().some((request) => !interactions.claimed(request));
       const inField = typing(event.target);
       for (const action of slots.list(Actions)) {

@@ -1084,8 +1084,8 @@ try {
   await fresh.click(".composer-callout >> text=Log in to a provider");
   await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
   await fresh.locator(".provider", { hasText: "OpenCode Zen" }).locator(".provider-connect").click();
-  await fresh.fill(".provider-key input", "sk-check");
-  await fresh.press(".provider-key input", "Enter");
+  await fresh.fill(".connect input[type=password]", "sk-check");
+  await fresh.press(".connect input[type=password]", "Enter");
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
   await fresh.waitForSelector("textarea");
   assert.equal(await fresh.locator(".composer-callout").count(), 0, "the no-provider notice stayed after connecting one");
@@ -1112,8 +1112,60 @@ try {
   await fresh.close();
   expectNoErrors("connecting a first provider and reloading the UI");
 
+  // 12. Connecting a provider, each way, in one dialog: a sign-in page with its paste fallback, a device code, a question after a
+  // documentation link, and a new custom provider whose key is answered for it; closing cancels, and leaves no link behind.
+  const connect = await open();
+  connect.on("pageerror", (error) => errors.push(error.message));
+  await connect.goto(`${url}/settings/providers?mock=fresh`);
+  await connect.locator(".provider", { hasText: "OpenAI" }).first().locator(".provider-connect").click();
+  await connect.click(".menu-item >> text=Sign in with ChatGPT");
+  await connect.waitForSelector(".connect .connect-url");
+  assert.equal(await connect.locator(".connect .connect-paste input").count(), 1, "the sign-in page's dialog has no paste-the-address fallback");
+  assert.equal(await connect.locator(".toast").count(), 0, "the sign-in's link showed as a toast as well as in its dialog");
+  await connect.mouse.click(5, 400);
+  assert.equal(await connect.locator(".connect").count(), 1, "a click on the backdrop cancelled the login");
+  await connect.click(".connect .dialog-foot >> text=Cancel");
+  await connect.waitForSelector(".connect", { state: "detached" });
+  await connect.waitForSelector(".provider:has-text('OpenAI') >> text=Connect");
+  assert.equal(await connect.locator(".toast").count(), 0, "cancelling left a toast behind: its link, or a failure");
+
+  await connect.locator(".provider", { hasText: "GitHub Copilot" }).first().locator(".provider-connect").click();
+  await connect.click(".menu-item >> text=/GitHub Copilot/");
+  await connect.waitForSelector(".connect .connect-code >> text=WDJB-MJHT");
+  await connect.keyboard.press("Escape");
+  await connect.waitForSelector(".connect", { state: "detached" });
+
+  await connect.fill("input[aria-label='Search providers']", "bedrock");
+  await connect.locator(".provider", { hasText: "Amazon Bedrock" }).first().locator(".provider-connect").click();
+  await connect.waitForSelector(".connect .connect-info >> text=AWS profiles");
+  assert.equal(await connect.locator(".connect .connect-paste").count(), 0, "a documentation link made the question look like a sign-in page's fallback");
+  // A blank answer is one: the default profile.
+  await connect.click(".connect .connect-question button[type=submit]");
+  await connect.waitForSelector(".connect", { state: "detached" });
+  await connect.waitForSelector(".provider:has-text('Amazon Bedrock') >> text=Manage");
+  await connect.fill("input[aria-label='Search providers']", "");
+
+  await connect.locator(".provider", { hasText: "Custom provider" }).locator(".provider-connect").click();
+  await connect.waitForSelector(".custom-provider-form");
+  await connect.evaluate(() => {
+    const seen = new MutationObserver(() => {
+      if (document.querySelector(".dialog.connect:not(.custom-provider)") !== null) (window as any).sawConnect = true;
+    });
+    seen.observe(document.body, { childList: true, subtree: true });
+  });
+  const fields = connect.locator(".custom-provider-form input");
+  await fields.nth(0).fill("Gateway");
+  await fields.nth(1).fill("http://localhost:4000/v1");
+  await fields.nth(2).fill("m1");
+  await fields.nth(3).fill("sk-gateway");
+  await connect.click(".custom-provider >> text=Add provider");
+  await connect.waitForSelector(".custom-provider", { state: "detached", timeout: 10_000 });
+  assert.notEqual(await connect.evaluate(() => (window as any).sawConnect), true, "adding a custom provider with a key opened the connect dialog too");
+  await connect.close();
+  expectNoErrors("connecting providers each way");
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog.`,
   );
 } catch (error) {
   await saveArtifacts();

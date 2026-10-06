@@ -1,0 +1,363 @@
+.callout-info {
+  background: var(--accent-soft);
+  color: var(--text);
+  align-items: center;
+}
+
+.callout-info .icon {
+  margin: 0;
+  color: var(--accent-text);
+}
+
+.callout-info .button {
+  margin-left: auto;
+}
+
+.providers-top {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 8px;
+  min-height: 48px;
+  padding: 6px 0;
+}
+
+.provider-models-toggle {
+  font-size: 12px;
+}
+
+.provider-models {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 0 0 4px 36px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.provider-models li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.provider-model-ref {
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider.configured .provider-mark {
+  color: var(--text);
+}
+
+.provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.provider-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-connect {
+  flex: none;
+  min-width: 76px;
+  justify-content: center;
+}
+
+.provider-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.menu-danger {
+  color: var(--err);
+}
+
+.menu-danger[data-active="true"] {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+.settings-intro {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* Connecting a provider: the key to paste, or the page to open and the code to enter there, and what it waits for. */
+.dialog.connect {
+  width: 500px;
+}
+
+.connect-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.connect-title > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.connect-method {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.connect .dialog-body {
+  gap: 12px;
+}
+
+.connect-lead {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.connect-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-sunk);
+}
+
+.connect-url code {
+  flex: 1;
+  min-width: 0;
+  max-height: 4.8em;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  word-break: break-all;
+  user-select: all;
+  outline: none;
+}
+
+.connect-url code:focus-visible {
+  color: var(--text);
+}
+
+.connect-url .icon-button {
+  flex: none;
+}
+
+.connect-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-sunk);
+}
+
+.connect-code code {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  user-select: all;
+}
+
+.connect-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.connect-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.connect-hint,
+.connect-note {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.connect-note {
+  margin: 0;
+}
+
+.connect-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-2);
+}
+
+.connect-paste {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.connect-paste summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.connect-paste summary:hover {
+  color: var(--text);
+}
+
+.connect-paste p {
+  margin: 8px 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.connect-form {
+  display: flex;
+  gap: 8px;
+}
+
+.connect-form .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.connect-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connect-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connect-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: none;
+  text-align: left;
+}
+
+.connect-choice:hover,
+.connect-choice:focus-visible {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.connect-choice-label {
+  font-weight: 500;
+}
+
+.connect-choice-desc {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.connect-get-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12.5px;
+}
+
+.connect-get-key .icon {
+  width: 11px;
+  height: 11px;
+}
+
+/* Adding a custom provider: each field under its label. */
+.custom-provider-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-2);
+}
+
+.custom-provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.custom-provider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.custom-provider-field small {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.custom-provider-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-provider-problem {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.connect-form > .button {
+  height: auto;
+}
+
+.connect-info {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}

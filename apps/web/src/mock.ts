@@ -9,6 +9,7 @@ import type {
   InteractionAnswer,
   InteractionRequest,
   ModelInfo,
+  NoticePayload,
   PluginStatus,
   PromptContent,
   QueuedPrompt,
@@ -366,6 +367,15 @@ export const createMockHost = (): Host => {
   };
   const pendingAnswers = new Map<string, (answer: InteractionAnswer | undefined) => void>();
   const openRequests = new Map<string, InteractionRequest>();
+  /** Running logins, by provider, so `cancelLogin` can stop one. */
+  const logins = new Map<string, AbortController>();
+  /** Closes a question as if dismissed: its asker sees no answer. */
+  const withdrawRequest = (requestId: string) => {
+    pendingAnswers.get(requestId)?.(undefined);
+    pendingAnswers.delete(requestId);
+    openRequests.delete(requestId);
+    emit({ type: "interaction-closed", id: requestId });
+  };
   const cancelled = new Set<string>();
   const running = new Set<string>();
   /** Prompts sent while a turn ran, as the agent queues them: steers join it after its tool step, follow-ups run next. */
@@ -846,45 +856,92 @@ export const createMockHost = (): Host => {
       models: async () => MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured),
       login: async (provider, type) => {
         const p = providers.find((x) => x.id === provider)!;
-        if (type === "api_key") {
-          const answer = await ask({
-            type: "interaction",
-            request: { type: "ask", id: id("i"), origin: `login:${p.id}`, title: `${p.name} API key`, placeholder: "sk-…", secret: true },
+        const origin = `login:${p.id}`;
+        const cancel = new AbortController();
+        logins.set(p.id, cancel);
+        const cancelled = () => new HostError({ code: "Cancelled", message: `${p.name} login was cancelled`, subject: p.id });
+        /** Asks under the login's origin; a cancelled login withdraws the question. */
+        const loginAsk = (request: InteractionRequest) => {
+          const withdraw = () => withdrawRequest(request.id);
+          cancel.signal.addEventListener("abort", withdraw, { once: true });
+          return ask({ type: "interaction", request }).finally(() => cancel.signal.removeEventListener("abort", withdraw));
+        };
+        const notice = (notice: Omit<NoticePayload, "level" | "source" | "origin">) =>
+          emit({ type: "notice", notice: { level: "info", source: "llm", origin, ...notice } });
+        /** Resolves after `ms`, or rejects once the login is cancelled. */
+        const wait = (ms: number) =>
+          new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, ms);
+            cancel.signal.addEventListener("abort", () => (clearTimeout(timer), reject(cancelled())), { once: true });
           });
-          if (answer === undefined || answer.type !== "ask" || answer.value === "") throw new Error("Login cancelled");
-        } else {
-          const answer = await ask({
-            type: "interaction",
-            request: {
-              type: "select",
-              id: id("i"),
-              origin: `login:${p.id}`,
-              title: `Log in to ${p.name}`,
-              options: [
-                { value: "browser", label: "Open browser", description: "Sign in on the provider's site" },
-                { value: "device", label: "Device code", description: "Enter a code on another device" },
-              ],
-            },
-          });
-          if (answer === undefined) throw new Error("Login cancelled");
-          emit({
-            type: "notice",
-            notice: {
-              level: "info",
-              source: "lemma/llm-pi-ai",
-              message: `Enter this code to finish logging in to ${p.name}`,
+        try {
+          if (type === "api_key" && p.id === "amazon-bedrock") {
+            // As Bedrock's does: documentation first, then a question that a blank answer also settles.
+            notice({
+              message: "Amazon Bedrock supports AWS profiles, IAM credentials, and role-based credentials.",
+              links: [{ url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html", label: "AWS profiles" }],
+            });
+            const answer = await loginAsk({ type: "ask", id: id("i"), origin, title: "Enter AWS profile name (blank for default):", placeholder: "default" });
+            if (answer === undefined) throw cancelled();
+          } else if (type === "api_key") {
+            const answer = await loginAsk({ type: "ask", id: id("i"), origin, title: `${p.name} API key`, placeholder: "sk-…", secret: true });
+            if (answer === undefined || answer.type !== "ask" || answer.value === "") throw cancelled();
+          } else if (p.id === "github-copilot") {
+            // As GitHub's device flow does: a code to enter on github.com, then polling until it is approved.
+            notice({
+              kind: "device-code",
+              message: `Enter code WDJB-MJHT at https://github.com/login/device to sign in to ${p.name}.`,
               code: "WDJB-MJHT",
-              links: [{ url: "https://github.com/login/device", label: "Open login page" }],
-            },
-          });
-          await sleep(4000);
+              links: [{ url: "https://github.com/login/device", label: "Enter code" }],
+            });
+            await wait(8000);
+            notice({ kind: "progress", message: "Enabling models..." });
+            await wait(600);
+          } else {
+            // As ChatGPT's sign-in does: a link, and a paste-the-redirect prompt racing the loopback callback.
+            notice({
+              kind: "sign-in",
+              message: "Complete sign-in in your browser. If the callback does not complete, paste the final redirect URL here.",
+              links: [
+                {
+                  url: `https://auth.example.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&code_challenge=${"x".repeat(43)}&state=${p.id}`,
+                  label: `Sign in to ${p.name}`,
+                },
+              ],
+            });
+            const pasted = loginAsk({
+              type: "ask",
+              id: id("i"),
+              origin,
+              title: "Complete login in your browser, or paste the final redirect URL here:",
+              placeholder: "http://localhost:1455/auth/callback",
+              kind: "sign-in-code",
+            });
+            const callback = wait(12000).then(() => "callback" as const);
+            const first = await Promise.race([pasted.then((answer) => ({ answer })), callback]);
+            if (first === "callback") {
+              // The browser reached the host: the paste prompt is no longer needed.
+              const open = [...openRequests.values()].find((request) => request.origin === origin);
+              if (open !== undefined) withdrawRequest(open.id);
+            } else if (first.answer === undefined) throw cancelled();
+            notice({ kind: "progress", message: "Exchanging authorization code for tokens..." });
+            await wait(700);
+          }
+        } catch (error) {
+          notice({ kind: "ended", message: cancel.signal.aborted ? `${p.name} login was cancelled` : `${p.name} login failed` });
+          throw error;
+        } finally {
+          logins.delete(p.id);
         }
         const i = providers.indexOf(p);
         providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "auth.json" };
-        emit({ type: "notice", notice: { level: "info", source: "llm", message: `Logged in to ${p.name}` } });
+        notice({ kind: "signed-in", message: `Logged in to ${p.name}` });
       },
-      // The fake's logins cannot be stopped; none is ever running for a second client to cancel.
-      cancelLogin: async () => false,
+      cancelLogin: async (provider) => {
+        const running = logins.get(provider);
+        running?.abort();
+        return running !== undefined;
+      },
       logout: async (provider) => {
         const i = providers.findIndex((x) => x.id === provider);
         const { source: _source, ...rest } = providers[i]!;

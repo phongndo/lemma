@@ -1,4 +1,5 @@
 import { batch, createMemo, createSignal } from "solid-js";
+import { HostError } from "@lemma/contracts";
 import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/contracts";
 import { load, loadJson, save } from "../lib/storage.ts";
 import { DEFAULT_THINKING, clampThinking, resolveModel } from "../model/prefs.ts";
@@ -119,13 +120,23 @@ export default defineUiPlugin({
             await refresh();
             return true;
           } catch (error) {
-            notify.report(error, `Login to ${provider.name} failed`);
+            // Whoever cancelled it knows.
+            if (!(error instanceof HostError && error.code === "Cancelled")) notify.report(error, `Login to ${provider.name} failed`);
             return false;
           } finally {
             setLoggingIn(undefined);
-            // Device codes and login links from this attempt are no longer useful.
-            notify.dismissWhere((toast) => toast.id > before && (toast.code !== undefined || toast.links !== undefined));
+            // Device codes, login links, and progress from this attempt are no longer useful; its success still is.
+            const origin = `login:${provider.id}`;
+            notify.dismissWhere(
+              (toast) => toast.id > before && toast.kind !== "signed-in" && (toast.code !== undefined || toast.links !== undefined || toast.origin === origin),
+            );
           }
+        },
+        cancelLogin: async (provider: ProviderInfo) => {
+          return host.llm.cancelLogin(provider.id).catch((error) => {
+            notify.report(error, `Could not cancel the ${provider.name} login`);
+            return true;
+          });
         },
         logout: async (provider: ProviderInfo) => {
           try {

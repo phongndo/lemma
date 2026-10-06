@@ -16,6 +16,7 @@ export default defineUiPlugin({
   provides: { notify: Notify },
   setup: ({ client }, plugin) => {
     const [toasts, setToasts] = createSignal<readonly Toast[]>([]);
+    const [claims, setClaims] = createSignal<readonly ((toast: Toast) => boolean)[]>([]);
     const timers = new Set<number>();
     let seq = 0;
     const dismiss = (id: number) => setToasts((all) => all.filter((toast) => toast.id !== id));
@@ -41,13 +42,15 @@ export default defineUiPlugin({
     plugin.onCleanup(
       client.onEvent((event) => {
         if (event.type !== "notice") return;
-        const { level, message, source, links, code } = event.notice;
+        const { level, message, source, links, code, origin, kind } = event.notice;
         toast({
           level,
           message,
           ...(source === undefined ? {} : { source }),
           ...(links === undefined ? {} : { links }),
           ...(code === undefined ? {} : { code }),
+          ...(origin === undefined ? {} : { origin }),
+          ...(kind === undefined ? {} : { kind }),
         });
       }),
     );
@@ -59,6 +62,13 @@ export default defineUiPlugin({
         dismissWhere: (drop: (toast: Toast) => boolean) => setToasts((all) => all.filter((item) => !drop(item))),
         report: (error: unknown, context?: string) =>
           void toast({ level: "error", message: context === undefined ? describeError(error) : `${context}: ${describeError(error)}` }),
+        claim: (which: (toast: Toast) => boolean) => {
+          // A fresh function per claim, so releasing removes this one only.
+          const claim = (toast: Toast) => which(toast);
+          setClaims((all) => [...all, claim]);
+          return () => setClaims((all) => all.filter((other) => other !== claim));
+        },
+        claimed: (toast: Toast) => claims().some((claim) => claim(toast)),
       },
     };
   },

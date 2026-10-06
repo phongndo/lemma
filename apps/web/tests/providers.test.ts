@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderInfo } from "@lemma/contracts";
-import { customProviderProblem, customProviderSpec, logoProblem, logoSource, providerGroups } from "../src/model/providers.ts";
+import type { NoticePayload, ProviderInfo } from "@lemma/contracts";
+import { customProviderProblem, customProviderSpec, logoProblem, logoSource, endsLogin, providerGroups, signInState } from "../src/model/providers.ts";
 
 const key = { type: "api_key", name: "API key", interactive: true } as const;
 const oauth = { type: "oauth", name: "Sign in", interactive: true } as const;
@@ -75,5 +75,32 @@ describe("custom logos", () => {
 
   it("draws one as an image", () => {
     expect(logoSource(` <svg viewBox="0 0 1 1"/> `)).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg viewBox="0 0 1 1"/>`)}`);
+  });
+});
+
+describe("signInState", () => {
+  const notice = (fields: Partial<NoticePayload>): NoticePayload => ({ level: "info", message: "", origin: "login:openai", ...fields });
+
+  it("shows the latest link or code by kind, and progress only since it", () => {
+    expect(signInState([])).toEqual({});
+    const link = notice({ kind: "sign-in", message: "Complete sign-in in your browser.", links: [{ url: "https://auth.test/authorize", label: "Sign in" }] });
+    expect(signInState([link])).toEqual({ link: { url: "https://auth.test/authorize" }, status: undefined });
+    expect(signInState([link, notice({ kind: "progress", message: "Exchanging authorization code for tokens..." })]).status).toBe(
+      "Exchanging authorization code for tokens",
+    );
+
+    const device = notice({ kind: "device-code", message: "Enter code ABCD-1234", code: "ABCD-1234", links: [{ url: "https://github.com/login/device" }] });
+    const state = signInState([notice({ kind: "progress", message: "Starting…" }), device]);
+    expect(state.device).toEqual({ code: "ABCD-1234", url: "https://github.com/login/device" });
+    expect(state.status).toBeUndefined();
+  });
+
+  it("keeps a documentation link apart from a sign-in page", () => {
+    const docs = notice({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
+    const state = signInState([docs]);
+    expect(state.link).toBeUndefined();
+    expect(state.info).toEqual({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
+    expect(endsLogin(notice({ kind: "ended" }))).toBe(true);
+    expect(endsLogin(docs)).toBe(false);
   });
 });

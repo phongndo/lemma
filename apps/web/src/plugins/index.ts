@@ -25,7 +25,7 @@ import pages from "./pages.tsx";
 import palette from "./palette.tsx";
 import pluginsPage from "./plugins-page.tsx";
 import projectsPage from "./projects-page.tsx";
-import providers from "./providers.tsx";
+import providers from "./providers/index.tsx";
 import reload from "./reload.tsx";
 import router from "./router.ts";
 import threadView from "./thread-view.tsx";

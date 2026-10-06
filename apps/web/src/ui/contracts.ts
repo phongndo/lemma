@@ -111,6 +111,10 @@ export interface Toast {
   readonly source?: string;
   readonly links?: NoticePayload["links"];
   readonly code?: string;
+  /** What it belongs to (`login:<provider>`), as the host's notice says. */
+  readonly origin?: string;
+  /** What a login's notice is (`sign-in`, `device-code`, …), as the host's notice says. */
+  readonly kind?: NoticePayload["kind"];
 }
 
 export interface NotifyService {
@@ -122,6 +126,13 @@ export interface NotifyService {
   readonly dismissWhere: (drop: (toast: Toast) => boolean) => void;
   /** Shows a failure; `context` says what failed. */
   readonly report: (error: unknown, context?: string) => void;
+  /**
+   * Shows messages somewhere else: those `which` picks (a sign-in dialog, its
+   * login's link and code). The toasts leave them undrawn until released.
+   */
+  readonly claim: (which: (toast: Toast) => boolean) => () => void;
+  /** Some view shows this message itself. */
+  readonly claimed: (toast: Toast) => boolean;
 }
 export class Notify extends Context.Service<Notify, NotifyService>()("lemma-ui/Notify") {}
 
@@ -210,8 +221,10 @@ export interface ModelsService {
   readonly turnOptions: () => TurnOptions | undefined;
   /** The provider whose login is running. */
   readonly loggingIn: Accessor<string | undefined>;
-  /** Resolves true once the provider is connected. */
+  /** Resolves true once the provider is connected; a cancelled login resolves false without a message. */
   readonly login: (provider: ProviderInfo, type: AuthType) => Promise<boolean>;
+  /** Stops the provider's running login, from this client or another; false when none was running. */
+  readonly cancelLogin: (provider: ProviderInfo) => Promise<boolean>;
   readonly logout: (provider: ProviderInfo) => Promise<void>;
   /** Adds a provider of the user's; resolves with it once the host lists it. Rejects when the host refuses. */
   readonly addCustom: (spec: CustomProviderSpec) => Promise<ProviderInfo>;
@@ -816,6 +829,8 @@ export interface DialogProps {
   readonly footer?: JSX.Element;
   readonly class?: string;
   readonly labelledBy?: string;
+  /** False keeps it open when the backdrop is clicked: closing would lose work a stray click should not (a login under way). */
+  readonly closeOnBackdrop?: boolean;
 }
 /** A modal: backdrop, Escape to close, focus kept inside. */
 export const DialogPart = definePart<DialogProps>("dialog");

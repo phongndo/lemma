@@ -50,7 +50,7 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
   );
 }
 
-/** Draws the `Notify` model's messages in a corner of the page; turning it off leaves the messages undrawn, not lost. */
+/** Draws the `Notify` model's messages in a corner of the page, but those a view claims; turning it off leaves the messages undrawn, not lost. */
 export default defineUiPlugin({
   id: "toasts",
   styles,
@@ -61,7 +61,9 @@ export default defineUiPlugin({
       order: 100,
       component: () => (
         <div class="toasts" aria-live="polite">
-          <For each={notify.toasts()}>{(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} />}</For>
+          <For each={notify.toasts().filter((item) => !notify.claimed(item))}>
+            {(item) => <ToastView toast={item} onDismiss={() => notify.dismiss(item.id)} />}
+          </For>
         </div>
       ),
     });

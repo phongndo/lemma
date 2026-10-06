@@ -46,7 +46,7 @@ export function Dialog(props: DialogProps) {
       <div
         class="backdrop"
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget) props.onClose?.();
+          if (event.target === event.currentTarget && props.closeOnBackdrop !== false) props.onClose?.();
         }}
       >
         <div ref={panel} class={`dialog ${props.class ?? ""}`} role="dialog" aria-modal="true" aria-label={props.label} tabindex="-1" onKeyDown={onKey}>
