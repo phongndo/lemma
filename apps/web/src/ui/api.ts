@@ -51,23 +51,13 @@ export const api = {
   web,
   store,
   html,
-  /** The shared parts, as the bundled plugins draw them: each follows whatever replaces it. `parts.Contained`, `Each`, and `First` draw a slot's items, each contained. */
-  components: {
-    ConfigForm: parts.ConfigForm,
-    Dialog: parts.Dialog,
-    Markdown: parts.Markdown,
-    Popover: parts.Popover,
-    ProviderLogo: parts.ProviderLogo,
-    Segmented: parts.Segmented,
-    SettingRow: parts.SettingRow,
-    Toggle: parts.Toggle,
-    SearchField: parts.SearchField,
-    FileIcon: parts.FileTypeIcon,
-  },
-  /** Every part's proxy (icons by name included), and `partView` for a plugin's own parts. */
+  /**
+   * The shared parts as the bundled plugins draw them, each following whatever
+   * replaces it (`Icon`, `Dialog`, `PlusIcon`, …); `Contained`, `Each`, and
+   * `First` draw a slot's items, each contained, and `partView` draws a
+   * plugin's own part.
+   */
   parts,
-  /** Icons by their names, each the `icon` part. */
-  icons: parts,
   /** The bundled implementations of the shared parts, to wrap or fall back to from a replacement. */
   defaults: {
     ConfigForm: DefaultConfigForm,

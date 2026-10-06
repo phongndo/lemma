@@ -151,7 +151,7 @@ export const ChatTurnFooter = partView(ChatTurnFooterPart);
 export const SidebarRow = partView(SidebarRowPart);
 export const ProviderRowView = partView(ProviderRowPart);
 
-// Icons by their old names, each the icon part.
+// Each icon by name, drawn through the `icon` part.
 export const PlusIcon = () => <Icon name="plus" />;
 export const StopIcon = () => <Icon name="stop" />;
 export const SendIcon = () => <Icon name="send" />;
