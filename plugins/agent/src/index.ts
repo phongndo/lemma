@@ -14,7 +14,7 @@ import {
   ToolOutput,
   Tools,
 } from "@lemma/contracts";
-import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, TurnOptions } from "@lemma/contracts";
+import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionInfo, TurnOptions } from "@lemma/contracts";
 import { LiveTurn } from "./live.ts";
 import { planResume } from "./resume.ts";
 import { makeSlots } from "./slots.ts";
@@ -304,32 +304,39 @@ export default definePlugin({
           requests.of(sessionId).set(requestId, turnId);
         };
 
+        /** The turn starts running: whether it was cancelled first. */
+        const begin = (entry: Running) =>
+          Effect.sync(() => {
+            entry.started = true;
+            return entry.cancelling;
+          });
+        /** What a turn of `entry` runs with, fresh or resumed, besides its model, its prompts, and where it resumes. */
+        const turnInput = (sessionId: string, entry: Running, info: SessionInfo) => ({
+          sessionId,
+          turnId: entry.turnId,
+          cwd: info.cwd,
+          signal: entry.controller.signal,
+          inbox: inboxOf(sessionId, entry),
+          live: entry.live,
+          logged: loggedIn(sessionId, entry.turnId),
+          suspended: () => suspending,
+          stopping: Deferred.await(stopping),
+          idle: idle(entry),
+          ...(info.title === undefined ? {} : { title: info.title }),
+        });
+
         /** A new turn: the prompts it starts with, the last one's options choosing the model. */
         const fresh = (sessionId: string, entry: Running) =>
           Effect.gen(function* () {
             // Cancelled while it waited for a slot, it never runs, as a queued prompt withdrawn.
-            const cancelling = yield* Effect.sync(() => {
-              entry.started = true;
-              return entry.cancelling;
-            });
-            if (cancelling) return "cancelled" as const;
+            if (yield* begin(entry)) return "cancelled" as const;
             const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             const last = entry.prompts[entry.prompts.length - 1]?.options;
             const model = yield* resolveModel(sessionId, last);
             return yield* runTurn(services, settings, {
-              sessionId,
-              turnId: entry.turnId,
-              cwd: info.cwd,
+              ...turnInput(sessionId, entry, info),
               model,
               prompts: entry.prompts.map(({ requestId, content }) => ({ requestId, content })),
-              signal: entry.controller.signal,
-              inbox: inboxOf(sessionId, entry),
-              live: entry.live,
-              logged: loggedIn(sessionId, entry.turnId),
-              suspended: () => suspending,
-              stopping: Deferred.await(stopping),
-              idle: idle(entry),
-              ...(info.title === undefined ? {} : { title: info.title }),
               ...(last?.thinking === undefined ? {} : { thinking: last.thinking }),
             });
           });
@@ -344,10 +351,7 @@ export default definePlugin({
               Effect.as(Deferred.await(stopping), false),
             ]);
             if (!ready) return yield* Effect.interrupt;
-            const cancelling = yield* Effect.sync(() => {
-              entry.started = true;
-              return entry.cancelling;
-            });
+            const cancelling = yield* begin(entry);
             const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             const resume = planResume(log, entry.turnId, entry.marked);
             // Cut off before its first event: cancelled meanwhile, it never runs.
@@ -365,20 +369,10 @@ export default definePlugin({
               ...(restored?.turnId === entry.turnId ? { restored } : {}),
             };
             return yield* runTurn(services, settings, {
-              sessionId,
-              turnId: entry.turnId,
-              cwd: info.cwd,
+              ...turnInput(sessionId, entry, info),
               model,
               prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(({ requestId, content }) => ({ requestId, content })),
               resume: turnResume,
-              signal: entry.controller.signal,
-              inbox: inboxOf(sessionId, entry),
-              live: entry.live,
-              logged: loggedIn(sessionId, entry.turnId),
-              suspended: () => suspending,
-              stopping: Deferred.await(stopping),
-              idle: idle(entry),
-              ...(info.title === undefined ? {} : { title: info.title }),
               ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
             });
           });
