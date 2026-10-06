@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
@@ -7,6 +6,7 @@ import type { CoreClosed } from "@lemma/core";
 import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved } from "@lemma/contracts";
 import type { SessionInfo, Sessions } from "@lemma/contracts";
 import { errorCode } from "@lemma/contracts/fs";
+import type { FileSystem } from "@lemma/contracts/fs";
 import { applyMarks, CHANGED_ON_DISK, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
 import { encodeCwd, encodeLine, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
@@ -85,23 +85,25 @@ const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: 
 interface Options {
   /** Seconds an open session may go unused before it is unloaded; 0 keeps it loaded. */
   readonly unloadAfter: number;
+  /** Where the files are: the real file system, or a simulated disk in tests. */
+  readonly fs: FileSystem;
 }
 
-export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | PluginContext | Scope.Scope> =>
+export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | PluginContext | Scope.Scope> =>
   Effect.gen(function* () {
     const paths = yield* Paths;
     const events = yield* Events;
     const owner = yield* PluginContext;
     const root = paths.sessions;
     // Taken first, so it is released last, after every file is closed.
-    const holder = yield* Effect.acquireRelease(acquireLock(root), (holder) => releaseLock(root, holder));
+    const holder = yield* Effect.acquireRelease(acquireLock(root, undefined, fs), (holder) => releaseLock(root, holder, fs));
     // Kept fresh while the store runs, so another process sees it live; one that took it over stops this store.
-    yield* owner.background("keep the sessions lock", Effect.repeat(refreshLock(root, holder), Schedule.spaced(Duration.millis(REFRESH_MS))), {
+    yield* owner.background("keep the sessions lock", Effect.repeat(refreshLock(root, holder, fs), Schedule.spaced(Duration.millis(REFRESH_MS))), {
       required: true,
     });
     const entries = new Map<string, Entry>();
     /** The listing index: each file's `Scanned`, by path under `root`. */
-    const index = yield* readIndex(root);
+    const index = yield* readIndex(fs, root);
     let indexChanged = false;
     const keyOf = (file: string) => path.relative(root, file);
     const record = (entry: Entry, scanned: Scanned) => {
@@ -112,7 +114,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
     const saveIndex = Effect.suspend(() => {
       if (!indexChanged) return Effect.void;
       indexChanged = false;
-      return writeIndex(root, index);
+      return writeIndex(fs, root, index);
     });
     // A failed write's leftover bytes are cut first: the next start would read them as appended. Each open
     // session is then indexed from memory, so the next start reads none of them.
@@ -185,7 +187,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         if (prior !== undefined && prior.size === size && prior.mtimeMs === mtimeMs && prior.ino === ino) {
           return known ?? (yield* remember(id, at, prior.info, prior));
         }
-        const scanned = yield* scan(at, id, prior !== undefined && prior.ino === ino && size >= prior.validBytes ? prior : undefined);
+        const scanned = yield* scan(fs, at, id, prior !== undefined && prior.ino === ino && size >= prior.validBytes ? prior : undefined);
         const entry = known ?? (yield* remember(id, at, scanned.info));
         entry.info = scanned.info;
         record(entry, scanned);
@@ -214,7 +216,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
       Effect.gen(function* () {
         if (entries.get(entry.id) !== entry) return yield* notFound(entry.id, `Session ${entry.id} does not exist`);
         if (entry.open !== undefined) return entry.open;
-        const { scanned, ...loaded } = yield* load(entry.file, entry.id);
+        const { scanned, ...loaded } = yield* load(fs, entry.file, entry.id);
         if (loaded.size > loaded.validBytes) {
           const ignored = loaded.size - loaded.validBytes;
           yield* warn(`Session ${entry.id}: ignored the last ${ignored} bytes of ${entry.file}, a write a crash cut short; they are cut before the next write`);
@@ -233,7 +235,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
     const writerOf = (entry: Entry, open: Open) =>
       open.writer !== undefined
         ? Effect.succeed(open.writer)
-        : Effect.tap(openFile(entry.file, entry.id, open), (writer) =>
+        : Effect.tap(openFile(fs, entry.file, entry.id, open), (writer) =>
             Effect.sync(() => {
               open.writer = writer;
             }),
@@ -279,7 +281,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
         // Uninterruptible until the entry holds the writer, so its file is always closed.
         const entry = yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            const writer = yield* createFile(file, header);
+            const writer = yield* createFile(fs, file, header);
             const open: Open = {
               header,
               events: [],

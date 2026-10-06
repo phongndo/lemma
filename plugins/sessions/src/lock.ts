@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Option, Schema } from "effect";
 import { SessionError } from "@lemma/contracts";
-import { errorCode, isAlive, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, isAlive, nodeFileSystem, writeFileAtomic } from "@lemma/contracts/fs";
+import type { FileSystem } from "@lemma/contracts/fs";
 import { io } from "./file.ts";
 
 /**
@@ -50,11 +50,11 @@ export const thisProcess: Claimant = {
 };
 
 /** Creates `file` holding `text`; false when it exists. Synced: a lock emptied by a power loss would name nobody. */
-const writeNew = (file: string, text: string) =>
-  Effect.tryPromise({ try: () => writeFileAtomic(file, text, { exclusive: true, sync: true }), catch: io(undefined, `Cannot create ${file}`) });
+const writeNew = (fs: FileSystem, file: string, text: string) =>
+  Effect.tryPromise({ try: () => writeFileAtomic(file, text, { exclusive: true, sync: true, fs }), catch: io(undefined, `Cannot create ${file}`) });
 
 /** The file's text and how long ago it was last modified; `undefined` when there is none. */
-const inspect = (file: string): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
+const inspect = (fs: FileSystem, file: string): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
   Effect.tryPromise({
     try: async () => {
       try {
@@ -68,7 +68,7 @@ const inspect = (file: string): Effect.Effect<{ readonly text: string; readonly 
     catch: io(undefined, `Cannot read ${file}`),
   });
 
-const remove = (file: string) => Effect.tryPromise({ try: () => fs.rm(file, { force: true }), catch: io(undefined, `Cannot remove ${file}`) });
+const remove = (fs: FileSystem, file: string) => Effect.tryPromise({ try: () => fs.rm(file, { force: true }), catch: io(undefined, `Cannot remove ${file}`) });
 
 const inUse = (file: string, holder: Option.Option<Holder>) => {
   const who = Option.match(holder, {
@@ -99,12 +99,12 @@ const inUse = (file: string, holder: Option.Option<Holder>) => {
  * clearing one at the same instant could both go on, a window this
  * convention accepts.
  */
-export function acquireLock(root: string, claimant: Claimant = thisProcess): Effect.Effect<Holder, SessionError> {
+export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: FileSystem = nodeFileSystem): Effect.Effect<Holder, SessionError> {
   const file = lockFile(root);
   const guard = guardFile(root);
   const self: Holder = { pid: claimant.pid, hostname: claimant.hostname, token: randomUUID(), startedAt: Date.now() };
   const text = JSON.stringify(self);
-  const replace = Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true }), catch: io(undefined, `Cannot replace ${file}`) });
+  const replace = Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true, fs }), catch: io(undefined, `Cannot replace ${file}`) });
   const stale = (holder: Option.Option<Holder>, age: number) => {
     if (Option.isNone(holder)) return age > UNREADABLE_GRACE_MS || Date.now() - age < claimant.bootedAt - BOOT_SLACK_MS;
     const { pid, hostname, startedAt } = holder.value;
@@ -116,26 +116,26 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess): Eff
   return Effect.gen(function* () {
     yield* Effect.tryPromise({ try: () => fs.mkdir(root, { recursive: true }), catch: io(undefined, `Cannot create ${root}`) });
     for (;;) {
-      if (yield* writeNew(file, text)) return self;
-      const found = yield* inspect(file);
+      if (yield* writeNew(fs, file, text)) return self;
+      const found = yield* inspect(fs, file);
       // Released meanwhile.
       if (found === undefined) continue;
       const holder = decodeHolder(found.text);
       if (!stale(holder, found.age)) return yield* inUse(file, holder);
-      if (!(yield* writeNew(guard, text))) {
+      if (!(yield* writeNew(fs, guard, text))) {
         // Another process is taking it over; or one crashed doing so, and its guard is old.
-        const other = yield* inspect(guard);
-        if (other !== undefined && other.age > UNREADABLE_GRACE_MS) yield* remove(guard);
+        const other = yield* inspect(fs, guard);
+        if (other !== undefined && other.age > UNREADABLE_GRACE_MS) yield* remove(fs, guard);
         else yield* Effect.sleep(50);
         continue;
       }
       // Replaced only if it is still the lock found stale: another process may have taken it over meanwhile.
       const taken = yield* Effect.gen(function* () {
-        const now = yield* inspect(file);
+        const now = yield* inspect(fs, file);
         if (now?.text !== found.text) return false;
         yield* replace;
         return true;
-      }).pipe(Effect.ensuring(Effect.ignore(remove(guard))));
+      }).pipe(Effect.ensuring(Effect.ignore(remove(fs, guard))));
       if (taken) return self;
     }
   });
@@ -148,13 +148,13 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess): Eff
  * this store must stop writing. Other failures to reach the file wait for the
  * next refresh.
  */
-export function refreshLock(root: string, holder: Holder): Effect.Effect<void, SessionError> {
+export function refreshLock(root: string, holder: Holder, fs: FileSystem = nodeFileSystem): Effect.Effect<void, SessionError> {
   const file = lockFile(root);
   return Effect.gen(function* () {
-    const found = yield* Effect.option(inspect(file));
+    const found = yield* Effect.option(inspect(fs, file));
     if (Option.isNone(found)) return;
     // Deleted: written again (or, if another process wrote it first, found held by that one next time).
-    if (found.value === undefined) return yield* Effect.ignore(writeNew(file, JSON.stringify(holder)));
+    if (found.value === undefined) return yield* Effect.ignore(writeNew(fs, file, JSON.stringify(holder)));
     const current = decodeHolder(found.value.text);
     if (Option.isSome(current) && current.value.token === holder.token) {
       const now = new Date();
@@ -165,12 +165,12 @@ export function refreshLock(root: string, holder: Holder): Effect.Effect<void, S
 }
 
 /** Removes the lock if `holder` still holds it. Best effort: a lock left behind is taken over. */
-export function releaseLock(root: string, holder: Holder): Effect.Effect<void> {
+export function releaseLock(root: string, holder: Holder, fs: FileSystem = nodeFileSystem): Effect.Effect<void> {
   const file = lockFile(root);
-  return inspect(file).pipe(
+  return inspect(fs, file).pipe(
     Effect.flatMap((found) => {
       const current = found === undefined ? Option.none() : decodeHolder(found.text);
-      return Option.isSome(current) && current.value.token === holder.token ? remove(file) : Effect.void;
+      return Option.isSome(current) && current.value.token === holder.token ? remove(fs, file) : Effect.void;
     }),
     Effect.ignore,
   );

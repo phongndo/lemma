@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { Effect, Schema } from "effect";
 import { SessionInfo } from "@lemma/contracts";
 import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
+import type { FileSystem } from "@lemma/contracts/fs";
 import type { Scanned } from "./file.ts";
 
 /**
@@ -29,13 +30,13 @@ const Index = Schema.Struct({
 
 const indexFile = (root: string): string => path.join(root, ".index.json");
 
-export const readIndex = (root: string): Effect.Effect<Map<string, Scanned>> =>
-  Effect.promise(async () => new Map<string, Scanned>(Object.entries((await readJsonFile(indexFile(root), Index))?.files ?? {})));
+export const readIndex = (fs: FileSystem, root: string): Effect.Effect<Map<string, Scanned>> =>
+  Effect.promise(async () => new Map<string, Scanned>(Object.entries((await readJsonFile(indexFile(root), Index, fs))?.files ?? {})));
 
 /** Replaces the index whole. Best effort: without it the next start reads the files. */
-export const writeIndex = (root: string, files: ReadonlyMap<string, Scanned>): Effect.Effect<void> =>
+export const writeIndex = (fs: FileSystem, root: string, files: ReadonlyMap<string, Scanned>): Effect.Effect<void> =>
   Effect.promise(() =>
-    writeFileAtomic(indexFile(root), `${JSON.stringify({ version: 1, files: Object.fromEntries(files) })}\n`, { mode: 0o644, dirMode: 0o755 }).catch(
+    writeFileAtomic(indexFile(root), `${JSON.stringify({ version: 1, files: Object.fromEntries(files) })}\n`, { mode: 0o644, dirMode: 0o755, fs }).catch(
       () => undefined,
     ),
   );

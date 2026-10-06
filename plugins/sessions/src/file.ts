@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { constants } from "node:fs";
 import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { SessionError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
+import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
 import { decodeRecord, encodeLine } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
@@ -69,7 +70,7 @@ const CHUNK = 1 << 20;
  * so one too big for a single string still reads. `visit` returning false
  * stops the read. Bytes after the last newline are not a line.
  */
-async function readLines(file: string, from: number, visit: (text: string, start: number) => boolean): Promise<Extent & Stamp> {
+async function readLines(fs: FileSystem, file: string, from: number, visit: (text: string, start: number) => boolean): Promise<Extent & Stamp> {
   const handle = await fs.open(file, "r");
   try {
     const { mtimeMs, ino, size } = await handle.stat();
@@ -109,6 +110,7 @@ async function readLines(file: string, from: number, visit: (text: string, start
  * the lines taken in all, and why reading stopped if it failed.
  */
 async function readJson(
+  fs: FileSystem,
   file: string,
   from: { readonly validBytes: number; readonly lines: number } & Partial<LastLine>,
   visit: (json: unknown, line: number) => string | undefined,
@@ -119,7 +121,7 @@ async function readJson(
   /** The last line taken: where it starts, and its text. */
   let lastStart = -1;
   let lastText = "";
-  const extent = await readLines(file, from.validBytes, (text, start) => {
+  const extent = await readLines(fs, file, from.validBytes, (text, start) => {
     line++;
     if (unreadable !== undefined) {
       failure = `line ${unreadable.line}: not JSON`;
@@ -150,7 +152,7 @@ async function readJson(
 }
 
 /** Whether the line `from` read last is still there, unchanged and complete, so reading on from it is sound. */
-async function lastLineHolds(file: string, from: Scanned): Promise<boolean> {
+async function lastLineHolds(fs: FileSystem, file: string, from: Scanned): Promise<boolean> {
   const length = from.validBytes - from.lastStart;
   if (length <= 0) return false;
   const handle = await fs.open(file, "r");
@@ -196,7 +198,7 @@ interface Loaded {
  * last, an event whose parent is unknown, or a checkout to nowhere is
  * `Corrupt`: skipping one would silently change what the model saw.
  */
-export function load(file: string, sessionId: string): Effect.Effect<Loaded, SessionError> {
+export function load(fs: FileSystem, file: string, sessionId: string): Effect.Effect<Loaded, SessionError> {
   return Effect.suspend(() => {
     let header: Header | undefined;
     const events: SessionEvent[] = [];
@@ -236,7 +238,7 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
       updatedAt = Math.max(updatedAt, line.at);
       return undefined;
     };
-    return Effect.tryPromise({ try: () => readJson(file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
+    return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
       Effect.flatMap(({ extent, lines, last, failure }) => {
         if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
         // The header is synced before `create` returns, so a file without one was never a session.
@@ -269,15 +271,15 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
  * to; unless the line that scan read last has changed, as when a failed
  * write's line was replaced.
  */
-export function scan(file: string, sessionId: string, prior?: Scanned): Effect.Effect<Scanned, SessionError> {
+export function scan(fs: FileSystem, file: string, sessionId: string, prior?: Scanned): Effect.Effect<Scanned, SessionError> {
   return Effect.tryPromise({
-    try: async () => scanFrom(file, prior !== undefined && (await lastLineHolds(file, prior)) ? prior : undefined),
+    try: async () => scanFrom(fs, file, prior !== undefined && (await lastLineHolds(fs, file, prior)) ? prior : undefined),
     catch: io(sessionId, `Cannot read ${file}`),
   }).pipe(Effect.flatMap((result) => (typeof result === "string" ? Effect.fail(corrupt(sessionId, file, result)) : Effect.succeed(result))));
 }
 
 /** `scan` from `from` (or the start): the scan, or why the file is not a session. */
-async function scanFrom(file: string, from: Scanned | undefined): Promise<Scanned | string> {
+async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined): Promise<Scanned | string> {
   let header: Header | undefined =
     from === undefined ? undefined : { type: "session", version: 1, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
   let leaf = from?.info.leaf;
@@ -318,7 +320,7 @@ async function scanFrom(file: string, from: Scanned | undefined): Promise<Scanne
     if (line.data?.type === "title") title = line.data.title;
     return undefined;
   };
-  const { extent, lines, last, failure } = await readJson(file, from ?? { validBytes: 0, lines: 0 }, visit);
+  const { extent, lines, last, failure } = await readJson(fs, file, from ?? { validBytes: 0, lines: 0 }, visit);
   if (failure !== undefined) return failure;
   if (header === undefined || last === undefined) return extent.size === 0 ? "missing header" : "unreadable header";
   return {
@@ -373,7 +375,7 @@ export interface Writer {
   readonly close: Effect.Effect<void>;
 }
 
-const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confirmed: number): Writer => {
+const writerFor = (handle: FileHandle, file: string, sessionId: string, confirmed: number): Writer => {
   let end = confirmed;
   /** Bytes a failed write may have left after `end`. */
   let unconfirmed = 0;
@@ -412,7 +414,7 @@ const writerFor = (handle: fs.FileHandle, file: string, sessionId: string, confi
 };
 
 /** Makes a new file's directory entry durable too. Best effort: some platforms cannot fsync a directory. */
-const syncDirectory = async (dir: string) => {
+const syncDirectory = async (fs: FileSystem, dir: string) => {
   try {
     const handle = await fs.open(dir, "r");
     try {
@@ -426,7 +428,7 @@ const syncDirectory = async (dir: string) => {
 };
 
 /** Creates a session file with its header. Uninterruptible, so its handle always reaches the writer. */
-export function createFile(file: string, header: Header): Effect.Effect<Writer, SessionError> {
+export function createFile(fs: FileSystem, file: string, header: Header): Effect.Effect<Writer, SessionError> {
   return Effect.tryPromise({
     try: async () => {
       await fs.mkdir(path.dirname(file), { recursive: true });
@@ -439,7 +441,7 @@ export function createFile(file: string, header: Header): Effect.Effect<Writer, 
         await handle.close();
         throw cause;
       }
-      await syncDirectory(path.dirname(file));
+      await syncDirectory(fs, path.dirname(file));
       return handle;
     },
     catch: io(header.id, `Cannot create ${file}`),
@@ -456,7 +458,12 @@ export function createFile(file: string, header: Header): Effect.Effect<Writer, 
  * (`CHANGED_ON_DISK`): cutting it to `validBytes` would delete what it wrote.
  * Uninterruptible, so the handle always reaches the writer.
  */
-export function openFile(file: string, sessionId: string, seen: { readonly validBytes: number; readonly size: number }): Effect.Effect<Writer, SessionError> {
+export function openFile(
+  fs: FileSystem,
+  file: string,
+  sessionId: string,
+  seen: { readonly validBytes: number; readonly size: number },
+): Effect.Effect<Writer, SessionError> {
   return Effect.tryPromise({
     try: async () => {
       // Without O_CREAT: a session deleted meanwhile stays deleted.

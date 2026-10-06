@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { promises as nodeFs } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Option, Schema } from "effect";
 
@@ -36,15 +36,69 @@ export const isInside = (root: string, path: string): boolean => {
 
 /** What is at `path`, following symlinks: undefined when nothing is, or it cannot be read. */
 export const kindOf = (path: string): Promise<"file" | "directory" | "other" | undefined> =>
-  stat(path).then(
+  nodeFs.stat(path).then(
     (info) => (info.isFile() ? "file" : info.isDirectory() ? "directory" : "other"),
     () => undefined,
   );
 
 /** The file at `path` as JSON of `schema`; undefined when it is missing, unreadable, or does not decode. */
-export const readJsonFile = async <A, I>(path: string, schema: Schema.Codec<A, I>): Promise<A | undefined> => {
-  const text = await readFile(path, "utf8").catch(() => undefined);
+export const readJsonFile = async <A, I>(path: string, schema: Schema.Codec<A, I>, fs: FileSystem = nodeFileSystem): Promise<A | undefined> => {
+  const text = await fs.readFile(path, "utf8").catch(() => undefined);
   return text === undefined ? undefined : Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text));
+};
+
+/** What storage code reads of a file's metadata. */
+export interface FileStats {
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ino: number;
+  /** 0 once the file's name was removed or replaced while it was open. */
+  readonly nlink: number;
+}
+
+/** The `FileHandle` operations Lemma's storage code uses. */
+export interface FileHandle {
+  read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ readonly bytesRead: number }>;
+  appendFile(data: string): Promise<void>;
+  writeFile(data: string): Promise<void>;
+  chmod(mode: number): Promise<void>;
+  stat(): Promise<FileStats>;
+  truncate(length: number): Promise<void>;
+  /** Makes the data written so far survive a crash. */
+  datasync(): Promise<void>;
+  /** As `datasync`, plus metadata; on a directory, makes its entries (created, renamed, removed names) survive a crash. */
+  sync(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The `node:fs/promises` operations Lemma's storage code uses: a seam, so a
+ * test can run that code on a simulated disk that crashes, tears writes, and
+ * fails. `nodeFileSystem` is the real one.
+ */
+export interface FileSystem {
+  open(path: string, flags: string | number, mode?: number): Promise<FileHandle>;
+  readFile(path: string, encoding: "utf8"): Promise<string>;
+  readdir(path: string): Promise<string[]>;
+  stat(path: string): Promise<FileStats>;
+  mkdir(path: string, options: { readonly recursive: true; readonly mode?: number }): Promise<unknown>;
+  rename(from: string, to: string): Promise<void>;
+  link(existing: string, path: string): Promise<void>;
+  rm(path: string, options?: { readonly force?: boolean }): Promise<void>;
+  utimes(path: string, atime: number | Date, mtime: number | Date): Promise<void>;
+}
+
+/** Looks each operation up when called, so a test that spies on `node:fs`'s `promises` reaches code given this. */
+export const nodeFileSystem: FileSystem = {
+  open: (path, flags, mode) => nodeFs.open(path, flags, mode),
+  readFile: (path, encoding) => nodeFs.readFile(path, encoding),
+  readdir: (path) => nodeFs.readdir(path),
+  stat: (path) => nodeFs.stat(path),
+  mkdir: (path, options) => nodeFs.mkdir(path, options),
+  rename: (from, to) => nodeFs.rename(from, to),
+  link: (existing, path) => nodeFs.link(existing, path),
+  rm: (path, options) => nodeFs.rm(path, options),
+  utimes: (path, atime, mtime) => nodeFs.utimes(path, atime, mtime),
 };
 
 export interface AtomicWriteOptions {
@@ -56,6 +110,8 @@ export interface AtomicWriteOptions {
   readonly sync?: boolean;
   /** Only creates the file: one that exists is left as it is, and the call returns false. */
   readonly exclusive?: boolean;
+  /** Default `nodeFileSystem`. */
+  readonly fs?: FileSystem;
 }
 
 /**
@@ -65,11 +121,12 @@ export interface AtomicWriteOptions {
  * temporary file never outlives the call, whatever fails. True when written.
  */
 export async function writeFileAtomic(path: string, text: string, options: AtomicWriteOptions = {}): Promise<boolean> {
+  const fs = options.fs ?? nodeFileSystem;
   const mode = options.mode ?? 0o600;
-  await mkdir(dirname(path), { recursive: true, mode: options.dirMode ?? 0o700 });
+  await fs.mkdir(dirname(path), { recursive: true, mode: options.dirMode ?? 0o700 });
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
-    const handle = await open(temp, "wx", mode);
+    const handle = await fs.open(temp, "wx", mode);
     try {
       await handle.chmod(mode);
       await handle.writeFile(text);
@@ -78,11 +135,11 @@ export async function writeFileAtomic(path: string, text: string, options: Atomi
       await handle.close();
     }
     if (options.exclusive !== true) {
-      await rename(temp, path);
+      await fs.rename(temp, path);
       return true;
     }
     try {
-      await link(temp, path);
+      await fs.link(temp, path);
       return true;
     } catch (cause) {
       if (errorCode(cause) === "EEXIST") return false;
@@ -90,6 +147,6 @@ export async function writeFileAtomic(path: string, text: string, options: Atomi
     }
   } finally {
     // Gone already after a rename; a link or a failure leaves it.
-    await rm(temp, { force: true });
+    await fs.rm(temp, { force: true });
   }
 }
