@@ -62,7 +62,9 @@ what it needs, and it mounts anew when it returns. With `open`, the keys that
 still exist (a tab bar's tabs), a view whose key leaves it is disposed at once,
 so a closed tab does not linger and an id used again later mounts a new view.
 A view reads `useActive()`, or runs code on `onSuspend` and `onResume`, to
-pause work while hidden. `createKeepAlive(active, keep, open)` is the same
+pause work while hidden. When the active key changes, the views that hear it do so in
+the order they mounted (Solid runs their effects so), not the one going
+hidden first: a view must not count on the other's having paused. `createKeepAlive(active, keep, open)` is the same
 choice without the elements, for an embedder drawing its own.
 
 ```tsx
