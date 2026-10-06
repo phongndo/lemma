@@ -8,7 +8,10 @@ attached to answer), the call is denied.
 It is a plugin file, not a bundled plugin: [`approvals.ts`](approvals.ts)
 imports only packages the host supplies (`effect`, `@lemma/core`,
 `@lemma/contracts`, and the file tools' own path resolution, so `~/x` and
-`@x` mean what they mean to `write`), so it needs no install step. A path
+`@x` mean what they mean to `write`), so it needs no install step. It is
+written with promises (`@lemma/core/plain`): `tools.guard` and
+`interaction.select` are the contracts' Effect methods, seen as promises, and a
+question it asks still belongs to the turn that caused it. A path
 counts as outside when it leads there through a link, too. To use it:
 
 ```sh

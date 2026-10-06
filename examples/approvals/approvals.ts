@@ -1,8 +1,8 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import { Effect, Layer, Result, Schema } from "effect";
-import { definePlugin } from "@lemma/core";
-import { Interaction, Tools } from "@lemma/contracts";
+import { Effect, Schema } from "effect";
+import { definePlugin } from "@lemma/core/plain";
+import { Interaction, InteractionError, Tools } from "@lemma/contracts";
 import type { GuardDecision, ToolInvocation } from "@lemma/contracts";
 import { resolveToCwd } from "@lemma/plugin-tools-builtin";
 
@@ -14,7 +14,9 @@ import { resolveToCwd } from "@lemma/plugin-tools-builtin";
  * A plugin file, written the way a user writes one: copy or link it into
  * `~/.lemma/plugins/` and run `lemma reload`. It imports only packages the
  * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, and the file
- * tools' own path resolution, so it judges the file a tool will touch.
+ * tools' own path resolution, so it judges the file a tool will touch. It is
+ * written with promises (`@lemma/core/plain`): its services are promise-based
+ * views of the same contracts an Effect plugin uses.
  */
 
 const Config = Schema.Struct({
@@ -82,39 +84,32 @@ export default definePlugin({
   id: "approvals",
   version: "0.1.0",
   config: Config,
-  requires: [Tools, Interaction],
-  layer: (config: typeof Config.Type) =>
-    Layer.effectDiscard(
-      Effect.gen(function* () {
-        const tools = yield* Tools;
-        const interaction = yield* Interaction;
-        /** Tools allowed for the rest of a session, by session id; forgotten when the plugin reloads. */
-        const allowed = new Map<string, Set<string>>();
+  requires: { tools: Tools, interaction: Interaction },
+  setup: async ({ tools, interaction }, { config }) => {
+    /** Tools allowed for the rest of a session, by session id; forgotten when the plugin reloads. */
+    const allowed = new Map<string, Set<string>>();
 
-        yield* tools.guard("*", (call) =>
-          Effect.gen(function* () {
-            const asked = question(call, config);
-            if (asked === undefined || allowed.get(call.sessionId)?.has(call.name)) return { _tag: "allow" } satisfies GuardDecision;
-            const choice = yield* interaction
-              .select(
-                asked.title,
-                [
-                  { value: "once", label: "Allow once" },
-                  { value: "session", label: `Allow ${call.name} for this session`, description: "Until the host restarts" },
-                  { value: "deny", label: "Deny", description: "The agent is told you declined" },
-                ],
-                asked.detail,
-              )
-              .pipe(Effect.result);
-            if (Result.isFailure(choice)) {
-              const reason = choice.failure.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${choice.failure.message})`;
-              return { _tag: "deny", reason } satisfies GuardDecision;
-            }
-            if (choice.success === "deny") return { _tag: "deny", reason: "the user declined" } satisfies GuardDecision;
-            if (choice.success === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
-            return { _tag: "allow" } satisfies GuardDecision;
-          }),
+    await tools.guard("*", async (call): Promise<GuardDecision> => {
+      const asked = question(call, config);
+      if (asked === undefined || allowed.get(call.sessionId)?.has(call.name)) return { _tag: "allow" };
+      let choice: string;
+      try {
+        choice = await interaction.select(
+          asked.title,
+          [
+            { value: "once", label: "Allow once" },
+            { value: "session", label: `Allow ${call.name} for this session`, description: "Until the host restarts" },
+            { value: "deny", label: "Deny", description: "The agent is told you declined" },
+          ],
+          asked.detail,
         );
-      }),
-    ),
+      } catch (error) {
+        if (!(error instanceof InteractionError)) throw error;
+        return { _tag: "deny", reason: error.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${error.message})` };
+      }
+      if (choice === "deny") return { _tag: "deny", reason: "the user declined" };
+      if (choice === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
+      return { _tag: "allow" };
+    });
+  },
 });
