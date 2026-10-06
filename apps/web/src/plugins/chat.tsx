@@ -79,10 +79,8 @@ const ChatConfig = Schema.Struct({
 });
 
 interface Chat {
-  readonly client: ClientService;
   readonly threads: ThreadsService;
   readonly router: RouterService;
-  readonly slots: SlotsService;
   readonly config: typeof ChatConfig.Type;
   readonly isOpen: (key: string, fallback: boolean) => boolean;
   readonly toggle: (key: string, fallback: boolean) => void;
@@ -162,10 +160,12 @@ function ThinkingView(props: ChatThinkingProps) {
   );
 }
 
-function Output(props: { id: string; text: string; error?: boolean; lines?: number }) {
-  const max = () => props.lines ?? 14;
+/** Lines of a tool's output shown before "more lines". */
+const OUTPUT_LINES = 14;
+
+function Output(props: { text: string; error?: boolean }) {
   const [all, setAll] = createSignal(false);
-  const cut = createMemo(() => truncateLines(props.text.replace(/\n+$/, ""), max()));
+  const cut = createMemo(() => truncateLines(props.text.replace(/\n+$/, ""), OUTPUT_LINES));
   return (
     <div class="output" classList={{ error: props.error === true }}>
       <pre>{all() ? props.text.replace(/\n+$/, "") : cut().text}</pre>
@@ -383,7 +383,7 @@ function DefaultBody(props: {
       </Show>
       <Show when={diff()}>{(d) => <Diff diff={d()} />}</Show>
       <Show when={outputText() && !(diff() !== undefined && props.state === "ok")}>
-        <Output id={props.id} text={outputText()} error={props.state === "error"} />
+        <Output text={outputText()} error={props.state === "error"} />
       </Show>
       <Show when={props.result}>{(result) => <Images content={result().content} />}</Show>
       <Show when={details().truncated}>
@@ -1122,10 +1122,8 @@ export default defineUiPlugin({
       onCleanup(() => clearInterval(timer));
     });
     const chat: Chat = {
-      client,
       threads,
       router,
-      slots,
       config: plugin.config,
       isOpen: (key, fallback) => expanded().get(key) ?? fallback,
       toggle: (key, fallback) => setExpanded((map) => new Map(map).set(key, !(map.get(key) ?? fallback))),

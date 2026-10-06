@@ -234,18 +234,17 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
   });
   const fiber = Effect.runFork(loop);
 
-  const call = <A, E>(effect: Effect.Effect<A, E>) => runPromise(effect);
   const unit = <E>(effect: Effect.Effect<unknown, E>) => runPromise(Effect.asVoid(effect));
 
   return {
     session: {
-      list: (cwd) => call(rpc.Session.List(cwd === undefined ? {} : { cwd })),
-      get: (sessionId) => call(rpc.Session.Get({ sessionId })),
-      create: (cwd) => call(rpc.Session.Create(cwd === undefined ? {} : { cwd })),
-      events: (sessionId, after) => call(rpc.Session.Events(after === undefined ? { sessionId } : { sessionId, after })),
-      checkout: (sessionId, eventId) => call(rpc.Session.Checkout({ sessionId, eventId })),
-      setTitle: (sessionId, title) => call(rpc.Session.SetTitle({ sessionId, title })),
-      mark: (sessionId, marks) => call(rpc.Session.Mark({ sessionId, ...marks })),
+      list: (cwd) => runPromise(rpc.Session.List(cwd === undefined ? {} : { cwd })),
+      get: (sessionId) => runPromise(rpc.Session.Get({ sessionId })),
+      create: (cwd) => runPromise(rpc.Session.Create(cwd === undefined ? {} : { cwd })),
+      events: (sessionId, after) => runPromise(rpc.Session.Events(after === undefined ? { sessionId } : { sessionId, after })),
+      checkout: (sessionId, eventId) => runPromise(rpc.Session.Checkout({ sessionId, eventId })),
+      setTitle: (sessionId, title) => runPromise(rpc.Session.SetTitle({ sessionId, title })),
+      mark: (sessionId, marks) => runPromise(rpc.Session.Mark({ sessionId, ...marks })),
       remove: (sessionId) => unit(rpc.Session.Delete({ sessionId })),
     },
     agent: {
@@ -260,44 +259,44 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
           }),
         ),
       cancel: (sessionId) => unit(rpc.Agent.Cancel({ sessionId })),
-      running: () => call(rpc.Agent.Running()),
-      queue: (sessionId) => call(rpc.Agent.Queue({ sessionId })),
-      withdraw: (sessionId, requestId) => call(rpc.Agent.Withdraw({ sessionId, requestId })),
-      view: (sessionId) => call(rpc.Agent.View({ sessionId })),
+      running: () => runPromise(rpc.Agent.Running()),
+      queue: (sessionId) => runPromise(rpc.Agent.Queue({ sessionId })),
+      withdraw: (sessionId, requestId) => runPromise(rpc.Agent.Withdraw({ sessionId, requestId })),
+      view: (sessionId) => runPromise(rpc.Agent.View({ sessionId })),
     },
     llm: {
-      providers: () => call(rpc.Llm.Providers()),
-      models: (available) => call(rpc.Llm.Models(available === undefined ? {} : { available })),
+      providers: () => runPromise(rpc.Llm.Providers()),
+      models: (available) => runPromise(rpc.Llm.Models(available === undefined ? {} : { available })),
       login: (provider, type) => unit(rpc.Llm.Login({ provider, type })),
       logout: (provider) => unit(rpc.Llm.Logout({ provider })),
-      addCustom: (spec) => call(rpc.Llm.AddCustom({ spec })),
+      addCustom: (spec) => runPromise(rpc.Llm.AddCustom({ spec })),
       removeCustom: (provider) => unit(rpc.Llm.RemoveCustom({ provider })),
       setLogo: (provider, svg) => unit(rpc.Llm.SetLogo({ provider, ...(svg === undefined ? {} : { svg }) })),
     },
     interaction: {
-      list: () => call(rpc.Interaction.List()),
+      list: () => runPromise(rpc.Interaction.List()),
       answer: (id, answer) => unit(rpc.Interaction.Answer({ id, answer })),
       dismiss: (id) => unit(rpc.Interaction.Dismiss({ id })),
     },
     workspace: {
-      status: (path) => call(rpc.Workspace.Status({ path })),
-      browse: (partialPath) => call(rpc.Workspace.Browse({ partialPath })),
-      createDirectory: (path) => call(rpc.Workspace.CreateDirectory({ path })),
+      status: (path) => runPromise(rpc.Workspace.Status({ path })),
+      browse: (partialPath) => runPromise(rpc.Workspace.Browse({ partialPath })),
+      createDirectory: (path) => runPromise(rpc.Workspace.CreateDirectory({ path })),
       createWorktree: (path, options) =>
-        call(
+        runPromise(
           rpc.Workspace.CreateWorktree(options.base === undefined ? { path, branch: options.branch } : { path, branch: options.branch, base: options.base }),
         ),
-      branches: (path) => call(rpc.Workspace.Branches({ path })),
+      branches: (path) => runPromise(rpc.Workspace.Branches({ path })),
       checkout: (path, branch, options) =>
-        call(rpc.Workspace.Checkout(options?.create === undefined ? { path, branch } : { path, branch, create: options.create })),
+        runPromise(rpc.Workspace.Checkout(options?.create === undefined ? { path, branch } : { path, branch, create: options.create })),
     },
     files: {
-      search: (cwd, query, options) => call(rpc.Files.Search({ cwd, query, ...options })),
+      search: (cwd, query, options) => runPromise(rpc.Files.Search({ cwd, query, ...options })),
     },
     commands: {
-      list: () => call(rpc.Command.List()),
+      list: () => runPromise(rpc.Command.List()),
       run: (id, context) =>
-        call(
+        runPromise(
           rpc.Command.Run({
             id,
             ...(context?.cwd === undefined ? {} : { cwd: context.cwd }),
@@ -306,17 +305,17 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
         ),
     },
     host: {
-      info: () => call(rpc.Host.Info()),
-      plugins: () => call(rpc.Host.Plugins()),
-      inspectors: () => call(rpc.Host.Inspectors()),
-      inspect: (id) => call(rpc.Host.Inspect({ id })),
+      info: () => runPromise(rpc.Host.Info()),
+      plugins: () => runPromise(rpc.Host.Plugins()),
+      inspectors: () => runPromise(rpc.Host.Inspectors()),
+      inspect: (id) => runPromise(rpc.Host.Inspect({ id })),
       restartPlugin: (pluginId, options) => unit(rpc.Host.RestartPlugin(options?.force === undefined ? { pluginId } : { pluginId, force: options.force })),
-      reload: () => call(rpc.Host.Reload()),
-      configure: (plugins, options) => call(rpc.Host.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
+      reload: () => runPromise(rpc.Host.Reload()),
+      configure: (plugins, options) => runPromise(rpc.Host.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     ui: {
-      composition: () => call(rpc.Ui.Composition()),
-      configure: (plugins, options) => call(rpc.Ui.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
+      composition: () => runPromise(rpc.Ui.Composition()),
+      configure: (plugins, options) => runPromise(rpc.Ui.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     status: () => status,
     onStatus: (listener) => {

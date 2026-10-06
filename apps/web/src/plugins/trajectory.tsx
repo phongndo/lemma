@@ -827,8 +827,6 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       let input = 0;
       let output = 0;
       let cost = 0;
-      let first = Infinity;
-      let last = 0;
       for (const record of props.visible) {
         if (record.kind === "assistant") {
           requests++;
@@ -838,10 +836,6 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
         }
         if (record.kind === "tool") tools++;
         if (recordFailed(record)) errors++;
-      }
-      for (const turn of new Set(props.visible.map((record) => record.turn))) {
-        first = Math.min(first, turn.startedAt);
-        last = Math.max(last, turn.endedAt ?? props.now);
       }
       const active = [...new Set(props.visible.map((record) => record.turn))].reduce((sum, turn) => sum + ((turn.endedAt ?? props.now) - turn.startedAt), 0);
       return { requests, tools, errors, input, output, cost, active };

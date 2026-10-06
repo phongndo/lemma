@@ -1,20 +1,8 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { GitBranch, WorkspaceStatus } from "@lemma/contracts";
-import {
-  ActionIds,
-  Actions,
-  Client,
-  ComposerFooter,
-  Notify,
-  SectionIds,
-  Threads,
-  SettingsGroups,
-  Slots,
-  Workspace,
-  WorkspaceBarItems,
-} from "../ui/contracts.ts";
-import type { ClientService, NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
+import { ActionIds, Actions, ComposerFooter, Notify, SectionIds, Threads, SettingsGroups, Slots, Workspace, WorkspaceBarItems } from "../ui/contracts.ts";
+import type { NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
 import {
@@ -37,7 +25,6 @@ import styles from "./workspace-bar.css?inline";
 const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
 
 interface Deps {
-  readonly client: ClientService;
   readonly threads: ThreadsService;
   readonly workspace: WorkspaceService;
   readonly notify: NotifyService;
@@ -436,7 +423,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
 export default defineUiPlugin({
   id: "workspace-bar",
   styles,
-  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
+  requires: { threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
   setup: (deps, plugin) => {
     plugin.onCleanup(deps.slots.add(ComposerFooter, { id: "workspace-bar", component: () => <WorkspaceBar deps={deps} /> }));
     // Its own pickers go through the slot other plugins add theirs to.

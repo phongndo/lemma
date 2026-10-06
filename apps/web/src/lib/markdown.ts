@@ -24,6 +24,12 @@ const hook = () => {
   });
 };
 
+/**
+ * Model HTML made safe to show. Raw HTML in the source is sanitized, never
+ * trusted. Styling attributes are dropped too: with `style`, `class`, or `id`
+ * model output could position itself over the app or borrow the app's own
+ * classes to fake a dialog or toast.
+ */
 const sanitize = (html: string): string => {
   hook();
   return DOMPurify.sanitize(html, {
@@ -32,14 +38,6 @@ const sanitize = (html: string): string => {
     FORBID_ATTR: ["style", "class", "id"],
   });
 };
-
-/**
- * Model markdown to sanitized HTML. Raw HTML in the source is sanitized, never
- * trusted. Styling attributes are dropped too: with `style`, `class`, or `id`
- * model output could position itself over the app or borrow the app's own
- * classes to fake a dialog or toast.
- */
-export const renderMarkdown = (source: string): string => sanitize(marked.parse(source) as string);
 
 /** Tokens that stand apart from what follows them: their text is followed by a space. */
 const SEPARATE = new Set(["paragraph", "heading", "code", "blockquote", "list_item", "table", "hr", "space", "br"]);

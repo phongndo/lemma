@@ -10,16 +10,7 @@ import { highlight, parseQuery, rank, remember } from "../model/palette.ts";
 import type { Searchable } from "../model/palette.ts";
 import { sessionTitle } from "../model/threads.ts";
 import { ActionIds, Actions, Client, Commands, Dialogs, Interactions, Layers, PaletteSources, Threads, Slots, UiPlugins, Workspace } from "../ui/contracts.ts";
-import type {
-  ClientService,
-  CommandsService,
-  DialogsService,
-  InteractionsService,
-  PaletteItem,
-  PaletteSource,
-  ThreadsService,
-  WorkspaceService,
-} from "../ui/contracts.ts";
+import type { DialogsService, InteractionsService, PaletteItem, PaletteSource } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
 import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, Isolated, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "../ui/parts.tsx";
@@ -28,10 +19,6 @@ import styles from "./palette.css?inline";
 const DIALOG = "palette";
 
 interface Deps {
-  readonly client: ClientService;
-  readonly threads: ThreadsService;
-  readonly workspace: WorkspaceService;
-  readonly commands: CommandsService;
   readonly interactions: InteractionsService;
   readonly dialogs: DialogsService;
   readonly slots: SlotsService;
@@ -510,7 +497,9 @@ export default defineUiPlugin({
     const { client, threads, workspace, commands, dialogs, interactions, uiPlugins, slots } = services;
     let requested: string | undefined;
     const deps: Deps = {
-      ...services,
+      interactions,
+      dialogs,
+      slots,
       takeRequested: () => {
         const id = requested;
         requested = undefined;
