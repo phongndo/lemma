@@ -54,6 +54,24 @@ const commonPrefix = (a: string, b: string) => {
   return n;
 };
 
+/** Of `models` (at least one), the one whose id shares the longest prefix with `id`: the closest relative of a model pi-ai does not know. */
+const nearest = (models: readonly Model<Api>[], id: string) =>
+  models.reduce((best, model) => (commonPrefix(model.id, id) > commonPrefix(best.id, id) ? model : best), models[0]!);
+
+/** A model's inputs from a list's modalities, else `fallback`'s. */
+const inputsOf = (modalities: readonly string[] | undefined, fallback: Model<Api>): Model<Api>["input"] =>
+  modalities === undefined ? fallback.input : modalities.includes("image") ? ["text", "image"] : ["text"];
+
+/** `url`'s JSON, as Lemma asks for it, given up on after 20 seconds; rejects on an HTTP error. */
+const fetchJson = async (fetchImpl: typeof fetch, url: string, headers: Record<string, string>, signal: AbortSignal): Promise<unknown> => {
+  const response = await fetchImpl(url, {
+    headers: { "user-agent": USER_AGENT, ...headers },
+    signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+  });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return response.json();
+};
+
 /**
  * Models `ids` adds to `known` (the provider's pi-ai list), in `ids` order.
  * Each is served like a known model on the same wire API (its base URL and
@@ -80,20 +98,21 @@ export function discoveredModels(
     const named = API_OF_NPM[info?.provider?.npm ?? dev?.npm ?? ""];
     const api = sibling?.api ?? (named !== undefined && apis.has(named) ? named : undefined) ?? (apis.size === 1 ? [...apis][0] : undefined);
     if (api === undefined) continue;
-    const onApi = known.filter((model) => model.api === api);
-    const nearest = onApi.reduce((best, model) => (commonPrefix(model.id, id) > commonPrefix(best.id, id) ? model : best), onApi[0]!);
-    const donor = sibling ?? nearest;
-    const input = info?.modalities?.input;
+    const relative = nearest(
+      known.filter((model) => model.api === api),
+      id,
+    );
+    const donor = sibling ?? relative;
     out.push({
       ...donor,
       id,
       name: info?.name ?? sibling?.name ?? id,
       api,
       provider: providerId,
-      baseUrl: nearest.baseUrl,
-      ...(nearest.headers === undefined ? {} : { headers: nearest.headers }),
+      baseUrl: relative.baseUrl,
+      ...(relative.headers === undefined ? {} : { headers: relative.headers }),
       reasoning: info?.reasoning ?? donor.reasoning,
-      input: input === undefined ? donor.input : input.includes("image") ? ["text", "image"] : ["text"],
+      input: inputsOf(info?.modalities?.input, donor),
       contextWindow: info?.limit?.context ?? donor.contextWindow,
       maxTokens: info?.limit?.output ?? donor.maxTokens,
       cost:
@@ -158,14 +177,7 @@ const DEV_TTL = 60 * 60 * 1000;
 /** Sources over the network: models.dev read once an hour for every provider, and each provider's own list. */
 export function networkSources(fetchImpl: typeof fetch, siblings: () => readonly Model<Api>[]): CatalogSources {
   let cached: { at: number; catalog: Promise<DevCatalog | undefined> } | undefined;
-  const readJson = async (url: string, headers: Record<string, string>, signal: AbortSignal): Promise<unknown> => {
-    const response = await fetchImpl(url, {
-      headers: { "user-agent": USER_AGENT, ...headers },
-      signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
-    });
-    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-    return response.json();
-  };
+  const readJson = (url: string, headers: Record<string, string>, signal: AbortSignal) => fetchJson(fetchImpl, url, headers, signal);
   return {
     dev: (signal) => {
       if (cached === undefined || Date.now() - cached.at > DEV_TTL) {
@@ -224,14 +236,13 @@ export function planModels(known: readonly Model<Api>[], listed: readonly PlanMo
     .map((entry) => {
       const own = known.find((model) => model.id === entry.slug);
       if (own !== undefined) return own;
-      const donor = known.reduce((best, model) => (commonPrefix(model.id, entry.slug) > commonPrefix(best.id, entry.slug) ? model : best), known[0]!);
-      const input = entry.input_modalities;
+      const donor = nearest(known, entry.slug);
       const levels = entry.supported_reasoning_levels;
       return {
         ...donor,
         id: entry.slug,
         name: entry.display_name ?? entry.slug,
-        input: input === undefined ? donor.input : input.includes("image") ? ["text", "image"] : ["text"],
+        input: inputsOf(entry.input_modalities, donor),
         contextWindow: entry.context_window ?? donor.contextWindow,
         reasoning: levels === undefined ? donor.reasoning : levels.length > 0,
       } as Model<Api>;
@@ -278,17 +289,11 @@ const PLAN_CLIENT_VERSION = "999.0.0";
 export function planSource(fetchImpl: typeof fetch): PlanSource {
   return {
     plan: async (accessToken, signal) => {
-      try {
-        const response = await fetchImpl(`https://api.openai.com/v1/models?client_version=${PLAN_CLIENT_VERSION}`, {
-          headers: { "user-agent": USER_AGENT, authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
-        });
-        if (!response.ok) return undefined;
-        const body = (await response.json()) as { models?: readonly PlanModel[] };
-        return Array.isArray(body.models) ? body.models.filter((entry) => typeof entry.slug === "string") : undefined;
-      } catch {
-        return undefined;
-      }
+      const url = `https://api.openai.com/v1/models?client_version=${PLAN_CLIENT_VERSION}`;
+      const body = (await fetchJson(fetchImpl, url, { authorization: `Bearer ${accessToken}` }, signal).catch(() => undefined)) as
+        | { models?: readonly PlanModel[] }
+        | undefined;
+      return Array.isArray(body?.models) ? body.models.filter((entry) => typeof entry.slug === "string") : undefined;
     },
   };
 }
