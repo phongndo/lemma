@@ -587,7 +587,7 @@ describe("planResume", () => {
   it("says when the turn never started or already ended", () => {
     expect(planResume([], "t")).toEqual({ kind: "not-started" });
     const events = [event(1, "a", null, { type: "turn-start", turnId: "t" }), event(2, "b", "a", { type: "turn-end", turnId: "t", reason: "done" })];
-    expect(planResume(events, "t")).toEqual({ kind: "ended" });
+    expect(planResume(events, "t")).toEqual({ kind: "ended", reason: "done" });
   });
 });
 

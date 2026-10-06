@@ -352,10 +352,7 @@ export default definePlugin({
             const resume = planResume(log, entry.turnId, entry.marked);
             // Cut off before its first event: cancelled meanwhile, it never runs.
             if (resume.kind === "not-started") return cancelling ? ("cancelled" as const) : yield* fresh(sessionId, entry);
-            if (resume.kind === "ended") {
-              const end = log.find((event) => event.data.type === "turn-end" && event.data.turnId === entry.turnId);
-              return end?.data.type === "turn-end" ? end.data.reason : "done";
-            }
+            if (resume.kind === "ended") return resume.reason;
             const { plan } = resume;
             const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             // The model it ran on, if it still exists; else the default, as a new turn would get.

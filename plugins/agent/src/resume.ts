@@ -1,5 +1,5 @@
 import { addUsage, emptyUsage } from "@lemma/contracts";
-import type { AssistantMessage, EventData, SessionEvent, ThinkingLevel, ToolCall, ToolResultMessage, Usage } from "@lemma/contracts";
+import type { AssistantMessage, EventData, SessionEvent, ThinkingLevel, ToolCall, ToolResultMessage, TurnEndReason, Usage } from "@lemma/contracts";
 
 /** The error of an `attempt` logged for a model call that a host restart cut off; a resumed turn retries it. */
 export const INTERRUPTED_CALL = "Interrupted: the host stopped during this model call";
@@ -70,7 +70,10 @@ export interface ResumePlan {
   readonly at: ResumePoint;
 }
 
-type Resume = { readonly kind: "not-started" } | { readonly kind: "ended" } | { readonly kind: "open"; readonly plan: ResumePlan };
+type Resume =
+  | { readonly kind: "not-started" }
+  | { readonly kind: "ended"; readonly reason: TurnEndReason }
+  | { readonly kind: "open"; readonly plan: ResumePlan };
 
 /** Whether the turn logged `event`: it names the turn (an agent's `custom` event, in its data). */
 const ownedBy = (event: SessionEvent, turnId: string): boolean => {
@@ -109,7 +112,7 @@ const turnPath = (events: readonly SessionEvent[], start: SessionEvent, turnId: 
 export function planResume(events: readonly SessionEvent[], turnId: string, marked = true): Resume {
   const start = events.find((event) => event.data.type === "turn-start" && event.data.turnId === turnId);
   if (start === undefined) return { kind: "not-started" };
-  if (events.some((event) => event.data.type === "turn-end" && event.data.turnId === turnId)) return { kind: "ended" };
+  for (const event of events) if (event.data.type === "turn-end" && event.data.turnId === turnId) return { kind: "ended", reason: event.data.reason };
 
   let usage = emptyUsage;
   let steps = 0;
