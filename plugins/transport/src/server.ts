@@ -8,7 +8,7 @@ import type { HttpServerError } from "effect/http";
 import { NodeHttpServer } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
-import { HostRpcs } from "@lemma/contracts";
+import { HOST_PROTOCOL, HostRpcs } from "@lemma/contracts";
 import type { UiComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 
@@ -113,7 +113,7 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
         }
         if (path === "/rpc") return yield* websocket;
         if (path === "/rpc/http" && request.method === "POST") return yield* http;
-        if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version });
+        if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version, protocol: HOST_PROTOCOL });
         if (under(path, "/api/ui") && options.ui !== undefined && (request.method === "GET" || request.method === "HEAD")) {
           const listed = (yield* options.ui).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);
           if (listed === undefined) return HttpServerResponse.jsonUnsafe({ error: "Not found" }, { status: 404 });

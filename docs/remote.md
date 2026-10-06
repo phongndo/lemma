@@ -5,6 +5,12 @@ with the web app, the desktop app, or the CLI. The UI runs on the client and
 talks to the host over its RPC socket, so nothing is drawn over SSH. The host
 stays on loopback and Tailscale carries it across machines over HTTPS.
 
+Keep the client's checkout at the server's version: the RPC protocol changes
+between versions (`HOST_PROTOCOL` in the transport plugin's
+[README](../plugins/transport/README.md#use)), and a CLI that finds the
+host on another one says so and asks for it to be restarted from its version.
+The web app comes from the host, so it always matches.
+
 ## On the server
 
 Build the web app once (and after updating the checkout), then run the host

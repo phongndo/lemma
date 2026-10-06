@@ -7,6 +7,7 @@ import {
   appUrl,
   branchOf,
   FILE_SEARCH_LIMIT,
+  HOST_PROTOCOL,
   HostError,
   kernelOf,
   NewThreadRoute,
@@ -607,6 +608,32 @@ const connect = (io: Io) =>
     return { target, rpc, live };
   });
 
+/**
+ * Whether the host speaks another RPC protocol (`HOST_PROTOCOL`): a host from another version of Lemma fails every
+ * call in ways that name nothing useful (one from before Effect 4 rejects even the request ids), and its health check
+ * says why. Undefined when it speaks this one, or cannot say.
+ */
+const otherProtocol = (target: Target): Effect.Effect<CliError | undefined> =>
+  Effect.promise(async () => {
+    try {
+      const response = await fetch(new URL("/api/health", target.url), {
+        headers: { authorization: `Bearer ${target.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (!response.ok) return undefined;
+      const protocol = ((await response.json()) as { readonly protocol?: unknown }).protocol ?? 1;
+      if (protocol === HOST_PROTOCOL) return undefined;
+      const where = target.source === "local" ? "The local host" : `The host at ${target.url}`;
+      return new CliError({
+        code: "OtherVersion",
+        message: `${where} runs another version of Lemma: it speaks RPC protocol ${String(protocol)}, this command ${HOST_PROTOCOL}. Restart it from this version (stop it, then \`lemma serve\`, or reopen the desktop app).`,
+        exit: ExitCode.unavailable,
+      });
+    } catch {
+      return undefined;
+    }
+  });
+
 /** A remote target that cannot be reached is the remote's "no host"; a local one that was found but did not answer is unreachable. */
 const toCliError = (error: Failure, target?: Target): CliError => {
   if (error instanceof CliError) return error;
@@ -752,7 +779,26 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
 
   const program: Effect.Effect<Output | undefined, Failure, Scope.Scope> =
     typeof command === "function"
-      ? Effect.flatMap(connect(io), (connection) => command(connection, io, options).pipe(Effect.mapError((error) => toCliError(error, connection.target))))
+      ? Effect.flatMap(connect(io), (connection) =>
+          command(connection, io, options).pipe(
+            // A reply the RPC client cannot read (from a host on another protocol) is a defect: reported, not thrown.
+            Effect.catchDefect((defect) =>
+              Effect.fail(
+                new CliError({
+                  code: "Unexpected",
+                  message: `The host's reply could not be read: ${defect instanceof Error ? defect.message : String(defect)}`,
+                  exit: ExitCode.failed,
+                }),
+              ),
+            ),
+            Effect.mapError((error) => toCliError(error, connection.target)),
+            Effect.catch((error) =>
+              error.code === "Unreachable" || error.code === "NoHost" || error.code === "Unexpected"
+                ? Effect.flatMap(otherProtocol(connection.target), (other) => Effect.fail(other ?? error))
+                : Effect.fail(error),
+            ),
+          ),
+        )
       : command.unattached;
   const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.result));
   if (result._tag === "Failure") return report(io, options.json, toCliError(result.failure));

@@ -10,7 +10,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
-import { CommandsChanged, HostError, HostRpcs, Inspectors, Interaction, InteractionError, Notice, SUBSCRIBED_HEADER } from "@lemma/contracts";
+import { CommandsChanged, HOST_PROTOCOL, HostError, HostRpcs, Inspectors, Interaction, InteractionError, Notice, SUBSCRIBED_HEADER } from "@lemma/contracts";
 import type { HostEvent } from "@lemma/contracts";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
@@ -154,7 +154,7 @@ describe("transport", () => {
         expect((yield* get("/rpc/http", { method: "POST", body: "" })).status).toBe(401);
         const byHeader = yield* get("/api/health", { headers: { authorization: `Bearer ${host.token}` } });
         expect(byHeader.status).toBe(200);
-        expect(yield* Effect.promise(() => byHeader.json())).toEqual({ ok: true, version: "0.1.0" });
+        expect(yield* Effect.promise(() => byHeader.json())).toEqual({ ok: true, version: "0.1.0", protocol: HOST_PROTOCOL });
         expect((yield* get(`/api/health?token=${encodeURIComponent(host.token)}`)).status).toBe(200);
         // Without staticDir there is no web app, but no token is asked for either.
         expect((yield* get("/")).status).toBe(404);
