@@ -5,8 +5,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Daily, every job: main reruns unchanged, so a failure there is a flake to fix (docs/development.md), and the
+  # nightly job runs its long seeded tests.
   schedule:
-    - cron: "23 7 * * 1"
+    - cron: "23 7 * * *"
 
 permissions:
   contents: read
@@ -16,6 +18,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Actions are pinned by commit, their version in the comment; Dependabot (.github/dependabot.yml) keeps them current.
+# What each job runs is a script in package.json (`pnpm run ci` is the check job), so it runs the same locally.
 jobs:
   # The same checks on Linux and macOS, in parallel, with plain Node.js and pnpm. The host does not support Windows yet.
   check:
@@ -27,15 +31,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm test
+      - run: pnpm run ci
 
   # The Nix development shell as developers use it, plus the packed-package and browser checks, and the web
   # app's replaceability checked on its real composition in Chromium (apps/web/AGENTS.md).
@@ -43,33 +46,78 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - id: pnpm-store
+        run: echo "path=$(nix develop -c pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
       - run: nix develop -c pnpm install --frozen-lockfile
-      - run: nix develop -c pnpm check
-      - run: nix develop -c pnpm test
+      - run: nix develop -c pnpm run ci
       - run: nix develop -c pnpm package:check
       - run: nix develop .#browser -c pnpm browser:check
+        env:
+          LEMMA_BENCH_OUTPUT_DIR: ${{ runner.temp }}/metrics
       - run: nix develop .#browser -c pnpm --filter @lemma/web ui:check
+        env:
+          LEMMA_UI_ARTIFACTS: ${{ runner.temp }}/ui-check
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: ui-check
+          path: ${{ runner.temp }}/ui-check
+          if-no-files-found: ignore
+      # Each commit on main leaves its numbers (bundle size, microbenchmarks, the session log's appends), so a
+      # trend can be read back: `gh run download --name metrics-<sha>`. Timings on shared runners are noisy; compare
+      # two builds with the bench workflow instead.
+      - if: github.event_name == 'push'
+        run: nix develop -c pnpm perf:check
+        env:
+          LEMMA_BENCH_OUTPUT_DIR: ${{ runner.temp }}/metrics
+          LEMMA_PERF_ENFORCE: "0"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'push'
+        with:
+          name: metrics-${{ github.sha }}
+          path: ${{ runner.temp }}/metrics
+          retention-days: 90
 
-  sustained:
+  # Nightly (or by hand): the tests with a fresh seed and many more property-test cases, and the performance checks.
+  nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
-      LEMMA_SEQUENCE_RUNS: "1000"
+      # Each run new seeds; a re-run keeps them. The kernel's property test allows 60 s, which bounds its cases.
       LEMMA_SEQUENCE_SEED: ${{ github.run_number }}
+      LEMMA_SEQUENCE_RUNS: "3000"
+      # The session log's simulation (crashes, torn writes, failing disks) and the agent's conversations.
+      LEMMA_SIM_SEED: ${{ github.run_number }}
+      LEMMA_SIM_RUNS: "20000"
+      LEMMA_CONVERSATION_SEED: ${{ github.run_number }}
+      LEMMA_CONVERSATION_RUNS: "500"
       LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
       # Shared runner timings are advisory; correctness/resource assertions fail.
       LEMMA_PERF_ENFORCE: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix develop -c pnpm install --frozen-lockfile
-      # The core's randomized sequences, many more of them; the other packages' tests run in the jobs above.
-      - run: nix develop -c pnpm core:test
+      # The randomized tests (the core's, the session log's simulation, the agent's conversations), many more of them;
+      # every test runs in the jobs above.
+      - run: nix develop -c pnpm test:random
       - run: nix develop -c pnpm perf:check
-      - uses: actions/upload-artifact@v4
+      - if: failure()
+        run: >-
+          echo "::error title=Reproduce::git checkout $GITHUB_SHA &&
+          LEMMA_SEQUENCE_SEED=$LEMMA_SEQUENCE_SEED LEMMA_SEQUENCE_RUNS=$LEMMA_SEQUENCE_RUNS
+          LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
+          LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
+          nix develop -c pnpm test:random (a failing property also prints its replay path)"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: performance

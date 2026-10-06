@@ -15,6 +15,13 @@ hooks {
     stash = "git"
     steps = linters
   }
+  // What CI runs, before commits leave: they go straight to main, with no merge queue to run it first. It checks
+  // the working tree as it is, uncommitted changes included.
+  ["pre-push"] {
+    steps {
+      ["ci"] = new Step { check = "pnpm run ci" }
+    }
+  }
   // `hk check` and `hk fix` run the same steps by hand (all files with --all).
   ["check"] { steps = linters }
   ["fix"] {

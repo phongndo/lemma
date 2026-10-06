@@ -11,12 +11,28 @@ publish a `source` condition for files they do not ship.
 nix develop -c pnpm install --frozen-lockfile
 nix develop -c pnpm check          # build, import boundaries, test hygiene, lint, format check, type-check
 nix develop -c pnpm test           # every package's tests
+nix develop -c pnpm run ci         # what CI's check job runs: check, then test
 nix develop -c pnpm format         # write the formatting `pnpm check` expects
-nix develop -c hk install          # git hooks (hk.pkl): format and lint-fix staged files on commit
+nix develop -c hk install          # git hooks (hk.pkl), below
 ```
 
-The hooks call the dev shell's `hk`: commit from inside `nix develop`, or set
-`HK=0` to skip them once.
+`pnpm run ci` needs `run`: `pnpm ci` is pnpm's own clean install.
+
+The hooks format and lint-fix the staged files on commit, and run `pnpm run ci`
+on push, since commits go straight to main with no merge queue to check them
+first; the push check sees the working tree, uncommitted changes included.
+They call the dev shell's `hk`: commit and push from inside `nix develop`, or
+set `HK=0` to skip them once.
+
+CI (`.github/workflows/check.yml`) runs `pnpm run ci` on Linux and macOS, and
+in the dev shell with the packed-package and browser checks; each commit on main
+also uploads its bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
+every job on main, unchanged, so a failure there is a flake to fix, and runs the
+tests with fresh seeds and many more random cases, and the performance checks;
+a failure prints the command that repeats it.
+`.github/workflows/bench.yml` compares the core's benchmarks with a base
+revision (by hand, or on a pull request labelled `performance`); locally,
+`node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
 
 Tests wait for a condition, never a fixed time, and make their temporary files
 with `mkdtemp`: `scripts/check-boundaries.ts` (in `pnpm check`) counts fixed
@@ -43,10 +59,20 @@ the `browser` shell, which supplies pinned Chromium on Linux. On macOS, install
 one with `nix develop .#browser -c pnpm exec playwright install chromium`, or
 set `LEMMA_CHROMIUM` to an existing executable.
 
+Randomized tests run a fixed number of seeded cases in `pnpm test` and many
+more nightly, through `pnpm test:random`; a failure prints the seed and path
+that replay it:
+
+| Test                                        | Checks                                                                                                                      | Variables (`_RUNS`, `_SEED`, `_PATH`) |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `packages/core/tests/sequences.test.ts`     | the kernel's load, reload, fail, and restart sequences                                                                      | `LEMMA_SEQUENCE_*`                    |
+| `plugins/sessions/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../plugins/sessions/README.md#testing)) | `LEMMA_SIM_*`                         |
+| `plugins/agent/tests/conversation.test.ts`  | random conversations and checkouts: every request is well formed and rebuilds from the log                                  | `LEMMA_CONVERSATION_*`                |
+
 Storage code takes its disk as a `FileSystem` (`@lemma/contracts/fs`), its
 time from Effect's `Clock`, and its randomness from Effect's `Random` or, where
 it must stay unguessable, a seedable source (the session ids' `IdBytes`), so
-a simulation controls all three; `scripts/check-boundaries.ts` fails on a seamed file that reaches
+these tests control all three; `scripts/check-boundaries.ts` fails on a seamed file that reaches
 around them. [`@lemma/testing`](../packages/testing/README.md) holds the
 simulated disk and the contract conformance suites that every implementation
 of a contract, a test's fake included, runs.

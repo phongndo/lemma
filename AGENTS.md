@@ -35,5 +35,5 @@ Use:
 `nix develop -c pnpm check` and `nix develop -c pnpm test` run locally without
 credentials; run them, and the focused package tests while working, without
 asking. A web app change also runs `ui:check` ([its AGENTS.md](apps/web/AGENTS.md)).
-Commit from inside `nix develop` so the hooks run. Report the commands run and
+Commit and push from inside `nix develop` so the hooks run. Report the commands run and
 any failing or blocked checks.
