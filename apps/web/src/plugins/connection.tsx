@@ -1,4 +1,4 @@
-import { Show, createSignal } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
 import { Client, ComposerNotices, SidebarFooter, Slots } from "../ui/contracts.ts";
@@ -79,9 +79,15 @@ export default defineUiPlugin({
   styles,
   requires: { client: Client, slots: Slots },
   setup: ({ client, slots }, plugin) => {
+    // Ticks only while a retry is being counted down to.
     const [now, setNow] = createSignal(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    plugin.onCleanup(() => window.clearInterval(timer));
+    const counting = () => client.status().retryAt !== undefined;
+    createEffect(() => {
+      if (!counting()) return;
+      setNow(Date.now());
+      const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+      onCleanup(() => window.clearInterval(timer));
+    });
     plugin.onCleanup(
       slots.add(SidebarFooter, {
         id: "connection",
