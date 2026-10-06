@@ -46,7 +46,6 @@
     --sidebar: 264px;
     /* Stacking of what covers the page, lowest first. A layer from a UI file slots in between by picking a value. */
     --z-drawer: 40;
-    --z-screen: 45;
     --z-dialog: 50;
     --z-menu: 60;
     --z-toast: 70;

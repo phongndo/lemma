@@ -73,8 +73,7 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
  *   The bar atop each column is then the window's title bar: it is 48px tall
  *   and marks itself `app-region: drag`. The shell sets `--titlebar-inset` on
  *   the column under the controls (the sidebar, or the main column when the
- *   sidebar is hidden or a drawer), the room its bar leaves at the left; a
- *   full-screen layer leaves a 48px strip over its own left column.
+ *   sidebar is hidden or a drawer), the room its bar leaves at the left.
  * - `window.lemmaDesktop`, in a desktop window, is its app's bridge
  *   (`apps/desktop/src/preload.cjs`): `ownsHost` when the app started the
  *   host, and `reload()` for that case, which restarts it (see the desktop
@@ -478,7 +477,7 @@ export type { Region } from "./slots.ts";
 
 /** What the page renders. Empty: a blank page. */
 export const Root = defineSlot<Region>("root", { shows: "first" });
-/** Mounted over the whole app in order: dialogs, the palette, settings, toasts, tooltips. Each shows itself when it should. */
+/** Mounted over the whole app in order: dialogs, the palette, toasts, tooltips. Each shows itself when it should. */
 export const Layers = defineSlot<Region>("layers");
 /** Panels docked under the app (the devtools), in order: the app shrinks to the space above them. Each sizes itself and shows itself when it should. */
 export const Docks = defineSlot<Region>("docks");

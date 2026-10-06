@@ -1,10 +1,11 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { withKeys } from "../lib/keys.ts";
 import { shownKeys } from "../model/keybindings.ts";
 import { filterGroups } from "../model/settings.ts";
 import type { EntryGroup } from "../model/settings.ts";
 import {
   Actions,
+  Layout,
   NewThreadRoute,
   Pages,
   Router,
@@ -14,13 +15,14 @@ import {
   SettingsRoute,
   SettingsSections,
   SidebarFooter,
+  SidebarRegion,
   Slots,
   UiPlugins,
 } from "../ui/contracts.ts";
 import type { SettingsEntry, SettingsSection } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
-import { ArrowLeftIcon, Contained, GearIcon, SearchIcon, SlidersIcon, XIcon } from "../ui/parts.tsx";
+import { ArrowLeftIcon, Contained, GearIcon, SearchIcon, SidebarIcon, SlidersIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./settings.css?inline";
 
 type Section = SlotItem<SettingsSection>;
@@ -36,174 +38,6 @@ const groupsOf = (slots: SlotsService, section: string): EntryGroup<SettingsEntr
   }
   return merged.filter((group) => group.entries.length > 0);
 };
-
-function SettingsView(props: {
-  slots: SlotsService;
-  section: () => string;
-  /** Changes on every `open`, even of the open section: the search clears, so a result that navigates lands there. */
-  visits: () => number;
-  open: (section: string | undefined) => void;
-  setFocus: (focus: (() => void) | undefined) => void;
-  /** The binding that closes settings, as the user has it. */
-  closeKeys: () => string | undefined;
-}) {
-  const { slots } = props;
-  const [query, setQuery] = createSignal("");
-  const searching = () => query().trim() !== "";
-  const sections = () => slots.list(SettingsSections);
-  let main!: HTMLDivElement;
-  let search!: HTMLInputElement;
-  const previous = document.activeElement as HTMLElement | null;
-  onMount(() => queueMicrotask(() => search.focus()));
-  props.setFocus(() => {
-    search.focus();
-    search.select();
-  });
-  onCleanup(() => {
-    props.setFocus(undefined);
-    previous?.focus?.();
-  });
-  createEffect(on([props.section, searching], () => main.scrollTo({ top: 0 }), { defer: true }));
-  createEffect(on(props.visits, () => setQuery(""), { defer: true }));
-
-  const current = (): Section | undefined => sections().find((candidate) => candidate.id === props.section()) ?? sections()[0];
-  const groups = createMemo(() => {
-    const section = current();
-    return section === undefined ? [] : groupsOf(slots, section.id);
-  });
-  const results = createMemo(() =>
-    searching()
-      ? sections()
-          .map((section) => ({ section, groups: filterGroups(groupsOf(slots, section.id), query()) }))
-          .filter((found) => found.groups.length > 0)
-      : [],
-  );
-  const count = (id: string) =>
-    results()
-      .find((found) => found.section.id === id)
-      ?.groups.reduce((sum, group) => sum + group.entries.length, 0) ?? 0;
-  const go = (id: string) => {
-    setQuery("");
-    props.open(id);
-  };
-
-  return (
-    <div class="settings" role="region" aria-label="Settings">
-      <nav class="settings-nav" aria-label="Settings sections">
-        <label class="search-box">
-          <SearchIcon />
-          <input
-            ref={search}
-            type="search"
-            placeholder="Search settings"
-            aria-label="Search settings"
-            autocomplete="off"
-            spellcheck={false}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && query() !== "") {
-                event.preventDefault();
-                event.stopPropagation();
-                setQuery("");
-              }
-            }}
-          />
-          <Show when={query() === ""}>
-            <span class="search-key" data-tip="Press / to search">
-              /
-            </span>
-          </Show>
-          <Show when={query() !== ""}>
-            <button class="icon-button search-clear" aria-label="Clear search" onClick={() => setQuery("")}>
-              <XIcon />
-            </button>
-          </Show>
-        </label>
-        <div class="settings-nav-items">
-          <For each={sections()}>
-            {(item) => (
-              <button
-                class="settings-nav-item"
-                classList={{ active: !searching() && current()?.id === item.id, dim: searching() && count(item.id) === 0 }}
-                aria-current={!searching() && current()?.id === item.id ? "page" : undefined}
-                onClick={() => go(item.id)}
-              >
-                <Contained slot={SettingsSections} item={item} component={item.icon} />
-                <span class="settings-nav-label">{item.title}</span>
-                <Show when={searching() && count(item.id) > 0}>
-                  <span class="settings-nav-count">{count(item.id)}</span>
-                </Show>
-                <Show when={!searching() && item.badge?.()}>{(badge) => <span class="settings-nav-count err">{badge()}</span>}</Show>
-              </button>
-            )}
-          </For>
-        </div>
-        <span class="spacer" />
-        <button class="settings-nav-item" onClick={() => props.open(undefined)} data-tip={withKeys("Back to chats", props.closeKeys())}>
-          <ArrowLeftIcon />
-          <span class="settings-nav-label">Back</span>
-        </button>
-      </nav>
-      <div class="settings-main" ref={main}>
-        <header class="settings-head">
-          <span class="muted">Settings</span>
-          <span class="settings-crumb-sep">/</span>
-          <span>{searching() ? "Search" : current()?.title}</span>
-          <span class="spacer" />
-          <Show when={!searching() && current()?.actions !== undefined && current()} keyed>
-            {(section) => <Contained slot={SettingsSections} item={section} component={section.actions} />}
-          </Show>
-          <button class="icon-button" aria-label="Close settings" data-tip={withKeys("Close", props.closeKeys())} onClick={() => props.open(undefined)}>
-            <XIcon />
-          </button>
-        </header>
-        <div class="settings-content" classList={{ wide: !searching() && current()?.body !== undefined }}>
-          <Show
-            when={searching()}
-            fallback={
-              <Show when={current()}>
-                {(section) => (
-                  <>
-                    <Show when={section().intro}>{(intro) => <Contained slot={SettingsSections} item={section()} component={intro()} />}</Show>
-                    <Show
-                      when={section().body}
-                      keyed
-                      fallback={
-                        <Show
-                          when={groups().some((group) => group.entries.length > 0)}
-                          fallback={<Show when={section().empty}>{(empty) => <Contained slot={SettingsSections} item={section()} component={empty()} />}</Show>}
-                        >
-                          <Groups groups={groups()} />
-                        </Show>
-                      }
-                    >
-                      {(body) => <Contained slot={SettingsSections} item={section()} component={body} />}
-                    </Show>
-                  </>
-                )}
-              </Show>
-            }
-          >
-            <Show when={results().length > 0} fallback={<p class="settings-empty">No settings match “{query().trim()}”</p>}>
-              <For each={results()}>
-                {(found) => (
-                  <section class="settings-result">
-                    <button class="settings-result-title" onClick={() => go(found.section.id)} data-tip={`Open ${found.section.title}`}>
-                      <Contained slot={SettingsSections} item={found.section} component={found.section.icon} />
-                      {found.section.title}
-                    </button>
-                    <Groups groups={found.groups} />
-                  </section>
-                )}
-              </For>
-            </Show>
-          </Show>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
   return (
@@ -223,8 +57,9 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
 }
 
 /**
- * Settings, a page covering the app: `/settings/<section>`, with the
- * section's own state in the search (`?plugin=agent&tab=faults`). Plugins add
+ * Settings: `/settings/<section>`, a page whose sections take the sidebar
+ * region while it shows, with the section's own state in the search
+ * (`?plugin=agent&tab=faults`). Plugins add
  * sections and the entries in them; the search runs across every section,
  * and clearing it returns to the section being browsed. Closing returns to
  * where settings were opened from.
@@ -232,10 +67,9 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
 export default defineUiPlugin({
   id: "settings",
   styles,
-  requires: { slots: Slots, router: Router, uiPlugins: UiPlugins },
+  requires: { slots: Slots, router: Router, uiPlugins: UiPlugins, layout: Layout },
   provides: { settings: Settings },
-  setup: ({ slots, router, uiPlugins }) => {
-    const [visits, setVisits] = createSignal(0);
+  setup: ({ slots, router, uiPlugins, layout }) => {
     const [focus, setFocus] = createSignal<() => void>();
     const here = () => router.matchOf(SettingsRoute);
     const section = createMemo(() => {
@@ -268,7 +102,7 @@ export default defineUiPlugin({
     });
 
     const open = (next: string | undefined, nextParams?: Readonly<Record<string, string>>) => {
-      setVisits((count) => count + 1);
+      setQuery("");
       if (next !== undefined) {
         router.navigate(SettingsRoute, { section: next }, { search: nextParams ?? left.get(next) ?? {} });
         return;
@@ -297,21 +131,172 @@ export default defineUiPlugin({
       const action = slots.get(Actions, id);
       return action === undefined ? undefined : shownKeys(action, uiPlugins.list());
     };
-    slots.add(SettingsSections, { id: SectionIds.general, order: 0, title: "General", icon: SlidersIcon });
-    slots.add(Pages, {
-      id: "settings",
-      route: SettingsRoute,
-      component: () => (
-        <SettingsView
-          slots={slots}
-          section={() => section() ?? SectionIds.general}
-          visits={visits}
-          open={open}
-          setFocus={(next) => setFocus(() => next)}
-          closeKeys={() => keysOf("settings.close")}
-        />
-      ),
+    const [query, setQuery] = createSignal("");
+    const searching = () => query().trim() !== "";
+    const sections = () => slots.list(SettingsSections);
+    const current = (): Section | undefined => sections().find((candidate) => candidate.id === section()) ?? sections()[0];
+    const groups = createMemo(() => {
+      const shown = section() === undefined ? undefined : current();
+      return shown === undefined ? [] : groupsOf(slots, shown.id);
     });
+    const results = createMemo(() =>
+      searching()
+        ? sections()
+            .map((found) => ({ section: found, groups: filterGroups(groupsOf(slots, found.id), query()) }))
+            .filter((found) => found.groups.length > 0)
+        : [],
+    );
+    const count = (id: string) =>
+      results()
+        .find((found) => found.section.id === id)
+        ?.groups.reduce((sum, group) => sum + group.entries.length, 0) ?? 0;
+
+    /** The sections, in the sidebar's place: the shell sizes, resizes, and collapses it as it does the threads. */
+    function Nav(props: { onPick: () => void }) {
+      let search!: HTMLInputElement;
+      const previous = document.activeElement as HTMLElement | null;
+      onMount(() => queueMicrotask(() => search.focus()));
+      setFocus(() => () => {
+        search.focus();
+        search.select();
+      });
+      onCleanup(() => {
+        setFocus(undefined);
+        previous?.focus?.();
+      });
+      const go = (id: string | undefined) => {
+        open(id);
+        props.onPick();
+      };
+      return (
+        <nav class="settings-nav" aria-label="Settings sections">
+          <label class="search-box">
+            <SearchIcon />
+            <input
+              ref={search}
+              type="search"
+              placeholder="Search settings"
+              aria-label="Search settings"
+              autocomplete="off"
+              spellcheck={false}
+              value={query()}
+              onInput={(event) => setQuery(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && query() !== "") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setQuery("");
+                }
+              }}
+            />
+            <Show when={query() === ""}>
+              <span class="search-key" data-tip="Press / to search">
+                /
+              </span>
+            </Show>
+            <Show when={query() !== ""}>
+              <button class="icon-button search-clear" aria-label="Clear search" onClick={() => setQuery("")}>
+                <XIcon />
+              </button>
+            </Show>
+          </label>
+          <For each={sections()}>
+            {(item) => (
+              <button
+                class="settings-nav-item"
+                classList={{ active: !searching() && current()?.id === item.id, dim: searching() && count(item.id) === 0 }}
+                aria-current={!searching() && current()?.id === item.id ? "page" : undefined}
+                onClick={() => go(item.id)}
+              >
+                <Contained slot={SettingsSections} item={item} component={item.icon} />
+                <span class="settings-nav-label">{item.title}</span>
+                <Show when={searching() && count(item.id) > 0}>
+                  <span class="settings-nav-count">{count(item.id)}</span>
+                </Show>
+                <Show when={!searching() && item.badge?.()}>{(badge) => <span class="settings-nav-count err">{badge()}</span>}</Show>
+              </button>
+            )}
+          </For>
+          <span class="spacer" />
+          <button class="settings-nav-item" onClick={() => go(undefined)} data-tip={withKeys("Back to chats", keysOf("settings.close"))}>
+            <ArrowLeftIcon />
+            <span class="settings-nav-label">Back</span>
+          </button>
+        </nav>
+      );
+    }
+    const opened = createMemo(() => section() !== undefined);
+    createEffect(() => {
+      if (opened()) onCleanup(untrack(() => slots.add(SidebarRegion, { id: "settings", order: -10, component: Nav })));
+    });
+
+    function Page() {
+      let main!: HTMLDivElement;
+      createEffect(on([section, searching], () => main.scrollTo({ top: 0 }), { defer: true }));
+      return (
+        <div class="settings" role="region" aria-label="Settings" ref={main}>
+          <header class="settings-head">
+            <button class="icon-button" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
+              <SidebarIcon />
+            </button>
+            <span class="muted">Settings</span>
+            <span class="settings-crumb-sep">/</span>
+            <span>{searching() ? "Search" : current()?.title}</span>
+            <span class="spacer" />
+            <Show when={!searching() && current()?.actions !== undefined && current()} keyed>
+              {(shown) => <Contained slot={SettingsSections} item={shown} component={shown.actions} />}
+            </Show>
+            <button class="icon-button" aria-label="Close settings" data-tip={withKeys("Close", keysOf("settings.close"))} onClick={() => open(undefined)}>
+              <XIcon />
+            </button>
+          </header>
+          <div class="settings-content" classList={{ wide: !searching() && current()?.body !== undefined }}>
+            <Show
+              when={searching()}
+              fallback={
+                <Show when={current()}>
+                  {(shown) => (
+                    <>
+                      <Show when={shown().intro}>{(intro) => <Contained slot={SettingsSections} item={shown()} component={intro()} />}</Show>
+                      <Show
+                        when={shown().body}
+                        keyed
+                        fallback={
+                          <Show
+                            when={groups().some((group) => group.entries.length > 0)}
+                            fallback={<Show when={shown().empty}>{(empty) => <Contained slot={SettingsSections} item={shown()} component={empty()} />}</Show>}
+                          >
+                            <Groups groups={groups()} />
+                          </Show>
+                        }
+                      >
+                        {(body) => <Contained slot={SettingsSections} item={shown()} component={body} />}
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              }
+            >
+              <Show when={results().length > 0} fallback={<p class="settings-empty">No settings match “{query().trim()}”</p>}>
+                <For each={results()}>
+                  {(found) => (
+                    <section class="settings-result">
+                      <button class="settings-result-title" onClick={() => open(found.section.id)} data-tip={`Open ${found.section.title}`}>
+                        <Contained slot={SettingsSections} item={found.section} component={found.section.icon} />
+                        {found.section.title}
+                      </button>
+                      <Groups groups={found.groups} />
+                    </section>
+                  )}
+                </For>
+              </Show>
+            </Show>
+          </div>
+        </div>
+      );
+    }
+    slots.add(SettingsSections, { id: SectionIds.general, order: 0, title: "General", icon: SlidersIcon });
+    slots.add(Pages, { id: "settings", route: SettingsRoute, component: Page });
     slots.add(Actions, {
       id: "settings.open",
       order: 8,
