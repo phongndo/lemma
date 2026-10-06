@@ -1,5 +1,7 @@
+export { createEntryStore } from "./entries.ts";
+export type { EntryStore, EntryStoreOptions, KeyValueStorage } from "./entries.ts";
 export { createBrowserHistory, createMemoryHistory } from "./history.ts";
-export type { HistoryAction, HistoryLocation, HistoryUpdate, RouterHistory } from "./history.ts";
+export type { HistoryAction, HistoryLocation, HistorySnapshot, HistoryUpdate, MemoryHistory, RouterHistory } from "./history.ts";
 export { interceptLinks } from "./links.ts";
 export type { LinkOptions } from "./links.ts";
 export type { Pattern, RawParams, Segment } from "./path.ts";
