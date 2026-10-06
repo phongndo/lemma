@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Events, Plugin } from "@lemma/core";
 import { AssistantDelta, emptyUsage, HostControl, Llm, LlmError, Sessions, ToolResult, Tools, TurnEnded, TurnStarted } from "@lemma/contracts";
@@ -214,6 +215,8 @@ export interface AgentSetup {
   readonly models?: readonly string[];
   /** In place of the sessions store. */
   readonly sessions?: Plugin;
+  /** Runs on Effect's test clock: waits (a retry's) last until the body adjusts it. */
+  readonly testClock?: boolean;
 }
 
 /**
@@ -242,7 +245,7 @@ export const runAgent = <A, E>(
         );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
-    ),
+    ).pipe(setup.testClock === true ? Effect.provide(TestClock.layer()) : (effect) => effect),
   );
 };
 

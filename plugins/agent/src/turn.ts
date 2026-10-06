@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Effect, Exit, Semaphore, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Random, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, Hook } from "@lemma/core";
 import type { Events, Hooks } from "@lemma/core";
@@ -76,11 +76,14 @@ const PARALLEL_TOOLS = 8;
 /** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
 const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
 
-/** Milliseconds before retry `attempt` (from 1): the provider's delay when it named one, else doubling backoff with ±20% jitter. */
-const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">, attempt: number, requested?: number): number =>
+/**
+ * Milliseconds before retry `attempt` (from 1): the provider's delay when it named one, else doubling backoff with
+ * ±20% jitter. `jitter` is a draw from [0, 1), from Effect's `Random` so a test can seed it.
+ */
+const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">, attempt: number, requested: number | undefined, jitter: number): number =>
   requested !== undefined
     ? Math.min(requested, MAX_REQUESTED_DELAY_MS)
-    : Math.round(Math.min(settings.maxRetryDelay, settings.retryDelay * 2 ** (attempt - 1)) * (0.8 + Math.random() * 0.4));
+    : Math.round(Math.min(settings.maxRetryDelay, settings.retryDelay * 2 ** (attempt - 1)) * (0.8 + jitter * 0.4));
 
 /** A prompt as a turn places it: a user message carrying the submission's id. */
 interface Placed {
@@ -291,25 +294,34 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
 
   /**
    * Waits until epoch `at`, without a slot; a stopping agent suspends the turn instead, and the rest of the wait comes
-   * when it resumes.
+   * when it resumes. Times in a turn come from Effect's `Clock`, as its waits do, so a test's clock drives both.
    */
-  const waitUntil = (at: number) => Effect.andThen(input.idle(Effect.raceFirst(Effect.sleep(Math.max(0, at - Date.now())), input.stopping)), boundary);
+  const waitUntil = (at: number) =>
+    Effect.andThen(
+      input.idle(
+        Effect.raceFirst(
+          Effect.flatMap(Clock.currentTimeMillis, (now) => Effect.sleep(Math.max(0, at - now))),
+          input.stopping,
+        ),
+      ),
+      boundary,
+    );
 
   const hookError = (hook: string) => (error: { readonly message: string }) =>
     new AgentError({ sessionId, reason: "Hook", message: `${hook}: ${error.message}`, cause: error });
 
   const userMessage = (placed: Placed) =>
-    append({ type: "message", message: { role: "user", content: placed.content, timestamp: Date.now() }, turnId, requestId: placed.requestId }).pipe(
-      Effect.tap(() => Effect.sync(() => input.logged(placed.requestId))),
-    );
+    Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
+      append({ type: "message", message: { role: "user", content: placed.content, timestamp }, turnId, requestId: placed.requestId }),
+    ).pipe(Effect.tap(() => Effect.sync(() => input.logged(placed.requestId))));
 
-  const toolResult = (call: ToolCall, text: string): ToolResultMessage => ({
+  const toolResult = (call: ToolCall, text: string, timestamp: number): ToolResultMessage => ({
     role: "toolResult",
     toolCallId: call.id,
     toolName: call.name,
     content: [{ type: "text", text }],
     isError: true,
-    timestamp: Date.now(),
+    timestamp,
   });
 
   /**
@@ -329,7 +341,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     for (const call of open.calls) {
       yield* append({
         type: "message",
-        message: toolResult(call, BRANCHED_CALL),
+        message: toolResult(call, BRANCHED_CALL, yield* Clock.currentTimeMillis),
         ...(callTurn === undefined ? {} : { turnId: callTurn }),
         ...(callStep === undefined ? {} : { stepId: callStep }),
       });
@@ -411,13 +423,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    * and besides those, an overflow once (with a shortened history) until the model answers. A cancelled turn asks
    * nothing again.
    */
-  const retryOf = (failure: LlmFailure | undefined) => {
-    if (failure === undefined || signal.aborted) return undefined;
-    const attempt = state.retries + 1;
-    if (failure.kind === "overflow") return state.overflowed ? undefined : { reason: "failure" as const, attempt, at: Date.now() };
-    if (failure.kind === "fatal" || attempt - (state.overflowed ? 1 : 0) > settings.retries) return undefined;
-    return { reason: "failure" as const, attempt, at: Date.now() + retryDelay(settings, attempt, failure.retryAfterMs) };
-  };
+  const retryOf = (failure: LlmFailure | undefined) =>
+    Effect.gen(function* () {
+      if (failure === undefined || signal.aborted) return undefined;
+      const attempt = state.retries + 1;
+      const now = yield* Clock.currentTimeMillis;
+      if (failure.kind === "overflow") return state.overflowed ? undefined : { reason: "failure" as const, attempt, at: now };
+      if (failure.kind === "fatal" || attempt - (state.overflowed ? 1 : 0) > settings.retries) return undefined;
+      return { reason: "failure" as const, attempt, at: now + retryDelay(settings, attempt, failure.retryAfterMs, yield* Random.next) };
+    });
 
   /**
    * Streams one model call. Returns the settled message; or, when the call failed, when it is to be asked again
@@ -425,7 +439,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    */
   const callModel = (stepId: string, request: LlmRequest, model: ModelInfo) =>
     Effect.gen(function* () {
-      const startedAt = Date.now();
+      const startedAt = yield* Clock.currentTimeMillis;
       let firstTokenAt: number | undefined;
       let settled: Extract<StreamEvent, { type: "done" | "error" }> | undefined;
       const partial = live.startStep(stepId, startedAt);
@@ -434,7 +448,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const streamError = yield* llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
-            if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = Date.now();
+            if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = yield* Clock.currentTimeMillis;
             const seq = live.apply(event);
             if (event.type === "done" || event.type === "error") settled = event;
             yield* events.publish(AssistantDelta, { sessionId, turnId, stepId, seq, event });
@@ -443,7 +457,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         Effect.as(undefined),
         Effect.catch((error) => Effect.succeed(error.message)),
       );
-      const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: Date.now() };
+      const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
       // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
       if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
       return yield* Effect.uninterruptible(
@@ -452,14 +466,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           live.endStep();
           if (settled === undefined) {
             const error = streamError ?? "The model stream ended without a result";
-            yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error), timing });
+            yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error, timing.endedAt), timing });
             return { ended: { reason: "error", error } satisfies Ended };
           }
           state.usage = addUsage(state.usage, settled.message.usage);
           if (settled.type === "error") {
             const aborted = settled.message.stopReason === "aborted";
             const failure = aborted ? undefined : settled.failure;
-            const retry = retryOf(failure);
+            const retry = yield* retryOf(failure);
             yield* append({
               type: "attempt",
               turnId,
@@ -496,7 +510,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    */
   const runCall = (stepId: string, call: ToolCall, interrupted: ReadonlyMap<string, string | undefined>, offered?: readonly string[]) =>
     Effect.gen(function* () {
-      const startedAt = Date.now();
+      const startedAt = yield* Clock.currentTimeMillis;
       const invocation = new ToolInvocation({
         sessionId,
         toolCallId: call.id,
@@ -532,7 +546,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         toolName: call.name,
         content: result.content,
         isError: result.isError,
-        timestamp: Date.now(),
+        timestamp: yield* Clock.currentTimeMillis,
       };
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
@@ -541,7 +555,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             message,
             turnId,
             stepId,
-            timing: { startedAt, endedAt: Date.now() },
+            timing: { startedAt, endedAt: message.timestamp },
             ...(result.details === undefined ? {} : { details: result.details }),
           });
           state.pending = state.pending.filter((pending) => pending.id !== call.id);
@@ -602,7 +616,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const results: ToolResultMessage[] = [];
       while (state.pending.length > 0) {
         const call = state.pending[0]!;
-        const message = toolResult(call, text(call));
+        const message = toolResult(call, text(call), yield* Clock.currentTimeMillis);
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             yield* append({ type: "message", message, turnId, ...(stepId === undefined ? {} : { stepId }) });
@@ -712,8 +726,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const output = (toolCallId: string) => restored?.output.find((entry) => entry.toolCallId === toolCallId)?.output;
       // What the cut-off call had produced, when the output file got that far.
       const cutStep = restored?.step !== undefined && restored.step.stepId === stepId ? restored.step : undefined;
-      const cutOff = () => partialMessage(cutStep?.content ?? [], input.model, cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL);
-      const timing = () => ({ startedAt: cutStep?.startedAt ?? Date.now(), endedAt: Date.now() });
+      const now = yield* Clock.currentTimeMillis;
+      const cutOff = () =>
+        partialMessage(cutStep?.content ?? [], input.model, cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL, now);
+      const timing = () => ({ startedAt: cutStep?.startedAt ?? now, endedAt: now });
       /** The next step, once a retry's wait (cut short by the restart) is over. */
       const again = () => Effect.andThen(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
 
@@ -738,7 +754,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
               stepId: at.stepId,
               message: cutOff(),
               timing: timing(),
-              retry: { reason: "restart", attempt: 1, at: Date.now() },
+              retry: { reason: "restart", attempt: 1, at: now },
             });
           }
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
@@ -803,8 +819,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const cancelled = ended.reason === "cancelled";
       const step = state.step;
       if (step !== undefined && state.partial !== undefined) {
-        const message = state.partial.message(step.model, cancelled ? "aborted" : "error", cancelled ? "Cancelled" : (ended.error ?? "Turn failed"));
-        yield* append({ type: "attempt", turnId, stepId: step.id, message, timing: { startedAt: state.partialStartedAt, endedAt: Date.now() } });
+        const endedAt = yield* Clock.currentTimeMillis;
+        const message = state.partial.message(step.model, cancelled ? "aborted" : "error", cancelled ? "Cancelled" : (ended.error ?? "Turn failed"), endedAt);
+        yield* append({ type: "attempt", turnId, stepId: step.id, message, timing: { startedAt: state.partialStartedAt, endedAt } });
         state.partial = undefined;
       }
       const failed = `the turn failed (${ended.error ?? "unknown error"})`;

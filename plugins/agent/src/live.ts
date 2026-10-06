@@ -8,7 +8,13 @@ const OUTPUT_TAIL_CHARS = 16 * 1024;
 type Block = AssistantMessage["content"][number];
 
 /** An assistant message made of what a call produced, for an `attempt` logged when the call did not finish. */
-export const partialMessage = (content: readonly Block[], model: ModelInfo, stopReason: "aborted" | "error", errorMessage: string): AssistantMessage => ({
+export const partialMessage = (
+  content: readonly Block[],
+  model: ModelInfo,
+  stopReason: "aborted" | "error",
+  errorMessage: string,
+  timestamp: number,
+): AssistantMessage => ({
   role: "assistant",
   content: [...content],
   api: model.api,
@@ -17,7 +23,7 @@ export const partialMessage = (content: readonly Block[], model: ModelInfo, stop
   usage: emptyUsage,
   stopReason,
   errorMessage,
-  timestamp: Date.now(),
+  timestamp,
 });
 
 /** Rebuilds what a stream produced so far: text, thinking, and finished tool calls. */
@@ -53,8 +59,8 @@ export class PartialMessage {
     return this.blocks.flatMap((block, index) => (block === undefined ? [] : [{ index, block }]));
   }
 
-  message(model: ModelInfo, stopReason: "aborted" | "error", errorMessage: string): AssistantMessage {
-    return partialMessage(this.content(), model, stopReason, errorMessage);
+  message(model: ModelInfo, stopReason: "aborted" | "error", errorMessage: string, timestamp: number): AssistantMessage {
+    return partialMessage(this.content(), model, stopReason, errorMessage, timestamp);
   }
 }
 

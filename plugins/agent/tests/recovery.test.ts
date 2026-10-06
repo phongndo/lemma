@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import { Agent, AgentRequestHook, branchOf, rebuildRequest, ToolResult } from "@lemma/contracts";
@@ -557,6 +558,7 @@ describe("admission", () => {
       {
         scripts: [failWith("529 Overloaded", { kind: "transient" }), reply("second answers"), reply("first answers")],
         config: { maxRunning: 1, retryDelay: 0.3 },
+        testClock: true,
       },
       () =>
         Effect.gen(function* () {
@@ -564,10 +566,11 @@ describe("admission", () => {
           const first = yield* newSession;
           const second = yield* newSession;
           const one = yield* Effect.forkChild(a.prompt(first.id, text("one")));
-          yield* waitFor(log(first.id), (events) => ofType(events, "attempt").length > 0);
-          // The first turn waits to ask again; the second runs meanwhile.
+          yield* TestClock.withLive(waitFor(log(first.id), (events) => ofType(events, "attempt").length > 0));
+          // The first turn waits to ask again, until the clock moves: the second runs meanwhile, however slow the machine.
           yield* a.prompt(second.id, text("two"));
           expect(ofType(yield* log(first.id), "request")).toHaveLength(1);
+          yield* TestClock.adjust("1 second");
           yield* Fiber.await(one);
           expect(ofType(yield* log(first.id), "turn-end").map((end) => end.reason)).toEqual(["done"]);
         }),
