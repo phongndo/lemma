@@ -175,4 +175,116 @@ for (const file of walk(web).filter((path) => path.endsWith(".css"))) {
 }
 report("Web UI boundary violations (see apps/web/AGENTS.md)", uiProblems, "web ui boundary: ok");
 
+// Tests and checks wait for a condition, not for time: a fixed wait is too short on a loaded machine (a flake) and
+// too long everywhere else (a slow suite). Nor do they name a file directly under the OS temp directory, which runs
+// at once (`pnpm stress`) would share; mkdtemp makes one of their own. Each file's count of either may only fall,
+// TigerBeetle "tidy" style: a count above its ceiling fails, and one below asks for the ceiling to come down with it.
+// The ceilings record what is left to fix, not what is allowed.
+const waitCeilings: Readonly<Record<string, number>> = {
+  "apps/web/scripts/shots.ts": 1,
+  "apps/web/tests/ui.test.ts": 1,
+  "packages/client/tests/rpc.test.ts": 1,
+  "packages/client/tests/session-log.test.ts": 1,
+  "packages/core/tests/events.test.ts": 5,
+  "packages/core/tests/lifecycle-regressions.test.ts": 1,
+  "packages/core/tests/supervision.test.ts": 3,
+  "packages/core/tests/support.ts": 1,
+  "packages/host/scripts/dev.ts": 2,
+  "plugins/agent/tests/crash.ts": 1,
+  "plugins/agent/tests/fakes.ts": 1,
+  "plugins/agent/tests/recovery.test.ts": 5,
+  "plugins/compaction/tests/compaction.test.ts": 1,
+  "plugins/credentials/tests/credentials.test.ts": 1,
+  "plugins/file-search-fff/tests/file-search.test.ts": 1,
+  "plugins/host/tests/watch.test.ts": 6,
+  "plugins/llm-pi-ai/tests/llm.test.ts": 2,
+  "plugins/sessions/tests/sessions.test.ts": 7,
+  "plugins/sessions/tests/simulation.test.ts": 1,
+  "plugins/tools-builtin/tests/bash.test.ts": 2,
+  "plugins/tools-builtin/tests/codemode.test.ts": 1,
+  "plugins/tools/tests/tools.test.ts": 3,
+  "scripts/e2e.ts": 1,
+  "scripts/mock-openai.ts": 1,
+};
+const tempNameCeilings: Readonly<Record<string, number>> = {
+  "plugins/host/tests/ui.test.ts": 2,
+  "plugins/transport/tests/transport.test.ts": 2,
+};
+const fixedWaits = [
+  // A promise its own timer resolves: `new Promise((resolve) => setTimeout(resolve, 100))`.
+  /new Promise(?:<[^>]*>)?\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*setTimeout\(\s*\1\s*,/g,
+  /\bwaitForTimeout\(/g,
+  /(?<![\w$.])sleep\(/g,
+  /\bEffect\.sleep\(/g,
+];
+// `join(tmpdir(), "name")` and the like, but not a prefix handed to mkdtemp.
+const fixedTempName = /(?<!mkdtemp(?:Sync)?\(\s*(?:\w+\.)?)\b(?:join|resolve)\(\s*(?:\w+\.)?tmpdir\(\)\s*,\s*(?:"[^"]*"|'[^']*'|`[^`$]*`)/g;
+const testProblems: string[] = [];
+const lower: string[] = [];
+const ratchet = (counts: ReadonlyMap<string, number>, ceilings: Readonly<Record<string, number>>, table: string, what: string, instead: string) => {
+  for (const file of new Set([...counts.keys(), ...Object.keys(ceilings)])) {
+    const count = counts.get(file) ?? 0;
+    const ceiling = ceilings[file] ?? 0;
+    if (count > ceiling) testProblems.push(`${file}: ${count} ${what}, above its ceiling of ${ceiling} (${table}): ${instead}`);
+    else if (count < ceiling)
+      lower.push(`${file}: ${count} ${what}, under its ceiling of ${ceiling}: set it to ${count} in ${table}${count === 0 ? " (remove the row)" : ""}`);
+  }
+};
+const waits = new Map<string, number>();
+const tempNames = new Map<string, number>();
+for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
+  for (const path of walk(join(root, dir)).filter((file) => /\.(ts|tsx|mts)$/.test(file))) {
+    const file = relative(root, path);
+    // This file names the patterns it looks for.
+    if (file === "scripts/check-boundaries.ts" || (!/(^|\/)(tests|scripts)\//.test(file) && !/\.test\.tsx?$/.test(file))) continue;
+    const text = readFileSync(path, "utf8");
+    const waited = fixedWaits.reduce((sum, pattern) => sum + [...text.matchAll(pattern)].length, 0);
+    const named = [...text.matchAll(fixedTempName)].length;
+    if (waited > 0) waits.set(file, waited);
+    if (named > 0) tempNames.set(file, named);
+  }
+}
+ratchet(waits, waitCeilings, "waitCeilings", "fixed-time waits (a timer's promise, waitForTimeout, sleep, Effect.sleep)", "wait for the condition instead");
+ratchet(tempNames, tempNameCeilings, "tempNameCeilings", "fixed names under the OS temp directory", "make a directory with mkdtemp");
+if (lower.length) console.log(`Ceilings to lower in scripts/check-boundaries.ts, so they stay down:\n${lower.map((note) => `  ${note}`).join("\n")}`);
+report("Test hygiene violations (scripts/check-boundaries.ts)", testProblems, "test hygiene: ok");
+
+// Code behind a seam reaches time, randomness, and the disk only through it, so a simulation controls all three
+// (plugins/sessions/README.md#testing): Effect's `Clock` and `Random`, and the `FileSystem` it is given.
+const reach = {
+  clock: [/\bDate\.now\(/g, "Date.now() (use Effect's Clock)"],
+  random: [/\bMath\.random\(|\brandom(?:Bytes|UUID|Int)\(/g, "a random source other than Effect's Random"],
+  disk: [/from\s+["']node:fs\/promises["']|\bpromises\b[^;]*from\s+["']node:fs["']/g, "node:fs's file operations (use the FileSystem given)"],
+} as const;
+const seamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
+  "plugins/sessions/src": ["clock", "random", "disk"],
+  "plugins/agent/src/turn.ts": ["clock"],
+  "plugins/agent/src/live.ts": ["clock", "random"],
+};
+// What a seamed file may still reach directly, and why.
+const unseamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
+  // The lock's lease is wall-clock time that other processes compare with the lock file's mtime; its token only
+  // has to be unique.
+  "plugins/sessions/src/lock.ts": ["clock", "random"],
+  // Turn and step ids only have to be unique; nothing a simulation checks depends on them.
+  "plugins/agent/src/turn.ts": ["random"],
+};
+const seamProblems: string[] = [];
+for (const [prefix, kinds] of Object.entries(seamed)) {
+  const target = join(root, prefix);
+  const files = statSync(target).isDirectory() ? walk(target).filter((path) => /\.(ts|tsx|mts)$/.test(path)) : [target];
+  for (const path of files) {
+    const file = relative(root, path);
+    const text = readFileSync(path, "utf8");
+    for (const kind of kinds) {
+      if (unseamed[file]?.includes(kind)) continue;
+      const [pattern, what] = reach[kind];
+      for (const match of text.matchAll(pattern)) {
+        seamProblems.push(`${file}:${text.slice(0, match.index).split("\n").length}: reaches ${what}`);
+      }
+    }
+  }
+}
+report("Seam violations (scripts/check-boundaries.ts)", seamProblems, "seams: ok");
+
 if (failed) process.exit(1);

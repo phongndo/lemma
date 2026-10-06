@@ -9,6 +9,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "pnpm build && pnpm -r --workspace-concurrency=4 test",
+    "stress": "node scripts/stress.ts",
     "start": "pnpm --filter @lemma/web build && pnpm --filter @lemma/host start",
     "lemma": "node --conditions=lemma-source apps/cli/src/main.ts",
     "dev": "node --conditions=lemma-source packages/host/scripts/dev.ts",
