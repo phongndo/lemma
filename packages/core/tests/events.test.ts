@@ -55,6 +55,27 @@ describe("events", () => {
     );
   });
 
+  test("an observer asking for no buffer fails with InvalidBuffer, which its plugin can handle", async () => {
+    await run(
+      Effect.gen(function* () {
+        const refused = yield* Deferred.make<string>();
+        const careful = definePlugin({
+          id: "careful",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              const error = yield* Effect.flip(owner.observe(Tick, () => Effect.void, { buffer: 0 }));
+              yield* Deferred.succeed(refused, error._tag === "EventError" ? error.reason : error._tag);
+            }),
+          ),
+        });
+        const core = yield* makeCore([careful]);
+        expect(yield* Deferred.await(refused)).toBe("InvalidBuffer");
+        expect((yield* core.inspect).plugins.map((p) => p.state)).toEqual(["active"]);
+      }),
+    );
+  });
+
   test("a slow observer sees a bounded, stale view and never stalls the publisher", async () => {
     await run(
       Effect.gen(function* () {

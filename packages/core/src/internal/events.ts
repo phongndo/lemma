@@ -153,7 +153,7 @@ export class EventBus implements Context.Tag.Service<Events> {
         if (this.closed) return Stream.empty;
         const entry = yield* this.entry(event).pipe(Effect.orDie);
         const scope = yield* Effect.scope;
-        const subscription = yield* this.subscribe(entry, undefined, options, scope);
+        const subscription = yield* this.subscribe(entry, undefined, options, scope).pipe(Effect.orDie);
         return Stream.fromQueue(subscription.queue) as Stream.Stream<P>;
       }),
     );
@@ -162,7 +162,7 @@ export class EventBus implements Context.Tag.Service<Events> {
     return Effect.gen(this, function* () {
       const buffer = options.buffer ?? DEFAULT_BUFFER;
       if (!Number.isInteger(buffer) || buffer < 1) {
-        return yield* Effect.die(new EventError({ reason: "InvalidBuffer", event: entry.name, message: "Observer buffer must be a positive integer" }));
+        return yield* new EventError({ reason: "InvalidBuffer", event: entry.name, message: "Observer buffer must be a positive integer" });
       }
       const overflow = options.overflow ?? "dropOldest";
       const queue = yield* overflow === "dropOldest"
