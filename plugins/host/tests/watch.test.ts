@@ -16,14 +16,23 @@ describe("watchConfig", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const seen = yield* Effect.forkChild(Stream.runCollect(Stream.take(watchConfig(paths, { debounceMs: 50 }), 2)));
+            const seen: string[] = [];
+            yield* Effect.forkChild(Stream.runForEach(watchConfig(paths, { debounceMs: 50 }), (path) => Effect.sync(() => seen.push(path))));
             // Let the watchers attach before writing.
             yield* Effect.sleep(Duration.millis(50));
-            yield* Effect.promise(() => writeFile(paths.projectConfig, `{ "plugins": {} }`));
-            yield* Effect.sleep(Duration.millis(150));
-            yield* Effect.promise(() => writeFile(paths.userConfig, `{ "plugins": { "x": {} } }`));
-            const changes = [...(yield* Fiber.join(seen).pipe(Effect.timeout(Duration.seconds(5))))];
-            expect(changes).toEqual([paths.projectConfig, paths.userConfig]);
+            // Each write waits for its own report, after it: macOS can also report the user config's first write, made
+            // before the watch started.
+            const reported = (path: string, contents: string) =>
+              Effect.gen(function* () {
+                const from = seen.length;
+                yield* Effect.promise(() => writeFile(path, contents));
+                yield* Effect.repeat(
+                  Effect.sync(() => seen.includes(path, from)),
+                  { until: (found) => found, schedule: Schedule.spaced(Duration.millis(20)) },
+                ).pipe(Effect.timeout(Duration.seconds(5)));
+              });
+            yield* reported(paths.projectConfig, `{ "plugins": {} }`);
+            yield* reported(paths.userConfig, `{ "plugins": { "x": {} } }`);
           }),
         ),
       );

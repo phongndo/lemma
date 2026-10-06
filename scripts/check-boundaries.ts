@@ -196,7 +196,7 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "plugins/compaction/tests/compaction.test.ts": 1,
   "plugins/credentials/tests/credentials.test.ts": 1,
   "plugins/file-search-fff/tests/file-search.test.ts": 1,
-  "plugins/host/tests/watch.test.ts": 6,
+  "plugins/host/tests/watch.test.ts": 5,
   "plugins/llm-pi-ai/tests/llm.test.ts": 2,
   "plugins/sessions/tests/sessions.test.ts": 7,
   "plugins/sessions/tests/simulation.test.ts": 1,

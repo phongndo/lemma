@@ -18,7 +18,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Actions are pinned by commit, their version in the comment; Dependabot (.github/dependabot.yml) keeps them current.
+# Actions are pinned by commit, their version in the comment.
 # What each job runs is a script in package.json (`pnpm run ci` is the check job), so it runs the same locally.
 jobs:
   # The same checks on Linux and macOS, in parallel, with plain Node.js and pnpm. The host does not support Windows yet.
