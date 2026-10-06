@@ -114,10 +114,6 @@
   }
 
   button {
-    cursor: pointer;
-  }
-
-  button:disabled {
     cursor: default;
   }
 
@@ -675,9 +671,6 @@
 
   * {
     -webkit-tap-highlight-color: transparent;
-  }
-
-  * {
     scrollbar-width: thin;
     scrollbar-color: var(--border-strong) transparent;
   }
@@ -703,10 +696,6 @@
     background: transparent;
   }
 
-  button {
-    cursor: default;
-  }
-
   .provider-mark {
     position: relative;
     width: 22px;
@@ -730,16 +719,12 @@
   }
 
   .settings-empty {
-    margin: 0;
-    color: var(--text-2);
-    font-size: 13px;
-  }
-
-  .settings-empty {
     display: flex;
     align-items: center;
     gap: 8px;
+    margin: 0;
     color: var(--text-3);
+    font-size: 13px;
   }
 
   .setting-row {
