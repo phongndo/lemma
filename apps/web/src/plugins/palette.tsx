@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, 
 import type { Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { CommandInfo, InteractionRequest } from "@lemma/contracts";
-import { keysFor, overridesFrom } from "../model/keybindings.ts";
+import { shownKeys } from "../model/keybindings.ts";
 import { formatKeys, shortcut } from "../lib/keys.ts";
 import { load, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
@@ -527,7 +527,7 @@ export default defineUiPlugin({
           .list(Actions)
           .filter((action) => action.hidden !== true && (action.when?.() ?? true))
           .map((action): PaletteItem => {
-            const keys = keysFor(action.id, action.keys, overridesFrom(uiPlugins.list()))[0];
+            const keys = shownKeys(action, uiPlugins.list());
             return {
               key: `action:${action.id}`,
               category: action.category,

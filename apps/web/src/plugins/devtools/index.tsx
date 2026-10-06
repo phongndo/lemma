@@ -1,4 +1,6 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
+import { withKeys } from "../../lib/keys.ts";
+import { shownKeys } from "../../model/keybindings.ts";
 import { ActionIds, Actions, Client, Devtools, DevtoolsPanels, Docks, HostPlugins, Router, Slots, UiPlugins } from "../../ui/contracts.ts";
 import type { DevtoolsService } from "../../ui/contracts.ts";
 import { defineUiPlugin } from "../../ui/define.ts";
@@ -9,6 +11,7 @@ import { kernelPanels } from "./kernel.tsx";
 import { routePanels } from "./routes.tsx";
 
 const STATE_KEY = "lemma.devtools";
+const TOGGLE_KEYS = "mod+shift+d";
 const MIN_HEIGHT = 160;
 
 interface Saved {
@@ -76,7 +79,12 @@ export default defineUiPlugin({
               )}
             </For>
             <span class="devtools-spacer" />
-            <button class="dt-close" aria-label="Close the devtools" data-tip="Close · mod+shift+d" onClick={() => setOpen(false)}>
+            <button
+              class="dt-close"
+              aria-label="Close the devtools"
+              data-tip={withKeys("Close", shownKeys({ id: "devtools.toggle", keys: TOGGLE_KEYS }, ui.list()))}
+              onClick={() => setOpen(false)}
+            >
               <XIcon />
             </button>
           </div>
@@ -110,7 +118,7 @@ export default defineUiPlugin({
         category: "Developer",
         keywords: ["inspect", "debug", "routes", "slots", "capabilities"],
         icon: CodeIcon,
-        keys: "mod+shift+d",
+        keys: TOGGLE_KEYS,
         whileTyping: true,
         global: true,
         run: () => toggle(),

@@ -71,6 +71,9 @@ export const formatKeys = (binding: string): string => {
   return shortcut(...(mod ? ["mod"] : []), ...(shift ? ["shift"] : []), ...(alt ? ["alt"] : []), NAMES[key] ?? key.toUpperCase());
 };
 
+/** A label with the shortcut that does the same, when there is one: `Settings · ⌘,`. */
+export const withKeys = (label: string, binding: string | undefined): string => (binding === undefined ? label : `${label} · ${formatKeys(binding)}`);
+
 /**
  * Whether `event` presses `binding`. Shift must match for letters and when the
  * binding names it; for other keys it is whatever the layout needs to type

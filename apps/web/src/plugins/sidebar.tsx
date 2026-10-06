@@ -2,9 +2,10 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/contracts";
 import { copyText } from "../lib/clipboard.ts";
-import { formatKeys } from "../lib/keys.ts";
+import { withKeys } from "../lib/keys.ts";
 import { loadJson, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
+import { shownKeys } from "../model/keybindings.ts";
 import { fileSessions, sessionTitle } from "../model/threads.ts";
 import {
   ActionIds,
@@ -19,6 +20,7 @@ import {
   SidebarRegion,
   SidebarRowPart,
   Slots,
+  UiPlugins,
   Workspace,
 } from "../ui/contracts.ts";
 import type { Action, ClientService, MenuAction, ThreadAction, ThreadsService, SidebarRowProps, WorkspaceService } from "../ui/contracts.ts";
@@ -376,13 +378,13 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
 export default defineUiPlugin({
   id: "sidebar",
   styles,
-  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
+  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots, uiPlugins: UiPlugins },
   setup: (use, plugin) => {
     // Relative times refresh once a minute.
     const [now, setNow] = createSignal(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     plugin.onCleanup(() => window.clearInterval(timer));
-    const { client, threads, workspace, notify, slots } = use;
+    const { client, threads, workspace, notify, slots, uiPlugins } = use;
     const newChatIn = (cwd?: string) => threads.newThread(cwd);
     /** Projects with threads, which the list can be narrowed to; a chosen one that loses its last thread lets go. */
     const scopes = createMemo(() => fileSessions(threads.list()).groups.map((group) => group.cwd));
@@ -509,15 +511,13 @@ export default defineUiPlugin({
       slots.get(Actions, id)?.run();
       props.onPick();
     };
-    /** An action's first binding, if it has one. */
-    const keysOf = (action: Action) => [action.keys ?? []].flat()[0];
     action("sidebar.palette", 0, (props) => (
       <Show when={slots.get(Actions, ActionIds.palette)}>
         {(palette) => (
           <button
             class="icon-button"
             aria-label="Command palette"
-            data-tip={keysOf(palette()) === undefined ? "Commands, threads, projects" : `Commands, threads, projects · ${formatKeys(keysOf(palette())!)}`}
+            data-tip={withKeys("Commands, threads, projects", shownKeys(palette(), uiPlugins.list()))}
             onClick={() => runAction(ActionIds.palette, props)}
           >
             <CommandIcon />

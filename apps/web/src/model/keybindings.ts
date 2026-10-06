@@ -68,3 +68,9 @@ export const overridesFrom = (plugins: readonly PluginStatus[]): KeyOverrides =>
   const bindings = plugins.find((plugin) => plugin.id === KEYMAP_PLUGIN)?.config?.values.bindings;
   return Array.isArray(bindings) ? parseBindings(bindings) : {};
 };
+
+/** The binding to show beside an action: its first, the user's over its own. */
+export const shownKeys = (
+  action: { readonly id: string; readonly keys?: string | readonly string[] | undefined },
+  plugins: readonly PluginStatus[],
+): string | undefined => keysFor(action.id, action.keys, overridesFrom(plugins))[0];

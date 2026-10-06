@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
-import { formatKeys } from "../lib/keys.ts";
+import { withKeys } from "../lib/keys.ts";
+import { shownKeys } from "../model/keybindings.ts";
 import { filterGroups } from "../model/settings.ts";
 import type { EntryGroup } from "../model/settings.ts";
 import {
@@ -14,6 +15,7 @@ import {
   SettingsSections,
   SidebarFooter,
   Slots,
+  UiPlugins,
 } from "../ui/contracts.ts";
 import type { SettingsEntry, SettingsSection } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -42,6 +44,8 @@ function SettingsView(props: {
   visits: () => number;
   open: (section: string | undefined) => void;
   setFocus: (focus: (() => void) | undefined) => void;
+  /** The binding that closes settings, as the user has it. */
+  closeKeys: () => string | undefined;
 }) {
   const { slots } = props;
   const [query, setQuery] = createSignal("");
@@ -136,7 +140,7 @@ function SettingsView(props: {
           </For>
         </div>
         <span class="spacer" />
-        <button class="settings-nav-item" onClick={() => props.open(undefined)} data-tip="Back to chats · Esc">
+        <button class="settings-nav-item" onClick={() => props.open(undefined)} data-tip={withKeys("Back to chats", props.closeKeys())}>
           <ArrowLeftIcon />
           <span class="settings-nav-label">Back</span>
         </button>
@@ -150,7 +154,7 @@ function SettingsView(props: {
           <Show when={!searching() && current()?.actions !== undefined && current()} keyed>
             {(section) => <Contained slot={SettingsSections} item={section} component={section.actions} />}
           </Show>
-          <button class="icon-button" aria-label="Close settings" data-tip="Close · Esc" onClick={() => props.open(undefined)}>
+          <button class="icon-button" aria-label="Close settings" data-tip={withKeys("Close", props.closeKeys())} onClick={() => props.open(undefined)}>
             <XIcon />
           </button>
         </header>
@@ -228,9 +232,9 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
 export default defineUiPlugin({
   id: "settings",
   styles,
-  requires: { slots: Slots, router: Router },
+  requires: { slots: Slots, router: Router, uiPlugins: UiPlugins },
   provides: { settings: Settings },
-  setup: ({ slots, router }, plugin) => {
+  setup: ({ slots, router, uiPlugins }, plugin) => {
     const [visits, setVisits] = createSignal(0);
     const [focus, setFocus] = createSignal<() => void>();
     const here = () => router.matchOf(SettingsRoute);
@@ -289,13 +293,25 @@ export default defineUiPlugin({
     };
 
     const add = (remove: () => void) => plugin.onCleanup(remove);
+    /** One of its actions' bindings, as the user has it. */
+    const keysOf = (id: string) => {
+      const action = slots.get(Actions, id);
+      return action === undefined ? undefined : shownKeys(action, uiPlugins.list());
+    };
     add(slots.add(SettingsSections, { id: SectionIds.general, order: 0, title: "General", icon: SlidersIcon }));
     add(
       slots.add(Pages, {
         id: "settings",
         route: SettingsRoute,
         component: () => (
-          <SettingsView slots={slots} section={() => section() ?? SectionIds.general} visits={visits} open={open} setFocus={(next) => setFocus(() => next)} />
+          <SettingsView
+            slots={slots}
+            section={() => section() ?? SectionIds.general}
+            visits={visits}
+            open={open}
+            setFocus={(next) => setFocus(() => next)}
+            closeKeys={() => keysOf("settings.close")}
+          />
         ),
       }),
     );
@@ -345,7 +361,7 @@ export default defineUiPlugin({
           <button
             class="icon-button with-badge"
             aria-label="Settings"
-            data-tip={attention() === undefined ? `Settings · ${formatKeys("mod+,")}` : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
+            data-tip={attention() === undefined ? withKeys("Settings", keysOf("settings.open")) : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
             onClick={() => {
               open(attention()?.id ?? "general");
               props.onPick();
