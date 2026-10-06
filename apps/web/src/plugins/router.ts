@@ -1,5 +1,6 @@
 import { createEffect, createSignal } from "solid-js";
-import { createBrowserHistory, createRouter, interceptLinks } from "@lemma/router";
+import { createBrowserHistory, createEntryStore, createRouter, interceptLinks } from "@lemma/router";
+import type { KeyValueStorage } from "@lemma/router";
 import { createRouteSignals } from "@lemma/router-solid";
 import { KnownRoutes, Notify, Pages, Router, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { Page } from "../ui/contracts.ts";
@@ -14,12 +15,12 @@ const ENTRIES_KEY = "lemma.router.entries";
 /** History entries whose state is kept; older ones are dropped. */
 const ENTRIES_KEPT = 100;
 
-type EntryStates = Record<string, Record<string, unknown>>;
-const loadEntries = (): EntryStates => {
+/** The page's session storage, where it may use it (a browser can turn it off, which makes reading it throw). */
+const sessionStore = (): KeyValueStorage | undefined => {
   try {
-    return JSON.parse(sessionStorage.getItem(ENTRIES_KEY) ?? "{}") as EntryStates;
+    return window.sessionStorage;
   } catch {
-    return {};
+    return undefined;
   }
 };
 
@@ -88,26 +89,13 @@ export default defineUiPlugin({
       }),
     );
 
-    const [entryStates, setEntryStates] = createSignal<EntryStates>(loadEntries());
-    let entries = entryStates();
+    // State kept with history entries (a scroll position), back with the entry on back, forward, and reload.
+    const store = createEntryStore({ storage: sessionStore(), key: ENTRIES_KEY, limit: ENTRIES_KEPT });
+    const [entryStates, setEntryStates] = createSignal(store.all());
+    plugin.onCleanup(store.subscribe(() => setEntryStates(store.all())));
     const entry = <T>(name: string) => {
       const key = signals.location().key;
-      return {
-        get: () => entries[key]?.[name] as T | undefined,
-        set: (value: T) => {
-          const { [key]: current, ...rest } = entries;
-          // The entry written last moves to the end, so the oldest are the first dropped.
-          entries = { ...rest, [key]: { ...current, [name]: value } };
-          const keys = Object.keys(entries);
-          if (keys.length > ENTRIES_KEPT) for (const old of keys.slice(0, keys.length - ENTRIES_KEPT)) delete entries[old];
-          setEntryStates(entries);
-          try {
-            sessionStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
-          } catch {
-            // Storage full or off: the state lasts as long as the page.
-          }
-        },
-      };
+      return { get: () => store.get<T>(key, name), set: (value: T) => store.set(key, name, value) };
     };
 
     return {
