@@ -1,0 +1,122 @@
+import { Deferred, Effect, Fiber, Queue, Stream } from "effect";
+import { describe, expect, test } from "vitest";
+import type { HostEvent, InteractionRequest, NoticePayload } from "@lemma/contracts";
+import type { Connection, Io, Options } from "../src/command.ts";
+import { loginCommand } from "../src/live.ts";
+
+const copilot = { id: "github-copilot", name: "GitHub Copilot", configured: false, auth: [{ type: "oauth", name: "GitHub Copilot", interactive: true }] };
+const notice = (fields: Partial<NoticePayload>): HostEvent => ({
+  type: "notice",
+  notice: { level: "info", message: "", origin: "login:github-copilot", ...fields },
+});
+const question = (request: Record<string, unknown>, id = "q1"): HostEvent =>
+  ({ type: "interaction", request: { ...request, id, origin: "login:github-copilot" } as InteractionRequest }) as HostEvent;
+
+/**
+ * A host whose login publishes `events` and runs until the test calls `finish`, recording the calls
+ * it is sent. Cancelling withdraws the login's open questions, as the transport does.
+ */
+const fakeHost = (events: readonly HostEvent[]) => {
+  const calls: string[] = [];
+  const answers: unknown[] = [];
+  const done = Effect.runSync(Deferred.make<void>());
+  const answered = Effect.runSync(Deferred.make<void>());
+  const stream = Effect.runSync(Queue.unbounded<HostEvent>());
+  for (const event of [{ type: "subscribed" } as HostEvent, ...events]) Queue.offerUnsafe(stream, event);
+  const rpc = {
+    "Llm.Providers": () => Effect.succeed([copilot]),
+    "Host.Events": () => Stream.fromQueue(stream),
+    "Llm.Login": () =>
+      Effect.andThen(
+        Effect.sync(() => calls.push("login")),
+        Deferred.await(done),
+      ),
+    // The transport withdraws the question before it replies, so the client hears of that first.
+    "Llm.CancelLogin": () =>
+      Effect.sync(() => {
+        calls.push("cancel");
+        for (const event of events) if (event.type === "interaction") Queue.offerUnsafe(stream, { type: "interaction-closed", id: event.request.id });
+      }).pipe(Effect.andThen(Effect.repeat(Effect.yieldNow, { times: 20 })), Effect.as(true)),
+    "Interaction.Answer": ({ answer }: { answer: unknown }) =>
+      Effect.andThen(
+        Effect.sync(() => void answers.push(answer)),
+        Deferred.succeed(answered, undefined),
+      ),
+  };
+  const connection = { target: { url: "http://host.test", token: "t" }, rpc, live: Effect.succeed(rpc) } as unknown as Connection;
+  return { connection, calls, answers, answered: Deferred.await(answered), finish: () => Effect.runSync(Deferred.succeed(done, undefined)) };
+};
+
+/** A terminal that records what it shows, asks, and opens; `reply` answers its prompts (never, by default). */
+const terminal = (watch: (tty: { err: string[]; asked: string[] }) => void, reply: () => Promise<string> = () => new Promise<string>(() => {})) => {
+  const tty = { err: [] as string[], asked: [] as string[], opened: [] as string[] };
+  const io: Io = {
+    env: {},
+    cwd: "/",
+    out: () => {},
+    err: (text) => (tty.err.push(text), watch(tty)),
+    ask: (text) => (tty.asked.push(text), watch(tty), reply()),
+    open: (url) => void tty.opened.push(url),
+  };
+  return { io, ...tty };
+};
+
+const options = (fields: Partial<Options> = {}) => ({ json: false, answers: [], ...fields }) as unknown as Options;
+const shown = (lines: readonly string[], text: string) => lines.join("\n").includes(text);
+const device = notice({ kind: "device-code", message: "Enter code", code: "WDJB-MJHT", links: [{ url: "https://github.com/login/device" }] });
+
+describe("lemma login", () => {
+  test("prints a device code, and asks to open its page only when this terminal answers questions", async () => {
+    for (const [policy, offered] of [
+      ["ignore", false],
+      ["ask", true],
+    ] as const) {
+      const host = fakeHost([device]);
+      const tty = terminal(({ err, asked }) => {
+        if (shown(err, "Only enter this code") && (!offered || asked.length > 0)) host.finish();
+      });
+      await Effect.runPromise(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: policy }))));
+      expect(shown(tty.err, "First copy your one-time code: WDJB-MJHT")).toBe(true);
+      expect(tty.asked.some((text) => text.startsWith("Press Enter to open github.com"))).toBe(offered);
+    }
+  });
+
+  test("leaves a question after a documentation link as it was asked", async () => {
+    const docs = notice({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
+    const host = fakeHost([docs, question({ type: "ask", title: "Enter AWS profile name" })]);
+    const tty = terminal(
+      () => {},
+      async () => "",
+    );
+    const login = Effect.runFork(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: "ask" }))));
+    await Effect.runPromise(host.answered);
+    host.finish();
+    await Effect.runPromise(Fiber.join(login));
+    expect(shown(tty.err, "AWS profiles: https://docs.aws.test/profiles")).toBe(true);
+    expect(tty.asked).toEqual(["Enter AWS profile name: "]);
+    // A blank answer is one: the default profile.
+    expect(host.answers).toEqual([{ type: "ask", value: "" }]);
+  });
+
+  test("words the host's paste-the-address question, after the link it follows though the question arrived first", async () => {
+    const link = notice({ kind: "sign-in", message: "Complete sign-in", links: [{ url: "https://auth.test/authorize" }] });
+    const host = fakeHost([question({ type: "ask", title: "Paste the final redirect URL:", kind: "sign-in-code" }), link]);
+    const tty = terminal(({ asked }) => asked.length > 0 && host.finish());
+    await Effect.runPromise(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: "ask" }))));
+    expect(tty.opened).toEqual(["https://auth.test/authorize"]);
+    expect(shown(tty.err, "https://auth.test/authorize")).toBe(true);
+    expect(tty.asked).toEqual(["If the browser ends on a page that won't load, paste its address here: "]);
+  });
+
+  test("interrupting cancels the login on the host, without saying its questions were answered elsewhere", async () => {
+    const host = fakeHost([question({ type: "ask", title: "GitHub Enterprise URL" })]);
+    const asking = Effect.runSync(Deferred.make<void>());
+    const tty = terminal(({ asked }) => asked.length > 0 && Effect.runSync(Deferred.succeed(asking, undefined)));
+    const login = Effect.runFork(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: "ask" }))));
+    await Effect.runPromise(Deferred.await(asking));
+    await Effect.runPromise(Fiber.interrupt(login));
+    expect(host.calls).toEqual(["login", "cancel"]);
+    expect(tty.err).toContain("Cancelled the GitHub Copilot login.");
+    expect(shown(tty.err, "answered elsewhere")).toBe(false);
+  });
+});

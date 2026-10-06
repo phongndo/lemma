@@ -1,7 +1,6 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { Effect, Schema } from "effect";
+import { Cause, Effect, Exit, Schema } from "effect";
 import type { Scope } from "effect";
 import {
   appUrl,
@@ -135,7 +134,8 @@ Sessions and turns
   queue <id>                     Prompts waiting for a turn: mode, request id, and text
   withdraw <id> <request>        Take a prompt out of the queue
   open [<id> [<view>]]           Open the web app at a session (a new thread without one) in the browser,
-                                 in a view such as trajectory; prints the address. --json: print it only
+                                 in a view such as trajectory; prints the address. --json: print it only.
+                                 Without a display or over SSH it only prints it
 
 Commands (what the web app's command palette runs; plugins add them)
   do                             List commands: id, title, category, and the plugin that added it
@@ -196,7 +196,7 @@ Options
   -h, --help  Show this help
 
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
-2 usage error, 3 no running host or it could not be reached.`;
+2 usage error, 3 no running host or it could not be reached, 130 interrupted (Ctrl+C).`;
 
 /** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
 export const parseOffset = (text: string): number | undefined => {
@@ -210,24 +210,15 @@ export const parseOffset = (text: string): number | undefined => {
   return rest === "" && text !== "" ? total : undefined;
 };
 
-/** Opens `url` with the system's handler, without waiting for it. */
-const openBrowser = (url: string) =>
-  Effect.sync(() => {
-    const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
-    spawn(command, [url], { detached: true, stdio: "ignore" })
-      .on("error", () => {})
-      .unref();
-  });
-
-/** The web app's address for a session (checked to exist) or a new thread, with the token; opened unless `--json`. */
+/** The web app's address for a session (checked to exist) or a new thread, with the token; opened unless `--json` or there is no browser here. */
 const openCommand =
   (sessionId: string | undefined, view: string | undefined, options: Options): Command =>
-  ({ target, rpc }) =>
+  ({ target, rpc }, io) =>
     Effect.gen(function* () {
       if (sessionId !== undefined) yield* rpc["Session.Get"]({ sessionId });
       const path = sessionId === undefined ? NewThreadRoute.href({}) : ThreadRoute.href({ id: sessionId, ...(view === undefined ? {} : { view }) });
       const url = appUrl(target.url, path, target.token);
-      if (!options.json) yield* openBrowser(url);
+      if (!options.json) io.open?.(url);
       return { json: { url }, text: url };
     });
 
@@ -800,7 +791,12 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
           ),
         )
       : command.unattached;
-  const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.result));
+  const exit = await Effect.runPromiseExit(Effect.scoped(program).pipe(Effect.result), io.interrupt === undefined ? undefined : { signal: io.interrupt });
+  if (Exit.isFailure(exit)) {
+    if (Cause.hasInterruptsOnly(exit.cause)) return ExitCode.interrupted;
+    throw Cause.squash(exit.cause);
+  }
+  const result = exit.value;
   if (result._tag === "Failure") return report(io, options.json, toCliError(result.failure));
   const output = result.success;
   if (output === undefined) return ExitCode.ok;

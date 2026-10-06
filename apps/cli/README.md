@@ -30,6 +30,13 @@ so the two show the same records and accept the same queries.
   `ignore` leaves them to another client and prints how to answer from the CLI
   (the default otherwise, so an agent never answers for the person), and
   `dismiss` fails them.
+- **Logins.** `lemma login` prints a sign-in's link and one-time code on lines
+  of their own, so they copy whole into a browser on any machine. With a
+  browser here (a display, not over SSH) it opens the link, and, when it
+  answers questions at the terminal, Enter opens a code's page. A browser on another machine cannot reach the host's callback
+  and ends on a page that fails to load; the prompt asks for that page's
+  address. Ctrl+C cancels the login on the host, which otherwise outlives the
+  command (exit 130).
 - **Busy sessions.** `run` waits for the next turn by default; `--steer` joins
   the running turn, and `--when-busy reject` fails `Busy`, as the
   [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`

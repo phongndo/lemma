@@ -9,6 +9,7 @@ import type {
   ImageContent,
   InteractionAnswer,
   InteractionRequest,
+  NoticePayload,
   PromptContent,
   TextContent,
   TurnOptions,
@@ -63,6 +64,16 @@ const promptText = (request: InteractionRequest): string => {
   }
 };
 
+/** How a command words its questions at the terminal, beyond their titles. */
+interface QuestionView {
+  /** Runs before a question is asked at the terminal: to wait for what explains it. */
+  readonly before?: (request: InteractionRequest) => Effect.Effect<void>;
+  /** The prompt for a question, when the command says it better than the question's title. */
+  readonly prompt?: (request: InteractionRequest) => string | undefined;
+  /** What to say when a question waiting at the terminal closes without an answer from it; "" says nothing. */
+  readonly closed?: (request: InteractionRequest) => string;
+}
+
 /**
  * Handles the host's questions per the policy: the next `--answer`, then the
  * terminal (`ask`), `dismiss`, or `ignore` (leave it to another client, such
@@ -74,11 +85,13 @@ const promptText = (request: InteractionRequest): string => {
  * own fiber, so events keep flowing while the terminal waits, and its prompt
  * closes when the question is answered elsewhere or the command ends.
  */
-const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined) =>
+const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
     const answers = [...options.answers];
     const seen = new Set<string>();
     const prompts = yield* FiberMap.make<string>();
+    /** Questions waiting at the terminal now. */
+    const prompting = new Map<string, InteractionRequest>();
     const handle = (request: InteractionRequest, next: string | undefined) =>
       Effect.gen(function* () {
         const policy = policyOf(io, options);
@@ -95,7 +108,13 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
         let raw = next;
         for (;;) {
           // Interrupting the fiber (the question closed, or the command ended) closes the prompt.
-          raw ??= yield* Effect.promise((signal) => io.ask!(promptText(request), request.type === "ask" && request.secret === true, signal));
+          if (raw === undefined) {
+            if (view.before !== undefined) yield* view.before(request);
+            prompting.set(request.id, request);
+            raw = yield* Effect.promise((signal) =>
+              io.ask!(view.prompt?.(request) ?? promptText(request), request.type === "ask" && request.secret === true, signal),
+            ).pipe(Effect.ensuring(Effect.sync(() => prompting.delete(request.id))));
+          }
           const answer = toAnswer(request, raw);
           if (typeof answer !== "string") {
             // Someone else may have answered first; that is not an error here.
@@ -108,7 +127,17 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
         }
       });
     return (event: HostEvent): Effect.Effect<void> => {
-      if (event.type === "interaction-closed") return FiberMap.remove(prompts, event.id);
+      if (event.type === "interaction-closed") {
+        const asking = prompting.get(event.id);
+        return FiberMap.remove(prompts, event.id).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              const said = asking === undefined ? undefined : (view.closed?.(asking) ?? "(answered elsewhere)");
+              if (said !== undefined && said !== "") io.err(said);
+            }),
+          ),
+        );
+      }
       if (event.type !== "interaction") return Effect.void;
       const request = event.request;
       if (seen.has(request.id) || (origin !== undefined && request.origin !== origin)) return Effect.void;
@@ -592,7 +621,15 @@ export const modelsCommand: Command = ({ rpc }, _io, options) =>
 export const providersCommand: Command = ({ rpc }) =>
   Effect.map(rpc["Llm.Providers"](), (providers) => ({ json: providers, text: formatProviders(providers) }));
 
-/** `lemma login <provider>`: runs the provider's login, answering its questions per the policy and printing its notices. */
+/**
+ * `lemma login <provider>`: runs the provider's login, answering its questions
+ * per the policy. Its link and one-time code print on lines of their own, so
+ * they copy whole into a browser anywhere; with a browser here, the link opens
+ * in it and Enter opens a code's page. A browser on another machine ends on a
+ * page that cannot reach the host, so the paste prompt asks for that page's
+ * address. Ctrl+C cancels the login on the host, which otherwise outlives the
+ * command.
+ */
 export const loginCommand =
   (provider: string): Command =>
   (connection, io, options) =>
@@ -605,16 +642,121 @@ export const loginCommand =
       if (!info.auth.some((auth) => auth.type === method))
         return yield* usage(`${provider} does not offer ${method}; it offers ${info.auth.map((auth) => auth.type).join(", ")}`);
       const rpc = yield* connection.live;
-      const questions = yield* questionHandler(rpc, io, options, `login:${provider}`);
+      const origin = `login:${provider}`;
+      const linkShown = yield* Deferred.make<void>();
+      /** The paste-the-address fallback of a sign-in page, as the host marks it. */
+      const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
+      /** Set once Ctrl+C cancels: the questions the host withdraws for it were not answered elsewhere. */
+      let cancelling = false;
+      const questions = yield* questionHandler(rpc, io, options, origin, {
+        // Questions and notices reach a client on separate streams: the paste prompt can overtake the link it follows.
+        before: (request) =>
+          isPaste(request) ? Deferred.await(linkShown).pipe(Effect.timeoutOrElse({ duration: Duration.millis(500), orElse: () => Effect.void })) : Effect.void,
+        prompt: (request) => (isPaste(request) ? "If the browser ends on a page that won't load, paste its address here: " : undefined),
+        // The browser reached the host first, so signing in goes on without it; or this command is cancelling it.
+        closed: (request) => (cancelling || isPaste(request) ? "" : "(answered elsewhere)"),
+      });
+      /** Whether this terminal answers questions: Enter to open a code's page is one. */
+      const asks = policyOf(io, options) === "ask" && io.ask !== undefined;
+      /** Enter opens a device code's page; the prompt closes when the login ends. */
+      const opener = yield* FiberMap.make<string>();
       yield* subscribe(rpc, (event) =>
         Effect.gen(function* () {
-          if (event.type === "notice") io.err(noticeLine(event));
+          if (event.type === "notice") {
+            if (options.json || event.notice.origin !== origin) io.err(noticeLine(event));
+            else {
+              const shown = loginLines(event.notice, info.name, io.open !== undefined);
+              if (shown.lines.length > 0) io.err(shown.lines.join("\n"));
+              if (shown.link !== undefined && event.notice.kind === "sign-in") {
+                yield* Deferred.succeed(linkShown, undefined);
+                io.open?.(shown.link);
+              }
+              if (shown.link !== undefined && event.notice.kind === "device-code" && io.open !== undefined && asks) {
+                const url = shown.link;
+                yield* FiberMap.run(
+                  opener,
+                  "device",
+                  Effect.promise((signal) => io.ask!(`Press Enter to open ${hostOf(url)} in your browser… `, false, signal)).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        io.open!(url);
+                        io.err("Waiting for you to approve…");
+                      }),
+                    ),
+                  ),
+                );
+              }
+            }
+          }
           yield* questions(event);
         }),
       );
-      yield* rpc["Llm.Login"]({ provider, type: method });
+      yield* rpc["Llm.Login"]({ provider, type: method }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.andThen(
+            Effect.sync(() => {
+              cancelling = true;
+            }),
+            Effect.andThen(
+              rpc["Llm.CancelLogin"]({ provider }).pipe(Effect.ignore),
+              Effect.sync(() => io.err(`Cancelled the ${info.name} login.`)),
+            ),
+          ),
+        ),
+        Effect.ensuring(FiberMap.clear(opener)),
+      );
       return { json: { loggedIn: provider, method }, text: `logged in to ${info.name}` };
     });
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * A login's notice for the terminal, by its kind: the sign-in page and the
+ * code alone on their lines, unindented, so a wrapped link still copies
+ * whole; a documentation link on its own line under what it explains. Its
+ * success and end print nothing: the command's own result says them. `link`
+ * is the page a sign-in or code names.
+ */
+export const loginLines = (notice: NoticePayload, providerName: string, canOpen: boolean): { readonly lines: readonly string[]; readonly link?: string } => {
+  const link = notice.links?.[0]?.url;
+  switch (notice.kind) {
+    case "device-code":
+      return notice.code === undefined || link === undefined
+        ? { lines: [notice.message] }
+        : {
+            link,
+            lines: ["", `First copy your one-time code: ${notice.code}`, `Then enter it at ${link}`, "Only enter this code if you started this sign-in.", ""],
+          };
+    case "sign-in":
+      return link === undefined
+        ? { lines: [notice.message] }
+        : {
+            link,
+            lines: [
+              "",
+              `Sign in to ${providerName} in your browser:`,
+              "",
+              link,
+              "",
+              canOpen
+                ? "Opened it in your browser here; to use another browser or device, copy the link."
+                : "Open it in any browser, on this machine or another.",
+              "",
+            ],
+          };
+    case "signed-in":
+    case "ended":
+      return { lines: [] };
+    default:
+      return { lines: [notice.message, ...(notice.links ?? []).map((item) => (item.label === undefined ? item.url : `${item.label}: ${item.url}`))] };
+  }
+};
 
 export const logoutCommand =
   (provider: string): Command =>

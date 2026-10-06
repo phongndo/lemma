@@ -6,7 +6,7 @@ import type { HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/plugin-transport";
 
 /** Exit codes a calling script or agent can branch on; `--json` errors also carry a `code`. */
-export const ExitCode = { ok: 0, failed: 1, usage: 2, unavailable: 3 } as const;
+export const ExitCode = { ok: 0, failed: 1, usage: 2, unavailable: 3, interrupted: 130 } as const;
 
 export class CliError extends Data.TaggedError("CliError")<{
   readonly code: string;
@@ -28,6 +28,10 @@ export interface Io {
   readonly err: (text: string) => void;
   /** Asks the person at the terminal; absent when stdin is not one. Aborting `signal` withdraws the prompt. */
   readonly ask?: (question: string, secret: boolean, signal?: AbortSignal) => Promise<string>;
+  /** Opens a link in this machine's browser; absent where there is none to open (no display, or over SSH). */
+  readonly open?: (url: string) => void;
+  /** Aborted when the person interrupts (Ctrl+C): the command stops, running its cleanup (a login cancels). */
+  readonly interrupt?: AbortSignal;
 }
 
 /** What to do with a question the host asks while a command is attached. */

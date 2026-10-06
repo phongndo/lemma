@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ExitCode, parseOffset } from "../src/cli.ts";
-import { toAnswer } from "../src/live.ts";
+import { ExitCode, parseOffset, run } from "../src/cli.ts";
+import { loginLines, toAnswer } from "../src/live.ts";
 import { formatQuestions } from "../src/format.ts";
 import { invoke } from "./invoke.ts";
 
@@ -18,6 +18,13 @@ describe("without a host", () => {
     const result = await invoke(["status", "--json"], home);
     expect(result.code).toBe(ExitCode.unavailable);
     expect(JSON.parse(result.err).error.code).toBe("NoHost");
+  });
+
+  test("an interrupted command exits 130", async () => {
+    const interrupt = new AbortController();
+    interrupt.abort();
+    const code = await run(["status"], { env: { LEMMA_HOME: home }, cwd: "/", out: () => {}, err: () => {}, interrupt: interrupt.signal });
+    expect(code).toBe(ExitCode.interrupted);
   });
 
   test("rejects bad usage before connecting", async () => {
@@ -115,6 +122,35 @@ describe("argument parsing", () => {
     expect(toAnswer({ type: "confirm", id: "c", title: "Go?" }, "Yes")).toEqual({ type: "confirm", value: true });
     expect(toAnswer({ type: "confirm", id: "c", title: "Go?" }, "maybe")).toContain("yes or no");
     expect(toAnswer({ type: "ask", id: "a", title: "Key" }, " sk ")).toEqual({ type: "ask", value: " sk " });
+  });
+
+  test("a login's link and code print alone on their lines, so they copy whole; a documentation link is not a sign-in", () => {
+    const url = "https://auth.test/oauth/authorize?client_id=app&state=s";
+    const link = loginLines({ level: "info", kind: "sign-in", message: "Complete sign-in in your browser.", links: [{ url }] }, "OpenAI", false);
+    expect(link.link).toBe(url);
+    expect(link.lines).toContain(url);
+    expect(link.lines).toContain("Open it in any browser, on this machine or another.");
+    expect(loginLines({ level: "info", kind: "sign-in", message: "", links: [{ url }] }, "OpenAI", true).lines.join("\n")).toContain(
+      "Opened it in your browser here",
+    );
+
+    const device = loginLines(
+      { level: "info", kind: "device-code", message: "Enter code", code: "ABCD-1234", links: [{ url: "https://github.com/login/device" }] },
+      "GitHub Copilot",
+      true,
+    );
+    expect(device.lines).toContain("First copy your one-time code: ABCD-1234");
+    expect(device.lines).toContain("Then enter it at https://github.com/login/device");
+    expect(loginLines({ level: "info", kind: "progress", message: "Enabling models..." }, "GitHub Copilot", true)).toEqual({ lines: ["Enabling models..."] });
+
+    const docs = loginLines(
+      { level: "info", message: "Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test", label: "AWS profiles" }] },
+      "Bedrock",
+      true,
+    );
+    expect(docs).toEqual({ lines: ["Bedrock supports AWS profiles.", "AWS profiles: https://docs.aws.test"] });
+    // The command's result says it, once.
+    expect(loginLines({ level: "info", kind: "signed-in", message: "Logged in to Bedrock" }, "Bedrock", true).lines).toEqual([]);
   });
 
   test("open questions show what they are about before their choices", () => {
