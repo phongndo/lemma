@@ -2,10 +2,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
-import { definePlugin, PluginContext } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
-import { AssistantDelta, emptyUsage, HostControl, Llm, LlmError, Paths, ToolResult, Tools, TurnEnded, TurnStarted } from "@lemma/contracts";
-import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, Tool, ToolCall, Usage } from "@lemma/contracts";
+import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import type { Events, Plugin } from "@lemma/core";
+import { AssistantDelta, emptyUsage, HostControl, Llm, LlmError, Sessions, ToolResult, Tools, TurnEnded, TurnStarted } from "@lemma/contracts";
+import type { Agent, AssistantMessage, EventData, LlmFailure, LlmRequest, ModelInfo, SessionEvent, StreamEvent, Tool, ToolCall, Usage } from "@lemma/contracts";
+import { pathsPlugin } from "@lemma/contracts/testing";
+import sessions from "../../sessions/src/index.ts";
+import tools from "../../tools/src/index.ts";
+import agent from "../src/index.ts";
 
 const model = (ref: string): ModelInfo => {
   const [provider, id] = ref.split("/") as [string, string];
@@ -130,12 +134,7 @@ export const host = (compositionId = "comp-1") =>
     }),
   });
 
-export const paths = (dir: string, cwd: string) =>
-  definePlugin({
-    id: "paths",
-    provides: [Paths],
-    layer: Layer.succeed(Paths, { home: dir, userConfig: "", projectConfig: "", auth: "", sessions: path.join(dir, "sessions"), cwd }),
-  });
+export const paths = (dir: string, cwd: string) => pathsPlugin(dir, { cwd });
 
 export const tempDir = () => fs.mkdtemp(path.join(os.tmpdir(), "lemma-agent-"));
 
@@ -205,3 +204,52 @@ export function waitFor<A, E, R>(effect: Effect.Effect<A, E, R>, predicate: (val
   );
   return poll.pipe(Effect.timeout(Duration.seconds(5)), Effect.orDie);
 }
+
+export interface AgentSetup {
+  readonly scripts: readonly (Script | ((request: LlmRequest) => Script))[];
+  readonly tools?: readonly Tool<any>[];
+  readonly plugins?: readonly Plugin[];
+  /** The agent's config. */
+  readonly config?: Record<string, unknown>;
+  readonly models?: readonly string[];
+  /** In place of the sessions store. */
+  readonly sessions?: Plugin;
+}
+
+/**
+ * One run of the agent over `dir`. When `body` returns, the core closes, as
+ * when the host stops: a turn still running is suspended, and the next run
+ * over the same `dir` resumes it.
+ */
+export const runAgent = <A, E>(
+  dir: string,
+  setup: AgentSetup,
+  body: (fixture: {
+    readonly requests: LlmRequest[];
+    readonly rec: ReturnType<typeof recorder>;
+    readonly executed: string[];
+  }) => Effect.Effect<A, E, Agent | Sessions | Events>,
+) => {
+  const llm = fakeLlm(setup.scripts, setup.models);
+  const rec = recorder();
+  const toolset = testTools(setup.tools);
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const core = yield* makeCore(
+          [paths(dir, dir), host(), setup.sessions ?? sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
+          { configs: { agent: setup.config ?? {} } },
+        );
+        return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
+      }),
+    ),
+  );
+};
+
+/** A prompt of one text part. */
+export const text = (value: string) => [{ type: "text" as const, text: value }];
+export const types = (events: readonly SessionEvent[]) => events.map((event) => event.data.type);
+export const ofType = <T extends EventData["type"]>(events: readonly SessionEvent[], type: T) =>
+  events.flatMap((event) => (event.data.type === type ? [event.data as Extract<EventData, { type: T }>] : []));
+export const newSession = Effect.flatMap(Sessions, (store) => store.create());
+export const log = (sessionId: string) => Effect.flatMap(Sessions, (store) => store.events(sessionId));

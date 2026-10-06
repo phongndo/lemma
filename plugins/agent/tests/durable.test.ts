@@ -2,17 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { definePlugin, makeCore, PluginContext } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
+import { definePlugin, PluginContext } from "@lemma/core";
 import { Agent, emptyUsage, SessionAppended, Sessions, ToolResult } from "@lemma/contracts";
-import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
-import sessions from "../../sessions/src/index.ts";
-import tools from "../../tools/src/index.ts";
-import agent from "../src/index.ts";
+import type { EventData, SessionEvent, Tool } from "@lemma/contracts";
 import { LiveTurn } from "../src/live.ts";
 import { INTERRUPTED_CALL, planResume } from "../src/resume.ts";
-import { call, failWith, fakeLlm, gated, hang, host, paths, recorder, reply, tempDir, testTools, useTools, waitFor } from "./fakes.ts";
-import type { Script } from "./fakes.ts";
+import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
+import type { AgentSetup } from "./fakes.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -22,52 +18,15 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-/**
- * One run of the agent over `dir`. When `body` returns, the core closes, as
- * when the host stops: a turn still running is suspended, and the next run
- * over the same `dir` resumes it. Without a grace to finish what runs
- * (`stopGrace: 0` unless the config says otherwise), closing cuts the turn
- * off where it is, as a crash would.
- */
-const run = <A, E>(
-  setup: {
-    readonly scripts: readonly (Script | ((request: LlmRequest) => Script))[];
-    readonly tools?: readonly Tool<any>[];
-    readonly plugins?: readonly Plugin[];
-    readonly config?: Record<string, unknown>;
-  },
-  body: (fixture: {
-    readonly requests: LlmRequest[];
-    readonly rec: ReturnType<typeof recorder>;
-    readonly executed: string[];
-  }) => Effect.Effect<A, E, Agent | Sessions>,
-) => {
-  const llm = fakeLlm(setup.scripts);
-  const rec = recorder();
-  const toolset = testTools(setup.tools);
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])], {
-          configs: { agent: { stopGrace: 0, ...setup.config } },
-        });
-        return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
-      }),
-    ),
-  );
-};
+/** One run of the agent over `dir` (see `runAgent`). Without a grace to finish what runs (`stopGrace: 0` unless the config says otherwise), closing cuts the turn off where it is, as a crash would. */
+const run = <A, E>(setup: AgentSetup, body: Parameters<typeof runAgent<A, E>>[2]) =>
+  runAgent(dir, { ...setup, config: { stopGrace: 0, ...setup.config } }, body);
 
-const text = (value: string) => [{ type: "text" as const, text: value }];
-const types = (events: readonly SessionEvent[]) => events.map((event) => event.data.type);
-const ofType = <T extends EventData["type"]>(events: readonly SessionEvent[], type: T) =>
-  events.flatMap((event) => (event.data.type === type ? [event.data as Extract<EventData, { type: T }>] : []));
 const userTexts = (events: readonly SessionEvent[]) =>
   ofType(events, "message").flatMap((data) =>
     data.message.role === "user" ? data.message.content.map((part) => (part.type === "text" ? part.text : "")) : [],
   );
 
-const newSession = Effect.flatMap(Sessions, (store) => store.create());
-const log = (sessionId: string) => Effect.flatMap(Sessions, (store) => store.events(sessionId));
 const ended = (sessionId: string, count = 1) => waitFor(log(sessionId), (events) => ofType(events, "turn-end").length >= count);
 const stateFiles = () => fs.readdir(path.join(dir, "agent")).catch(() => [] as string[]);
 

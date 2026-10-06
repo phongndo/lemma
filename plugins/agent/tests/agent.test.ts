@@ -1,8 +1,7 @@
 import * as fs from "node:fs/promises";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
+import { definePlugin, PluginContext } from "@lemma/core";
 import {
   Agent,
   AgentContinueHook,
@@ -18,11 +17,9 @@ import {
 } from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
-import tools from "../../tools/src/index.ts";
-import agent from "../src/index.ts";
 import { BRANCHED_CALL, unansweredCalls } from "../src/turn.ts";
-import { call, failWith, fakeLlm, gated, hang, host, paths, recorder, reply, tempDir, testTools, useTools, waitFor } from "./fakes.ts";
-import type { Script } from "./fakes.ts";
+import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
+import type { AgentSetup } from "./fakes.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -32,48 +29,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-interface Setup {
-  readonly scripts: readonly (Script | ((request: LlmRequest) => Script))[];
-  readonly plugins?: readonly Plugin[];
-  readonly tools?: readonly Tool<any>[];
-  readonly config?: Record<string, unknown>;
-  readonly models?: readonly string[];
-  /** In place of the sessions store. */
-  readonly sessions?: Plugin;
-}
-
-const withAgent = <A, E>(
-  setup: Setup,
-  body: (fixture: {
-    readonly requests: LlmRequest[];
-    readonly rec: ReturnType<typeof recorder>;
-    readonly executed: string[];
-  }) => Effect.Effect<A, E, Agent | Sessions | Events>,
-) => {
-  const llm = fakeLlm(setup.scripts, setup.models);
-  const rec = recorder();
-  const toolset = testTools(setup.tools);
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const core = yield* makeCore(
-          [paths(dir, dir), host(), setup.sessions ?? sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
-          {
-            configs: { agent: setup.config ?? {} },
-          },
-        );
-        return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
-      }),
-    ),
-  );
-};
-
-const text = (value: string) => [{ type: "text" as const, text: value }];
-const types = (events: readonly SessionEvent[]) => events.map((event) => event.data.type);
-const ofType = <T extends EventData["type"]>(events: readonly SessionEvent[], type: T) =>
-  events.flatMap((event) => (event.data.type === type ? [event.data as Extract<EventData, { type: T }>] : []));
-
-const newSession = Effect.flatMap(Sessions, (store) => store.create());
+const withAgent = <A, E>(setup: AgentSetup, body: Parameters<typeof runAgent<A, E>>[2]) => runAgent(dir, setup, body);
 
 /** The sessions store, but the next `branch` read is followed by `race.checkout`: a client moving the leaf as a turn starts. */
 const racingSessions = (race: { checkout?: { readonly sessionId: string; readonly eventId: string } }) =>
@@ -116,7 +72,6 @@ const unreadableSessions = (failing: { reads: number }) =>
       })),
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
   });
-const log = (sessionId: string) => Effect.flatMap(Sessions, (store) => store.events(sessionId));
 
 /** Every `request` event rebuilds to exactly what the model received, in order. */
 const expectLogInvariant = (events: readonly SessionEvent[], sessionId: string, requests: readonly LlmRequest[]) => {
