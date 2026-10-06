@@ -11,16 +11,21 @@ declarations and targets Node.js 24 and browsers.
 
 ## Use
 
+A plugin names what it requires and provides, and a `setup` that receives the
+one and returns the other. Write it with Effects, or with promises from
+`@lemma/core/plain`; the core treats both alike.
+
 ```ts
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect } from "effect";
 import { definePlugin, makeCore } from "@lemma/core";
 
 class Greeting extends Context.Service<Greeting, string>()("example/Greeting") {}
 
 const greeting = definePlugin({
   id: "greeting",
-  provides: [Greeting],
-  layer: Layer.succeed(Greeting, "Hello"),
+  config: { text: "Hello" }, // defaults; a Schema works too
+  provides: { greeting: Greeting },
+  setup: (_, { config }) => Effect.succeed({ greeting: config.text }),
 });
 
 await Effect.runPromise(
@@ -37,14 +42,15 @@ See [`examples/hello.ts`](examples/hello.ts) for a capability implementation ext
 
 ## Plugin contract
 
-`definePlugin({ id, version?, config?, provides?, requires?, exclusive?, restart?, deadlines?, layer })` declares a composition member:
+`definePlugin({ id, version?, config?, provides?, requires?, exclusive?, restart?, deadlines?, setup })` declares a composition member, as does the same with a `layer` in place of `setup` (below):
 
 - `id` uniquely identifies an instance within one core. `version` is optional diagnostic metadata, not a dependency constraint.
-- `config` is an Effect Schema. `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. `layer` may be a function of the decoded config.
+- `config` is an Effect Schema or, with `setup`, the defaults one is derived from (`configSchema`: each field takes its default's type and decodes to it when absent; nested objects default field by field). `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. Write the Schema for titles, descriptions, or constraints.
 - `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `restart` is an Effect `Schedule` consulted after a runtime failure; without one the plugin stays failed. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
 - Capabilities are ordinary Effect `Context.Service` keys. Share the keys between consumers and providers; use namespaced key names. Effect identifies capabilities by their key names.
-- `provides` declares exports; `requires` declares dependencies supplied by other plugins. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
-- `layer` is an ordinary Effect `Layer`. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared.
+- `provides` declares exports; `requires` declares dependencies supplied by other plugins: with `setup`, by name (`{ store: Store }`), the names under which `setup` receives and returns them; with `layer`, as a list of tags. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
+- `setup(services, plugin)` runs when the plugin activates, in its scope: an Effect, or a generator function yielding Effects as `Effect.gen` takes. `plugin` is the `PluginContext` with the decoded `config` and a `signal` that aborts when the plugin stops, before its own finalizers run. It returns the provided services by name. TypeScript checks that it uses only what it requires and the built-ins, and returns what it provides.
+- `layer` is an ordinary Effect `Layer`, the form `setup` is built on. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared. `layer` may be a function of the decoded config.
 - The manifest is needed for runtime graph inspection and validation: Effect's type-level requirements alone cannot describe a dynamically supplied composition. Construction and cleanup still belong to Effect, not a second dependency-injection system.
 
 The complete graph is validated before Layers execute. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`; `checkComposition(plugins, configs)` returns the same errors without running anything, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
@@ -66,6 +72,117 @@ collection a plugin keeps in its own data structure must be released with the
 contributor's scope too; if it rejects duplicate names, mark the contributor
 `exclusive: true` so reload can unregister the old value before installing the
 new one, which incurs the same interruption gap as any exclusive resource.
+
+## Plugins written with promises
+
+`@lemma/core/plain` defines plugins with promises instead of Effects. The
+plugin has the same shape, and the core plans, orders, supervises, and replaces
+it as it does any other:
+
+```ts
+import { definePlugin } from "@lemma/core/plain";
+
+export default definePlugin({
+  id: "audit",
+  config: { ask: ["shell"] },
+  requires: { store: Store },
+  setup: async ({ store }, { config, on, onCleanup }) => {
+    const seen = await store.get("audit"); // Store's Effects, as promises
+    on(Save, async (item, next) => (config.ask.includes(item.kind) ? next(item) : "skipped"));
+    onCleanup(() => store.put("audit", seen));
+  },
+});
+```
+
+- **Services** arrive as `Plain<S>`: a method returning an Effect returns a
+  promise of its value, one returning a stream an async iterable, and an Effect
+  member becomes a method. A failure rejects with its error, marked so that
+  rethrowing it keeps it a typed failure; a defect rejects with the defect. A
+  generic or overloaded method keeps one signature through the mapping; a
+  contract restores it with a phantom `"~plain"` member (see `Plain`).
+- **Context.** A call runs in the context of the work that led to it (a hook's
+  operation, an event, the activation), so it keeps that work's references and
+  trace, and stops when that work is interrupted. It always runs as the plugin
+  that makes it, with its own `PluginContext` and `Scope`, whoever's work called
+  the code (a guard another plugin runs). Where the runtime has
+  `AsyncLocalStorage` (Node.js, found without importing it, so browser bundles
+  are unaffected; `followsAwait` says so) this follows `await` and `.then`;
+  elsewhere it holds until the first one, and later calls run in the plugin's
+  own context, stopping when it stops.
+- **`setup`** may be `async`, and receives the `PluginContext` operations as
+  promise-based functions (`on`, `add`, `observe`, `publish`, `invoke`,
+  `items`, `changes`, `background`, `fault`, `run`) plus `config`, `signal`, and
+  `onCleanup`. The plugin is active once setup has returned and every call it
+  made has settled (calls a background task makes are not setup's). A call
+  that failed, which setup neither awaited nor caught, fails the activation, as
+  does a throw; neither is ever an unhandled rejection. Start long-running work
+  with `background`, not by leaving a promise behind.
+- **Hook handlers** return a value, a promise, or `next(input)`. Returned from a
+  function that is not `async`, `next(input)` runs the rest of the chain in
+  place, on the caller's fiber: a pass-through costs about 1.4 times an Effect
+  handler (`bench/budgets.ts`). Awaiting `next` costs a promise per handler. A
+  handler that declares a third parameter receives a signal, aborted if the
+  operation is interrupted; calls the handler made stop then too.
+- **Errors.** A throw of an `Error` is a defect; `throw fail(error)` (or
+  returning an Effect) is a typed failure, and so is a thrown value that is not
+  an object (a string), which carries no stack and so was meant.
+- **Streams** read as async iterables end when the work that started reading
+  them is interrupted, or the plugin stops.
+- **Stopping.** When the plugin stops, its signal aborts, then its cleanups run
+  (`onCleanup`, last first, each even if another throws). Its services still
+  work for them: what a cleanup calls runs until cleanup is over, however long
+  it takes within the dispose deadline. Then its services refuse calls with
+  `PluginStopped`, so a timer or promise it left behind cannot act through them:
+  a method that has returned Effects rejects (a refusal nobody awaits is logged
+  as a warning), any other throws where it is called, `items` throws, and
+  `publish` drops the event. A setup that fails aborts its signal before its
+  cleanups run.
+- **Unawaited failures.** A call that fails with nothing awaiting or chaining its
+  promise is reported as the plugin's fault (`unawaited <operation>`), not as an
+  unhandled rejection that would end a Node.js process.
+- **Reloading.** `handoff(() => state)` and `previous` carry state to the
+  replacement, as `PluginContext.handoff` does, checked by `carry` when given.
+- **Services as data.** Plain objects inside a service are converted as the
+  service is; class instances inside it (a `Map`, a `Date`) are data, left as
+  they are. A service that is itself a class instance keeps its prototype,
+  getters, and private fields behind a proxy.
+- **Providing.** `setup` returns services as their contracts declare them; it does
+  not convert them. `asEffect(async (…) => …)` turns an async function into one
+  returning an Effect, for a contract whose methods return Effects.
+
+An application with its own way of writing plugins (a UI framework's) builds on
+`definePlugin(definition, { services, run })`. `services: "raw"` hands services
+over as provided, for contracts that are promise-based already, and a function
+gives its own view. `run` wraps the call to setup in a reactive root or an
+error boundary.
+
+### Callbacks a contract takes
+
+A contract that takes callbacks (a guard, a handler a library calls) types them
+as `Awaitable<A, E, R>`: a value, a promise, or an Effect. Its provider runs
+each with `awaitable(() => callback(…))`. That way plugins written either way
+can supply them, and promise code runs in the caller's context. A value
+succeeds at once with no promise or extra turn. A callback that declares a
+parameter receives a signal, aborted when the Effect is interrupted.
+
+## Testing a plugin
+
+`@lemma/core/testing` starts one plugin the way an application would, with
+stand-ins for what it requires, and returns promise-based handles:
+
+```ts
+import { testPlugin } from "@lemma/core/testing";
+
+const tested = await testPlugin(audit, { provide: [[Store, fakeStore]], config: { ask: [] } });
+expect(await tested.run(Effect.flatMap(Saver, (saver) => saver.save(item)))).toBe("skipped");
+const fault = await tested.waitForFault((fault) => fault.phase === "background");
+await tested.close();
+```
+
+It fails as `makeCore` does: a `CompositionError` when the plugin cannot plan, a
+`PluginFault` when it cannot start. `faults` holds what is reported while it
+runs, including each plugin's latest fault from its start. `with` runs other
+plugins beside it.
 
 ## Plugin-defined hooks
 
@@ -176,6 +293,8 @@ overwrite its replacement's fault. Observer failures leave their plugin active.
 3. Swap: new callers see the new environment, hooks, and observers in one step. Work already in flight finishes on the environment it entered with.
 4. Old instances drain, then close in reverse order. Work that outlives the dispose deadline is interrupted and counted in `ReloadReport.interrupted`.
 
+A replacement can start where its predecessor left off. `PluginContext.handoff(save)` registers what the running instance hands over; `save` runs when the replacement starts staging (an `exclusive` plugin's once its work has drained, just before it stops, so everything it did is included; otherwise changes after that moment are not carried), and a structured clone of its result is the replacement's `PluginContext.previous`. The clone means the two never share an object: a replacement that fails to start cannot change the state the old instance keeps serving with. State must therefore be what `structuredClone` copies (data, `Map`, `Set`, `Date`; not functions or sockets); what it cannot copy is reported as the old instance's fault, and the replacement starts fresh. A first start, a restart after a failure (a failed instance's state is not trusted), and a `save` that throws (reported as the old instance's fault) all start with `previous` undefined. With `setup`, a `carry` Schema checks what arrives first: state whose shape changed in an update fails to decode, is reported as the plugin's fault (`handoff`), and the plugin starts fresh instead of trusting it. The state stays in memory; durable state belongs to the plugin's own storage.
+
 Caller cancellation rolls back staging. Once the swap or an exclusive resource interruption has begun, the supervised lifecycle operation finishes even if disposal interrupts its initiating `core.run` caller. A caller that lost the result must inspect the resulting state. Core shutdown still owns and interrupts lifecycle work.
 
 If any replacement fails to start, staged instances are disposed and the running composition is unchanged. `exclusive` plugins are the documented exception: they stop before the replacement starts, and if the replacement then fails they stay failed, attributed to that failure. Re-applying an unchanged composition does not restart a failed plugin; that takes `restart` or a config change.
@@ -218,7 +337,7 @@ Rollback releases acquired resources and registrations. It cannot undo arbitrary
 
 `core.inspect` returns a detached snapshot of plugin identities, lifecycle state, latest fault, provided/required capability keys, ordered hook ownership, and event observers. It does not expose implementations or configuration secrets.
 
-Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable. `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
+Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
 
 These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.

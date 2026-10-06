@@ -32,12 +32,39 @@ holds the rationale and constraints.
 
 **Rule for choosing a primitive:** an _operation_ others may change is a hook; _news_ others may react to is an event; a _thing a plugin offers_ (an entry in a list others read) is a registry item. If the caller must learn when it fails, use a hook or a direct capability call. Events carry only information that is safe to lose. Applications own authoritative state and recovery after missed notifications.
 
-**Authoring surface.** The plugin skeleton uses Effect. Capability contracts are
-ordinary TypeScript and can expose values, functions, promises, or Effects.
-Applications decide which surface fits their operations. Effect supplies resource
-ownership, structured concurrency, schemas, and cancellation; its role is broader
-than runtime type checking. Promise-based work must honor a cancellation signal to
-stop its underlying operation. No automatic wrapper can make arbitrary work cancelable.
+**Authoring surface.** Effect is how the kernel is built, not what every
+plugin author must write. A plugin has one shape: named `requires` and
+`provides`, and a `setup` that receives the one and returns the other. It is
+written either with Effects (`definePlugin`'s `setup` as a generator) or with
+promises (`@lemma/core/plain`), and the two differ in little more than
+`function*` and `async`, so moving a plugin from one to the other is a
+mechanical edit. The promise-based form is a view, not a second runtime. Its
+plugins are planned, supervised, and replaced by the same code. Its services
+are the same services, converted once at activation: Effect methods return
+promises, streams become async iterables. Its callbacks become Effects that run
+on the caller's fiber, without a promise, when they return synchronously.
+
+What the view keeps, and how. Resources stay owned by the plugin's scope:
+registrations go through its `PluginContext`, and `onCleanup` runs in its
+finalizer. Cancellation reaches promise code through signals, and calls
+promise code makes run in the context of the work that led to them, which is
+carried across `await` by `AsyncLocalStorage` where the runtime has one. That
+way a question that promise code asks while handling an operation still
+belongs to that operation, and is withdrawn with it. Lifetime safety comes from refusal: once a plugin
+stops, its services reject further calls, so work it leaked cannot act
+through a capability. A failure nobody awaited becomes an attributed fault,
+not a process-ending unhandled rejection. What it gives up is the typed error
+channel at compile time (rejections are `unknown`; `fail` marks an expected
+one) and structured concurrency for promises it never hands a signal. A
+contract that takes callbacks accepts any of the three (`Awaitable`), and its
+provider runs them with `awaitable`, so either kind of plugin can supply them.
+
+Capability contracts remain ordinary TypeScript and can expose values,
+functions, promises, or Effects. Effect supplies resource ownership,
+structured concurrency, schemas, and cancellation; its role is broader than
+runtime type checking. Promise-based work must honor a cancellation signal to
+stop its underlying operation. No automatic wrapper can make arbitrary work
+cancelable.
 
 **Runtime choice.** The framework remains TypeScript so plugin values, callbacks,
 promises, and errors stay in the same runtime as its consumers. A native core would
@@ -70,6 +97,14 @@ than pretending the swap was transactional. A core registry's items follow
 their contributor through the swap, so a contributor to one needs no such gap.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
+
+In-memory state crosses a reload only when the plugin hands it over
+(`handoff`), as a structured clone taken when its replacement starts, not as shared
+mutable state. The old instance keeps serving while the new one stages, so
+anything shared would be written by two instances at once. A failed instance
+hands nothing over, since the failure may have left its state half updated.
+The handoff is a convenience for keeping work across an edit (an application reloading
+code as it is edited); it is not persistence, which stays the application's.
 
 A change is all or nothing because it has a running composition to keep. The
 first start has none, so refusing it for one failing plugin only takes away the
