@@ -3,7 +3,7 @@
 An Effect-native, domain-neutral plugin runtime. It composes typed capabilities,
 plugin-defined hooks and events, configuration, and scoped lifetimes. Applications
 and plugin authors define their own contracts and behavior.
-[`docs/kernel.md`](../../docs/kernel.md) holds the design rationale.
+[`DESIGN.md`](DESIGN.md) holds the design rationale.
 
 Only `effect` is a runtime dependency. Plugins are trusted, in-process modules;
 there is no security sandbox. The package exports ESM JavaScript and TypeScript

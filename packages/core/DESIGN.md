@@ -4,7 +4,7 @@ The core (`packages/core`) is a domain-neutral TypeScript library for composing 
 It supplies capabilities, hooks, events, lifetimes, and configuration. The embedding
 application chooses its domain contracts, plugin sources, and composition.
 
-Usage details live in [the package README](../packages/core/README.md); this page
+Usage details live in [the package README](README.md); this page
 holds the rationale and constraints.
 
 ## Principles
@@ -42,7 +42,7 @@ stop its underlying operation. No automatic wrapper can make arbitrary work canc
 **Runtime choice.** The framework remains TypeScript so plugin values, callbacks,
 promises, and errors stay in the same runtime as its consumers. A native core would
 require a second lifetime and value model across an FFI without a demonstrated
-performance benefit. Node.js is the runtime for development, tests, and the harness
+performance benefit. Node.js is the runtime for development, tests, and server embedders
 (including Electron's embedded Node); the library emits ESM JavaScript with
 declarations and uses no runtime-specific APIs, so it also runs in browsers.
 Workload measurements should guide any future native acceleration.
@@ -55,7 +55,7 @@ pending → activating → active → draining → closed
 ```
 
 Plugins activate in dependency order and dispose in reverse. `draining` admits
-no new work while in-flight work finishes. The [lifetime contract](../packages/core/README.md#lifetime-and-failure-semantics)
+no new work while in-flight work finishes. The [lifetime contract](README.md#lifetime-and-failure-semantics)
 specifies shutdown, deadlines, and what cooperative cancellation can and cannot
 stop.
 
@@ -68,7 +68,7 @@ unique name kept in a plugin's own data structure) makes its plugin
 `exclusive`, stopped before its replacement starts: that gap is explicit rather
 than pretending the swap was transactional. A core registry's items follow
 their contributor through the swap, so a contributor to one needs no such gap.
-The [loader contract](../packages/core/README.md#loader-and-reload) gives the
+The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
 A change is all or nothing because it has a running composition to keep. The
@@ -80,7 +80,7 @@ fail the whole start.
 ## Faults
 
 Faults and diagnostics are data attributed to a plugin instance; the
-[supervision contract](../packages/core/README.md#supervision) gives their
+[supervision contract](README.md#supervision) gives their
 shapes and delivery. Deadlines wait on a daemon fiber plus a timer rather than
 `Effect.timeout`, because Effect's timeout races cannot fire inside an
 uninterruptible region and lifecycle bookkeeping is uninterruptible by design.

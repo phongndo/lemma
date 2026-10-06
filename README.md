@@ -13,6 +13,6 @@ Lemma runs from a checkout and is under active development.
 - [Web app](apps/web/README.md): UI plugins and files, addresses, and devtools
 - [CLI](apps/cli/README.md): `lemma`, for people and agents
 - [Architecture](docs/architecture.md): packages, plugins, and the session log
-- [Kernel design](docs/kernel.md): the plugin runtime's rationale and limits
+- [Kernel design](packages/core/DESIGN.md): the plugin runtime's rationale and limits
 - [Development](docs/development.md): dev shell, checks, and git hooks
 - [App icons](assets/brand/README.md): shared light and dark artwork

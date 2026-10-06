@@ -57,7 +57,7 @@ export interface PartialStart {
 interface Runtime {
   readonly core: Core<any>;
   /**
-   * Transactional change to the running composition; see docs/kernel.md. With
+   * Transactional change to the running composition; see DESIGN.md. With
    * `partial`, a plugin that fails to activate is left failed instead, unless
    * it is required or something required needs it.
    */

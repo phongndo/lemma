@@ -6,7 +6,8 @@
   "files": [
     "dist",
     "examples",
-    "README.md"
+    "README.md",
+    "DESIGN.md"
   ],
   "type": "module",
   "types": "./dist/index.d.ts",

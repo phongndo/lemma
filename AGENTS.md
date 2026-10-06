@@ -10,7 +10,7 @@ the extension points have to be good enough for Lemma's own plugins.
 Use:
 
 - [Architecture](docs/architecture.md) for which package owns what;
-- [Kernel design](docs/kernel.md) and the [core README](packages/core/README.md) when changing `packages/core`;
+- [Kernel design](packages/core/DESIGN.md) and the [core README](packages/core/README.md) when changing `packages/core`;
 - a plugin's README for its contract and rationale when changing that plugin;
 - [the web app's AGENTS.md](apps/web/AGENTS.md) when changing the web app;
 - [Configuration](docs/configuration.md) for config files, turning plugins on and off, and project trust; and
