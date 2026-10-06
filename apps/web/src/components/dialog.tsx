@@ -1,6 +1,6 @@
 import { Show, onCleanup, onMount } from "solid-js";
-import type { JSX } from "solid-js";
 import { Portal } from "solid-js/web";
+import type { DialogProps } from "../ui/contracts.ts";
 import { XIcon } from "../ui/parts.tsx";
 
 /**
@@ -8,15 +8,7 @@ import { XIcon } from "../ui/parts.tsx";
  * close, Tab kept inside. Without a `title` there is no header: the body leads
  * (a search field) and names the dialog through `label`.
  */
-export function Dialog(props: {
-  title?: JSX.Element;
-  label?: string;
-  onClose?: (() => void) | undefined;
-  children: JSX.Element;
-  footer?: JSX.Element;
-  class?: string;
-  labelledBy?: string;
-}) {
+export function Dialog(props: DialogProps) {
   let panel!: HTMLDivElement;
   const previous = document.activeElement as HTMLElement | null;
   const focusables = () =>

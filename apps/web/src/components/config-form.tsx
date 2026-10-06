@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import { parseConfigValue } from "@lemma/contracts";
-import type { ConfigField, ConfigValues } from "@lemma/contracts";
+import type { ConfigField } from "@lemma/contracts";
+import type { ConfigFormProps } from "../ui/contracts.ts";
 import { Toggle } from "../ui/parts.tsx";
 
 const show = (value: unknown): string => (value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value));
@@ -11,14 +12,7 @@ const show = (value: unknown): string => (value === undefined ? "" : Array.isArr
  * default). Nested fields are edited in the config file; secrets are never
  * shown, only replaced.
  */
-export function ConfigForm(props: {
-  fields: readonly ConfigField[];
-  config: ConfigValues | undefined;
-  /** Where the fields are written, for the note under the form. */
-  file: string;
-  disabled?: boolean;
-  onSave: (values: Readonly<Record<string, unknown>>) => Promise<void>;
-}) {
+export function ConfigForm(props: ConfigFormProps) {
   const [saving, setSaving] = createSignal<string>();
   const [errors, setErrors] = createSignal<Readonly<Record<string, string>>>({});
   const value = (field: ConfigField) => props.config?.values[field.key];

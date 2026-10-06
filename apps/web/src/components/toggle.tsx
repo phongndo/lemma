@@ -1,5 +1,7 @@
+import type { ToggleProps } from "../ui/contracts.ts";
+
 /** An on/off switch. A disabled one keeps showing its value; explain why in a `data-tip` on a wrapper. */
-export function Toggle(props: { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
+export function Toggle(props: ToggleProps) {
   return (
     <button
       class="switch"

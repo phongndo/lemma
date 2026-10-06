@@ -1,12 +1,13 @@
 import { Match, Show, Switch } from "solid-js";
 import { logoSource, providerBrand } from "../model/providers.ts";
+import type { ProviderLogoProps } from "../ui/contracts.ts";
 
 /**
  * A provider's logo, drawn on whatever is behind it: its brand mark (per
  * theme where the brand has two), a custom provider's own SVG, else its
  * initial. Sized by `.provider-mark`.
  */
-export function ProviderLogo(props: { id: string; name: string; custom?: string | undefined }) {
+export function ProviderLogo(props: ProviderLogoProps) {
   const logo = () => providerBrand(props.id).logo;
   const mono = () => {
     const l = logo();

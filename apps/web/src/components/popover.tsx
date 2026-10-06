@@ -1,8 +1,7 @@
 import { Show, createSignal, onCleanup } from "solid-js";
-import type { JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 
-import type { Placement } from "../ui/contracts.ts";
+import type { Placement, PopoverProps } from "../ui/contracts.ts";
 
 const MARGIN = 8;
 const GAP = 6;
@@ -38,20 +37,7 @@ const position = (anchor: DOMRect, menu: HTMLElement, placement: Placement) => {
  *
  * Items are elements with role `menuitem`, `menuitemradio`, or `option`.
  */
-export function Popover(props: {
-  label: string;
-  trigger: JSX.Element;
-  triggerClass?: string;
-  placement?: Placement;
-  disabled?: boolean;
-  /** Tooltip for the trigger; defaults to `label`. */
-  tip?: string;
-  menuClass?: string;
-  onOpen?: () => void;
-  /** Receives a handle for opening the menu from elsewhere (a shortcut, say). */
-  controller?: (handle: { readonly open: () => void }) => void;
-  children: (close: () => void) => JSX.Element;
-}) {
+export function Popover(props: PopoverProps) {
   const [open, setOpen] = createSignal(false);
   let trigger!: HTMLButtonElement;
   let menu: HTMLDivElement | undefined;

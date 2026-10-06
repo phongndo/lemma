@@ -1,8 +1,8 @@
 import { For } from "solid-js";
-import type { JSX } from "solid-js";
+import type { SegmentedProps, SettingRowProps } from "../ui/contracts.ts";
 
 /** A setting's name and explanation, with its control on the right. */
-export function SettingRow(props: { title: string; description?: string | undefined; children: JSX.Element }) {
+export function SettingRow(props: SettingRowProps) {
   return (
     <div class="setting-row">
       <div class="setting-text">
@@ -15,7 +15,7 @@ export function SettingRow(props: { title: string; description?: string | undefi
 }
 
 /** A choice of a few options shown side by side. */
-export function Segmented<T extends string>(props: { label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void }) {
+export function Segmented(props: SegmentedProps) {
   return (
     <div class="segmented" role="radiogroup" aria-label={props.label}>
       <For each={props.options}>
