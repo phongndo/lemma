@@ -24,7 +24,21 @@ export { Registries, Registry } from "./registries.ts";
 export type { ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
 export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
+export { configSchema } from "./config.ts";
+export type { ConfigDefaults, ConfigInput, ConfigOf, ConfigValue } from "./config.ts";
 export { definePlugin } from "./plugin.ts";
-export type { Capability, Deadlines, Plugin, PluginLayer } from "./plugin.ts";
+export type {
+  BuiltIns,
+  Capabilities,
+  Capability,
+  Deadlines,
+  Plugin,
+  PluginLayer,
+  PluginSetup,
+  Provided,
+  Services,
+  SetupDefinition,
+  SetupResult,
+} from "./plugin.ts";
 export type { EventSnapshot } from "./internal/events.ts";
 export type { HookSnapshot } from "./internal/hooks.ts";

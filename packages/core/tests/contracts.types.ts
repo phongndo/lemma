@@ -4,6 +4,7 @@ import { definePlugin, Event, Events, Hook, Hooks, makeCore, PluginContext } fro
 
 class Value extends Context.Service<Value, string>()("types/Value") {}
 class Other extends Context.Service<Other, number>()("types/Other") {}
+class Prefix extends Context.Service<Prefix, string>()("types/Prefix") {}
 
 export function contracts() {
   const provider = definePlugin({ id: "value", provides: [Value], layer: Layer.succeed(Value, "value") });
@@ -88,3 +89,63 @@ export function contracts() {
   );
   return calls;
 }
+
+// The setup form: named services in, named services out, config typed from its defaults or Schema.
+export function setups() {
+  const named = definePlugin({
+    id: "named",
+    config: { prefix: "#", limit: 3, tags: ["a"] },
+    requires: { value: Value },
+    provides: { other: Other },
+    setup: function* ({ value }, { config, signal }) {
+      const text: string = value;
+      const prefix: string = config.prefix;
+      const limit: number = config.limit;
+      const tags: readonly string[] = config.tags;
+      const aborted: boolean = signal.aborted;
+      yield* PluginContext;
+      yield* Hooks;
+      return { other: text.length + prefix.length + limit + tags.length + Number(aborted) };
+    },
+  });
+  definePlugin({
+    id: "wrong-export",
+    provides: { other: Other },
+    // @ts-expect-error Other is a number.
+    setup: () => Effect.succeed({ other: "text" }),
+  });
+  definePlugin({
+    id: "undeclared",
+    // @ts-expect-error Value is not declared in requires.
+    setup: function* () {
+      yield* Value;
+    },
+  });
+  definePlugin({
+    id: "unknown-config",
+    config: { prefix: "#" },
+    setup: (_, { config }) => {
+      // @ts-expect-error The defaults name no such field.
+      void config.missing;
+      return Effect.void;
+    },
+  });
+  definePlugin({
+    id: "schema-config",
+    config: Schema.Struct({ greeting: Schema.String }),
+    setup: (_, { config }) => Effect.sync(() => void config.greeting.length),
+  });
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const core = yield* makeCore([definePlugin({ id: "value", provides: { value: Value }, setup: () => Effect.succeed({ value: "v" }) }), named]);
+        const other: number = yield* core.run(Other);
+        // @ts-expect-error Nothing provides Prefix.
+        Effect.runPromise(core.run(Prefix));
+        return other;
+      }),
+    ),
+  );
+}
+
+// The promise-based view of services: what plain plugins see.
