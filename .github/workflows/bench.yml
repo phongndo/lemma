@@ -1,0 +1,35 @@
+name: Bench
+
+# The core's microbenchmarks of a base revision and of this one, alternated on one runner, compared with a
+# Mann-Whitney U test (scripts/bench-compare.ts): by hand against any base, or on a pull request labelled
+# `performance` against main. Advisory: the table goes to the job summary.
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Revision to compare against
+        default: origin/main
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - run: nix develop -c pnpm install --frozen-lockfile
+      - run: nix develop -c node scripts/bench-compare.ts --base "$BASE" --runs 10 | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          BASE: ${{ inputs.base || 'origin/main' }}

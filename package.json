@@ -22,7 +22,8 @@
     "core:test": "pnpm --filter @lemma/core test",
     "core:bench": "pnpm --filter @lemma/core bench",
     "core:stress": "node --expose-gc packages/core/bench/workload.ts",
-    "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress"
+    "sessions:bench": "pnpm --filter @lemma/plugin-sessions bench",
+    "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress && pnpm sessions:bench"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

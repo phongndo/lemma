@@ -262,6 +262,18 @@ These synthetic workloads measure framework overhead, not an application's
 performance.
 
 The budgets and their reference environment are in
-[`bench/budgets.ts`](bench/budgets.ts). Results are advisory:
-`LEMMA_PERF_ENFORCE=1` turns a budget miss into a failure (measure on an idle,
-comparable machine), and `LEMMA_BENCH_OUTPUT_DIR` writes dated JSON artifacts.
+[`bench/budgets.ts`](bench/budgets.ts). Timing budgets are advisory:
+`LEMMA_PERF_ENFORCE=1` turns a miss into a failure (measure on an idle,
+comparable machine). Size budgets (the browser bundle) are the same on every
+machine and always fail. `LEMMA_BENCH_OUTPUT_DIR` writes dated JSON artifacts.
+`core:test` runs both benchmarks with tiny counts (`LEMMA_BENCH_ITERATIONS`,
+`LEMMA_BENCH_SAMPLES`, `LEMMA_STRESS_CYCLES`), so they cannot rot unnoticed.
+
+A number from one machine says little; a change between two builds measured
+side by side does. `node scripts/bench-compare.ts [--base <ref>] [--runs <n>]`
+checks the base revision (default: the merge base with `origin/main`) out
+beside the working tree, alternates the microbenchmarks of the two, and reports
+a change only when a Mann-Whitney U test finds it significant across `--runs`
+pairs (default 10), corrected for the number of benchmarks, and it is beyond
+`--threshold` (default 10%), as Go's benchstat does. `--fail` exits non-zero on
+a slowdown.

@@ -7,9 +7,11 @@ import type { Plugin } from "../src/index.ts";
 // Warm microbenchmarks, not end-to-end latency or a comparison with another harness.
 // Every reported value is a batch mean. Samples use fresh Effect runtime entry but
 // dispatch cases reuse a mounted core, with one core.run per batch (not per hook).
-const samples = 7;
+const samples = Number(process.env.LEMMA_BENCH_SAMPLES ?? 7);
+if (!Number.isInteger(samples) || samples < 1) throw new Error("LEMMA_BENCH_SAMPLES must be a positive integer");
 const iterations = Number(process.env.LEMMA_BENCH_ITERATIONS ?? 10_000);
 if (!Number.isInteger(iterations) || iterations < 1) throw new Error("LEMMA_BENCH_ITERATIONS must be a positive integer");
+const mounts = Math.min(100, iterations);
 const point = Hook.make<number, number>("bench/increment");
 const tick = Event.make<number>("bench/tick");
 const entries = Registry.make<number>("bench/entries");
@@ -111,7 +113,7 @@ await Effect.runPromise(
 
 for (const count of [0, 8, 32, 128]) {
   const composition = plugins(count);
-  await measure(`Mount + dispose / ${count} plugins`, 100, repeat(Effect.scoped(makeCore(composition)), 100));
+  await measure(`Mount + dispose / ${count} plugins`, mounts, repeat(Effect.scoped(makeCore(composition)), mounts));
 }
 
 for (const count of [0, 1, 8]) {

@@ -18,22 +18,27 @@ export const budgets = {
   heapGrowthBytes: 16 * 1024 * 1024,
   rssGrowthBytes: 64 * 1024 * 1024,
   // Packed UI fixture including Effect and application code, bundled by esbuild:
-  // 596KB / 185KB gzip. These caps allow about 10-15% dependency/bundler variation.
+  // 596KB / 185KB gzip. These caps allow about 10-15% dependency/bundler variation,
+  // and fail CI when exceeded.
   browserBundleBytes: 660_000,
   browserBundleGzipBytes: 210_000,
   httpP99Ms: 25,
 } as const;
 
 const measurements: Record<string, { value: number; limit?: number; passed?: boolean }> = {};
+/** Timings vary with the machine, so their budgets fail only when asked to (on an idle, comparable machine). */
 export const enforced = process.env.LEMMA_PERF_ENFORCE === "1";
+/** Sizes are the same on every machine, so their budgets always fail. */
+const deterministic = new Set<string>(["browserBundleBytes", "browserBundleGzipBytes"]);
 
 export function record(name: string, value: number) {
   const limit = budgets[name as keyof typeof budgets];
   if (!Number.isFinite(value)) throw new Error(`Invalid measurement: ${name}`);
   measurements[name] = { value, ...(limit === undefined ? {} : { limit, passed: value <= limit }) };
   if (limit !== undefined && value > limit) {
-    console.warn(`${enforced ? "FAIL" : "ADVISORY"}: ${name} ${value.toFixed(3)} > ${limit}`);
-    if (enforced) process.exitCode = 1;
+    const fails = enforced || deterministic.has(name);
+    console.warn(`${fails ? "FAIL" : "ADVISORY"}: ${name} ${value.toFixed(3)} > ${limit}`);
+    if (fails) process.exitCode = 1;
   }
 }
 
