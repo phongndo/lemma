@@ -546,7 +546,9 @@ describe("credential store adapter", () => {
     await adapter.delete("x");
     expect(await adapter.read("x")).toBeUndefined();
   });
+});
 
+describe("custom providers", () => {
   it("adds, relabels, and removes the user's providers through its own config", async () => {
     const host = fakeHost();
     const { plugins } = setup({ providers: () => [] });

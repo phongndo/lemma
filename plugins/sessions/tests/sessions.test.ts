@@ -623,7 +623,9 @@ describe("unloading idle sessions", () => {
       { unloadAfter: 0 },
     );
   });
+});
 
+describe("the session file", () => {
   it("treats an unreadable last line as a write a crash cut short: ignored with a notice, then cut before the next append", async () => {
     const id = await run(
       Effect.gen(function* () {
