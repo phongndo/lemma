@@ -1,7 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/contracts";
-import { copyText } from "../lib/clipboard.ts";
+import { copyAndTell } from "../lib/clipboard.ts";
 import { withKeys } from "../lib/keys.ts";
 import { loadJson, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
@@ -489,8 +489,7 @@ export default defineUiPlugin({
       order: 20,
       label: () => "Copy path",
       icon: CopyIcon,
-      run: (cwd) =>
-        void copyText(cwd).then((copied) => notify.toast(copied ? { level: "info", message: `Copied ${cwd}` } : { level: "error", message: "Could not copy" })),
+      run: (cwd) => void copyAndTell(notify, cwd),
     });
     // Its head's buttons go through the slot other plugins add theirs to.
     type ActionProps = { readonly onPick: () => void };

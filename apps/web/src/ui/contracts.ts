@@ -850,6 +850,16 @@ export interface SearchFieldProps {
 /** A page's search (the settings sections'): an underlined field with an icon, and room for the page's controls. */
 export const SearchFieldPart = definePart<SearchFieldProps>("search-field");
 
+export interface CopyButtonProps {
+  /** What it puts on the clipboard. */
+  readonly text: string;
+  /** Its accessible name and tooltip: `Copy response`. */
+  readonly label: string;
+  readonly class?: string;
+}
+/** An icon button that copies its text and says for a moment whether that worked. */
+export const CopyButtonPart = definePart<CopyButtonProps>("copy-button");
+
 export interface ToggleProps {
   readonly label: string;
   readonly checked: boolean;

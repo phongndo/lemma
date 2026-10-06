@@ -6,6 +6,7 @@ import * as web from "solid-js/web";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
 import { ConfigForm as DefaultConfigForm } from "../components/config-form.tsx";
+import { CopyButton as DefaultCopyButton } from "../components/copy-button.tsx";
 import { Dialog as DefaultDialog } from "../components/dialog.tsx";
 import { PlainFileIcon } from "../components/file-icon.tsx";
 import { DefaultIcon, icons as defaultIcons } from "../components/icons.tsx";
@@ -61,6 +62,7 @@ export const api = {
   /** The bundled implementations of the shared parts, to wrap or fall back to from a replacement. */
   defaults: {
     ConfigForm: DefaultConfigForm,
+    CopyButton: DefaultCopyButton,
     Dialog: DefaultDialog,
     FileIcon: PlainFileIcon,
     Icon: DefaultIcon,

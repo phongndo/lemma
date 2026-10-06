@@ -11,6 +11,7 @@ import {
   ChatWorkingPart,
   ChatWorkPart,
   ConfigFormPart,
+  CopyButtonPart,
   DialogPart,
   FileIconPart,
   IconPart,
@@ -125,6 +126,7 @@ export const Dialog = partView(DialogPart);
 export const Popover = partView(PopoverPart);
 export const Toggle = partView(TogglePart);
 export const SearchField = partView(SearchFieldPart);
+export const CopyButton = partView(CopyButtonPart);
 export const SettingRow = partView(SettingRowPart);
 /** Typed by its options' values; the part itself takes strings. */
 export const Segmented = partView(SegmentedPart) as unknown as <T extends string>(props: {

@@ -52,13 +52,12 @@ import {
   ChevronDownIcon,
   ChevronIcon,
   Contained,
-  CopyIcon,
   FileTypeIcon,
   Markdown,
   Spinner,
   XIcon,
+  CopyButton,
 } from "../ui/parts.tsx";
-import { copyText } from "../lib/clipboard.ts";
 import { markdownText } from "../lib/markdown.ts";
 import styles from "./chat.css?inline";
 
@@ -507,24 +506,9 @@ function TurnFooter(props: ChatTurnFooterProps) {
   const model = () => props.turn.models.map((ref) => parseModelRef(ref)?.model ?? ref).join(", ");
   const reason = () => props.turn.end?.reason;
   const answer = () => props.answer;
-  const [copied, setCopied] = createSignal<boolean>();
-  const copy = () =>
-    void copyText(answer()).then((ok) => {
-      setCopied(ok);
-      setTimeout(() => setCopied(undefined), 1500);
-    });
   return (
     <footer class="turn-footer" data-tip={usage().title}>
-      <Show when={answer()}>
-        <button
-          class="icon-button turn-copy"
-          aria-label="Copy response"
-          data-tip={copied() === undefined ? "Copy response" : copied() ? "Copied" : "Copy failed"}
-          onClick={copy}
-        >
-          {copied() === undefined ? <CopyIcon /> : copied() ? <CheckIcon /> : <XIcon />}
-        </button>
-      </Show>
+      <Show when={answer()}>{(text) => <CopyButton text={text()} label="Copy response" class="turn-copy" />}</Show>
       <Show when={reason() === "cancelled"}>
         <span class="badge">cancelled</span>
       </Show>

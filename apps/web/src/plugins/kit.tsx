@@ -1,4 +1,5 @@
 import { ConfigForm } from "../components/config-form.tsx";
+import { CopyButton } from "../components/copy-button.tsx";
 import { Dialog } from "../components/dialog.tsx";
 import { PlainFileIcon } from "../components/file-icon.tsx";
 import { DefaultIcon } from "../components/icons.tsx";
@@ -10,6 +11,7 @@ import { SearchField } from "../components/search-field.tsx";
 import { Toggle } from "../components/toggle.tsx";
 import {
   ConfigFormPart,
+  CopyButtonPart,
   DialogPart,
   FileIconPart,
   IconPart,
@@ -29,7 +31,7 @@ import styles from "./kit.css?inline";
 
 /**
  * The shared parts every view draws with: markdown, dialogs, menus, toggles,
- * setting rows, the config form, provider logos, icons, and file icons. The only plugin
+ * copy buttons, setting rows, the config form, provider logos, icons, and file icons. The only plugin
  * that imports rendering components; everything else draws these parts, so
  * replacing one here (or adding one with a lower order from any plugin or UI
  * file) changes it everywhere.
@@ -46,6 +48,7 @@ export default defineUiPlugin({
     add(PopoverPart, Popover);
     add(TogglePart, Toggle);
     add(SearchFieldPart, SearchField);
+    add(CopyButtonPart, CopyButton);
     add(SettingRowPart, SettingRow);
     add(SegmentedPart, Segmented);
     add(ConfigFormPart, ConfigForm);

@@ -23,7 +23,7 @@ import type { Action } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotItem } from "../ui/slots.ts";
 import { Contained, CopyIcon, Each, First, PenSquareIcon, SidebarIcon, Spinner, StopIcon } from "../ui/parts.tsx";
-import { copyText } from "../lib/clipboard.ts";
+import { copyAndTell } from "../lib/clipboard.ts";
 import styles from "./thread-view.css?inline";
 
 /**
@@ -109,9 +109,7 @@ export default defineUiPlugin({
         run: () => {
           const id = threads.activeId();
           if (id === undefined) return;
-          void copyText(id).then((ok) =>
-            ok ? notify.toast({ level: "info", message: `Copied ${id}` }) : notify.toast({ level: "error", message: "Could not copy to the clipboard" }),
-          );
+          void copyAndTell(notify, id);
         },
       },
     );

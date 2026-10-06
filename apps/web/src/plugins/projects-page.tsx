@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/contracts";
-import { copyText } from "../lib/clipboard.ts";
+import { copyAndTell } from "../lib/clipboard.ts";
 import { tildePath } from "../model/format.ts";
 import { folderName } from "../model/prefs.ts";
 import {
@@ -210,16 +210,7 @@ export default defineUiPlugin({
           <SettingRow title="Location" description={cwd === client.info()?.cwd ? "The host's own directory." : "The folder on the host that threads work in."}>
             <div class="project-location">
               <code>{path(cwd)}</code>
-              <button
-                class="icon-button"
-                aria-label="Copy path"
-                data-tip="Copy path"
-                onClick={() =>
-                  void copyText(cwd).then((copied) =>
-                    notify.toast(copied ? { level: "info", message: "Path copied" } : { level: "error", message: "Could not copy" }),
-                  )
-                }
-              >
+              <button class="icon-button" aria-label="Copy path" data-tip="Copy path" onClick={() => void copyAndTell(notify, cwd)}>
                 <CopyIcon />
               </button>
             </div>

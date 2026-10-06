@@ -1,3 +1,5 @@
+import type { NotifyService } from "../ui/contracts.ts";
+
 /**
  * Puts `text` on the clipboard; resolves whether it worked. Pages served over
  * plain HTTP from another machine (a host on a LAN or Tailscale address) are
@@ -29,4 +31,9 @@ export const copyText = async (text: string): Promise<boolean> => {
     area.remove();
     focused?.focus();
   }
+};
+
+/** Copies `text`, then says so in a toast: `Copied <text>`, or that the clipboard refused it. */
+export const copyAndTell = async (notify: Pick<NotifyService, "toast">, text: string): Promise<void> => {
+  notify.toast((await copyText(text)) ? { level: "info", message: `Copied ${text}` } : { level: "error", message: "Could not copy to the clipboard" });
 };

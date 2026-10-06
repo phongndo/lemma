@@ -1,40 +1,20 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show } from "solid-js";
 import { Layers, Notify, Slots } from "../ui/contracts.ts";
 import type { Toast } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { AlertIcon, CheckIcon, CopyIcon, ExternalIcon, XIcon } from "../ui/parts.tsx";
-import { copyText } from "../lib/clipboard.ts";
+import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./toasts.css?inline";
 
 function CodeBox(props: { code: string }) {
-  const [copied, setCopied] = createSignal(false);
   return (
     <div class="device-code">
       <code>{props.code}</code>
-      <button
-        class="icon-button"
-        aria-label="Copy code"
-        data-tip={copied() ? "Copied" : "Copy code"}
-        onClick={() =>
-          void copyText(props.code).then((ok) => {
-            setCopied(ok);
-            setTimeout(() => setCopied(false), 1500);
-          })
-        }
-      >
-        {copied() ? <CheckIcon /> : <CopyIcon />}
-      </button>
+      <CopyButton text={props.code} label="Copy code" />
     </div>
   );
 }
 
 function ToastView(props: { toast: Toast; onDismiss: () => void }) {
-  const [copied, setCopied] = createSignal(false);
-  const copy = () =>
-    void copyText(props.toast.message).then((ok) => {
-      setCopied(ok);
-      setTimeout(() => setCopied(false), 1500);
-    });
   return (
     <div class={`toast toast-${props.toast.level}`} role={props.toast.level === "error" ? "alert" : "status"}>
       <div class="toast-main">
@@ -48,9 +28,7 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
           </Show>
         </div>
         <Show when={props.toast.level !== "info"}>
-          <button class="icon-button" aria-label="Copy message" data-tip={copied() ? "Copied" : "Copy"} onClick={copy}>
-            {copied() ? <CheckIcon /> : <CopyIcon />}
-          </button>
+          <CopyButton text={props.toast.message} label="Copy message" />
         </Show>
         <button class="icon-button" aria-label="Dismiss" onClick={() => props.onDismiss()}>
           <XIcon />
