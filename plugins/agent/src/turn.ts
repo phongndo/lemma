@@ -30,7 +30,6 @@ import type {
   PromptContent,
   RequestDraft,
   RequestPlan,
-  SessionError,
   SessionEvent,
   Sessions,
   StreamEvent,
@@ -190,6 +189,12 @@ const causeMessage = (cause: Cause.Cause<unknown>): string => {
   return error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error);
 };
 
+/** A failure of another capability (the log, the models) as the agent reports it: its message, with it as the cause. */
+export const failedAs =
+  (sessionId: string, reason: AgentError["reason"]) =>
+  (error: { readonly message: string }): AgentError =>
+    new AgentError({ sessionId, reason, message: error.message, cause: error });
+
 /** `error` is the core's `CoreClosed`, or wraps one (as a hook failure the turn reports does). */
 const isCoreClosed = (error: unknown, depth = 0): boolean =>
   typeof error === "object" &&
@@ -246,7 +251,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     shorten: false,
   };
 
-  const sessionError = (error: SessionError) => new AgentError({ sessionId, reason: "Session", message: error.message, cause: error });
+  const sessionError = failedAs(sessionId, "Session");
 
   /**
    * Whether the core is shutting down. It refuses every hook call from the moment it begins (hooks fail closed, so
@@ -371,12 +376,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           }),
         )
         .pipe(Effect.mapError(hookError("AgentRequestHook")));
-      const model =
-        plan.model === input.model.ref
-          ? input.model
-          : yield* llm
-              .model(plan.model)
-              .pipe(Effect.mapError((error) => new AgentError({ sessionId, reason: "NoModel", message: error.message, cause: error })));
+      const model = plan.model === input.model.ref ? input.model : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
       const system = plan.sections
         .map((section) => section.text)
         .filter((text) => text.length > 0)

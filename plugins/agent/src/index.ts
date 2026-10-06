@@ -21,7 +21,7 @@ import { makeSlots } from "./slots.ts";
 import type { SlotHolder } from "./slots.ts";
 import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
 import type { Journal } from "./state.ts";
-import { newId, runTurn } from "./turn.ts";
+import { failedAs, newId, runTurn } from "./turn.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
 
 const AgentConfig = Schema.Struct({
@@ -95,9 +95,6 @@ interface SessionState {
   /** The last turn failed or was cancelled: queued prompts wait for the next one rather than starting a turn. */
   held: boolean;
 }
-
-const userError = (sessionId: string) => (error: { readonly message: string }) =>
-  new AgentError({ sessionId, reason: "Session", message: error.message, cause: error });
 
 export default definePlugin({
   id: "agent",
@@ -210,7 +207,7 @@ export default definePlugin({
                     (error) => error.reason === "NotFound",
                     () => Effect.succeed([]),
                   ),
-                  Effect.mapError(userError(sessionId)),
+                  Effect.mapError(failedAs(sessionId, "Session")),
                   Effect.map((log) => indexRequests(sessionId, log)),
                 ),
           );
@@ -263,9 +260,7 @@ export default definePlugin({
           Effect.gen(function* () {
             const ref = options?.model ?? config.defaultModel;
             if (ref !== undefined) {
-              return yield* llm
-                .model(ref)
-                .pipe(Effect.mapError((error) => new AgentError({ sessionId, reason: "NoModel", message: error.message, cause: error })));
+              return yield* llm.model(ref).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
             }
             const [first] = yield* llm.models({ available: true });
             if (first === undefined) {
@@ -357,7 +352,7 @@ export default definePlugin({
               return entry.cancelling;
             });
             if (cancelling) return "cancelled" as const;
-            const info = yield* sessions.get(sessionId).pipe(Effect.mapError(userError(sessionId)));
+            const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             const last = entry.prompts[entry.prompts.length - 1]?.options;
             const model = yield* resolveModel(sessionId, last);
             return yield* runTurn(services, settings, {
@@ -392,7 +387,7 @@ export default definePlugin({
               entry.started = true;
               return entry.cancelling;
             });
-            const log = yield* sessions.events(sessionId).pipe(Effect.mapError(userError(sessionId)));
+            const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             const resume = planResume(log, entry.turnId, entry.marked);
             // Cut off before its first event: cancelled meanwhile, it never runs.
             if (resume.kind === "not-started") return cancelling ? ("cancelled" as const) : yield* fresh(sessionId, entry);
@@ -401,7 +396,7 @@ export default definePlugin({
               return end?.data.type === "turn-end" ? end.data.reason : "done";
             }
             const { plan } = resume;
-            const info = yield* sessions.get(sessionId).pipe(Effect.mapError(userError(sessionId)));
+            const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             // The model it ran on, if it still exists; else the default, as a new turn would get.
             const model =
               plan.model === undefined ? yield* resolveModel(sessionId) : yield* llm.model(plan.model).pipe(Effect.orElse(() => resolveModel(sessionId)));
@@ -560,7 +555,7 @@ export default definePlugin({
                     yield* queueChanged(sessionId);
                     return item.done;
                   }
-                  yield* sessions.get(sessionId).pipe(Effect.mapError(userError(sessionId)));
+                  yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
                   // Prompts held after a failed or cancelled turn go first, then this one.
                   const item = yield* makeItem(content, options, "follow-up");
                   const prompts = [...state.queue, item];
