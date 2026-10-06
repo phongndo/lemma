@@ -126,18 +126,18 @@ export function planComposition(input: PlanInput): Plan {
 
   // Leave out what cannot run until the rest plans, as the kernel would plan it.
   const problems = new Map<string, string>();
+  const suggestions = new Map<string, string>();
   const fatal = new Map<string, string>();
-  let resolved = resolveComposition(known, composition, [...pinned]);
+  const effective = (): Composition => ({
+    plugins: Object.fromEntries(Object.entries(plugins).map(([id, entry]) => [id, problems.has(id) ? { ...entry, enabled: false } : entry])),
+  });
+  let resolved = resolveComposition(known, effective(), [...pinned]);
   for (let round = 0; round <= known.length; round++) {
-    const effective: Composition = {
-      plugins: Object.fromEntries(Object.entries(plugins).map(([id, entry]) => [id, problems.has(id) ? { ...entry, enabled: false } : entry])),
-    };
-    resolved = resolveComposition(known, effective, [...pinned]);
     const running = known.filter(({ plugin }) => isRunning(resolved.composition, plugin.id)).map(({ plugin }) => plugin);
     const configs = Object.fromEntries(running.map((plugin) => [plugin.id, resolved.composition.plugins[plugin.id]?.config]));
     const errors = checkComposition(running, configs);
     if (errors.length === 0) break;
-    const needed = closure(known, effective, requested);
+    const needed = closure(known, effective(), requested);
     let progressed = false;
     for (const error of errors) {
       const problem = describe(error, running, configs, known);
@@ -148,10 +148,12 @@ export function planComposition(input: PlanInput): Plan {
       }
       if (!problems.has(target)) {
         problems.set(target, problem);
+        suggestions.set(target, suggestionFor(error));
         progressed = true;
       }
     }
     if (!progressed) break;
+    resolved = resolveComposition(known, effective(), [...pinned]);
   }
 
   for (const [id, problem] of fatal) {
@@ -166,7 +168,7 @@ export function planComposition(input: PlanInput): Plan {
     );
   }
   for (const [id, problem] of problems) {
-    diagnostics.push(new Diagnostic({ severity: "warning", pluginId: id, message: `"${id}" is left out: ${problem}`, suggestion: suggestionFor(problem) }));
+    diagnostics.push(new Diagnostic({ severity: "warning", pluginId: id, message: `"${id}" is left out: ${problem}`, suggestion: suggestions.get(id)! }));
   }
   // What must run and does not, though nothing failed to plan: a row turned off what it needs.
   const absent = [...requested].filter((id) => byId.has(id) && !fatal.has(id) && !isRunning(resolved.composition, id));
@@ -306,11 +308,17 @@ function describe(error: CompositionError, running: readonly Plugin[], configs: 
   }
 }
 
-function suggestionFor(problem: string): string {
-  if (problem.startsWith("its config is invalid")) return `Fix its "config" row (its README lists the current settings)`;
-  if (problem.includes(" API, and ")) return "Update the plugin for this version of Lemma, or turn it off";
-  if (problem.includes("as ")) return "Turn one of them off";
-  return "Fix the plugin, or turn it off";
+function suggestionFor(error: CompositionError): string {
+  switch (error.reason) {
+    case "InvalidConfig":
+      return `Fix its "config" row (its README lists the current settings)`;
+    case "MissingCapability":
+      return API_KEY.test(error.capability ?? "") ? "Update the plugin for this version of Lemma, or turn it off" : "Fix the plugin, or turn it off";
+    case "DuplicateCapability":
+      return "Turn one of them off";
+    default:
+      return "Fix the plugin, or turn it off";
+  }
 }
 
 /** The plugin a halted one ultimately waits on: the first in its chain that is off or left out. */

@@ -92,6 +92,21 @@ describe("planComposition", () => {
     expect(planned.problems.get("my-agent")).toBe(`it provides "test/Agent", as "agent" and "my-agent" both do`);
   });
 
+  test("suggests what fits the problem, not what its wording resembles", () => {
+    const suggestion = (planned: Plan, id: string) => planned.diagnostics.find((diagnostic) => diagnostic.pluginId === id)?.suggestion;
+    const mine = definePlugin({ id: "my-agent", requires: [Llm], provides: [Agent], layer: Layer.succeed(Agent, "mine") });
+    expect(suggestion(plan({ local: [{ plugin: mine, source: "user" }], rows: { agent: { required: true } } }), "my-agent")).toBe("Turn one of them off");
+    // A cycle through "canvas" reads "canvas -> paint", with the "as " the duplicate's "as … both do" has.
+    class Canvas extends Context.Tag("test/Canvas")<Canvas, string>() {}
+    class Paint extends Context.Tag("test/Paint")<Paint, string>() {}
+    const canvas = definePlugin({ id: "canvas", requires: [Paint], provides: [Canvas], layer: Layer.succeed(Canvas, "canvas") });
+    const paint = definePlugin({ id: "paint", requires: [Canvas], provides: [Paint], layer: Layer.succeed(Paint, "paint") });
+    const planned = plan({ local: [canvas, paint].map((plugin) => ({ plugin, source: "user" as const })) });
+    const [id, problem] = [...planned.problems][0]!;
+    expect(problem).toMatch(/canvas -> /);
+    expect(suggestion(planned, id)).toBe("Fix the plugin, or turn it off");
+  });
+
   test("keeps a pinned plugin on whatever its row says, and says the row is ignored", () => {
     const planned = plan({ rows: { transport: { enabled: false } } });
     expect(running(planned)).toContain("transport");
