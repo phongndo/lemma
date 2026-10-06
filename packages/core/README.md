@@ -357,6 +357,9 @@ nix develop -c pnpm perf:check                # build, then core:bench and core:
 
 The package is private. `pnpm --filter @lemma/core pack` builds and packs it
 for installation into another application; Effect stays an external dependency.
+In this repository its `exports` also name a `lemma-source` condition that
+selects the TypeScript sources; `publishConfig.exports` leaves it out of the
+packed manifest, so a consumer sees only `types` and `import`.
 
 `package:check` checks the emitted declarations and runs a consumer through the
 package export, outside this workspace: provider replacement, dependent

@@ -3,13 +3,33 @@
   "version": "0.1.0",
   "private": true,
   "description": "A client-side router whose routes can come and go at runtime, typed by each route's own definition",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "lemma-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "node --expose-gc bench/router.ts"
   },
   "dependencies": {
     "effect": "4.0.1"

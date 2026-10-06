@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @lemma/core build",
+    "build": "pnpm --filter @lemma/core --filter @lemma/router build",
     "check": "pnpm build && node scripts/check-boundaries.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
@@ -18,15 +18,16 @@
     "dev:web": "pnpm --filter @lemma/web dev",
     "desktop": "pnpm --filter @lemma/desktop start",
     "example": "pnpm build && node packages/core/examples/hello.ts",
-    "package:check": "node packages/core/scripts/check-package.ts",
-    "browser:check": "node packages/core/scripts/check-package.ts --browser",
+    "package:check": "node packages/core/scripts/check-package.ts && node packages/router/scripts/check-package.ts",
+    "browser:check": "node packages/core/scripts/check-package.ts --browser && node packages/router/scripts/check-package.ts --browser",
     "core:check": "pnpm --filter @lemma/core check",
     "core:test": "pnpm --filter @lemma/core test",
     "test:random": "pnpm build && pnpm core:test && pnpm --filter @lemma/plugin-sessions exec vitest run simulation && pnpm --filter @lemma/plugin-agent exec vitest run conversation",
     "core:bench": "pnpm --filter @lemma/core bench",
     "core:stress": "node --expose-gc packages/core/bench/workload.ts",
     "sessions:bench": "pnpm --filter @lemma/plugin-sessions bench",
-    "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress && pnpm sessions:bench"
+    "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress && pnpm router:bench && pnpm sessions:bench",
+    "router:bench": "pnpm --filter @lemma/router bench"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

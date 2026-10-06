@@ -28,6 +28,22 @@
       "import": "./dist/testing.js"
     }
   },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./plain": {
+        "types": "./dist/plain/index.d.ts",
+        "import": "./dist/plain/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "import": "./dist/testing.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",

@@ -4,7 +4,7 @@ The dev shell supplies Node.js 24 and pnpm from [`flake.nix`](../flake.nix),
 for CI too. Node runs the TypeScript sources directly through type stripping,
 so source must use erasable syntax only (`erasableSyntaxOnly` enforces it).
 Processes run with `--conditions=lemma-source`, which selects `@lemma/core`'s
-sources over its build; the condition is Lemma's own because dependencies
+and `@lemma/router`'s sources over their builds; the condition is Lemma's own because dependencies
 publish a `source` condition for files they do not ship.
 
 ```sh
