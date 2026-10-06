@@ -1,9 +1,6 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +14,7 @@ import type { Tool } from "@lemma/contracts";
 import { run as cli } from "@lemma/cli/src/cli.ts";
 import tools from "@lemma/plugin-tools";
 import approvals, { question } from "../approvals.ts";
+import { mockConfig, startHost, startMockProvider, stopHost } from "../../../scripts/e2e.ts";
 
 const file = fileURLToPath(new URL("../approvals.ts", import.meta.url));
 const defaults = { ask: ["bash"], outsideProject: ["write", "edit"] };
@@ -134,18 +132,7 @@ describe("the guard", () => {
 
 const execFileAsync = promisify(execFile);
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const hostMain = join(root, "packages/host/src/main.ts");
 const cliMain = join(root, "apps/cli/src/main.ts");
-const mockProvider = join(root, "scripts/fixtures/mock-openai.ts");
-
-const freePort = () =>
-  new Promise<number>((done) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address() as AddressInfo;
-      server.close(() => done(port));
-    });
-  });
 
 // The user's path: the file dropped into `<home>/plugins`, loaded by a real host, its question answered at the CLI.
 describe("as a plugin file in a real host", () => {
@@ -161,40 +148,16 @@ describe("as a plugin file in a real host", () => {
     home = await mkdtemp(join(tmpdir(), "lemma-approvals-"));
     await mkdir(join(home, "plugins"));
     await copyFile(file, join(home, "plugins", "approvals.ts"));
-    const port = await freePort();
-    const provider = spawn(process.execPath, [mockProvider], { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "ignore"] });
-    mock = provider;
-    await new Promise<void>((done) => provider.stdout!.once("data", () => done()));
-    await writeFile(
-      join(home, "config.jsonc"),
-      JSON.stringify({
-        plugins: {
-          transport: { config: { port: 0 } },
-          llm: { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: "scripted" }] }] } },
-        },
-      }),
-    );
-    const started = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
-      env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
-      stdio: "ignore",
-    });
-    host = started;
-    const deadline = Date.now() + 20_000;
-    while (!existsSync(join(home, "transport.json"))) {
-      if (Date.now() > deadline || started.exitCode !== null) throw new Error("host did not start");
-      await new Promise((done) => setTimeout(done, 100));
-    }
+    const provider = await startMockProvider();
+    mock = provider.process;
+    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl)));
+    host = await startHost(home);
   }, 30_000);
 
   // Whatever the setup got to before it failed.
   afterAll(async () => {
     mock?.kill();
-    if (host !== undefined && host.exitCode === null) {
-      const running = host;
-      const exited = new Promise((done) => running.once("exit", done));
-      running.kill("SIGTERM");
-      await exited;
-    }
+    if (host !== undefined) await stopHost(host);
     if (home !== undefined) await rm(home, { recursive: true, force: true });
   });
 

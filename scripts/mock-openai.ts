@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 /**
  * A scripted OpenAI Chat Completions server for end-to-end runs without an API
@@ -21,7 +22,7 @@ interface ChatMessage {
 const chunk = (delta: object, finish: string | null = null) =>
   `data: ${JSON.stringify({ id: "mock", object: "chat.completion.chunk", created: 0, model: "scripted", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
 
-createServer((request, response) => {
+const server = createServer((request, response) => {
   if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
     response.writeHead(404).end();
     return;
@@ -69,4 +70,6 @@ createServer((request, response) => {
     send("data: [DONE]\n\n");
     response.end();
   });
-}).listen(port, "127.0.0.1", () => console.log(`mock-openai listening on http://127.0.0.1:${port}/v1`));
+});
+// `PORT=0` takes a free port; the line names the one it took.
+server.listen(port, "127.0.0.1", () => console.log(`mock-openai listening on http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`));

@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
@@ -6,15 +6,13 @@ import type { AddressInfo } from "node:net";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ledger, promptDiff, trajectory } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
 import { ExitCode, parseOffset, run } from "../src/cli.ts";
 import { toAnswer } from "../src/live.ts";
+import { mockConfig, startHost, startMockProvider, stopHost } from "../../../scripts/e2e.ts";
 import { formatDiff, formatPlugins, formatQuestions, formatRecords, formatSession, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
-
-const hostMain = fileURLToPath(new URL("../../../packages/host/src/main.ts", import.meta.url));
 
 const invoke = async (argv: readonly string[], home: string, cwd = "/", env: Readonly<Record<string, string>> = {}) => {
   let out = "";
@@ -47,8 +45,6 @@ const settled = async <A>(read: () => Promise<A | undefined>, until: (value: A) 
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 };
-
-const mockProvider = fileURLToPath(new URL("../../../scripts/fixtures/mock-openai.ts", import.meta.url));
 
 const freePort = () =>
   new Promise<number>((resolve) => {
@@ -149,36 +145,15 @@ describe("against a running host", () => {
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "lemma-cli-"));
     // A scripted provider: a prompt gets a bash call, the tool result gets a streamed answer.
-    const port = await freePort();
-    mock = spawn(process.execPath, [mockProvider], { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "ignore"] });
-    await new Promise<void>((resolve) => mock.stdout!.once("data", () => resolve()));
-    await writeFile(
-      join(home, "config.jsonc"),
-      JSON.stringify({
-        plugins: {
-          transport: { config: { port: 0 } },
-          llm: { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: "scripted" }] }] } },
-        },
-      }),
-    );
-    host = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
-      env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
-      stdio: "ignore",
-    });
-    const deadline = Date.now() + 20_000;
-    while (!existsSync(join(home, "transport.json"))) {
-      if (Date.now() > deadline || host.exitCode !== null) throw new Error("host did not start");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    const provider = await startMockProvider();
+    mock = provider.process;
+    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl)));
+    host = await startHost(home);
   }, 30_000);
 
   afterAll(async () => {
     mock.kill();
-    if (host.exitCode === null) {
-      const exited = new Promise((resolve) => host.once("exit", resolve));
-      host.kill("SIGTERM");
-      await exited;
-    }
+    await stopHost(host);
     await rm(home, { recursive: true, force: true });
   });
 
@@ -859,18 +834,9 @@ describe("a host killed mid-turn", () => {
   let mock: ChildProcess;
   const hosts: ChildProcess[] = [];
 
-  const startHost = async () => {
-    const host = spawn(process.execPath, ["--conditions=lemma-source", hostMain, "--no-open"], {
-      env: { ...process.env, LEMMA_HOME: home, INIT_CWD: home },
-      stdio: "ignore",
-    });
+  const startOne = async () => {
+    const host = await startHost(home);
     hosts.push(host);
-    // A killed host leaves its transport.json behind: wait for this one's.
-    const ready = await settled(
-      async () => JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { pid: number },
-      (entry) => entry.pid === host.pid,
-    );
-    if (ready === undefined) throw new Error("host did not start");
     return host;
   };
   const show = async (session: string) =>
@@ -878,34 +844,19 @@ describe("a host killed mid-turn", () => {
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "lemma-cli-crash-"));
-    const port = await freePort();
-    mock = spawn(process.execPath, [mockProvider], { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "ignore"] });
-    await new Promise<void>((resolve) => mock.stdout!.once("data", () => resolve()));
-    await writeFile(
-      join(home, "config.jsonc"),
-      JSON.stringify({
-        plugins: {
-          transport: { config: { port: 0 } },
-          llm: { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: "scripted" }] }] } },
-          agent: { config: { defaultModel: "mock/scripted" } },
-        },
-      }),
-    );
+    const provider = await startMockProvider();
+    mock = provider.process;
+    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl, { agent: { config: { defaultModel: "mock/scripted" } } })));
   }, 30_000);
 
   afterAll(async () => {
     mock.kill();
-    for (const host of hosts) {
-      if (host.exitCode !== null || host.signalCode !== null) continue;
-      const exited = new Promise((resolve) => host.once("exit", resolve));
-      host.kill("SIGTERM");
-      await exited;
-    }
+    for (const host of hosts) await stopHost(host);
     await rm(home, { recursive: true, force: true });
   });
 
   test("resumes its turns when it starts again: a cut-off command is reported with its output, a cut-off answer is asked again", async () => {
-    const first = await startHost();
+    const first = await startOne();
     const slow = (await invoke(["session", "new", "--cwd", home], home)).out;
     const ramble = (await invoke(["session", "new", "--cwd", home], home)).out;
     // Both are left waiting when the host dies under them.
@@ -928,7 +879,7 @@ describe("a host killed mid-turn", () => {
     first.kill("SIGKILL");
     await exited;
 
-    await startHost();
+    await startOne();
     const ended = async (session: string) =>
       settled(
         () => show(session),
