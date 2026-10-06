@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
+import { appUrl } from "@lemma/contracts";
 import { resolvePaths } from "@lemma/plugin-host";
 import { readDiscovery } from "@lemma/plugin-transport";
 
@@ -113,7 +114,7 @@ if (host === undefined) {
     );
     if (!ready) await sleep(200);
   }
-  if (!stopping) say(`in a browser, open ${page}/?token=${encodeURIComponent(host.token)}`);
+  if (!stopping) say(`in a browser, open ${appUrl(page, "/", host.token)}`);
   // The window's main process loads the core as built.
   if (!stopping && !(await once("pnpm", ["--filter", "@lemma/core", "build"]))) say("the core did not build, so there is no window");
   else if (!stopping) {

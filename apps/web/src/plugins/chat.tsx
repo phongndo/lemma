@@ -1,7 +1,7 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { Schema } from "effect";
-import { formatDuration, formatTokens } from "@lemma/contracts";
+import { contentText, formatDuration, formatTokens, parseModelRef } from "@lemma/contracts";
 import type { ImageContent, TextContent } from "@lemma/contracts";
 import { diffStats, parseDiff, readDetails } from "../model/details.ts";
 import { summarizeToolArgs, summarizePartialArgs, summarizeUsage, truncateLines } from "../model/format.ts";
@@ -258,11 +258,7 @@ const toolView = (deps: { readonly client: ClientService; readonly threads: Thre
     const details = createMemo(() => readDetails(props.result?.details));
     const summary = createMemo(() => custom()?.summary?.(props.args, context()) ?? summarizeToolArgs(props.name, props.args, context()));
     const primary = () => summary().primary ?? (props.partial === undefined ? undefined : summarizePartialArgs(props.name, props.partial));
-    const outputText = () =>
-      props.result?.content
-        .filter((part): part is TextContent => part.type === "text")
-        .map((part) => part.text)
-        .join("\n") ?? "";
+    const outputText = () => (props.result === undefined ? "" : contentText(props.result.content));
     const diff = () => details().diff;
     const stats = createMemo(() => {
       const d = diff();
@@ -508,7 +504,7 @@ function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: bo
 function TurnFooter(props: ChatTurnFooterProps) {
   const usage = createMemo(() => summarizeUsage(props.turn.usage));
   const duration = () => (props.turn.endedAt === undefined ? undefined : props.turn.endedAt - props.turn.startedAt);
-  const model = () => props.turn.models.map((ref) => ref.slice(ref.indexOf("/") + 1)).join(", ");
+  const model = () => props.turn.models.map((ref) => parseModelRef(ref)?.model ?? ref).join(", ");
   const reason = () => props.turn.end?.reason;
   const answer = () => props.answer;
   const [copied, setCopied] = createSignal<boolean>();

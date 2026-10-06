@@ -1,8 +1,8 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
 import { Schema } from "effect";
+import { newRequestId } from "@lemma/client";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/contracts";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
-import { randomId } from "../lib/id.ts";
 import { formatKeys, modKey } from "../lib/keys.ts";
 import { applySuggestion, findTrigger } from "../model/completion.ts";
 import type { TriggerMatch } from "../model/completion.ts";
@@ -298,7 +298,7 @@ function Composer(props: { deps: Deps }) {
     const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
     const key = draftKey();
-    const sent: Draft = { text: text(), images: images(), requestId: drafts.get(key)?.requestId ?? randomId() };
+    const sent: Draft = { text: text(), images: images(), requestId: drafts.get(key)?.requestId ?? newRequestId() };
     setSending(true);
     let ok = false;
     try {

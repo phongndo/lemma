@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Either, Exit, Option, ParseResult, Schema, Stream } from "effect";
-import { describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { appUrl, describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import {
@@ -542,7 +542,7 @@ const program = Effect.gen(function* () {
 
   const discovery = yield* readDiscovery(paths.home);
   if (discovery !== undefined) {
-    const url = `${discovery.url}/?token=${encodeURIComponent(discovery.token)}`;
+    const url = appUrl(discovery.url, "/", discovery.token);
     yield* log(`open ${url}`);
     if (!args.has("--no-open")) yield* openBrowser(url);
   }

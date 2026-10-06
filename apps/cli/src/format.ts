@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatTokens,
   hookChain,
+  parseModelRef,
   providerOf,
   recordDuration,
   recordName,
@@ -273,7 +274,7 @@ const usageText = (usage: Usage): string => {
   return parts.join(" ");
 };
 
-const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
+const shortModel = (ref: string): string => parseModelRef(ref)?.model ?? ref;
 
 const stepLine = (step: TrajectoryStep): string[] => {
   const request = step.request;

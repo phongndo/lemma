@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { Agent, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
+import { Agent, appUrl, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
 import { definePlugin, Events, PluginContext, Registries } from "@lemma/core";
 import { makeHandlers } from "./handlers.ts";
 import { makeHub } from "./hub.ts";
@@ -79,7 +79,7 @@ export default definePlugin({
           level: "info",
           source: owner.id,
           message: `Listening on ${url}`,
-          ...(config.staticDir === undefined ? {} : { links: [{ url: `${url}/?token=${encodeURIComponent(token)}`, label: "Open the web app" }] }),
+          ...(config.staticDir === undefined ? {} : { links: [{ url: appUrl(url, "/", token), label: "Open the web app" }] }),
         });
       }),
     ),

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { Cause, Effect, Exit, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, Hook } from "@lemma/core";
@@ -179,18 +180,6 @@ export function unansweredCalls(branch: readonly SessionEvent[]): { readonly eve
     return calls.length === 0 ? undefined : { event, calls };
   }
   return undefined;
-}
-
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  const keysA = Object.keys(a);
-  const keysB = Object.keys(b);
-  return (
-    keysA.length === keysB.length &&
-    keysA.every((key) => Object.hasOwn(b, key) && deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]))
-  );
 }
 
 const isFirstToken = (event: StreamEvent) =>
@@ -407,7 +396,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
         composition: composition.id,
         ...(previous.system === system ? {} : { system }),
-        ...(deepEqual(previous.tools ?? [], specs) ? {} : { tools: specs }),
+        ...(isDeepStrictEqual(previous.tools ?? [], specs) ? {} : { tools: specs }),
         contributions,
       });
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.

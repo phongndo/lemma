@@ -2,7 +2,8 @@ import type { PromptContent, TurnOptions, WhenBusy } from "@lemma/contracts";
 import type { Host } from "./host.ts";
 
 /** A random request id. `crypto.getRandomValues`, unlike `crypto.randomUUID`, exists outside secure contexts too (a page over plain HTTP). */
-const randomId = (): string => Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export const newRequestId = (): string =>
+  Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 export interface StartedPrompt {
   /** The submission's id: sending again with it (after a lost connection, say) cannot place the prompt twice. */
@@ -33,7 +34,7 @@ export function startPrompt(
   options?: TurnOptions,
   submit: { readonly requestId?: string; readonly whenBusy?: WhenBusy } = {},
 ): StartedPrompt {
-  const requestId = submit.requestId ?? randomId();
+  const requestId = submit.requestId ?? newRequestId();
   let stop = () => {};
   const started = new Promise<void>((resolve) => {
     stop = host.onEvent((event) => {
