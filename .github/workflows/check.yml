@@ -66,7 +66,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - run: nix develop -c pnpm install --frozen-lockfile
-      - run: nix develop -c pnpm test
+      # The core's randomized sequences, many more of them; the other packages' tests run in the jobs above.
+      - run: nix develop -c pnpm core:test
       - run: nix develop -c pnpm perf:check
       - uses: actions/upload-artifact@v4
         if: always()
