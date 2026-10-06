@@ -133,8 +133,8 @@ export const parseBranches = (output: string): GitBranch[] => {
 export interface WorkspaceOptions {
   /** What `~` expands to. Defaults to the OS home directory. */
   readonly home?: string;
-  /** Where `createWorktree` puts worktrees, one folder per repository. Defaults to `<home>/.lemma/worktrees`. */
-  readonly worktrees?: string;
+  /** Where `createWorktree` puts worktrees, one folder per repository. */
+  readonly worktrees: string;
 }
 
 /** The work tree owning a common git dir: `/repo/.git` → `/repo`; a bare repository has none. */
@@ -143,9 +143,9 @@ const mainWorkTree = (commonDir: string): string | undefined => (basename(common
 /** A branch name as a single path segment: `feat/x` → `feat-x`. */
 const folderName = (branch: string) => branch.replace(/[/\\]+/g, "-");
 
-export const makeWorkspace = (options: WorkspaceOptions = {}): Context.Tag.Service<Workspace> => {
+export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Workspace> => {
   const home = options.home ?? homedir();
-  const worktrees = options.worktrees ?? join(home, ".lemma", "worktrees");
+  const { worktrees } = options;
 
   const gitStatus = async (dir: string): Promise<GitStatus | undefined> => {
     const [root, status, short, common] = await Promise.all([

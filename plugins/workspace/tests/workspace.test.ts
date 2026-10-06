@@ -48,7 +48,7 @@ const commit = async (root: string, file: string, content: string, message: stri
   });
 };
 
-const ws = makeWorkspace({ home: "/nonexistent-home" });
+const ws = makeWorkspace({ home: "/nonexistent-home", worktrees: "/nonexistent-home/worktrees" });
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 const failure = async <A>(effect: Effect.Effect<A, WorkspaceError>): Promise<WorkspaceError> => {
   const result = await Effect.runPromise(Effect.either(effect));
@@ -62,7 +62,7 @@ describe("status", () => {
     expect(expandPath("~/code/x/", "/home/u")).toBe("/home/u/code/x");
     expect(expandPath("/a/../b", "/home/u")).toBe("/b");
     expect(await run(ws.status("relative/dir"))).toEqual({ path: "relative/dir", exists: false });
-    expect(await run(makeWorkspace({ home: dir }).status("~"))).toEqual({ path: dir, exists: true });
+    expect(await run(makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") }).status("~"))).toEqual({ path: dir, exists: true });
   });
 
   it("reports a missing path, a file, and a plain directory", async () => {
@@ -257,7 +257,7 @@ describe("browse", () => {
     await fs.symlink(path.join(dir, "real"), path.join(dir, "link"));
     await fs.symlink(path.join(dir, "nowhere"), path.join(dir, "dangling"));
     expect(names(await run(ws.browse(`${dir}/`)))).toEqual(["link", "real"]);
-    const home = makeWorkspace({ home: dir });
+    const home = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") });
     expect((await run(home.browse("~/"))).parent).toBe(dir);
     expect(names(await run(home.browse("~/re")))).toEqual(["real"]);
     expect((await run(ws.browse(`${dir}/missing/`))).entries).toEqual([]);
