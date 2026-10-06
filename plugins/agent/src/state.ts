@@ -1,8 +1,8 @@
-import { readdir, readFile, rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Effect, Either, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { AssistantMessage, QueuedPrompt } from "@lemma/contracts";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 
 /*
  * What the agent keeps on disk beside the session log, per session, under
@@ -43,9 +43,6 @@ export const LiveFile = Schema.Struct({
 });
 export type LiveFile = typeof LiveFile.Type;
 
-const decodeJournal = Schema.decodeUnknownEither(Schema.parseJson(Journal));
-const decodeLive = Schema.decodeUnknownEither(Schema.parseJson(LiveFile));
-
 const stateDir = (home: string) => join(home, "agent");
 const journalPath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.json`);
 const livePath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.live.json`);
@@ -65,8 +62,7 @@ export const readJournals = (home: string): Effect.Effect<ReadonlyMap<string, Jo
     for (const name of names) {
       if (!name.endsWith(".json") || name.endsWith(".live.json")) continue;
       const sessionId = name.slice(0, -".json".length);
-      const text = yield* Effect.promise(() => readFile(join(stateDir(home), name), "utf8").catch(() => undefined));
-      const journal = text === undefined ? undefined : Either.getOrUndefined(decodeJournal(text));
+      const journal = yield* Effect.promise(() => readJsonFile(join(stateDir(home), name), Journal));
       if (journal === undefined) yield* Effect.logWarning(`agent: ignoring unreadable state ${join(stateDir(home), name)}`);
       else found.set(sessionId, journal);
     }
@@ -86,9 +82,7 @@ export const writeJournal = (home: string, sessionId: string, journal: Journal):
   });
 
 export const readLive = (home: string, sessionId: string): Effect.Effect<LiveFile | undefined> =>
-  Effect.promise(() => readFile(livePath(home, sessionId), "utf8").catch(() => undefined)).pipe(
-    Effect.map((text) => (text === undefined ? undefined : Either.getOrUndefined(decodeLive(text)))),
-  );
+  Effect.promise(() => readJsonFile(livePath(home, sessionId), LiveFile));
 
 export const writeLive = (home: string, sessionId: string, live: LiveFile): Effect.Effect<void> =>
   bestEffort(`write the output of session ${sessionId}`, async () => {

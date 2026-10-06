@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { expandHome, isAlive, isInside, kindOf, writeFileAtomic } from "../src/fs.ts";
+import { Schema } from "effect";
+import { expandHome, isAlive, isInside, kindOf, readJsonFile, writeFileAtomic } from "../src/fs.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -68,5 +69,18 @@ describe("paths", () => {
   test("isAlive: this process, and not a pid nothing has", () => {
     expect(isAlive(process.pid)).toBe(true);
     expect(isAlive(2 ** 22 + 1)).toBe(false);
+  });
+});
+
+describe("readJsonFile", () => {
+  test("decodes the file, and is undefined when it is missing, not JSON, or not the schema", async () => {
+    const Entry = Schema.Struct({ pid: Schema.Number });
+    await writeFile(join(dir, "good.json"), `{"pid": 7}`);
+    await writeFile(join(dir, "torn.json"), `{"pid": 7`);
+    await writeFile(join(dir, "other.json"), `{"pid": "7"}`);
+    expect(await readJsonFile(join(dir, "good.json"), Entry)).toEqual({ pid: 7 });
+    expect(await readJsonFile(join(dir, "missing.json"), Entry)).toBeUndefined();
+    expect(await readJsonFile(join(dir, "torn.json"), Entry)).toBeUndefined();
+    expect(await readJsonFile(join(dir, "other.json"), Entry)).toBeUndefined();
   });
 });

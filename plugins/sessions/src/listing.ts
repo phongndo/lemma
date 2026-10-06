@@ -1,8 +1,7 @@
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Effect, Either, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { SessionInfo } from "@lemma/contracts";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { Scanned } from "./file.ts";
 
 /**
@@ -28,16 +27,10 @@ const Index = Schema.Struct({
   }),
 });
 
-const decodeIndex = Schema.decodeUnknownEither(Schema.parseJson(Index));
-
 const indexFile = (root: string): string => path.join(root, ".index.json");
 
 export const readIndex = (root: string): Effect.Effect<Map<string, Scanned>> =>
-  Effect.promise(async () => {
-    const text = await fs.readFile(indexFile(root), "utf8").catch(() => undefined);
-    const decoded = text === undefined ? undefined : decodeIndex(text);
-    return decoded !== undefined && Either.isRight(decoded) ? new Map<string, Scanned>(Object.entries(decoded.right.files)) : new Map<string, Scanned>();
-  });
+  Effect.promise(async () => new Map<string, Scanned>(Object.entries((await readJsonFile(indexFile(root), Index))?.files ?? {})));
 
 /** Replaces the index whole. Best effort: without it the next start reads the files. */
 export const writeIndex = (root: string, files: ReadonlyMap<string, Scanned>): Effect.Effect<void> =>

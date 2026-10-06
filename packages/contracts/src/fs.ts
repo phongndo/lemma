@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { Option, Schema } from "effect";
 
 /*
  * Node only, apart from the package root (which clients load in browsers):
@@ -39,6 +40,12 @@ export const kindOf = (path: string): Promise<"file" | "directory" | "other" | u
     (info) => (info.isFile() ? "file" : info.isDirectory() ? "directory" : "other"),
     () => undefined,
   );
+
+/** The file at `path` as JSON of `schema`; undefined when it is missing, unreadable, or does not decode. */
+export const readJsonFile = async <A, I>(path: string, schema: Schema.Schema<A, I>): Promise<A | undefined> => {
+  const text = await readFile(path, "utf8").catch(() => undefined);
+  return text === undefined ? undefined : Option.getOrUndefined(Schema.decodeUnknownOption(Schema.parseJson(schema))(text));
+};
 
 export interface AtomicWriteOptions {
   /** The file's mode, set explicitly since the creation mode is subject to umask. Default 0600. */
