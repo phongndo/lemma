@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Effect, Layer } from "effect";
-import { definePlugin, PluginContext } from "@lemma/core";
+import { Effect } from "effect";
+import { definePlugin } from "@lemma/core";
 import { AgentRequestHook, Paths } from "@lemma/contracts";
 import type { SystemSection } from "@lemma/contracts";
 
@@ -84,25 +84,22 @@ const insert = (sections: readonly SystemSection[], section: SystemSection): Sys
 export default definePlugin({
   id: "project-context",
   version: "0.1.0",
-  requires: [Paths],
-  layer: Layer.effectDiscard(
-    Effect.gen(function* () {
-      const owner = yield* PluginContext;
-      const load = makeLoader((yield* Paths).home);
-      yield* owner.on(AgentRequestHook, (draft, next) =>
-        Effect.flatMap(
-          Effect.promise(() => load(draft.cwd)),
-          (files) =>
-            next(
-              files.length === 0
-                ? draft
-                : {
-                    ...draft,
-                    sections: insert(draft.sections, { id: "project-context", source: owner.id, text: renderSection(files) }),
-                  },
-            ),
-        ),
-      );
-    }),
-  ),
+  requires: { paths: Paths },
+  setup: function* ({ paths }, owner) {
+    const load = makeLoader(paths.home);
+    yield* owner.on(AgentRequestHook, (draft, next) =>
+      Effect.flatMap(
+        Effect.promise(() => load(draft.cwd)),
+        (files) =>
+          next(
+            files.length === 0
+              ? draft
+              : {
+                  ...draft,
+                  sections: insert(draft.sections, { id: "project-context", source: owner.id, text: renderSection(files) }),
+                },
+          ),
+      ),
+    );
+  },
 });

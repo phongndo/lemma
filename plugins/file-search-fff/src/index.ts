@@ -1,8 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { Effect, Layer, Schema } from "effect";
-import { definePlugin, PluginContext } from "@lemma/core";
+import { Effect, Schema } from "effect";
+import { definePlugin } from "@lemma/core";
 import { FileSearchError, FileSearchers, Inspectors } from "@lemma/contracts";
 import type { FileEntry, FileKind, FileSearcher, FileSearchOptions, FileSearchResult } from "@lemma/contracts";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
@@ -229,20 +229,16 @@ export default definePlugin({
   id: "file-search",
   version: "0.1.0",
   config: FileSearchConfig,
-  layer: (config) =>
-    Layer.effectDiscard(
-      Effect.gen(function* () {
-        const owner = yield* PluginContext;
-        const { service, snapshot } = yield* makeFileSearch({ idleMs: config.idleMinutes * 60_000 });
-        yield* owner.add(FileSearchers, { id: owner.id, ...service }, { order: SEARCHER_ORDER }).pipe(Effect.orDie);
-        yield* owner
-          .add(Inspectors, {
-            id: "file-search.indexes",
-            title: "File search indexes",
-            description: "Open indexes: files read, whether a scan is running, searches using it, and seconds since the last one ended",
-            snapshot,
-          })
-          .pipe(Effect.ignore);
-      }),
-    ),
+  setup: function* (_, owner) {
+    const { service, snapshot } = yield* makeFileSearch({ idleMs: owner.config.idleMinutes * 60_000 });
+    yield* owner.add(FileSearchers, { id: owner.id, ...service }, { order: SEARCHER_ORDER }).pipe(Effect.orDie);
+    yield* owner
+      .add(Inspectors, {
+        id: "file-search.indexes",
+        title: "File search indexes",
+        description: "Open indexes: files read, whether a scan is running, searches using it, and seconds since the last one ended",
+        snapshot,
+      })
+      .pipe(Effect.ignore);
+  },
 });

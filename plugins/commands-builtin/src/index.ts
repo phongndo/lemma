@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { CommandError, Commands, describeReload, HostControl, Interaction, Llm, recoverable, Workspace } from "@lemma/contracts";
@@ -143,13 +143,8 @@ const commandsPlugin = <I, S>(id: string, service: Context.Key<I, S>, commands: 
   definePlugin({
     id,
     version: "0.1.0",
-    requires: [Commands, Interaction, service],
-    layer: Layer.effectDiscard(
-      Effect.gen(function* () {
-        const [registry, ask, dependency] = yield* Effect.all([Commands, Interaction, service]);
-        yield* Effect.forEach(commands(dependency, ask), registry.register, { discard: true });
-      }),
-    ),
+    requires: { registry: Commands, ask: Interaction, dependency: service },
+    setup: ({ registry, ask, dependency }) => Effect.forEach(commands(dependency, ask), registry.register, { discard: true }),
   });
 
 export const host = commandsPlugin("commands-host", HostControl, hostCommands);

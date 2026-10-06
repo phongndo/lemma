@@ -1,7 +1,7 @@
-import { Data, Effect, Layer, Schema, Stream } from "effect";
+import { Data, Effect, Schema, Stream } from "effect";
 import { AgentRequestHook, Llm, LlmRequest, modelView, Notice } from "@lemma/contracts";
 import type { ModelInfo, RequestDraft, StreamEvent } from "@lemma/contracts";
-import { definePlugin, Events, PluginContext } from "@lemma/core";
+import { definePlugin, Events } from "@lemma/core";
 import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact.ts";
 
 export { chooseCut, estimateTokens, transcript } from "./compact.ts";
@@ -46,104 +46,100 @@ export default definePlugin({
   id: "compaction",
   version: "0.1.0",
   config: Config,
-  requires: [Llm],
-  layer: (config: Config) =>
-    Layer.effectDiscard(
-      Effect.gen(function* () {
-        const owner = yield* PluginContext;
-        const llm = yield* Llm;
-        const events = yield* Events;
-        /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
-        const failedIn = new Map<string, string>();
+  requires: { llm: Llm },
+  setup: function* ({ llm }, owner) {
+    const config = owner.config;
+    const events = yield* Events;
+    /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
+    const failedIn = new Map<string, string>();
 
-        const summarize = (writer: ModelInfo, text: string, output: number, sessionId: string) =>
-          llm
-            .stream(
-              new LlmRequest({
-                model: writer.ref,
-                system: SUMMARY_PROMPT,
-                messages: [{ role: "user", content: [{ type: "text", text: `${text}\n\nSummarize the conversation above.` }], timestamp: Date.now() }],
-                maxTokens: output,
-                sessionId,
-              }),
-            )
-            .pipe(
-              Stream.runFold(
-                (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
-                (last, event) => (event.type === "done" || event.type === "error" ? event : last),
-              ),
-              Effect.flatMap((settled) => {
-                if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
-                // A summary cut off at its length limit would lose the rest of what it replaces.
-                if (settled.message.stopReason === "length") return Effect.fail(new SummaryFailed({ message: `the summary ran past ${output} tokens` }));
-                const summary = settled.message.content
-                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
-                  .join("")
-                  .trim();
-                return summary === ""
-                  ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
-                  : Effect.succeed({ summary, usage: settled.message.usage });
-              }),
-            );
-
-        const compact = (draft: RequestDraft) =>
-          Effect.gen(function* () {
-            const model = yield* llm.model(draft.model);
-            const branch = draft.branch;
-            const tokens = estimateTokens(
-              branch,
-              () => draft.sections.reduce((sum, section) => sum + section.text.length, 0) + JSON.stringify(draft.tools.map((tool) => tool.spec)).length,
-            );
-            // The previous call was refused as too long: the estimate was wrong, so summarize now.
-            if (tokens < config.at * model.contextWindow && draft.overflow !== true) return;
-            const first = chooseCut(branch, Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3)));
-            if (first === undefined) return;
-            const { start, compaction } = modelView(branch);
-            const previous = compaction === undefined ? undefined : branch[compaction]!.data;
-            const older = branch.slice(start, first).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
-            const writer = config.model === undefined ? model : yield* llm.model(config.model);
-            // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
-            const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
-            const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN);
-            const text = transcript(older, previous?.type === "compaction" ? previous.summary : undefined, budget);
-            const written = yield* summarize(writer, text, output, draft.sessionId);
-            yield* draft.append({
-              type: "compaction",
-              summary: written.summary,
-              firstKeptId: branch[first]!.id,
-              tokensBefore: tokens,
-              source: owner.id,
-              turnId: draft.turnId,
-              usage: written.usage,
-            });
-            yield* events.publish(Notice, {
-              level: "info",
-              source: owner.id,
-              message: `Summarized the earlier conversation (about ${Math.round(tokens / 1000)}k tokens) to stay within ${model.name}'s context window`,
-            });
-          });
-
-        // A summary that fails leaves the conversation as it was: the call goes ahead (and may fail for length), and the
-        // turn goes on without trying again, so a lasting cause costs one attempt and one warning a turn. A call the model
-        // refused as too long (`overflow`) is tried once more whatever happened before: without a summary it fails again.
-        yield* owner.on(
-          AgentRequestHook,
-          (draft, next) =>
-            Effect.gen(function* () {
-              if (draft.overflow === true || failedIn.get(draft.sessionId) !== draft.turnId) {
-                yield* compact(draft).pipe(
-                  Effect.catch((error) =>
-                    Effect.andThen(
-                      Effect.sync(() => failedIn.set(draft.sessionId, draft.turnId)),
-                      events.publish(Notice, { level: "warning", source: owner.id, message: `Could not summarize the earlier conversation: ${error.message}` }),
-                    ),
-                  ),
-                );
-              }
-              return yield* next(draft);
-            }),
-          { order: ORDER },
+    const summarize = (writer: ModelInfo, text: string, output: number, sessionId: string) =>
+      llm
+        .stream(
+          new LlmRequest({
+            model: writer.ref,
+            system: SUMMARY_PROMPT,
+            messages: [{ role: "user", content: [{ type: "text", text: `${text}\n\nSummarize the conversation above.` }], timestamp: Date.now() }],
+            maxTokens: output,
+            sessionId,
+          }),
+        )
+        .pipe(
+          Stream.runFold(
+            (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
+            (last, event) => (event.type === "done" || event.type === "error" ? event : last),
+          ),
+          Effect.flatMap((settled) => {
+            if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
+            // A summary cut off at its length limit would lose the rest of what it replaces.
+            if (settled.message.stopReason === "length") return Effect.fail(new SummaryFailed({ message: `the summary ran past ${output} tokens` }));
+            const summary = settled.message.content
+              .flatMap((part) => (part.type === "text" ? [part.text] : []))
+              .join("")
+              .trim();
+            return summary === ""
+              ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
+              : Effect.succeed({ summary, usage: settled.message.usage });
+          }),
         );
-      }),
-    ),
+
+    const compact = (draft: RequestDraft) =>
+      Effect.gen(function* () {
+        const model = yield* llm.model(draft.model);
+        const branch = draft.branch;
+        const tokens = estimateTokens(
+          branch,
+          () => draft.sections.reduce((sum, section) => sum + section.text.length, 0) + JSON.stringify(draft.tools.map((tool) => tool.spec)).length,
+        );
+        // The previous call was refused as too long: the estimate was wrong, so summarize now.
+        if (tokens < config.at * model.contextWindow && draft.overflow !== true) return;
+        const first = chooseCut(branch, Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3)));
+        if (first === undefined) return;
+        const { start, compaction } = modelView(branch);
+        const previous = compaction === undefined ? undefined : branch[compaction]!.data;
+        const older = branch.slice(start, first).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+        const writer = config.model === undefined ? model : yield* llm.model(config.model);
+        // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
+        const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
+        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN);
+        const text = transcript(older, previous?.type === "compaction" ? previous.summary : undefined, budget);
+        const written = yield* summarize(writer, text, output, draft.sessionId);
+        yield* draft.append({
+          type: "compaction",
+          summary: written.summary,
+          firstKeptId: branch[first]!.id,
+          tokensBefore: tokens,
+          source: owner.id,
+          turnId: draft.turnId,
+          usage: written.usage,
+        });
+        yield* events.publish(Notice, {
+          level: "info",
+          source: owner.id,
+          message: `Summarized the earlier conversation (about ${Math.round(tokens / 1000)}k tokens) to stay within ${model.name}'s context window`,
+        });
+      });
+
+    // A summary that fails leaves the conversation as it was: the call goes ahead (and may fail for length), and the
+    // turn goes on without trying again, so a lasting cause costs one attempt and one warning a turn. A call the model
+    // refused as too long (`overflow`) is tried once more whatever happened before: without a summary it fails again.
+    yield* owner.on(
+      AgentRequestHook,
+      (draft, next) =>
+        Effect.gen(function* () {
+          if (draft.overflow === true || failedIn.get(draft.sessionId) !== draft.turnId) {
+            yield* compact(draft).pipe(
+              Effect.catch((error) =>
+                Effect.andThen(
+                  Effect.sync(() => failedIn.set(draft.sessionId, draft.turnId)),
+                  events.publish(Notice, { level: "warning", source: owner.id, message: `Could not summarize the earlier conversation: ${error.message}` }),
+                ),
+              ),
+            );
+          }
+          return yield* next(draft);
+        }),
+      { order: ORDER },
+    );
+  },
 });

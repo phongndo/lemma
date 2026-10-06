@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Paths, Sessions } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
@@ -23,12 +23,12 @@ export const makeSessionsPlugin = (options: { readonly fs?: FileSystem } = {}) =
     id: "sessions",
     version: "0.1.0",
     config: Config,
-    provides: [Sessions],
-    requires: [Paths],
+    provides: { sessions: Sessions },
+    requires: { paths: Paths },
     // Two instances must not write one directory: a reload stops this one (closing its files and releasing the
     // lock) before it starts the next.
     exclusive: true,
-    layer: (config: Config) => Layer.effect(Sessions, make({ ...config, fs: options.fs ?? nodeFileSystem })),
+    setup: (_, { config }) => Effect.map(make({ ...config, fs: options.fs ?? nodeFileSystem }), (sessions) => ({ sessions })),
   });
 
 export default makeSessionsPlugin();

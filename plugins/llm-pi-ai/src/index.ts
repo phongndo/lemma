@@ -1,8 +1,8 @@
-import { Cause, Effect, Fiber, Layer, Queue, Schedule, Schema, Stream } from "effect";
+import { Cause, Effect, Fiber, Queue, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { Events, Hooks, PluginContext, definePlugin } from "@lemma/core";
+import { Events, Hooks, definePlugin } from "@lemma/core";
 import {
   Credentials,
   HostControl,
@@ -105,318 +105,308 @@ export function makeLlmPlugin(options: Options = {}) {
     id: "llm",
     version: "0.1.0",
     config: Config,
-    provides: [Llm],
-    requires: [Credentials, Interaction, HostControl, Paths],
-    layer: (config: Config) =>
-      Layer.effect(
-        Llm,
-        Effect.gen(function* () {
-          const plugin = yield* PluginContext;
-          const hooks = yield* Hooks;
-          const events = yield* Events;
-          const credentials = yield* Credentials;
-          const interaction = yield* Interaction;
-          const host = yield* HostControl;
-          const { home } = yield* Paths;
-          const run = runner(yield* Effect.context<never>());
-          const scope = yield* Effect.scope;
+    provides: { llm: Llm },
+    requires: { credentials: Credentials, interaction: Interaction, host: HostControl, paths: Paths },
+    setup: function* ({ credentials, interaction, host, paths }, plugin) {
+      const config = plugin.config;
+      const hooks = yield* Hooks;
+      const events = yield* Events;
+      const { home } = paths;
+      const run = runner(yield* Effect.context<never>());
+      const scope = yield* Effect.scope;
 
-          const models = createModels({
-            credentials: credentialStore(credentials, run),
-            ...(options.authContext === undefined ? {} : { authContext: options.authContext }),
-          });
-          const builtins = selectProviders((options.providers ?? builtinProviders)(), config).map(withoutAnthropicOAuth);
-          // A missing model may be described already by another built-in provider's catalog.
-          const siblings = () => builtins.flatMap((provider) => provider.getModels());
-          const sources = networkSources(options.fetch ?? fetch, siblings);
-          const plan = planSource(options.fetch ?? fetch);
-          // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
-          const live = (provider: Provider) => {
-            const caught = withLiveCatalog(provider, sources);
-            return provider.id === "openai" ? withPlanCatalog(caught, plan) : caught;
-          };
-          for (const provider of builtins) models.setProvider(config.liveCatalogs ? live(provider) : provider);
-          for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
-          const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
-          /**
-           * Saves a change to this plugin's own `providers` list, in the config file its config comes from; the host
-           * reloads it, after replying when that restarts the caller's transport.
-           */
-          const saveProviders = (change: { readonly add?: readonly CustomProvider[]; readonly remove?: readonly string[] }) =>
-            host.plugins
-              .pipe(
-                Effect.map((plugins) => plugins.find((info) => info.id === plugin.id)?.configScope),
-                Effect.flatMap((scope) =>
-                  host.configure(
-                    {
-                      [plugin.id]: {
-                        ...(change.add === undefined ? {} : { add: { providers: change.add } }),
-                        ...(change.remove === undefined ? {} : { remove: { providers: change.remove } }),
-                      },
-                    },
-                    scope === "project" ? { scope } : undefined,
-                  ),
-                ),
-              )
-              .pipe(
-                Effect.mapError(
-                  (error) =>
-                    new LlmError({ reason: "SaveFailed", message: error.diagnostics.map((diagnostic) => diagnostic.message).join("; "), cause: error }),
-                ),
-                Effect.asVoid,
-              );
-          const customOf = (providerId: string) =>
-            Effect.suspend(() => {
-              const entry = custom.get(providerId);
-              return entry === undefined
-                ? Effect.fail(new LlmError({ reason: "UnknownProvider", message: `No provider "${providerId}" was added by the user` }))
-                : Effect.succeed(entry);
-            });
-
-          // Pooled Codex websockets keep the event loop alive until released.
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              try {
-                cleanupSessionResources();
-              } catch {
-                // Best effort: a socket that fails to close cannot hold the plugin open.
-              }
-            }),
+      const models = createModels({
+        credentials: credentialStore(credentials, run),
+        ...(options.authContext === undefined ? {} : { authContext: options.authContext }),
+      });
+      const builtins = selectProviders((options.providers ?? builtinProviders)(), config).map(withoutAnthropicOAuth);
+      // A missing model may be described already by another built-in provider's catalog.
+      const siblings = () => builtins.flatMap((provider) => provider.getModels());
+      const sources = networkSources(options.fetch ?? fetch, siblings);
+      const plan = planSource(options.fetch ?? fetch);
+      // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
+      const live = (provider: Provider) => {
+        const caught = withLiveCatalog(provider, sources);
+        return provider.id === "openai" ? withPlanCatalog(caught, plan) : caught;
+      };
+      for (const provider of builtins) models.setProvider(config.liveCatalogs ? live(provider) : provider);
+      for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
+      const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
+      /**
+       * Saves a change to this plugin's own `providers` list, in the config file its config comes from; the host
+       * reloads it, after replying when that restarts the caller's transport.
+       */
+      const saveProviders = (change: { readonly add?: readonly CustomProvider[]; readonly remove?: readonly string[] }) =>
+        host.plugins
+          .pipe(
+            Effect.map((plugins) => plugins.find((info) => info.id === plugin.id)?.configScope),
+            Effect.flatMap((scope) =>
+              host.configure(
+                {
+                  [plugin.id]: {
+                    ...(change.add === undefined ? {} : { add: { providers: change.add } }),
+                    ...(change.remove === undefined ? {} : { remove: { providers: change.remove } }),
+                  },
+                },
+                scope === "project" ? { scope } : undefined,
+              ),
+            ),
+          )
+          .pipe(
+            Effect.mapError(
+              (error) => new LlmError({ reason: "SaveFailed", message: error.diagnostics.map((diagnostic) => diagnostic.message).join("; "), cause: error }),
+            ),
+            Effect.asVoid,
           );
+      const customOf = (providerId: string) =>
+        Effect.suspend(() => {
+          const entry = custom.get(providerId);
+          return entry === undefined
+            ? Effect.fail(new LlmError({ reason: "UnknownProvider", message: `No provider "${providerId}" was added by the user` }))
+            : Effect.succeed(entry);
+        });
 
-          const listed = () =>
-            models
-              .getProviders()
-              .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
-              .join("\n");
-          /**
-           * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
-           * Clients hear when the models changed, and list them again.
-           */
-          const refresh = (providers?: readonly string[]) =>
-            Effect.gen(function* () {
-              const before = listed();
-              const result = yield* Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) }));
-              yield* Effect.forEach(result.errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`));
-              if (listed() !== before) yield* events.publish(ModelsChanged, {});
-              return result;
-            });
-          // Now and every hour, so models a provider adds or retires show without a restart.
-          yield* plugin.background("refresh models", Effect.repeat(refresh().pipe(Effect.ignore), Schedule.spaced("1 hour")));
+      // Pooled Codex websockets keep the event loop alive until released.
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            cleanupSessionResources();
+          } catch {
+            // Best effort: a socket that fails to close cannot hold the plugin open.
+          }
+        }),
+      );
 
-          const unknownModel = (ref: string) => new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}. Model refs are <provider>/<model>.` });
+      const listed = () =>
+        models
+          .getProviders()
+          .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
+          .join("\n");
+      /**
+       * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
+       * Clients hear when the models changed, and list them again.
+       */
+      const refresh = (providers?: readonly string[]) =>
+        Effect.gen(function* () {
+          const before = listed();
+          const result = yield* Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) }));
+          yield* Effect.forEach(result.errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`));
+          if (listed() !== before) yield* events.publish(ModelsChanged, {});
+          return result;
+        });
+      // Now and every hour, so models a provider adds or retires show without a restart.
+      yield* plugin.background("refresh models", Effect.repeat(refresh().pipe(Effect.ignore), Schedule.spaced("1 hour")));
 
-          const findModel = (ref: string) => {
-            const parsed = parseModelRef(ref);
-            return parsed === undefined ? undefined : models.getModel(parsed.provider, parsed.model);
-          };
+      const unknownModel = (ref: string) => new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}. Model refs are <provider>/<model>.` });
 
-          const terminal = (request: LlmRequest) =>
-            Effect.gen(function* () {
-              const model = findModel(request.model);
-              const provider = model === undefined ? undefined : models.getProvider(model.provider);
-              if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
-              const reasoning = reasoningFor(model, request.thinking);
-              const headers = identityHeaders(model);
-              return Stream.callback<StreamEvent>((queue) =>
-                Effect.acquireRelease(
-                  Effect.sync(() => {
-                    const controller = new AbortController();
-                    const streamOptions: SimpleStreamOptions = {
-                      signal: controller.signal,
-                      cacheRetention: config.cacheRetention,
-                      maxRetries: SDK_RETRIES,
-                      ...(headers === undefined ? {} : { headers }),
-                      ...(reasoning === undefined ? {} : { reasoning }),
-                      ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-                      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-                    };
-                    const mapper = makeEventMapper(model, provider);
-                    let closed = false;
-                    const send = (out: StreamEvent[]) => !closed && out.length > 0 && Queue.offerAllUnsafe(queue, out);
-                    const close = (out: StreamEvent[]) => {
-                      send(out);
-                      if (!closed) Queue.endUnsafe(queue);
-                      closed = true;
-                    };
-                    // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
-                    // request is aborted: a half-open connection would otherwise hold the turn forever.
-                    const idleMs = config.streamTimeout * 1000;
-                    let stalled = false;
-                    let timer: ReturnType<typeof setTimeout> | undefined;
-                    const arm = () => {
-                      if (idleMs <= 0) return;
-                      clearTimeout(timer);
-                      timer = setTimeout(() => {
-                        stalled = true;
-                        close(
-                          mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
-                            kind: "transient",
-                          }),
-                        );
-                        controller.abort();
-                      }, idleMs);
-                    };
-                    void (async () => {
+      const findModel = (ref: string) => {
+        const parsed = parseModelRef(ref);
+        return parsed === undefined ? undefined : models.getModel(parsed.provider, parsed.model);
+      };
+
+      const terminal = (request: LlmRequest) =>
+        Effect.gen(function* () {
+          const model = findModel(request.model);
+          const provider = model === undefined ? undefined : models.getProvider(model.provider);
+          if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
+          const reasoning = reasoningFor(model, request.thinking);
+          const headers = identityHeaders(model);
+          return Stream.callback<StreamEvent>((queue) =>
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                const controller = new AbortController();
+                const streamOptions: SimpleStreamOptions = {
+                  signal: controller.signal,
+                  cacheRetention: config.cacheRetention,
+                  maxRetries: SDK_RETRIES,
+                  ...(headers === undefined ? {} : { headers }),
+                  ...(reasoning === undefined ? {} : { reasoning }),
+                  ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+                  ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+                };
+                const mapper = makeEventMapper(model, provider);
+                let closed = false;
+                const send = (out: StreamEvent[]) => !closed && out.length > 0 && Queue.offerAllUnsafe(queue, out);
+                const close = (out: StreamEvent[]) => {
+                  send(out);
+                  if (!closed) Queue.endUnsafe(queue);
+                  closed = true;
+                };
+                // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
+                // request is aborted: a half-open connection would otherwise hold the turn forever.
+                const idleMs = config.streamTimeout * 1000;
+                let stalled = false;
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const arm = () => {
+                  if (idleMs <= 0) return;
+                  clearTimeout(timer);
+                  timer = setTimeout(() => {
+                    stalled = true;
+                    close(
+                      mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
+                        kind: "transient",
+                      }),
+                    );
+                    controller.abort();
+                  }, idleMs);
+                };
+                void (async () => {
+                  arm();
+                  try {
+                    for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
+                      if (stalled) break;
                       arm();
-                      try {
-                        for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
-                          if (stalled) break;
-                          arm();
-                          send(mapper.push(event));
-                          if (mapper.finished) break;
-                        }
-                        close(mapper.end());
-                      } catch (error) {
-                        close(mapper.end(error));
-                      } finally {
-                        clearTimeout(timer);
-                      }
-                    })();
-                    return () => {
-                      clearTimeout(timer);
-                      controller.abort();
-                    };
-                  }),
-                  // Interrupting the consumer aborts the provider request.
-                  (stop) => Effect.sync(stop),
-                ),
-              );
-            });
+                      send(mapper.push(event));
+                      if (mapper.finished) break;
+                    }
+                    close(mapper.end());
+                  } catch (error) {
+                    close(mapper.end(error));
+                  } finally {
+                    clearTimeout(timer);
+                  }
+                })();
+                return () => {
+                  clearTimeout(timer);
+                  controller.abort();
+                };
+              }),
+              // Interrupting the consumer aborts the provider request.
+              (stop) => Effect.sync(stop),
+            ),
+          );
+        });
 
-          return Llm.of({
-            providers: Effect.forEach(
-              models.getProviders(),
-              (provider) =>
-                Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
-                  Effect.orElseSucceed(() => undefined),
-                  Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id))),
-                ),
-              { concurrency: "unbounded" },
+      return {
+        llm: Llm.of({
+          providers: Effect.forEach(
+            models.getProviders(),
+            (provider) =>
+              Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
+                Effect.orElseSucceed(() => undefined),
+                Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id))),
+              ),
+            { concurrency: "unbounded" },
+          ),
+
+          models: (query) =>
+            query?.available === true
+              ? Effect.forEach(
+                  models.getProviders(),
+                  (provider) => Effect.tryPromise((signal) => models.getAvailable(provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
+                  { concurrency: "unbounded" },
+                ).pipe(Effect.map((lists) => lists.flat().map(toModelInfo)))
+              : Effect.sync(() => models.getModels().map(toModelInfo)),
+
+          model: (ref) => {
+            const model = findModel(ref);
+            return model === undefined ? Effect.fail(unknownModel(ref)) : Effect.succeed(toModelInfo(model));
+          },
+
+          stream: (request) =>
+            Stream.unwrap(
+              hooks.invoke(LlmRequestHook, request, terminal).pipe(
+                // Hook misuse and a closing core are defects here: the contract's error channel is LlmError.
+                Effect.catch((error) => (error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error))),
+              ),
             ),
 
-            models: (query) =>
-              query?.available === true
-                ? Effect.forEach(
-                    models.getProviders(),
-                    (provider) => Effect.tryPromise((signal) => models.getAvailable(provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
-                    { concurrency: "unbounded" },
-                  ).pipe(Effect.map((lists) => lists.flat().map(toModelInfo)))
-                : Effect.sync(() => models.getModels().map(toModelInfo)),
-
-            model: (ref) => {
-              const model = findModel(ref);
-              return model === undefined ? Effect.fail(unknownModel(ref)) : Effect.succeed(toModelInfo(model));
-            },
-
-            stream: (request) =>
-              Stream.unwrap(
-                hooks.invoke(LlmRequestHook, request, terminal).pipe(
-                  // Hook misuse and a closing core are defects here: the contract's error channel is LlmError.
-                  Effect.catch((error) => (error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error))),
+          login: (providerId: string, type: AuthType) =>
+            Effect.gen(function* () {
+              const provider = models.getProvider(providerId);
+              if (provider === undefined) {
+                return yield* Effect.fail(new LlmError({ reason: "UnknownProvider", message: `Unknown provider: ${providerId}` }));
+              }
+              const method = type === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
+              if (method?.login === undefined) {
+                const kind = type === "oauth" ? "OAuth" : "API key";
+                return yield* Effect.fail(new LlmError({ reason: "LoginFailed", message: `${provider.name} does not support ${kind} login` }));
+              }
+              // Provider flows notify synchronously; a queue keeps notices ordered, and
+              // `undefined` ends it so every notice is published before login returns.
+              const notices = yield* Queue.unbounded<NoticePayload | undefined>();
+              // Its questions and its link or code share the origin, so a client shows them together.
+              const origin = yield* InteractionOrigin;
+              const publishAll: Effect.Effect<void> = Queue.take(notices).pipe(
+                Effect.flatMap((notice) =>
+                  notice === undefined
+                    ? Effect.void
+                    : Effect.andThen(
+                        events.publish(Notice, notice),
+                        Effect.suspend(() => publishAll),
+                      ),
                 ),
-              ),
-
-            login: (providerId: string, type: AuthType) =>
-              Effect.gen(function* () {
-                const provider = models.getProvider(providerId);
-                if (provider === undefined) {
-                  return yield* Effect.fail(new LlmError({ reason: "UnknownProvider", message: `Unknown provider: ${providerId}` }));
-                }
-                const method = type === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
-                if (method?.login === undefined) {
-                  const kind = type === "oauth" ? "OAuth" : "API key";
-                  return yield* Effect.fail(new LlmError({ reason: "LoginFailed", message: `${provider.name} does not support ${kind} login` }));
-                }
-                // Provider flows notify synchronously; a queue keeps notices ordered, and
-                // `undefined` ends it so every notice is published before login returns.
-                const notices = yield* Queue.unbounded<NoticePayload | undefined>();
-                // Its questions and its link or code share the origin, so a client shows them together.
-                const origin = yield* InteractionOrigin;
-                const publishAll: Effect.Effect<void> = Queue.take(notices).pipe(
-                  Effect.flatMap((notice) =>
-                    notice === undefined
-                      ? Effect.void
-                      : Effect.andThen(
-                          events.publish(Notice, notice),
-                          Effect.suspend(() => publishAll),
-                        ),
+              );
+              const publisher = yield* Effect.forkChild(publishAll);
+              const flush = Effect.andThen(Queue.offer(notices, undefined), Fiber.join(publisher));
+              const stamp = (notice: NoticePayload): NoticePayload => (origin === undefined ? notice : { ...notice, origin });
+              yield* Effect.tryPromise({
+                try: (signal) =>
+                  models.login(
+                    providerId,
+                    type,
+                    authInteraction(interaction, run, signal, origin, (event) => {
+                      Queue.offerUnsafe(notices, stamp(toNotice(event, provider.name)));
+                    }),
+                    { getDeviceId: () => deviceId(home) },
                   ),
-                );
-                const publisher = yield* Effect.forkChild(publishAll);
-                const flush = Effect.andThen(Queue.offer(notices, undefined), Fiber.join(publisher));
-                const stamp = (notice: NoticePayload): NoticePayload => (origin === undefined ? notice : { ...notice, origin });
-                yield* Effect.tryPromise({
-                  try: (signal) =>
-                    models.login(
-                      providerId,
-                      type,
-                      authInteraction(interaction, run, signal, origin, (event) => {
-                        Queue.offerUnsafe(notices, stamp(toNotice(event, provider.name)));
-                      }),
-                      { getDeviceId: () => deviceId(home) },
-                    ),
-                  catch: (error) => loginError(error, provider),
-                }).pipe(
-                  Effect.ensuring(flush),
-                  // Failed or cancelled: a client showing the login (one that did not start it, say) closes it.
-                  Effect.onError((cause) =>
-                    events.publish(
-                      Notice,
-                      stamp({
-                        level: "info",
-                        source: "llm",
-                        kind: "ended",
-                        message: Cause.hasInterruptsOnly(cause) ? `${provider.name} login was cancelled` : `${provider.name} login failed`,
-                      }),
-                    ),
+                catch: (error) => loginError(error, provider),
+              }).pipe(
+                Effect.ensuring(flush),
+                // Failed or cancelled: a client showing the login (one that did not start it, say) closes it.
+                Effect.onError((cause) =>
+                  events.publish(
+                    Notice,
+                    stamp({
+                      level: "info",
+                      source: "llm",
+                      kind: "ended",
+                      message: Cause.hasInterruptsOnly(cause) ? `${provider.name} login was cancelled` : `${provider.name} login failed`,
+                    }),
                   ),
-                );
-                // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
-                // longer report it cancelled. Its live catalog first, so clients that list models on hearing of
-                // the login see all of them; every client learns of it, including one that reloaded meanwhile.
-                yield* Effect.forkIn(
-                  refresh([providerId]).pipe(
-                    Effect.timeout("20 seconds"),
-                    Effect.ignore,
-                    Effect.andThen(
-                      events.publish(Notice, stamp({ level: "info", source: "llm", kind: "signed-in", message: `Logged in to ${provider.name}` })),
-                    ),
-                  ),
-                  scope,
-                );
-              }),
+                ),
+              );
+              // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
+              // longer report it cancelled. Its live catalog first, so clients that list models on hearing of
+              // the login see all of them; every client learns of it, including one that reloaded meanwhile.
+              yield* Effect.forkIn(
+                refresh([providerId]).pipe(
+                  Effect.timeout("20 seconds"),
+                  Effect.ignore,
+                  Effect.andThen(events.publish(Notice, stamp({ level: "info", source: "llm", kind: "signed-in", message: `Logged in to ${provider.name}` }))),
+                ),
+                scope,
+              );
+            }),
 
-            logout: (providerId) =>
-              Effect.tryPromise({
-                try: (signal) => models.logout(providerId, { signal }),
-                catch: (error) =>
-                  new LlmError({
-                    reason: "LoginFailed",
-                    message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
-                    cause: error,
-                  }),
-                // Signed out of a plan, the provider's own list returns.
-              }).pipe(Effect.tap(() => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore))),
+          logout: (providerId) =>
+            Effect.tryPromise({
+              try: (signal) => models.logout(providerId, { signal }),
+              catch: (error) =>
+                new LlmError({
+                  reason: "LoginFailed",
+                  message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
+                  cause: error,
+                }),
+              // Signed out of a plan, the provider's own list returns.
+            }).pipe(Effect.tap(() => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore))),
 
-            addCustom: (spec) =>
-              Effect.gen(function* () {
-                const taken = new Set([...models.getProviders().map((provider) => provider.id), ...custom.keys()]);
-                const entry = customEntry(spec, taken);
-                if (entry === undefined) return yield* new LlmError({ reason: "InvalidProvider", message: `Unknown wire API "${spec.api}"` });
-                yield* saveProviders({ add: [entry] });
-                return entry.id;
-              }),
+          addCustom: (spec) =>
+            Effect.gen(function* () {
+              const taken = new Set([...models.getProviders().map((provider) => provider.id), ...custom.keys()]);
+              const entry = customEntry(spec, taken);
+              if (entry === undefined) return yield* new LlmError({ reason: "InvalidProvider", message: `Unknown wire API "${spec.api}"` });
+              yield* saveProviders({ add: [entry] });
+              return entry.id;
+            }),
 
-            removeCustom: (providerId) => Effect.andThen(customOf(providerId), saveProviders({ remove: [providerId] })),
+          removeCustom: (providerId) => Effect.andThen(customOf(providerId), saveProviders({ remove: [providerId] })),
 
-            setLogo: (providerId, svg) =>
-              Effect.flatMap(customOf(providerId), ({ logo: _logo, ...entry }) =>
-                saveProviders({ add: [svg === undefined ? entry : { ...entry, logo: svg }] }),
-              ),
-          });
+          setLogo: (providerId, svg) =>
+            Effect.flatMap(customOf(providerId), ({ logo: _logo, ...entry }) => saveProviders({ add: [svg === undefined ? entry : { ...entry, logo: svg }] })),
         }),
-      ),
+      };
+    },
   });
 }
 

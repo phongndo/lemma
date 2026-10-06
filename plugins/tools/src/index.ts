@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Tools } from "@lemma/contracts";
 import { makeRegistry } from "./registry.ts";
@@ -18,6 +18,6 @@ export default definePlugin({
   id: "tools",
   version: "0.1.0",
   config: ToolsConfig,
-  provides: [Tools],
-  layer: (config) => Layer.effect(Tools, makeRegistry(config)),
+  provides: { tools: Tools },
+  setup: (_, { config }) => Effect.map(makeRegistry(config), (tools) => ({ tools })),
 });

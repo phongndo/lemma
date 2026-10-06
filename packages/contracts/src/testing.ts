@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Layer } from "effect";
+import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Paths } from "./host.ts";
@@ -12,14 +12,17 @@ import { Paths } from "./host.ts";
 export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<typeof Paths>> = {}) =>
   definePlugin({
     id: "paths",
-    provides: [Paths],
-    layer: Layer.succeed(Paths, {
-      home,
-      userConfig: join(home, "config.jsonc"),
-      projectConfig: join(paths.cwd ?? home, ".lemma", "config.jsonc"),
-      auth: join(home, "auth.json"),
-      sessions: join(home, "sessions"),
-      cwd: home,
-      ...paths,
-    }),
+    provides: { paths: Paths },
+    setup: () =>
+      Effect.succeed({
+        paths: {
+          home,
+          userConfig: join(home, "config.jsonc"),
+          projectConfig: join(paths.cwd ?? home, ".lemma", "config.jsonc"),
+          auth: join(home, "auth.json"),
+          sessions: join(home, "sessions"),
+          cwd: home,
+          ...paths,
+        },
+      }),
   });
