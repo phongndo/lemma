@@ -28,6 +28,7 @@ const Api = HostApi(HOST_API);
 export function hostPlugin(options: HostPluginOptions): Plugin<readonly [typeof Paths, typeof HostControl, typeof Api]> {
   return definePlugin({
     id: HOST_PLUGIN_ID,
+    version: "0.1.0",
     config: PathsSchema,
     provides: [Paths, HostControl, Api],
     layer: (paths) =>

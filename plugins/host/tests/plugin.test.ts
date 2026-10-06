@@ -61,7 +61,7 @@ describe("host plugin", () => {
         Effect.gen(function* () {
           const { loader, control, events, configured } = yield* start;
           expect(yield* loader.core.run(Paths)).toEqual(paths);
-          expect((yield* control.composition).plugins).toEqual([{ id: "host" }]);
+          expect((yield* control.composition).plugins).toEqual([{ id: "host", version: "0.1.0" }]);
           const changes = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 2)));
           const report = yield* control.reload;
           expect(report.unchanged).toEqual(["host"]);

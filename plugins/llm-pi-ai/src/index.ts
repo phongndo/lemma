@@ -96,6 +96,7 @@ function loginError(error: unknown, provider: Provider): LlmError {
 export function makeLlmPlugin(options: Options = {}) {
   return definePlugin({
     id: "llm",
+    version: "0.1.0",
     config: Config,
     provides: [Llm],
     requires: [Credentials, Interaction, HostControl, Paths],
