@@ -3,8 +3,19 @@ export type { HistoryAction, HistoryLocation, HistoryUpdate, RouterHistory } fro
 export { interceptLinks } from "./links.ts";
 export type { LinkOptions } from "./links.ts";
 export type { Pattern, RawParams, Segment } from "./path.ts";
-export { defineRoute, RouteError } from "./route.ts";
-export type { AnyRoute, Encoded, ParamsOf, PathParams, Route, RouteOptions, SearchOf } from "./route.ts";
+export { defineRoute, RouteError, searchSchema } from "./route.ts";
+export type {
+  AnyRoute,
+  Encoded,
+  ParamsOf,
+  PathParams,
+  Route,
+  RouteDefaultsOptions,
+  RouteOptions,
+  SearchDefaults,
+  SearchFromDefaults,
+  SearchOf,
+} from "./route.ts";
 export { createRouter, isRoute } from "./router.ts";
 export type { Explanation, MatchInfo, RouteInfo, RouterEvent, RouterSnapshot, RouteVerdict } from "./inspect.ts";
 export type { BlockOptions, Match, Navigate, NavigateOptions, RouteEntry, RouteIssue, Router, RouterOptions, RouteTable, Transition } from "./router.ts";

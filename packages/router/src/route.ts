@@ -1,4 +1,7 @@
 import { Result, Schema, SchemaAST } from "effect";
+// By module, not through the `effect` index: a browser bundle then keeps only what the router uses of them.
+import { succeed } from "effect/Effect";
+import { transform } from "effect/SchemaTransformation";
 import { buildPath, parsePattern } from "./path.ts";
 import type { Pattern, RawParams } from "./path.ts";
 import { stringifySearch } from "./search.ts";
@@ -71,6 +74,50 @@ export interface RouteOptions<P extends string, Params, ParamsEncoded extends En
   readonly search?: Schema.Codec<Search, SearchEncoded>;
 }
 
+/**
+ * A search described by its defaults: `{ page: 1, tab: "all", open: false }`.
+ * Each key reads as its default's type (a string, a finite number, or
+ * `true`/`false`), decodes to the default when absent, and is left out of
+ * the URL while it equals it.
+ */
+export type SearchDefaults = { readonly [key: string]: string | number | boolean };
+
+/** The search a defaults object describes: its keys, typed as their defaults are, every one present. */
+export type SearchFromDefaults<D> = { readonly [K in keyof D]: D[K] extends string ? string : D[K] extends number ? number : boolean };
+
+export interface RouteDefaultsOptions<P extends string, Params, ParamsEncoded extends Encoded, D extends SearchDefaults> {
+  /** `/users/:id/:tab?`; see `parsePattern`. */
+  readonly path: P;
+  /** Decodes the path's params from their strings; its fields are the path's names. Without one they are the strings. */
+  readonly params?: Schema.Codec<Params, ParamsEncoded> & CheckParams<P, ParamsEncoded>;
+  /** The search by its defaults (see `SearchDefaults`); write a Schema for anything else. */
+  readonly search: D;
+}
+
+/** `"true"` and `"false"` as a boolean. */
+const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
+  Schema.decodeTo(Schema.Boolean, transform({ decode: (text: "true" | "false") => text === "true", encode: (value: boolean) => (value ? "true" : "false") })),
+);
+
+/** A search Schema from its defaults (see `SearchDefaults`). */
+export const searchSchema = <const D extends SearchDefaults>(id: string, defaults: D): Schema.Codec<SearchFromDefaults<D>, Encoded> => {
+  const fields: Record<string, Schema.Codec<any, any>> = {};
+  for (const [key, value] of Object.entries(defaults)) {
+    const schema =
+      typeof value === "string"
+        ? Schema.String
+        : typeof value === "number" && Number.isFinite(value)
+          ? Schema.FiniteFromString
+          : typeof value === "boolean"
+            ? BooleanFromString
+            : undefined;
+    if (schema === undefined)
+      throw new RouteError(id, `the search default "${key}" is not a string, a finite number, or a boolean; write a search Schema instead`);
+    fields[key] = (schema as Schema.Codec<any, any>).pipe(Schema.withDecodingDefaultType(succeed(value))) as Schema.Codec<any, any>;
+  }
+  return Schema.Struct(fields) as unknown as Schema.Codec<SearchFromDefaults<D>, Encoded>;
+};
+
 /** A route defined wrongly, or values its Schemas do not encode: a mistake in the code, named by the route's id. */
 export class RouteError extends Error {
   readonly routeId: string;
@@ -120,7 +167,18 @@ export function defineRoute<
   ParamsEncoded extends Encoded = Encoded,
   Search = {},
   SearchEncoded extends Encoded = Encoded,
->(id: string, options: RouteOptions<P, Params, ParamsEncoded, Search, SearchEncoded>): Route<Params, Search> {
+>(id: string, options: RouteOptions<P, Params, ParamsEncoded, Search, SearchEncoded>): Route<Params, Search>;
+/** A route whose search is described by its defaults (`{ page: 1, tab: "all" }`; see `SearchDefaults`). */
+export function defineRoute<const P extends string, D extends SearchDefaults, Params = PathParams<P>, ParamsEncoded extends Encoded = Encoded>(
+  id: string,
+  options: RouteDefaultsOptions<P, Params, ParamsEncoded, D>,
+): Route<Params, SearchFromDefaults<D>>;
+export function defineRoute(
+  id: string,
+  options: RouteOptions<string, any, Encoded, any, Encoded> | RouteDefaultsOptions<string, any, Encoded, SearchDefaults>,
+): Route<any, any> {
+  type Params = any;
+  type Search = any;
   let pattern: Pattern;
   try {
     pattern = parsePattern(options.path);
@@ -128,7 +186,9 @@ export function defineRoute<
     throw new RouteError(id, message(error));
   }
   const params = (options.params ?? strings) as Schema.Codec<Params, any>;
-  const search = (options.search ?? Schema.Struct({})) as Schema.Codec<Search, any>;
+  const search = (
+    options.search === undefined ? Schema.Struct({}) : Schema.isSchema(options.search) ? options.search : searchSchema(id, options.search as SearchDefaults)
+  ) as Schema.Codec<Search, any>;
   checkParams(id, pattern, params);
   const decodeParams = Schema.decodeUnknownResult(params);
   const encodeParams = Schema.encodeResult(params);

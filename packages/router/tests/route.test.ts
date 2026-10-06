@@ -1,6 +1,7 @@
 import { Effect, Result, Schema } from "effect";
-import { describe, expect, test } from "vitest";
-import { defineRoute } from "../src/route.ts";
+import { describe, expect, expectTypeOf, test } from "vitest";
+import { defineRoute, RouteError } from "../src/route.ts";
+import type { ParamsOf, SearchOf } from "../src/route.ts";
 
 const Thread = defineRoute("thread", {
   path: "/threads/:id/:view?",
@@ -47,5 +48,28 @@ describe("defineRoute", () => {
     expect(Plain.decodeParams({ a: "1" })).toEqual(Result.succeed({ a: "1" }));
     expect(Plain.href({ a: "1" })).toBe("/p/1");
     expect(Plain.defaults).toEqual({});
+  });
+});
+
+describe("a search described by its defaults", () => {
+  const List = defineRoute("list", { path: "/list/:kind", search: { page: 1, tab: "all", open: false } });
+
+  test("types each key as its default and reads the URL's strings", () => {
+    expectTypeOf<SearchOf<typeof List>>().toEqualTypeOf<{ readonly page: number; readonly tab: string; readonly open: boolean }>();
+    expectTypeOf<ParamsOf<typeof List>>().toEqualTypeOf<{ readonly kind: string }>();
+    expect(Result.getOrThrow(List.decodeSearch({}))).toEqual({ page: 1, tab: "all", open: false });
+    expect(Result.getOrThrow(List.decodeSearch({ page: "2", open: "true" }))).toEqual({ page: 2, tab: "all", open: true });
+    expect(Result.isFailure(List.decodeSearch({ page: "two" }))).toBe(true);
+    expect(Result.isFailure(List.decodeSearch({ open: "yes" }))).toBe(true);
+  });
+
+  test("leaves keys equal to their defaults out of the URL", () => {
+    expect(List.href({ kind: "a" })).toBe("/list/a");
+    expect(List.href({ kind: "a" }, { page: 2, open: true })).toBe("/list/a?page=2&open=true");
+    expect(List.href({ kind: "a" }, { tab: "all" })).toBe("/list/a");
+  });
+
+  test("refuses a default it cannot read from a URL", () => {
+    expect(() => defineRoute("bad", { path: "/bad", search: { page: Number.NaN } })).toThrow(RouteError);
   });
 });
