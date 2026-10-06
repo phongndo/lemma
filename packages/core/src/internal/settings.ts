@@ -1,4 +1,4 @@
-import { Clock, Context, Random, References, Schedule, Tracer } from "effect";
+import { Clock, Context, Layer, Random, References, Schedule, Tracer } from "effect";
 
 /**
  * Effect's runtime settings: references a caller sets for the work it runs
@@ -25,12 +25,16 @@ export const runtimeSettings: ReadonlySet<string> = new Set([
   Schedule.CurrentMetadata.key,
 ]);
 
+/** Keys a captured context leaves behind: the trace it was captured in, and the memo map of the Layer build that ran then. */
+const transient: ReadonlySet<string> = new Set([Tracer.ParentSpan.key, Layer.CurrentMemoMap.key]);
+
 /**
  * A captured context's services, for work that runs later on someone else's
- * fiber: settings belong to that fiber, and trace ancestry to that invocation.
+ * fiber: settings belong to that fiber, trace ancestry to that invocation,
+ * and a Layer build's memo map to that build.
  */
 export function servicesOf<R>(context: Context.Context<R>): Context.Context<R> {
   const map = context.mapUnsafe;
-  if (![...map.keys()].some((key) => key === Tracer.ParentSpan.key || runtimeSettings.has(key))) return context;
-  return Context.makeUnsafe<R>(new Map([...map].filter(([key]) => key !== Tracer.ParentSpan.key && !runtimeSettings.has(key))));
+  if (![...map.keys()].some((key) => transient.has(key) || runtimeSettings.has(key))) return context;
+  return Context.makeUnsafe<R>(new Map([...map].filter(([key]) => !transient.has(key) && !runtimeSettings.has(key))));
 }

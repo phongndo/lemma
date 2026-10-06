@@ -1,4 +1,4 @@
-import { Context, Effect, Order, Scope } from "effect";
+import { Context, Effect, Order, References, Scope } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import { servicesOf } from "./settings.ts";
 import type { Handler, Hook, HookOptions, Hooks, Next, PluginContext, PluginIdentity } from "../hooks.ts";
@@ -24,6 +24,8 @@ interface Registration {
   readonly order: number;
   readonly sequence: number;
   readonly handle: Handler<unknown, unknown, unknown>;
+  /** Its span's attributes, made once. */
+  readonly attributes: Readonly<Record<string, string | number>>;
   /** False once stopped or disposed: an in-flight dispatch reaching it fails. */
   active: boolean;
 }
@@ -83,18 +85,22 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
             return yield* new HookError({ reason: "InvalidOrder", hook: hook.name, pluginId: identity.id, message: "Hook order must be finite" });
           }
           const entry = yield* this.entry(hook);
-          const environment = servicesOf(yield* Effect.context<R>());
+          const environment: readonly Provided[] = [...servicesOf(yield* Effect.context<R>()).mapUnsafe].map(([key, value]) => ({
+            key: { key } as Context.Key<unknown, unknown>,
+            value,
+          }));
           const registration: Registration = {
             owner,
             entry,
             order,
             sequence: this.sequence++,
             active: true,
+            attributes: { ...attributes(identity), "hook.name": hook.name, "hook.order": order },
             // This erasure is local to the heterogeneous registry. Token identity protects dispatch.
             handle: ((input: I, next: Next<I, O, E>) =>
-              Effect.provide(
-                Effect.suspend(() => handler(input, next)),
-                environment,
+              Effect.updateContext(
+                Effect.suspend(() => handler(input, next)) as Effect.Effect<O, E | HookError | CoreClosed>,
+                (current: Context.Context<never>) => overriding(current, environment),
               )) as unknown as Handler<unknown, unknown, unknown>,
           };
           entry.all.push(registration);
@@ -177,19 +183,26 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
               return dispatch(index + 1, nextInput);
             });
           const handle = registration.handle as Handler<I, O, E>;
-          return Effect.suspend(() => handle(value, next)).pipe(
+          const run = Effect.suspend(() => handle(value, next)).pipe(
             Effect.ensuring(
               Effect.sync(() => {
                 alive = false;
               }),
             ),
-            Effect.withSpan(
-              "core.hook",
-              { attributes: { ...attributes(registration.owner.identity), "hook.name": hook.name, "hook.order": registration.order } },
-              // This frame is always the dispatcher, not plugin code. Keep attribution
-              // and failure stacks without capturing a redundant stack on every call.
-              { captureStackTrace: false },
-            ),
+          );
+          // With tracing off, no span at all: not even a no-op span's context change.
+          return Effect.withFiber((fiber) =>
+            fiber.getRef(References.TracerEnabled)
+              ? run.pipe(
+                  Effect.withSpan(
+                    "core.hook",
+                    { attributes: registration.attributes },
+                    // This frame is always the dispatcher, not plugin code. Keep attribution
+                    // and failure stacks without capturing a redundant stack on every call.
+                    { captureStackTrace: false },
+                  ),
+                )
+              : run,
           );
         });
       return yield* dispatch(0, input);
@@ -216,6 +229,25 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       return Effect.succeed(entry);
     });
   }
+}
+
+/**
+ * `current` with a registration's services where its own differ: what
+ * providing them does, without copying the whole context per call. A handler
+ * usually differs from its caller only in its own `PluginContext` and
+ * `Scope`, so it costs a couple of overlays rather than a copy.
+ */
+interface Provided {
+  readonly key: Context.Key<unknown, unknown>;
+  readonly value: unknown;
+}
+
+function overriding(current: Context.Context<never>, environment: readonly Provided[]): Context.Context<never> {
+  let context = current;
+  for (const { key, value } of environment) {
+    if (value === undefined || Context.getOrUndefined(context, key) !== value) context = Context.addUnsafe(context, key.key, value) as Context.Context<never>;
+  }
+  return context;
 }
 
 function rebuild(entry: Entry): void {
