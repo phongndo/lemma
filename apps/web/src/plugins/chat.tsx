@@ -1,9 +1,10 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { Schema } from "effect";
+import { formatDuration, formatTokens } from "@lemma/contracts";
 import type { ImageContent, TextContent } from "@lemma/contracts";
 import { diffStats, parseDiff, readDetails } from "../model/details.ts";
-import { formatDuration, formatTokens, summarizeToolArgs, summarizePartialArgs, summarizeUsage, truncateLines } from "../model/format.ts";
+import { summarizeToolArgs, summarizePartialArgs, summarizeUsage, truncateLines } from "../model/format.ts";
 import { answerText, entryKey, foldRunning, foldTurn } from "../model/fold.ts";
 import type { TurnEntry } from "../model/fold.ts";
 import { parseDraftArgs } from "../model/live.ts";

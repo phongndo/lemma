@@ -1,4 +1,4 @@
-import { contentText, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
+import { contentText, formatCost, formatDuration, formatTokens, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
 import type {
   CommandInfo,
   InspectorInfo,
@@ -265,15 +265,11 @@ export const formatSession = (info: SessionInfo, branch: readonly SessionEvent[]
 
 const count = (n: number): string => n.toLocaleString("en-US");
 
-const tokens = (n: number): string => (n < 1_000 ? String(n) : n < 100_000 ? `${(n / 1_000).toFixed(1)}k` : `${Math.round(n / 1_000)}k`);
-
-const seconds = (ms: number): string => (ms < 1_000 ? `${Math.max(0, Math.round(ms))}ms` : `${(ms / 1_000).toFixed(1)}s`);
-
 /** Input counts cache reads and writes, as providers bill them. */
 const usageText = (usage: Usage): string => {
-  const parts = [`↑${tokens(usage.input + usage.cacheRead + usage.cacheWrite)}`, `↓${tokens(usage.output)}`];
-  if (usage.cacheRead > 0) parts.push(`cache ${tokens(usage.cacheRead)}`);
-  if (usage.cost.total > 0) parts.push(`$${usage.cost.total.toFixed(usage.cost.total < 0.01 ? 4 : 3)}`);
+  const parts = [`↑${formatTokens(usage.input + usage.cacheRead + usage.cacheWrite)}`, `↓${formatTokens(usage.output)}`];
+  if (usage.cacheRead > 0) parts.push(`cache ${formatTokens(usage.cacheRead)}`);
+  if (usage.cost.total > 0) parts.push(formatCost(usage.cost.total));
   return parts.join(" ");
 };
 
@@ -294,8 +290,8 @@ const stepLine = (step: TrajectoryStep): string[] => {
         ? `failed: ${step.attempts.at(-1)!.message.errorMessage ?? step.attempts.at(-1)!.message.stopReason}`
         : "running"
       : usageText(response.message.usage),
-    timing?.firstTokenAt === undefined ? "" : `ttft ${seconds(timing.firstTokenAt - timing.startedAt)}`,
-    timing === undefined ? "" : seconds(timing.endedAt - timing.startedAt),
+    timing?.firstTokenAt === undefined ? "" : `ttft ${formatDuration(timing.firstTokenAt - timing.startedAt)}`,
+    timing === undefined ? "" : formatDuration(timing.endedAt - timing.startedAt),
     calls.length ? `→ ${calls.join(", ")}` : "",
   ];
 };
@@ -316,7 +312,7 @@ export const formatTrajectory = (turns: readonly TrajectoryTurn[]): string => {
         turn.end?.reason ?? "running",
         `${turn.steps.length} step${turn.steps.length === 1 ? "" : "s"}`,
         usageText(turn.usage),
-        ...(turn.endedAt === undefined ? [] : [seconds(turn.endedAt - turn.startedAt)]),
+        ...(turn.endedAt === undefined ? [] : [formatDuration(turn.endedAt - turn.startedAt)]),
       ].join(" · ");
       return [
         header,
@@ -369,7 +365,7 @@ export const formatStep = (turn: TrajectoryTurn, step: TrajectoryStep): string =
   for (const attempt of step.attempts) {
     lines.push(
       "",
-      `Failed call (${attempt.message.stopReason}) after ${seconds(attempt.timing.endedAt - attempt.timing.startedAt)}: ${attempt.message.errorMessage ?? ""}`.trimEnd(),
+      `Failed call (${attempt.message.stopReason}) after ${formatDuration(attempt.timing.endedAt - attempt.timing.startedAt)}: ${attempt.message.errorMessage ?? ""}`.trimEnd(),
     );
   }
   const response = step.response;
@@ -380,8 +376,8 @@ export const formatStep = (turn: TrajectoryTurn, step: TrajectoryStep): string =
       [
         `Response: ${response.message.stopReason}`,
         usageText(response.message.usage),
-        ...(timing?.firstTokenAt === undefined ? [] : [`ttft ${seconds(timing.firstTokenAt - timing.startedAt)}`]),
-        ...(timing === undefined ? [] : [seconds(timing.endedAt - timing.startedAt)]),
+        ...(timing?.firstTokenAt === undefined ? [] : [`ttft ${formatDuration(timing.firstTokenAt - timing.startedAt)}`]),
+        ...(timing === undefined ? [] : [formatDuration(timing.endedAt - timing.startedAt)]),
       ].join(" · "),
     );
     const text = response.message.content
@@ -397,7 +393,7 @@ export const formatStep = (turn: TrajectoryTurn, step: TrajectoryStep): string =
         step.tools.map((run) => [
           `  ${run.call.name}`,
           run.result === undefined ? "no result" : run.result.isError ? "error" : "ok",
-          run.timing === undefined ? "" : seconds(run.timing.endedAt - run.timing.startedAt),
+          run.timing === undefined ? "" : formatDuration(run.timing.endedAt - run.timing.startedAt),
           firstLine(JSON.stringify(run.call.arguments), 60),
         ]),
       ),
@@ -422,8 +418,8 @@ export const formatRecords = (records: readonly LedgerRecord[], running: boolean
       request,
       RECORD_KIND_LABEL[record.kind],
       recordStatus(record, running),
-      duration === undefined ? "" : seconds(duration),
-      usage === undefined ? "" : `${tokens(usage.input + usage.cacheRead + usage.cacheWrite)}/${tokens(usage.output)}`,
+      duration === undefined ? "" : formatDuration(duration),
+      usage === undefined ? "" : `${formatTokens(usage.input + usage.cacheRead + usage.cacheWrite)}/${formatTokens(usage.output)}`,
       name.length > NAME_CHARS ? `${name.slice(0, NAME_CHARS - 1)}…` : name,
     ];
   });
@@ -477,7 +473,7 @@ export const formatModels = (models: readonly ModelInfo[]): string =>
         ...models.map((model) => [
           model.ref,
           model.name,
-          tokens(model.contextWindow),
+          formatTokens(model.contextWindow),
           model.reasoning ? model.thinkingLevels.join(",") : "no",
           model.input.join(","),
           model.cost.input === 0 && model.cost.output === 0 ? "" : `${model.cost.input}/${model.cost.output}`,
@@ -538,7 +534,7 @@ export const formatTurnResult = (turn: TurnResult, withText: boolean): string =>
     `${turn.steps} step${turn.steps === 1 ? "" : "s"}`,
     `${turn.toolCalls} tool call${turn.toolCalls === 1 ? "" : "s"}`,
     ...(turn.usage === undefined ? [] : [usageText(turn.usage)]),
-    ...(turn.duration === undefined ? [] : [seconds(turn.duration)]),
+    ...(turn.duration === undefined ? [] : [formatDuration(turn.duration)]),
     `session ${turn.session}`,
   ].join(" · ");
   return [...(withText && turn.text ? [turn.text.trimEnd(), ""] : []), `── ${summary}`, ...(turn.error === undefined ? [] : [`error: ${turn.error}`])].join(

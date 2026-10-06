@@ -1,28 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ModelInfo } from "@lemma/contracts";
 import { diffStats, parseDiff, readDetails } from "../src/model/details.ts";
-import {
-  displayPath,
-  formatCost,
-  formatDuration,
-  formatTokens,
-  partialStringField,
-  summarizeToolArgs,
-  summarizeUsage,
-  tildePath,
-  truncateLines,
-} from "../src/model/format.ts";
-import { branchSlug, contextSize } from "../src/model/format.ts";
+import { branchSlug, contextSize, displayPath, partialStringField, summarizeToolArgs, summarizeUsage, tildePath, truncateLines } from "../src/model/format.ts";
 import { clampThinking, filterModels, folderName, knownProjects, patchProjectSettings, projectName, resolveModel, thinkingLevels } from "../src/model/prefs.ts";
 import { usage } from "./fixtures.ts";
 
 describe("format", () => {
-  it("formats numbers compactly", () => {
-    expect([formatTokens(950), formatTokens(1234), formatTokens(45_600), formatTokens(2_500_000)]).toEqual(["950", "1.2k", "46k", "2.50M"]);
-    expect([formatCost(0), formatCost(0.00123), formatCost(0.123), formatCost(12.3)]).toEqual(["$0", "$0.0012", "$0.123", "$12.30"]);
-    expect([formatDuration(420), formatDuration(4200), formatDuration(42_000), formatDuration(125_000)]).toEqual(["420ms", "4.2s", "42s", "2m 5s"]);
-  });
-
   it("shortens paths", () => {
     expect(tildePath("/home/me/x", "/home/me")).toBe("~/x");
     expect(tildePath("/home/meow", "/home/me")).toBe("/home/meow");

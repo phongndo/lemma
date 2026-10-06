@@ -3,6 +3,9 @@ import type { JSX } from "solid-js";
 import {
   RECORD_KIND_LABEL,
   contentText,
+  formatCost,
+  formatDuration,
+  formatTokens,
   ledger,
   ledgerSpans,
   parseLedgerFilter,
@@ -17,7 +20,6 @@ import {
   trajectory as projectTrajectory,
 } from "@lemma/contracts";
 import type { AssistantRecord, LedgerRecord, LedgerSort, LedgerSpan, SystemRecord, Timing, ToolRecord, TrajectoryRequest } from "@lemma/contracts";
-import { formatCost, formatDuration, formatTokens } from "../model/format.ts";
 import { Notify, Threads, Slots, ToolViews, TrajectoryActions, TrajectoryTabs, Views } from "../ui/contracts.ts";
 import type { NotifyService, ThreadsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
