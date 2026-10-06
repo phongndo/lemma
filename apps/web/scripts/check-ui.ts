@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
@@ -45,7 +47,10 @@ import { createServer } from "vite";
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
  * (`pnpm exec playwright install firefox webkit`; `PLAYWRIGHT_BROWSERS_PATH`
- * puts them elsewhere): history timing differs between engines.
+ * puts them elsewhere): history timing differs between engines. A failed run
+ * leaves a Playwright trace and a screenshot of each open page in
+ * `LEMMA_UI_ARTIFACTS` (by default a new directory under the OS temp
+ * directory, named in the output); `pnpm exec playwright show-trace` opens a trace.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -69,9 +74,43 @@ const expectNoErrors = (when: string) => {
 };
 /** Resolves once the page has a frame drawn by whatever fills `root`. */
 const settled = (page: Page) => page.waitForFunction(() => document.querySelector("#root")!.childElementCount > 0, undefined, { timeout: 10_000 });
+/** Resolves once the page has drawn two more frames: what changed before the call is laid out, and observers have run. */
+const drawn = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+/**
+ * Puts the app's services on `window.services`, by contract name: a wait's page function runs synchronously, so it
+ * reads them there rather than awaiting `lemma.service`. A reload drops them.
+ */
+const expose = (page: Page, ...names: string[]) =>
+  page.evaluate(async (names) => {
+    const contracts = await import("/src/ui/contracts.ts" as string);
+    const lemma = (window as any).lemma;
+    (window as any).services = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await lemma.service(contracts[name])])));
+  }, names);
+
+/** Every page opened, traced, so that a failure can leave its trace and a screenshot behind. */
+const pages: Page[] = [];
+const open = async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  await page.context().tracing.start({ screenshots: true, snapshots: true });
+  pages.push(page);
+  return page;
+};
+const saveArtifacts = async () => {
+  const directory = process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
+  mkdirSync(directory, { recursive: true });
+  for (const [index, page] of pages.entries()) {
+    if (page.isClosed()) continue;
+    await page.screenshot({ path: join(directory, `page-${index + 1}.png`), fullPage: true }).catch(() => {});
+    await page
+      .context()
+      .tracing.stop({ path: join(directory, `trace-${index + 1}.zip`) })
+      .catch(() => {});
+  }
+  console.error(`UI check failed: traces and screenshots are in ${directory}`);
+};
 
 try {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  const page = await open();
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
@@ -403,18 +442,19 @@ try {
   });
   await page.reload();
   await page.waitForSelector(".turn");
-  await page.waitForTimeout(300);
-  // The seeded thread may not scroll at all, so the reader's scroll is an event, not a move.
-  await page.evaluate(() => document.querySelector(".chat-view .scroller")!.dispatchEvent(new Event("scroll")));
-  await page.waitForTimeout(200);
-  assert.notEqual(
-    await page.evaluate(async () => {
-      const { Router } = await import("/src/ui/contracts.ts" as string);
-      return (await (window as any).lemma.service(Router)).entry("chat.scroll").get();
-    }),
-    1_000_000,
-    "an unreachable saved position kept the chat from remembering scrolls",
-  );
+  await expose(page, "Router");
+  // The seeded thread may not scroll at all, so the reader's scroll is an event, not a move: one each frame until the
+  // chat, done placing the saved position, remembers one.
+  await page
+    .waitForFunction(
+      () => {
+        document.querySelector(".chat-view .scroller")!.dispatchEvent(new Event("scroll"));
+        return (window as any).services.Router.entry("chat.scroll").get() !== 1_000_000;
+      },
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => assert.fail("an unreachable saved position kept the chat from remembering scrolls"));
   // A view is in the address, and back returns to the one before.
   // The trajectory opens at its newest row, and scrolling up stops following it until Follow; a short window makes it scroll.
   await page.setViewportSize({ width: 1200, height: 320 });
@@ -470,6 +510,7 @@ try {
     (await (window as any).lemma.service(Settings)).open("archived");
   });
   await page.waitForFunction(() => location.pathname === "/settings/archived");
+  await expose(page, "Router");
   await page.click(
     `.archived-row:has-text("${await page.evaluate(async (id) => {
       const { Threads } = await import("/src/ui/contracts.ts" as string);
@@ -478,9 +519,11 @@ try {
     }, seeded)}") .archived-title`,
   );
   // Closing settings goes back, which lands later; the thread's own navigation waits for it, in every engine (unheld,
-  // Chromium and WebKit apply the back after it and end on "/", and Firefox keeps settings behind the thread).
-  await page.waitForTimeout(500);
-  assert.equal(new URL(page.url()).pathname, `/threads/${seeded}`, "opening an archived thread did not end on it");
+  // Chromium and WebKit apply the back after it and end on "/", and Firefox keeps settings behind the thread). So the
+  // thread shows once the back has landed, and stays.
+  await page
+    .waitForFunction((id) => !(window as any).services.Router.inspect().moving && location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
+    .catch(async () => assert.fail(`opening an archived thread ended on ${await where()}`));
   await page.goBack();
   await page
     .waitForFunction(() => location.pathname === "/", undefined, { timeout: 5_000 })
@@ -501,6 +544,8 @@ try {
   await page
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 10_000 })
     .catch(async () => assert.fail(`/#${id} went to ${await where()}`));
+  // The address changes while the plugins start, before the page is up.
+  await settled(page);
   // The open thread deleted while settings show over it: settings stay.
   await page.evaluate(async () => {
     const { Threads } = await import("/src/ui/contracts.ts" as string);
@@ -514,11 +559,20 @@ try {
   const doomed = new URL(page.url()).pathname.split("/")[2]!;
   await page.keyboard.press("ControlOrMeta+,");
   await page.waitForFunction(() => location.pathname.startsWith("/settings"));
+  await expose(page, "Router", "Threads");
   await page.evaluate(async (id) => {
     const { Threads } = await import("/src/ui/contracts.ts" as string);
     await (await (window as any).lemma.service(Threads)).remove(id);
   }, doomed);
-  await page.waitForTimeout(200);
+  // Once the app has it gone, and any move that set off has landed, settings are still there.
+  await page.waitForFunction(
+    (id) => {
+      const { Router, Threads } = (window as any).services;
+      return !Threads.list().some((session: any) => session.id === id) && !Router.inspect().moving;
+    },
+    doomed,
+    { timeout: 5_000 },
+  );
   assert.match(new URL(page.url()).pathname, /^\/settings/, "deleting the thread under settings closed them");
   // Closing them returns to the deleted thread's address, which leaves for a new thread.
   await page.keyboard.press("Escape");
@@ -645,13 +699,16 @@ try {
   await page.waitForSelector(".page-missing >> text=check boom");
   await page.waitForSelector(".toast >> text=match the same addresses");
   assert(await page.locator(".sidebar").isVisible(), "a failing page took the sidebar with it");
-  const reruns = async (navigate: string) =>
-    page.evaluate(async (target) => {
+  // Readers run again as the router takes the address in (all at once): once it has, their count is final.
+  await expose(page, "Router");
+  const reruns = async (navigate: string) => {
+    await page.evaluate((target) => {
       history.pushState(null, "", target);
       dispatchEvent(new PopStateEvent("popstate"));
-      await new Promise((done) => setTimeout(done, 50));
-      return (window as any).reruns;
     }, navigate);
+    await page.waitForFunction((path) => (window as any).services.Router.location().pathname === path, new URL(navigate, url).pathname, { timeout: 5_000 });
+    return page.evaluate(() => (window as any).reruns);
+  };
   assert.equal(await reruns("/broken/2?mock"), 3, "the route's own change did not rerun its reader");
   assert.equal(await reruns("/nowhere?mock"), 4, "leaving the route did not rerun its reader");
   assert.equal(await reruns("/elsewhere?mock"), 4, "an unrelated navigation reran a route's reader");
@@ -689,7 +746,7 @@ try {
       (await (window as any).lemma.service(Router)).navigate(path);
     }, path);
     await page.waitForFunction((path) => location.pathname === path, path);
-    await page.waitForTimeout(100);
+    await drawn(page);
     assert(await dockOnTop(), `the devtools are hidden at ${path}`);
   }
   await page.reload();
@@ -900,11 +957,18 @@ try {
       };
     });
   assert.ok((await railPlace()).offCenter <= 1, "the prompt rail is not level with the middle of the pane");
-  // With a composer too tall for that, it stops while its steps still fit in the chat view.
+  // With a composer too tall for that, it stops while its steps still fit in the chat view (once it has moved for it).
+  const short = await page.evaluate(() => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below"));
   await page.fill("textarea", Array.from({ length: 40 }, (_, line) => `line ${line}`).join("\n"));
-  await page.waitForTimeout(200);
+  await page
+    .waitForFunction((short) => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below") !== short, short, { timeout: 5_000 })
+    .catch(() => assert.fail("the prompt rail did not move for a taller composer"));
   assert.ok((await railPlace()).stepsOut <= 0, "a tall composer pushes the prompt rail's steps out of the chat view");
+  // Pointing at a tick needs the rail back where it was.
   await page.fill("textarea", "");
+  await page
+    .waitForFunction((short) => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below") === short, short, { timeout: 5_000 })
+    .catch(() => assert.fail("the prompt rail did not return for an emptied composer"));
   assert.deepEqual(
     await ticks.evaluateAll((all) => all.map((tick) => [tick.tabIndex, tick.getAttribute("aria-current")])),
     [
@@ -1012,7 +1076,7 @@ try {
   expectNoErrors("using the prompt rail");
 
   // 11. No provider set up: the chat, not settings, and its notice opens Providers, which returns to the chat once one connects.
-  const fresh = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  const fresh = await open();
   fresh.on("pageerror", (error) => errors.push(error.message));
   await fresh.goto(`${url}/?mock`);
   await fresh.waitForSelector(".composer-callout, .settings");
@@ -1051,6 +1115,9 @@ try {
   console.log(
     `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back.`,
   );
+} catch (error) {
+  await saveArtifacts();
+  throw error;
 } finally {
   await browser.close();
   await server.close();
