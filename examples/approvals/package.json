@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",
@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@lemma/cli": "workspace:*",
-    "@lemma/host": "workspace:*",
     "@lemma/plugin-tools": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",

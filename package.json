@@ -15,7 +15,6 @@
     "dev:desktop": "pnpm --filter @lemma/desktop dev",
     "dev:web": "pnpm --filter @lemma/web dev",
     "desktop": "pnpm --filter @lemma/desktop start",
-    "harness:check": "pnpm -r --filter './plugins/**' --filter './apps/**' --filter @lemma/contracts --filter @lemma/client --filter @lemma/host check",
     "example": "pnpm build && node packages/core/examples/hello.ts",
     "package:check": "node scripts/check-package.ts",
     "browser:check": "node scripts/check-package.ts --browser",

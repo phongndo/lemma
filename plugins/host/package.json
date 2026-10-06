@@ -10,7 +10,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",

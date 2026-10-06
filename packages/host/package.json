@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node --conditions=lemma-source src/main.ts",
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",
