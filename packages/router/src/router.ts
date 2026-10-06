@@ -55,10 +55,19 @@ export interface Transition {
   readonly action: HistoryAction | "unload";
 }
 
-export interface RouterOptions {
-  readonly history: RouterHistory;
+/** What a route table is made with: the routes it knows without entries, and how it reports conflicts and names entries. */
+export interface RouteTableOptions {
   /** Routes the location may name while nothing is registered at them (they match as `unavailable`). */
   readonly known?: readonly AnyRoute[];
+  /** Called with each new conflict between routes (see `RouteIssue`), when entries or known routes change. */
+  readonly onIssue?: (issue: RouteIssue) => void;
+  /** How an entry is named in `inspect`, `explain`, and the journal. Default: its route's id. */
+  readonly label?: (entry: any) => string;
+}
+
+/** What a navigator is made with: its history, and how it reports what goes wrong. */
+export interface NavigatorOptions {
+  readonly history: RouterHistory;
   /** Search keys every navigation keeps from the current location unless it sets them (`safe`, a debug flag). */
   readonly retain?: readonly string[];
   /**
@@ -68,15 +77,13 @@ export interface RouterOptions {
    * land within `settleTimeout` (`history`). Default `console.error`.
    */
   readonly onError?: (error: unknown, during: "listener" | "blocker" | "navigate" | "history") => void;
-  /** Called with each new conflict between routes (see `RouteIssue`), when entries or known routes change. */
-  readonly onIssue?: (issue: RouteIssue) => void;
-  /** How an entry is named in `inspect`, `explain`, and the journal. Default: its route's id. */
-  readonly label?: (entry: any) => string;
   /** How many events the journal keeps; older ones are dropped. Default 200. */
   readonly journal?: number;
   /** How long navigations wait for a back or forward to land before going ahead anyway, the move reported (ms). Default 1000. */
   readonly settleTimeout?: number;
 }
+
+export interface RouterOptions extends RouteTableOptions, NavigatorOptions {}
 
 export interface BlockOptions {
   /** Who blocks and why (`"editor: unsaved changes"`), for the journal and `inspect`. */
@@ -95,7 +102,35 @@ export interface RouteIssue {
   readonly message: string;
 }
 
-export interface Router<E extends RouteEntry = RouteEntry> {
+/**
+ * The routes an app has now and what is registered at them, compiled once per
+ * change and shared by any number of navigators: each tab, pane, or preview
+ * keeps its own location over the same table.
+ */
+export interface RouteTable<E extends RouteEntry = RouteEntry> {
+  /** What is registered, in priority order: for a route with several entries, the first is the one shown. */
+  readonly setEntries: (entries: readonly E[]) => void;
+  readonly setKnown: (routes: readonly AnyRoute[]) => void;
+  readonly entries: () => readonly E[];
+  readonly known: () => readonly AnyRoute[];
+  /** The conflicts between the routes now registered or known. */
+  readonly issues: () => readonly RouteIssue[];
+  /** What `location` shows with the routes now; with `trace`, every route's verdict is added to it. */
+  readonly resolve: (location: HistoryLocation, signal: AbortSignal, trace?: RouteVerdict[]) => Match<E>;
+  /** Called after the routes change, with the conflicts that are new. Returns the unsubscribe. */
+  readonly subscribe: (listener: (fresh: readonly RouteIssue[]) => void) => () => void;
+  /** An entry's name for inspection (`RouteTableOptions.label`). */
+  readonly label: (entry: E) => string;
+  /** Every route, with what is registered at it in priority order, as plain data. */
+  readonly routes: () => readonly RouteInfo[];
+  /** Stops telling subscribers; the navigators over it keep the last routes. */
+  readonly destroy: () => void;
+}
+
+/** One location over a route table: its history, its match, and the navigations that move it. */
+export interface Navigator<E extends RouteEntry = RouteEntry> {
+  /** The table it matches against, shared with any other navigator over it. */
+  readonly table: RouteTable<E>;
   readonly location: () => HistoryLocation;
   readonly match: () => Match<E>;
   /** The current params and search when the location is `route` (matched or unavailable), else undefined. */
@@ -104,9 +139,6 @@ export interface Router<E extends RouteEntry = RouteEntry> {
   readonly matchHref: (href: string) => Match<E>;
   /** Called whenever the match changes: a navigation, or entries coming and going. Returns the unsubscribe. */
   readonly subscribe: (listener: (match: Match<E>) => void) => () => void;
-  /** What is registered, in priority order: for a route with several entries, the first is the one shown. */
-  readonly setEntries: (entries: readonly E[]) => void;
-  readonly setKnown: (routes: readonly AnyRoute[]) => void;
   /** `route`'s address for these values, keeping the retained search keys. Throws when a value does not encode. */
   readonly href: <R extends AnyRoute>(route: R, params: ParamsOf<R>, search?: Partial<SearchOf<R>>) => string;
   /**
@@ -116,33 +148,41 @@ export interface Router<E extends RouteEntry = RouteEntry> {
    * to `onError`). Made while a `go` is still landing, it waits for it, up to `settleTimeout`.
    */
   readonly navigate: Navigate;
-  /** The conflicts between the routes now registered or known. */
-  readonly issues: () => readonly RouteIssue[];
   readonly go: (delta: number) => void;
   readonly back: () => void;
   /** Runs before every navigation; returning false stops it (a back or forward is undone). Returns the removal. */
   readonly block: (blocker: (transition: Transition) => boolean, options?: BlockOptions) => () => void;
   /** Why `href` shows what it does: every route's verdict, without going there. */
   readonly explain: (href: string) => Explanation;
-  /** The router now, as plain data. */
+  /** The navigator now, with its table's routes, as plain data. */
   readonly inspect: () => RouterSnapshot;
-  /** What the router did lately, oldest first. */
+  /** What it did lately, oldest first. */
   readonly journal: () => readonly RouterEvent[];
   /** Called with each event as it is recorded. Returns the unsubscribe. */
   readonly onEvent: (listener: (event: RouterEvent) => void) => () => void;
+  /** Stops following its history and its table; the table is left to whoever made it. */
   readonly destroy: () => void;
+}
+
+/** A table and one navigator over it, the common case: an app whose page has one location. */
+export interface Router<E extends RouteEntry = RouteEntry> extends Navigator<E> {
+  /** What is registered, in priority order: for a route with several entries, the first is the one shown. */
+  readonly setEntries: (entries: readonly E[]) => void;
+  readonly setKnown: (routes: readonly AnyRoute[]) => void;
+  /** The conflicts between the routes now registered or known. */
+  readonly issues: () => readonly RouteIssue[];
 }
 
 type Candidate = { readonly route: AnyRoute; readonly score: readonly number[]; readonly raw: Readonly<Record<string, string>> };
 
 /** Routes ready to match: one per id with its shown entry, and how many segments each can take. */
-export interface RouteTable<E extends RouteEntry> {
+export interface CompiledRoutes<E extends RouteEntry> {
   readonly entryOf: ReadonlyMap<string, E>;
   readonly routes: readonly { readonly route: AnyRoute; readonly min: number; readonly max: number }[];
 }
 
 /** Compiles `entries` (first per route id wins) and `known` routes for `resolve`; done once per change, not per navigation. */
-export const compileRoutes = <E extends RouteEntry>(entries: readonly E[], known: readonly AnyRoute[]): RouteTable<E> => {
+export const compileRoutes = <E extends RouteEntry>(entries: readonly E[], known: readonly AnyRoute[]): CompiledRoutes<E> => {
   const entryOf = new Map<string, E>();
   for (const entry of entries) if (!entryOf.has(entry.route.id)) entryOf.set(entry.route.id, entry);
   const byId = new Map<string, AnyRoute>();
@@ -164,7 +204,7 @@ const lengthOf = (min: number, max: number) => (max === Infinity ? `${min} or mo
  * embedders that keep their own state. With `trace`, every route's verdict is
  * added to it (the chosen route's first), at the cost of trying them all.
  */
-export const resolve = <E extends RouteEntry>(location: HistoryLocation, table: RouteTable<E>, signal: AbortSignal, trace?: RouteVerdict[]): Match<E> => {
+export const resolve = <E extends RouteEntry>(location: HistoryLocation, table: CompiledRoutes<E>, signal: AbortSignal, trace?: RouteVerdict[]): Match<E> => {
   const verdict = (route: AnyRoute, outcome: RouteVerdict["outcome"], detail: string) => trace?.push({ route: route.id, path: route.path, outcome, detail });
   const segments = splitPath(location.pathname);
   if (segments === undefined) {
@@ -322,20 +362,87 @@ const same = <E extends RouteEntry>(a: Match<E>, b: Match<E>) =>
   (a.status === "unmatched" || (b.status !== "unmatched" && a.route === b.route)) &&
   (a.status !== "matched" || (b.status === "matched" && a.entry === b.entry));
 
-export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterOptions): Router<E> => {
+/**
+ * A route table: entries and known routes, compiled once per change, with
+ * the conflicts among them. Navigators made over it (`createNavigator`)
+ * follow it, each matching its own location again when it changes.
+ */
+export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: RouteTableOptions = {}): RouteTable<E> => {
+  let entries: readonly E[] = [];
+  let known: readonly AnyRoute[] = options.known ?? [];
+  let compiled = compileRoutes(entries, known);
+  let issues: readonly RouteIssue[] = [];
+  const listeners = new Set<(fresh: readonly RouteIssue[]) => void>();
+  const label: (entry: E) => string = options.label ?? ((entry) => entry.route.id);
+
+  /** Routes changed: compile them again, report new conflicts, and tell the navigators. */
+  const recompile = () => {
+    compiled = compileRoutes(entries, known);
+    const before = new Set(issues.map((issue) => issue.message));
+    issues = findIssues(entries, known);
+    const fresh = issues.filter((issue) => !before.has(issue.message));
+    for (const issue of fresh) options.onIssue?.(issue);
+    // A copy: a listener may unsubscribe while being called. One that throws does not keep the others from hearing.
+    for (const listener of Array.from(listeners)) {
+      try {
+        listener(fresh);
+      } catch (error) {
+        console.error("router: a route table listener failed", error);
+      }
+    }
+  };
+
+  return {
+    setEntries: (next) => {
+      entries = next;
+      recompile();
+    },
+    setKnown: (next) => {
+      known = next;
+      recompile();
+    },
+    entries: () => entries,
+    known: () => known,
+    issues: () => issues,
+    resolve: (location, signal, trace) => resolve(location, compiled, signal, trace),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    label,
+    routes: () => {
+      const routes = new Map<string, { path: string; known: boolean; entries: string[] }>();
+      for (const entry of entries) {
+        const found = routes.get(entry.route.id) ?? { path: entry.route.path, known: false, entries: [] };
+        found.entries.push(label(entry));
+        routes.set(entry.route.id, found);
+      }
+      for (const route of known) {
+        const found = routes.get(route.id);
+        if (found === undefined) routes.set(route.id, { path: route.path, known: true, entries: [] });
+        else found.known = true;
+      }
+      return [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.String(a.path, b.path));
+    },
+    destroy: () => listeners.clear(),
+  };
+};
+
+/**
+ * A location over `table`: its own history (a memory history for each tab or
+ * pane of a page, the browser's for the page itself), match, blockers, and
+ * journal. Navigators over one table share its routes and compilation, and
+ * cost only their history and current match.
+ */
+export const createNavigator = <E extends RouteEntry = RouteEntry>(table: RouteTable<E>, options: NavigatorOptions): Navigator<E> => {
   const { history } = options;
   const retain = options.retain ?? [];
   const onError = options.onError ?? ((error: unknown, during: string) => console.error(`router: a ${during} failed`, error));
   const settleTimeout = options.settleTimeout ?? 1000;
-  let entries: readonly E[] = [];
-  let known: readonly AnyRoute[] = options.known ?? [];
-  let table = compileRoutes(entries, known);
-  let issues: readonly RouteIssue[] = [];
   let controller = new AbortController();
-  let current: Match<E> = resolve(history.location(), table, controller.signal);
+  let current: Match<E> = table.resolve(history.location(), controller.signal);
   const listeners = new Set<(match: Match<E>) => void>();
   const blockers = new Map<(transition: Transition) => boolean, string>();
-  const label: (entry: E) => string = options.label ?? ((entry) => entry.route.id);
 
   const kept = options.journal ?? 200;
   let events: RouterEvent[] = [];
@@ -357,7 +464,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     status: match.status,
     href: match.location.href,
     ...(match.status === "unmatched" ? {} : { route: match.route.id, params: match.params, search: match.search }),
-    ...(match.status === "matched" ? { entry: label(match.entry) } : {}),
+    ...(match.status === "matched" ? { entry: table.label(match.entry) } : {}),
   });
   const report = (error: unknown, during: "listener" | "blocker" | "navigate" | "history") => {
     record({ kind: "failed", during, message: error instanceof Error ? error.message : String(error) });
@@ -369,7 +476,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       controller.abort();
       controller = new AbortController();
     }
-    const next = resolve(history.location(), table, controller.signal);
+    const next = table.resolve(history.location(), controller.signal);
     if (same(current, next)) return;
     current = next;
     record({ kind: "matched", match: describe(current) });
@@ -382,18 +489,11 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       }
     }
   };
-  /** Routes changed: compile them again, report new conflicts, and match the location again. */
-  const recompile = () => {
-    table = compileRoutes(entries, known);
-    const before = new Set(issues.map((issue) => issue.message));
-    issues = findIssues(entries, known);
-    for (const issue of issues) {
-      if (before.has(issue.message)) continue;
-      record({ kind: "issue", message: issue.message });
-      options.onIssue?.(issue);
-    }
+  // The table's routes changed: its new conflicts go in the journal, and the location is matched again.
+  const stopFollowing = table.subscribe((fresh) => {
+    for (const issue of fresh) record({ kind: "issue", message: issue.message });
     update(false);
-  };
+  });
   // A blocker that throws allows the navigation: a broken one must not trap the user on the page.
   const allowed = (transition: Transition) => {
     for (const [blocker, by] of Array.from(blockers)) {
@@ -531,23 +631,15 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       : undefined;
 
   return {
+    table,
     location: history.location,
     match: () => current,
     matchOf,
-    matchHref: (href) => resolve(split(withRetained(href), "", -1), table, new AbortController().signal),
+    matchHref: (href) => table.resolve(split(withRetained(href), "", -1), new AbortController().signal),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => void listeners.delete(listener);
     },
-    setEntries: (next) => {
-      entries = next;
-      recompile();
-    },
-    setKnown: (next) => {
-      known = next;
-      recompile();
-    },
-    issues: () => issues,
     href: (route, params, search) => withRetained(route.href(params, search)),
     navigate,
     go,
@@ -561,31 +653,18 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
     explain: (href) => {
       const verdicts: RouteVerdict[] = [];
       const target = withRetained(href);
-      const match = resolve(split(target, "", -1), table, new AbortController().signal, verdicts);
+      const match = table.resolve(split(target, "", -1), new AbortController().signal, verdicts);
       return { href: target, status: match.status, ...(match.status === "unmatched" ? {} : { route: match.route.id }), verdicts };
     },
-    inspect: () => {
-      const routes = new Map<string, { path: string; known: boolean; entries: string[] }>();
-      for (const entry of entries) {
-        const found = routes.get(entry.route.id) ?? { path: entry.route.path, known: false, entries: [] };
-        found.entries.push(label(entry));
-        routes.set(entry.route.id, found);
-      }
-      for (const route of known) {
-        const found = routes.get(route.id);
-        if (found === undefined) routes.set(route.id, { path: route.path, known: true, entries: [] });
-        else found.known = true;
-      }
-      return {
-        location: history.location(),
-        match: describe(current),
-        routes: [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.String(a.path, b.path)),
-        issues: issues.map((issue) => ({ kind: issue.kind, message: issue.message, routes: issue.routes.map((route) => route.id) })),
-        blockers: [...blockers.values()],
-        retain,
-        moving,
-      };
-    },
+    inspect: () => ({
+      location: history.location(),
+      match: describe(current),
+      routes: table.routes(),
+      issues: table.issues().map((issue) => ({ kind: issue.kind, message: issue.message, routes: issue.routes.map((route) => route.id) })),
+      blockers: [...blockers.values()],
+      retain,
+      moving,
+    }),
     journal: () => events,
     onEvent: (listener) => {
       eventListeners.add(listener);
@@ -596,12 +675,29 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       moving = false;
       waiting = [];
       undoing = undefined;
+      stopFollowing();
       stopUnload?.();
       stop();
       controller.abort();
       listeners.clear();
       blockers.clear();
       eventListeners.clear();
+    },
+  };
+};
+
+/** A route table and one navigator over it: an app whose page has one location. Destroying it destroys both. */
+export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterOptions): Router<E> => {
+  const table = createRouteTable<E>(options);
+  const navigator = createNavigator(table, options);
+  return {
+    ...navigator,
+    setEntries: table.setEntries,
+    setKnown: table.setKnown,
+    issues: table.issues,
+    destroy: () => {
+      navigator.destroy();
+      table.destroy();
     },
   };
 };

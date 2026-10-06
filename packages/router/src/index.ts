@@ -16,7 +16,21 @@ export type {
   SearchFromDefaults,
   SearchOf,
 } from "./route.ts";
-export { createRouter, isRoute } from "./router.ts";
+export { createNavigator, createRouter, createRouteTable, isRoute } from "./router.ts";
 export type { Explanation, MatchInfo, RouteInfo, RouterEvent, RouterSnapshot, RouteVerdict } from "./inspect.ts";
-export type { BlockOptions, Match, Navigate, NavigateOptions, RouteEntry, RouteIssue, Router, RouterOptions, RouteTable, Transition } from "./router.ts";
+export type {
+  BlockOptions,
+  Match,
+  Navigate,
+  NavigateOptions,
+  Navigator,
+  NavigatorOptions,
+  RouteEntry,
+  RouteIssue,
+  Router,
+  RouterOptions,
+  RouteTable,
+  RouteTableOptions,
+  Transition,
+} from "./router.ts";
 export type { RawSearch } from "./search.ts";
