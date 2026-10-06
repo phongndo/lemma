@@ -13,3 +13,8 @@ Both are 1254 x 1254 PNGs with transparency outside the rounded tile. The
 filenames describe the tile's appearance. Use these originals when deriving
 platform-specific sizes and formats; keep shared artwork here rather than
 duplicating it in each app.
+
+The desktop app uses `icon-dark.png` as its window and Dock icon. The web app's
+favicon, [`apps/web/public/favicon.svg`](../../apps/web/public/favicon.svg), is
+the mark alone, redrawn as vector paths with no tile: charcoal on light browser
+themes and white on dark ones. Redraw it if the mark changes.

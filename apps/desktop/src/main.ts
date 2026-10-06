@@ -23,6 +23,8 @@ const STARTUP_TIMEOUT_MS = 30_000;
 /** The host's own limit on stopping (40 seconds), and a margin: quitting sooner would cut off what it lets finish. */
 const SHUTDOWN_TIMEOUT_MS = 45_000;
 const REMOTE_TIMEOUT_MS = 10_000;
+/** The shared app icon (assets/brand); the dark tile reads on light and dark desktops alike. */
+const icon = fileURLToPath(new URL("../../../assets/brand/icon-dark.png", import.meta.url));
 
 let host: UtilityProcess | undefined;
 let ownsHost = false;
@@ -177,6 +179,7 @@ const openWindow = (url: string) => {
     minWidth: 640,
     minHeight: 480,
     title: "lemma",
+    icon,
     show: false,
     // No native title bar: the controls overlay the page, which reads where (Window Controls Overlay) and makes
     // its own 48px top bars the title bar; centered in one at y 17.
@@ -265,6 +268,8 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
+      // Windows and Linux take the window's `icon`; the macOS Dock takes the app's.
+      app.dock?.setIcon(icon);
       // Without the dev server the window would be blank, and a host started for it would serve nothing.
       if (
         webUrl !== undefined &&
