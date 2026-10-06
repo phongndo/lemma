@@ -2,8 +2,7 @@
 
 The host's own commands, as three plugins so a composition missing one
 capability still gets the others. Each requires `Commands` and `Interaction`,
-plus the capability named below. They are all exclusive because the registry
-rejects duplicate ids.
+plus the capability named below.
 
 | Plugin               | Requires      | Commands                                                                                                                                                                                                                                                                                                                                                   |
 | -------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -7,7 +7,7 @@ import { Diagnostic } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 
 /**
- * Local plugins are `.ts` or `.js` files in `<home>/plugins` and, for a
+ * Local plugins are `.ts`, `.js`, or `.mjs` files in `<home>/plugins` and, for a
  * trusted project, `<cwd>/.lemma/plugins`, whose default export is a plugin,
  * an array of plugins, or a function of `{ bundled }` (the bundled plugins by
  * id) returning either, so a replacement can wrap the bundled plugin it

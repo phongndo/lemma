@@ -74,9 +74,9 @@ does not show, or an extension slot does not render what a plugin adds.
 For a change to how things look, compare screenshots of the main screens:
 
 ```sh
-nix develop .#browser -c node scripts/shots.ts /tmp/shots/before   # before the change
-nix develop .#browser -c node scripts/shots.ts /tmp/shots/after    # after it
-nix develop .#browser -c node scripts/compare-shots.ts /tmp/shots/before /tmp/shots/after
+nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/before   # before the change
+nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/after    # after it
+nix develop .#browser -c node apps/web/scripts/compare-shots.ts /tmp/shots/before /tmp/shots/after
 ```
 
 The Plugins page shows the dev server's port and the chat a turn's duration, so

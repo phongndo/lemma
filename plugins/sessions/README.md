@@ -4,11 +4,13 @@ Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
 `SessionEvent`s stored as one JSONL file. Requires `Paths`.
 
 ```ts
-const store = yield * Sessions;
-const { id } = yield * store.create({ cwd });
-const event = yield * store.append(id, { type: "title", title: "Fix the build" });
-const branch = yield * store.branch(id); // root → leaf
-yield * store.checkout(id, event.id); // later appends branch from here
+Effect.gen(function* () {
+  const store = yield* Sessions;
+  const { id } = yield* store.create({ cwd });
+  const event = yield* store.append(id, { type: "title", title: "Fix the build" });
+  const branch = yield* store.branch(id); // root → leaf
+  yield* store.checkout(id, event.id); // later appends branch from here
+});
 ```
 
 ```jsonc

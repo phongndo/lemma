@@ -176,7 +176,7 @@ export class HostRpcs extends RpcGroup.make(
     error: HostError,
   }),
 
-  /** Entries in `cwd` matching `query`, best first (see `FileSearch`). */
+  /** Entries in `cwd` matching `query`, best first (see `FileSearcher`). */
   Rpc.make("Files.Search", {
     payload: { cwd: Schema.String, query: Schema.String, ...FileSearchOptions.fields },
     success: FileSearchResult,

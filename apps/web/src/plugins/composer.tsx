@@ -602,7 +602,6 @@ function Composer(props: { deps: Deps }) {
   );
 }
 
-/** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
 /** The default `composer.queued` part: the prompt's mode and text on one line, and a button to withdraw it. */
 function QueuedRow(props: ComposerQueuedProps) {
   return (
@@ -663,6 +662,7 @@ function AttachImages(props: ComposerActionProps) {
   );
 }
 
+/** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
 export default defineUiPlugin({
   id: "composer",
   styles,

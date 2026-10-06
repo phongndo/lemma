@@ -7,7 +7,6 @@ tools through. Tool plugins require `Tools` and register during activation.
 const greet = definePlugin({
   id: "greet",
   requires: [Tools],
-  exclusive: true, // the registry rejects duplicate names; see below
   layer: Layer.scopedDiscard(
     Effect.flatMap(Tools, (tools) =>
       tools.register({
@@ -33,8 +32,9 @@ const greet = definePlugin({
   that registered it, and the guards: the devtools' Inspectors panel and
   `lemma inspectors` show it.
 - `register` records the caller's `PluginContext` id as the tool's `source` and
-  unregisters when the caller's scope closes. A duplicate name fails with
-  `InvalidInput`, so contributors should be `exclusive` to reload cleanly.
+  unregisters when the caller's scope closes. A name another plugin holds fails
+  with `InvalidInput`, naming that plugin; a plugin's replacement takes its
+  names over when a reload swaps them, so contributors need not be `exclusive`.
 - A tool that only reads declares `replay: "safe"`: a call a host restart cut
   off then runs again when the turn resumes, where any other is reported to the
   model as interrupted (see the [agent](../agent/README.md#durability)). One

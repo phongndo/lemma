@@ -472,12 +472,6 @@ function CustomProviderRow(props: { add: (draft: CustomProviderDraft, key: strin
   );
 }
 
-/**
- * Model providers: sign in with a subscription or paste an API key, in the
- * provider's row. A search at the top narrows the list; popular ways to start
- * come first. Opened from the chat's notice (or the palette) with nothing set
- * up, it says why and closes once a provider is connected.
- */
 export const ProvidersConfig = Schema.Struct({
   logos: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })).annotations({
     title: "Custom provider logos to move",
@@ -485,6 +479,12 @@ export const ProvidersConfig = Schema.Struct({
   }),
 });
 
+/**
+ * Model providers: sign in with a subscription or paste an API key, in the
+ * provider's row. A search at the top narrows the list; popular ways to start
+ * come first. Opened from the chat's notice (or the palette) with nothing set
+ * up, it says why and closes once a provider is connected.
+ */
 export default defineUiPlugin({
   id: "providers",
   styles,

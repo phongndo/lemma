@@ -15,17 +15,3 @@ Log in to a provider from the key icon in the web app or with `lemma login`, or
 set the provider's API key environment variable. The
 [llm plugin](../plugins/llm-pi-ai/README.md) lists the providers and how to add
 your own.
-
-## Working on Lemma
-
-Keep `pnpm dev` running: it starts the host, the web app's dev server, and the
-desktop window on them. The host restarts when its code changes and the web app
-hot-reloads. Quitting the window leaves the rest running; Ctrl+C stops
-everything.
-
-```sh
-nix develop -c pnpm dev            # host (restarting on edits), dev server, and window; prints a browser link too
-nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
-```
-
-[Development](development.md) covers checks and hooks.

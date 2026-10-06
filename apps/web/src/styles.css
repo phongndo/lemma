@@ -54,7 +54,7 @@
     color-scheme: light;
   }
 
-  /* The theme is resolved in JS (store.ts), so an explicit choice overrides the system. */
+  /* The theme is resolved in JS (lib/paint.ts), so an explicit choice overrides the system. */
   :root[data-theme="dark"] {
     --bg: #0b0b0b;
     --bg-sunk: #080808;

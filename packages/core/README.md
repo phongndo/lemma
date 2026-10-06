@@ -78,15 +78,19 @@ const Render = Hook.make<string, string>("example/render");
 Contributors obtain `PluginContext` and register around middleware:
 
 ```ts
-const owner = yield * PluginContext;
-yield * owner.on(Render, (input, next) => Effect.map(next(input), (output) => output.toUpperCase()), { order: 10 });
+Effect.gen(function* () {
+  const owner = yield* PluginContext;
+  yield* owner.on(Render, (input, next) => Effect.map(next(input), (output) => output.toUpperCase()), { order: 10 });
+});
 ```
 
 The owning operation obtains `Hooks` and supplies its terminal behavior:
 
 ```ts
-const hooks = yield * Hooks;
-const result = yield * hooks.invoke(Render, "hello", Effect.succeed);
+Effect.gen(function* () {
+  const hooks = yield* Hooks;
+  const result = yield* hooks.invoke(Render, "hello", Effect.succeed);
+});
 ```
 
 These snippets assume the exports are imported from `@lemma/core`; the complete runnable example shows the wiring.
@@ -127,12 +131,14 @@ const Commands = Registry.make<Command>("example/commands", { key: (command) => 
 A plugin contributes with its `PluginContext`; readers use `Registries`:
 
 ```ts
-const owner = yield * PluginContext;
-const remove = yield * owner.add(Menu, { label: "Open" }, { order: 10 });
+Effect.gen(function* () {
+  const owner = yield* PluginContext;
+  const remove = yield* owner.add(Menu, { label: "Open" }, { order: 10 });
 
-const registries = yield * Registries;
-const items = yield * registries.items(Menu); // [{ item, pluginId, order }], in order
-const updates = registries.changes(Menu); // the items now, then after each change
+  const registries = yield* Registries;
+  const items = yield* registries.items(Menu); // [{ item, pluginId, order }], in order
+  const updates = registries.changes(Menu); // the items now, then after each change
+});
 ```
 
 - Items come in `order` (lower first), then by plugin id, then in the order that plugin added them. Each carries the contributing plugin's id; `core.inspect` lists who contributes what.

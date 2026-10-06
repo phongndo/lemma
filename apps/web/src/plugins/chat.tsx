@@ -559,7 +559,6 @@ function TurnFooter(props: ChatTurnFooterProps) {
   );
 }
 
-/** A finished turn's work behind its answer, as one line: how long it took and how many tool calls; opening it shows them. */
 /** Folded work, through the `chat.work` part; the chat renders the steps inside it. */
 function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }> }) {
   return (
@@ -577,7 +576,7 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
   );
 }
 
-/** The default `chat.work` part: one quiet line that opens to the steps. */
+/** The default `chat.work` part: a turn's work behind its answer as one quiet line (how long it took, how many tool calls) that opens to the steps. */
 function WorkView(props: ChatWorkProps) {
   return (
     <div class="work" classList={{ open: props.open }}>

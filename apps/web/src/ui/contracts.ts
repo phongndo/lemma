@@ -232,12 +232,12 @@ export interface WorktreeDraft {
 
 export interface WorkspaceService {
   readonly api: Host["workspace"];
-  /** The host's directory, then projects by the recency of their threads, then ones added by hand. */
+  /** Folders with threads, most recently used first, then ones added by hand; never `standaloneDir`. */
   readonly projects: Accessor<readonly string[]>;
   /** Added by hand (remembered), so they are offered before they have threads. */
   readonly added: Accessor<readonly string[]>;
   readonly add: (path: string) => void;
-  /** Stops listing a project, the host's directory included, until a thread starts in it or it is added again. */
+  /** Stops listing a project until a thread starts in it or it is added again. */
   readonly remove: (path: string) => void;
   /** A project's settings (remembered in this browser); fields absent follow the defaults. */
   readonly projectSettings: (cwd: string) => ProjectSettings;
@@ -252,7 +252,7 @@ export interface WorkspaceService {
   readonly newStandalone: () => Promise<void>;
   /** Starts a new chat in the folder at `input` (`~` allowed) once the host confirms it exists. */
   readonly open: (input: string) => Promise<boolean>;
-  /** Where the composer works: the active session's directory, else the new chat's, else the host's. */
+  /** Where the composer works: the active session's directory, else the new chat's, else `standaloneDir`. */
   readonly workingDir: Accessor<string | undefined>;
   /** The working directory's status, kept fresh while connected. */
   readonly status: Accessor<WorkspaceStatus | undefined>;

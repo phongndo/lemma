@@ -6,16 +6,10 @@ import { writeFileAtomic } from "@lemma/contracts/fs";
 
 /*
  * What the agent keeps on disk beside the session log, per session, under
- * `<home>/agent`. The log stays the source of truth: these files say which
- * turns to resume and what is queued, and anything they claim that the log
- * contradicts (a turn that ended, a prompt already placed) is dropped.
- *
- * - `<session>.json`, the journal: the open turn and the queue. Synced on
- *   every change, which happens per prompt and per turn, not per event.
- * - `<session>.live.json`: the running turn's model output and tool output so
- *   far, rewritten at most every `LIVE_INTERVAL_MS` while it changes and not
- *   synced, so a process crash loses at most that window. It fills in what a
- *   cut-off call had produced when the turn resumes.
+ * `<home>/agent`: the journal (`<session>.json`) and the running turn's output
+ * so far (`<session>.live.json`), as the README's Durability section
+ * describes. The log stays the source of truth: anything these files claim
+ * that it contradicts is dropped.
  */
 
 /** How often a running turn's output so far is written, at most. */

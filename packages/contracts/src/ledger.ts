@@ -5,7 +5,7 @@ import type { TrajectoryRequest, TrajectoryStep, TrajectoryToolRun, TrajectoryTu
 /**
  * The Trajectory ledger: one flat, ordered list of records (the system prompt
  * when it is first sent or changes, each user prompt, each model call, each
- * tool run) projected from `trajectory(branch)`, plus the timeline ledgerSpans they
+ * tool run) projected from `trajectory(branch)`, plus the timeline spans they
  * occupy. Pure, so the view only renders.
  */
 
@@ -120,7 +120,7 @@ export interface LedgerSpan {
   readonly start: number;
   /** Absent while the record is still running. */
   readonly end?: number;
-  /** Time to first token, for model ledgerSpans. */
+  /** Time to first token, for model spans. */
   readonly ttft?: number;
   readonly error: boolean;
 }

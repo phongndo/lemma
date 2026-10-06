@@ -112,7 +112,7 @@ export interface Host {
     readonly checkout: (path: string, branch: string, options?: { create?: boolean }) => Promise<WorkspaceStatus>;
   };
   readonly files: {
-    /** Entries in `cwd` matching `query`, best first (see `FileSearch`); rejects `NotFound` or `Unavailable`. */
+    /** Entries in `cwd` matching `query`, best first (see `FileSearcher` in the contracts); rejects `NotFound` or `Unavailable`. */
     readonly search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<FileSearchResult>;
   };
   readonly commands: {

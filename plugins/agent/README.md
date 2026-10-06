@@ -5,10 +5,12 @@ Provides `Agent` (`@lemma/contracts`): the turn loop. Requires `Sessions`, `Llm`
 its turns, before the new instance resumes them.
 
 ```ts
-const agent = yield * Agent;
-yield * agent.prompt(sessionId, [{ type: "text", text: "Fix the failing test" }]);
-yield * agent.prompt(sessionId, [{ type: "text", text: "Use pnpm" }], { whenBusy: "steer", requestId: "r-42" });
-yield * agent.cancel(sessionId);
+Effect.gen(function* () {
+  const agent = yield* Agent;
+  yield* agent.prompt(sessionId, [{ type: "text", text: "Fix the failing test" }]);
+  yield* agent.prompt(sessionId, [{ type: "text", text: "Use pnpm" }], { whenBusy: "steer", requestId: "r-42" });
+  yield* agent.cancel(sessionId);
+});
 ```
 
 ## Config

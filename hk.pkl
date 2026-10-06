@@ -1,7 +1,7 @@
 amends "package://github.com/jdx/hk/releases/download/v2.0.1/hk@2.0.1#/Config.pkl"
 import "package://github.com/jdx/hk/releases/download/v2.0.1/hk@2.0.1#/Builtins.pkl"
 
-// Git hooks (https://hk.jdx.dev). `hk install` sets them up; see the README.
+// Git hooks (https://hk.jdx.dev). `hk install` sets them up; see docs/development.md.
 // The linters are the workspace's pinned versions, run through `pnpm exec`.
 local linters = new Mapping<String, Step> {
   ["oxfmt"] = (Builtins.oxfmt) { prefix = List("pnpm", "exec") }

@@ -66,4 +66,4 @@ Without an `apiKey`, a custom provider counts as configured and sends a placehol
 
 ## Testing
 
-`makeLlmPlugin({ providers, authContext })` replaces the built-in provider list and the environment used for auth. Tests use it to register pi-ai's `fauxProvider` and isolate themselves from the developer's API keys.
+`makeLlmPlugin({ providers, authContext, fetch })` replaces the built-in provider list, the environment used for auth, and how live catalogs are fetched. Tests use it to register pi-ai's `fauxProvider`, isolate themselves from the developer's API keys, and keep catalogs offline.

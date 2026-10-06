@@ -35,8 +35,7 @@ that never exits cannot hold a turn forever.
 ## Rationale
 
 - **One plugin per tool** so a composition can drop or replace one (a sandboxed
-  `bash`) by id. They are `exclusive`: the registry rejects duplicate names, so a
-  reload must unregister before re-registering.
+  `bash`) by id.
 - **Exact edits.** Matching is exact after normalizing line endings (CRLF files
   stay CRLF, a BOM is kept). Unlike pi there is no fuzzy fallback for trailing
   whitespace or typographic quotes; a failed match tells the model to copy the

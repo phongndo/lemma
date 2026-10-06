@@ -18,6 +18,16 @@ nix develop -c hk install          # git hooks (hk.pkl): format and lint-fix sta
 The hooks call the dev shell's `hk`: commit from inside `nix develop`, or set
 `HK=0` to skip them once.
 
+Keep `pnpm dev` running while you work: it starts the host, the web app's dev
+server, and the desktop window on them. The host restarts when its code changes
+and the web app hot-reloads. Quitting the window leaves the rest running;
+Ctrl+C stops everything.
+
+```sh
+nix develop -c pnpm dev            # host (restarting on edits), dev server, and window; prints a browser link too
+nix develop -c pnpm dev:desktop    # the window again, while `pnpm dev` runs
+```
+
 Browser checks (the web app's `ui:check`, the core's `browser:check`) run in
 the `browser` shell, which supplies pinned Chromium on Linux. On macOS, install
 one with `nix develop .#browser -c pnpm exec playwright install chromium`, or
