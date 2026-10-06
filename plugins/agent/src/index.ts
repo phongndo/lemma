@@ -14,13 +14,14 @@ import {
   ToolOutput,
   Tools,
 } from "@lemma/contracts";
-import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionEvent, TurnOptions } from "@lemma/contracts";
+import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, TurnOptions } from "@lemma/contracts";
 import { LiveTurn } from "./live.ts";
 import { planResume } from "./resume.ts";
 import { makeSlots } from "./slots.ts";
 import type { SlotHolder } from "./slots.ts";
 import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
 import type { Journal } from "./state.ts";
+import { makeRequestIndex } from "./requests.ts";
 import { failedAs, newId, runTurn } from "./turn.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
 
@@ -171,51 +172,11 @@ export default definePlugin({
           <A, E, R>(wait: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
             Effect.zipRight(slots.release(entry), Effect.zipLeft(wait, takeSlot(entry)));
 
-        /**
-         * Each session's request ids that are in its log, with the turn that
-         * placed them: read from the log once (`loadRequests`), then kept as
-         * turns log prompts, so a prompt's exactly-once check does not reread
-         * it while the session is busy. Dropped when the session goes idle
-         * (`forget`), so a long-running host keeps none for idle sessions.
-         */
-        const requests = new Map<string, Map<string, string | undefined>>();
-        const loadedRequests = new Set<string>();
-        const requestsOf = (sessionId: string) => {
-          let known = requests.get(sessionId);
-          if (known === undefined) {
-            known = new Map();
-            requests.set(sessionId, known);
-          }
-          return known;
-        };
-        const indexRequests = (sessionId: string, log: readonly SessionEvent[]) => {
-          const known = requestsOf(sessionId);
-          for (const event of log) {
-            if (event.data.type === "message" && event.data.message.role === "user" && event.data.requestId !== undefined && !known.has(event.data.requestId)) {
-              known.set(event.data.requestId, event.data.turnId);
-            }
-          }
-          loadedRequests.add(sessionId);
-        };
-        /** A session not created yet has no requests; a log that cannot be read fails the check rather than pass it. */
-        const loadRequests = (sessionId: string) =>
-          Effect.suspend(() =>
-            loadedRequests.has(sessionId)
-              ? Effect.void
-              : sessions.events(sessionId).pipe(
-                  Effect.catchIf(
-                    (error) => error.reason === "NotFound",
-                    () => Effect.succeed([]),
-                  ),
-                  Effect.mapError(failedAs(sessionId, "Session")),
-                  Effect.map((log) => indexRequests(sessionId, log)),
-                ),
-          );
+        const requests = makeRequestIndex(sessions);
         /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
         const forget = (sessionId: string, state: SessionState) => {
           if (state.turn !== undefined || state.queue.length > 0) return;
-          requests.delete(sessionId);
-          loadedRequests.delete(sessionId);
+          requests.drop(sessionId);
         };
         const stateOf = (sessionId: string): SessionState => {
           let state = states.get(sessionId);
@@ -340,7 +301,7 @@ export default definePlugin({
             ),
           );
         const loggedIn = (sessionId: string, turnId: string) => (requestId: string) => {
-          requestsOf(sessionId).set(requestId, turnId);
+          requests.of(sessionId).set(requestId, turnId);
         };
 
         /** A new turn: the prompts it starts with, the last one's options choosing the model. */
@@ -516,7 +477,7 @@ export default definePlugin({
           Effect.gen(function* () {
             const { requestId } = options;
             // Outside the lock: the first exactly-once check of a session reads its log.
-            if (requestId !== undefined) yield* loadRequests(sessionId);
+            if (requestId !== undefined) yield* requests.load(sessionId);
             // Admission cannot be split by the caller's interruption, or a prompt could be queued and forgotten.
             const waitOn = yield* admit.withPermits(1)(
               Effect.uninterruptible(
@@ -524,7 +485,7 @@ export default definePlugin({
                   const state = stateOf(sessionId);
                   if (requestId !== undefined) {
                     // Dropped meanwhile if the session went idle: read again, under the lock, so the check is complete.
-                    yield* loadRequests(sessionId);
+                    yield* requests.load(sessionId);
                     const queued = state.queue.find((item) => item.prompt.requestId === requestId);
                     if (queued !== undefined) {
                       // Held after a failed or cancelled turn: the retry starts it, as a new prompt would.
@@ -539,9 +500,9 @@ export default definePlugin({
                     }
                     const placed = state.turn?.items.get(requestId);
                     if (placed !== undefined) return placed.done;
-                    if (requestsOf(sessionId).has(requestId)) {
+                    if (requests.of(sessionId).has(requestId)) {
                       const running = state.turn;
-                      return running !== undefined && requestsOf(sessionId).get(requestId) === running.turnId ? running.ended : undefined;
+                      return running !== undefined && requests.of(sessionId).get(requestId) === running.turnId ? running.ended : undefined;
                     }
                   }
                   if (state.turn !== undefined) {
@@ -632,8 +593,7 @@ export default definePlugin({
               const state = states.get(sessionId);
               if (state?.turn !== undefined) return;
               states.delete(sessionId);
-              requests.delete(sessionId);
-              loadedRequests.delete(sessionId);
+              requests.drop(sessionId);
               for (const item of state?.queue ?? []) {
                 yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
               }
@@ -651,8 +611,8 @@ export default definePlugin({
             continue;
           }
           const log = yield* sessions.events(sessionId).pipe(Effect.orElseSucceed(() => []));
-          indexRequests(sessionId, log);
-          const placed = requestsOf(sessionId);
+          requests.index(sessionId, log);
+          const placed = requests.of(sessionId);
           const state = stateOf(sessionId);
           state.queue = yield* Effect.forEach(
             journal.queue.filter((prompt) => !placed.has(prompt.requestId)),
