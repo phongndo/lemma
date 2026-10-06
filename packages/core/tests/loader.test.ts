@@ -2,12 +2,11 @@ import { describe, expect, test } from "vitest";
 import { Context, Deferred, Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { checkComposition, definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
 import type { Composition, Plugin, PluginSource } from "../src/index.ts";
-import { waitFor } from "./support.ts";
+import { run, waitFor } from "./support.ts";
 
 class Db extends Context.Tag("test/Db")<Db, { readonly name: string; readonly generation: number }>() {}
 class Api extends Context.Tag("test/Api")<Api, () => string>() {}
 const Greet = Hook.make<string, string>("test/greet");
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
 
 function fixtures(log: string[]) {
   let generation = 0;

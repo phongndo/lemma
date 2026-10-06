@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect";
 import { PluginFault, CapabilityMismatch, CompositionError, CoreClosed, definePlugin, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
 import type { Core, Plugin } from "../src/index.ts";
+import { failure, run } from "./support.ts";
 
 class Prefix extends Context.Tag("test/Prefix")<Prefix, string>() {}
 class Format extends Context.Tag("test/Format")<Format, (text: string) => string>() {}
@@ -22,16 +23,6 @@ const formatter = definePlugin({
     Effect.map(Prefix, (value) => (text: string) => value + text),
   ),
 });
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
-
-function failure<E>(exit: Exit.Exit<unknown, E>): E {
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isSuccess(exit)) throw new Error("Expected failure");
-  const result = Cause.failureOption(exit.cause);
-  expect(Option.isSome(result)).toBe(true);
-  if (Option.isNone(result)) throw new Error(Cause.pretty(exit.cause));
-  return result.value;
-}
 
 describe("composition", () => {
   test("an empty core has no application behavior and rejects use after scope closure", async () => {

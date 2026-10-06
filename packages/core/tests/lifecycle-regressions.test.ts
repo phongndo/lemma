@@ -2,12 +2,11 @@ import { expect, test } from "vitest";
 import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schedule, Schema, Scope, Stream } from "effect";
 import { definePlugin, Event, Events, makeCore, makeLoader, PluginContext } from "../src/index.ts";
 import type { Loader } from "../src/index.ts";
-import { waitFor } from "./support.ts";
+import { run, waitFor } from "./support.ts";
 
 class Value extends Context.Tag("regression/Value")<Value, number>() {}
 const value = definePlugin({ id: "value", provides: [Value], config: Schema.Struct({ n: Schema.Number }), layer: ({ n }) => Layer.succeed(Value, n) });
 const composition = (n: number, transport = false) => ({ plugins: { value: { config: { n } }, ...(transport ? { transport: {} } : {}) } });
-const run = <A, E>(body: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(body));
 
 test("reload initiated inside core.run completes and releases the lifecycle lock", async () => {
   await run(

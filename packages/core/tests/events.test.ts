@@ -1,10 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schedule, Scope, Stream } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect";
 import { definePlugin, Event, Events, makeCore, PluginContext } from "../src/index.ts";
-import { waitFor } from "./support.ts";
+import { run, waitFor } from "./support.ts";
 
 const Tick = Event.make<number>("test/tick");
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
 
 describe("events", () => {
   test("publishing reaches every observer, never fails, and isolates observer failures", async () => {

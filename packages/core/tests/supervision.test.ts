@@ -1,11 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule, Scope, Stream } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule, Stream } from "effect";
 import { CoreClosed, DeadlineExceeded, definePlugin, makeCore, PluginContext } from "../src/index.ts";
-import { waitFor } from "./support.ts";
+import { run, waitFor } from "./support.ts";
 
 class Db extends Context.Tag("test/Db")<Db, { readonly name: string }>() {}
 class Api extends Context.Tag("test/Api")<Api, string>() {}
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
 
 /** A provider whose background task fails when the test fires the trigger created for its current activation. */
 const flaky = (options: { required: boolean; log: string[]; triggers: Deferred.Deferred<void>[] }) =>

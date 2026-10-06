@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Chunk, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Stream } from "effect";
+import { Cause, Chunk, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
 import type { Composition, Plugin, PluginSource } from "../src/index.ts";
-import { waitFor } from "./support.ts";
+import { failure, run, waitFor } from "./support.ts";
 
 interface Entry {
   readonly label: string;
@@ -21,12 +21,6 @@ const contributor = (id: string, entries: readonly (Entry & { readonly order?: n
   });
 const labels = (registry = Menu) =>
   Effect.flatMap(Registries, (registries) => registries.items(registry)).pipe(Effect.map((items) => items.map((item) => item.item.label)));
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
-
-function failure<E>(exit: Exit.Exit<unknown, E>): E {
-  if (Exit.isSuccess(exit)) throw new Error("Expected failure");
-  return Option.getOrThrow(Cause.failureOption(exit.cause));
-}
 
 describe("registries", () => {
   test("items come in order, then by plugin id and contribution order, attributed to their plugin", async () => {

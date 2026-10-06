@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Tracer } from "effect";
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Tracer } from "effect";
 import { definePlugin, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
 import type { Handler, Next } from "../src/index.ts";
+import { failure, run } from "./support.ts";
 
 const point = Hook.make<number, number, string>("test/compute");
 const middleware = (id: string, handler: Handler<number, number, string, PluginContext | Hooks>, order = 0) =>
@@ -11,12 +12,6 @@ const middleware = (id: string, handler: Handler<number, number, string, PluginC
     layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(point, handler, { order }))),
   });
 const invoke = (value: number) => Effect.flatMap(Hooks, (hooks) => hooks.invoke(point, value, (input) => Effect.succeed(input * 2)));
-const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(effect));
-
-function failure<E>(exit: Exit.Exit<unknown, E>): E {
-  if (Exit.isSuccess(exit)) throw new Error("Expected failure");
-  return Option.getOrThrow(Cause.failureOption(exit.cause));
-}
 
 describe("plugin-owned hooks", () => {
   test("no listeners calls the terminal; order is explicit and independent of mounting order", async () => {
