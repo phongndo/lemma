@@ -124,8 +124,6 @@ const identity = (value: object): number => {
   return id;
 };
 
-const noCache: Cache = { get: (_key, _signature, make) => make(), sweep: () => {} };
-
 interface MutableTurn {
   key: string;
   turnId: string | undefined;
@@ -349,8 +347,6 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
   cache.sweep();
   return { turns: views, ...(title === undefined ? {} : { title }) };
 };
-
-export const projectTranscript = (branch: readonly SessionEvent[]): Transcript => project(branch, noCache);
 
 /** A stateful projector for one session view; reuses unchanged objects between calls. */
 export const createProjector = (): ((branch: readonly SessionEvent[]) => Transcript) => {

@@ -1,5 +1,9 @@
 import { emptyUsage } from "@lemma/contracts";
 import type { AssistantMessage, EventData, SessionEvent, Usage } from "@lemma/contracts";
+import { createProjector } from "../src/model/transcript.ts";
+
+/** A branch's transcript, projected once. */
+export const transcriptOf = (events: readonly SessionEvent[]) => createProjector()(events);
 
 /** Builds a linear branch: each event's parent is the previous one. */
 export const branch = (...data: EventData[]): SessionEvent[] =>

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createProjector, pendingToolCalls, projectTranscript, promptMarks } from "../src/model/transcript.ts";
+import { createProjector, pendingToolCalls, promptMarks } from "../src/model/transcript.ts";
 import type { AssistantItem } from "../src/model/transcript.ts";
-import { assistant, branch, toolResult, usage, user } from "./fixtures.ts";
+import { assistant, branch, toolResult, transcriptOf, usage, user } from "./fixtures.ts";
 
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });
 
-describe("projectTranscript", () => {
+describe("transcript", () => {
   it("groups a turn and pairs tool calls with results", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "turn-start", turnId: "t1" },
         user("hi", "t1"),
@@ -32,13 +32,13 @@ describe("projectTranscript", () => {
   });
 
   it("attaches turn-start to a preceding user message", () => {
-    const t = projectTranscript(branch(user("hi"), { type: "turn-start", turnId: "t1" }, { type: "turn-end", turnId: "t1", reason: "cancelled" }));
+    const t = transcriptOf(branch(user("hi"), { type: "turn-start", turnId: "t1" }, { type: "turn-end", turnId: "t1", reason: "cancelled" }));
     expect(t.turns).toHaveLength(1);
     expect(t.turns[0]).toMatchObject({ key: "t1", turnId: "t1", end: { reason: "cancelled" } });
   });
 
   it("starts a new turn per user message and per turn-start", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "turn-start", turnId: "t1" },
         user("a", "t1"),
@@ -53,7 +53,7 @@ describe("projectTranscript", () => {
   });
 
   it("shows a steer in the turn it joined, between its steps", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "turn-start", turnId: "t1" },
         user("a", "t1"),
@@ -68,7 +68,7 @@ describe("projectTranscript", () => {
   });
 
   it("shows attempts distinctly and counts their usage but not as steps", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "turn-start", turnId: "t1" },
         {
@@ -88,7 +88,7 @@ describe("projectTranscript", () => {
   });
 
   it("keeps the latest title, compactions, and orphan results", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "title", title: "one" },
         { type: "compaction", summary: "s", firstKeptId: "e1", tokensBefore: 900, source: "x" },
@@ -101,7 +101,7 @@ describe("projectTranscript", () => {
   });
 
   it("lists pending tool calls", () => {
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch({ type: "turn-start", turnId: "t1" }, { type: "message", turnId: "t1", message: assistant([call("c1"), call("c2")]) }, toolResult("c1", "x")),
     );
     expect([...pendingToolCalls(t)]).toEqual(["c2"]);
@@ -138,7 +138,7 @@ describe("createProjector", () => {
 describe("promptMarks", () => {
   it("marks each turn that starts with a prompt, with its answer", () => {
     const answer = "## Fixed\n\nThe **cause** was `retry_count`.";
-    const t = projectTranscript(
+    const t = transcriptOf(
       branch(
         { type: "turn-start", turnId: "t1" },
         user("fix   the\nbuild", "t1"),

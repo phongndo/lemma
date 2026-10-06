@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { answerText, entryKey, foldRunning, foldTurn } from "../src/model/fold.ts";
 import type { TurnEntry } from "../src/model/fold.ts";
-import { projectTranscript } from "../src/model/transcript.ts";
 import type { EventData } from "@lemma/contracts";
-import { assistant, branch, toolResult, user } from "./fixtures.ts";
+import { assistant, branch, toolResult, transcriptOf, user } from "./fixtures.ts";
 
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });
-const turnOf = (...data: EventData[]) => projectTranscript(branch({ type: "turn-start", turnId: "t1" }, user("hi", "t1"), ...data)).turns[0]!;
+const turnOf = (...data: EventData[]) => transcriptOf(branch({ type: "turn-start", turnId: "t1" }, user("hi", "t1"), ...data)).turns[0]!;
 const describeEntries = (entries: readonly TurnEntry[] | undefined) =>
   entries?.map((entry) =>
     entry.kind === "work"

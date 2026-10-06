@@ -1,22 +1,5 @@
 import type { PluginStatus, ReloadResult } from "@lemma/contracts";
 
-type Source = PluginStatus["source"];
-
-const SOURCE_ORDER: readonly Source[] = ["bundled", "user", "project"];
-export const SOURCE_TITLES: Readonly<Record<Source, string>> = { bundled: "Bundled", user: "Your plugins", project: "Project plugins" };
-
-export interface PluginGroup {
-  readonly source: Source;
-  readonly title: string;
-  readonly plugins: readonly PluginStatus[];
-}
-
-/** By where they come from, keeping the host's order within each group; empty groups are dropped. */
-export const pluginGroups = (plugins: readonly PluginStatus[]): PluginGroup[] =>
-  SOURCE_ORDER.map((source) => ({ source, title: SOURCE_TITLES[source], plugins: plugins.filter((plugin) => plugin.source === source) })).filter(
-    (group) => group.plugins.length > 0,
-  );
-
 /** What a search over plugins matches. */
 export const pluginText = (plugin: PluginStatus): string =>
   [
@@ -99,12 +82,6 @@ export function describeState(plugin: PluginStatus): string {
 export const recoverable = (plugin: PluginStatus): boolean => plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
 
 const providesOf = (plugins: readonly PluginStatus[], id: string): readonly string[] => plugins.find((plugin) => plugin.id === id)?.provides ?? [];
-
-/** Every plugin requiring a capability `id` provides, directly, running or not: what the details panel lists. Compare `dependentsOf`. */
-export const requiredBy = (plugins: readonly PluginStatus[], id: string): string[] => {
-  const provides = providesOf(plugins, id);
-  return plugins.filter((plugin) => plugin.id !== id && plugin.requires.some((key) => provides.includes(key))).map((plugin) => plugin.id);
-};
 
 /** Enabled plugins providing a capability `id` also provides: the host turns them off when `id` is turned on. */
 export const replaces = (plugins: readonly PluginStatus[], id: string): string[] => {

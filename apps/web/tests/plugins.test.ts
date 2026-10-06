@@ -5,12 +5,10 @@ import {
   describeReload,
   describeState,
   matchPlugins,
-  pluginGroups,
   pluginText,
   providerOf,
   recoverable,
   replaces,
-  requiredBy,
   usersOf,
   waitingOn,
 } from "../src/model/plugins.ts";
@@ -36,15 +34,6 @@ const plugins: PluginStatus[] = [
   plugin("notes", { source: "user", requires: ["lemma/Tools"], state: "failed", fault: { phase: "activate", message: "boom" } }),
 ];
 
-describe("pluginGroups", () => {
-  it("groups by source in a fixed order and drops empty groups", () => {
-    expect(pluginGroups(plugins).map((group) => [group.title, group.plugins.map((plugin) => plugin.id)])).toEqual([
-      ["Bundled", ["llm", "tools", "bash", "edit", "agent", "transport"]],
-      ["Your plugins", ["notes"]],
-    ]);
-  });
-});
-
 describe("dependentsOf", () => {
   it("follows provided capabilities through running plugins only, nearest first", () => {
     expect(dependentsOf(plugins, "tools")).toEqual(["bash", "agent", "notes", "transport"]);
@@ -53,13 +42,7 @@ describe("dependentsOf", () => {
   });
 });
 
-describe("requiredBy and replaces", () => {
-  it("lists direct dependents whether or not they run, unlike dependentsOf", () => {
-    expect(requiredBy(plugins, "tools")).toEqual(["bash", "edit", "agent", "notes"]);
-    expect(dependentsOf(plugins, "tools")).not.toContain("edit");
-    expect(requiredBy(plugins, "bash")).toEqual([]);
-  });
-
+describe("replaces", () => {
   it("names the enabled providers a plugin replaces when turned on", () => {
     const withAlternative = [...plugins, plugin("my-llm", { source: "user", provides: ["lemma/Llm"], enabled: false, state: "disabled" })];
     expect(replaces(withAlternative, "my-llm")).toEqual(["llm"]);
