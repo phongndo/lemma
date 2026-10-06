@@ -9,6 +9,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = join(root, "packages/core");
 const problems: string[] = [];
 
+/** Prints a boundary's verdict; every boundary is checked before the script fails. */
+let failed = false;
+const report = (heading: string, found: readonly string[], ok: string) => {
+  if (found.length === 0) return console.log(ok);
+  failed = true;
+  console.error(`${heading}:\n${found.map((problem) => `  ${problem}`).join("\n")}`);
+};
+
 const manifest = JSON.parse(readFileSync(join(core, "package.json"), "utf8"));
 for (const name of Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })) {
   if (name !== "effect") problems.push(`packages/core/package.json: runtime dependency "${name}" (only effect is allowed)`);
@@ -42,11 +50,7 @@ for (const file of walk(join(core, "src")).filter((path) => /\.(ts|tsx|mts)$/.te
     });
 }
 
-if (problems.length) {
-  console.error(`Kernel boundary violations:\n${problems.map((problem) => `  ${problem}`).join("\n")}`);
-  process.exit(1);
-}
-console.log("kernel boundary: ok");
+report("Kernel boundary violations", problems, "kernel boundary: ok");
 
 // The router and its Solid bindings are libraries others could use: each depends only on what it lists here,
 // imports nothing else from this workspace (not even the core: entries come and go through `setEntries`), and names
@@ -72,14 +76,29 @@ const checkLibrary = (name: string, dir: string, allowed: readonly string[]) => 
       if (word !== undefined) problems.push(`${relative(root, file)}:${index + 1}: names "${word}", a harness concept`);
     });
   }
-  if (problems.length) {
-    console.error(`${name} boundary violations:\n${problems.map((problem) => `  ${problem}`).join("\n")}`);
-    process.exit(1);
-  }
-  console.log(`${name} boundary: ok`);
+  report(`${name} boundary violations`, problems, `${name} boundary: ok`);
 };
 checkLibrary("router", "packages/router", ["effect"]);
 checkLibrary("router-solid", "packages/router-solid", ["@lemma/router", "solid-js"]);
+
+// A bundled host plugin is one a user could have written: it meets the others only through `packages/contracts`
+// (AGENTS.md), so its package depends on no other plugin and its source imports none.
+const pluginProblems: string[] = [];
+for (const dir of readdirSync(join(root, "plugins"))) {
+  const home = join(root, "plugins", dir);
+  const manifest = JSON.parse(readFileSync(join(home, "package.json"), "utf8"));
+  for (const dependency of Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })) {
+    if (dependency.startsWith("@lemma/plugin-")) pluginProblems.push(`plugins/${dir}/package.json: runtime dependency "${dependency}" (use a contract)`);
+  }
+  for (const file of walk(join(home, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
+    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+      const specifier = match[1]!;
+      const escapes = specifier.startsWith(".") && !resolve(dirname(file), specifier).startsWith(home);
+      if (specifier.startsWith("@lemma/plugin-") || escapes) pluginProblems.push(`${relative(root, file)}: imports "${specifier}" (use a contract)`);
+    }
+  }
+}
+report("Host plugin boundary violations", pluginProblems, "host plugin boundary: ok");
 
 // The web app is replaceable piece by piece: everything it shows comes from a
 // plugin (turn it off or replace it by id), and plugins reach each other only
@@ -154,8 +173,6 @@ for (const file of walk(web).filter((path) => path.endsWith(".css"))) {
       if (value !== undefined && Number(value) > 20) uiProblems.push(`${relative(root, file)}:${index + 1}: z-index ${value} (use a --z-* token)`);
     });
 }
-if (uiProblems.length) {
-  console.error(`Web UI boundary violations (see apps/web/AGENTS.md):\n${uiProblems.map((problem) => `  ${problem}`).join("\n")}`);
-  process.exit(1);
-}
-console.log("web ui boundary: ok");
+report("Web UI boundary violations (see apps/web/AGENTS.md)", uiProblems, "web ui boundary: ok");
+
+if (failed) process.exit(1);
