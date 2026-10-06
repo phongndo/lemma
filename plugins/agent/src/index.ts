@@ -204,11 +204,19 @@ export default definePlugin({
           }
           loadedRequests.add(sessionId);
         };
+        /** A session not created yet has no requests; a log that cannot be read fails the check rather than pass it. */
         const loadRequests = (sessionId: string) =>
           Effect.suspend(() =>
             loadedRequests.has(sessionId)
               ? Effect.void
-              : Effect.map(sessions.events(sessionId).pipe(Effect.orElseSucceed(() => [])), (log) => indexRequests(sessionId, log)),
+              : sessions.events(sessionId).pipe(
+                  Effect.catchIf(
+                    (error) => error.reason === "NotFound",
+                    () => Effect.succeed([]),
+                  ),
+                  Effect.mapError(userError(sessionId)),
+                  Effect.map((log) => indexRequests(sessionId, log)),
+                ),
           );
         /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
         const forget = (sessionId: string, state: SessionState) => {

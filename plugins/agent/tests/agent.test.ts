@@ -3,7 +3,19 @@ import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Agent, AgentContinueHook, AgentError, AgentRequestHook, branchOf, emptyUsage, Paths, rebuildRequest, Sessions, ToolResult } from "@lemma/contracts";
+import {
+  Agent,
+  AgentContinueHook,
+  AgentError,
+  AgentRequestHook,
+  branchOf,
+  emptyUsage,
+  Paths,
+  rebuildRequest,
+  SessionError,
+  Sessions,
+  ToolResult,
+} from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
 import tools from "../../tools/src/index.ts";
@@ -80,6 +92,26 @@ const racingSessions = (race: { checkout?: { readonly sessionId: string; readonl
             if (move === undefined) return Effect.void;
             delete race.checkout;
             return Effect.asVoid(store.checkout(move.sessionId, move.eventId));
+          }),
+      })),
+    ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+  });
+/** The sessions store, but its next `failing.reads` log reads fail, as an unreadable file's would. */
+const unreadableSessions = (failing: { reads: number }) =>
+  definePlugin({
+    id: "sessions",
+    provides: [Sessions],
+    requires: [Paths],
+    exclusive: true,
+    layer: Layer.effect(
+      Sessions,
+      Effect.map(Sessions, (store) => ({
+        ...store,
+        events: (sessionId: string, options?: { readonly after?: number }) =>
+          Effect.suspend(() => {
+            if (failing.reads === 0) return store.events(sessionId, options);
+            failing.reads -= 1;
+            return Effect.fail(new SessionError({ sessionId, reason: "Io", message: "unreadable" }));
           }),
       })),
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
@@ -425,6 +457,24 @@ describe("agent", () => {
           expect(requests[2]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "assistant", "user"]);
           expectLogInvariant(events, id, requests);
         }),
+    );
+  });
+
+  it("fails a prompt whose request id it cannot check, rather than placing it again", async () => {
+    const failing = { reads: 0 };
+    // One script: a second turn would fail with "no script left".
+    await withAgent({ sessions: unreadableSessions(failing), scripts: [reply("hi")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        yield* a.prompt(id, text("hello"), { requestId: "r1" });
+        // Idle, the session's request ids are dropped; a retry reads them again, and that read fails.
+        failing.reads = 1;
+        const unchecked = yield* Effect.flip(a.prompt(id, text("hello"), { requestId: "r1" }));
+        expect(unchecked).toMatchObject({ reason: "Session", message: "unreadable" });
+        yield* a.prompt(id, text("hello"), { requestId: "r1" });
+        expect(ofType(yield* log(id), "turn-start")).toHaveLength(1);
+      }),
     );
   });
 
