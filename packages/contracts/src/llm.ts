@@ -251,7 +251,7 @@ export type StreamEvent = typeof StreamEvent.Type;
 
 /** A request that cannot start: unknown model or provider. Provider failures arrive as an `error` event instead. */
 export class LlmError extends Data.TaggedError("LlmError")<{
-  readonly reason: "UnknownModel" | "UnknownProvider" | "NotConfigured" | "LoginFailed" | "Cancelled" | "InvalidProvider" | "SaveFailed";
+  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "InvalidProvider" | "SaveFailed";
   readonly message: string;
   readonly cause?: unknown;
 }> {}

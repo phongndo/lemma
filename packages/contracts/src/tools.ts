@@ -30,7 +30,7 @@ export interface ToolContext {
 
 export class ToolError extends Data.TaggedError("ToolError")<{
   readonly tool: string;
-  readonly reason: "NotFound" | "InvalidInput" | "Failed" | "Denied" | "Cancelled";
+  readonly reason: "NotFound" | "InvalidInput" | "Failed" | "Cancelled";
   readonly message: string;
   readonly cause?: unknown;
 }> {}

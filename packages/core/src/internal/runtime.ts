@@ -36,7 +36,6 @@ export interface PartialStart {
 
 interface Runtime {
   readonly core: Core<any>;
-  readonly members: Effect.Effect<readonly Member[]>;
   /**
    * Transactional change to the running composition; see docs/kernel.md. With
    * `partial`, a plugin that fails to activate is left failed instead, unless
@@ -696,7 +695,6 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
 
     return {
       core,
-      members: Effect.sync(currentMembers),
       apply: (members, onApplied, partial) =>
         supervised((operation) => applyLocked(members, new Set(), partial, operation).pipe(Effect.tap(() => Effect.sync(() => onApplied?.())))),
       shutdown,

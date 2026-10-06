@@ -79,7 +79,7 @@ export class RegistryError extends Data.TaggedError("RegistryError")<{
 }> {}
 
 /** Where in a plugin's life a failure was observed. */
-export const FaultPhase = Schema.Literal("config", "activate", "service", "intercept", "observe", "background", "dispose");
+export const FaultPhase = Schema.Literal("activate", "service", "observe", "background", "dispose");
 export type FaultPhase = typeof FaultPhase.Type;
 
 /**
