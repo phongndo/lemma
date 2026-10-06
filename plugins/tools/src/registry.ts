@@ -1,4 +1,4 @@
-import { Cause, Effect, ParseResult, Runtime, Schema } from "effect";
+import { Cause, Effect, Order, ParseResult, Runtime, Schema } from "effect";
 import type { Context } from "effect";
 import { Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
 import { Inspectors, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult } from "@lemma/contracts";
@@ -182,7 +182,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           ...(contribution.item.tool.replay === undefined ? {} : { replay: contribution.item.tool.replay }),
           ...(contribution.item.tool.parallel === undefined ? {} : { parallel: contribution.item.tool.parallel }),
         }))
-        .sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0)),
+        .sort((a, b) => Order.string(a.spec.name, b.spec.name)),
     );
 
     const unknown = (name: string, names: string[]) =>

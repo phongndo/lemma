@@ -1,6 +1,6 @@
 import { readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { Effect, Either, ParseResult, Schema } from "effect";
+import { Effect, Either, ParseResult, Predicate, Schema } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
 import { ConfigFile } from "@lemma/contracts";
@@ -136,8 +136,6 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
 
 const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" } };
 
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 /**
  * The config text with each plugin's row updated in place, keeping comments and
  * other rows. A key present in `row` is written, and a row left with no keys is
@@ -157,7 +155,7 @@ export function patchConfig(
   let next = text;
   const rowOf = (id: string): Record<string, unknown> => {
     const current: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section]?.[id];
-    return isObject(current) ? { ...current } : {};
+    return Predicate.isRecord(current) ? { ...current } : {};
   };
   for (const [id, row] of Object.entries(rows)) {
     const edits: Record<string, unknown> = {};
@@ -169,23 +167,23 @@ export function patchConfig(
       next = applyEdits(next, modify(next, [section, id, key], value, FORMAT));
     }
     if (row.values !== undefined) {
-      if (!isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
+      if (!Predicate.isRecord(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
       for (const [key, value] of Object.entries(row.values)) {
         const config = rowOf(id).config;
-        if (value === null && !(isObject(config) && key in config)) continue;
+        if (value === null && !(Predicate.isRecord(config) && key in config)) continue;
         next = applyEdits(next, modify(next, [section, id, "config", key], value === null ? undefined : value, FORMAT));
       }
       const config = rowOf(id).config;
-      if (isObject(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, [section, id, "config"], undefined, FORMAT));
+      if (Predicate.isRecord(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, [section, id, "config"], undefined, FORMAT));
     }
     const list = (key: string): unknown[] => {
       const config = rowOf(id).config;
-      const value = isObject(config) ? config[key] : undefined;
+      const value = Predicate.isRecord(config) ? config[key] : undefined;
       return Array.isArray(value) ? value : [];
     };
-    const indexOf = (key: string, itemId: unknown) => list(key).findIndex((item) => isObject(item) && item.id === itemId);
+    const indexOf = (key: string, itemId: unknown) => list(key).findIndex((item) => Predicate.isRecord(item) && item.id === itemId);
     for (const [key, items] of Object.entries(row.add ?? {})) {
-      if (!isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
+      if (!Predicate.isRecord(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
       if (!Array.isArray((rowOf(id).config as Record<string, unknown>)[key])) next = applyEdits(next, modify(next, [section, id, "config", key], [], FORMAT));
       for (const item of items) {
         const at = indexOf(key, item.id);
@@ -202,7 +200,8 @@ export function patchConfig(
       }
     }
     const rows: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section];
-    if (isObject(rows) && isObject(rows[id]) && Object.keys(rows[id]).length === 0) next = applyEdits(next, modify(next, [section, id], undefined, FORMAT));
+    if (Predicate.isRecord(rows) && Predicate.isRecord(rows[id]) && Object.keys(rows[id]).length === 0)
+      next = applyEdits(next, modify(next, [section, id], undefined, FORMAT));
   }
   return next;
 }

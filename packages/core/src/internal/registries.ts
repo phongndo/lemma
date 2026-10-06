@@ -1,9 +1,8 @@
-import { Effect, Scope, Stream } from "effect";
+import { Effect, Order, Scope, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, RegistryError } from "../errors.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
 import type { ContributeOptions, Contribution, Registries, Registry } from "../registries.ts";
-import { compare } from "./hooks.ts";
 
 interface Entry {
   readonly token: object;
@@ -67,7 +66,7 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
   inspect(): readonly RegistrySnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.visible.length > 0)
-      .sort((a, b) => compare(a.name, b.name))
+      .sort((a, b) => Order.string(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         items: entry.all
@@ -240,7 +239,7 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
 }
 
 const byOrder = (a: Item, b: Item) =>
-  a.contribution.order - b.contribution.order || compare(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
+  a.contribution.order - b.contribution.order || Order.string(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
 
 /** Recomputes the visible array and tells readers, only when what they see changed. */
 function update(entry: Entry): void {

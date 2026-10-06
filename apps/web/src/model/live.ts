@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { AgentView, AssistantMessage, SessionEvent, StreamEvent, ToolCall } from "@lemma/contracts";
 
 /**
@@ -250,7 +251,7 @@ export const parseDraftArgs = (block: Extract<DraftBlock, { kind: "tool" }>): Re
   if (block.call !== undefined) return block.call.arguments;
   try {
     const value: unknown = JSON.parse(block.args);
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return Predicate.isRecord(value) ? (value as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }

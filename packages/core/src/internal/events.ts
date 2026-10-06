@@ -1,8 +1,8 @@
-import { Cause, Context, Deferred, Effect, Queue, Scope, Stream } from "effect";
+import { Cause, Context, Deferred, Effect, Order, Queue, Scope, Stream } from "effect";
 import { CoreClosed, EventError, PluginFault } from "../errors.ts";
 import type { Event, Events, Observer, ObserveOptions } from "../events.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
-import { attributes, compare, withoutParent } from "./hooks.ts";
+import { attributes, withoutParent } from "./hooks.ts";
 
 interface Entry {
   readonly token: object;
@@ -70,7 +70,7 @@ export class EventBus implements Context.Tag.Service<Events> {
   inspect(): readonly EventSnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.subscriptions.some((subscription) => subscription.owner))
-      .sort((a, b) => compare(a.name, b.name))
+      .sort((a, b) => Order.string(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         observers: entry.subscriptions.flatMap((subscription) => (subscription.owner ? [subscription.owner.identity.id] : [])),

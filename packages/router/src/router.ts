@@ -1,4 +1,4 @@
-import { Either } from "effect";
+import { Either, Order } from "effect";
 import { BASE, split } from "./history.ts";
 import type { HistoryAction, HistoryLocation, RouterHistory } from "./history.ts";
 import { compareScores, matchPattern, splitPath } from "./path.ts";
@@ -238,7 +238,7 @@ const outranked = (loser: Candidate, winner: Candidate) => {
   return `as specific as "${winner.route.id}", which comes first by id`;
 };
 
-const byId = (a: AnyRoute, b: AnyRoute) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const byId = Order.mapInput(Order.string, (route: AnyRoute) => route.id);
 const byPreference = (a: Candidate, b: Candidate) =>
   compareScores(a.score, b.score) || a.route.pattern.segments.length - b.route.pattern.segments.length || byId(a.route, b.route);
 
@@ -564,7 +564,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       return {
         location: history.location(),
         match: describe(current),
-        routes: [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+        routes: [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.string(a.path, b.path)),
         issues: issues.map((issue) => ({ kind: issue.kind, message: issue.message, routes: issue.routes.map((route) => route.id) })),
         blockers: [...blockers.values()],
         retain,

@@ -1,4 +1,4 @@
-import { Order } from "effect";
+import { Order, Predicate } from "effect";
 import type { PluginStatus } from "./rpc.ts";
 
 /*
@@ -101,10 +101,9 @@ export interface Table {
 }
 
 const cell = (value: unknown): string => (value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value));
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const tableOf = (rows: readonly unknown[], title?: string): Table | undefined => {
-  if (!rows.every(isRecord)) return undefined;
+  if (!rows.every(Predicate.isRecord)) return undefined;
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   return { ...(title === undefined ? {} : { title }), columns, rows: rows.map((row) => columns.map((column) => cell(row[column]))) };
 };
@@ -120,7 +119,7 @@ export const tablesOf = (value: unknown): readonly Table[] | undefined => {
     const table = tableOf(value);
     return table === undefined ? undefined : [table];
   }
-  if (!isRecord(value)) return undefined;
+  if (!Predicate.isRecord(value)) return undefined;
   const tables: Table[] = [];
   for (const [key, rows] of Object.entries(value)) {
     const table = Array.isArray(rows) ? tableOf(rows, key) : undefined;

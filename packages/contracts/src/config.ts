@@ -1,4 +1,4 @@
-import { Either, Option, Schema, SchemaAST } from "effect";
+import { Either, Option, Predicate, Schema, SchemaAST } from "effect";
 
 /**
  * Settings forms are projected from a plugin's config Schema, so a plugin gets
@@ -154,8 +154,6 @@ export function configValues(schema: Schema.Schema.AnyNoContext, config: unknown
   return { values, secretsSet };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 /**
  * `schema`, also reading the rows earlier versions of a plugin wrote:
  * `migrate` turns a row's config into the current shape before it decodes, so
@@ -172,7 +170,7 @@ export const migrateConfig = <A, I>(
   Schema.compose(
     Schema.transform(Schema.Unknown, Schema.Unknown, {
       strict: true,
-      decode: (config) => (isRecord(config) ? migrate(config) : config),
+      decode: (config) => (Predicate.isRecord(config) ? migrate(config) : config),
       encode: (config) => config,
     }),
     schema,

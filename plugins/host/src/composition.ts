@@ -1,3 +1,4 @@
+import { Order } from "effect";
 import { createHash } from "node:crypto";
 import type { CompositionInfo } from "@lemma/contracts";
 import type { Composition, PluginIdentity } from "@lemma/core";
@@ -11,7 +12,7 @@ import type { Composition, PluginIdentity } from "@lemma/core";
  */
 export function compositionInfo(composition: Composition, plugins: readonly PluginIdentity[]): CompositionInfo {
   const members = [...plugins]
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort((a, b) => Order.string(a.id, b.id))
     .map((plugin) => ({ id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }) }));
   const hash = createHash("sha256");
   for (const member of members) {
@@ -26,7 +27,7 @@ function canonicalJson(value: unknown): string {
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value)
       .filter(([, item]) => item !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      .sort(([a], [b]) => Order.string(a, b));
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";

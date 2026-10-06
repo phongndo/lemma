@@ -1,4 +1,4 @@
-import { Either, ParseResult, Schema } from "effect";
+import { Either, ParseResult, Predicate, Schema } from "effect";
 import type { PluginRow } from "@lemma/contracts";
 import { checkComposition, Diagnostic } from "@lemma/core";
 import type { Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
@@ -49,7 +49,6 @@ export interface Plan {
 }
 
 const keys = (plugin: Plugin) => new Set(plugin.provides.map((tag) => tag.key));
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** `lemma/api@2`: a capability naming the API version a plugin is written for (`HostApi`, `UiApi`). */
 const API_KEY = /^(.+)\/api@(\d+)$/;
@@ -234,7 +233,7 @@ function entryOf(entry: PluginEntry, row: PluginRow, base: Readonly<Record<strin
   const { required: _, ...rest } = row;
   // JSON cannot express undefined, so a decoded row carries only the keys its file wrote.
   const merged = { ...entry, ...rest } as PluginEntry;
-  return base !== undefined && isRecord(row.config) ? { ...merged, config: { ...base, ...row.config } } : merged;
+  return base !== undefined && Predicate.isRecord(row.config) ? { ...merged, config: { ...base, ...row.config } } : merged;
 }
 
 const isRunning = (composition: Composition, id: string) => composition.plugins[id] !== undefined && composition.plugins[id]?.enabled !== false;
@@ -330,7 +329,7 @@ function rootOf(resolved: Resolved, id: string): string {
 
 /** Keys `config` sets that `schema` does not read: a setting renamed or removed since the row was written. */
 function unusedKeys(schema: Schema.Schema<any, any, never>, config: unknown): string[] {
-  if (!isRecord(config) || Either.isLeft(Schema.decodeUnknownEither(schema)(config))) return [];
+  if (!Predicate.isRecord(config) || Either.isLeft(Schema.decodeUnknownEither(schema)(config))) return [];
   const strict = Schema.decodeUnknownEither(schema, { onExcessProperty: "error", errors: "all" })(config);
   if (Either.isRight(strict)) return [];
   return ParseResult.ArrayFormatter.formatErrorSync(strict.left)

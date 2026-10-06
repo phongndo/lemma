@@ -1,4 +1,4 @@
-import { Context, Effect, Scope, Tracer } from "effect";
+import { Context, Effect, Order, Scope, Tracer } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import type { Handler, Hook, HookOptions, Hooks, Next, PluginContext, PluginIdentity } from "../hooks.ts";
 
@@ -62,7 +62,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
   inspect(): readonly HookSnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.handlers.length > 0)
-      .sort((a, b) => compare(a.name, b.name))
+      .sort((a, b) => Order.string(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         handlers: entry.handlers.map(({ owner, order }) => ({ pluginId: owner.identity.id, order })),
@@ -219,7 +219,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
 function rebuild(entry: Entry): void {
   entry.handlers = entry.all
     .filter((registration) => registration.active && registration.owner.visible)
-    .sort((a, b) => a.order - b.order || compare(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
+    .sort((a, b) => a.order - b.order || Order.string(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
 }
 
 export function attributes(identity: PluginIdentity): Record<string, string> {
@@ -239,8 +239,4 @@ export function withoutParent<R>(context: Context.Context<R>): Context.Context<R
 
 function ownerClosed(hook: string, pluginId: string): HookError {
   return new HookError({ reason: "OwnerClosed", hook, pluginId, message: `Plugin "${pluginId}" has closed` });
-}
-
-export function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }

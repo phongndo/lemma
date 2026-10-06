@@ -1,4 +1,4 @@
-import { Either, ParseResult, Schema, Scope } from "effect";
+import { Either, Order, ParseResult, Schema, Scope } from "effect";
 import { CompositionError } from "../errors.ts";
 import { Events } from "../events.ts";
 import { Hooks, PluginContext } from "../hooks.ts";
@@ -121,14 +121,14 @@ export function plan(
       }
       required.add(provider);
     }
-    dependencies.set(plugin, [...required].sort(byName));
+    dependencies.set(plugin, [...required].sort(byPluginId));
   }
 
   const ordered: Plugin[] = [];
   const visited = new Set<Plugin>();
   const visiting = new Set<Plugin>();
   // Iterative DFS avoids JS stack depth limits on large compositions.
-  for (const start of [...byId.values()].sort(byName)) {
+  for (const start of [...byId.values()].sort(byPluginId)) {
     if (visited.has(start)) continue;
     const stack: { plugin: Plugin; index: number }[] = [{ plugin: start, index: 0 }];
     visiting.add(start);
@@ -170,6 +170,4 @@ export function plan(
   });
 }
 
-function byName(a: Plugin, b: Plugin): number {
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
+const byPluginId = Order.mapInput(Order.string, (plugin: Plugin) => plugin.id);

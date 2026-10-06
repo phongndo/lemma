@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 /**
  * Tool `details` are plugin-defined UI data. These readers accept the shapes
  * the built-in tools are expected to produce (pi-style) and ignore the rest.
@@ -12,14 +13,12 @@ interface ToolDetails {
   readonly fullOutputPath?: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 export const readDetails = (details: unknown): ToolDetails => {
-  if (!isRecord(details)) return {};
+  if (!Predicate.isRecord(details)) return {};
   const diff = typeof details.diff === "string" ? details.diff : typeof details.patch === "string" ? details.patch : undefined;
   const exit = details.exitCode ?? details.exit_code ?? details.code;
   const truncation = details.truncation;
-  const truncated = details.truncated === true || (isRecord(truncation) && truncation.truncated !== false);
+  const truncated = details.truncated === true || (Predicate.isRecord(truncation) && truncation.truncated !== false);
   const fullOutputPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
   return {
     ...(diff === undefined || diff === "" ? {} : { diff }),
