@@ -1,6 +1,6 @@
 import { batch, createSignal } from "solid-js";
 import type { Accessor, Setter } from "solid-js";
-import type { AnyRoute, HistoryLocation, Match, ParamsOf, RouteEntry, Router, SearchOf } from "@lemma/router";
+import type { AnyRoute, HistoryLocation, Match, Navigator, ParamsOf, RouteEntry, SearchOf } from "@lemma/router";
 
 /** A router's state as Solid signals. */
 export interface RouteSignals<E extends RouteEntry> {
@@ -22,11 +22,11 @@ const foundIn = (match: Match<RouteEntry>, id: string): Found =>
 const sameFound = (a: Found, b: Found) => a === b || (a !== undefined && b !== undefined && a.href === b.href);
 
 /**
- * Follows `router` with signals. Each route read through `matchOf` gets a
- * signal of its own, so a page reading its route does not run again when
- * another route is navigated to.
+ * Follows a router, or any one navigator, with signals. Each route read
+ * through `matchOf` gets a signal of its own, so a page reading its route does
+ * not run again when another route is navigated to.
  */
-export const createRouteSignals = <E extends RouteEntry>(router: Router<E>): RouteSignals<E> => {
+export const createRouteSignals = <E extends RouteEntry>(router: Pick<Navigator<E>, "match" | "location" | "subscribe">): RouteSignals<E> => {
   const [match, setMatch] = createSignal(router.match(), { equals: false });
   const [location, setLocation] = createSignal(router.location(), { equals: (a, b) => a.key === b.key && a.href === b.href });
   const routes = new Map<string, readonly [Accessor<Found>, Setter<Found>]>();

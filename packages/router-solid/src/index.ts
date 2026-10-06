@@ -1,3 +1,9 @@
+export { RouterProvider, useLocation, useMatch, useNavigator, useRouteMatch } from "./context.ts";
+export type { RouterProviderProps } from "./context.ts";
+export { createKeepAlive, onResume, onSuspend, useActive } from "./keep-alive.ts";
+export type { KeepAliveState } from "./keep-alive.ts";
+export { KeepAlive } from "./keep-alive-view.tsx";
+export type { KeepAliveProps } from "./keep-alive-view.tsx";
 export { RouteOutlet } from "./outlet.tsx";
 export type { ComponentEntry, RouteFailure, RouteOutletProps } from "./outlet.tsx";
 export { createRouteSignals } from "./signals.ts";
