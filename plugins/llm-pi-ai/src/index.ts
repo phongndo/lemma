@@ -1,4 +1,4 @@
-import { Effect, Fiber, Layer, Queue, Schedule, Schema, Stream } from "effect";
+import { Cause, Effect, Fiber, Layer, Queue, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -8,6 +8,7 @@ import {
   HostControl,
   Interaction,
   InteractionError,
+  InteractionOrigin,
   Llm,
   LlmError,
   LlmRequestHook,
@@ -118,6 +119,7 @@ export function makeLlmPlugin(options: Options = {}) {
           const host = yield* HostControl;
           const { home } = yield* Paths;
           const run = runner(yield* Effect.context<never>());
+          const scope = yield* Effect.scope;
 
           const models = createModels({
             credentials: credentialStore(credentials, run),
@@ -329,6 +331,8 @@ export function makeLlmPlugin(options: Options = {}) {
                 // Provider flows notify synchronously; a queue keeps notices ordered, and
                 // `undefined` ends it so every notice is published before login returns.
                 const notices = yield* Queue.unbounded<NoticePayload | undefined>();
+                // Its questions and its link or code share the origin, so a client shows them together.
+                const origin = yield* InteractionOrigin;
                 const publishAll: Effect.Effect<void> = Queue.take(notices).pipe(
                   Effect.flatMap((notice) =>
                     notice === undefined
@@ -341,22 +345,46 @@ export function makeLlmPlugin(options: Options = {}) {
                 );
                 const publisher = yield* Effect.forkChild(publishAll);
                 const flush = Effect.andThen(Queue.offer(notices, undefined), Fiber.join(publisher));
+                const stamp = (notice: NoticePayload): NoticePayload => (origin === undefined ? notice : { ...notice, origin });
                 yield* Effect.tryPromise({
                   try: (signal) =>
                     models.login(
                       providerId,
                       type,
-                      authInteraction(interaction, run, signal, (event) => {
-                        Queue.offerUnsafe(notices, toNotice(event, provider.name));
+                      authInteraction(interaction, run, signal, origin, (event) => {
+                        Queue.offerUnsafe(notices, stamp(toNotice(event, provider.name)));
                       }),
                       { getDeviceId: () => deviceId(home) },
                     ),
                   catch: (error) => loginError(error, provider),
-                }).pipe(Effect.ensuring(flush));
-                // Its live catalog first, so clients that list models on hearing of the login see all of them.
-                yield* refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore);
-                // Every client learns of it, including one that reloaded while the login ran.
-                yield* events.publish(Notice, { level: "info", source: "llm", message: `Logged in to ${provider.name}` });
+                }).pipe(
+                  Effect.ensuring(flush),
+                  // Failed or cancelled: a client showing the login (one that did not start it, say) closes it.
+                  Effect.onError((cause) =>
+                    events.publish(
+                      Notice,
+                      stamp({
+                        level: "info",
+                        source: "llm",
+                        kind: "ended",
+                        message: Cause.hasInterruptsOnly(cause) ? `${provider.name} login was cancelled` : `${provider.name} login failed`,
+                      }),
+                    ),
+                  ),
+                );
+                // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
+                // longer report it cancelled. Its live catalog first, so clients that list models on hearing of
+                // the login see all of them; every client learns of it, including one that reloaded meanwhile.
+                yield* Effect.forkIn(
+                  refresh([providerId]).pipe(
+                    Effect.timeout("20 seconds"),
+                    Effect.ignore,
+                    Effect.andThen(
+                      events.publish(Notice, stamp({ level: "info", source: "llm", kind: "signed-in", message: `Logged in to ${provider.name}` })),
+                    ),
+                  ),
+                  scope,
+                );
               }),
 
             logout: (providerId) =>

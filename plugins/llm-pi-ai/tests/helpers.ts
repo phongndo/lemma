@@ -6,7 +6,7 @@ import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, Notice, Paths } from "@lemma/contracts";
+import { Credentials, HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
 import type { ConfigScope, Credential, InteractionError, Llm, NoticePayload, PluginChange } from "@lemma/contracts";
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
@@ -33,12 +33,14 @@ type Question =
   | { readonly type: "ask"; readonly title: string; readonly secret?: boolean; readonly placeholder?: string }
   | { readonly type: "select"; readonly title: string; readonly options: readonly string[] };
 
-/** Answers questions with `answer`; every question is recorded. */
+/** Answers questions with `answer`; every question is recorded, with the origin it was asked under. */
 export function fakeInteraction(answer: (question: Question) => Effect.Effect<string, InteractionError>) {
   const asked: Question[] = [];
+  const origins: (string | undefined)[] = [];
   const respond = (question: Question) =>
-    Effect.suspend(() => {
+    Effect.flatMap(InteractionOrigin, (origin) => {
       asked.push(question);
+      origins.push(origin);
       return answer(question);
     });
   const service: typeof Interaction.Service = {
@@ -47,7 +49,7 @@ export function fakeInteraction(answer: (question: Question) => Effect.Effect<st
     select: (title, options) => respond({ type: "select", title, options: options.map((option) => option.value) }) as Effect.Effect<never, InteractionError>,
   };
   const plugin = definePlugin({ id: "interaction", provides: [Interaction], layer: Layer.succeed(Interaction, service) });
-  return { asked, plugin };
+  return { asked, origins, plugin };
 }
 
 /** Records every `Notice` through a plugin observer, so no publish races a late subscriber. */

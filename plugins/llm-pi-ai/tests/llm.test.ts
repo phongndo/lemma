@@ -10,7 +10,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin } from "@lemma/core";
-import { InteractionError, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
+import { InteractionError, InteractionOrigin, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
@@ -444,7 +444,7 @@ describe("login", () => {
     expect(unsupported.reason).toBe("LoginFailed");
   });
 
-  it("publishes auth events as notices and withdraws prompts the flow abandons", async () => {
+  it("publishes auth events as notices under the login's origin and withdraws prompts the flow abandons", async () => {
     let withdrawn = false;
     const credentials = fakeCredentials();
     const interaction = fakeInteraction((question) =>
@@ -497,13 +497,16 @@ describe("login", () => {
       plugins,
       Effect.gen(function* () {
         const llm = yield* Llm;
-        yield* llm.login("sso", "oauth");
+        yield* Effect.provideService(llm.login("sso", "oauth"), InteractionOrigin, "login:sso");
         yield* Effect.sleep("20 millis");
         return yield* llm.providers;
       }),
     );
 
     expect(withdrawn).toBe(true);
+    // pi-ai prompts from outside the login's fiber; its question still names the login, and says it is the paste fallback.
+    expect(interaction.origins).toEqual(["login:sso"]);
+    expect(interaction.asked).toEqual([{ type: "ask", title: "Paste the code", kind: "sign-in-code" }]);
     // The installation's one device ID (OpenAI's ChatGPT sign-in requires it), kept in the host's home.
     expect(devices[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(devices[1]).toBe(devices[0]);
@@ -511,18 +514,84 @@ describe("login", () => {
     expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token", accountId: "acct" });
     expect(info[0]).toMatchObject({ auth: [{ type: "oauth", name: "SSO account", interactive: true }], configured: true, source: "OAuth" });
     expect(recorder.notices).toEqual([
-      { level: "info", source: "llm", message: "Open the link to sign in to SSO.", links: [{ url: "https://sso.test/authorize", label: "Sign in to SSO" }] },
+      {
+        level: "info",
+        source: "llm",
+        message: "Open the link to sign in to SSO.",
+        links: [{ url: "https://sso.test/authorize", label: "Sign in to SSO" }],
+        origin: "login:sso",
+        kind: "sign-in",
+      },
       {
         level: "info",
         source: "llm",
         message: "Enter code ABCD-1234 at https://sso.test/device to sign in to SSO.",
         code: "ABCD-1234",
         links: [{ url: "https://sso.test/device", label: "Enter code" }],
+        origin: "login:sso",
+        kind: "device-code",
       },
-      { level: "info", source: "llm", message: "Waiting for the browser" },
+      { level: "info", source: "llm", message: "Waiting for the browser", origin: "login:sso", kind: "progress" },
       // Success is announced to every client after the flow's own notices.
-      { level: "info", source: "llm", message: "Logged in to SSO" },
+      { level: "info", source: "llm", message: "Logged in to SSO", origin: "login:sso", kind: "signed-in" },
     ]);
+  });
+});
+
+describe("login's end", () => {
+  const ssoProvider = (login: () => Promise<Credential>) =>
+    createProvider({
+      id: "sso",
+      name: "SSO",
+      auth: {
+        oauth: {
+          name: "SSO account",
+          login: async () => (await login()) as never,
+          refresh: async (credential) => credential,
+          toAuth: async (credential) => ({ apiKey: credential.access }),
+        },
+      },
+      models: [],
+      api: openAICompletionsApi(),
+    });
+
+  it("announces a failed or cancelled login as ended, under its origin", async () => {
+    const credentials = fakeCredentials();
+    const recorder = noticeRecorder();
+    const plugins = [
+      credentials.plugin,
+      fakeInteraction(() => Effect.succeed("unused")).plugin,
+      recorder.plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({ fetch: offline, providers: () => [ssoProvider(() => Promise.reject(new Error("denied")))], authContext: envContext() }),
+    ];
+    const failure = await runWith(
+      plugins,
+      Effect.flip(Effect.flatMap(Llm, (llm) => Effect.provideService(llm.login("sso", "oauth"), InteractionOrigin, "login:sso"))),
+    );
+    expect(failure.reason).toBe("LoginFailed");
+    expect(recorder.notices).toEqual([{ level: "info", source: "llm", kind: "ended", message: "SSO login failed", origin: "login:sso" }]);
+  });
+
+  it("returns once the credential is stored, without waiting on the catalog refresh a cancel could interrupt", async () => {
+    const credentials = fakeCredentials();
+    // models.dev never answers: the refresh after the login waits on it.
+    const hanging = (() => new Promise<Response>(() => {})) as typeof fetch;
+    const plugins = [
+      credentials.plugin,
+      fakeInteraction(() => Effect.succeed("unused")).plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({
+        fetch: hanging,
+        providers: () => [ssoProvider(async () => ({ type: "oauth", access: "token", refresh: "r", expires: Date.now() + 3_600_000 }))],
+        authContext: envContext(),
+      }),
+    ];
+    await runWith(
+      plugins,
+      Effect.flatMap(Llm, (llm) => llm.login("sso", "oauth").pipe(Effect.timeout("2 seconds"))),
+    );
+    expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token" });
   });
 });
 

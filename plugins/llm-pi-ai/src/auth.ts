@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit } from "effect";
 import type { Context } from "effect";
 import type * as Pi from "@earendil-works/pi-ai";
+import { InteractionOrigin } from "@lemma/contracts";
 import type { Credential, Credentials, Interaction, NoticePayload } from "@lemma/contracts";
 
 type CredentialsService = typeof Credentials.Service;
@@ -46,11 +47,21 @@ export function credentialStore(credentials: CredentialsService, run: Run): Pi.C
 }
 
 /**
- * Login prompts become `Interaction` questions. A prompt's own signal (a
+ * Login prompts become `Interaction` questions, asked under the login's
+ * `origin`: pi-ai calls back through promises, outside the login's fiber, so
+ * the origin is carried here rather than inherited. A prompt's own signal (a
  * callback server that won the race against a paste-the-code prompt) and the
  * login's signal both withdraw the pending question by interrupting it.
  */
-export function authInteraction(interaction: InteractionService, run: Run, signal: AbortSignal, notify: (event: Pi.AuthEvent) => void): Pi.AuthInteraction {
+export function authInteraction(
+  interaction: InteractionService,
+  run: Run,
+  signal: AbortSignal,
+  origin: string | undefined,
+  notify: (event: Pi.AuthEvent) => void,
+): Pi.AuthInteraction {
+  const ask = <A>(effect: Effect.Effect<A, unknown>, withdraw: AbortSignal) =>
+    run(origin === undefined ? effect : Effect.provideService(effect, InteractionOrigin, origin), withdraw);
   return {
     signal,
     notify,
@@ -58,7 +69,7 @@ export function authInteraction(interaction: InteractionService, run: Run, signa
       const withdraw = prompt.signal === undefined ? signal : AbortSignal.any([signal, prompt.signal]);
       switch (prompt.type) {
         case "select":
-          return run(
+          return ask(
             interaction.select(
               prompt.message,
               prompt.options.map((option) => ({
@@ -72,10 +83,11 @@ export function authInteraction(interaction: InteractionService, run: Run, signa
         case "secret":
         case "text":
         case "manual_code":
-          return run(
+          return ask(
             interaction.ask(prompt.message, {
               ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }),
               ...(prompt.type === "secret" ? { secret: true } : {}),
+              ...(prompt.type === "manual_code" ? { kind: "sign-in-code" as const } : {}),
             }),
             withdraw,
           );
@@ -90,12 +102,14 @@ export function toNotice(event: Pi.AuthEvent, providerName: string): NoticePaylo
     case "auth_url":
       return {
         ...base,
+        kind: "sign-in",
         message: event.instructions ?? `Open the link to sign in to ${providerName}.`,
         links: [{ url: event.url, label: `Sign in to ${providerName}` }],
       };
     case "device_code":
       return {
         ...base,
+        kind: "device-code",
         message: `Enter code ${event.userCode} at ${event.verificationUri} to sign in to ${providerName}.`,
         code: event.userCode,
         links: [{ url: event.verificationUri, label: "Enter code" }],
@@ -111,6 +125,6 @@ export function toNotice(event: Pi.AuthEvent, providerName: string): NoticePaylo
             }),
       };
     case "progress":
-      return { ...base, message: event.message };
+      return { ...base, kind: "progress", message: event.message };
   }
 }

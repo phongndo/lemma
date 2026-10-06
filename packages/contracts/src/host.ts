@@ -136,6 +136,20 @@ export const NoticePayload = Schema.Struct({
   links: Schema.optional(Schema.Array(Schema.Struct({ url: Schema.String, label: Schema.optional(Schema.String) }))),
   /** A code the user types elsewhere (device login). */
   code: Schema.optional(Schema.String),
+  /**
+   * What it belongs to, as an `InteractionOrigin`: a login's link and code
+   * carry `login:<provider>`, so a client can show them with that login's
+   * questions rather than on their own.
+   */
+  origin: Schema.optional(Schema.String),
+  /**
+   * What a login's notice is, so a client need not guess from its order:
+   * `sign-in` names the page to open (its first link), `device-code` the code
+   * to enter (`code`) and where, `progress` a step under way, `signed-in` and
+   * `ended` the login's success and its failure or cancellation. A login's
+   * other notices (documentation links, say) have none.
+   */
+  kind: Schema.optional(Schema.Literals(["sign-in", "device-code", "progress", "signed-in", "ended"])),
 });
 export type NoticePayload = typeof NoticePayload.Type;
 export const Notice = Event.make<NoticePayload>("lemma/notice");

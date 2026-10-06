@@ -32,6 +32,12 @@ export const InteractionRequest = Schema.Union([
     title: Schema.String,
     placeholder: Schema.optional(Schema.String),
     secret: Schema.optional(Schema.Boolean),
+    /**
+     * `sign-in-code`: the code or address a sign-in page ends on, pasted when
+     * the browser cannot reach the host's callback (on another machine). It
+     * races that callback, which withdraws it.
+     */
+    kind: Schema.optional(Schema.Literal("sign-in-code")),
   }),
   Schema.Struct({
     type: Schema.Literal("select"),
@@ -63,7 +69,10 @@ export class Interaction extends Context.Service<
   Interaction,
   {
     readonly confirm: (title: string, detail?: string) => Effect.Effect<boolean, InteractionError>;
-    readonly ask: (title: string, options?: { readonly placeholder?: string; readonly secret?: boolean }) => Effect.Effect<string, InteractionError>;
+    readonly ask: (
+      title: string,
+      options?: { readonly placeholder?: string; readonly secret?: boolean; readonly kind?: "sign-in-code" },
+    ) => Effect.Effect<string, InteractionError>;
     readonly select: <V extends string>(
       title: string,
       options: readonly { readonly value: V; readonly label: string; readonly description?: string }[],
