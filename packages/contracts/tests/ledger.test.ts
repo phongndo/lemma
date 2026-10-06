@@ -3,7 +3,7 @@ import { emptyUsage } from "../src/llm.ts";
 import { trajectory } from "../src/trajectory.ts";
 import type { AssistantMessage } from "../src/llm.ts";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
-import { ledger, ledgerSpans, lineDiff, parseLedgerFilter, promptDiff, recordSummary } from "../src/ledger.ts";
+import { ledger, ledgerSpans, lineDiff, parseLedgerFilter, promptDiff, recordsBetween, recordStart, recordSummary } from "../src/ledger.ts";
 
 const log = (...items: EventData[]): SessionEvent[] =>
   items.map((data, i) => ({ seq: i + 1, id: `e${i + 1}`, parent: i === 0 ? null : `e${i}`, at: 1000 * (i + 1), data }));
@@ -99,6 +99,18 @@ describe("ledger", () => {
       ["user", 0, 13000, 13000, undefined, false],
       ["assistant", 1, 17000, 17500, undefined, true],
     ]);
+  });
+});
+
+describe("recordsBetween", () => {
+  it("takes what overlaps the range, and what has no span by when it started", () => {
+    const kinds = (from: number, to: number) => recordsBetween(records, from, to, 20_000).map((record) => record.kind);
+    expect(kinds(5500, 6050)).toEqual(["assistant", "tool"]);
+    // A system prompt has no span: it is in a range holding when it was sent.
+    const sent = recordStart(records.find((record) => record.kind === "system")!);
+    expect(kinds(sent, sent)).toEqual(["system"]);
+    // A response without timing runs on to `now`.
+    expect(kinds(19_000, 19_500)).toEqual(["assistant"]);
   });
 });
 

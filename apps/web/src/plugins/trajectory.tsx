@@ -16,6 +16,7 @@ import {
   recordName,
   recordRequest,
   recordStatus,
+  recordWithin,
   sortRecords,
   trajectory as projectTrajectory,
 } from "@lemma/contracts";
@@ -396,7 +397,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
               };
               const outside = () => {
                 const r = range();
-                return r !== undefined && ((span.end ?? props.now) < r.from || span.start > r.to);
+                return r !== undefined && !recordWithin(span.record, span, r.from, r.to, props.now);
               };
               return (
                 <div
@@ -553,9 +554,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   }) {
     const inRange = (record: LedgerRecord) => {
       const r = range();
-      if (r === undefined) return true;
-      const span = props.ledgerSpans.get(record.id);
-      return span !== undefined && (span.end ?? props.now) >= r.from && span.start <= r.to;
+      return r === undefined || recordWithin(record, props.ledgerSpans.get(record.id), r.from, r.to, props.now);
     };
     const sorted = createMemo(() => sortRecords(props.visible, sort().key, sort().desc, deps.threads.busy()));
     // Group rows open each turn, in time order only; a sorted table is flat, as in DevTools.

@@ -403,15 +403,15 @@ export function sortRecords(records: readonly LedgerRecord[], key: LedgerSort, d
   });
 }
 
-/** Records active at any moment in `[from, to]` (epoch ms): a span that overlaps, or a start inside it. */
+/** Whether a record was active at any moment in `[from, to]` (epoch ms): its span (from `ledgerSpans`) overlaps, or without one it started inside. */
+export const recordWithin = (record: LedgerRecord, span: LedgerSpan | undefined, from: number, to: number, now = Date.now()): boolean => {
+  if (span !== undefined) return (span.end ?? now) >= from && span.start <= to;
+  const at = recordStart(record);
+  return at >= from && at <= to;
+};
+
+/** The records active at any moment in `[from, to]` (`recordWithin`). */
 export function recordsBetween(records: readonly LedgerRecord[], from: number, to: number, now = Date.now()): LedgerRecord[] {
   const spans = new Map(ledgerSpans(records).map((span) => [span.record.id, span]));
-  return records.filter((record) => {
-    const span = spans.get(record.id);
-    if (span === undefined) {
-      const at = recordStart(record);
-      return at >= from && at <= to;
-    }
-    return (span.end ?? now) >= from && span.start <= to;
-  });
+  return records.filter((record) => recordWithin(record, spans.get(record.id), from, to, now));
 }
