@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { build } from "esbuild";
 import { chromium } from "playwright";
-import { finish, record } from "../packages/core/bench/budgets.ts";
+import { finish, record } from "../bench/budgets.ts";
 
 /** Runs the packed consumer in a real browser. The caller owns the temporary install. */
 export async function checkBrowser(consumer: string) {
