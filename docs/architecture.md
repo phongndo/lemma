@@ -17,6 +17,7 @@ plugin can be turned off or replaced by id ([configuration](configuration.md)).
 | [`apps/desktop`](../apps/desktop/README.md)                   | The web app in a desktop window, attaching to a running host or starting one               |
 | [`packages/router`](../packages/router/README.md)             | A router whose routes come and go at runtime, typed by each route; the web app's addresses |
 | [`packages/router-solid`](../packages/router-solid/README.md) | The router's SolidJS bindings                                                              |
+| [`packages/testing`](../packages/testing/README.md)           | Test support: a simulated disk for crash tests, and contract conformance suites            |
 | [`examples/*`](../examples)                                   | Plugin files written as a user writes them                                                 |
 
 Clients reach the host through the [transport](../plugins/transport/README.md)

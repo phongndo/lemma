@@ -74,7 +74,7 @@ export interface FileHandle {
 /**
  * The `node:fs/promises` operations Lemma's storage code uses: a seam, so a
  * test can run that code on a simulated disk that crashes, tears writes, and
- * fails. `nodeFileSystem` is the real one.
+ * fails (`@lemma/testing`). `nodeFileSystem` is the real one.
  */
 export interface FileSystem {
   open(path: string, flags: string | number, mode?: number): Promise<FileHandle>;

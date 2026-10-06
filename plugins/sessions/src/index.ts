@@ -17,7 +17,7 @@ const Config = Schema.Struct({
 });
 type Config = typeof Config.Type;
 
-/** The plugin on `fs`: the real file system by default; tests pass a simulated disk. */
+/** The plugin on `fs`: the real file system by default; tests pass a simulated disk (`SimDisk` in `@lemma/testing`). */
 export const makeSessionsPlugin = (options: { readonly fs?: FileSystem } = {}) =>
   definePlugin({
     id: "sessions",

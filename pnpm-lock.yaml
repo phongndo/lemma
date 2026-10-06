@@ -435,6 +435,28 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2))
 
+  packages/testing:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../core
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2))
+
   plugins/agent:
     dependencies:
       '@lemma/contracts':
@@ -676,6 +698,9 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
     devDependencies:
+      '@lemma/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0
@@ -751,6 +776,9 @@ importers:
       '@lemma/plugin-commands':
         specifier: workspace:*
         version: link:../commands
+      '@lemma/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0

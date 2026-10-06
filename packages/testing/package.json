@@ -1,7 +1,8 @@
 {
-  "name": "@lemma/plugin-transport",
+  "name": "@lemma/testing",
   "version": "0.1.0",
   "private": true,
+  "description": "Test support shared by Lemma's packages: a simulated disk for crash tests, and contract conformance suites",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -11,14 +12,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.1",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {
-    "@lemma/plugin-commands": "workspace:*",
-    "@lemma/testing": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

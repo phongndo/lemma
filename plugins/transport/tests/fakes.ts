@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Effect, Layer, Stream } from "effect";
+import { Clock, Effect, Layer, Stream } from "effect";
 import {
   Agent,
   AgentError,
@@ -64,23 +64,31 @@ export const fakeSessions = definePlugin({
       return {
         create: (options) =>
           Effect.gen(function* () {
-            const now = Date.now();
+            const now = yield* Clock.currentTimeMillis;
             const info: SessionInfo = { id: `s${++count}`, cwd: options?.cwd ?? "/default", createdAt: now, updatedAt: now, lastSeq: 0 };
             store.set(info.id, { info, events: [] });
             yield* events.publish(SessionChanged, { info });
             return info;
           }),
         list: (options) =>
-          Effect.sync(() => [...store.values()].map((session) => session.info).filter((info) => options?.cwd === undefined || info.cwd === options.cwd)),
+          Effect.sync(() =>
+            [...store.values()]
+              .map((session) => session.info)
+              .filter((info) => options?.cwd === undefined || info.cwd === options.cwd)
+              .sort((a, b) => b.updatedAt - a.updatedAt),
+          ),
         get: (sessionId) => Effect.map(find(sessionId), (session) => session.info),
         append: (sessionId, data, options) =>
           Effect.gen(function* () {
             const session = yield* find(sessionId);
+            if (options?.parent !== undefined && !session.events.some((event) => event.id === options.parent)) {
+              return yield* new SessionError({ sessionId, reason: "InvalidParent", message: `No event "${options.parent}"` });
+            }
             const event: SessionEvent = {
               seq: session.events.length + 1,
               id: randomUUID(),
               parent: options?.parent ?? session.info.leaf ?? null,
-              at: Date.now(),
+              at: yield* Clock.currentTimeMillis,
               data,
             };
             session.events.push(event);
@@ -96,14 +104,26 @@ export const fakeSessions = definePlugin({
             return event;
           }),
         events: (sessionId, options) => Effect.map(find(sessionId), (session) => session.events.filter((event) => event.seq > (options?.after ?? 0))),
-        branch: (sessionId) => Effect.map(find(sessionId), (session) => session.events),
+        branch: (sessionId, options) =>
+          Effect.flatMap(find(sessionId), (session) => {
+            const byId = new Map(session.events.map((event) => [event.id, event]));
+            const leaf = options?.leaf ?? session.info.leaf;
+            if (options?.leaf !== undefined && !byId.has(options.leaf)) {
+              return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `No event "${options.leaf}"` }));
+            }
+            const path: SessionEvent[] = [];
+            for (let at = leaf === undefined ? undefined : byId.get(leaf); at !== undefined; at = at.parent === null ? undefined : byId.get(at.parent))
+              path.push(at);
+            return Effect.succeed(path.reverse());
+          }),
         checkout: (sessionId, eventId) =>
           Effect.gen(function* () {
             const session = yield* find(sessionId);
             if (!session.events.some((event) => event.id === eventId)) {
-              return yield* new SessionError({ sessionId, reason: "InvalidParent", message: `No event "${eventId}"` });
+              return yield* new SessionError({ sessionId, reason: "NotFound", message: `No event "${eventId}"` });
             }
-            session.info = { ...session.info, leaf: eventId };
+            session.info = { ...session.info, leaf: eventId, updatedAt: yield* Clock.currentTimeMillis };
+            yield* events.publish(SessionChanged, { info: session.info });
             return session.info;
           }),
         mark: (sessionId, marks) =>
