@@ -164,3 +164,9 @@ export const branchSlug = (text: string): string => {
 
 /** A context window for display: `1_000_000` → `1M`, `203_000` → `203K`. */
 export const contextSize = (tokens: number): string => (tokens >= 1_000_000 ? `${Number((tokens / 1_000_000).toFixed(1))}M` : `${Math.round(tokens / 1000)}K`);
+
+/** Whole seconds, then minutes: a label that ticks without jumping in width every tenth. */
+export const formatElapsed = (ms: number): string => {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+};

@@ -2,7 +2,7 @@ import type { Plugin } from "@lemma/core";
 import addProject from "./add-project.tsx";
 import appearance from "./appearance.tsx";
 import archivedPage from "./archived-page.tsx";
-import chat from "./chat.tsx";
+import chat from "./chat/index.tsx";
 import commands from "./commands.ts";
 import composer from "./composer.tsx";
 import connection from "./connection.tsx";

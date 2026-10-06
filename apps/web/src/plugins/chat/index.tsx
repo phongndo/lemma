@@ -1,17 +1,16 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Component, JSX } from "solid-js";
-import { Schema } from "effect";
-import { contentText, formatDuration, formatTokens, parseModelRef } from "@lemma/contracts";
-import type { ImageContent, TextContent } from "@lemma/contracts";
-import { diffStats, parseDiff, readDetails } from "../model/details.ts";
-import { summarizeToolArgs, summarizePartialArgs, summarizeUsage, truncateLines } from "../model/format.ts";
-import { answerText, entryKey, foldRunning, foldTurn } from "../model/fold.ts";
-import type { TurnEntry } from "../model/fold.ts";
-import { parseDraftArgs } from "../model/live.ts";
-import type { DraftBlock, StepDraft } from "../model/live.ts";
-import { createProjector, pendingToolCalls, promptMarks } from "../model/transcript.ts";
-import type { AssistantItem, AttemptItem, Block, Item, PromptMark, ToolResultView, TurnView } from "../model/transcript.ts";
-import { createNow } from "../lib/now.ts";
+import { formatDuration, formatTokens, parseModelRef } from "@lemma/contracts";
+import type { TextContent } from "@lemma/contracts";
+import { formatElapsed, summarizeUsage } from "../../model/format.ts";
+import { answerText, entryKey, foldRunning, foldTurn } from "../../model/fold.ts";
+import type { TurnEntry } from "../../model/fold.ts";
+import { parseDraftArgs } from "../../model/live.ts";
+import type { DraftBlock, StepDraft } from "../../model/live.ts";
+import { createProjector, pendingToolCalls, promptMarks } from "../../model/transcript.ts";
+import type { AssistantItem, AttemptItem, Block, Item, TurnView } from "../../model/transcript.ts";
+import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "../../model/prompt-rail.ts";
+import { createNow } from "../../lib/now.ts";
 import {
   ChatThinkingPart,
   ChatToolPart,
@@ -23,87 +22,35 @@ import {
   Router,
   Threads,
   Slots,
-  ToolViews,
   Views,
-} from "../ui/contracts.ts";
-import type {
-  ChatThinkingProps,
-  ChatToolProps,
-  ChatTurnFooterProps,
-  ChatUserProps,
-  ChatWorkingProps,
-  ChatWorkProps,
-  ClientService,
-  RouterService,
-  ThreadsService,
-} from "../ui/contracts.ts";
-import { defineUiPlugin } from "../ui/define.ts";
-import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
-import type { Part, SlotsService } from "../ui/slots.ts";
+} from "../../ui/contracts.ts";
+import type { ChatThinkingProps, ChatTurnFooterProps, ChatUserProps, ChatWorkingProps, ChatWorkProps } from "../../ui/contracts.ts";
+import { defineUiPlugin } from "../../ui/define.ts";
+import { DEFAULT_PART_ORDER } from "../../ui/slots.ts";
+import type { Part } from "../../ui/slots.ts";
 import {
   AlertIcon,
   ChatIcon,
   ChatThinking,
-  ChatTool,
   ChatTurnFooter,
   ChatUser,
   ChatWork,
   ChatWorking,
-  CheckIcon,
   ChevronDownIcon,
   ChevronIcon,
-  Contained,
-  FileTypeIcon,
   Markdown,
   Spinner,
-  XIcon,
   CopyButton,
-} from "../ui/parts.tsx";
-import { markdownText } from "../lib/markdown.ts";
+} from "../../ui/parts.tsx";
 import styles from "./chat.css?inline";
-
-const ChatConfig = Schema.Struct({
-  expandTools: Schema.optionalWith(Schema.Boolean, { default: () => false }).annotations({
-    title: "Open tool calls",
-    description: "Show every tool call's arguments and output instead of one quiet line.",
-  }),
-  foldWork: Schema.optionalWith(Schema.Boolean, { default: () => true }).annotations({
-    title: "Fold finished work",
-    description: "Once a turn ends, fold its thinking and tool calls into one line above the answer.",
-  }),
-  promptRail: Schema.optionalWith(Schema.Boolean, { default: () => true }).annotations({
-    title: "Prompt rail",
-    description:
-      "Mark each of your prompts beside the chat, when there is room for them and a mouse or trackpad: point at one to preview it, click to go to it.",
-  }),
-});
-
-interface Chat {
-  readonly threads: ThreadsService;
-  readonly router: RouterService;
-  readonly config: typeof ChatConfig.Type;
-  readonly isOpen: (key: string, fallback: boolean) => boolean;
-  readonly toggle: (key: string, fallback: boolean) => void;
-  readonly pending: () => ReadonlySet<string>;
-  /** The time, ticking each second while a turn runs, for elapsed-time labels. */
-  readonly now: () => number;
-}
+import { ChatConfig } from "./config.ts";
+import type { Chat } from "./config.ts";
+import { PromptRail } from "./rail.tsx";
+import { Images, ToolCard, toolView } from "./tools.tsx";
+import type { ToolState } from "./tools.tsx";
 
 /** The chat's scroll position, kept with each history entry. */
 const SCROLL_STATE = "chat.scroll";
-
-const imageSrc = (image: ImageContent) => `data:${image.mimeType};base64,${image.data}`;
-
-function Images(props: { content: readonly (TextContent | ImageContent)[] }) {
-  const images = () => props.content.filter((part): part is ImageContent => part.type === "image");
-  return (
-    <Show when={images().length > 0}>
-      <div class="images">
-        <For each={images()}>{(image) => <img src={imageSrc(image)} alt="Attached image" loading="lazy" />}</For>
-      </div>
-    </Show>
-  );
-}
 
 /** The default `chat.user` part. */
 function UserView(props: ChatUserProps) {
@@ -155,238 +102,6 @@ function ThinkingView(props: ChatThinkingProps) {
       </button>
       <Show when={open()}>
         <div class="thinking-body">{props.text}</div>
-      </Show>
-    </div>
-  );
-}
-
-/** Lines of a tool's output shown before "more lines". */
-const OUTPUT_LINES = 14;
-
-function Output(props: { text: string; error?: boolean }) {
-  const [all, setAll] = createSignal(false);
-  const cut = createMemo(() => truncateLines(props.text.replace(/\n+$/, ""), OUTPUT_LINES));
-  return (
-    <div class="output" classList={{ error: props.error === true }}>
-      <pre>{all() ? props.text.replace(/\n+$/, "") : cut().text}</pre>
-      <Show when={cut().hidden > 0}>
-        <button class="link-button output-more" aria-expanded={all()} onClick={() => setAll(!all())}>
-          <ChevronDownIcon />
-          {all() ? "Fewer lines" : `${cut().hidden} more lines`}
-        </button>
-      </Show>
-    </div>
-  );
-}
-
-function Diff(props: { diff: string }) {
-  const lines = createMemo(() => parseDiff(props.diff));
-  return (
-    <pre class="diff">
-      <For each={lines()}>
-        {(line) => (
-          <span class={`diff-${line.kind}`}>
-            {line.text}
-            {"\n"}
-          </span>
-        )}
-      </For>
-    </pre>
-  );
-}
-
-/** Whole seconds, then minutes: a label that ticks without jumping in width every tenth. */
-const formatElapsed = (ms: number): string => {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-};
-
-/** Lines of a running tool's output shown under it. */
-const LIVE_LINES = 6;
-
-type ToolState = "running" | "queued" | "ok" | "error" | "interrupted";
-
-/** A tool call, through the `chat.tool` part, with the chat's open state, its live output, and how long it has run. */
-function ToolCard(props: {
-  chat: Chat;
-  id: string;
-  name: string;
-  args: Record<string, unknown> | undefined;
-  partial?: string;
-  result?: ToolResultView | undefined;
-  state: ToolState;
-}) {
-  // Every call starts as one quiet line unless configured otherwise.
-  const defaultOpen = () => props.chat.config.expandTools;
-  /** The last lines a running tool printed; its result replaces them. */
-  const output = createMemo(() => {
-    const text = props.chat.threads.live().output.get(props.id)?.replace(/\n+$/, "");
-    return text === undefined || text === "" ? undefined : text.split("\n").slice(-LIVE_LINES).join("\n");
-  });
-  // Measured from when the call appeared here: close enough to show that a slow command is still going.
-  const shownAt = Date.now();
-  const running = () => props.state === "running";
-  return (
-    <ChatTool
-      id={props.id}
-      name={props.name}
-      args={props.args}
-      partial={props.partial}
-      result={props.result}
-      state={props.state}
-      output={running() ? output() : undefined}
-      elapsed={running() ? props.chat.now() - shownAt : undefined}
-      open={props.chat.isOpen(props.id, defaultOpen())}
-      onToggle={() => props.chat.toggle(props.id, defaultOpen())}
-    />
-  );
-}
-
-/**
- * The default `chat.tool` part: one quiet line (status, name, summary,
- * diffstat, time) that opens to the tool's `ToolViews` body, else the chat's.
- */
-const toolView = (deps: { readonly client: ClientService; readonly threads: ThreadsService; readonly slots: SlotsService }) =>
-  function ToolView(props: ChatToolProps) {
-    const { client, threads, slots } = deps;
-    const context = () => {
-      const info = client.info();
-      return info === undefined ? {} : { cwd: threads.active()?.cwd ?? info.cwd, home: info.home };
-    };
-    /** A plugin's view of this tool, when one fills the slot for it. */
-    const custom = () => slots.get(ToolViews, props.name);
-    const details = createMemo(() => readDetails(props.result?.details));
-    const summary = createMemo(() => custom()?.summary?.(props.args, context()) ?? summarizeToolArgs(props.name, props.args, context()));
-    const primary = () => summary().primary ?? (props.partial === undefined ? undefined : summarizePartialArgs(props.name, props.partial));
-    const outputText = () => (props.result === undefined ? "" : contentText(props.result.content));
-    const diff = () => details().diff;
-    const stats = createMemo(() => {
-      const d = diff();
-      return d === undefined ? undefined : diffStats(parseDiff(d));
-    });
-    const open = () => props.open;
-    const argsShown = () => summary().primary === undefined && props.args !== undefined && Object.keys(props.args).length > 0;
-    const duration = () => {
-      const t = props.result?.timing;
-      return t === undefined ? undefined : t.endedAt - t.startedAt;
-    };
-    return (
-      <div class={`tool tool-${props.state}`} classList={{ open: open() }}>
-        <button class="tool-head" aria-expanded={open()} onClick={() => props.onToggle()}>
-          <ChevronIcon class="chevron" />
-          <span class="tool-status">
-            <Switch>
-              <Match when={props.state === "running"}>
-                <Spinner />
-              </Match>
-              <Match when={props.state === "queued"}>
-                <span class="dot-muted" />
-              </Match>
-              <Match when={props.state === "ok"}>
-                <CheckIcon />
-              </Match>
-              <Match when={props.state === "error"}>
-                <XIcon />
-              </Match>
-              <Match when={props.state === "interrupted"}>
-                <span class="dot-muted" />
-              </Match>
-            </Switch>
-          </span>
-          <span class="tool-name">{props.name || "tool"}</span>
-          <Show when={summary().file}>{(file) => <FileTypeIcon path={file().path} kind={file().kind} class="tool-file" />}</Show>
-          <Show when={primary()}>
-            <span class="tool-primary" classList={{ shell: summary().shell === true || props.name === "bash" }}>
-              {primary()}
-            </span>
-          </Show>
-          <Show when={summary().secondary}>
-            <span class="tool-secondary">{summary().secondary}</span>
-          </Show>
-          <span class="tool-meta">
-            <Show when={stats()}>
-              {(s) => (
-                <span class="diffstat">
-                  <span class="add">+{s().added}</span> <span class="del">−{s().removed}</span>
-                </span>
-              )}
-            </Show>
-            <Show when={details().exitCode !== undefined && details().exitCode !== 0}>
-              <span class="badge badge-error">exit {details().exitCode}</span>
-            </Show>
-            <Show when={props.state === "interrupted"}>
-              <span class="badge">no result</span>
-            </Show>
-            <Show when={duration() !== undefined && duration()! >= 1000}>
-              <span class="muted">{formatDuration(duration()!)}</span>
-            </Show>
-            <Show when={props.elapsed !== undefined && props.elapsed >= 1000}>
-              <span class="muted">{formatElapsed(props.elapsed!)}</span>
-            </Show>
-          </span>
-        </button>
-        <Show when={props.output}>{(text) => <pre class="tool-live">{text()}</pre>}</Show>
-        <Show when={open()}>
-          <Show
-            // A view with a summary and no body leaves the body to the chat's own.
-            when={custom()?.body === undefined ? undefined : custom()}
-            keyed
-            fallback={
-              <DefaultBody
-                id={props.id}
-                args={props.args}
-                result={props.result}
-                state={props.state}
-                argsShown={argsShown()}
-                diff={diff()}
-                outputText={outputText()}
-                details={details()}
-              />
-            }
-          >
-            {(view) => (
-              <Contained
-                slot={ToolViews}
-                item={view}
-                component={view.body}
-                props={{ id: props.id, name: props.name, args: props.args, result: props.result, state: props.state, output: props.output }}
-              />
-            )}
-          </Show>
-        </Show>
-      </div>
-    );
-  };
-
-function DefaultBody(props: {
-  id: string;
-  args: Record<string, unknown> | undefined;
-  result?: ToolResultView | undefined;
-  state: ToolState;
-  argsShown: boolean;
-  diff: string | undefined;
-  outputText: string;
-  details: ReturnType<typeof readDetails>;
-}) {
-  const argsShown = () => props.argsShown;
-  const diff = () => props.diff;
-  const outputText = () => props.outputText;
-  const details = () => props.details;
-  return (
-    <div class="tool-body">
-      <Show when={argsShown()}>
-        <pre class="tool-args">{JSON.stringify(props.args, null, 2)}</pre>
-      </Show>
-      <Show when={diff()}>{(d) => <Diff diff={d()} />}</Show>
-      <Show when={outputText() && !(diff() !== undefined && props.state === "ok")}>
-        <Output text={outputText()} error={props.state === "error"} />
-      </Show>
-      <Show when={props.result}>{(result) => <Images content={result().content} />}</Show>
-      <Show when={details().truncated}>
-        <p class="muted small">Output truncated{details().fullOutputPath ? ` — full output in ${details().fullOutputPath}` : ""}</p>
-      </Show>
-      <Show when={props.state === "ok" && !outputText() && diff() === undefined && !props.result?.content.some((part) => part.type === "image")}>
-        <p class="muted small">No output</p>
       </Show>
     </div>
   );
@@ -696,161 +411,6 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   );
 }
 
-/** With less space than this beside the transcript's text, the prompt rail shows only while pointed at or focused. */
-const RAIL_ROOM = 48;
-/** A tick's length by how far it is from the one pointed at, then the length of the rest. */
-const TICK_SCALES = [1, 0.667, 0.417];
-const TICK_SCALE_REST = 0.333;
-/** How much of an answer the card reads: more than its three lines hold. */
-const PREVIEW_SOURCE = 2000;
-/** The card keeps this far inside the chat view. */
-const CARD_INSET = 8;
-/** A jump to a turn stops this far above its start. */
-const JUMP_MARGIN = 8;
-
-/**
- * A tick per prompt along the chat's left edge, evenly spaced and squeezed
- * together when there are too many to fit. Pointing anywhere on the strip
- * picks the nearest tick and previews its prompt and answer in a card level
- * with it; clicking goes there. Each tick is also a button: one tab stop, the
- * arrow keys, Home, and End move between them. The ticks of the turns in view
- * are lit. The strip keeps to the space beside the transcript's text
- * (`--room`), so it never covers what the reader is selecting, and sits level
- * with the middle of the whole pane, the composer below the chat included
- * (`--below`), as far as the chat view leaves room.
- */
-function PromptRail(props: {
-  marks: readonly PromptMark[];
-  /** The index of the prompt being read. */
-  current: number;
-  /** Where the previous and next buttons go. */
-  previous: number | undefined;
-  next: number | undefined;
-  /** The indices of the first and last prompts whose turns are in view. */
-  seen: { readonly first: number; readonly last: number } | undefined;
-  /** The space between the chat's left edge and the transcript's text, in pixels. */
-  room: number;
-  /** How far the pane the chat is in reaches below the chat view (its composer), in pixels. */
-  below: number;
-  onJump: (key: string) => void;
-}) {
-  let rail!: HTMLElement;
-  let strip!: HTMLDivElement;
-  let card: HTMLDivElement | undefined;
-  const ticks: HTMLButtonElement[] = [];
-  const count = () => props.marks.length;
-  const [hovered, setHovered] = createSignal<number>();
-  const [focused, setFocused] = createSignal<number>();
-  /** The prompt the card shows: the one pointed at, else the one focused. */
-  const active = () => {
-    const index = hovered() ?? focused();
-    return index !== undefined && index < count() ? index : undefined;
-  };
-  const shown = createMemo(() => {
-    const index = active();
-    if (index === undefined) return undefined;
-    const mark = props.marks[index]!;
-    return { index, prompt: mark.prompt, reply: markdownText(mark.reply.slice(0, PREVIEW_SOURCE)) };
-  });
-  const at = (index: number) => (count() < 2 ? 0 : (index / (count() - 1)) * 100);
-  const scale = (index: number) => {
-    const pointer = active();
-    return pointer === undefined ? TICK_SCALE_REST : (TICK_SCALES[Math.abs(index - pointer)] ?? TICK_SCALE_REST);
-  };
-  /** The tick nearest the pointer's height on the strip. */
-  const fromPointer = (event: MouseEvent) => {
-    const box = strip.getBoundingClientRect();
-    const progress = box.height <= 0 ? 0 : Math.max(0, Math.min(1, (event.clientY - box.top) / box.height));
-    return Math.round(progress * (count() - 1));
-  };
-  const jump = (index: number | undefined) => {
-    const mark = index === undefined ? undefined : props.marks[index];
-    if (mark !== undefined) props.onJump(mark.key);
-  };
-  /** The tick the tab key reaches: the focused one, else the current prompt's. */
-  const stop = () => focused() ?? Math.min(props.current, count() - 1);
-  const onKeyDown = (event: KeyboardEvent, index: number) => {
-    // With a modifier it is an app shortcut, not a move along the rail.
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    const keys: Record<string, number> = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: count() - 1 };
-    const to = keys[event.key];
-    if (to === undefined) return;
-    event.preventDefault();
-    ticks[Math.max(0, Math.min(count() - 1, to))]?.focus();
-  };
-  // The card's middle is level with its tick unless that takes it out of the chat view, and it is no larger than the view leaves.
-  // It is placed again whenever the strip moves under it: the composer settling below (`below`), the room beside the text, a new prompt.
-  createEffect(
-    on([shown, () => props.below, () => props.room, count], () => {
-      const index = shown()?.index;
-      if (index === undefined || card === undefined) return;
-      const view = rail.getBoundingClientRect();
-      const box = strip.getBoundingClientRect();
-      card.style.maxWidth = `${Math.max(0, view.right - card.getBoundingClientRect().left - CARD_INSET)}px`;
-      card.style.maxHeight = `${Math.max(0, view.height - 2 * CARD_INSET)}px`;
-      const tick = box.top + (at(index) / 100) * box.height;
-      const top = Math.max(view.top + CARD_INSET, Math.min(tick - card.offsetHeight / 2, view.bottom - card.offsetHeight - CARD_INSET));
-      card.style.top = `${top - box.top}px`;
-    }),
-  );
-  return (
-    <nav
-      class="prompt-rail"
-      classList={{ tucked: props.room < RAIL_ROOM }}
-      aria-label="Prompts"
-      ref={rail}
-      style={{ "--room": `${props.room}px`, "--below": `${props.below}px`, "--count": count() }}
-    >
-      <div class="prompt-strip" ref={strip}>
-        <button class="prompt-step previous" aria-label="Previous prompt" disabled={props.previous === undefined} onClick={() => jump(props.previous)}>
-          <ChevronIcon />
-        </button>
-        <div
-          class="prompt-hit"
-          aria-hidden="true"
-          onMouseMove={(event) => setHovered(fromPointer(event))}
-          onMouseLeave={() => setHovered(undefined)}
-          // Going to a prompt leaves focus where the reader was typing.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={(event) => jump(fromPointer(event))}
-        />
-        <div class="prompt-ticks">
-          <Index each={props.marks}>
-            {(mark, index) => (
-              <button
-                class="prompt-tick"
-                classList={{ pointed: active() === index, seen: props.seen !== undefined && index >= props.seen.first && index <= props.seen.last }}
-                style={{ top: `${at(index)}%`, "--scale": scale(index) }}
-                ref={(element) => (ticks[index] = element)}
-                tabIndex={stop() === index ? 0 : -1}
-                aria-label={`Prompt ${index + 1} of ${count()}: ${mark().prompt}`}
-                aria-current={index === props.current ? "location" : undefined}
-                onFocus={() => setFocused(index)}
-                onBlur={() => setFocused(undefined)}
-                onKeyDown={(event) => onKeyDown(event, index)}
-                onClick={() => jump(index)}
-              />
-            )}
-          </Index>
-        </div>
-        <button class="prompt-step next" aria-label="Next prompt" disabled={props.next === undefined} onClick={() => jump(props.next)}>
-          <ChevronIcon />
-        </button>
-        <Show when={shown()}>
-          {(preview) => (
-            <div class="prompt-card" ref={card} aria-hidden="true">
-              <div class="prompt-card-prompt">{preview().prompt}</div>
-              <Show when={preview().reply}>
-                <div class="prompt-card-reply">{preview().reply}</div>
-              </Show>
-            </div>
-          )}
-        </Show>
-      </div>
-    </nav>
-  );
-}
-
 function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   const threads = props.chat.threads;
   let view!: HTMLDivElement;
@@ -882,35 +442,14 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   const locate = () => {
     const turns = new Map<string | undefined, number>();
     for (const element of content.querySelectorAll<HTMLElement>("[data-turn]")) turns.set(element.dataset.turn, element.offsetTop);
-    const tops = marks().map((mark) => turns.get(mark.key));
-    const top = scroller.scrollTop;
-    const bottom = top + scroller.clientHeight;
-    const line = top + scroller.clientHeight / 3;
-    const from = heading ?? top;
-    const atEnd = from >= scroller.scrollHeight - scroller.clientHeight - 1;
-    let found: number | undefined;
-    let first: number | undefined;
-    let last: number | undefined;
-    let previous: number | undefined;
-    let next: number | undefined;
-    let end = scroller.scrollHeight;
-    for (let index = tops.length - 1; index >= 0; index--) {
-      const start = tops[index];
-      if (start === undefined) continue;
-      if (start < bottom && end > top) {
-        first = index;
-        last ??= index;
-      }
-      if (found === undefined && start <= line) found = index;
-      const target = Math.max(0, start - JUMP_MARGIN);
-      if (previous === undefined && target < from - 1) previous = index;
-      if (!atEnd && target > from + 1) next = index;
-      end = start;
-    }
-    // At the bottom the last prompt is the one being read, however short its turn.
-    setCurrent(scroller.scrollHeight - bottom < 2 ? Math.max(0, tops.length - 1) : (found ?? 0));
-    setSeen(first === undefined || last === undefined ? undefined : { first, last });
-    setSteps({ previous, next });
+    const found = locatePrompts(
+      marks().map((mark) => turns.get(mark.key)),
+      { top: scroller.scrollTop, height: scroller.clientHeight, scrollHeight: scroller.scrollHeight },
+      heading,
+    );
+    setCurrent(found.current);
+    setSeen(found.seen);
+    setSteps({ previous: found.previous, next: found.next });
   };
   let locating = 0;
   const locateSoon = () => {
@@ -945,12 +484,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     if (nearBottom) setStuck(true);
     else if (scroller.scrollTop < lastTop) setStuck(false);
-    if (heading !== undefined) {
-      // The jump is over once the view gets there, passes it, or turns away from it.
-      const left = heading - scroller.scrollTop;
-      const before = heading - lastTop;
-      if (Math.abs(left) < 2 || Math.sign(left) !== Math.sign(before) || Math.abs(left) > Math.abs(before)) heading = undefined;
-    }
+    if (heading !== undefined && jumpOver(heading, scroller.scrollTop, lastTop)) heading = undefined;
     lastTop = scroller.scrollTop;
     locateSoon();
     if (restoring !== undefined) return;
