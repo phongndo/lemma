@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
-import { Result, Schema } from "effect";
+import { Context, Effect, Result, Schema } from "effect";
 import { SessionEvent } from "@lemma/contracts";
 
 /**
@@ -56,17 +56,24 @@ export function decodeRecord(json: unknown, header: boolean): Result.Result<Line
   return Result.mapError(decoded, (error) => firstLine(error.message));
 }
 
+/**
+ * Where ids' random bytes come from: the system's secure source, so an id cannot be guessed from others. A test
+ * provides a seeded one, so a run gets the same ids, and the same order of files, every time.
+ */
+export const IdBytes = Context.Reference<(size: number) => Uint8Array>("lemma/sessions/IdBytes", { defaultValue: () => randomBytes });
+
 /** Url-safe random id that never starts with `-`, so a command line doesn't read it as an option. */
-const randomId = (bytes: number): string => {
-  for (;;) {
-    const id = randomBytes(bytes).toString("base64url");
-    if (!id.startsWith("-")) return id;
-  }
-};
+const randomId = (bytes: number): Effect.Effect<string> =>
+  Effect.map(IdBytes, (draw) => {
+    for (;;) {
+      const id = Buffer.from(draw(bytes)).toString("base64url");
+      if (!id.startsWith("-")) return id;
+    }
+  });
 
 /** Short, url-safe, random. 72 bits for sessions (global), 48 bits for events (per session, collisions retried). */
-export const sessionId = (): string => randomId(9);
-export const eventId = (): string => randomId(6);
+export const sessionId: Effect.Effect<string> = randomId(9);
+export const eventId: Effect.Effect<string> = randomId(6);
 
 /** Directory for a working directory, pi-style: `/home/me/app` → `--home-me-app--`. The header's `cwd` stays authoritative. */
 export const encodeCwd = (cwd: string): string => `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;

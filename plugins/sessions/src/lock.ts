@@ -5,7 +5,7 @@ import { Effect, Option, Schema } from "effect";
 import { SessionError } from "@lemma/contracts";
 import { errorCode, isAlive, nodeFileSystem, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { io } from "./file.ts";
+import { io, syncAncestors } from "./file.ts";
 
 /**
  * One process writes a sessions directory: two appending to one session would
@@ -114,7 +114,13 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: 
   };
 
   return Effect.gen(function* () {
-    yield* Effect.tryPromise({ try: () => fs.mkdir(root, { recursive: true }), catch: io(undefined, `Cannot create ${root}`) });
+    yield* Effect.tryPromise({
+      try: async () => {
+        await fs.mkdir(root, { recursive: true });
+        await syncAncestors(fs, root);
+      },
+      catch: io(undefined, `Cannot create ${root}`),
+    });
     for (;;) {
       if (yield* writeNew(fs, file, text)) return self;
       const found = yield* inspect(fs, file);

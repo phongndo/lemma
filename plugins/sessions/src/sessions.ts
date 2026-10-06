@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
+import { Clock, Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
 import { Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
@@ -7,7 +7,7 @@ import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEv
 import type { SessionInfo, Sessions } from "@lemma/contracts";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { applyMarks, CHANGED_ON_DISK, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
+import { applyMarks, CHANGED_ON_DISK, createFile, infoOf, io, lineHash, load, openFile, scan, syncDirectory, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
 import { encodeCwd, encodeLine, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
 import type { Header, Line } from "./format.ts";
@@ -85,7 +85,7 @@ const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: 
 interface Options {
   /** Seconds an open session may go unused before it is unloaded; 0 keeps it loaded. */
   readonly unloadAfter: number;
-  /** Where the files are: the real file system, or a simulated disk in tests. */
+  /** Where the files are: the real file system, or a simulated disk in tests. Time comes from Effect's `Clock`. */
   readonly fs: FileSystem;
 }
 
@@ -141,10 +141,12 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
     const changed = (entry: Entry) => events.publish(SessionChanged, { info: entry.info });
 
     const remember = (id: string, file: string, info: SessionInfo, scanned?: Scanned) =>
-      Effect.map(Semaphore.make(1), (lock) => {
+      Effect.gen(function* () {
+        const lock = yield* Semaphore.make(1);
+        const lastUsed = yield* Clock.currentTimeMillis;
         const existing = entries.get(id);
         if (existing !== undefined) return existing;
-        const entry: Entry = { id, file, lock, info, ...(scanned === undefined ? {} : { scanned }), lastUsed: Date.now() };
+        const entry: Entry = { id, file, lock, info, ...(scanned === undefined ? {} : { scanned }), lastUsed };
         entries.set(id, entry);
         return entry;
       });
@@ -203,7 +205,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
           if (found === undefined) return yield* notFound(id, `Session ${id} does not exist`);
           entry = yield* refresh(id, found.file);
         }
-        entry.lastUsed = Date.now();
+        entry.lastUsed = yield* Clock.currentTimeMillis;
         return entry;
       });
 
@@ -271,9 +273,9 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
     const create: Service["create"] = (options) =>
       Effect.gen(function* () {
         const cwd = path.resolve(options?.cwd ?? paths.cwd);
-        const createdAt = Date.now();
-        let id = newSessionId();
-        while (entries.has(id)) id = newSessionId();
+        const createdAt = yield* Clock.currentTimeMillis;
+        let id = yield* newSessionId;
+        while (entries.has(id)) id = yield* newSessionId;
         const header: Header = { type: "session", version: 1, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
         const line = encodeLine(header);
@@ -317,10 +319,10 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
             if (parent !== null && !open.byId.has(parent)) {
               return yield* new SessionError({ sessionId, reason: "InvalidParent", message: `Event ${parent} does not exist in session ${sessionId}` });
             }
-            let id = eventId();
-            while (open.byId.has(id)) id = eventId();
+            let id = yield* eventId;
+            while (open.byId.has(id)) id = yield* eventId;
             // A line that does not read back as it was written would make memory and a reload disagree, or the session unreadable.
-            const read = asRead({ seq: open.events.length + 1, id, parent, at: Date.now(), data });
+            const read = asRead({ seq: open.events.length + 1, id, parent, at: yield* Clock.currentTimeMillis, data });
             if (Result.isFailure(read)) {
               return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.failure}` });
             }
@@ -346,7 +348,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
           Effect.gen(function* () {
             const open = yield* openLocked(entry);
             if (!open.byId.has(target)) return yield* notFound(sessionId, `Event ${target} does not exist in session ${sessionId}`);
-            const at = Date.now();
+            const at = yield* Clock.currentTimeMillis;
             yield* commit(entry, open, { type: "checkout", leaf: target, at }, () => {
               open.leaf = target;
               open.updatedAt = Math.max(open.updatedAt, at);
@@ -363,7 +365,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         return yield* entry.lock.withPermits(1)(
           Effect.gen(function* () {
             const open = yield* openLocked(entry);
-            const line = { type: "marks" as const, ...marks, at: Date.now() };
+            const line = { type: "marks" as const, ...marks, at: yield* Clock.currentTimeMillis };
             yield* commit(entry, open, line, () => {
               open.marks = applyMarks(open.marks, marks);
             });
@@ -383,6 +385,9 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
               // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
               yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
+              // So a crash does not bring it back. Best effort: the file is gone either way, and a session that
+              // returns after a crash on a failing disk is whole.
+              yield* Effect.promise(() => syncDirectory(fs, path.dirname(entry.file)).catch(() => undefined));
               entries.delete(sessionId);
               indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
               yield* entry.open?.writer?.close ?? Effect.void;
@@ -449,8 +454,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
     if (unloadAfter > 0) {
       const idleMs = unloadAfter * 1000;
       // A session busy with an operation is in use: skipped, not waited for.
-      const sweep = Effect.suspend(() => {
-        const cutoff = Date.now() - idleMs;
+      const sweep = Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const cutoff = now - idleMs;
         return Effect.forEach(
           [...entries.values()].filter((entry) => entry.open !== undefined && entry.lastUsed <= cutoff),
           (entry) => Effect.ignore(entry.lock.withPermitsIfAvailable(1)(Effect.uninterruptible(unload(entry, cutoff)))),

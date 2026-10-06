@@ -1,16 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { Effect } from "effect";
+import { eventId, IdBytes, sessionId } from "../src/format.ts";
 
-// 0xf8 encodes as `-` in base64url; the second draw is all zeros, `A…`.
-const draws = [Buffer.alloc(9, 0xf8), Buffer.alloc(9, 0)];
-vi.mock("node:crypto", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:crypto")>()),
-  randomBytes: (size: number) => draws.shift()!.subarray(0, size),
-}));
+describe("ids", () => {
+  it("never start with -, which a command line would take for an option", () => {
+    // 0xf8 encodes as `-` in base64url; the second draw is all zeros, `A…`.
+    const draws = [new Uint8Array(9).fill(0xf8), new Uint8Array(9)];
+    const id = Effect.runSync(sessionId.pipe(Effect.provideService(IdBytes, (size) => draws.shift()!.subarray(0, size))));
+    expect(id).toBe("AAAAAAAAAAAA");
+  });
 
-const { sessionId } = await import("../src/format.ts");
-
-describe("sessionId", () => {
-  it("never starts with -, which a command line would take for an option", () => {
-    expect(sessionId()).toBe("AAAAAAAAAAAA");
+  it("are url-safe, 12 characters for sessions and 8 for events, from the system's secure source by default", () => {
+    const [session, event] = Effect.runSync(Effect.all([sessionId, eventId]));
+    expect(session).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]{11}$/);
+    expect(event).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]{7}$/);
   });
 });

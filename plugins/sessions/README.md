@@ -46,9 +46,12 @@ costs re-reading the files.
 ## Behavior
 
 - **Durability.** `append` and `checkout` write through a per-session file handle
-  and `fdatasync` before returning; `create` also fsyncs the directory. Appends to
-  one session are serialized by a semaphore. The cost is one sync per event, and
-  the agent appends only settled events (never stream deltas).
+  and `fdatasync` before returning. `create` also fsyncs the file's directory and
+  that directory's parent, since a new directory's name survives a power loss only
+  once its parent is synced; a failed directory sync fails the `create` and
+  removes the file (one the platform cannot do at all is skipped). Appends to one session are serialized by
+  a semaphore. The cost is one sync per event, and the agent appends only settled
+  events (never stream deltas).
 - **Crash tolerance.** A write a crash cut short is a torn write: bytes after the
   last newline, or a last line that is not JSON (a power loss can keep a line's
   newline but not its bytes). It is ignored when reading, with a `Notice` when
@@ -113,7 +116,28 @@ costs re-reading the files.
   and a session larger than the longest string Node allows still opens (each line
   must still fit in one). Opening validates every line; listing uses `JSON.parse`
   alone.
-- **Removal.** `remove` closes the file and deletes it; the session is gone from
-  memory and listings, and `SessionRemoved` is published.
+- **Removal.** `remove` deletes the file and closes it, then fsyncs its directory
+  so a power loss does not bring the session back (best effort: on a failing disk
+  it may come back, whole); the session is gone from memory and listings, and
+  `SessionRemoved` is published.
 - `SessionAppended` and `SessionChanged` are published after each write. They are
   losable; the file is the source of truth.
+
+## Testing
+
+`tests/simulation.test.ts` runs random operations on a simulated disk
+(`SimDisk` from `@lemma/testing`; the plugin takes it through
+`makeSessionsPlugin({ fs })`) that crashes, including part-way through an
+append, keeps or tears what was not synced, fails writes, syncs, truncations,
+and opens at rates drawn per run, and is written to by other programs. It
+checks that every acknowledged event survives as returned, that a crash leaves
+at most one failed append, that no session nothing else wrote to is ever
+`Corrupt`, and that `list` agrees, then that every session takes an append once
+the disk is healthy. Time comes from Effect's `Clock`, and ids from
+`IdBytes` (secure random bytes unless a test seeds them), so one seed fixes a
+run. `LEMMA_SIM_RUNS` (default 100),
+`LEMMA_SIM_SEED`, and `LEMMA_SIM_PATH` (printed by a failure) control it; a
+failing seed becomes a regression test. It also counts the situations runs reach
+(torn tails, failed appends kept and dropped, removals undone by a crash) and
+fails if one is never reached, so the generator cannot quietly stop covering
+them.

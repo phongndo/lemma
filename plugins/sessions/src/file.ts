@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { SessionError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
+import { errorCode } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
 import { decodeRecord, encodeLine } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
@@ -409,21 +410,50 @@ const writerFor = (handle: FileHandle, file: string, sessionId: string, confirme
         catch: orIo(sessionId, `Cannot write ${file}`),
       }),
     settle: Effect.tryPromise({ try: cut, catch: io(sessionId, `Cannot write ${file}`) }),
-    close: Effect.promise(() => handle.close()).pipe(Effect.ignore),
+    // `tryPromise`: a failed close is ignored like any other; `promise` would make it a defect.
+    close: Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
   };
 };
 
-/** Makes a new file's directory entry durable too. Best effort: some platforms cannot fsync a directory. */
-const syncDirectory = async (fs: FileSystem, dir: string) => {
+/** What a platform that cannot open or sync a directory answers (Windows, some network file systems). */
+const UNSUPPORTED = new Set(["EISDIR", "EPERM", "EACCES", "EINVAL", "ENOTSUP", "EOPNOTSUPP"]);
+const unsupported = (cause: unknown) => {
+  if (!UNSUPPORTED.has(errorCode(cause) ?? "")) throw cause;
+};
+
+/**
+ * Makes the names in a directory durable: a new file's, or a removed one's absence. Skipped where the platform
+ * cannot sync a directory (the data itself is still synced); any other failure, such as EIO, is thrown, since a
+ * name that may not survive a crash must not be reported written.
+ */
+export const syncDirectory = async (fs: FileSystem, dir: string) => {
+  const handle = await fs.open(dir, "r").catch(unsupported);
+  if (handle === undefined) return;
   try {
-    const handle = await fs.open(dir, "r");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    // Not supported here; the data itself is still synced.
+    await handle.sync().catch(unsupported);
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * Syncs every directory above `dir`, so `dir` and each of its ancestors keep their names in a crash, whichever of
+ * them an earlier run made and then failed to sync. Once per start, for the sessions directory.
+ */
+export const syncAncestors = async (fs: FileSystem, dir: string) => {
+  for (let at = dir; path.dirname(at) !== at; at = path.dirname(at)) await syncDirectory(fs, path.dirname(at));
+};
+
+/**
+ * Syncs the parent of `dir`, and of each directory above it up to `created` (what `mkdir(dir, { recursive: true })`
+ * returned: the first directory it made, if any). A directory's own name survives a crash only once its parent is
+ * synced, and `dir` may have been made by an earlier call that failed before syncing it. Without this, a crash
+ * could take a project's new directory, and the session just created in it.
+ */
+export const syncParents = async (fs: FileSystem, dir: string, created: unknown) => {
+  for (let at = dir; ; at = path.dirname(at)) {
+    await syncDirectory(fs, path.dirname(at));
+    if (typeof created !== "string" || at === created || path.dirname(at) === at) return;
   }
 };
 
@@ -431,17 +461,20 @@ const syncDirectory = async (fs: FileSystem, dir: string) => {
 export function createFile(fs: FileSystem, file: string, header: Header): Effect.Effect<Writer, SessionError> {
   return Effect.tryPromise({
     try: async () => {
-      await fs.mkdir(path.dirname(file), { recursive: true });
+      const created = await fs.mkdir(path.dirname(file), { recursive: true });
       // Append mode, like `openFile`: writes land at the end even after a failed write is truncated away.
       const handle = await fs.open(file, "ax");
       try {
         await handle.appendFile(encodeLine(header));
         await handle.datasync();
+        await syncDirectory(fs, path.dirname(file));
+        await syncParents(fs, path.dirname(file), created);
       } catch (cause) {
         await handle.close();
+        // A session reported not created must not be listed. Best effort: a crash could still leave it.
+        await fs.rm(file, { force: true }).catch(() => undefined);
         throw cause;
       }
-      await syncDirectory(fs, path.dirname(file));
       return handle;
     },
     catch: io(header.id, `Cannot create ${file}`),
