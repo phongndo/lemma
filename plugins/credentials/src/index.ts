@@ -9,8 +9,8 @@ export type { LockOptions, RawStore } from "./store.ts";
 
 /**
  * `auth.json` at `Paths.auth`. Reads take no lock (writes are atomic renames).
- * Writes serialize per provider in-process, then take the file lock and re-read
- * the file, so another process's change is never overwritten. Only the entry
+ * Writes queue in-process, then take the file lock and re-read the file, so
+ * another process's change is never overwritten. Only the entry
  * being changed is replaced; every other entry is written back verbatim.
  */
 export default definePlugin({
@@ -22,16 +22,10 @@ export default definePlugin({
     Credentials,
     Effect.gen(function* () {
       const path = (yield* Paths).auth;
-      const semaphores = new Map<string, Effect.Semaphore>();
-      const serialized = <A, E>(provider: string, body: Effect.Effect<A, E>): Effect.Effect<A, E | CredentialError> =>
-        Effect.suspend(() => {
-          let semaphore = semaphores.get(provider);
-          if (semaphore === undefined) {
-            semaphore = Effect.unsafeMakeSemaphore(1);
-            semaphores.set(provider, semaphore);
-          }
-          return semaphore.withPermits(1)(withFileLock(path, body));
-        });
+      // The file lock is the whole file's, and waits only `waitMs` for its holder: this process's writers queue
+      // here instead, however long the one before them takes.
+      const writing = yield* Effect.makeSemaphore(1);
+      const serialized = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | CredentialError> => writing.withPermits(1)(withFileLock(path, body));
 
       const withProvider = (provider: string) => (error: CredentialError) =>
         error.provider !== undefined
@@ -45,7 +39,6 @@ export default definePlugin({
 
       const modify = <E>(provider: string, update: (current: Credential | undefined) => Effect.Effect<Credential | undefined, E>) =>
         serialized(
-          provider,
           Effect.gen(function* () {
             const store = yield* readStore(path);
             const current = yield* decodeEntry(path, store, provider);
@@ -70,7 +63,6 @@ export default definePlugin({
         modify,
         remove: (provider) =>
           serialized(
-            provider,
             Effect.gen(function* () {
               const store = yield* readStore(path);
               if (!Object.hasOwn(store, provider)) return;
