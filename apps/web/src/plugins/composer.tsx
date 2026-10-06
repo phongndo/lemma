@@ -60,7 +60,7 @@ const readImage = (file: File): Promise<ImageContent> =>
     reader.readAsDataURL(file);
   });
 
-export const ComposerConfig = Schema.Struct({
+const ComposerConfig = Schema.Struct({
   send: Schema.optionalWith(Schema.Literal("enter", "mod+enter"), { default: () => "enter" as const }).annotations({
     title: "Send with",
     description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",

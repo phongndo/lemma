@@ -24,11 +24,7 @@ import type { Journal } from "./state.ts";
 import { newId, runTurn } from "./turn.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
 
-export { basePrompt, environment, titleFrom } from "./prompt.ts";
-export type { EnvironmentFacts } from "./prompt.ts";
-export { runTurn } from "./turn.ts";
-
-export const AgentConfig = Schema.Struct({
+const AgentConfig = Schema.Struct({
   defaultModel: Schema.optional(Schema.String).annotations({ description: "<provider>/<model> for turns that name none. Absent: the first available model." }),
   systemPrompt: Schema.optional(Schema.String).annotations({ description: "Replaces the default base prompt; the environment section is still added." }),
   cli: Schema.optional(Schema.String).annotations({
@@ -54,7 +50,7 @@ export const AgentConfig = Schema.Struct({
     description: "Turns running at once, across sessions; another waits for one to end.",
   }),
 });
-export type AgentConfig = typeof AgentConfig.Type;
+type AgentConfig = typeof AgentConfig.Type;
 
 /** A submitted prompt, queued or placed in a turn. */
 interface Item {

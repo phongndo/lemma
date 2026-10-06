@@ -29,13 +29,13 @@ export interface Target {
  * `Environment`: `LEMMA_URL` is not a base URL, or `LEMMA_TOKEN` is missing;
  * `File`: remote.json cannot be read or is not `{ url, token }`.
  */
-export class TargetError extends Data.TaggedError("TargetError")<{
+class TargetError extends Data.TaggedError("TargetError")<{
   readonly reason: "Environment" | "File";
   readonly message: string;
 }> {}
 
 const Remote = Schema.Struct({ url: Schema.String, token: Schema.String });
-export type Remote = typeof Remote.Type;
+type Remote = typeof Remote.Type;
 const decode = Schema.decodeUnknownEither(Schema.parseJson(Remote));
 
 export const remotePath = (home: string): string => join(home, "remote.json");
@@ -60,7 +60,7 @@ const unusable = (path: string, why: string) =>
   });
 
 /** remote.json's entry, or undefined without the file. */
-export const readRemote = (home: string): Effect.Effect<Remote | undefined, TargetError> => {
+const readRemote = (home: string): Effect.Effect<Remote | undefined, TargetError> => {
   const path = remotePath(home);
   return Effect.tryPromise({
     try: () => readFile(path, "utf8").catch((cause: NodeJS.ErrnoException) => (cause.code === "ENOENT" ? undefined : Promise.reject(cause))),

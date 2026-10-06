@@ -11,14 +11,13 @@ import { startServer } from "./server.ts";
 import { loadToken } from "./token.ts";
 
 export { Discovery, discoveryPath, readDiscovery } from "./discovery.ts";
-export { clearRemote, findTarget, normalizeUrl, readRemote, remotePath, TargetError, writeRemote } from "./target.ts";
-export type { Remote, Target } from "./target.ts";
-export { toHostError, toPluginStatus } from "./errors.ts";
+export { clearRemote, findTarget, normalizeUrl, remotePath, writeRemote } from "./target.ts";
+export type { Target } from "./target.ts";
 
 /** Reported by `Host.Info` and as the plugin version. */
-export const VERSION = "0.1.0";
+const VERSION = "0.1.0";
 
-export const TransportConfig = Schema.Struct({
+const TransportConfig = Schema.Struct({
   host: Schema.optionalWith(Schema.String, { default: () => "127.0.0.1" }).annotations({
     description: "Loopback by default; set explicitly to expose the host beyond this machine.",
   }),
@@ -36,7 +35,7 @@ export const TransportConfig = Schema.Struct({
     description: "How long an open interaction waits for a client to (re)connect before failing Unavailable.",
   }),
 });
-export type TransportConfig = typeof TransportConfig.Type;
+type TransportConfig = typeof TransportConfig.Type;
 
 /** A wildcard bind is reachable locally through loopback; that is what the discovery file should say. */
 const clientHost = (hostname: string): string => {

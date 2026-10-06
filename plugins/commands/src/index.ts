@@ -21,7 +21,7 @@ const message = (cause: unknown): string => (cause instanceof Error ? cause.mess
 const infoOf = (items: readonly { readonly item: Command; readonly pluginId: string }[]): CommandInfo[] =>
   items.map(({ item: { run: _run, ...fields }, pluginId }) => ({ ...fields, source: pluginId })).sort(byCategoryThenTitle);
 
-export const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Registries> = Effect.gen(function* () {
+const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Registries> = Effect.gen(function* () {
   const events = yield* Events;
   const owner = yield* PluginContext;
   const registries = yield* Registries;

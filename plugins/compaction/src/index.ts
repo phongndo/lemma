@@ -4,7 +4,7 @@ import type { ModelInfo, RequestDraft, StreamEvent } from "@lemma/contracts";
 import { definePlugin, Events, PluginContext } from "@lemma/core";
 import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact.ts";
 
-export { chooseCut, estimateTokens, messageChars, transcript } from "./compact.ts";
+export { chooseCut, estimateTokens, transcript } from "./compact.ts";
 
 const Config = Schema.Struct({
   at: Schema.optionalWith(Schema.Number.pipe(Schema.greaterThan(0), Schema.lessThan(1)), { default: () => 0.8 }).annotations({

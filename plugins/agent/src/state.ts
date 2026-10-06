@@ -46,7 +46,7 @@ export type LiveFile = typeof LiveFile.Type;
 const decodeJournal = Schema.decodeUnknownEither(Schema.parseJson(Journal));
 const decodeLive = Schema.decodeUnknownEither(Schema.parseJson(LiveFile));
 
-export const stateDir = (home: string) => join(home, "agent");
+const stateDir = (home: string) => join(home, "agent");
 const journalPath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.json`);
 const livePath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.live.json`);
 

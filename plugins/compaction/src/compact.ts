@@ -7,7 +7,7 @@ const IMAGE_CHARS = 4_800;
 const CHARS_PER_TOKEN = 4;
 
 /** A message's size in characters, as the model reads it. */
-export const messageChars = (message: Message): number => {
+const messageChars = (message: Message): number => {
   let chars = 0;
   for (const part of message.content) {
     if (part.type === "text") chars += part.text.length;

@@ -9,8 +9,8 @@ import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
 import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/contracts";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
 
-export const READ_TIMEOUT_MS = 5_000;
-export const CHECKOUT_TIMEOUT_MS = 15_000;
+const READ_TIMEOUT_MS = 5_000;
+const CHECKOUT_TIMEOUT_MS = 15_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
 
 type GitResult = { readonly ok: true; readonly stdout: string } | { readonly ok: false; readonly message: string };
@@ -59,7 +59,7 @@ export const matchName = (name: string, needle: string): { readonly score: numbe
 };
 
 /** Entries returned by `browse`; more are reported as `truncated`. */
-export const BROWSE_LIMIT = 200;
+const BROWSE_LIMIT = 200;
 
 const isDirectory = async (path: string): Promise<boolean> => (await kindOf(path)) === "directory";
 
@@ -68,7 +68,7 @@ const isDirectory = async (path: string): Promise<boolean> => (await kindOf(path
  * NUL-terminated; a rename or copy (`2`) is followed by one extra record, its
  * original path, which is not a separate change.
  */
-export const parseStatus = (output: string) => {
+const parseStatus = (output: string) => {
   let oid: string | undefined;
   let branch: string | null = null;
   let upstream: string | undefined;
@@ -102,7 +102,7 @@ export const parseStatus = (output: string) => {
 const REF_FORMAT = "%(refname)%00%(committerdate:unix)%00%(HEAD)%00%(symref)%00%(worktreepath)";
 
 /** Parses `git for-each-ref --sort=-committerdate --format=REF_FORMAT refs/heads refs/remotes`, keeping that order within each group. */
-export const parseBranches = (output: string): GitBranch[] => {
+const parseBranches = (output: string): GitBranch[] => {
   const local: GitBranch[] = [];
   const remote: GitBranch[] = [];
   for (const line of output.split("\n")) {
@@ -121,7 +121,7 @@ export const parseBranches = (output: string): GitBranch[] => {
   return [...local, ...remote.filter((branch) => !names.has(branch.name.slice(branch.name.indexOf("/") + 1)))];
 };
 
-export interface WorkspaceOptions {
+interface WorkspaceOptions {
   /** What `~` expands to. Defaults to the OS home directory. */
   readonly home?: string;
   /** Where `createWorktree` puts worktrees, one folder per repository. */
@@ -298,7 +298,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
   return { status, browse, createDirectory, createWorktree, branches, checkout };
 };
 
-export const WorkspaceConfig = Schema.Struct({
+const WorkspaceConfig = Schema.Struct({
   worktrees: Schema.optional(Schema.String).annotations({
     description: "Where new worktrees go; defaults to worktrees in the host's home (~/.lemma/worktrees).",
   }),

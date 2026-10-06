@@ -38,7 +38,7 @@ export const loadLanguage = (lang: string): Promise<boolean> => {
 };
 
 /** `lang` can be highlighted now, synchronously. */
-export const canHighlight = (lang: string): boolean => ready !== undefined && ready.getLoadedLanguages().includes(lang);
+const canHighlight = (lang: string): boolean => ready !== undefined && ready.getLoadedLanguages().includes(lang);
 
 const tokenize = (hl: HighlighterCore, code: string, lang: string, grammarState?: GrammarState): ThemedToken[][] =>
   hl.codeToTokens(code, { lang, themes: THEMES, defaultColor: false, ...(grammarState === undefined ? {} : { grammarState }) }).tokens;

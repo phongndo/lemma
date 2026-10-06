@@ -1,6 +1,6 @@
 import type { ModelInfo, ThinkingLevel } from "@lemma/contracts";
 
-export interface ModelGroup {
+interface ModelGroup {
   readonly provider: string;
   readonly models: readonly ModelInfo[];
 }

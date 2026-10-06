@@ -14,7 +14,7 @@ import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
 import { Schema } from "effect";
 
 /** Wire APIs a configured provider can speak. Implementations load on first request. */
-export const apis = {
+const apis = {
   "openai-completions": openAICompletionsApi,
   "openai-responses": openAIResponsesApi,
   "openai-codex-responses": openAICodexResponsesApi,
@@ -27,14 +27,14 @@ export const apis = {
   "pi-messages": piMessagesApi,
 } satisfies Record<string, () => ProviderStreams>;
 
-export const ApiId = Schema.Literal(...(Object.keys(apis) as (keyof typeof apis)[]));
-export type ApiId = typeof ApiId.Type;
+const ApiId = Schema.Literal(...(Object.keys(apis) as (keyof typeof apis)[]));
+type ApiId = typeof ApiId.Type;
 
 const Cost = Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number });
 /** pi-ai's per-API `compat` flags (e.g. `supportsDeveloperRole: false` for Ollama); passed through unchecked. */
 const Compat = Schema.Record({ key: Schema.String, value: Schema.Unknown });
 
-export const CustomModel = Schema.Struct({
+const CustomModel = Schema.Struct({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   reasoning: Schema.optional(Schema.Boolean),
@@ -47,7 +47,7 @@ export const CustomModel = Schema.Struct({
   thinkingLevelMap: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) })),
   compat: Schema.optional(Compat),
 });
-export type CustomModel = typeof CustomModel.Type;
+type CustomModel = typeof CustomModel.Type;
 
 export const CustomProvider = Schema.Struct({
   id: Schema.String.pipe(Schema.pattern(/^[^/]+$/)),
@@ -137,7 +137,7 @@ function customAuth(config: CustomProvider, name: string): ApiKeyAuth {
 }
 
 /** Defaults follow pi's models.json: 128k context, 16k output, text only, free. */
-export function customModel(config: CustomProvider, model: CustomModel): Model<Api> {
+function customModel(config: CustomProvider, model: CustomModel): Model<Api> {
   const compat = config.compat === undefined && model.compat === undefined ? undefined : { ...config.compat, ...model.compat };
   return {
     id: model.id,

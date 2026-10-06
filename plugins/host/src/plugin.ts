@@ -8,7 +8,7 @@ import { PathsSchema } from "./paths.ts";
 
 export type HostControlService = Context.Tag.Service<HostControl>;
 
-export interface HostPluginOptions {
+interface HostPluginOptions {
   /** The app owns the loader; it hands the plugin a handle rather than the loader itself. */
   readonly control: HostControlService;
   /** `core.faults` of the composition this plugin runs in, so clients hear about failures. */

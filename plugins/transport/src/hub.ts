@@ -20,7 +20,7 @@ import type { CoreClosed, Event, EventError, PluginContext } from "@lemma/core";
 import { toPluginStatus } from "./errors.ts";
 
 /** Per-subscriber buffer for kernel events. A slow client loses the oldest and repairs from the session log. */
-export const SUBSCRIBER_BUFFER = 1024;
+const SUBSCRIBER_BUFFER = 1024;
 
 interface Subscriber {
   /** Kernel events: bounded, drop-oldest. */

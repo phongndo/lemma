@@ -22,7 +22,7 @@ export function runner(runtime: Runtime.Runtime<never>) {
   };
 }
 
-export type Run = ReturnType<typeof runner>;
+type Run = ReturnType<typeof runner>;
 
 /** pi-ai's `CredentialStore` over the `Credentials` capability. The shapes match; `modify` keeps its lock. */
 export function credentialStore(credentials: CredentialsService, run: Run): Pi.CredentialStore {

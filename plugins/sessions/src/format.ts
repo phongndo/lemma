@@ -83,7 +83,7 @@ export const eventId = (): string => randomId(6);
 /** Directory for a working directory, pi-style: `/home/me/app` → `--home-me-app--`. The header's `cwd` stays authoritative. */
 export const encodeCwd = (cwd: string): string => `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 
-export const fileName = (createdAt: number, id: string): string => `${new Date(createdAt).toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;
+const fileName = (createdAt: number, id: string): string => `${new Date(createdAt).toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;
 
 /** Session id from a file name, or undefined for files that are not sessions. */
 export function idFromFileName(name: string): string | undefined {

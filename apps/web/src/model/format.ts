@@ -30,7 +30,7 @@ export const displayPath = (path: string, cwd: string | undefined, home: string 
   return tildePath(path, home);
 };
 
-export interface UsageSummary {
+interface UsageSummary {
   readonly input: string;
   readonly output: string;
   readonly cache?: string;

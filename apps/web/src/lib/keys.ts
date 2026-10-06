@@ -1,5 +1,5 @@
 /** macOS writes app shortcuts with ⌘; Windows and Linux with Ctrl. */
-export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
 /**
  * Whether the platform's shortcut modifier is held: ⌘ on macOS, Ctrl elsewhere.
@@ -44,7 +44,7 @@ type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "al
  * the physical key, so ⌥K on a Mac (which types ˚) is still `k`; other keys
  * from what they type (`/`, `?`), and the space bar is `space`.
  */
-export const keyOf = (event: Pick<KeyboardEvent, "key" | "code">): string => {
+const keyOf = (event: Pick<KeyboardEvent, "key" | "code">): string => {
   const physical = /^Key([A-Z])$/.exec(event.code)?.[1] ?? /^Digit(\d)$/.exec(event.code)?.[1];
   if (physical !== undefined) return physical.toLowerCase();
   return event.key === " " ? "space" : event.key.toLowerCase();

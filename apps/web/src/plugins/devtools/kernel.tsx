@@ -13,7 +13,7 @@ const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host
 const INSPECTORS_PANEL = "devtools.inspectors";
 
 /** What the kernel's panels read. */
-export interface Deps {
+interface Deps {
   readonly slots: SlotsService;
   readonly router: RouterService;
   readonly devtools: DevtoolsService;

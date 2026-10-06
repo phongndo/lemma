@@ -14,7 +14,7 @@ import { HOST_PLUGIN_ID } from "./catalog.ts";
 
 export { HOST_PLUGIN_ID };
 
-export interface LoadedComposition {
+interface LoadedComposition {
   /** Always contains the `host` row carrying `paths`; the host plugin cannot be disabled by a file. */
   readonly composition: Composition;
   /** Errors (unreadable or invalid files) and warnings. Every message names the file. */
@@ -31,7 +31,7 @@ export interface LoadedComposition {
   readonly ui: MergedRows;
 }
 
-export interface MergedRows {
+interface MergedRows {
   readonly plugins: Readonly<Record<string, PluginRow>>;
   readonly enabledIn: Readonly<Record<string, ConfigScope>>;
   readonly configIn: Readonly<Record<string, ConfigScope>>;
@@ -219,7 +219,7 @@ export const readConfigText = (path: string): Effect.Effect<string | undefined, 
     ),
   );
 
-export interface ConfigUpdate {
+interface ConfigUpdate {
   /** What the file holds now. */
   readonly text: string;
   /** What it held before; undefined when it did not exist. */
@@ -338,7 +338,7 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
   });
 
 /** JSONC with comments and trailing commas; anything else the parser recovers from is still an error here. */
-export function parseConfig(path: string, text: string): Either.Either<ConfigFile, Diagnostic> {
+function parseConfig(path: string, text: string): Either.Either<ConfigFile, Diagnostic> {
   const errors: ParseError[] = [];
   const value: unknown = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length) {

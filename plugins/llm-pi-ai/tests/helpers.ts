@@ -29,7 +29,7 @@ export function fakeCredentials(initial: Record<string, Credential> = {}) {
   return { store, service, plugin };
 }
 
-export type Question =
+type Question =
   | { readonly type: "ask"; readonly title: string; readonly secret?: boolean; readonly placeholder?: string }
   | { readonly type: "select"; readonly title: string; readonly options: readonly string[] };
 

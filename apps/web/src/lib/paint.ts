@@ -6,8 +6,8 @@
  * and the page's default, with no plugin applying one, is the system theme.
  */
 
-export type Theme = "light" | "dark";
-export interface Look {
+type Theme = "light" | "dark";
+interface Look {
   readonly theme: Theme;
   /** A CSS length for `--content`; absent for the stylesheet's own. */
   readonly content?: string;
@@ -16,7 +16,7 @@ export interface Look {
 const KEY = "lemma.paint";
 const root = () => document.documentElement;
 
-export const systemTheme = (): Theme => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+const systemTheme = (): Theme => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
 const put = (look: Look, owner: string | undefined) => {
   root().dataset.theme = look.theme;

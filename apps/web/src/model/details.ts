@@ -3,7 +3,7 @@
  * the built-in tools are expected to produce (pi-style) and ignore the rest.
  */
 
-export interface ToolDetails {
+interface ToolDetails {
   /** Unified diff (edit/write). */
   readonly diff?: string;
   readonly exitCode?: number;
@@ -29,7 +29,7 @@ export const readDetails = (details: unknown): ToolDetails => {
   };
 };
 
-export type DiffLine = { readonly kind: "add" | "del" | "ctx" | "hunk" | "meta"; readonly text: string };
+type DiffLine = { readonly kind: "add" | "del" | "ctx" | "hunk" | "meta"; readonly text: string };
 
 export const parseDiff = (diff: string): DiffLine[] =>
   diff

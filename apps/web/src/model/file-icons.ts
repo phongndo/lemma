@@ -256,12 +256,12 @@ export const FILE_EXTENSIONS: Readonly<Record<string, string>> = {
 export const DEFAULT_FILE_TYPE = "default";
 
 /** A user's own matches, consulted before the tables (all of them, so `.md = text` covers `README.md` too): by lower-case name, and by extension. */
-export interface FileTypeRules {
+interface FileTypeRules {
   readonly names: Readonly<Record<string, string>>;
   readonly extensions: Readonly<Record<string, string>>;
 }
 
-export const NO_RULES: FileTypeRules = { names: {}, extensions: {} };
+const NO_RULES: FileTypeRules = { names: {}, extensions: {} };
 
 /**
  * Rules from config lines: `.mdc = markdown` (or `*.mdc`) matches an

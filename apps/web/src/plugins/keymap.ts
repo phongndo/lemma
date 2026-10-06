@@ -4,7 +4,7 @@ import { KEYMAP_PLUGIN, keysFor, parseBindings } from "../model/keybindings.ts";
 import { ActionIds, Actions, Dialogs, Interactions, Slots } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 
-export const KeymapConfig = Schema.Struct({
+const KeymapConfig = Schema.Struct({
   bindings: Schema.optional(Schema.Array(Schema.String)).annotations({
     title: "Shortcuts",
     description:

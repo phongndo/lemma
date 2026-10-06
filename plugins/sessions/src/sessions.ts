@@ -81,7 +81,7 @@ const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: 
   info: infoOfOpen(open),
 });
 
-export interface Options {
+interface Options {
   /** Seconds an open session may go unused before it is unloaded; 0 keeps it loaded. */
   readonly unloadAfter: number;
 }

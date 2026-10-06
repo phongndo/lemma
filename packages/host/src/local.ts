@@ -44,20 +44,20 @@ const made = new Map<string, unknown>();
 const isPlugin = (value: unknown): value is Plugin =>
   typeof value === "object" && value !== null && typeof (value as Plugin).id === "string" && typeof (value as Plugin).layer === "function";
 
-export interface LocalPlugin {
+interface LocalPlugin {
   readonly plugin: Plugin;
   /** The directory in `dirs` the plugin's file was found in. */
   readonly dir: string;
 }
 
-export interface LocalPlugins {
+interface LocalPlugins {
   /** In `dirs` order, then by file name. */
   readonly plugins: readonly LocalPlugin[];
   readonly diagnostics: readonly Diagnostic[];
 }
 
 /** What a plugin file's default export receives when it is a function. */
-export interface LocalContext {
+interface LocalContext {
   /** The bundled plugins by id: a replacement can wrap one, delegating to it. */
   readonly bundled: Readonly<Record<string, Plugin>>;
 }

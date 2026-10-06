@@ -4,7 +4,7 @@
  * decides what the items are and what choosing one does.
  */
 
-export interface Match {
+interface Match {
   readonly score: number;
   /** Indices into the text that matched, for highlighting. */
   readonly matches: readonly number[];
@@ -81,7 +81,7 @@ export interface Searchable {
   readonly keywords?: readonly string[] | undefined;
 }
 
-export interface Ranked<T> {
+interface Ranked<T> {
   readonly item: T;
   readonly score: number;
   /** Title indices to highlight. */

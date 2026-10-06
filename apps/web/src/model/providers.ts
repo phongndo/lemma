@@ -44,7 +44,7 @@ import baseten from "../assets/providers/lobehub-baseten.svg?raw";
  * this; a provider missing here (a custom one) shows its initial.
  * The logos are files in `assets/providers`; its README says where they are from.
  */
-export interface ProviderBrand {
+interface ProviderBrand {
   readonly logo?: ProviderLogo;
   /** What it is, when the auth methods alone do not say. */
   readonly blurb?: string;
@@ -55,7 +55,7 @@ export interface ProviderBrand {
 }
 
 /** A color logo's file URLs (the dark one for dark themes, when it differs), or a one-color logo's SVG markup that draws in the text color. */
-export type ProviderLogo = { readonly light: string; readonly dark?: string } | { readonly mono: string };
+type ProviderLogo = { readonly light: string; readonly dark?: string } | { readonly mono: string };
 
 const brands: Readonly<Record<string, ProviderBrand>> = {
   "openai-codex": { logo: { light: openai, dark: openaiDark }, keywords: "chatgpt gpt", blurb: "Sign in with your ChatGPT plan" },
@@ -112,7 +112,7 @@ const POPULAR = ["openai", "github-copilot", "opencode", "opencode-go", "anthrop
 
 export const providerBrand = (id: string): ProviderBrand => brands[id] ?? {};
 
-export const hasOAuth = (provider: ProviderInfo) => provider.auth.some((method) => method.type === "oauth");
+const hasOAuth = (provider: ProviderInfo) => provider.auth.some((method) => method.type === "oauth");
 /** An environment variable name, as opposed to a stored credential the host can remove. */
 export const fromEnv = (source: string | undefined) => source !== undefined && /^[A-Z0-9_]+$/.test(source);
 
@@ -140,7 +140,7 @@ export const providerText = (provider: ProviderInfo): string => {
 /** Which ways in to list: signing in with a subscription, or pasting an API key. */
 export type AuthFilter = "all" | "oauth" | "api_key";
 
-export interface ProviderGroup {
+interface ProviderGroup {
   readonly title: string;
   readonly providers: readonly ProviderInfo[];
 }
@@ -209,7 +209,7 @@ export const customProviderProblem = (draft: CustomProviderDraft): string | unde
 };
 
 /** The largest logo file a custom provider takes; logos live in config.jsonc. */
-export const MAX_LOGO_BYTES = 32 * 1024;
+const MAX_LOGO_BYTES = 32 * 1024;
 
 /** What is wrong with an SVG file's text as a logo, if anything. */
 export const logoProblem = (svg: string): string | undefined => {

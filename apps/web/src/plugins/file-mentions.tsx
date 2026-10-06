@@ -7,7 +7,7 @@ import type { ComposerSuggestion } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import { FileTypeIcon } from "../ui/parts.tsx";
 
-export const FileMentionsConfig = Schema.Struct({
+const FileMentionsConfig = Schema.Struct({
   trigger: Schema.optionalWith(Schema.String.pipe(Schema.minLength(1)), { default: () => "@" }).annotations({
     title: "Trigger",
     description: "Typed at the start of a word, offers the project's files; picking one writes it after the trigger (@src/app.ts).",

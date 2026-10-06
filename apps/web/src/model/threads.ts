@@ -1,7 +1,7 @@
 import { branchOf } from "@lemma/contracts";
 import type { QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
 
-export interface SessionGroup {
+interface SessionGroup {
   readonly cwd: string;
   /** Newest first. */
   readonly sessions: readonly SessionInfo[];
@@ -61,7 +61,7 @@ export const resolveLeaf = (events: readonly SessionEvent[], leaf: string | unde
 
 export const sessionTitle = (session: SessionInfo | undefined): string => session?.title?.trim() || "New thread";
 
-export interface TurnTracking {
+interface TurnTracking {
   /** Sessions with a turn in progress. */
   readonly running: readonly string[];
   /** The last ended turn per session. */

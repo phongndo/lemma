@@ -24,7 +24,7 @@ import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
 import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
-export const Config = Schema.Struct({
+const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to register; default all." }),
   exclude: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["openai-codex"] }).annotations({
     description: "Built-in provider ids to leave out. Default: the legacy openai-codex, whose ChatGPT sign-in openai now offers.",
@@ -45,7 +45,7 @@ export const Config = Schema.Struct({
     description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
   }),
 });
-export type Config = typeof Config.Type;
+type Config = typeof Config.Type;
 
 /**
  * Times pi-ai asks again itself, before a response starts, when the provider
@@ -55,7 +55,7 @@ export type Config = typeof Config.Type;
  */
 const SDK_RETRIES = 2;
 
-export interface Options {
+interface Options {
   /** Replaces pi-ai's built-in provider list (tests register the faux provider here). Filtered by `include`/`exclude`. */
   readonly providers?: () => readonly Provider[];
   /** Environment used for auth resolution; default `process.env` and the filesystem. */
@@ -389,6 +389,5 @@ export function makeLlmPlugin(options: Options = {}) {
 
 export default makeLlmPlugin();
 
-export { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
-export { explainError, makeEventMapper, reasoningFor, toAssistantMessage, toContext, toModelInfo } from "./convert.ts";
-export { CustomModel, CustomProvider, apis, customModel, customProvider, withoutAnthropicOAuth } from "./providers.ts";
+export { credentialStore, runner } from "./auth.ts";
+export { makeEventMapper } from "./convert.ts";

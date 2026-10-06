@@ -15,7 +15,7 @@
  * CC0), padded to the others' size.
  */
 
-export interface Glyph {
+interface Glyph {
   /** Its markup inside an `<svg>`, from this file only (it is set as HTML). */
   readonly body: string;
   /** Default `0 0 16 16`. */

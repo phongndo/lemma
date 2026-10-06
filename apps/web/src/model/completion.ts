@@ -93,7 +93,7 @@ export const applySuggestion = (
 export const mentionPath = (path: string, options: { readonly open?: boolean } = {}): string =>
   /[\s"]/.test(path) ? `"${path.replace(/(["\\])/g, "\\$1")}${options.open === true ? "" : '"'}` : path;
 
-export interface FileSuggestionView {
+interface FileSuggestionView {
   /** The last segment: a file's name, a directory's own. */
   readonly label: string;
   /** The folder it is in, without a trailing slash; empty at the top. */

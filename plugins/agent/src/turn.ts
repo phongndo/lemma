@@ -47,7 +47,7 @@ import { INTERRUPTED_CALL, RESUMED, TOOLS_STARTED } from "./resume.ts";
 import type { ResumePlan, StepOutcome } from "./resume.ts";
 import type { LiveFile } from "./state.ts";
 
-export interface TurnServices {
+interface TurnServices {
   readonly sessions: Context.Tag.Service<typeof Sessions>;
   readonly llm: Context.Tag.Service<typeof Llm>;
   readonly tools: Context.Tag.Service<typeof Tools>;
@@ -58,7 +58,7 @@ export interface TurnServices {
   readonly source: string;
 }
 
-export interface TurnSettings {
+interface TurnSettings {
   readonly systemPrompt?: string;
   /** Shell command for the `lemma` CLI, named in the environment section. */
   readonly cli?: string;
@@ -76,19 +76,19 @@ const PARALLEL_TOOLS = 8;
 const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
 
 /** Milliseconds before retry `attempt` (from 1): the provider's delay when it named one, else doubling backoff with ±20% jitter. */
-export const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">, attempt: number, requested?: number): number =>
+const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">, attempt: number, requested?: number): number =>
   requested !== undefined
     ? Math.min(requested, MAX_REQUESTED_DELAY_MS)
     : Math.round(Math.min(settings.maxRetryDelay, settings.retryDelay * 2 ** (attempt - 1)) * (0.8 + Math.random() * 0.4));
 
 /** A prompt as a turn places it: a user message carrying the submission's id. */
-export interface Placed {
+interface Placed {
   readonly requestId: string;
   readonly content: PromptContent;
 }
 
 /** The session's queue as the turn sees it: steers join the turn between steps. */
-export interface TurnInbox {
+interface TurnInbox {
   /** Queued steers, oldest first. They stay queued until `placed`, so one is never lost between the queue and the log. */
   readonly steers: Effect.Effect<readonly Placed[]>;
   /** These steers' messages are in the log: take them out of the queue. */
@@ -103,7 +103,7 @@ export interface TurnResume {
   readonly cancelling: boolean;
 }
 
-export interface TurnInput {
+interface TurnInput {
   readonly sessionId: string;
   readonly turnId: string;
   readonly cwd: string;

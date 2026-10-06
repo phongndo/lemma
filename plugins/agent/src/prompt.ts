@@ -6,7 +6,7 @@ import type { PromptContent, SystemSection } from "@lemma/contracts";
  * tools that are actually registered, so replacing or removing a builtin tool
  * does not leave stale advice behind.
  */
-export function basePrompt(toolNames: ReadonlySet<string>): string {
+function basePrompt(toolNames: ReadonlySet<string>): string {
   const rules: string[] = [];
   if (toolNames.has("bash") && !toolNames.has("grep") && !toolNames.has("find") && !toolNames.has("ls")) {
     rules.push("Use bash for file operations like ls, rg, find");
@@ -28,7 +28,7 @@ export function basePrompt(toolNames: ReadonlySet<string>): string {
   ].join("\n\n");
 }
 
-export interface EnvironmentFacts {
+interface EnvironmentFacts {
   readonly cwd: string;
   /** The session this turn belongs to, so the agent can inspect its own log. */
   readonly sessionId: string;

@@ -27,7 +27,7 @@ export interface ReadDetails {
 export const MAX_IMAGE_BYTES = 3.75 * 1024 * 1024;
 
 /** PNG, JPEG, GIF, or WebP by magic bytes, like pi; the extension is not trusted. */
-export function sniffImage(head: Uint8Array): string | undefined {
+function sniffImage(head: Uint8Array): string | undefined {
   const ascii = (offset: number, value: string) => [...value].every((char, i) => head[offset + i] === char.charCodeAt(0));
   if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
   if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => head[i] === byte)) return "image/png";

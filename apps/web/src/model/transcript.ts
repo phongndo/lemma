@@ -88,7 +88,7 @@ export interface TurnView {
   readonly firstTokenMs?: number;
 }
 
-export interface Transcript {
+interface Transcript {
   readonly turns: readonly TurnView[];
   readonly title?: string;
 }

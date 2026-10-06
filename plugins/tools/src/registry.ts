@@ -8,7 +8,7 @@ import { toolParameters } from "./schema.ts";
 
 type Service = Context.Tag.Service<typeof Tools>;
 
-export interface RegistryOptions {
+interface RegistryOptions {
   /** Total text characters a result may carry to the model before it is truncated. */
   readonly maxResultChars: number;
 }
@@ -37,7 +37,7 @@ const Guards = Registry.make<GuardEntry>("lemma/tools.guards");
 
 const message = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));
 
-export const errorResult = (text: string, details?: unknown): ToolResult =>
+const errorResult = (text: string, details?: unknown): ToolResult =>
   new ToolResult({ content: [{ type: "text", text }], isError: true, ...(details === undefined ? {} : { details }) });
 
 const decodeResult = Schema.decodeUnknownEither(ToolResult);

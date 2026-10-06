@@ -5,9 +5,9 @@ import { Data, Effect } from "effect";
 import { errorCode, writeFileAtomic } from "@lemma/contracts/fs";
 
 /** `<home>/token`: the token the host uses when its config sets none. */
-export const tokenPath = (home: string): string => join(home, "token");
+const tokenPath = (home: string): string => join(home, "token");
 
-export class TokenError extends Data.TaggedError("TokenError")<{ readonly message: string }> {}
+class TokenError extends Data.TaggedError("TokenError")<{ readonly message: string }> {}
 
 const reason = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 

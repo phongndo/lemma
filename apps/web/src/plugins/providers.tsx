@@ -472,7 +472,7 @@ function CustomProviderRow(props: { add: (draft: CustomProviderDraft, key: strin
   );
 }
 
-export const ProvidersConfig = Schema.Struct({
+const ProvidersConfig = Schema.Struct({
   logos: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })).annotations({
     title: "Custom provider logos to move",
     description: "Logos an earlier version kept here, by provider id. They move to their providers (the llm plugin's config) on start.",

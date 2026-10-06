@@ -23,18 +23,18 @@ export interface Member {
 }
 
 /** Planning found problems; nothing was activated. */
-export class PlanError extends Data.TaggedError("PlanError")<{
+class PlanError extends Data.TaggedError("PlanError")<{
   readonly errors: readonly [CompositionError, ...CompositionError[]];
 }> {}
 
-export type ApplyError = PlanError | PluginFault;
+type ApplyError = PlanError | PluginFault;
 
 /** A change that tolerates activation failures: only `required` plugins (and what they need) must activate. */
 export interface PartialStart {
   readonly required: ReadonlySet<string>;
 }
 
-export interface Runtime {
+interface Runtime {
   readonly core: Core<any>;
   readonly members: Effect.Effect<readonly Member[]>;
   /**
@@ -799,7 +799,7 @@ function snapshot(instance: Instance): PluginSnapshot {
 }
 
 /** Structural equality for config data (JSON-like values); other objects compare by reference. */
-export function deepEqual(a: unknown, b: unknown): boolean {
+function deepEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;

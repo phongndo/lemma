@@ -30,7 +30,7 @@ const Index = Schema.Struct({
 
 const decodeIndex = Schema.decodeUnknownEither(Schema.parseJson(Index));
 
-export const indexFile = (root: string): string => path.join(root, ".index.json");
+const indexFile = (root: string): string => path.join(root, ".index.json");
 
 export const readIndex = (root: string): Effect.Effect<Map<string, Scanned>> =>
   Effect.promise(async () => {

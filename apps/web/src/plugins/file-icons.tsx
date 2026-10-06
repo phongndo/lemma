@@ -9,7 +9,7 @@ import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import { Icon } from "../ui/parts.tsx";
 import styles from "./file-icons.css?inline";
 
-export const FileIconsConfig = Schema.Struct({
+const FileIconsConfig = Schema.Struct({
   rules: Schema.optional(Schema.Array(Schema.String)).annotations({
     title: "Types",
     description:

@@ -6,9 +6,9 @@ import { AgentRequestHook, Paths } from "@lemma/contracts";
 import type { SystemSection } from "@lemma/contracts";
 
 /** Per directory, the first of these that is a file wins (pi's order: AGENTS first, CLAUDE as the fallback). */
-export const CANDIDATES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] as const;
+const CANDIDATES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] as const;
 
-export interface ContextFile {
+interface ContextFile {
   readonly path: string;
   readonly content: string;
 }
@@ -69,7 +69,7 @@ export function makeLoader(home: string) {
   };
 }
 
-export const renderSection = (files: readonly ContextFile[]): string =>
+const renderSection = (files: readonly ContextFile[]): string =>
   [
     "Project-specific instructions and guidelines:",
     ...files.map(({ path: file, content }) => `<project_instructions path="${file}">\n${content}\n</project_instructions>`),

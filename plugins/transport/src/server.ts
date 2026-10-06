@@ -12,9 +12,9 @@ import { HostRpcs } from "@lemma/contracts";
 import type { UiComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 
-export type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof HostRpcs>>>;
+type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof HostRpcs>>>;
 
-export interface ServerOptions {
+interface ServerOptions {
   readonly host: string;
   readonly port: number;
   readonly token: string;

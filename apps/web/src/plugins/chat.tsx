@@ -62,7 +62,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { markdownText } from "../lib/markdown.ts";
 import styles from "./chat.css?inline";
 
-export const ChatConfig = Schema.Struct({
+const ChatConfig = Schema.Struct({
   expandTools: Schema.optionalWith(Schema.Boolean, { default: () => false }).annotations({
     title: "Open tool calls",
     description: "Show every tool call's arguments and output instead of one quiet line.",

@@ -8,7 +8,7 @@ import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
 import type { makeLogins } from "./logins.ts";
 
-export interface HandlerServices {
+interface HandlerServices {
   readonly version: string;
   readonly hub: Hub;
   readonly interactions: Interactions;

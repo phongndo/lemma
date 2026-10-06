@@ -47,8 +47,6 @@ export interface ConnectionStatus {
   readonly error?: string;
 }
 
-export type { ReloadResult } from "@lemma/contracts";
-
 /**
  * Promise-returning facade over `HostRpcs`. Methods reject with `HostError`
  * for domain failures and a plain `Error` for transport failures. The web app

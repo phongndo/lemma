@@ -70,7 +70,7 @@ export interface ResumePlan {
   readonly at: ResumePoint;
 }
 
-export type Resume = { readonly kind: "not-started" } | { readonly kind: "ended" } | { readonly kind: "open"; readonly plan: ResumePlan };
+type Resume = { readonly kind: "not-started" } | { readonly kind: "ended" } | { readonly kind: "open"; readonly plan: ResumePlan };
 
 /** Whether the turn logged `event`: it names the turn (an agent's `custom` event, in its data). */
 const ownedBy = (event: SessionEvent, turnId: string): boolean => {

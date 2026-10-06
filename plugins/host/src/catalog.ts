@@ -121,7 +121,7 @@ function lockedBy(known: readonly KnownPlugin[], composition: Composition, pinne
   return locked;
 }
 
-export interface CatalogInput {
+interface CatalogInput {
   readonly known: readonly KnownPlugin[];
   /** As the config files describe it, before resolution: says what is enabled. */
   readonly composition: Composition;

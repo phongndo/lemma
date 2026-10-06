@@ -3,7 +3,7 @@ import type { AgentView, AssistantMessage, ModelInfo, StreamEvent } from "@lemma
 import type { LiveFile } from "./state.ts";
 
 /** Output kept per running tool: its tail, enough for a view and for telling the model where an interrupted call got to. */
-export const OUTPUT_TAIL_CHARS = 16 * 1024;
+const OUTPUT_TAIL_CHARS = 16 * 1024;
 
 type Block = AssistantMessage["content"][number];
 

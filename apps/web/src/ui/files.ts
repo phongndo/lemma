@@ -2,7 +2,7 @@ import type { UiFile } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import type { LocalPlugin } from "@lemma/plugin-host/planner";
 
-export interface LoadedFiles {
+interface LoadedFiles {
   readonly plugins: readonly LocalPlugin[];
   /** Files that failed to load or export no plugin, each naming the file. */
   readonly problems: readonly string[];

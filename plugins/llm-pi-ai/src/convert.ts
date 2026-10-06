@@ -9,7 +9,7 @@ import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, 
 
 const contractLevels: ReadonlySet<string> = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export const modelRef = (model: Pi.Model<Pi.Api>): string => `${model.provider}/${model.id}`;
+const modelRef = (model: Pi.Model<Pi.Api>): string => `${model.provider}/${model.id}`;
 
 export function toModelInfo(model: Pi.Model<Pi.Api>): ModelInfo {
   return {
@@ -51,7 +51,7 @@ export function reasoningFor(model: Pi.Model<Pi.Api>, thinking: ThinkingLevel | 
   return level === "off" ? undefined : level;
 }
 
-export function toToolCall(call: Pi.ToolCall): ToolCall {
+function toToolCall(call: Pi.ToolCall): ToolCall {
   return {
     type: "toolCall",
     id: call.id,
@@ -83,7 +83,7 @@ function toContent(block: Pi.AssistantMessage["content"][number]): AssistantMess
  * `deferred` (a handle this plugin never requests) become `error`, so the
  * message can still be logged and replayed.
  */
-export function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: string): AssistantMessage {
+function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: string): AssistantMessage {
   const { usage } = message;
   let stopReason: AssistantMessage["stopReason"];
   let error = errorMessage ?? message.errorMessage;
@@ -122,7 +122,7 @@ export function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: 
 }
 
 /** Rewrites pi's terse auth failures into something a user can act on. */
-export function explainError(message: string | undefined, provider: { readonly id: string; readonly name: string }): string | undefined {
+function explainError(message: string | undefined, provider: { readonly id: string; readonly name: string }): string | undefined {
   if (message === undefined) return undefined;
   const login = `Run /login ${provider.id}`;
   if (message.startsWith("Provider is not configured:") || message.startsWith("No API key for provider:")) {
@@ -152,7 +152,7 @@ const NETWORK = /\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTF
  * misses Node's connection errors, so a leading 4xx status and those codes
  * are read first.
  */
-export function classifyFailure(message: Pi.AssistantMessage, contextWindow: number): LlmFailure {
+function classifyFailure(message: Pi.AssistantMessage, contextWindow: number): LlmFailure {
   if (isContextOverflow(message, contextWindow)) return { kind: "overflow" };
   const text = message.errorMessage ?? "";
   if (TOO_LARGE.test(text) || CLIENT_ERROR.test(text)) return { kind: "fatal" };

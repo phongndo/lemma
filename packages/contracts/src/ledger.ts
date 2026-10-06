@@ -179,7 +179,7 @@ export function lineDiff(before: string, after: string): { readonly kind: "same"
 }
 
 /** Record text the search box matches against. */
-export const recordText = (record: LedgerRecord): string => {
+const recordText = (record: LedgerRecord): string => {
   switch (record.kind) {
     case "system":
       return record.request.sections.map((section) => `${section.id} ${section.source} ${section.text ?? ""}`).join(" ");

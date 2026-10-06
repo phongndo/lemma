@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, tailBytes, truncateTail } from "./truncate.ts";
 import type { Truncation } from "./truncate.ts";
 
-export interface OutputSnapshot {
+interface OutputSnapshot {
   readonly content: string;
   readonly truncation: Truncation;
   /** Set once the output exceeded the limits: the complete raw output. */

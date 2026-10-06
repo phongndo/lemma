@@ -238,7 +238,7 @@ export function planModels(known: readonly Model<Api>[], listed: readonly PlanMo
     });
 }
 
-export interface PlanSource {
+interface PlanSource {
   /** What a ChatGPT sign-in's plan offers, asked with its access token; undefined when it cannot be read. */
   readonly plan: (accessToken: string, signal: AbortSignal) => Promise<readonly PlanModel[] | undefined>;
 }

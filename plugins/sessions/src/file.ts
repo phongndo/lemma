@@ -27,7 +27,7 @@ const changedOnDisk = (sessionId: string, file: string, how = "changed on disk s
 const orIo = (sessionId: string, message: string) => (cause: unknown) => (cause instanceof SessionError ? cause : io(sessionId, message)(cause));
 
 /** What reading a file saw. */
-export interface Extent {
+interface Extent {
   /** End of the last line taken; bytes after it are a torn write. */
   readonly validBytes: number;
   /** Bytes read in all. */
@@ -35,7 +35,7 @@ export interface Extent {
 }
 
 /** A file's identity when it was read: a different size, mtime, or inode means it changed since. */
-export interface Stamp {
+interface Stamp {
   readonly size: number;
   readonly mtimeMs: number;
   readonly ino: number;
@@ -176,7 +176,7 @@ export const applyMarks = (filed: FiledAs, marks: Pick<Marks, "pinned" | "archiv
   archived: marks.archived ?? filed.archived,
 });
 
-export interface Loaded {
+interface Loaded {
   readonly header: Header;
   readonly events: SessionEvent[];
   readonly byId: Map<string, SessionEvent>;

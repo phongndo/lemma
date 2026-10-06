@@ -20,7 +20,7 @@ const isTagged = (error: unknown): error is Tagged => typeof error === "object" 
 
 const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 
-export const formatDiagnostic = (diagnostic: Diagnostic): string =>
+const formatDiagnostic = (diagnostic: Diagnostic): string =>
   `${diagnostic.severity}${diagnostic.pluginId === undefined ? "" : ` [${diagnostic.pluginId}]`}: ${diagnostic.message}` +
   (diagnostic.suggestion === undefined ? "" : ` (${diagnostic.suggestion})`);
 

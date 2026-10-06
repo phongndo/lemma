@@ -3,7 +3,7 @@ import { definePlugin } from "@lemma/core";
 import { Paths, Sessions } from "@lemma/contracts";
 import { make } from "./sessions.ts";
 
-export { Checkout, Header, decodeLine, encodeCwd, encodeLine, fileName } from "./format.ts";
+export { encodeCwd } from "./format.ts";
 
 const Config = Schema.Struct({
   unloadAfter: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => 300 }).annotations({

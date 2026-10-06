@@ -28,7 +28,7 @@ const UNREADABLE_GRACE_MS = 10_000;
 
 /** The lock's contents. `token` is per store, so a store releases only a lock it still holds. */
 const Holder = Schema.Struct({ pid: Schema.Number, hostname: Schema.String, token: Schema.String, startedAt: Schema.Number });
-export type Holder = typeof Holder.Type;
+type Holder = typeof Holder.Type;
 
 const decodeHolder = Schema.decodeUnknownOption(Schema.parseJson(Holder));
 

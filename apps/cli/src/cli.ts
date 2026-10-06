@@ -69,10 +69,9 @@ import {
 import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
 import { workspaceCommand } from "./workspace.ts";
 
-export { CliError, ExitCode } from "./command.ts";
-export type { Io } from "./command.ts";
+export { ExitCode } from "./command.ts";
 
-export const USAGE = `Usage: lemma <command> [options] [--json]
+const USAGE = `Usage: lemma <command> [options] [--json]
 
 Everything the web app can do, from a shell. Every command except serve, remote,
 and token talks to a running host: the one LEMMA_URL (with LEMMA_TOKEN) names,

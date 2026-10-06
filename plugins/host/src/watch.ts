@@ -5,7 +5,7 @@ import { Duration, Effect, Stream } from "effect";
 import type { PathsService } from "./paths.ts";
 import { projectUiDir, userUiDir } from "./ui.ts";
 
-export interface WatchOptions {
+interface WatchOptions {
   /** Quiet period before a burst of changes becomes one emission. Default 250ms. */
   readonly debounceMs?: number;
 }

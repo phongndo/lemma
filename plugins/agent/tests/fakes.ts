@@ -7,7 +7,7 @@ import type { Plugin } from "@lemma/core";
 import { AssistantDelta, emptyUsage, HostControl, Llm, LlmError, Paths, ToolResult, Tools, TurnEnded, TurnStarted } from "@lemma/contracts";
 import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, Tool, ToolCall, Usage } from "@lemma/contracts";
 
-export const model = (ref: string): ModelInfo => {
+const model = (ref: string): ModelInfo => {
   const [provider, id] = ref.split("/") as [string, string];
   return {
     ref,
@@ -24,7 +24,7 @@ export const model = (ref: string): ModelInfo => {
   };
 };
 
-export const usage = (input: number, output: number): Usage => ({
+const usage = (input: number, output: number): Usage => ({
   ...emptyUsage,
   input,
   output,

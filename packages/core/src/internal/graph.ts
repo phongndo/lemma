@@ -8,7 +8,7 @@ import type { Plugin } from "../plugin.ts";
 const builtins = new Set<string>([Hooks.key, PluginContext.key, Events.key, Registries.key]);
 const reserved = new Set([...builtins, Scope.Scope.key]);
 
-export interface Planned {
+interface Planned {
   /** Dependency order; independent plugins use code-unit id order. */
   readonly ordered: readonly Plugin[];
   /** Decoded config per plugin id (absent for plugins without a schema). */
