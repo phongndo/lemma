@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyUsage } from "../src/llm.ts";
 import type { AssistantMessage, ToolSpec } from "../src/llm.ts";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
+import { deriveMessages } from "../src/derive.ts";
 import { splitSystem, trajectory } from "../src/trajectory.ts";
 
 function log(...items: readonly EventData[]): SessionEvent[] {
@@ -38,6 +39,50 @@ describe("splitSystem", () => {
 });
 
 describe("trajectory", () => {
+  it("counts the messages each request carried as deriveMessages does, across a compaction", () => {
+    const say = (turnId: string, text: string): EventData => ({
+      type: "message",
+      turnId,
+      message: { role: "user", content: [{ type: "text", text }], timestamp: 0 },
+    });
+    const answer = (turnId: string, stepId: string): EventData => ({
+      type: "message",
+      turnId,
+      stepId,
+      message: assistant([{ type: "text", text: "ok" }], "stop"),
+    });
+    const ask = (turnId: string, stepId: string): EventData => ({ type: "request", turnId, stepId, model: "p/m", composition: "c", contributions: [] });
+    const turn = (turnId: string, ...extra: EventData[]): EventData[] => [
+      { type: "turn-start", turnId },
+      say(turnId, turnId),
+      { type: "step-start", turnId, stepId: `${turnId}.1` },
+      ...extra,
+      ask(turnId, `${turnId}.1`),
+      answer(turnId, `${turnId}.1`),
+      { type: "step-end", turnId, stepId: `${turnId}.1` },
+      { type: "turn-end", turnId, reason: "done" },
+    ];
+    // The third turn compacts what came before its own prompt (e16) into a summary.
+    const branch = log(
+      ...turn("t1"),
+      ...turn("t2"),
+      ...turn("t3", { type: "compaction", turnId: "t3", summary: "so far", firstKeptId: "e16", tokensBefore: 100, source: "compaction" }),
+      ...turn("t4"),
+    );
+    const counted = trajectory(branch).flatMap((t) => t.steps.map((step) => step.request!));
+    const derived = counted.map(
+      (request) =>
+        deriveMessages(
+          branch.slice(
+            0,
+            branch.findIndex((event) => event.id === request.eventId),
+          ),
+        ).length,
+    );
+    expect(counted.map((request) => request.messages)).toEqual(derived);
+    expect(derived).toEqual([1, 3, 2, 4]);
+  });
+
   const events = log(
     { type: "turn-start", turnId: "t1" },
     { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text: "list files" }], timestamp: 0 } },

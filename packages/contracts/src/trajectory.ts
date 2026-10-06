@@ -1,4 +1,3 @@
-import { deriveMessages } from "./derive.ts";
 import { addUsage, emptyUsage } from "./llm.ts";
 import type { AssistantMessage, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "./llm.ts";
 import type { Contribution, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
@@ -151,6 +150,13 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   let specs: readonly ToolSpec[] = [];
   let previousSections = new Map<string, string | number>();
   let previousTools = new Map<string, string>();
+  // How many messages each request carried, as `deriveMessages` of the branch before it would count them, kept as the
+  // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start.
+  const positionOf = new Map(branch.map((event, position) => [event.id, position]));
+  const messagesBefore = [0];
+  for (const event of branch) messagesBefore.push(messagesBefore.at(-1)! + (event.data.type === "message" ? 1 : 0));
+  let viewStart = 0;
+  let summarized = 0;
 
   const stepFor = (turnId: string, stepId: string, at: number): MutableStep | undefined => {
     const existing = stepById.get(stepId);
@@ -231,7 +237,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           model: data.model,
           ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
           composition: data.composition,
-          messages: deriveMessages(branch.slice(0, position)).length,
+          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]!,
           ...(system === undefined ? {} : { system }),
           sections,
           tools,
@@ -240,6 +246,9 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         return;
       }
       case "compaction": {
+        const kept = positionOf.get(data.firstKeptId);
+        viewStart = kept === undefined || kept > position ? position + 1 : kept;
+        summarized = 1;
         // Writing the summary is part of what the turn cost.
         const turn = data.turnId === undefined ? undefined : turnById.get(data.turnId);
         if (turn !== undefined && data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
