@@ -226,6 +226,8 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Llm.Models", { payload: { available: Schema.optional(Schema.Boolean) }, success: Schema.Array(ModelInfo), error: HostError }),
   /** Drives the provider's login flow; its questions arrive as `interaction` events and its progress as `notice` events. */
   Rpc.make("Llm.Login", { payload: { provider: Schema.String, type: AuthType }, error: HostError }),
+  /** Stops the provider's running login, as dismissing its question would; false when none was running. */
+  Rpc.make("Llm.CancelLogin", { payload: { provider: Schema.String }, success: Schema.Boolean }),
   Rpc.make("Llm.Logout", { payload: { provider: Schema.String }, error: HostError }),
   Rpc.make("Llm.AddCustom", { payload: { spec: CustomProviderSpec }, success: Schema.String, error: HostError }),
   Rpc.make("Llm.RemoveCustom", { payload: { provider: Schema.String }, error: HostError }),

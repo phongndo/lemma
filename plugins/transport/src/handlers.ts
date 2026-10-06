@@ -21,14 +21,14 @@ interface HandlerServices {
   readonly commands: Context.Service.Shape<typeof Commands>;
   /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
   readonly registries: Context.Service.Shape<typeof Registries>;
-  /** Runs `Llm.login` in the plugin's scope; see `makeLogins`. */
-  readonly login: ReturnType<typeof makeLogins>;
+  /** Runs `Llm.login` in the plugin's scope, and cancels it; see `makeLogins`. */
+  readonly logins: ReturnType<typeof makeLogins>;
 }
 
 const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : { cwd });
 
 /** Every RPC maps to one capability call; only the error boundary is transport-specific. */
-export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }: HandlerServices) =>
+export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }: HandlerServices) =>
   HostRpcs.of({
     "Session.List": ({ cwd }) => sessions.list(cwdOption(cwd)).pipe(Effect.mapError(toHostError)),
     "Session.Get": ({ sessionId }) => sessions.get(sessionId).pipe(Effect.mapError(toHostError)),
@@ -67,7 +67,8 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Llm.Providers": () => llm.providers,
     "Llm.Models": ({ available }) => llm.models(available === undefined ? undefined : { available }),
     // Like a turn, the login outlives this call: a dropped client can return and answer its questions.
-    "Llm.Login": ({ provider, type }) => login(provider, type).pipe(Effect.mapError(toHostError)),
+    "Llm.Login": ({ provider, type }) => logins.login(provider, type).pipe(Effect.mapError(toHostError)),
+    "Llm.CancelLogin": ({ provider }) => logins.cancel(provider),
     "Llm.Logout": ({ provider }) => llm.logout(provider).pipe(Effect.mapError(toHostError)),
     "Llm.AddCustom": ({ spec }) => llm.addCustom(spec).pipe(Effect.mapError(toHostError)),
     "Llm.RemoveCustom": ({ provider }) => llm.removeCustom(provider).pipe(Effect.mapError(toHostError)),

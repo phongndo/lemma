@@ -69,9 +69,9 @@ export default definePlugin({
         yield* owner.on(InteractionHook, interactions.handle);
 
         const token = config.token ?? (yield* loadToken(paths.home));
-        const login = makeLogins(llm, yield* Effect.scope);
+        const logins = makeLogins(llm, yield* Effect.scope);
         const handlers = HostRpcs.toLayer(
-          makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, login }),
+          makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }),
         );
         const address = yield* startServer(
           { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },

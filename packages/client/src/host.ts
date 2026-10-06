@@ -91,6 +91,8 @@ export interface Host {
     readonly providers: () => Promise<readonly ProviderInfo[]>;
     readonly models: (available?: boolean) => Promise<readonly ModelInfo[]>;
     readonly login: (provider: string, type: AuthType) => Promise<void>;
+    /** Stops the provider's running login, wherever it was started; false when none was running. */
+    readonly cancelLogin: (provider: string) => Promise<boolean>;
     readonly logout: (provider: string) => Promise<void>;
     /** Adds a provider of the user's; resolves with its id once saved (listed once `providers` lists it). */
     readonly addCustom: (spec: CustomProviderSpec) => Promise<string>;
@@ -289,6 +291,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       providers: () => runPromise(rpc["Llm.Providers"]()),
       models: (available) => runPromise(rpc["Llm.Models"](available === undefined ? {} : { available })),
       login: (provider, type) => unit(rpc["Llm.Login"]({ provider, type })),
+      cancelLogin: (provider) => runPromise(rpc["Llm.CancelLogin"]({ provider })),
       logout: (provider) => unit(rpc["Llm.Logout"]({ provider })),
       addCustom: (spec) => runPromise(rpc["Llm.AddCustom"]({ spec })),
       removeCustom: (provider) => unit(rpc["Llm.RemoveCustom"]({ provider })),

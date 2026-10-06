@@ -594,6 +594,28 @@ describe("transport", () => {
   );
 
   test(
+    "cancelling a login withdraws its question and fails the RPC Cancelled",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const events = yield* subscribe(client);
+          expect(yield* client["Llm.CancelLogin"]({ provider: "fake" })).toBe(false);
+          const login = yield* Effect.forkChild(client["Llm.Login"]({ provider: "fake", type: "api_key" }));
+          const [asked] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
+          if (asked?.type !== "interaction") throw new Error("expected an interaction");
+          // Another client may cancel it: the login is the plugin's, not the caller's.
+          const other = yield* host.connect("websocket");
+          expect(yield* other["Llm.CancelLogin"]({ provider: "fake" })).toBe(true);
+          expect(hostError(yield* Fiber.await(login))).toMatchObject({ code: "Cancelled" });
+          yield* waitFor(events, (event) => event.type === "interaction-closed" && event.id === asked.request.id);
+          expect(yield* client["Llm.CancelLogin"]({ provider: "fake" })).toBe(false);
+        }),
+      ),
+    30_000,
+  );
+
+  test(
     "a login outlives a dropped RPC, so a returning client answers its replayed question",
     () =>
       withHost(

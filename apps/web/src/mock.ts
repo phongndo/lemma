@@ -883,6 +883,8 @@ export const createMockHost = (): Host => {
         providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "auth.json" };
         emit({ type: "notice", notice: { level: "info", source: "llm", message: `Logged in to ${p.name}` } });
       },
+      // The fake's logins cannot be stopped; none is ever running for a second client to cancel.
+      cancelLogin: async () => false,
       logout: async (provider) => {
         const i = providers.findIndex((x) => x.id === provider);
         const { source: _source, ...rest } = providers[i]!;

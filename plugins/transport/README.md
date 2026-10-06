@@ -36,6 +36,8 @@ After listening it writes `<Paths.home>/transport.json` as `{ url, token, pid, s
   documents. Two outlive their caller: `Agent.Prompt` (the agent keeps the turn)
   and `Llm.Login`, which runs in this plugin's scope, so a login survives a
   dropped connection and a second call for the same provider joins it.
+  `Llm.CancelLogin` interrupts it, from any client: its question is withdrawn
+  and every waiting call fails `Cancelled`.
   `Files.Search` asks `FileSearchers` at each call, so file search can be off
   without the transport noticing.
 - **`Host.Events`.** The kernel events behind each [`HostEvent`](../../packages/contracts/src/rpc.ts) are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and repairs from `Session.Events`. Each kind has its own observer queue, so order holds within a kind but not across kinds (`turn-ended` can overtake the last `delta`). A subscription that asks for it with the `lemma-subscribed` header (`SUBSCRIBED_HEADER`) opens with `{ type: "subscribed" }`, sent once the subscriber has joined: a client that must see the effects of its own next call (a question a command asks) waits for it. Opt-in, so a client from before it never receives an event it cannot decode. A call's reply is no such sign, since the host handles the calls on one socket concurrently and the RPC client sends a stream request asynchronously.
