@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
 import type { HostEvent } from "@lemma/contracts";
+import { clockTime } from "../../model/format.ts";
 import { ThreadRoute } from "../../ui/contracts.ts";
 import type { ClientService, DevtoolsPanel, RouterService } from "../../ui/contracts.ts";
 import { XIcon } from "../../ui/parts.tsx";
@@ -79,11 +80,6 @@ const describe = (line: Line): string => {
   }
 };
 
-const pad = (n: number, width: number) => String(n).padStart(width, "0");
-const clock = (at: number) => {
-  const time = new Date(at);
-  return `${pad(time.getHours(), 2)}:${pad(time.getMinutes(), 2)}:${pad(time.getSeconds(), 2)}.${pad(time.getMilliseconds(), 3)}`;
-};
 const gap = (ms: number) => (ms < 1000 ? `+${ms}ms` : ms < 60_000 ? `+${(ms / 1000).toFixed(1)}s` : `+${Math.round(ms / 60_000)}m`);
 const size = (bytes: number) => (bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}K`);
 
@@ -207,7 +203,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
                   const before = () => shown()[index() - 1];
                   return (
                     <tr data-row data-selected={selected() === line.seq} onClick={() => setSelected(selected() === line.seq ? undefined : line.seq)}>
-                      <td class="dt-code dt-muted">{clock(line.at)}</td>
+                      <td class="dt-code dt-muted">{clockTime(line.at)}</td>
                       <td class="dt-code dt-muted dt-num">{before() === undefined ? "" : gap(line.at - before()!.at)}</td>
                       <td class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</td>
                       <td class="dt-code">
@@ -237,7 +233,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
             <aside class="dt-details dt-side" aria-label="Event details">
               <div class="dt-details-title">
                 <strong class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</strong>
-                <span class="dt-muted">{clock(line.at)}</span>
+                <span class="dt-muted">{clockTime(line.at)}</span>
                 <button class="dt-close" style={{ "margin-left": "auto" }} aria-label="Close details" onClick={() => setSelected(undefined)}>
                   <XIcon />
                 </button>

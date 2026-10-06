@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { GitBranch, WorkspaceStatus } from "@lemma/contracts";
+import { folderName } from "../model/prefs.ts";
 import { ActionIds, Actions, ComposerFooter, Notify, SectionIds, Threads, SettingsGroups, Slots, Workspace, WorkspaceBarItems } from "../ui/contracts.ts";
 import type { NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -21,8 +22,6 @@ import {
   WorktreeIcon,
 } from "../ui/parts.tsx";
 import styles from "./workspace-bar.css?inline";
-
-const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
 
 interface Deps {
   readonly threads: ThreadsService;
@@ -103,7 +102,7 @@ function ModePicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]
               <span class="menu-stack">
                 <span class="menu-label">Local</span>
                 <span class="menu-desc">
-                  Work directly in {baseName(workingDir() ?? "")} on {props.git.branch ?? "the current commit"}
+                  Work directly in {folderName(workingDir() ?? "")} on {props.git.branch ?? "the current commit"}
                 </span>
               </span>
             </button>
@@ -195,7 +194,7 @@ function ProjectPicker(props: { deps: Deps }) {
                     </Show>
                   </span>
                   <span class="menu-label">{workspace.projectName(path)}</span>
-                  <span class="menu-hint">{path.slice(0, path.length - baseName(path).length - 1)}</span>
+                  <span class="menu-hint">{path.slice(0, path.length - folderName(path).length - 1)}</span>
                 </button>
               )}
             </For>

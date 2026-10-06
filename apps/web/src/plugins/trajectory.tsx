@@ -21,6 +21,9 @@ import {
   trajectory as projectTrajectory,
 } from "@lemma/contracts";
 import type { AssistantRecord, LedgerRecord, LedgerSort, LedgerSpan, SystemRecord, Timing, ToolRecord, TrajectoryRequest } from "@lemma/contracts";
+import { stepFor } from "../lib/keys.ts";
+import { clockTime } from "../model/format.ts";
+import { createNow } from "../lib/now.ts";
 import { Notify, Threads, Slots, ToolViews, TrajectoryActions, TrajectoryTabs, Views } from "../ui/contracts.ts";
 import type { NotifyService, ThreadsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -92,11 +95,6 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
 
   // ------------------------------------------------------------------ helpers
 
-  const clock = (ms: number) => {
-    const date = new Date(ms);
-    const two = (n: number) => String(n).padStart(2, "0");
-    return `${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-  };
   const firstLine = (text: string) =>
     text
       .trim()
@@ -110,17 +108,6 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
 
   const copy = async (text: string) => {
     if (!(await copyText(text))) deps.notify.report(new Error("The clipboard refused the text"), "Could not copy");
-  };
-
-  /** Current time while a turn runs, so running bars grow. */
-  const useNow = (active: () => boolean) => {
-    const [now, setNow] = createSignal(Date.now());
-    createEffect(() => {
-      if (!active()) return;
-      const timer = setInterval(() => setNow(Date.now()), 500);
-      onCleanup(() => clearInterval(timer));
-    });
-    return now;
   };
 
   const statusOf = (record: LedgerRecord) => recordStatus(record, deps.threads.busy());
@@ -445,7 +432,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
                       : RECORD_KIND_LABEL[h().span.record.kind]}
                 </strong>
                 <span>
-                  {clock(h().span.start)} · {h().span.end === undefined ? "running" : formatDuration(h().span.end! - h().span.start)}
+                  {clockTime(h().span.start)} · {h().span.end === undefined ? "running" : formatDuration(h().span.end! - h().span.start)}
                 </span>
                 <Show when={h().span.ttft !== undefined && h().span.end !== undefined}>
                   <span>
@@ -491,7 +478,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
               data-running={props.span!.end === undefined}
               classList={{ "has-ttft": ttft() !== undefined && !equalDurations() }}
               style={{ left: `${pct(b().from)}%`, width: `max(2px, ${pct(b().to) - pct(b().from)}%)`, "--ttft": `${ttft() ?? 0}%` }}
-              data-tip={`${clock(props.span!.start)}${props.span!.end === undefined ? " · running" : ` · ${formatDuration(props.span!.end - props.span!.start)}`}${props.span!.ttft === undefined ? "" : ` · TTFT ${formatDuration(props.span!.ttft)}`}`}
+              data-tip={`${clockTime(props.span!.start)}${props.span!.end === undefined ? " · running" : ` · ${formatDuration(props.span!.end - props.span!.start)}`}${props.span!.ttft === undefined ? "" : ` · TTFT ${formatDuration(props.span!.ttft)}`}`}
             />
           )}
         </Show>
@@ -1050,12 +1037,12 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
     return (
       <Facts
         rows={[
-          ["Started", clock(t().startedAt)],
+          ["Started", clockTime(t().startedAt)],
           [
             "First token",
-            t().firstTokenAt === undefined ? undefined : `${clock(t().firstTokenAt!)} · TTFT ${formatDuration(t().firstTokenAt! - t().startedAt)}`,
+            t().firstTokenAt === undefined ? undefined : `${clockTime(t().firstTokenAt!)} · TTFT ${formatDuration(t().firstTokenAt! - t().startedAt)}`,
           ],
-          ["Ended", clock(t().endedAt)],
+          ["Ended", clockTime(t().endedAt)],
           ["Duration", formatDuration(t().endedAt - t().startedAt)],
           ["Decoding", decoding() === undefined ? undefined : formatDuration(decoding()!)],
           [
@@ -1154,7 +1141,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
                 <Facts
                   rows={[
                     ["Turn", String(record.turn.index)],
-                    ["Sent", clock(record.at)],
+                    ["Sent", clockTime(record.at)],
                   ]}
                 />
                 <Pre text={contentText(record.message.content)} />
@@ -1274,8 +1261,8 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
                   render: () => (
                     <Facts
                       rows={[
-                        ["Started", clock(timing.startedAt)],
-                        ["Ended", clock(timing.endedAt)],
+                        ["Started", clockTime(timing.startedAt)],
+                        ["Ended", clockTime(timing.endedAt)],
                         ["Duration", formatDuration(timing.endedAt - timing.startedAt)],
                       ]}
                     />
@@ -1439,7 +1426,8 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
 
   function Trajectory(): JSX.Element {
     const records = createMemo(() => ledger(projectTrajectory(deps.threads.branch())));
-    const now = useNow(deps.threads.busy);
+    // Running bars grow while a turn runs.
+    const now = createNow(500, deps.threads.busy);
     const allSpans = createMemo(() => ledgerSpans(records()));
     const spanById = createMemo(() => new Map(allSpans().map((span) => [span.record.id, span])));
     const scale = createMemo(() => timeScale(allSpans(), now()));
@@ -1509,7 +1497,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
       const rows = [...root.querySelectorAll<HTMLTableRowElement>("tbody tr[data-record]")];
       const s = selection();
       const current = rows.findIndex((row) => s?.type === "record" && row.dataset.record === s.id);
-      const next = rows[Math.min(rows.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)))];
+      const next = rows[stepFor(event.key, current, rows.length)!];
       if (next === undefined) return;
       select({ type: "record", id: next.dataset.record! }, tab());
       next.scrollIntoView({ block: "nearest" });

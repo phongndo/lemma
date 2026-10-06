@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { RouterEvent, RouteVerdict } from "@lemma/router";
+import { clockTime } from "../../model/format.ts";
 import { Pages, PLUGIN_PANEL } from "../../ui/contracts.ts";
 import type { DevtoolsPanel, DevtoolsService, RouterService } from "../../ui/contracts.ts";
 import type { SlotItem, SlotsService } from "../../ui/slots.ts";
@@ -10,11 +11,6 @@ const VERDICT_CLASS: Readonly<Record<RouteVerdict["outcome"], string>> = {
   outranked: "",
   rejected: "dt-err",
   "no-match": "dt-muted",
-};
-
-const time = (at: number) => {
-  const date = new Date(at);
-  return `${date.toLocaleTimeString([], { hour12: false })}.${String(date.getMilliseconds()).padStart(3, "0")}`;
 };
 
 /** Where an event happened, and what it did there. */
@@ -265,7 +261,7 @@ function Navigation(props: { router: RouterService }) {
               >
                 {(event) => (
                   <tr data-row data-selected={selected() === event.seq} onClick={() => setSelected(selected() === event.seq ? undefined : event.seq)}>
-                    <td class="dt-code dt-muted">{time(event.at)}</td>
+                    <td class="dt-code dt-muted">{clockTime(event.at)}</td>
                     <td class="dt-num dt-muted">{event.index}</td>
                     <td class={KIND_CLASS[event.kind]}>{event.kind}</td>
                     <td class="dt-code">{addressOf(event)}</td>
@@ -312,7 +308,7 @@ function Navigation(props: { router: RouterService }) {
                 <div class="dt-details-title">
                   <strong class={KIND_CLASS[event.kind]}>{event.kind}</strong>
                   <span class="dt-muted">
-                    #{event.seq} · {time(event.at)}
+                    #{event.seq} · {clockTime(event.at)}
                   </span>
                 </div>
                 <div class="dt-side-body">

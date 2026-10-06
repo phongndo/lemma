@@ -1,11 +1,12 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
-import type { JSX } from "solid-js";
 import type { DirectoryEntry } from "@lemma/contracts";
 import { Portal } from "solid-js/web";
+import { tildePath } from "../model/format.ts";
+import { folderName } from "../model/prefs.ts";
 import { ActionIds, Actions, Client, Dialogs, Layers, Notify, Slots, Workspace } from "../ui/contracts.ts";
 import type { ClientService, DialogsService, NotifyService, WorkspaceService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Spinner } from "../ui/parts.tsx";
+import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Highlighted, Spinner } from "../ui/parts.tsx";
 import styles from "./add-project.css?inline";
 
 const DIALOG = "add-project";
@@ -23,17 +24,7 @@ type Row =
   | { readonly kind: "entry"; readonly entry: DirectoryEntry }
   | { readonly kind: "create"; readonly path: string };
 
-/** `/home/me/code` → `~/code` given the host user's home. */
-const shorten = (path: string, home: string | undefined) =>
-  home !== undefined && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
 const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
-const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
-
-/** `name` with the characters at `matches` emphasised. */
-const Highlighted = (props: { name: string; matches: readonly number[] }): JSX.Element => {
-  const hit = new Set(props.matches);
-  return <>{[...props.name].map((char, index) => (hit.has(index) ? <mark>{char}</mark> : char))}</>;
-};
 
 /**
  * Pick a folder on the host by typing its path. Matching folders list as you
@@ -98,7 +89,7 @@ function AddProjectDialog(props: { deps: Deps }) {
     else debounce = window.setTimeout(() => void refresh(next), 50);
   };
   const go = (path: string) => {
-    const next = withSlash(shorten(path, home()));
+    const next = withSlash(tildePath(path, home()));
     update(next, true);
     input.focus();
     input.setSelectionRange(next.length, next.length);
@@ -185,7 +176,7 @@ function AddProjectDialog(props: { deps: Deps }) {
   const crumbs = createMemo(() => {
     const parent = listing()?.parent;
     if (parent === undefined) return [];
-    const short = shorten(parent, home());
+    const short = tildePath(parent, home());
     const parts = short.split("/").filter((part, index) => part !== "" || index === 0);
     let acc = "";
     return parts.map((part, index) => {
@@ -205,7 +196,7 @@ function AddProjectDialog(props: { deps: Deps }) {
       /* absolute paths still work */
     }
     const cwd = client.info()?.cwd;
-    initial = cwd === undefined ? "~/" : withSlash(shorten(cwd.slice(0, cwd.lastIndexOf("/")) || "/", userHome));
+    initial = cwd === undefined ? "~/" : withSlash(tildePath(cwd.slice(0, cwd.lastIndexOf("/")) || "/", userHome));
     update(initial, true);
     input.setSelectionRange(initial.length, initial.length);
   });
@@ -291,8 +282,8 @@ function AddProjectDialog(props: { deps: Deps }) {
                           return (
                             <>
                               <FolderIcon />
-                              <span class="palette-name">{baseName(row.path)}</span>
-                              <span class="palette-path">{shorten(row.path, home())}</span>
+                              <span class="palette-name">{folderName(row.path)}</span>
+                              <span class="palette-path">{tildePath(row.path, home())}</span>
                             </>
                           );
                         case "here":
@@ -300,7 +291,7 @@ function AddProjectDialog(props: { deps: Deps }) {
                             <>
                               <FolderIcon />
                               <span class="palette-name">
-                                Open <span class="palette-mono">{shorten(row.path, home())}</span>
+                                Open <span class="palette-mono">{tildePath(row.path, home())}</span>
                               </span>
                             </>
                           );
@@ -309,7 +300,7 @@ function AddProjectDialog(props: { deps: Deps }) {
                             <>
                               <FolderPlusIcon />
                               <span class="palette-name">
-                                Create folder <span class="palette-mono">{shorten(row.path, home())}</span>
+                                Create folder <span class="palette-mono">{tildePath(row.path, home())}</span>
                               </span>
                             </>
                           );
@@ -320,7 +311,7 @@ function AddProjectDialog(props: { deps: Deps }) {
                                 <GitBranchIcon />
                               </Show>
                               <span class="palette-name">
-                                <Highlighted name={row.entry.name} matches={row.entry.matches} />
+                                <Highlighted text={row.entry.name} matches={row.entry.matches} />
                               </span>
                               <Show when={row.entry.git}>
                                 <span class="tag palette-tag">git</span>

@@ -1,4 +1,4 @@
-import { ErrorBoundary, For, Show, createContext, useContext } from "solid-js";
+import { ErrorBoundary, For, Show, createContext, createMemo, useContext } from "solid-js";
 import type { Accessor, Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import {
@@ -25,6 +25,7 @@ import {
   SearchFieldPart,
   TogglePart,
 } from "./contracts.ts";
+import { highlight } from "../model/palette.ts";
 import type { Part, Region, Slot, SlotItem, SlotsService } from "./slots.ts";
 
 /**
@@ -86,6 +87,12 @@ export function Isolated<P extends Record<string, any>>(props: { readonly compon
       <Dynamic component={props.component} {...(props.props ?? ({} as P))} />
     </ErrorBoundary>
   );
+}
+
+/** `text` with the characters at `matches` (a search's hits) marked. */
+export function Highlighted(props: { readonly text: string; readonly matches: readonly number[] }): JSX.Element {
+  const parts = createMemo(() => highlight(props.text, props.matches));
+  return <For each={parts()}>{(part) => (part.hit ? <mark>{part.text}</mark> : part.text)}</For>;
 }
 
 /** The props a region's components take. */

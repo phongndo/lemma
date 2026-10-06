@@ -166,26 +166,32 @@ interface CustomActions {
   readonly remove: (provider: ProviderInfo) => void;
 }
 
-function CustomItems(props: { provider: ProviderInfo; custom: CustomActions; close: () => void }): JSX.Element {
-  const item = (label: string, run: () => void, danger = false) => (
+/** An item of a provider's menu: picking it closes the menu, then runs. */
+function MenuItem(props: { label: string; close: () => void; run: () => void; danger?: boolean }) {
+  return (
     <button
       class="menu-item"
-      classList={{ "menu-danger": danger }}
+      classList={{ "menu-danger": props.danger === true }}
       role="menuitem"
       onClick={() => {
         props.close();
-        run();
+        props.run();
       }}
     >
-      <span class="menu-label">{label}</span>
+      <span class="menu-label">{props.label}</span>
     </button>
   );
+}
+
+function CustomItems(props: { provider: ProviderInfo; custom: CustomActions; close: () => void }): JSX.Element {
   return (
     <>
       <div class="menu-sep" />
-      {item("Change logo…", () => props.custom.changeLogo(props.provider))}
-      <Show when={props.provider.logo !== undefined}>{item("Remove logo", () => props.custom.removeLogo(props.provider))}</Show>
-      {item("Remove provider", () => props.custom.remove(props.provider), true)}
+      <MenuItem label="Change logo…" close={props.close} run={() => props.custom.changeLogo(props.provider)} />
+      <Show when={props.provider.logo !== undefined}>
+        <MenuItem label="Remove logo" close={props.close} run={() => props.custom.removeLogo(props.provider)} />
+      </Show>
+      <MenuItem label="Remove provider" close={props.close} run={() => props.custom.remove(props.provider)} danger />
     </>
   );
 }
@@ -250,20 +256,7 @@ function ProviderRow(props: { models: ModelsService; interactions: InteractionsS
               >
                 {(close) => (
                   <>
-                    <For each={ways()}>
-                      {(method) => (
-                        <button
-                          class="menu-item"
-                          role="menuitem"
-                          onClick={() => {
-                            close();
-                            login(method.type);
-                          }}
-                        >
-                          <span class="menu-label">{methodLabel(method)}</span>
-                        </button>
-                      )}
-                    </For>
+                    <For each={ways()}>{(method) => <MenuItem label={methodLabel(method)} close={close} run={() => login(method.type)} />}</For>
                     <Show when={props.provider.custom}>
                       <CustomItems provider={props.provider} custom={props.custom} close={close} />
                     </Show>
@@ -288,31 +281,11 @@ function ProviderRow(props: { models: ModelsService; interactions: InteractionsS
           {(close) => (
             <>
               <For each={methods()}>
-                {(method) => (
-                  <button
-                    class="menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      close();
-                      login(method.type);
-                    }}
-                  >
-                    <span class="menu-label">{method.type === "oauth" ? "Sign in again" : "Replace API key"}</span>
-                  </button>
-                )}
+                {(method) => <MenuItem label={method.type === "oauth" ? "Sign in again" : "Replace API key"} close={close} run={() => login(method.type)} />}
               </For>
               <Show when={!fromEnv(props.provider.source) && props.provider.source !== "no key required"}>
                 <div class="menu-sep" />
-                <button
-                  class="menu-item menu-danger"
-                  role="menuitem"
-                  onClick={() => {
-                    close();
-                    logout();
-                  }}
-                >
-                  <span class="menu-label">Log out</span>
-                </button>
+                <MenuItem label="Log out" close={close} run={logout} danger />
               </Show>
               <Show when={props.provider.custom}>
                 <CustomItems provider={props.provider} custom={props.custom} close={close} />

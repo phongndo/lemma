@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { InteractionRequest } from "@lemma/contracts";
+import { stepFor } from "../lib/keys.ts";
 import { Interactions, Layers, Slots } from "../ui/contracts.ts";
 import type { InteractionsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -78,11 +79,11 @@ function Confirm(props: { interactions: InteractionsService; request: Of<"confir
 function Select(props: { interactions: InteractionsService; request: Of<"select"> }) {
   const pick = (value: string) => props.interactions.answer(props.request.id, { type: "select", value });
   const onKey = (event: KeyboardEvent) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(".choice")];
-    const index = items.indexOf(document.activeElement as HTMLElement);
+    const next = stepFor(event.key, items.indexOf(document.activeElement as HTMLElement), items.length);
+    if (next === undefined) return;
     event.preventDefault();
-    items[Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    items[next]?.focus();
   };
   return (
     <Dialog title={props.request.title} onClose={() => props.interactions.dismiss(props.request.id)}>

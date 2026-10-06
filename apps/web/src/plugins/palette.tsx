@@ -6,14 +6,27 @@ import { shownKeys } from "../model/keybindings.ts";
 import { formatKeys, shortcut } from "../lib/keys.ts";
 import { load, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
-import { highlight, parseQuery, rank, remember } from "../model/palette.ts";
+import { parseQuery, rank, remember } from "../model/palette.ts";
 import type { Searchable } from "../model/palette.ts";
 import { sessionTitle } from "../model/threads.ts";
 import { ActionIds, Actions, Client, Commands, Dialogs, Interactions, Layers, PaletteSources, Threads, Slots, UiPlugins, Workspace } from "../ui/contracts.ts";
 import type { DialogsService, InteractionsService, PaletteItem, PaletteSource } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, Isolated, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "../ui/parts.tsx";
+import {
+  ChatIcon,
+  CheckIcon,
+  ChevronIcon,
+  CommandIcon,
+  FolderIcon,
+  GitBranchIcon,
+  Isolated,
+  KeyIcon,
+  PuzzleIcon,
+  RefreshIcon,
+  Spinner,
+  Highlighted,
+} from "../ui/parts.tsx";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -95,11 +108,6 @@ const CONFIRM: readonly Item[] = [
   { key: "yes", title: "Yes" },
   { key: "no", title: "No" },
 ];
-
-function Highlighted(props: { text: string; matches: readonly number[] }) {
-  const parts = createMemo(() => highlight(props.text, props.matches));
-  return <For each={parts()}>{(part) => (part.hit ? <mark>{part.text}</mark> : part.text)}</For>;
-}
 
 /**
  * Cmd+K (Ctrl+K on Windows and Linux): search everything the app can do or

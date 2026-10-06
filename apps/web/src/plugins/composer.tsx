@@ -6,7 +6,6 @@ import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts
 import { formatKeys, modKey } from "../lib/keys.ts";
 import { applySuggestion, findTrigger } from "../model/completion.ts";
 import type { TriggerMatch } from "../model/completion.ts";
-import { highlight } from "../model/palette.ts";
 import {
   ActionIds,
   Actions,
@@ -42,7 +41,7 @@ import type {
 import { defineUiPlugin } from "../ui/define.ts";
 import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
-import { ChatIcon, ComposerQueued, ComposerSuggestionView, Each, ImageIcon, Isolated, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
+import { ChatIcon, ComposerQueued, ComposerSuggestionView, Each, Highlighted, ImageIcon, Isolated, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
 
 const readImage = (file: File): Promise<ImageContent> =>
@@ -611,23 +610,18 @@ function QueuedRow(props: ComposerQueuedProps) {
   );
 }
 
-function Marked(props: { text: string; matches: readonly number[] }) {
-  const parts = createMemo(() => highlight(props.text, props.matches));
-  return <For each={parts()}>{(part) => (part.hit ? <mark>{part.text}</mark> : part.text)}</For>;
-}
-
 /** The default `composer.suggestion` part: icon, label with the matched letters marked, then the detail. */
 function SuggestionRow(props: ComposerSuggestionProps) {
   return (
     <>
       <Show when={props.suggestion.icon}>{(icon) => <Isolated component={icon()} />}</Show>
       <span class="menu-label">
-        <Marked text={props.suggestion.label} matches={props.suggestion.matches ?? []} />
+        <Highlighted text={props.suggestion.label} matches={props.suggestion.matches ?? []} />
       </span>
       <Show when={props.suggestion.detail}>
         {(detail) => (
           <span class="menu-hint completion-detail">
-            <Marked text={detail()} matches={props.suggestion.detailMatches ?? []} />
+            <Highlighted text={detail()} matches={props.suggestion.detailMatches ?? []} />
           </span>
         )}
       </Show>

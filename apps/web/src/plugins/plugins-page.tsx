@@ -5,6 +5,7 @@ import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "../model/format.ts";
 import { PLUGIN_FILTERS, dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../model/plugins.ts";
 import type { KindedPlugin, PluginKind } from "../model/plugins.ts";
+import { stepFor } from "../lib/keys.ts";
 import { Actions, Client, HostPlugins, Notify, PluginTabs, Threads, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -577,13 +578,13 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
     }),
   );
   const onKey = (event: KeyboardEvent) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    event.preventDefault();
     const rows = shown();
-    if (rows.length === 0) return;
     const at = rows.findIndex((entry) => entry.kind === inspector.selected()?.kind && entry.plugin.id === inspector.selected()?.id);
-    const next = rows[Math.max(0, Math.min(rows.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))]!;
-    inspector.select({ kind: next.kind, id: next.plugin.id });
+    const step = stepFor(event.key, at, rows.length);
+    if (step === undefined) return;
+    event.preventDefault();
+    const next = rows[step];
+    if (next !== undefined) inspector.select({ kind: next.kind, id: next.plugin.id });
   };
   return (
     <div class="inspector">

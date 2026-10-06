@@ -92,3 +92,7 @@ export const bindsTyping = (binding: string): boolean => !parse(binding).mod;
 /** Focus is in something that takes typing. */
 export const typing = (target: EventTarget | null): boolean =>
   target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+/** Where ↓ or ↑ moves from `index` in a list of `length`, staying in it; undefined for any other key. From nothing (-1), both go to the first. */
+export const stepFor = (key: string, index: number, length: number): number | undefined =>
+  key === "ArrowDown" ? Math.min(length - 1, index + 1) : key === "ArrowUp" ? Math.max(0, index - 1) : undefined;

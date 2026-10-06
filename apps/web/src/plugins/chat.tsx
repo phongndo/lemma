@@ -11,6 +11,7 @@ import { parseDraftArgs } from "../model/live.ts";
 import type { DraftBlock, StepDraft } from "../model/live.ts";
 import { createProjector, pendingToolCalls, promptMarks } from "../model/transcript.ts";
 import type { AssistantItem, AttemptItem, Block, Item, PromptMark, ToolResultView, TurnView } from "../model/transcript.ts";
+import { createNow } from "../lib/now.ts";
 import {
   ChatThinkingPart,
   ChatToolPart,
@@ -1094,13 +1095,7 @@ export default defineUiPlugin({
       return projector(threads.branch());
     });
     const pending = createMemo(() => pendingToolCalls(transcript()));
-    const [now, setNow] = createSignal(Date.now());
-    createEffect(() => {
-      if (!threads.busy()) return;
-      setNow(Date.now());
-      const timer = setInterval(() => setNow(Date.now()), 1000);
-      onCleanup(() => clearInterval(timer));
-    });
+    const now = createNow(1000, threads.busy);
     const chat: Chat = {
       threads,
       router,

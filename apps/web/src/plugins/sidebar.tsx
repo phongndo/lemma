@@ -2,11 +2,12 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/contracts";
 import { copyAndTell } from "../lib/clipboard.ts";
-import { withKeys } from "../lib/keys.ts";
+import { stepFor, withKeys } from "../lib/keys.ts";
 import { loadJson, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
 import { shownKeys } from "../model/keybindings.ts";
 import { fileSessions, sessionTitle } from "../model/threads.ts";
+import { createNow } from "../lib/now.ts";
 import {
   ActionIds,
   Actions,
@@ -233,12 +234,12 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const projectActions = (cwd: string) => slots.list(ProjectActions).filter((action) => action.when?.(cwd) ?? true);
   const onKey = (event: KeyboardEvent) => {
     // Arrow keys move between session rows.
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
     const index = rows.indexOf(document.activeElement as HTMLElement);
-    if (index === -1) return;
+    const next = stepFor(event.key, index, rows.length);
+    if (next === undefined || index === -1) return;
     event.preventDefault();
-    rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    rows[next]?.focus();
   };
   const rows = (list: readonly SessionInfo[]) => (
     <ul class="session-list">
@@ -379,11 +380,9 @@ export default defineUiPlugin({
   id: "sidebar",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots, uiPlugins: UiPlugins },
-  setup: (use, plugin) => {
+  setup: (use) => {
     // Relative times refresh once a minute.
-    const [now, setNow] = createSignal(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    plugin.onCleanup(() => window.clearInterval(timer));
+    const now = createNow(60_000);
     const { client, threads, workspace, notify, slots, uiPlugins } = use;
     const newChatIn = (cwd?: string) => threads.newThread(cwd);
     /** Projects with threads, which the list can be narrowed to; a chosen one that loses its last thread lets go. */

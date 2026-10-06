@@ -13,6 +13,13 @@ export const relativeTime = (at: number, now: number = Date.now()): string => {
   return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(d > 300 ? { year: "numeric" } : {}) });
 };
 
+/** The time of day of `at` (epoch ms) to the millisecond: `14:03:07.042`. */
+export const clockTime = (at: number): string => {
+  const date = new Date(at);
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+};
+
 /** `/home/me/code/x` → `~/code/x`. */
 export const tildePath = (path: string, home: string | undefined): string => {
   if (home === undefined || home === "" || home === "/") return path;
