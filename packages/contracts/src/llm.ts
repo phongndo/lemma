@@ -31,6 +31,11 @@ export const ImageContent = Schema.Struct({
 });
 export type ImageContent = typeof ImageContent.Type;
 
+/** The image formats every provider accepts; another (SVG, HEIC, TIFF…) would fail every later request in its session. */
+export const IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/** The largest image to send: providers reject more than 5 MB of base64, and a rejected image fails every later request in its session. */
+export const MAX_IMAGE_BYTES = 3.75 * 1024 * 1024;
+
 export const ToolCall = Schema.Struct({
   type: Schema.Literal("toolCall"),
   id: Schema.String,

@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access, open, readFile, stat } from "node:fs/promises";
 import { Schema } from "effect";
-import { ToolResult } from "@lemma/contracts";
+import { MAX_IMAGE_BYTES, ToolResult } from "@lemma/contracts";
 import type { Tool } from "@lemma/contracts";
 import { fsMessage, resolveReadPath, text, throwIfAborted } from "./files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
@@ -18,13 +18,6 @@ export interface ReadDetails {
   readonly path: string;
   readonly truncation?: Truncation;
 }
-
-/**
- * Providers reject oversized images, and a rejected image in the history
- * fails every later request, so larger files are described instead of sent.
- * 3.75 MB of bytes is 5 MB of base64.
- */
-export const MAX_IMAGE_BYTES = 3.75 * 1024 * 1024;
 
 /** PNG, JPEG, GIF, or WebP by magic bytes, like pi; the extension is not trusted. */
 function sniffImage(head: Uint8Array): string | undefined {

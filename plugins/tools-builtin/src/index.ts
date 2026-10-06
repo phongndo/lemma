@@ -15,7 +15,7 @@ export { codemodeTool, CodemodeInput } from "./codemode.ts";
 export type { CodemodeDetails } from "./codemode.ts";
 export { applyEdits, editTool, EditInput } from "./edit.ts";
 export type { EditDetails } from "./edit.ts";
-export { readTool, ReadInput, MAX_IMAGE_BYTES } from "./read.ts";
+export { readTool, ReadInput } from "./read.ts";
 export type { ReadDetails } from "./read.ts";
 export { writeTool, WriteInput } from "./write.ts";
 export { unifiedPatch } from "./diff.ts";

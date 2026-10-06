@@ -1,5 +1,6 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
 import { Schema } from "effect";
+import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/contracts";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
 import { randomId } from "../lib/id.ts";
 import { formatKeys, modKey } from "../lib/keys.ts";
@@ -43,11 +44,6 @@ import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
 import { ChatIcon, ComposerQueued, ComposerSuggestionView, Each, ImageIcon, Isolated, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
-
-/** The formats every provider accepts; others (SVG, HEIC, TIFF…) would fail every later request in the session. */
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-/** Providers reject larger images (5 MB of base64), and a rejected image would be resent with every later prompt. Matches the read tool. */
-const MAX_IMAGE_BYTES = 3.75 * 1024 * 1024;
 
 const readImage = (file: File): Promise<ImageContent> =>
   new Promise((resolve, reject) => {
@@ -650,7 +646,7 @@ function AttachImages(props: ComposerActionProps) {
       <input
         ref={picker}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
+        accept={[...IMAGE_TYPES].join(",")}
         multiple
         hidden
         onChange={(event) => {
