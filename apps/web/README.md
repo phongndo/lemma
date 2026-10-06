@@ -107,7 +107,9 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletio
   });
 ```
 
-`setup` runs in its own Solid root. What it adds to slots leaves when it stops;
+`defineUiPlugin` is the kernel's promise-based `definePlugin`
+([`@lemma/core/plain`](../../packages/core/README.md#plugins-written-with-promises))
+with the page's conventions. `setup` runs in its own Solid root. What it adds to slots leaves when it stops;
 release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
 `config` Schema (from `api.Schema`, Effect 4's Schema with Effect 3's `Literal`,
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
