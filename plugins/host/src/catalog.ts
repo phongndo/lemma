@@ -1,5 +1,4 @@
-import { Cause } from "effect";
-import { configValues, describeConfig } from "@lemma/contracts";
+import { configValues, describeConfig, faultMessage } from "@lemma/contracts";
 import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, PluginSource } from "@lemma/contracts";
 import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
@@ -243,11 +242,6 @@ export function catalog({
 }
 
 /** A fault as text: the kernel's message and its cause, squashed. */
-export const faultMessage = (fault: { readonly message: string; readonly cause: Cause.Cause<unknown> }): string => {
-  const cause = Cause.squash(fault.cause);
-  return `${fault.message}: ${cause instanceof Error ? cause.message : String(cause)}`;
-};
-
 /**
  * Recent faults per plugin, newest first and at most `limit` each: the core
  * keeps only an instance's latest, and a restart clears it, so the history of

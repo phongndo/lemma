@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { kernelOf, tablesOf } from "../src/kernel.ts";
+import { capabilityName, hookChain, kernelOf, providerOf, recoverable, tablesOf, usersOf } from "../src/kernel.ts";
 import type { PluginStatus } from "../src/rpc.ts";
 
 const plugin = (id: string, fields: Partial<PluginStatus> = {}): PluginStatus => ({
@@ -10,6 +10,41 @@ const plugin = (id: string, fields: Partial<PluginStatus> = {}): PluginStatus =>
   provides: [],
   requires: [],
   ...fields,
+});
+
+describe("plugin wiring", () => {
+  const plugins = [
+    plugin("llm-off", { enabled: false, state: "disabled", provides: ["lemma/Llm"] }),
+    plugin("llm", { provides: ["lemma/Llm"], hooks: [{ name: "turn.before", order: 0 }] }),
+    plugin("agent", {
+      requires: ["lemma/Llm"],
+      hooks: [
+        { name: "turn.before", order: 10 },
+        { name: "turn.before", order: -5 },
+      ],
+    }),
+  ];
+
+  test("who provides a capability (the enabled one), who needs it, and what it is called", () => {
+    expect(providerOf(plugins, "lemma/Llm")?.id).toBe("llm");
+    expect(usersOf(plugins, "lemma/Llm")).toEqual(["agent"]);
+    expect(capabilityName("lemma/Llm")).toBe("Llm");
+  });
+
+  test("a hook's handlers in run order, a plugin's several included", () => {
+    expect(hookChain(plugins, "turn.before")).toEqual([
+      { plugin: "agent", order: -5 },
+      { plugin: "llm", order: 0 },
+      { plugin: "agent", order: 10 },
+    ]);
+  });
+
+  test("a restart helps a failed plugin or one a failure halted", () => {
+    expect(recoverable(plugin("a", { state: "failed" }))).toBe(true);
+    expect(recoverable(plugin("a", { state: "closed", haltedBy: "llm" }))).toBe(true);
+    expect(recoverable(plugin("a"))).toBe(false);
+    expect(recoverable(plugin("a", { state: "disabled", haltedBy: "tools" }))).toBe(false);
+  });
 });
 
 describe("kernelOf", () => {

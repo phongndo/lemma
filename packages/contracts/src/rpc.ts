@@ -4,7 +4,19 @@ import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from ".
 import { CommandInfo, CommandResult } from "./commands.ts";
 import { ConfigField, ConfigValues } from "./config.ts";
 import { FileSearchOptions, FileSearchResult } from "./files.ts";
-import { CompositionInfo, ConfigScope, FaultRecord, HookUse, NoticePayload, PluginChange, PluginSource, RegistryUse, UiComposition } from "./host.ts";
+import {
+  CompositionInfo,
+  ConfigScope,
+  FaultRecord,
+  faultMessage,
+  HookUse,
+  NoticePayload,
+  PluginChange,
+  PluginSource,
+  RegistryUse,
+  UiComposition,
+} from "./host.ts";
+import type { PluginInfo } from "./host.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, StreamEvent, Usage } from "./llm.ts";
@@ -24,31 +36,60 @@ export class HostError extends Schema.TaggedError<HostError>()("HostError", {
 }) {}
 
 /** `PluginInfo` for the wire: the fault flattened to text, and "disabled" for a plugin the core has not loaded. */
+/**
+ * One plugin the host knows, as clients see it. `enabled` is the config files'
+ * choice; `state` is the core's, `disabled` when the plugin is not loaded. A
+ * plugin can be enabled yet unloaded when a capability it requires comes from a
+ * plugin that is off: `haltedBy` then names that plugin.
+ */
 export const PluginStatus = Schema.Struct({
   id: Schema.String,
   version: Schema.optional(Schema.String),
   source: PluginSource,
+  /** A local plugin with a bundled plugin's id runs instead of it. */
   shadows: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
+  /** The config file whose row sets `enabled`; absent when neither does. */
   scope: Schema.optional(ConfigScope),
+  /** Why this plugin cannot be turned off: it is pinned by the app, or a pinned plugin needs what it provides. */
   locked: Schema.optional(Schema.String),
+  /** Capability keys. */
   provides: Schema.Array(Schema.String),
   requires: Schema.Array(Schema.String),
   state: Schema.Literal("pending", "activating", "active", "draining", "closed", "failed", "disabled"),
   fault: Schema.optional(Schema.Struct({ phase: Schema.String, operation: Schema.optional(Schema.String), message: Schema.String })),
   /** The plugin whose failure or absence keeps this one from running. */
   haltedBy: Schema.optional(Schema.String),
-  /** Why it is left out though enabled (see `PluginInfo.problem`). */
+  /** Why it is left out though enabled: it does not decode its config, is written for another API, or failed to start with the host. */
   problem: Schema.optional(Schema.String),
+  /** Its settings form, projected from its config Schema; absent when it takes no config. */
   configFields: Schema.optional(Schema.Array(ConfigField)),
+  /** The config it runs with, as the form shows it. */
   config: Schema.optional(ConfigValues),
+  /** The config file whose row sets `config`; absent when neither does. */
   configScope: Schema.optional(ConfigScope),
+  /** Hooks its running instance intercepts. */
   hooks: Schema.optional(Schema.Array(HookUse)),
+  /** Events its running instance observes. */
   observes: Schema.optional(Schema.Array(Schema.String)),
+  /** Registries its running instance contributes to, with how many items. */
   contributes: Schema.optional(Schema.Array(RegistryUse)),
+  /** Its recent faults, newest first, across restarts. */
   faults: Schema.optional(Schema.Array(FaultRecord)),
 });
 export type PluginStatus = typeof PluginStatus.Type;
+
+/** A plugin as clients see it: its fault in a line, and `disabled` when the core has not loaded it (off, or waiting on one that is). */
+export const toPluginStatus = (info: PluginInfo): PluginStatus => {
+  const { fault, state, ...rest } = info;
+  return {
+    ...rest,
+    state: state ?? "disabled",
+    ...(fault === undefined
+      ? {}
+      : { fault: { phase: fault.phase, ...(fault.operation === undefined ? {} : { operation: fault.operation }), message: faultMessage(fault) } }),
+  };
+};
 
 /** What a reload or configure changed, as clients report it. */
 export const ReloadResult = Schema.Struct({
@@ -61,6 +102,24 @@ export const ReloadResult = Schema.Struct({
   deferred: Schema.optional(Schema.Boolean),
 });
 export type ReloadResult = typeof ReloadResult.Type;
+
+/**
+ * What a reload or config change did, in a phrase (`started x; restarted y; failed z`), leaving out
+ * `except`, the plugin the caller already names; undefined when it changed nothing.
+ */
+export const describeReload = (result: Pick<ReloadResult, "started" | "restarted" | "stopped" | "failed">, except?: string): string | undefined => {
+  const phrase = (verb: string, ids: readonly string[] | undefined) => {
+    const named = (ids ?? []).filter((id) => id !== except);
+    return named.length > 0 ? `${verb} ${named.join(", ")}` : "";
+  };
+  const parts = [
+    phrase("started", result.started),
+    phrase("restarted", result.restarted),
+    phrase("stopped", result.stopped),
+    phrase("failed", result.failed),
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : undefined;
+};
 
 /** Everything a client reacts to, multiplexed on one subscription. Losable: clients repair gaps from `Session.Events`. */
 export const HostEvent = Schema.Union(

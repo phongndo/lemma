@@ -7,7 +7,7 @@ export type { PathsService } from "./paths.ts";
 export { HOST_PLUGIN_ID, isTrusted, loadComposition, patchConfig, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 export type { ConfigSection } from "./config.ts";
 export { listUiFiles, projectUiDir, userUiDir } from "./ui.ts";
-export { catalog, faultHistory, faultMessage, resolveComposition, restartedBy, withReplacements } from "./catalog.ts";
+export { catalog, faultHistory, resolveComposition, restartedBy, withReplacements } from "./catalog.ts";
 export type { KnownPlugin, Resolved } from "./catalog.ts";
 export { planComposition } from "./planner.ts";
 export type { Plan, PlanInput } from "./planner.ts";

@@ -1,21 +1,9 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
+import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "../model/format.ts";
-import {
-  PLUGIN_FILTERS,
-  capabilityName,
-  dependentsOf,
-  describeReload,
-  describeState,
-  matchPlugins,
-  pluginText,
-  providerOf,
-  recoverable,
-  replaces,
-  usersOf,
-  waitingOn,
-} from "../model/plugins.ts";
+import { PLUGIN_FILTERS, dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../model/plugins.ts";
 import type { KindedPlugin, PluginKind } from "../model/plugins.ts";
 import { Actions, Client, HostPlugins, Notify, PluginTabs, Threads, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
@@ -307,11 +295,9 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
   const plugin = () => props.plugin;
   /** Where its handler runs among every plugin's handlers of that hook. */
   const position = (name: string, order: number) => {
-    const orders = all()
-      .flatMap((other) => other.hooks?.filter((hook) => hook.name === name).map((hook) => ({ id: other.id, order: hook.order })) ?? [])
-      .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
-    const index = orders.findIndex((entry) => entry.id === plugin().id && entry.order === order);
-    return orders.length > 1 ? `${index + 1} of ${orders.length}` : "only handler";
+    const chain = hookChain(all(), name);
+    const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.order === order);
+    return chain.length > 1 ? `${index + 1} of ${chain.length}` : "only handler";
   };
   const contributions = () => plugin().contributes ?? [];
   return (
@@ -717,7 +703,7 @@ export default defineUiPlugin({
               return;
             }
             const also = describeReload(result, target.id);
-            notify.toast({ level: "info", message: `Turned ${target.id} ${verb}${also === "nothing changed" ? "" : `; ${also}`}` });
+            notify.toast({ level: "info", message: `Turned ${target.id} ${verb}${also === undefined ? "" : `; ${also}`}` });
           } catch (error) {
             notify.report(error, `Could not turn ${target.id} ${verb}`);
           }
@@ -730,7 +716,7 @@ export default defineUiPlugin({
             const also = describeReload(result, target.id);
             notify.toast({
               level: "info",
-              message: `Saved ${target.id} ${fields}${result.deferred ? `; ${deferredNote}` : also === "nothing changed" ? "" : `; ${also}`}`,
+              message: `Saved ${target.id} ${fields}${result.deferred ? `; ${deferredNote}` : also === undefined ? "" : `; ${also}`}`,
             });
           } catch (error) {
             notify.report(error, `Could not save ${target.id} ${fields}`);
@@ -768,7 +754,7 @@ export default defineUiPlugin({
       run("reload", async () => {
         try {
           const summary = describeReload(await host.reload());
-          notify.toast({ level: "info", message: summary === "nothing changed" ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` });
+          notify.toast({ level: "info", message: summary === undefined ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` });
         } catch (error) {
           notify.report(error, "Reload failed");
         }

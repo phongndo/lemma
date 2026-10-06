@@ -1,5 +1,5 @@
 import { Show, createSignal } from "solid-js";
-import { describeReload } from "../model/plugins.ts";
+import { describeReload } from "@lemma/contracts";
 import { Actions, Client, Notify, SidebarFooter, Slots } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import { RefreshIcon, Spinner } from "../ui/parts.tsx";
@@ -51,10 +51,10 @@ export default defineUiPlugin({
           const result = await client.host.host.reload();
           // A plugin the reload left failed stays on screen, rather than a page reload passing over it.
           if ((result.failed?.length ?? 0) > 0) {
-            notify.toast({ level: "error", message: `Reload: ${describeReload(result)}. The Plugins page says why.` });
+            notify.toast({ level: "error", message: `Reload: ${describeReload(result) ?? "nothing changed"}. The Plugins page says why.` });
             return;
           }
-          leaveReport(describeReload(result));
+          leaveReport(describeReload(result) ?? "nothing changed");
         }
         window.location.reload();
       } catch (error) {

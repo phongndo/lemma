@@ -1,9 +1,9 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles } from "@lemma/contracts";
+import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, toPluginStatus } from "@lemma/contracts";
 import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
-import { toHostError, toPluginStatus } from "./errors.ts";
+import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
 import type { makeLogins } from "./logins.ts";

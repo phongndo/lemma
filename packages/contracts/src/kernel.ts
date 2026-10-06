@@ -1,3 +1,4 @@
+import { Order } from "effect";
 import type { PluginStatus } from "./rpc.ts";
 
 /*
@@ -40,7 +41,30 @@ export interface KernelView {
   readonly capabilities: readonly CapabilityView[];
 }
 
-const byName = <T extends { readonly name: string }>(a: T, b: T) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+const byName = Order.mapInput(Order.string, (item: { readonly name: string }) => item.name);
+const runOrder = (a: { readonly plugin: string; readonly order: number }, b: { readonly plugin: string; readonly order: number }) =>
+  a.order - b.order || Order.string(a.plugin, b.plugin);
+
+/** `lemma/Llm` reads as `Llm`. */
+export const capabilityName = (key: string): string => key.slice(key.lastIndexOf("/") + 1);
+
+/** Plugins requiring `key`, by id. */
+export const usersOf = (plugins: readonly PluginStatus[], key: string): string[] =>
+  plugins.filter((plugin) => plugin.requires.includes(key)).map((plugin) => plugin.id);
+
+/** The plugin providing `key`: the enabled one when several do. */
+export const providerOf = (plugins: readonly PluginStatus[], key: string): PluginStatus | undefined =>
+  plugins.find((plugin) => plugin.enabled && plugin.provides.includes(key)) ?? plugins.find((plugin) => plugin.provides.includes(key));
+
+/** Every plugin's handlers of hook `name`, in run order (`HookChain.handlers`). */
+export const hookChain = (plugins: readonly PluginStatus[], name: string): HookChain["handlers"] =>
+  plugins
+    .flatMap((plugin) => plugin.hooks?.filter((hook) => hook.name === name).map((hook) => ({ plugin: plugin.id, order: hook.order })) ?? [])
+    .sort(runOrder);
+
+/** Whether a restart would do anything without `force`: the plugin failed, or a failed dependency halted it. */
+export const recoverable = (plugin: { readonly state?: string | undefined; readonly haltedBy?: string | undefined }): boolean =>
+  plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
 
 export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
   const hooks = new Map<string, { plugin: string; order: number }[]>();
@@ -54,9 +78,7 @@ export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
   }
   const keys = [...new Set(plugins.flatMap((plugin) => [...plugin.provides, ...plugin.requires]))].sort();
   return {
-    hooks: [...hooks]
-      .map(([name, handlers]) => ({ name, handlers: handlers.sort((a, b) => a.order - b.order || (a.plugin < b.plugin ? -1 : 1)) }))
-      .sort(byName),
+    hooks: [...hooks].map(([name, handlers]) => ({ name, handlers: handlers.sort(runOrder) })).sort(byName),
     registries: [...registries]
       .map(([name, contributors]) => ({ name, contributors, items: contributors.reduce((sum, contributor) => sum + contributor.items, 0) }))
       .sort(byName),
@@ -66,7 +88,7 @@ export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
       providers: plugins
         .filter((plugin) => plugin.provides.includes(key))
         .map((plugin) => ({ plugin: plugin.id, state: plugin.state, enabled: plugin.enabled })),
-      users: plugins.filter((plugin) => plugin.requires.includes(key)).map((plugin) => plugin.id),
+      users: usersOf(plugins, key),
     })),
   };
 };

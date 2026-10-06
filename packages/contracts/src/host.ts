@@ -1,8 +1,8 @@
-import { Context, Schema } from "effect";
+import { Cause, Context, Schema } from "effect";
 import type { Effect } from "effect";
 import { Event } from "@lemma/core";
 import type { CoreClosed, PluginFault, PluginState, ReloadError, ReloadReport, RestartOptions } from "@lemma/core";
-import { ConfigField, ConfigValues } from "./config.ts";
+import type { PluginStatus } from "./rpc.ts";
 
 /**
  * Locations the host resolves once. Plugins never compute paths themselves.
@@ -101,46 +101,21 @@ export const FaultRecord = Schema.Struct({
 });
 export type FaultRecord = typeof FaultRecord.Type;
 
+/** A fault in a line: the core's message, then what caused it. */
+export const faultMessage = (fault: { readonly message: string; readonly cause: Cause.Cause<unknown> }): string => {
+  const cause = Cause.squash(fault.cause);
+  return `${fault.message}: ${cause instanceof Error ? cause.message : String(cause)}`;
+};
+
 /**
- * One plugin the host knows, running or not. `enabled` is the config files'
- * choice; `state` is the core's, absent when the plugin is not loaded. A plugin
- * can be enabled yet unloaded when a capability it requires comes from a plugin
- * that is off: `haltedBy` then names that plugin.
+ * One plugin the host knows, running or not: what clients see of it
+ * (`PluginStatus`), with the core's own `state`, absent while the plugin is not
+ * loaded, and its `fault`.
  */
-export interface PluginInfo {
-  readonly id: string;
-  readonly version?: string;
-  readonly source: PluginSource;
-  /** A local plugin with a bundled plugin's id runs instead of it. */
-  readonly shadows?: boolean;
-  readonly enabled: boolean;
-  /** The config file whose row sets `enabled`; absent when neither does. */
-  readonly scope?: ConfigScope;
-  /** Why this plugin cannot be turned off: it is pinned by the app, or a pinned plugin needs what it provides. */
-  readonly locked?: string;
-  /** Capability keys. */
-  readonly provides: readonly string[];
-  readonly requires: readonly string[];
+export type PluginInfo = Omit<PluginStatus, "state" | "fault"> & {
   readonly state?: PluginState;
   readonly fault?: PluginFault;
-  readonly haltedBy?: string;
-  /** Why it is left out though enabled: it does not decode its config, is written for another API, or failed to start with the host. */
-  readonly problem?: string;
-  /** Its settings form, projected from its config Schema; absent when it takes no config. */
-  readonly configFields?: readonly ConfigField[];
-  /** The config it runs with, as the form shows it. */
-  readonly config?: ConfigValues;
-  /** The config file whose row sets `config`; absent when neither does. */
-  readonly configScope?: ConfigScope;
-  /** Hooks its running instance intercepts. */
-  readonly hooks?: readonly HookUse[];
-  /** Events its running instance observes. */
-  readonly observes?: readonly string[];
-  /** Registries its running instance contributes to, with how many items. */
-  readonly contributes?: readonly RegistryUse[];
-  /** Its recent faults, newest first, across restarts. */
-  readonly faults?: readonly FaultRecord[];
-}
+};
 
 /** Identifies the running plugin set, so a logged request can name what produced it. */
 export const CompositionInfo = Schema.Struct({

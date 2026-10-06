@@ -4,10 +4,11 @@ import { Show, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import type { PluginInfo, PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
+import { faultMessage, toPluginStatus } from "@lemma/contracts";
+import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, faultMessage, withReplacements } from "@lemma/plugin-host/catalog";
+import { catalog, faultHistory, withReplacements } from "@lemma/plugin-host/catalog";
 import { planComposition } from "@lemma/plugin-host/planner";
 import type { Plan } from "@lemma/plugin-host/planner";
 import type { AnyRoute } from "@lemma/router";
@@ -48,18 +49,6 @@ export interface BootOptions {
   /** `?safe`: ignore `ui` rows and UI files, running the app as shipped. */
   readonly safe: boolean;
 }
-
-/** `PluginInfo` for the page: the fault flattened to text, "disabled" for a plugin that is not loaded. */
-const toStatus = (info: PluginInfo): PluginStatus => {
-  const { fault, state, ...rest } = info;
-  return {
-    ...rest,
-    state: state ?? "disabled",
-    ...(fault === undefined
-      ? {}
-      : { fault: { phase: fault.phase, ...(fault.operation === undefined ? {} : { operation: fault.operation }), message: faultMessage(fault) } }),
-  };
-};
 
 const toResult = (report: ReloadReport | undefined): ReloadResult => ({
   started: report?.started ?? [],
@@ -111,7 +100,7 @@ export async function boot(options: BootOptions): Promise<void> {
       configIn: safe ? {} : ui.configIn,
       pinned: PINNED,
     });
-    setStatuses(infos.map(toStatus));
+    setStatuses(infos.map(toPluginStatus));
     setSlots(await serviceOf(Slots));
   };
   /** New problems become warnings, once each, where a Notify is running; all of them stay listed on the Plugins page. */

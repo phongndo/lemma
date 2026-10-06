@@ -1,9 +1,8 @@
 import { Effect, Layer } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
-import { CommandError, Commands, HostControl, Interaction, Llm, Workspace } from "@lemma/contracts";
-import type { Command, PluginInfo } from "@lemma/contracts";
-import type { ReloadReport } from "@lemma/core";
+import { CommandError, Commands, describeReload, HostControl, Interaction, Llm, recoverable, Workspace } from "@lemma/contracts";
+import type { Command } from "@lemma/contracts";
 
 type Ask = Context.Tag.Service<typeof Interaction>;
 
@@ -19,8 +18,8 @@ export const hostCommands = (control: Context.Tag.Service<typeof HostControl>, a
     keywords: ["plugins", "composition", "settings"],
     run: () =>
       Effect.map(control.reload, (report) => {
-        const summary = describeReport(report);
-        return { message: summary === "nothing changed" ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` };
+        const summary = describeReload(report);
+        return { message: summary === undefined ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` };
       }),
   },
   {
@@ -67,27 +66,13 @@ export const hostCommands = (control: Context.Tag.Service<typeof HostControl>, a
         if (after !== undefined && after.enabled !== enabled) {
           return yield* nothing("host.toggle-plugin", `${id} is still ${after.enabled ? "on" : "off"}: the ${after.scope ?? "user"} config decides it`);
         }
-        const also = describeReport(report, id);
+        const also = describeReload(report, id);
         // On but not loaded: a plugin it needs is off, and it starts when that one does.
         const waiting = enabled && after?.state === undefined && after?.haltedBy !== undefined ? `; it starts when ${after.haltedBy} is on` : "";
-        return { message: `Turned ${id} ${verb}${waiting}${also === "nothing changed" ? "" : `; ${also}`}` };
+        return { message: `Turned ${id} ${verb}${waiting}${also === undefined ? "" : `; ${also}`}` };
       }),
   },
 ];
-
-/** Whether a restart would do anything without `force`: the plugin failed, or a failed dependency halted it. */
-const recoverable = (plugin: PluginInfo): boolean => plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
-
-/** `started x; restarted y; stopped z`, leaving out `except` (the plugin the caller already named). */
-const describeReport = (report: ReloadReport, except?: string): string => {
-  const list = (ids: readonly string[]) => ids.filter((id) => id !== except);
-  const parts = [
-    list(report.started).length > 0 ? `started ${list(report.started).join(", ")}` : "",
-    list(report.restarted).length > 0 ? `restarted ${list(report.restarted).join(", ")}` : "",
-    list(report.stopped).length > 0 ? `stopped ${list(report.stopped).join(", ")}` : "",
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join("; ") : "nothing changed";
-};
 
 export const llmCommands = (llm: Context.Tag.Service<typeof Llm>, ask: Ask): readonly Command[] => [
   {

@@ -2,14 +2,13 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Either, Exit, Option, ParseResult, Schema, Stream } from "effect";
-import { HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import {
   catalog,
   compositionInfo,
   faultHistory,
-  faultMessage,
   HOST_PLUGIN_ID,
   hostPlugin,
   listUiFiles,
@@ -166,9 +165,7 @@ const load = (host: Plugin): Effect.Effect<Loaded, ReloadError> =>
 
 const describe = (report: ReloadReport): string => {
   const parts = [
-    report.started.length ? `started ${report.started.join(", ")}` : "",
-    report.restarted.length ? `restarted ${report.restarted.join(", ")}` : "",
-    report.stopped.length ? `stopped ${report.stopped.join(", ")}` : "",
+    describeReload(report) ?? "",
     report.interrupted ? `interrupted ${report.interrupted} in-flight task(s)` : "",
     report.faults.length ? `${report.faults.length} dispose fault(s)` : "",
   ].filter(Boolean);

@@ -1,4 +1,19 @@
-import { contentText, formatCost, formatDuration, formatTokens, recordDuration, recordName, recordStatus, RECORD_KIND_LABEL, tablesOf } from "@lemma/contracts";
+import {
+  capabilityName,
+  contentText,
+  describeReload,
+  formatCost,
+  formatDuration,
+  formatTokens,
+  hookChain,
+  providerOf,
+  recordDuration,
+  recordName,
+  recordStatus,
+  RECORD_KIND_LABEL,
+  tablesOf,
+  usersOf,
+} from "@lemma/contracts";
 import type {
   CommandInfo,
   InspectorInfo,
@@ -13,6 +28,7 @@ import type {
   PluginStatus,
   ProviderInfo,
   QueuedPrompt,
+  ReloadResult,
   SectionDiff,
   SessionEvent,
   SessionInfo,
@@ -101,34 +117,30 @@ export const formatPlugins = (plugins: readonly PluginStatus[]): string =>
 
 const show = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));
 
-const capability = (key: string) => key.slice(key.lastIndexOf("/") + 1);
-
 /**
  * One plugin as the web app's inspector shows it: its state and why, what it
  * provides and requires and who is on the other end, the hooks it intercepts,
  * the events it observes, what it contributes, and its recent faults.
  */
 export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginStatus): string => {
-  const users = (key: string) => plugins.filter((other) => other.requires.includes(key)).map((other) => other.id);
-  const provider = (key: string) =>
-    (plugins.find((other) => other.enabled && other.provides.includes(key)) ?? plugins.find((other) => other.provides.includes(key)))?.id;
-  const handlers = (name: string) =>
-    plugins
-      .flatMap((other) => other.hooks?.filter((hook) => hook.name === name).map((hook) => ({ id: other.id, order: hook.order })) ?? [])
-      .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
   const lines = [
     `${plugin.id}${plugin.version === undefined ? "" : ` ${plugin.version}`}  ${plugin.state}${plugin.enabled ? "" : " (off)"}  ${plugin.source}${plugin.shadows ? " (shadows bundled)" : ""}`,
     ...(pluginNote(plugins, plugin) === "" ? [] : [`  ${pluginNote(plugins, plugin)}`]),
     "",
     "Provides",
-    ...(plugin.provides.length === 0 ? ["  nothing"] : plugin.provides.map((key) => `  ${capability(key)}  used by ${users(key).join(", ") || "no plugin"}`)),
+    ...(plugin.provides.length === 0
+      ? ["  nothing"]
+      : plugin.provides.map((key) => `  ${capabilityName(key)}  used by ${usersOf(plugins, key).join(", ") || "no plugin"}`)),
     "Requires",
-    ...(plugin.requires.length === 0 ? ["  nothing"] : plugin.requires.map((key) => `  ${capability(key)}  from ${provider(key) ?? "no plugin"}`)),
+    ...(plugin.requires.length === 0
+      ? ["  nothing"]
+      : plugin.requires.map((key) => `  ${capabilityName(key)}  from ${providerOf(plugins, key)?.id ?? "no plugin"}`)),
     "Hooks",
     ...(plugin.hooks?.length
       ? plugin.hooks.map((hook) => {
-          const all = handlers(hook.name);
-          return `  ${hook.name}  order ${hook.order}, ${all.length > 1 ? `${all.findIndex((entry) => entry.id === plugin.id) + 1} of ${all.length}` : "only handler"}`;
+          const chain = hookChain(plugins, hook.name);
+          const at = chain.findIndex((entry) => entry.plugin === plugin.id && entry.order === hook.order);
+          return `  ${hook.name}  order ${hook.order}, ${chain.length > 1 ? `${at + 1} of ${chain.length}` : "only handler"}`;
         })
       : ["  none"]),
     "Observes",
@@ -186,22 +198,10 @@ export const formatUi = (ui: UiComposition): string => {
   ].join("\n\n");
 };
 
-export const formatReload = (report: {
-  readonly started: readonly string[];
-  readonly restarted: readonly string[];
-  readonly stopped: readonly string[];
-  readonly failed?: readonly string[] | undefined;
-  readonly deferred?: boolean | undefined;
-}): string => {
-  if (report.deferred) return "applying: the host restarts the plugins that use it, the transport among them, so clients reconnect";
-  const parts = [
-    report.started.length ? `started ${report.started.join(", ")}` : "",
-    report.restarted.length ? `restarted ${report.restarted.join(", ")}` : "",
-    report.stopped.length ? `stopped ${report.stopped.join(", ")}` : "",
-    report.failed?.length ? `failed ${report.failed.join(", ")}` : "",
-  ].filter(Boolean);
-  return parts.length ? parts.join("; ") : "nothing changed";
-};
+export const formatReload = (report: ReloadResult): string =>
+  report.deferred
+    ? "applying: the host restarts the plugins that use it, the transport among them, so clients reconnect"
+    : (describeReload(report) ?? "nothing changed");
 
 export const formatSessions = (sessions: readonly SessionInfo[], withCwd: boolean): string =>
   pad(

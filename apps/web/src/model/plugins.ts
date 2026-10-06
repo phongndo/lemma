@@ -1,4 +1,5 @@
-import type { PluginStatus, ReloadResult } from "@lemma/contracts";
+import { capabilityName } from "@lemma/contracts";
+import type { PluginStatus } from "@lemma/contracts";
 
 /** What a search over plugins matches. */
 export const pluginText = (plugin: PluginStatus): string =>
@@ -17,9 +18,6 @@ export const pluginText = (plugin: PluginStatus): string =>
   ]
     .filter(Boolean)
     .join(" ");
-
-/** `lemma/Llm` reads as `Llm`. */
-export const capabilityName = (key: string): string => key.slice(key.lastIndexOf("/") + 1);
 
 const loaded = (plugin: PluginStatus) => plugin.enabled && plugin.state !== "disabled";
 
@@ -78,9 +76,6 @@ export function describeState(plugin: PluginStatus): string {
   }
 }
 
-/** Whether a restart would do anything without `force`: the plugin failed, or a failed dependency halted it. */
-export const recoverable = (plugin: PluginStatus): boolean => plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
-
 const providesOf = (plugins: readonly PluginStatus[], id: string): readonly string[] => plugins.find((plugin) => plugin.id === id)?.provides ?? [];
 
 /** Enabled plugins providing a capability `id` also provides: the host turns them off when `id` is turned on. */
@@ -135,28 +130,4 @@ export const matchPlugins = (entries: readonly KindedPlugin[], query: string): K
     return `${pluginText(plugin)} ${kind}`.toLowerCase().includes(term);
   };
   return entries.filter((entry) => terms.every((term) => (term.startsWith("-") && term.length > 1 ? !test(term.slice(1), entry) : test(term, entry))));
-};
-
-/** Plugins requiring `key`, by id. */
-export const usersOf = (plugins: readonly PluginStatus[], key: string): string[] =>
-  plugins.filter((plugin) => plugin.requires.includes(key)).map((plugin) => plugin.id);
-
-/** The plugin providing `key`: the enabled one when several do. */
-export const providerOf = (plugins: readonly PluginStatus[], key: string): PluginStatus | undefined =>
-  plugins.find((plugin) => plugin.enabled && plugin.provides.includes(key)) ?? plugins.find((plugin) => plugin.provides.includes(key));
-
-/** `started x; restarted y; stopped z; failed w`, leaving out `except` (a plugin the message already names). */
-export const describeReload = (result: ReloadResult, except?: string): string => {
-  const list = (ids: readonly string[] | undefined) => (ids ?? []).filter((id) => id !== except);
-  const parts = (
-    [
-      ["started", result.started],
-      ["restarted", result.restarted],
-      ["stopped", result.stopped],
-      ["failed", result.failed],
-    ] as const
-  )
-    .map(([verb, ids]) => (list(ids).length > 0 ? `${verb} ${list(ids).join(", ")}` : ""))
-    .filter(Boolean);
-  return parts.length > 0 ? parts.join("; ") : "nothing changed";
 };

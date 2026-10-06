@@ -10,6 +10,7 @@ import {
   SessionAppended,
   SessionChanged,
   SessionRemoved,
+  toPluginStatus,
   ToolOutput,
   TurnEnded,
   TurnStarted,
@@ -17,7 +18,6 @@ import {
 } from "@lemma/contracts";
 import type { HostEvent, InteractionRequest } from "@lemma/contracts";
 import type { CoreClosed, Event, EventError, PluginContext } from "@lemma/core";
-import { toPluginStatus } from "./errors.ts";
 
 /** Per-subscriber buffer for kernel events. A slow client loses the oldest and repairs from the session log. */
 const SUBSCRIBER_BUFFER = 1024;

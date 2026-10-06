@@ -1,6 +1,6 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Schema } from "effect";
-import { HostError, configValues, describeConfig, emptyUsage, secret } from "@lemma/contracts";
+import { HostError, configValues, describeConfig, emptyUsage, providerOf, secret } from "@lemma/contracts";
 import { fuzzy } from "./model/palette.ts";
 import type {
   AssistantMessage,
@@ -348,13 +348,10 @@ export const createMockHost = (): Host => {
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
   let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
-  // Like the host: an enabled provider wins over a disabled one with the same capability.
-  const providerOf = (key: string) =>
-    plugins.find((plugin) => plugin.enabled && plugin.provides.includes(key)) ?? plugins.find((plugin) => plugin.provides.includes(key));
   const halted = () => {
     for (const plugin of plugins) {
       if (!plugin.enabled) continue;
-      const missing = plugin.requires.map(providerOf).find((provider) => provider !== undefined && provider.state === "disabled");
+      const missing = plugin.requires.map((key) => providerOf(plugins, key)).find((provider) => provider !== undefined && provider.state === "disabled");
       if (missing !== undefined) plugins[plugins.indexOf(plugin)] = { ...plugin, state: "disabled", haltedBy: missing.id };
       else if (plugin.state === "disabled") plugins[plugins.indexOf(plugin)] = { ...plugin, state: "active", haltedBy: undefined };
     }

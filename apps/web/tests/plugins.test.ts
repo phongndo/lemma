@@ -1,17 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginStatus } from "@lemma/contracts";
-import {
-  dependentsOf,
-  describeReload,
-  describeState,
-  matchPlugins,
-  pluginText,
-  providerOf,
-  recoverable,
-  replaces,
-  usersOf,
-  waitingOn,
-} from "../src/model/plugins.ts";
+import { dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../src/model/plugins.ts";
 
 const plugin = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => ({
   id,
@@ -63,7 +52,7 @@ describe("waitingOn", () => {
   });
 });
 
-describe("describeState and recoverable", () => {
+describe("describeState", () => {
   it("names the state or the reason the plugin is not running", () => {
     expect(describeState(plugin("a"))).toBe("Running");
     expect(describeState(plugin("a", { enabled: false, state: "disabled" }))).toBe("Off");
@@ -71,10 +60,6 @@ describe("describeState and recoverable", () => {
     expect(describeState(plugin("a", { state: "disabled", problem: "its config is invalid at x: Expected number" }))).toBe("Left out");
     expect(describeState(plugin("a", { state: "closed", haltedBy: "llm" }))).toBe("Halted by llm");
     expect(describeState(plugin("a", { state: "failed" }))).toBe("Failed");
-    expect(recoverable(plugin("a", { state: "failed" }))).toBe(true);
-    expect(recoverable(plugin("a", { state: "closed", haltedBy: "llm" }))).toBe(true);
-    expect(recoverable(plugin("a"))).toBe(false);
-    expect(recoverable(plugin("a", { state: "disabled", haltedBy: "tools" }))).toBe(false);
   });
 });
 
@@ -107,19 +92,5 @@ describe("matchPlugins", () => {
 
   it("an unknown state matches nothing", () => {
     expect(ids("is:sleepy")).toEqual([]);
-  });
-});
-
-describe("providerOf and usersOf", () => {
-  it("find who provides a capability and who needs it", () => {
-    expect(providerOf(plugins, "lemma/Tools")?.id).toBe("tools");
-    expect(usersOf(plugins, "lemma/Tools")).toEqual(["bash", "edit", "agent", "notes"]);
-  });
-});
-
-describe("describeReload", () => {
-  it("names what changed, failures included, leaving out the plugin the message already names", () => {
-    expect(describeReload({ started: ["a"], restarted: ["b", "c"], stopped: [], failed: ["d"] }, "c")).toBe("started a; restarted b; failed d");
-    expect(describeReload({ started: [], restarted: [], stopped: [] })).toBe("nothing changed");
   });
 });

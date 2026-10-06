@@ -778,25 +778,3 @@ describe("transport", () => {
     }
   });
 });
-
-describe("plugin statuses", () => {
-  test("carry a plugin's wiring to clients: hooks, events, and what it contributes", async () => {
-    const { toPluginStatus } = await import("../src/errors.ts");
-    const status = toPluginStatus({
-      id: "bash",
-      source: "bundled",
-      enabled: true,
-      provides: [],
-      requires: ["lemma/Tools"],
-      state: "active",
-      hooks: [{ name: "lemma/tool.execute", order: 0 }],
-      observes: ["lemma/turn.ended"],
-      contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }],
-    });
-    expect(status).toMatchObject({
-      hooks: [{ name: "lemma/tool.execute", order: 0 }],
-      observes: ["lemma/turn.ended"],
-      contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }],
-    });
-  });
-});

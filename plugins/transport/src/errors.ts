@@ -1,6 +1,4 @@
-import { Cause } from "effect";
 import { HostError } from "@lemma/contracts";
-import type { PluginInfo, PluginStatus } from "@lemma/contracts";
 import type { Diagnostic } from "@lemma/core";
 
 interface Tagged {
@@ -47,40 +45,4 @@ export const toHostError = (error: unknown): HostError => {
     (named.size === 1 ? text([...named][0]) : undefined);
   const message = error.diagnostics?.length ? error.diagnostics.map(formatDiagnostic).join("\n") : (text(error.message) ?? code);
   return new HostError({ code, message, ...(subject === undefined ? {} : { subject }) });
-};
-
-/** A plugin the core has not loaded (turned off, or waiting on one that is) reports `state: "disabled"`. */
-export const toPluginStatus = (info: PluginInfo): PluginStatus => {
-  const fault = info.fault;
-  const cause = fault === undefined ? undefined : Cause.squash(fault.cause);
-  return {
-    id: info.id,
-    ...(info.version === undefined ? {} : { version: info.version }),
-    source: info.source,
-    ...(info.shadows === undefined ? {} : { shadows: info.shadows }),
-    enabled: info.enabled,
-    ...(info.scope === undefined ? {} : { scope: info.scope }),
-    ...(info.locked === undefined ? {} : { locked: info.locked }),
-    provides: info.provides,
-    requires: info.requires,
-    state: info.state ?? "disabled",
-    ...(fault === undefined
-      ? {}
-      : {
-          fault: {
-            phase: fault.phase,
-            ...(fault.operation === undefined ? {} : { operation: fault.operation }),
-            message: `${fault.message}: ${cause instanceof Error ? cause.message : String(cause)}`,
-          },
-        }),
-    ...(info.haltedBy === undefined ? {} : { haltedBy: info.haltedBy }),
-    ...(info.problem === undefined ? {} : { problem: info.problem }),
-    ...(info.configFields === undefined ? {} : { configFields: info.configFields }),
-    ...(info.config === undefined ? {} : { config: info.config }),
-    ...(info.configScope === undefined ? {} : { configScope: info.configScope }),
-    ...(info.hooks === undefined ? {} : { hooks: info.hooks }),
-    ...(info.observes === undefined ? {} : { observes: info.observes }),
-    ...(info.contributes === undefined ? {} : { contributes: info.contributes }),
-    ...(info.faults === undefined ? {} : { faults: info.faults }),
-  };
 };
