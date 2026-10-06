@@ -83,6 +83,8 @@ interface Instance {
   haltedBy?: string;
   /** A fatal fault reported while it was staged: it fails once published. */
   failing?: PluginFault;
+  /** What it hands its replacement (`PluginContext.handoff`). */
+  handoff?: () => unknown;
 }
 
 /** One published composition. In-flight work keeps the environment it entered with. */
@@ -233,7 +235,28 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
         yield* Effect.forkIn(Effect.interruptible(watch), supervisor);
       }).pipe(Effect.asVoid);
 
-    const activate = (instance: Instance, config: unknown, environment: Context.Context<never>): Effect.Effect<void, PluginFault> =>
+    /**
+     * What a running (or draining) instance hands its replacement: a structured
+     * clone of what its `save` returns, so the replacement never shares an
+     * object with it (one that fails to start cannot change the state the old
+     * one keeps serving with). `undefined` when it set nothing, or when `save`
+     * throws or returns what cannot be cloned (a function, a socket): reported
+     * as the old instance's fault.
+     */
+    const takeHandoff = (instance: Instance | undefined): Effect.Effect<unknown> =>
+      Effect.suspend(() => {
+        if (instance?.handoff === undefined || (instance.state !== "active" && instance.state !== "draining")) return Effect.void;
+        const save = instance.handoff;
+        try {
+          return Effect.succeed(structuredClone(save()));
+        } catch (error) {
+          return report(instance, new PluginFault({ pluginId: instance.id, phase: "service", operation: "handoff", cause: Cause.die(error) })).pipe(
+            Effect.as(undefined),
+          );
+        }
+      });
+
+    const activate = (instance: Instance, config: unknown, environment: Context.Context<never>, previous?: unknown): Effect.Effect<void, PluginFault> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           instance.state = "activating";
@@ -258,6 +281,11 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                 );
               }),
             trace: (name, effect) => effect.pipe(Effect.withSpan(name, { attributes: attributes(instance.identity) })),
+            previous,
+            handoff: (save) =>
+              Effect.sync(() => {
+                instance.handoff = save;
+              }),
           };
           // Only declared dependencies are visible during activation, not the entire graph.
           const inputs = new Map<string, unknown>([
@@ -505,11 +533,15 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                 for (const dependent of dependentsOf(id)) if (instances.get(dependent)?.state === "active") gapped.add(dependent);
               }
             }
+            // What each running instance hands its replacement: an exclusive one's before it stops, the rest's as theirs stage.
+            const carried = new Map<string, unknown>();
             if (gapped.size) {
               if (operation) operation.committed = true;
               for (const id of gapped) retire(instances.get(id)!);
               const previous = yield* publishRevision;
               interrupted += yield* drain(previous);
+              // An exclusive plugin hands over once its work has drained and before it stops: everything it did is included.
+              for (const id of gapped) carried.set(id, yield* takeHandoff(instances.get(id)));
               for (const id of [...previousOrder].reverse()) if (gapped.has(id)) yield* dispose(instances.get(id)!, Exit.void, "closed");
             }
 
@@ -529,7 +561,8 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                     inactive.add(plugin.id);
                     continue;
                   }
-                  const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment)));
+                  const previous = carried.has(plugin.id) ? carried.get(plugin.id) : yield* takeHandoff(instances.get(plugin.id));
+                  const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment, previous)));
                   if (Exit.isFailure(exit)) {
                     if (required === undefined || required.has(plugin.id) || Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
                     inactive.add(plugin.id);

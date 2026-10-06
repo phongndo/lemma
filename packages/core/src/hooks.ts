@@ -85,6 +85,22 @@ export class PluginContext extends Context.Service<
     readonly fault: (operation: string, cause: Cause.Cause<unknown>, options?: FaultOptions) => Effect.Effect<void>;
     /** Attribute custom capability operations without wrapping or proxying their values. */
     readonly trace: <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+    /**
+     * What the instance this one replaces handed over (`handoff`), when this
+     * activation replaces a running one: a reload, a config change, a forced
+     * restart. Undefined on a first start, after a failure, and when the old
+     * instance handed nothing over.
+     */
+    readonly previous: unknown;
+    /**
+     * Hands state to this plugin's replacement: `save` runs once, when a
+     * replacement starts staging (an `exclusive` plugin's, just before it
+     * stops), and what it returns is the replacement's `previous`. Changes after
+     * that are not carried, unless the plugin is `exclusive`. A throw is
+     * reported as this plugin's fault, and the replacement starts without it.
+     * The latest call wins.
+     */
+    readonly handoff: (save: () => unknown) => Effect.Effect<void>;
   }
 >()("@lemma/core/PluginContext") {}
 
