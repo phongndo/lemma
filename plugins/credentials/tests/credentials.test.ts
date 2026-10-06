@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { Effect, Layer } from "effect";
-import { Credentials, Paths } from "@lemma/contracts";
+import { Effect } from "effect";
+import { Credentials } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
-import { definePlugin, makeCore } from "@lemma/core";
+import { pathsPlugin } from "@lemma/contracts/testing";
+import { makeCore } from "@lemma/core";
 import credentials, { withFileLock } from "../src/index.ts";
 
 let root: string;
@@ -23,15 +24,8 @@ beforeEach(async () => {
 });
 afterEach(() => rm(root, { recursive: true, force: true }));
 
-const pathsPlugin = () =>
-  definePlugin({
-    id: "paths",
-    provides: [Paths],
-    layer: Layer.sync(Paths, () => ({ home, userConfig: "", projectConfig: "", auth, sessions: "", cwd: root })),
-  });
-
 const run = <A, E>(body: Effect.Effect<A, E, Credentials>) =>
-  Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([pathsPlugin(), credentials]), (core) => core.run(body))));
+  Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([pathsPlugin(home, { auth, cwd: root }), credentials]), (core) => core.run(body))));
 
 const stored = async (): Promise<Record<string, unknown>> => JSON.parse(await readFile(auth, "utf8"));
 const set = (credential: Credential) => () => Effect.succeed(credential);

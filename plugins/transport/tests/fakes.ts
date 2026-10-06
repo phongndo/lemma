@@ -12,7 +12,6 @@ import {
   InteractionHook,
   Llm,
   LlmError,
-  Paths,
   PluginsChanged,
   SessionAppended,
   SessionChanged,
@@ -27,6 +26,7 @@ import {
   FileSearchError,
   FileSearchers,
 } from "@lemma/contracts";
+import { pathsPlugin } from "@lemma/contracts/testing";
 import type {
   AssistantMessage,
   ConfigScope,
@@ -341,19 +341,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
     ),
   });
 
-export const fakePaths = (home: string) =>
-  definePlugin({
-    id: "paths",
-    provides: [Paths],
-    layer: Layer.succeed(Paths, {
-      home,
-      userConfig: `${home}/config.jsonc`,
-      projectConfig: "/work/.lemma/config.jsonc",
-      auth: `${home}/auth.json`,
-      sessions: `${home}/sessions`,
-      cwd: "/work",
-    }),
-  });
+export const fakePaths = (home: string) => pathsPlugin(home, { cwd: "/work" });
 
 /** `/work` is a repository with branches `main` (current) and `dev`; every other path is a plain directory. */
 export const fakeWorkspace = definePlugin({

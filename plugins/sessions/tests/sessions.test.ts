@@ -5,8 +5,9 @@ import { Cause, Chunk, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effe
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Notice, Paths, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/contracts";
+import { Notice, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/contracts";
 import type { EventData } from "@lemma/contracts";
+import { pathsPlugin } from "@lemma/contracts/testing";
 import sessions, { encodeCwd } from "../src/index.ts";
 
 let dir: string;
@@ -18,19 +19,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-const paths = () =>
-  definePlugin({
-    id: "paths",
-    provides: [Paths],
-    layer: Layer.succeed(Paths, {
-      home: dir,
-      userConfig: "",
-      projectConfig: "",
-      auth: "",
-      sessions: path.join(dir, "sessions"),
-      cwd: "/work/app",
-    }),
-  });
+const paths = () => pathsPlugin(dir, { cwd: "/work/app" });
 
 /** Runs `body` against a fresh core over the same directory, as a restarted host would. */
 const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>, config?: { readonly unloadAfter?: number }) =>

@@ -1,11 +1,12 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { definePlugin, Hooks, makeCore } from "@lemma/core";
-import { AgentRequestHook, Paths } from "@lemma/contracts";
+import { Hooks, makeCore } from "@lemma/core";
+import { AgentRequestHook } from "@lemma/contracts";
 import type { RequestDraft, RequestPlan } from "@lemma/contracts";
+import { pathsPlugin } from "@lemma/contracts/testing";
 import projectContext, { makeLoader } from "../src/index.ts";
 
 let dir: string;
@@ -56,11 +57,7 @@ describe("project context", () => {
 
   it("adds a section attributed to its plugin id, before the environment section", async () => {
     await put("repo/AGENTS.md", "Use tabs.");
-    const paths = definePlugin({
-      id: "paths",
-      provides: [Paths],
-      layer: Layer.succeed(Paths, { home: path.join(dir, "home"), userConfig: "", projectConfig: "", auth: "", sessions: "", cwd: dir }),
-    });
+    const paths = pathsPlugin(path.join(dir, "home"), { cwd: dir });
     const draft: RequestDraft = {
       sessionId: "s",
       turnId: "t",

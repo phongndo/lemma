@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Either } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { definePlugin, makeCore } from "@lemma/core";
-import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
+import { makeCore } from "@lemma/core";
+import { Workspace, WorkspaceError } from "@lemma/contracts";
+import { pathsPlugin } from "@lemma/contracts/testing";
 import workspace, { makeWorkspace, matchName } from "../src/index.ts";
 
 // Isolate every git call, ours and the plugin's, from the machine's config.
@@ -211,11 +212,7 @@ describe("plugin", () => {
     const state = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const paths = definePlugin({
-            id: "paths",
-            provides: [Paths],
-            layer: Layer.succeed(Paths, { home: dir, userConfig: "", projectConfig: "", auth: "", sessions: "", cwd: dir }),
-          });
+          const paths = pathsPlugin(dir);
           const core = yield* makeCore([paths, workspace]);
           return yield* core.run(Effect.flatMap(Workspace, (service) => service.status(dir)));
         }),
