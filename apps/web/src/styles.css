@@ -2,7 +2,8 @@
  * The foundation every plugin draws on: tokens (every colour, radius, width,
  * and stacking level is a `--` custom property), the base element styles, and
  * the shared class vocabulary (`.button`, `.icon-button`, `.field`, `.badge`,
- * `.callout`, `.muted`, the `.menu-*` rows, the `.palette-*` list). Everything
+ * `.callout`, `.muted`, the `.search-box` field, the `.menu-*` rows, the
+ * `.palette-*` list, and the inspectors' `.dt-*`). Everything
  * else belongs to the plugin that draws it and loads with it (`styles` in
  * `defineUiPlugin`), in the `plugins` layer; the shared parts' styles sit in
  * its `parts` sublayer, under the views. Stylesheets in `~/.lemma/ui` are not
@@ -317,7 +318,7 @@
     margin: -1px -4px -1px 0;
   }
 
-  .sidebar-search {
+  .search-box {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -330,13 +331,13 @@
     cursor: text;
   }
 
-  .sidebar-search:hover,
-  .sidebar-search:focus-within {
+  .search-box:hover,
+  .search-box:focus-within {
     background: var(--bg-hover);
     color: var(--text-2);
   }
 
-  .sidebar-search input {
+  .search-box input {
     flex: 1;
     min-width: 0;
     border: 0;
@@ -347,11 +348,11 @@
     color: var(--text);
   }
 
-  .sidebar-search input::placeholder {
+  .search-box input::placeholder {
     color: var(--text-3);
   }
 
-  .sidebar-search input::-webkit-search-cancel-button {
+  .search-box input::-webkit-search-cancel-button {
     display: none;
   }
 
@@ -379,12 +380,6 @@
     scroll-padding-bottom: 24px;
   }
 
-  /* The diagram viewer: the dialog part, grown to the diagram (see `viewerScale`); a larger diagram scrolls inside it. */
-  .backdrop:has(.diagram-dialog) {
-    place-items: center;
-    padding: 16px;
-  }
-
   .composer-callout {
     margin-bottom: 8px;
   }
@@ -404,11 +399,6 @@
     from {
       opacity: 0;
     }
-  }
-
-  .link-button.inspector-link {
-    font-family: var(--font-mono);
-    font-size: 12px;
   }
 
   @keyframes drop {
@@ -609,14 +599,6 @@
     min-width: 0;
   }
 
-  .tag + .palette-into {
-    margin-left: 4px;
-  }
-
-  .palette-row[data-active="true"] .palette-into {
-    opacity: 1;
-  }
-
   .palette-section {
     padding: 10px 12px 4px;
     font-size: 11px;
@@ -626,10 +608,6 @@
 
   .palette-section:first-child {
     padding-top: 4px;
-  }
-
-  .palette-row[data-active="true"] .palette-mono {
-    color: var(--text);
   }
 
   .palette-row mark {
@@ -712,10 +690,6 @@
     width: 22px;
     height: 22px;
     object-fit: contain;
-  }
-
-  .sidebar-search:focus-within .search-key {
-    display: none;
   }
 
   .settings-empty {

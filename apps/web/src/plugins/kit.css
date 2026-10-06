@@ -205,12 +205,6 @@
     cursor: zoom-in;
   }
 
-  .dialog.diagram-dialog {
-    width: auto;
-    max-width: calc(100vw - 32px);
-    max-height: calc(100vh - 32px);
-  }
-
   .chevron {
     transition: transform 0.12s;
   }
@@ -365,11 +359,6 @@
     flex-direction: column;
     overflow-y: auto;
     overscroll-behavior: contain;
-  }
-
-  .menu:has(> .menu-search) {
-    padding: 0;
-    overflow: hidden;
   }
 
   /* Logos with a file per theme. */

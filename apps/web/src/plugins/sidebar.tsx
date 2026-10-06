@@ -267,7 +267,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   return (
     <nav class="sidebar" aria-label="Threads" onKeyDown={onKey}>
       <div class="sidebar-head">
-        <label class="sidebar-search">
+        <label class="search-box">
           <SearchIcon />
           <input
             type="search"

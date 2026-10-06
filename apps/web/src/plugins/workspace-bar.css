@@ -1,3 +1,8 @@
+.menu:has(> .menu-search) {
+  padding: 0;
+  overflow: hidden;
+}
+
 .workspace-bar {
   position: relative;
   display: flex;

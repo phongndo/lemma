@@ -90,7 +90,7 @@ function SettingsView(props: {
   return (
     <div class="settings" role="region" aria-label="Settings">
       <nav class="settings-nav" aria-label="Settings sections">
-        <label class="sidebar-search">
+        <label class="search-box">
           <SearchIcon />
           <input
             ref={search}

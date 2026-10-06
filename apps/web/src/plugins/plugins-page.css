@@ -1,3 +1,8 @@
+.link-button.inspector-link {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .host-facts {
   display: grid;
   grid-template-columns: max-content 1fr;

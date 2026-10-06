@@ -48,7 +48,7 @@
   app-region: drag;
 }
 
-.settings-nav .sidebar-search {
+.settings-nav .search-box {
   flex: none;
   margin-bottom: 6px;
 }
@@ -57,6 +57,10 @@
   flex: none;
   font-size: 12px;
   color: var(--text-3);
+}
+
+.search-box:focus-within .search-key {
+  display: none;
 }
 
 .settings-nav-items {

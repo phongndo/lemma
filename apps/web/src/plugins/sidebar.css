@@ -24,7 +24,7 @@
   app-region: drag;
 }
 
-[data-titlebar] .sidebar-head .sidebar-search {
+[data-titlebar] .sidebar-head .search-box {
   grid-area: search;
 }
 
